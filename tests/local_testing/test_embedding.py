@@ -9,9 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
@@ -145,17 +143,13 @@ async def test_together_ai_embedding(model, api_base, api_key, sync_mode):
             response_keys
         )  # assert litellm response has expected keys from OpenAI embedding response
 
-        request_cost = litellm.completion_cost(
-            completion_response=response, call_type="embedding"
-        )
+        request_cost = litellm.completion_cost(completion_response=response, call_type="embedding")
 
         print("Calculated request cost=", request_cost)
 
         assert isinstance(response.usage, litellm.Usage)
     except litellm.BadRequestError:
-        print(
-            "Bad request error occurred - Together AI raises 404s for their embedding models"
-        )
+        print("Bad request error occurred - Together AI raises 404s for their embedding models")
         pass
 
     except Exception as e:
@@ -207,9 +201,7 @@ async def test_azure_ai_embedding_image(sync_mode):
             client = HTTPHandler()
         else:
             client = AsyncHTTPHandler()
-        with patch.object(
-            client, "post", side_effect=_azure_ai_image_mock_response
-        ) as mock_client:
+        with patch.object(client, "post", side_effect=_azure_ai_image_mock_response) as mock_client:
             if sync_mode:
                 response = embedding(
                     model=model,
@@ -259,9 +251,7 @@ def test_openai_azure_embedding_timeouts():
         print("Good job got timeout error!")
         pass
     except Exception as e:
-        pytest.fail(
-            f"Expected timeout error, did not get the correct error. Instead got {e}"
-        )
+        pytest.fail(f"Expected timeout error, did not get the correct error. Instead got {e}")
 
 
 # test_openai_azure_embedding_timeouts()
@@ -279,9 +269,7 @@ def test_openai_embedding_timeouts():
         print("Good job got OpenAI timeout error!")
         pass
     except Exception as e:
-        pytest.fail(
-            f"Expected timeout error, did not get the correct error. Instead got {e}"
-        )
+        pytest.fail(f"Expected timeout error, did not get the correct error. Instead got {e}")
 
 
 # test_openai_embedding_timeouts()
@@ -321,15 +309,11 @@ def _openai_mock_response(*args, **kwargs):
     new_response = MagicMock()
     new_response.headers = {"hello": "world"}
 
-    new_response.parse.return_value = (
-        openai.types.create_embedding_response.CreateEmbeddingResponse(
-            data=[Embedding(embedding=[1234, 45667], index=0, object="embedding")],
-            model="azure/test",
-            object="list",
-            usage=openai.types.create_embedding_response.Usage(
-                prompt_tokens=1, total_tokens=2
-            ),
-        )
+    new_response.parse.return_value = openai.types.create_embedding_response.CreateEmbeddingResponse(
+        data=[Embedding(embedding=[1234, 45667], index=0, object="embedding")],
+        model="azure/test",
+        object="list",
+        usage=openai.types.create_embedding_response.Usage(prompt_tokens=1, total_tokens=2),
     )
     return new_response
 
@@ -421,13 +405,11 @@ async def test_bedrock_embedding_titan(model, sync_mode):
                 aws_region_name="us-west-2",
             )
         print("response:", response)
-        assert isinstance(
-            response["data"][0]["embedding"], list
-        ), "Expected response to be a list"
+        assert isinstance(response["data"][0]["embedding"], list), "Expected response to be a list"
         print("type of first embedding:", type(response["data"][0]["embedding"][0]))
-        assert all(
-            isinstance(x, float) for x in response["data"][0]["embedding"]
-        ), "Expected response to be a list of floats"
+        assert all(isinstance(x, float) for x in response["data"][0]["embedding"]), (
+            "Expected response to be a list of floats"
+        )
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -464,13 +446,11 @@ async def test_bedrock_embedding_titan_caching(model, sync_mode):
                 aws_region_name="us-west-2",
             )
         print("response:", response)
-        assert isinstance(
-            response["data"][0]["embedding"], list
-        ), "Expected response to be a list"
+        assert isinstance(response["data"][0]["embedding"], list), "Expected response to be a list"
         print("type of first embedding:", type(response["data"][0]["embedding"][0]))
-        assert all(
-            isinstance(x, float) for x in response["data"][0]["embedding"]
-        ), "Expected response to be a list of floats"
+        assert all(isinstance(x, float) for x in response["data"][0]["embedding"]), (
+            "Expected response to be a list of floats"
+        )
 
         # this also tests if we can return a cache response for this scenario
         import time
@@ -515,13 +495,11 @@ def test_bedrock_embedding_cohere():
             ],
             aws_region_name="us-west-2",
         )
-        assert isinstance(
-            response["data"][0]["embedding"], list
-        ), "Expected response to be a list"
+        assert isinstance(response["data"][0]["embedding"], list), "Expected response to be a list"
         print(f"type of first embedding:", type(response["data"][0]["embedding"][0]))
-        assert all(
-            isinstance(x, float) for x in response["data"][0]["embedding"]
-        ), "Expected response to be a list of floats"
+        assert all(isinstance(x, float) for x in response["data"][0]["embedding"]), (
+            "Expected response to be a list of floats"
+        )
         # print(f"response:", response)
 
         assert isinstance(response.usage, litellm.Usage)
@@ -582,9 +560,7 @@ def tgi_mock_post(*args, **kwargs):
             "sentences": ["this is another item"],
         }
     }
-    assert (
-        json.loads(kwargs["data"]) == expected_data
-    ), "Data does not match the expected data"
+    assert json.loads(kwargs["data"]) == expected_data, "Data does not match the expected data"
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "application/json"}
@@ -596,9 +572,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 @pytest.mark.asyncio
-@patch(
-    "litellm.llms.huggingface.embedding.handler.async_get_hf_task_embedding_for_model"
-)
+@patch("litellm.llms.huggingface.embedding.handler.async_get_hf_task_embedding_for_model")
 @patch("litellm.llms.huggingface.embedding.handler.get_hf_task_embedding_for_model")
 @pytest.mark.parametrize("sync_mode", [True, False])
 async def test_hf_embedding_sentence_sim(
@@ -707,9 +681,7 @@ def test_sagemaker_embeddings():
         )
         print(f"response: {response}")
         cost = completion_cost(completion_response=response)
-        assert (
-            cost > 0.0 and cost < 1.0
-        )  # should never be > $1 for a single embedding call
+        assert cost > 0.0 and cost < 1.0  # should never be > $1 for a single embedding call
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -725,9 +697,7 @@ async def test_sagemaker_aembeddings():
         )
         print(f"response: {response}")
         cost = completion_cost(completion_response=response)
-        assert (
-            cost > 0.0 and cost < 1.0
-        )  # should never be > $1 for a single embedding call
+        assert cost > 0.0 and cost < 1.0  # should never be > $1 for a single embedding call
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -818,9 +788,7 @@ def test_watsonx_embeddings(monkeypatch):
 
         # Verify the request was made correctly
         assert "Authorization" in captured_request["headers"]
-        assert (
-            captured_request["headers"]["Authorization"] == "Bearer mock-watsonx-token"
-        )
+        assert captured_request["headers"]["Authorization"] == "Bearer mock-watsonx-token"
         assert "us-south.ml.cloud.ibm.com" in captured_request["url"]
     except litellm.RateLimitError as e:
         pass
@@ -881,9 +849,7 @@ async def test_watsonx_aembeddings(monkeypatch):
 # test_mistral_embeddings()
 
 
-@pytest.mark.skip(
-    reason="Community maintained embedding provider - they are quite unstable"
-)
+@pytest.mark.skip(reason="Community maintained embedding provider - they are quite unstable")
 def test_voyage_embeddings():
     try:
         litellm.set_verbose = True
@@ -898,7 +864,8 @@ def test_voyage_embeddings():
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize(
-    "input", ["good morning from litellm", ["good morning from litellm"]]  #
+    "input",
+    ["good morning from litellm", ["good morning from litellm"]],  #
 )
 @pytest.mark.asyncio
 async def test_gemini_embeddings(sync_mode, input):
@@ -1192,11 +1159,7 @@ async def test_embedding_with_extra_headers(sync_mode):
             [
                 "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
             ],
-            [
-                {
-                    "image": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
-                }
-            ],
+            [{"image": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="}],
         ),
     ],
 )
@@ -1232,9 +1195,7 @@ def test_jina_ai_img_embeddings(input_data, expected_payload_input):
         try:
             litellm.embedding(model="jina_ai/jina-embeddings-v4", input=input_data)
         except Exception as e:
-            pytest.fail(
-                f"litellm.embedding call failed with an unexpected exception: {e}"
-            )
+            pytest.fail(f"litellm.embedding call failed with an unexpected exception: {e}")
 
         # --- Assertions ---
         # 1. Check that our mock `post` method was called exactly once.
@@ -1261,9 +1222,7 @@ def test_encoding_format_defaults_to_float_for_openai_sdk(monkeypatch):
     Optional global override: `LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT`.
     """
     monkeypatch.delenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", raising=False)
-    with patch(
-        "litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client"
-    ) as mock_get_client:
+    with patch("litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client") as mock_get_client:
         # Create a mock client instance
         mock_client_instance = MagicMock()
         mock_get_client.return_value = mock_client_instance
@@ -1280,9 +1239,7 @@ def test_encoding_format_defaults_to_float_for_openai_sdk(monkeypatch):
         )
         mock_response.headers = {}
 
-        mock_client_instance.embeddings.with_raw_response.create.return_value = (
-            mock_response
-        )
+        mock_client_instance.embeddings.with_raw_response.create.return_value = mock_response
 
         # Call the embedding function without encoding_format
         response = embedding(
@@ -1292,16 +1249,14 @@ def test_encoding_format_defaults_to_float_for_openai_sdk(monkeypatch):
 
         # Get the call arguments to verify what was sent to OpenAI SDK
         call_args = mock_client_instance.embeddings.with_raw_response.create.call_args
-        assert (
-            call_args is not None
-        ), "OpenAI SDK embeddings.create should have been called"
+        assert call_args is not None, "OpenAI SDK embeddings.create should have been called"
 
         call_kwargs = call_args[1]  # Get kwargs
 
         assert "encoding_format" in call_kwargs
-        assert (
-            call_kwargs["encoding_format"] == "float"
-        ), "encoding_format should default to float when not provided by user"
+        assert call_kwargs["encoding_format"] == "float", (
+            "encoding_format should default to float when not provided by user"
+        )
 
         print("✅ PASS: encoding_format='float' is correctly passed to OpenAI SDK")
 
@@ -1313,9 +1268,7 @@ def test_encoding_format_explicit_value_preserved():
     When user provides encoding_format='float' or 'base64', it should be
     sent as-is to the OpenAI SDK.
     """
-    with patch(
-        "litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client"
-    ) as mock_get_client:
+    with patch("litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client") as mock_get_client:
         # Create a mock client instance
         mock_client_instance = MagicMock()
         mock_get_client.return_value = mock_client_instance
@@ -1332,24 +1285,16 @@ def test_encoding_format_explicit_value_preserved():
         )
         mock_response.headers = {}
 
-        mock_client_instance.embeddings.with_raw_response.create.return_value = (
-            mock_response
-        )
+        mock_client_instance.embeddings.with_raw_response.create.return_value = mock_response
 
         # Test with explicit encoding_format='float'
-        response = embedding(
-            model="text-embedding-ada-002", input="Hello world", encoding_format="float"
-        )
+        response = embedding(model="text-embedding-ada-002", input="Hello world", encoding_format="float")
 
         # Verify the encoding_format was passed correctly
         call_args = mock_client_instance.embeddings.with_raw_response.create.call_args
         call_kwargs = call_args[1]
 
-        assert (
-            "encoding_format" in call_kwargs
-        ), "encoding_format should be in the request"
-        assert (
-            call_kwargs["encoding_format"] == "float"
-        ), "encoding_format should be 'float' when explicitly provided"
+        assert "encoding_format" in call_kwargs, "encoding_format should be in the request"
+        assert call_kwargs["encoding_format"] == "float", "encoding_format should be 'float' when explicitly provided"
 
         print("✅ PASS: encoding_format='float' is correctly preserved")

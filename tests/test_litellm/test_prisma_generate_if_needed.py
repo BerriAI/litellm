@@ -1,9 +1,7 @@
 import importlib.util
 from pathlib import Path
 
-_MODULE_PATH = (
-    Path(__file__).resolve().parents[2] / "scripts" / "prisma_generate_if_needed.py"
-)
+_MODULE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "prisma_generate_if_needed.py"
 _spec = importlib.util.spec_from_file_location("prisma_generate_if_needed", _MODULE_PATH)
 mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mod)
@@ -22,10 +20,7 @@ def test_skip_requires_a_matching_stamp(tmp_path):
     assert mod.should_skip(stamp, expected, client_generated=True) is False
     stamp.write_text(expected)
     assert mod.should_skip(stamp, expected, client_generated=True) is True
-    assert (
-        mod.should_skip(stamp, mod.stamp_value(b"other", "0.11.0"), client_generated=True)
-        is False
-    )
+    assert mod.should_skip(stamp, mod.stamp_value(b"other", "0.11.0"), client_generated=True) is False
 
 
 def test_skip_requires_a_generated_client_even_with_a_matching_stamp(tmp_path):

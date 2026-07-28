@@ -39,9 +39,7 @@ def _minimal_responses_api_payload(response_id: str, model: str) -> dict:
                 "id": "msg_1",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "Done.", "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": "Done.", "annotations": []}],
             }
         ],
         "parallel_tool_calls": True,
@@ -81,9 +79,9 @@ class MockResponse:
 def _assert_request_body_matches(request_body: dict, expected_body: dict) -> None:
     for key, expected_value in expected_body.items():
         assert key in request_body, f"Missing key in request body: {key}"
-        assert (
-            request_body[key] == expected_value
-        ), f"Mismatch for key {key}: got {request_body[key]!r}, expected {expected_value!r}"
+        assert request_body[key] == expected_value, (
+            f"Mismatch for key {key}: got {request_body[key]!r}, expected {expected_value!r}"
+        )
 
 
 @pytest.mark.asyncio
@@ -98,9 +96,7 @@ async def test_aresponses_context_management_and_shell_request_body_matches_expe
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         new_callable=AsyncMock,
     ) as mock_post:
-        mock_post.return_value = MockResponse(
-            _minimal_responses_api_payload("resp_ctx_shell_test", "gpt-4o"), 200
-        )
+        mock_post.return_value = MockResponse(_minimal_responses_api_payload("resp_ctx_shell_test", "gpt-4o"), 200)
 
         await litellm.aresponses(
             model="openai/gpt-4o",

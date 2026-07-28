@@ -71,9 +71,7 @@ async def test_failure_hook_transforms_error_response():
         # Verify transformed exception is returned
         assert result is not None
         assert isinstance(result, HTTPException)
-        assert (
-            result.detail == "User-friendly error: Your request could not be processed."
-        )
+        assert result.detail == "User-friendly error: Your request could not be processed."
 
 
 @pytest.mark.asyncio

@@ -81,9 +81,7 @@ def test_parse_rss_to_posts_missing_channel():
 
 
 def test_validate_blog_posts_valid():
-    posts = [
-        {"title": "T", "description": "D", "date": "2026-01-01", "url": "https://x.com"}
-    ]
+    posts = [{"title": "T", "description": "D", "date": "2026-01-01", "url": "https://x.com"}]
     assert GetBlogPosts.validate_blog_posts(posts) is True
 
 
@@ -162,9 +160,7 @@ def test_get_blog_posts_ttl_cache_not_refetched():
         m.raise_for_status = MagicMock()
         return m
 
-    with patch(
-        "litellm.litellm_core_utils.get_blog_posts.httpx.get", side_effect=mock_get
-    ):
+    with patch("litellm.litellm_core_utils.get_blog_posts.httpx.get", side_effect=mock_get):
         posts = get_blog_posts(url=litellm.blog_posts_url)
 
     assert call_count == 0  # cache hit, no fetch
@@ -218,9 +214,5 @@ def test_blog_post_pydantic_model():
 
 
 def test_blog_posts_response_pydantic_model():
-    resp = BlogPostsResponse(
-        posts=[
-            BlogPost(title="T", description="D", date="2026-01-01", url="https://x.com")
-        ]
-    )
+    resp = BlogPostsResponse(posts=[BlogPost(title="T", description="D", date="2026-01-01", url="https://x.com")])
     assert len(resp.posts) == 1

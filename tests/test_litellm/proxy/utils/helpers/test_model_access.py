@@ -109,8 +109,7 @@ def test_create_model_info_response_happy_path_no_metadata():
         "owned_by": result["owned_by"],
         "created_is_int": isinstance(result["created"], int),
         "metadata_absent": "metadata" not in result,
-        "max_input_tokens_positive_int": isinstance(result["max_input_tokens"], int)
-        and result["max_input_tokens"] > 0,
+        "max_input_tokens_positive_int": isinstance(result["max_input_tokens"], int) and result["max_input_tokens"] > 0,
         "max_output_tokens_positive_int": isinstance(result["max_output_tokens"], int)
         and result["max_output_tokens"] > 0,
     }
@@ -204,9 +203,7 @@ def test_validate_model_access_happy_path_single_model_in_list():
 
 def test_validate_model_access_happy_path_batch_all_accessible():
     summary = {
-        "result": validate_model_access(
-            "gpt-4o,claude-haiku", ["gpt-4o", "claude-haiku", "gemini"]
-        ),
+        "result": validate_model_access("gpt-4o,claude-haiku", ["gpt-4o", "claude-haiku", "gemini"]),
         "input": "gpt-4o,claude-haiku",
         "available": ["gpt-4o", "claude-haiku", "gemini"],
     }
@@ -388,9 +385,7 @@ async def test_get_available_models_for_user_error_path_complete_list_raises(
     def _boom(**_kwargs):
         raise RuntimeError("downstream failure")
 
-    monkeypatch.setattr(
-        "litellm.proxy.auth.model_checks.get_complete_model_list", _boom
-    )
+    monkeypatch.setattr("litellm.proxy.auth.model_checks.get_complete_model_list", _boom)
     user_api_key_dict = UserAPIKeyAuth(
         api_key="sk-test-key",
         user_id="user-1",

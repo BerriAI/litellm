@@ -91,13 +91,9 @@ async def test_team_update_authz_matrix(
             "organization_id": org_id,
         },
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value} {shape}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value} {shape}: {resp.status_code} {resp.text}"
 
-    row = await prisma.db.litellm_teamtable.find_unique(
-        where={"team_id": scratch.prefix}
-    )
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None
     if expected_status == 200:
         assert row.team_alias == MARKER_ALIAS
@@ -105,9 +101,7 @@ async def test_team_update_authz_matrix(
         assert row.team_alias != MARKER_ALIAS, "denied but team mutated"
 
 
-async def test_team_update_org_admin_resolved_from_team_without_org_context(
-    proxy_client, prisma, scratch, world
-):
+async def test_team_update_org_admin_resolved_from_team_without_org_context(proxy_client, prisma, scratch, world):
     """With no organization_id in the body the route gate resolves the target
     team's org from team_id, so an org admin of the team's own org is allowed
     (200), same as PROXY_ADMIN. A team admin of that same team stays denied
@@ -172,13 +166,9 @@ async def test_team_update_org_relocation_gate(
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"team_id": scratch.prefix, "organization_id": world.org_b_id},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value}: {resp.status_code} {resp.text}"
 
-    row = await prisma.db.litellm_teamtable.find_unique(
-        where={"team_id": scratch.prefix}
-    )
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None
     if expected_status == 200:
         assert row.organization_id == world.org_b_id
@@ -191,9 +181,7 @@ async def test_team_update_org_relocation_gate(
 # team's org-membership check. The relocation matrix above covers the
 # status; this guard turns a silent rename of the helper's exception detail
 # into a CI red.
-async def test_team_update_org_b_admin_relocation_rejection_detail(
-    proxy_client, prisma, scratch, world
-):
+async def test_team_update_org_b_admin_relocation_rejection_detail(proxy_client, prisma, scratch, world):
     await _seed_target(prisma, world, "alpha", scratch.prefix)
     resp = await proxy_client.post(
         "/team/update",
@@ -204,9 +192,7 @@ async def test_team_update_org_b_admin_relocation_rejection_detail(
     assert "do not have access to this team" in resp.text, resp.text
 
 
-async def test_team_update_org_relocation_allowed_for_dual_org_admin(
-    proxy_client, prisma, scratch, world
-):
+async def test_team_update_org_relocation_allowed_for_dual_org_admin(proxy_client, prisma, scratch, world):
     """Relocation-allowed branch: a caller who is org admin of BOTH the source
     and destination org may relocate a team between them. Completes the
     _RELOCATION matrix, whose allowed branch PR2 left open — no seeded actor is
@@ -217,9 +203,7 @@ async def test_team_update_org_relocation_allowed_for_dual_org_admin(
         user_role=LitellmUserRoles.ORG_ADMIN.value,
         org_admin_of=(world.org_a_id, world.org_b_id),
     )
-    team_id = await create_scratch_team(
-        prisma, scratch.tag("team"), organization_id=world.org_a_id
-    )
+    team_id = await create_scratch_team(prisma, scratch.tag("team"), organization_id=world.org_a_id)
 
     resp = await proxy_client.post(
         "/team/update",
@@ -230,6 +214,4 @@ async def test_team_update_org_relocation_allowed_for_dual_org_admin(
 
     row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": team_id})
     assert row is not None
-    assert (
-        row.organization_id == world.org_b_id
-    ), "dual-org admin relocation not applied"
+    assert row.organization_id == world.org_b_id, "dual-org admin relocation not applied"

@@ -8,9 +8,7 @@ import platform
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 
 def test_using_litellm_on_windows():
@@ -19,9 +17,7 @@ def test_using_litellm_on_windows():
     try:
         import litellm
 
-        print(
-            f"litellm imported successfully on Windows ({platform.system()} {platform.release()})"
-        )
+        print(f"litellm imported successfully on Windows ({platform.system()} {platform.release()})")
 
         response = litellm.completion(
             model="gpt-4o",
@@ -35,6 +31,4 @@ def test_using_litellm_on_windows():
         )
         print(response)
     except Exception as e:
-        pytest.fail(
-            f"Error occurred on Windows: {e}. Installing litellm on Windows failed."
-        )
+        pytest.fail(f"Error occurred on Windows: {e}. Installing litellm on Windows failed.")

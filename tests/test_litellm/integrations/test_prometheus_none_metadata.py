@@ -37,9 +37,7 @@ class TestNoneMetadataHandling:
         _metadata.get("model_info") -> AttributeError
     """
 
-    def test_set_llm_deployment_success_metrics_with_none_metadata(
-        self, prometheus_logger
-    ):
+    def test_set_llm_deployment_success_metrics_with_none_metadata(self, prometheus_logger):
         """
         set_llm_deployment_success_metrics should not raise when
         litellm_params.metadata is None.
@@ -84,9 +82,7 @@ class TestNoneMetadataHandling:
             output_tokens=10.0,
         )
 
-    def test_set_llm_deployment_success_metrics_with_missing_litellm_params(
-        self, prometheus_logger
-    ):
+    def test_set_llm_deployment_success_metrics_with_missing_litellm_params(self, prometheus_logger):
         """
         set_llm_deployment_success_metrics should not raise when
         litellm_params is missing entirely.
@@ -127,9 +123,7 @@ class TestNoneMetadataHandling:
             output_tokens=10.0,
         )
 
-    def test_set_llm_deployment_success_metrics_with_litellm_metadata_key(
-        self, prometheus_logger
-    ):
+    def test_set_llm_deployment_success_metrics_with_litellm_metadata_key(self, prometheus_logger):
         """
         set_llm_deployment_success_metrics should pick up litellm_metadata
         when metadata is None, using get_litellm_metadata_from_kwargs.

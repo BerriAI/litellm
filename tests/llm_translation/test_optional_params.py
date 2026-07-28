@@ -48,24 +48,18 @@ def test_supports_system_message():
 
     ## confirm you can make a openai call with this param
 
-    response = litellm.completion(
-        model="gpt-3.5-turbo", messages=new_messages, supports_system_message=False
-    )
+    response = litellm.completion(model="gpt-3.5-turbo", messages=new_messages, supports_system_message=False)
 
     assert isinstance(response, litellm.ModelResponse)
 
 
-@pytest.mark.parametrize(
-    "stop_sequence, expected_count", [("\n", 0), (["\n"], 0), (["finish_reason"], 1)]
-)
+@pytest.mark.parametrize("stop_sequence, expected_count", [("\n", 0), (["\n"], 0), (["finish_reason"], 1)])
 def test_anthropic_optional_params(stop_sequence, expected_count):
     """
     Test if whitespace character optional param is dropped by anthropic
     """
     litellm.drop_params = True
-    optional_params = get_optional_params(
-        model="claude-3", custom_llm_provider="anthropic", stop=stop_sequence
-    )
+    optional_params = get_optional_params(model="claude-3", custom_llm_provider="anthropic", stop=stop_sequence)
     assert len(optional_params) == expected_count
 
 
@@ -266,9 +260,7 @@ def test_bedrock_optional_params_simple(model):
         ("bedrock/cohere.embed-multilingual-v3", True, None),
     ],
 )
-def test_bedrock_optional_params_embeddings_dimension(
-    model, expected_dimensions, dimensions_kwarg
-):
+def test_bedrock_optional_params_embeddings_dimension(model, expected_dimensions, dimensions_kwarg):
     litellm.drop_params = True
     optional_params = get_optional_params_embeddings(
         model=model,
@@ -502,10 +494,10 @@ def test_azure_tool_choice(api_version):
     if api_version == "2024-07-01":
         assert optional_params["tool_choice"] == "required"
     else:
-        assert (
-            "tool_choice" not in optional_params
-        ), "tool choice should not be present. Got - tool_choice={} for api version={}".format(
-            optional_params["tool_choice"], api_version
+        assert "tool_choice" not in optional_params, (
+            "tool choice should not be present. Got - tool_choice={} for api version={}".format(
+                optional_params["tool_choice"], api_version
+            )
         )
 
 
@@ -535,9 +527,7 @@ def test_dynamic_drop_params(drop_params):
 
 
 def test_dynamic_drop_params_e2e():
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
-    ) as mock_response:
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -554,9 +544,7 @@ def test_dynamic_drop_params_e2e():
 
 
 def test_dynamic_pass_additional_params():
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
-    ) as mock_response:
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -604,9 +592,7 @@ def test_dynamic_drop_params_parallel_tool_calls():
     """
     https://github.com/BerriAI/litellm/issues/4584
     """
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
-    ) as mock_response:
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -661,9 +647,7 @@ def test_dynamic_drop_additional_params_stream_options():
 
 
 def test_dynamic_drop_additional_params_e2e():
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
-    ) as mock_response:
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -682,16 +666,12 @@ def test_dynamic_drop_additional_params_e2e():
 
 
 def test_get_optional_params_image_gen():
-    response = litellm.utils.get_optional_params_image_gen(
-        aws_region_name="us-east-1", custom_llm_provider="openai"
-    )
+    response = litellm.utils.get_optional_params_image_gen(aws_region_name="us-east-1", custom_llm_provider="openai")
 
     print(response)
 
     assert "aws_region_name" not in response
-    response = litellm.utils.get_optional_params_image_gen(
-        aws_region_name="us-east-1", custom_llm_provider="bedrock"
-    )
+    response = litellm.utils.get_optional_params_image_gen(aws_region_name="us-east-1", custom_llm_provider="bedrock")
 
     print(response)
 
@@ -754,9 +734,7 @@ def test_vertex_safety_settings(provider):
         },
     ]
 
-    optional_params = get_optional_params(
-        model="gemini-1.5-pro", custom_llm_provider=provider
-    )
+    optional_params = get_optional_params(model="gemini-1.5-pro", custom_llm_provider=provider)
     assert len(optional_params) == 1
 
 
@@ -865,9 +843,7 @@ def _check_additional_properties(schema):
     if isinstance(schema, dict):
         # Remove the 'additionalProperties' key if it exists and is set to False
         if "additionalProperties" in schema or "strict" in schema:
-            raise ValueError(
-                "additionalProperties and strict should not be in the schema"
-            )
+            raise ValueError("additionalProperties and strict should not be in the schema")
 
         # Recursively process all dictionary values
         for key, value in schema.items():
@@ -1070,32 +1046,23 @@ def test_vertex_schema_field():
     )
     print(optional_params)
     print(optional_params["tools"][0]["function_declarations"][0])
-    assert (
-        "$schema"
-        not in optional_params["tools"][0]["function_declarations"][0]["parameters"]
-    )
+    assert "$schema" not in optional_params["tools"][0]["function_declarations"][0]["parameters"]
 
 
 def test_watsonx_tool_choice():
-    optional_params = get_optional_params(
-        model="gemini-1.5-pro", custom_llm_provider="watsonx", tool_choice="auto"
-    )
+    optional_params = get_optional_params(model="gemini-1.5-pro", custom_llm_provider="watsonx", tool_choice="auto")
     print(optional_params)
     assert optional_params["tool_choice_option"] == "auto"
 
 
 def test_watsonx_text_top_k():
-    optional_params = get_optional_params(
-        model="gemini-1.5-pro", custom_llm_provider="watsonx_text", top_k=10
-    )
+    optional_params = get_optional_params(model="gemini-1.5-pro", custom_llm_provider="watsonx_text", top_k=10)
     print(optional_params)
     assert optional_params["top_k"] == 10
 
 
 def test_together_ai_model_params():
-    optional_params = get_optional_params(
-        model="together_ai", custom_llm_provider="together_ai", logprobs=1
-    )
+    optional_params = get_optional_params(model="together_ai", custom_llm_provider="together_ai", logprobs=1)
     print(optional_params)
     assert optional_params["logprobs"] == 1
 
@@ -1204,9 +1171,7 @@ def test_groq_response_format_json_schema():
 
 
 def test_gemini_frequency_penalty():
-    optional_params = get_optional_params(
-        model="gemini-1.5-flash", custom_llm_provider="gemini", frequency_penalty=0.5
-    )
+    optional_params = get_optional_params(model="gemini-1.5-flash", custom_llm_provider="gemini", frequency_penalty=0.5)
     assert optional_params["frequency_penalty"] == 0.5
 
 
@@ -2010,9 +1975,7 @@ def test_validate_openai_optional_params_integration():
             mock_response.usage.completion_tokens = 5
             mock_response.usage.total_tokens = 15
 
-            mock_client.return_value.chat.completions.create.return_value = (
-                mock_response
-            )
+            mock_client.return_value.chat.completions.create.return_value = mock_response
 
             # Call completion with more than 4 stop sequences
             response = litellm.completion(

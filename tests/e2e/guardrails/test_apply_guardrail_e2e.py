@@ -31,29 +31,20 @@ class TestApplyGuardrailEndpoint:
         guardrail_id = client.create_content_filter_guardrail(name, banned)
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
-        blocked = client.apply_guardrail(
-            MASTER_KEY, name=name, text=f"please say {banned} now"
-        )
+        blocked = client.apply_guardrail(MASTER_KEY, name=name, text=f"please say {banned} now")
         match blocked:
             case UnknownApiError(status_code=status):
-                assert status in {400, 403}, (
-                    f"banned text must fail apply_guardrail, got {status}: {blocked}"
-                )
+                assert status in {400, 403}, f"banned text must fail apply_guardrail, got {status}: {blocked}"
             case UnauthorizedError():
                 pytest.fail(
-                    "apply_guardrail returned unauthorized for master key; "
-                    "proxy auth is blocking the apply surface"
+                    "apply_guardrail returned unauthorized for master key; proxy auth is blocking the apply surface"
                 )
             case Success(data=body):
-                pytest.fail(
-                    f"banned text must not pass apply_guardrail; got {body}"
-                )
+                pytest.fail(f"banned text must not pass apply_guardrail; got {body}")
             case _:
                 pytest.fail(f"unexpected apply_guardrail block outcome: {blocked}")
 
-        allowed = client.apply_guardrail(
-            MASTER_KEY, name=name, text="hello, this is clean input"
-        )
+        allowed = client.apply_guardrail(MASTER_KEY, name=name, text="hello, this is clean input")
         match allowed:
             case Success(data=body):
                 assert body.response_text, "clean input must return response_text"

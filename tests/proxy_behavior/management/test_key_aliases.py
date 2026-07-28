@@ -85,16 +85,12 @@ async def test_key_aliases_visibility(
         f"/key/aliases?search={scratch.prefix}&size=100",
         headers={"Authorization": f"Bearer {world.keys[actor].cleartext}"},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value}: {resp.status_code} {resp.text}"
     if expected_status != 200:
         return
 
     visible = {known[a] for a in resp.json()["aliases"] if a in known}
-    assert visible == set(
-        expected_tags
-    ), f"{actor.value}: expected {sorted(expected_tags)}, got {sorted(visible)}"
+    assert visible == set(expected_tags), f"{actor.value}: expected {sorted(expected_tags)}, got {sorted(visible)}"
 
 
 async def test_key_aliases_team_id_filter(proxy_client, prisma, scratch, world):

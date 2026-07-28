@@ -9,9 +9,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm import speech
@@ -285,9 +283,7 @@ class TestMinimaxSpeechIntegration:
             "extra_info": {},
         }
 
-        with patch(
-            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.text_to_speech_handler"
-        ) as mock_tts:
+        with patch("litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.text_to_speech_handler") as mock_tts:
             # Create a mock httpx.Response
             mock_response = MagicMock()
             mock_response.status_code = 200
@@ -344,9 +340,7 @@ class TestMinimaxProviderRegistration:
         """Test that get_llm_provider correctly identifies MiniMax models"""
         from litellm import get_llm_provider
 
-        model, provider, api_key, api_base = get_llm_provider(
-            model="minimax/speech-2.6-hd"
-        )
+        model, provider, api_key, api_base = get_llm_provider(model="minimax/speech-2.6-hd")
 
         assert model == "speech-2.6-hd"
         assert provider == "minimax"

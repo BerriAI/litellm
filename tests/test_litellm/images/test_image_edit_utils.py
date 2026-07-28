@@ -295,9 +295,7 @@ class TestImageEditHandlerCredentialsForwarding:
             "vertex_ai_credentials": "/path/to/creds.json",
         }
 
-        with patch.object(
-            config, "_ensure_access_token", return_value=("token", "project")
-        ) as mock_ensure:
+        with patch.object(config, "_ensure_access_token", return_value=("token", "project")) as mock_ensure:
             config.validate_environment(
                 headers={},
                 model="test-model",
@@ -326,9 +324,7 @@ class TestImageEditHandlerCredentialsForwarding:
             "vertex_ai_credentials": "/path/to/creds.json",
         }
 
-        with patch.object(
-            config, "_ensure_access_token", return_value=("token", "project")
-        ) as mock_ensure:
+        with patch.object(config, "_ensure_access_token", return_value=("token", "project")) as mock_ensure:
             config.validate_environment(
                 headers={},
                 model="test-model",
@@ -398,10 +394,6 @@ class TestImageEditHandlerCredentialsForwarding:
             params = list(sig.parameters.keys())
 
             assert "litellm_params" in params, (
-                f"{config.__class__.__name__}.validate_environment "
-                "missing litellm_params parameter"
+                f"{config.__class__.__name__}.validate_environment missing litellm_params parameter"
             )
-            assert "api_base" in params, (
-                f"{config.__class__.__name__}.validate_environment "
-                "missing api_base parameter"
-            )
+            assert "api_base" in params, f"{config.__class__.__name__}.validate_environment missing api_base parameter"

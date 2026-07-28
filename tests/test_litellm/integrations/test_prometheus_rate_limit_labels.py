@@ -48,9 +48,7 @@ def test_should_include_rate_limit_labels_on_failed_requests_metric():
     original = litellm.prometheus_emit_rate_limit_labels
     try:
         litellm.prometheus_emit_rate_limit_labels = True
-        labels = PrometheusMetricLabels.get_labels(
-            "litellm_proxy_failed_requests_metric"
-        )
+        labels = PrometheusMetricLabels.get_labels("litellm_proxy_failed_requests_metric")
         assert "rate_limit_category" in labels
         assert "rate_limit_type" in labels
         # These must coexist with the legacy exception labels (back-compat).
@@ -176,9 +174,7 @@ def test_should_extract_budget_dimension_for_budget_exceeded_error():
 def test_should_serialize_rate_limit_enums_as_underlying_string_values(
     category_enum, rate_limit_enum, expected_category, expected_type
 ):
-    err = ProxyRateLimitError(
-        detail="boom", category=category_enum, rate_limit_type=rate_limit_enum
-    )
+    err = ProxyRateLimitError(detail="boom", category=category_enum, rate_limit_type=rate_limit_enum)
     category, rate_limit_type = PrometheusLogger._extract_rate_limit_labels(err)
     assert category == expected_category
     assert rate_limit_type == expected_type
@@ -208,9 +204,7 @@ def test_should_keep_provider_prefixed_exception_class_for_vendor_rate_limit_err
 
 
 def test_should_preserve_exception_class_name_for_unrelated_exceptions():
-    assert PrometheusLogger._get_exception_class_name(ValueError("nope")) == (
-        "ValueError"
-    )
+    assert PrometheusLogger._get_exception_class_name(ValueError("nope")) == ("ValueError")
 
 
 # ---------------------------------------------------------------------------
@@ -226,16 +220,12 @@ async def test_should_populate_rate_limit_labels_for_proxy_rate_limit_error_on_f
     ``UserAPIKeyLabelValues`` must carry both new labels AND keep
     ``exception_class="HTTPException"`` for back-compat.
     """
-    with patch(
-        "litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None
-    ):
+    with patch("litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None):
         logger = PrometheusLogger()
         logger.litellm_proxy_failed_requests_metric = MagicMock()
         logger.litellm_proxy_total_requests_metric = MagicMock()
         logger.get_labels_for_metric = MagicMock(
-            return_value=PrometheusMetricLabels.get_labels(
-                "litellm_proxy_failed_requests_metric"
-            )
+            return_value=PrometheusMetricLabels.get_labels("litellm_proxy_failed_requests_metric")
         )
 
     err = ProxyRateLimitError(
@@ -244,9 +234,7 @@ async def test_should_populate_rate_limit_labels_for_proxy_rate_limit_error_on_f
         rate_limit_type=RateLimitType.REQUESTS,
     )
 
-    with patch(
-        "litellm.integrations.prometheus.prometheus_label_factory"
-    ) as mock_label_factory:
+    with patch("litellm.integrations.prometheus.prometheus_label_factory") as mock_label_factory:
         mock_label_factory.return_value = {}
         await logger.async_post_call_failure_hook(
             request_data={"model": "gpt-4o-mini", "metadata": {}},
@@ -265,23 +253,17 @@ async def test_should_populate_rate_limit_labels_for_proxy_rate_limit_error_on_f
 
 @pytest.mark.asyncio
 async def test_should_populate_rate_limit_labels_for_vendor_rate_limit_error_on_failure_hook():
-    with patch(
-        "litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None
-    ):
+    with patch("litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None):
         logger = PrometheusLogger()
         logger.litellm_proxy_failed_requests_metric = MagicMock()
         logger.litellm_proxy_total_requests_metric = MagicMock()
         logger.get_labels_for_metric = MagicMock(
-            return_value=PrometheusMetricLabels.get_labels(
-                "litellm_proxy_failed_requests_metric"
-            )
+            return_value=PrometheusMetricLabels.get_labels("litellm_proxy_failed_requests_metric")
         )
 
     err = RateLimitError(message="upstream 429", llm_provider="openai", model="gpt-4o")
 
-    with patch(
-        "litellm.integrations.prometheus.prometheus_label_factory"
-    ) as mock_label_factory:
+    with patch("litellm.integrations.prometheus.prometheus_label_factory") as mock_label_factory:
         mock_label_factory.return_value = {}
         await logger.async_post_call_failure_hook(
             request_data={"model": "gpt-4o", "metadata": {}},
@@ -300,21 +282,15 @@ async def test_should_populate_rate_limit_labels_for_vendor_rate_limit_error_on_
 
 @pytest.mark.asyncio
 async def test_should_leave_rate_limit_labels_blank_for_non_rate_limit_failure():
-    with patch(
-        "litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None
-    ):
+    with patch("litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None):
         logger = PrometheusLogger()
         logger.litellm_proxy_failed_requests_metric = MagicMock()
         logger.litellm_proxy_total_requests_metric = MagicMock()
         logger.get_labels_for_metric = MagicMock(
-            return_value=PrometheusMetricLabels.get_labels(
-                "litellm_proxy_failed_requests_metric"
-            )
+            return_value=PrometheusMetricLabels.get_labels("litellm_proxy_failed_requests_metric")
         )
 
-    with patch(
-        "litellm.integrations.prometheus.prometheus_label_factory"
-    ) as mock_label_factory:
+    with patch("litellm.integrations.prometheus.prometheus_label_factory") as mock_label_factory:
         mock_label_factory.return_value = {}
         await logger.async_post_call_failure_hook(
             request_data={"model": "gpt-4o", "metadata": {}},
@@ -329,9 +305,7 @@ async def test_should_leave_rate_limit_labels_blank_for_non_rate_limit_failure()
 
 
 def _logger_with_mock_virtual_key_gauges() -> PrometheusLogger:
-    with patch(
-        "litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None
-    ):
+    with patch("litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None):
         logger = PrometheusLogger()
     logger.litellm_remaining_api_key_requests_for_model = MagicMock()
     logger.litellm_remaining_api_key_tokens_for_model = MagicMock()
@@ -380,12 +354,8 @@ def test_should_read_v3_remaining_headers_when_metadata_keys_absent():
 
     _set_virtual_key_metrics(logger, kwargs)
 
-    logger.litellm_remaining_api_key_requests_for_model.labels.return_value.set.assert_called_once_with(
-        42
-    )
-    logger.litellm_remaining_api_key_tokens_for_model.labels.return_value.set.assert_called_once_with(
-        900
-    )
+    logger.litellm_remaining_api_key_requests_for_model.labels.return_value.set.assert_called_once_with(42)
+    logger.litellm_remaining_api_key_tokens_for_model.labels.return_value.set.assert_called_once_with(900)
 
 
 def test_should_prefer_legacy_metadata_keys_over_v3_headers():
@@ -405,12 +375,8 @@ def test_should_prefer_legacy_metadata_keys_over_v3_headers():
 
     _set_virtual_key_metrics(logger, kwargs)
 
-    logger.litellm_remaining_api_key_requests_for_model.labels.return_value.set.assert_called_once_with(
-        3
-    )
-    logger.litellm_remaining_api_key_tokens_for_model.labels.return_value.set.assert_called_once_with(
-        200
-    )
+    logger.litellm_remaining_api_key_requests_for_model.labels.return_value.set.assert_called_once_with(3)
+    logger.litellm_remaining_api_key_tokens_for_model.labels.return_value.set.assert_called_once_with(200)
 
 
 def test_should_treat_zero_v3_remaining_as_zero():
@@ -424,12 +390,8 @@ def test_should_treat_zero_v3_remaining_as_zero():
 
     _set_virtual_key_metrics(logger, kwargs)
 
-    logger.litellm_remaining_api_key_requests_for_model.labels.return_value.set.assert_called_once_with(
-        0
-    )
-    logger.litellm_remaining_api_key_tokens_for_model.labels.return_value.set.assert_called_once_with(
-        0
-    )
+    logger.litellm_remaining_api_key_requests_for_model.labels.return_value.set.assert_called_once_with(0)
+    logger.litellm_remaining_api_key_tokens_for_model.labels.return_value.set.assert_called_once_with(0)
 
 
 def test_should_keep_maxsize_sentinel_when_no_rate_limit_source_present():
@@ -443,12 +405,8 @@ def test_should_keep_maxsize_sentinel_when_no_rate_limit_source_present():
 
     _set_virtual_key_metrics(logger, kwargs)
 
-    logger.litellm_remaining_api_key_requests_for_model.labels.return_value.set.assert_called_once_with(
-        sys.maxsize
-    )
-    logger.litellm_remaining_api_key_tokens_for_model.labels.return_value.set.assert_called_once_with(
-        sys.maxsize
-    )
+    logger.litellm_remaining_api_key_requests_for_model.labels.return_value.set.assert_called_once_with(sys.maxsize)
+    logger.litellm_remaining_api_key_tokens_for_model.labels.return_value.set.assert_called_once_with(sys.maxsize)
 
 
 @pytest.mark.parametrize("bad_value", ["not-a-number", None, True])
@@ -465,9 +423,5 @@ def test_should_ignore_non_int_v3_header_values(bad_value):
 
     _set_virtual_key_metrics(logger, kwargs)
 
-    logger.litellm_remaining_api_key_requests_for_model.labels.return_value.set.assert_called_once_with(
-        sys.maxsize
-    )
-    logger.litellm_remaining_api_key_tokens_for_model.labels.return_value.set.assert_called_once_with(
-        sys.maxsize
-    )
+    logger.litellm_remaining_api_key_requests_for_model.labels.return_value.set.assert_called_once_with(sys.maxsize)
+    logger.litellm_remaining_api_key_tokens_for_model.labels.return_value.set.assert_called_once_with(sys.maxsize)

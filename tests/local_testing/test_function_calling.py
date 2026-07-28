@@ -8,9 +8,7 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 import litellm
@@ -29,9 +27,7 @@ def get_current_weather(location, unit="fahrenheit"):
     if "tokyo" in location.lower():
         return json.dumps({"location": "Tokyo", "temperature": "10", "unit": "celsius"})
     elif "san francisco" in location.lower():
-        return json.dumps(
-            {"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}
-        )
+        return json.dumps({"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"})
     elif "paris" in location.lower():
         return json.dumps({"location": "Paris", "temperature": "22", "unit": "celsius"})
     else:
@@ -98,9 +94,7 @@ def test_aaparallel_function_call(model):
         tool_calls = response_message.tool_calls
 
         print("Expecting there to be 3 tool calls")
-        assert (
-            len(tool_calls) > 0
-        )  # this has to call the function for SF, Tokyo and paris
+        assert len(tool_calls) > 0  # this has to call the function for SF, Tokyo and paris
 
         # Step 2: check if the model wanted to call a function
         print(f"tool_calls: {tool_calls}")
@@ -110,9 +104,7 @@ def test_aaparallel_function_call(model):
             available_functions = {
                 "get_current_weather": get_current_weather,
             }  # only one function in this example, but you can have multiple
-            messages.append(
-                response_message
-            )  # extend conversation with assistant's reply
+            messages.append(response_message)  # extend conversation with assistant's reply
             print("Response message\n", response_message)
             # Step 4: send the info for each function call and function response to the model
             for tool_call in tool_calls:
@@ -209,9 +201,7 @@ def test_aaparallel_function_call_with_anthropic_thinking(model):
         tool_calls = response_message.tool_calls
 
         print("Expecting there to be 3 tool calls")
-        assert (
-            len(tool_calls) > 0
-        )  # this has to call the function for SF, Tokyo and paris
+        assert len(tool_calls) > 0  # this has to call the function for SF, Tokyo and paris
 
         # Step 2: check if the model wanted to call a function
         print(f"tool_calls: {tool_calls}")
@@ -221,9 +211,7 @@ def test_aaparallel_function_call_with_anthropic_thinking(model):
             available_functions = {
                 "get_current_weather": get_current_weather,
             }  # only one function in this example, but you can have multiple
-            messages.append(
-                response_message
-            )  # extend conversation with assistant's reply
+            messages.append(response_message)  # extend conversation with assistant's reply
             print("Response message\n", response_message)
             # Step 4: send the info for each function call and function response to the model
             for tool_call in tool_calls:
@@ -335,9 +323,7 @@ _PARALLEL_TOOL_HISTORY_MESSAGES = [
         ),
     ],
 )
-def test_parallel_function_call_anthropic_error_msg(
-    model, messages, expect_unsupported_params_error
-):
+def test_parallel_function_call_anthropic_error_msg(model, messages, expect_unsupported_params_error):
     """
     Tool history without an explicit ``tools`` param:
 
@@ -433,9 +419,7 @@ def test_parallel_function_call_stream():
 
         print("length of tool calls", len(tool_calls))
         print("Expecting there to be 3 tool calls")
-        assert (
-            len(tool_calls) > 1
-        )  # this has to call the function for SF, Tokyo and parise
+        assert len(tool_calls) > 1  # this has to call the function for SF, Tokyo and parise
 
         # Step 2: check if the model wanted to call a function
         if tool_calls:
@@ -444,9 +428,7 @@ def test_parallel_function_call_stream():
             available_functions = {
                 "get_current_weather": get_current_weather,
             }  # only one function in this example, but you can have multiple
-            messages.append(
-                response_message
-            )  # extend conversation with assistant's reply
+            messages.append(response_message)  # extend conversation with assistant's reply
             print("Response message\n", response_message)
             # Step 4: send the info for each function call and function response to the model
             for tool_call in tool_calls:
@@ -478,9 +460,7 @@ def test_parallel_function_call_stream():
 # test_parallel_function_call_stream()
 
 
-@pytest.mark.skip(
-    reason="Flaky test. Groq function calling is not reliable for ci/cd testing."
-)
+@pytest.mark.skip(reason="Flaky test. Groq function calling is not reliable for ci/cd testing.")
 def test_groq_parallel_function_call():
     litellm.set_verbose = True
     try:
@@ -529,12 +509,8 @@ def test_groq_parallel_function_call():
         if hasattr(response_message, "tool_calls"):
             tool_calls = response_message.tool_calls
 
-            assert isinstance(
-                response.choices[0].message.tool_calls[0].function.name, str
-            )
-            assert isinstance(
-                response.choices[0].message.tool_calls[0].function.arguments, str
-            )
+            assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+            assert isinstance(response.choices[0].message.tool_calls[0].function.arguments, str)
 
             print("length of tool calls", len(tool_calls))
 
@@ -545,9 +521,7 @@ def test_groq_parallel_function_call():
                 available_functions = {
                     "get_current_weather": get_current_weather,
                 }  # only one function in this example, but you can have multiple
-                messages.append(
-                    response_message
-                )  # extend conversation with assistant's reply
+                messages.append(response_message)  # extend conversation with assistant's reply
                 print("Response message\n", response_message)
                 # Step 4: send the info for each function call and function response to the model
                 for tool_call in tool_calls:

@@ -14,9 +14,7 @@ async def test_get_favicon_default():
     """Test that get_favicon returns the default favicon when no URL set."""
     os.environ.pop("LITELLM_FAVICON_URL", None)
 
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
-    ) as ac:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as ac:
         response = await ac.get("/get_favicon")
 
     assert response.status_code in [200, 404]

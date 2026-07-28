@@ -61,9 +61,7 @@ def get_deferred_tools() -> List[Dict[str, Any]]:
             "description": "Search the web for information",
             "input_schema": {
                 "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "The search query"}
-                },
+                "properties": {"query": {"type": "string", "description": "The search query"}},
                 "required": ["query"],
             },
             "defer_loading": True,
@@ -188,9 +186,7 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
         # The model should attempt to use tools when asked about weather
         # It might use tool_search first, or directly use get_weather if discovered
         if response.get("stop_reason") == "tool_use":
-            assert (
-                len(tool_uses) > 0
-            ), "Expected tool_use blocks when stop_reason is tool_use"
+            assert len(tool_uses) > 0, "Expected tool_use blocks when stop_reason is tool_use"
 
     @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=5)
@@ -222,9 +218,7 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
                         try:
                             json_data = json.loads(line[6:])
                             chunks.append(json_data)
-                            print(
-                                f"Chunk: {json.dumps(json_data, indent=2, default=str)}"
-                            )
+                            print(f"Chunk: {json.dumps(json_data, indent=2, default=str)}")
                         except json.JSONDecodeError:
                             pass
             elif isinstance(chunk, dict):
@@ -249,9 +243,7 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
         litellm._turn_on_debug()
 
         tools = self.get_tools_with_tool_search()
-        messages = [
-            {"role": "user", "content": "What's the stock price of Apple (AAPL)?"}
-        ]
+        messages = [{"role": "user", "content": "What's the stock price of Apple (AAPL)?"}]
 
         response = await litellm.anthropic.messages.acreate(
             model=self.get_model(),

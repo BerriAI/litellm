@@ -46,9 +46,7 @@ async def test_max_iterations_basic_enforcement():
 
     mock_agent = _make_mock_agent(max_iterations=3)
 
-    with patch(
-        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
-    ) as mock_registry:
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry") as mock_registry:
         mock_registry.get_agent_by_id.return_value = mock_agent
 
         # First 3 requests should succeed
@@ -91,9 +89,7 @@ async def test_max_iterations_different_sessions_independent():
 
     mock_agent = _make_mock_agent(max_iterations=2)
 
-    with patch(
-        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
-    ) as mock_registry:
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry") as mock_registry:
         mock_registry.get_agent_by_id.return_value = mock_agent
 
         # Session A: 2 calls succeed

@@ -80,36 +80,30 @@ def _assert_cell(
     else:
         assert thinking is not None, "expected thinking present, got omit"
         assert thinking.get("type") == cell.thinking_type, (
-            f"expected thinking.type={cell.thinking_type!r}, "
-            f"got {thinking.get('type')!r}"
+            f"expected thinking.type={cell.thinking_type!r}, got {thinking.get('type')!r}"
         )
 
     if cell.output_config_effort is OMIT:
-        assert (
-            output_config is None or "effort" not in output_config
-        ), f"expected output_config.effort omitted, got {output_config!r}"
+        assert output_config is None or "effort" not in output_config, (
+            f"expected output_config.effort omitted, got {output_config!r}"
+        )
     else:
         assert output_config is not None, (
-            f"expected output_config.effort={cell.output_config_effort!r}, "
-            "got output_config omitted"
+            f"expected output_config.effort={cell.output_config_effort!r}, got output_config omitted"
         )
         assert output_config.get("effort") == cell.output_config_effort, (
-            f"expected output_config.effort={cell.output_config_effort!r}, "
-            f"got {output_config.get('effort')!r}"
+            f"expected output_config.effort={cell.output_config_effort!r}, got {output_config.get('effort')!r}"
         )
 
     if cell.thinking_budget_tokens is not OMIT:
         assert thinking is not None
         assert thinking.get("budget_tokens") == cell.thinking_budget_tokens, (
-            f"expected thinking.budget_tokens={cell.thinking_budget_tokens!r}, "
-            f"got {thinking.get('budget_tokens')!r}"
+            f"expected thinking.budget_tokens={cell.thinking_budget_tokens!r}, got {thinking.get('budget_tokens')!r}"
         )
 
     if cell.max_tokens is not OMIT:
         wire_max = _max_tokens_from_body(body, route_name)
-        assert (
-            wire_max == cell.max_tokens
-        ), f"expected max_tokens={cell.max_tokens!r}, got {wire_max!r}"
+        assert wire_max == cell.max_tokens, f"expected max_tokens={cell.max_tokens!r}, got {wire_max!r}"
 
 
 _PARAMS: List[Tuple[str, ModelEntry, str, CellExpectation]] = all_cells()
@@ -148,9 +142,7 @@ async def _call_chat(model: ModelEntry, effort: str) -> Tuple[int, Optional[Exce
         return _classify_status(exc), exc
 
 
-async def _call_messages(
-    model: ModelEntry, effort: str
-) -> Tuple[int, Optional[Exception]]:
+async def _call_messages(model: ModelEntry, effort: str) -> Tuple[int, Optional[Exception]]:
     kwargs = _build_completion_kwargs(model, effort)
     try:
         await litellm.anthropic_messages(**kwargs)
@@ -160,9 +152,7 @@ async def _call_messages(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("route_name", "model", "effort", "cell"), _PARAMS, ids=_PARAM_IDS
-)
+@pytest.mark.parametrize(("route_name", "model", "effort", "cell"), _PARAMS, ids=_PARAM_IDS)
 async def test_reasoning_effort_grid(
     route_name: str,
     model: ModelEntry,
@@ -194,17 +184,12 @@ async def test_reasoning_effort_grid(
         _assert_cell(route_name, body, status, cell)
     except AssertionError:
         if exc is not None:
-            raise AssertionError(
-                f"underlying exception ({type(exc).__name__}): {exc}"
-            ) from None
+            raise AssertionError(f"underlying exception ({type(exc).__name__}): {exc}") from None
         raise
 
 
 def test_grid_cell_count() -> None:
-    assert len(_PARAMS) == 31 * 11, (
-        f"expected 341 cells (31 provider x model combos x 11 efforts), "
-        f"got {len(_PARAMS)}"
-    )
+    assert len(_PARAMS) == 31 * 11, f"expected 341 cells (31 provider x model combos x 11 efforts), got {len(_PARAMS)}"
 
 
 def test_grid_route_coverage() -> None:
@@ -232,10 +217,7 @@ def test_model_unavailable_tolerates_only_the_declared_error() -> None:
     )
 
     assert _model_unavailable(gated, entitlement_error) is True
-    assert (
-        _model_unavailable(gated, Exception("ThrottlingException: rate exceeded"))
-        is False
-    )
+    assert _model_unavailable(gated, Exception("ThrottlingException: rate exceeded")) is False
     assert _model_unavailable(gated, None) is False
 
     ungated = ModelEntry(

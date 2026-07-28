@@ -17,34 +17,26 @@ async def test_delete_prompt_success():
     from litellm.proxy.prompts.prompt_endpoints import delete_prompt
 
     # Mock user auth
-    mock_user_auth = UserAPIKeyAuth(
-        api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
-    )
+    mock_user_auth = UserAPIKeyAuth(api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN)
 
     # Mock DB Client
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_prompttable.delete_many = AsyncMock(return_value=None)
 
     # Mock In-Memory Registry
-    with patch(
-        "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
-    ) as mock_registry:
+    with patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry:
         # User passes "test_prompt.v2"
         # We simulate that get_prompt_by_id returns the prompt spec for v2
         prompt_spec = PromptSpec(
             prompt_id="test_prompt.v2",
-            litellm_params=PromptLiteLLMParams(
-                prompt_id="test_prompt", prompt_integration="dotprompt"
-            ),
+            litellm_params=PromptLiteLLMParams(prompt_id="test_prompt", prompt_integration="dotprompt"),
             prompt_info=PromptInfo(prompt_type="db"),
         )
         mock_registry.get_prompt_by_id.return_value = prompt_spec
 
         # Patch the prisma client in the endpoint module
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
-            response = await delete_prompt(
-                prompt_id="test_prompt.v2", user_api_key_dict=mock_user_auth
-            )
+            response = await delete_prompt(prompt_id="test_prompt.v2", user_api_key_dict=mock_user_auth)
 
             # Assertions
             expected_base_id = "test_prompt"
@@ -55,13 +47,9 @@ async def test_delete_prompt_success():
             )
 
             # 2. Memory deletion should use base ID
-            mock_registry.delete_prompts_by_base_id.assert_called_once_with(
-                expected_base_id
-            )
+            mock_registry.delete_prompts_by_base_id.assert_called_once_with(expected_base_id)
 
-            assert response == {
-                "message": f"Prompt {expected_base_id} deleted successfully"
-            }
+            assert response == {"message": f"Prompt {expected_base_id} deleted successfully"}
 
 
 @pytest.mark.asyncio
@@ -73,18 +61,14 @@ async def test_delete_prompt_by_base_id_success():
     from litellm.proxy.prompts.prompt_endpoints import delete_prompt
 
     # Mock user auth
-    mock_user_auth = UserAPIKeyAuth(
-        api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
-    )
+    mock_user_auth = UserAPIKeyAuth(api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN)
 
     # Mock DB Client
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_prompttable.delete_many = AsyncMock(return_value=None)
 
     # Mock In-Memory Registry
-    with patch(
-        "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
-    ) as mock_registry:
+    with patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry:
         # User passes "test_prompt" (base ID)
         # 1. get_prompt_by_id("test_prompt") -> None (if it's not registered as base)
         # 2. It calls get_latest_version_prompt_id -> returns "test_prompt.v3"
@@ -97,9 +81,7 @@ async def test_delete_prompt_by_base_id_success():
             if prompt_id == "test_prompt.v3":
                 return PromptSpec(
                     prompt_id="test_prompt.v3",
-                    litellm_params=PromptLiteLLMParams(
-                        prompt_id="test_prompt", prompt_integration="dotprompt"
-                    ),
+                    litellm_params=PromptLiteLLMParams(prompt_id="test_prompt", prompt_integration="dotprompt"),
                     prompt_info=PromptInfo(prompt_type="db"),
                 )
             return None
@@ -113,9 +95,7 @@ async def test_delete_prompt_by_base_id_success():
 
         # Patch the prisma client in the endpoint module
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
-            response = await delete_prompt(
-                prompt_id="test_prompt", user_api_key_dict=mock_user_auth
-            )
+            response = await delete_prompt(prompt_id="test_prompt", user_api_key_dict=mock_user_auth)
 
             # Assertions
             expected_base_id = "test_prompt"
@@ -126,13 +106,9 @@ async def test_delete_prompt_by_base_id_success():
             )
 
             # 2. Memory deletion should use base ID
-            mock_registry.delete_prompts_by_base_id.assert_called_once_with(
-                expected_base_id
-            )
+            mock_registry.delete_prompts_by_base_id.assert_called_once_with(expected_base_id)
 
-            assert response == {
-                "message": f"Prompt {expected_base_id} deleted successfully"
-            }
+            assert response == {"message": f"Prompt {expected_base_id} deleted successfully"}
 
 
 @pytest.mark.asyncio
@@ -143,24 +119,18 @@ async def test_get_prompt_info_by_base_id():
     from litellm.proxy.prompts.prompt_endpoints import get_prompt_info
 
     # Mock user auth
-    mock_user_auth = UserAPIKeyAuth(
-        api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
-    )
+    mock_user_auth = UserAPIKeyAuth(api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN)
 
     # Mock In-Memory Registry
     # Patch prisma_client to None to avoid leaking state from other tests
     with (
         patch("litellm.proxy.proxy_server.prisma_client", None),
-        patch(
-            "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
-        ) as mock_registry,
+        patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry,
     ):
         # Setup mocks behavior
         prompt_spec_v3 = PromptSpec(
             prompt_id="test_prompt.v3",
-            litellm_params=PromptLiteLLMParams(
-                prompt_id="test_prompt", prompt_integration="dotprompt"
-            ),
+            litellm_params=PromptLiteLLMParams(prompt_id="test_prompt", prompt_integration="dotprompt"),
             prompt_info=PromptInfo(prompt_type="db"),
         )
 
@@ -183,11 +153,7 @@ async def test_get_prompt_info_by_base_id():
         # We also need to mock get_prompt_callback_by_id to avoid content extraction errors/logic
         mock_registry.get_prompt_callback_by_id.return_value = None
 
-        response = await get_prompt_info(
-            prompt_id="test_prompt", user_api_key_dict=mock_user_auth
-        )
+        response = await get_prompt_info(prompt_id="test_prompt", user_api_key_dict=mock_user_auth)
 
-        assert (
-            response.prompt_spec.prompt_id == "test_prompt"
-        )  # Should return base ID in spec response
+        assert response.prompt_spec.prompt_id == "test_prompt"  # Should return base ID in spec response
         assert response.prompt_spec.version == 3  # Should identify it as version 3

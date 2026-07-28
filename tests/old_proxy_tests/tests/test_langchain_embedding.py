@@ -9,9 +9,7 @@ embeddings = OpenAIEmbeddings(
 )
 
 
-query_result = embeddings.embed_query(
-    "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
-)
+query_result = embeddings.embed_query("gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png")
 # print(len(query_result))
 # print(query_result[:5])
 print(query_result)

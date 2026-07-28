@@ -74,9 +74,7 @@ class TestBuildPartForInput:
         assert part["file_data"]["file_uri"] == GCS_URL
 
     def test_file_reference_resolved(self):
-        resolved = {
-            "files/abc": {"mime_type": "image/jpeg", "uri": "https://example.com/abc"}
-        }
+        resolved = {"files/abc": {"mime_type": "image/jpeg", "uri": "https://example.com/abc"}}
         part = _build_part_for_input("files/abc", resolved_files=resolved)
         assert part["file_data"] is not None
         assert part["file_data"]["mime_type"] == "image/jpeg"
@@ -115,10 +113,7 @@ class TestTransformOpenaiInputGeminiContent:
         )
         assert len(result["requests"]) == 2
         # First request is text
-        assert (
-            result["requests"][0]["content"]["parts"][0]["text"]
-            == "The food was delicious"
-        )
+        assert result["requests"][0]["content"]["parts"][0]["text"] == "The food was delicious"
         # Second request is image
         assert result["requests"][1]["content"]["parts"][0]["inline_data"] is not None
 
@@ -217,9 +212,7 @@ class TestProcessResponse:
     """Test that process_response sets correct indices."""
 
     def test_single_embedding_index(self):
-        predictions: VertexAIBatchEmbeddingsResponseObject = {
-            "embeddings": [{"values": [0.1, 0.2]}]
-        }
+        predictions: VertexAIBatchEmbeddingsResponseObject = {"embeddings": [{"values": [0.1, 0.2]}]}
         model_response = EmbeddingResponse()
         result = process_response(
             input="hello",
@@ -270,9 +263,7 @@ class TestProcessResponse:
 
     def test_nested_input_token_counting(self):
         """Nested list: only plain-text sub-elements should be counted."""
-        predictions: VertexAIBatchEmbeddingsResponseObject = {
-            "embeddings": [{"values": [0.1, 0.2]}]
-        }
+        predictions: VertexAIBatchEmbeddingsResponseObject = {"embeddings": [{"values": [0.1, 0.2]}]}
         result = process_response(
             input=[["a red shoe", IMAGE_DATA_URI]],
             model_response=EmbeddingResponse(),
@@ -374,9 +365,7 @@ class TestProcessEmbedContentResponseUsage:
             response_json=response_json,
         )
         assert result.usage.prompt_tokens == 516
-        assert result.usage.prompt_tokens_details.video_length_seconds == pytest.approx(
-            2.0
-        )
+        assert result.usage.prompt_tokens_details.video_length_seconds == pytest.approx(2.0)
         assert result.usage.prompt_tokens_details.text_tokens == 1
 
     def test_missing_usage_metadata_does_not_estimate_from_base64(self):
@@ -456,9 +445,7 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert result.usage.prompt_tokens_details.image_count == 0
         assert result.usage.prompt_tokens_details.audio_tokens == 64
-        assert result.usage.prompt_tokens_details.audio_length_seconds == pytest.approx(
-            2.0
-        )
+        assert result.usage.prompt_tokens_details.audio_length_seconds == pytest.approx(2.0)
 
         prompt_cost, _ = generic_cost_per_token(
             model=self.MODEL,
@@ -487,12 +474,8 @@ class TestProcessEmbedContentResponseUsage:
             response_json=response_json,
         )
         assert result.usage.prompt_tokens_details.text_tokens == 1
-        assert result.usage.prompt_tokens_details.video_length_seconds == pytest.approx(
-            2.0
-        )
-        assert result.usage.prompt_tokens_details.audio_length_seconds == pytest.approx(
-            2.0
-        )
+        assert result.usage.prompt_tokens_details.video_length_seconds == pytest.approx(2.0)
+        assert result.usage.prompt_tokens_details.audio_length_seconds == pytest.approx(2.0)
 
         prompt_cost, _ = generic_cost_per_token(
             model=self.MODEL,

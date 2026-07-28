@@ -311,9 +311,7 @@ class RateLimiter:
             return cfg.burst, now
 
     @staticmethod
-    def _refill(
-        tokens: float, last_refill: float, now: float, cfg: ProviderConfig
-    ) -> tuple:
+    def _refill(tokens: float, last_refill: float, now: float, cfg: ProviderConfig) -> tuple:
         """Apply elapsed time to the bucket, capped at burst.
 
         Negative elapsed (clock went backward, e.g. across host
@@ -326,9 +324,7 @@ class RateLimiter:
 
     @staticmethod
     def _write_state(fd: int, tokens: float, last_refill: float) -> None:
-        payload = json.dumps({"tokens": tokens, "last_refill": last_refill}).encode(
-            "utf-8"
-        )
+        payload = json.dumps({"tokens": tokens, "last_refill": last_refill}).encode("utf-8")
         os.lseek(fd, 0, os.SEEK_SET)
         os.ftruncate(fd, 0)
         os.write(fd, payload)

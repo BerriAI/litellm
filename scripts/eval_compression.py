@@ -757,9 +757,7 @@ SYSTEM_MSG = (
 def call_llm(model: str, messages: list[dict]) -> dict:
     """Call model via litellm. Returns dict with response text and usage."""
     t0 = time.time()
-    resp = litellm.completion(
-        model=model, messages=messages, temperature=0.0, max_tokens=2048
-    )
+    resp = litellm.completion(model=model, messages=messages, temperature=0.0, max_tokens=2048)
     latency_ms = (time.time() - t0) * 1000
 
     text = resp.choices[0].message.content or ""
@@ -849,10 +847,7 @@ def build_messages(
     messages.append(
         {
             "role": "user",
-            "content": (
-                "Complete the following Python function. Return ONLY the code.\n\n"
-                + problem["prompt"]
-            ),
+            "content": ("Complete the following Python function. Return ONLY the code.\n\n" + problem["prompt"]),
         }
     )
     return messages
@@ -936,15 +931,11 @@ def aggregate(results: list[RunResult]) -> dict:
         "passed": passed,
         "total": total,
         "avg_prompt_tokens": round(statistics.mean(r.prompt_tokens for r in results)),
-        "avg_completion_tokens": round(
-            statistics.mean(r.completion_tokens for r in results)
-        ),
+        "avg_completion_tokens": round(statistics.mean(r.completion_tokens for r in results)),
         "avg_total_tokens": round(statistics.mean(r.total_tokens for r in results)),
         "avg_latency_ms": round(statistics.mean(r.latency_ms for r in results), 1),
         "median_latency_ms": round(statistics.median(r.latency_ms for r in results), 1),
-        "avg_compression_ratio": round(
-            statistics.mean(r.compression_ratio for r in results), 4
-        ),
+        "avg_compression_ratio": round(statistics.mean(r.compression_ratio for r in results), 4),
     }
 
 
@@ -1029,28 +1020,20 @@ def run_benchmark(
     print("RESULTS")
     print(f"{'=' * 60}")
     print(f"\n  Baseline (with {padding_factor} distractor snippets, no compression):")
-    print(
-        f"    Pass rate:         {base_agg['pass_rate']}% ({base_agg['passed']}/{base_agg['total']})"
-    )
+    print(f"    Pass rate:         {base_agg['pass_rate']}% ({base_agg['passed']}/{base_agg['total']})")
     print(f"    Avg prompt tokens: {base_agg['avg_prompt_tokens']}")
     print(f"    Avg total tokens:  {base_agg['avg_total_tokens']}")
     print(f"    Avg latency:       {base_agg['avg_latency_ms']}ms")
 
     print(f"\n  Compressed (litellm.compress → then call model):")
-    print(
-        f"    Pass rate:         {comp_agg['pass_rate']}% ({comp_agg['passed']}/{comp_agg['total']})"
-    )
+    print(f"    Pass rate:         {comp_agg['pass_rate']}% ({comp_agg['passed']}/{comp_agg['total']})")
     print(f"    Avg prompt tokens: {comp_agg['avg_prompt_tokens']}")
     print(f"    Avg total tokens:  {comp_agg['avg_total_tokens']}")
     print(f"    Avg latency:       {comp_agg['avg_latency_ms']}ms")
     print(f"    Avg compression:   {comp_agg['avg_compression_ratio']:.2%}")
 
     token_savings = base_agg["avg_prompt_tokens"] - comp_agg["avg_prompt_tokens"]
-    token_pct = (
-        round(token_savings / base_agg["avg_prompt_tokens"] * 100, 1)
-        if base_agg["avg_prompt_tokens"]
-        else 0
-    )
+    token_pct = round(token_savings / base_agg["avg_prompt_tokens"] * 100, 1) if base_agg["avg_prompt_tokens"] else 0
     latency_diff = base_agg["avg_latency_ms"] - comp_agg["avg_latency_ms"]
     pass_diff = comp_agg["pass_rate"] - base_agg["pass_rate"]
 
@@ -1087,15 +1070,9 @@ def run_benchmark(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Prompt Compression Evaluation Harness"
-    )
-    parser.add_argument(
-        "--model", default="gpt-4o-mini", help="Model name (litellm format)"
-    )
-    parser.add_argument(
-        "--problems", type=int, default=0, help="Number of problems (0 = all)"
-    )
+    parser = argparse.ArgumentParser(description="Prompt Compression Evaluation Harness")
+    parser.add_argument("--model", default="gpt-4o-mini", help="Model name (litellm format)")
+    parser.add_argument("--problems", type=int, default=0, help="Number of problems (0 = all)")
     parser.add_argument("--runs", type=int, default=1, help="Number of runs per mode")
     parser.add_argument(
         "--padding-factor",

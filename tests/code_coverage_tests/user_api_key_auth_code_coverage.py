@@ -58,13 +58,9 @@ def get_all_functions_called_in_tests(base_dir):
                     if file == "test_router_validate_fallbacks.py":
                         print(f"tree: {tree}")
                     for node in ast.walk(tree):
-                        if isinstance(node, ast.Call) and isinstance(
-                            node.func, ast.Name
-                        ):
+                        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                             called_functions.add(node.func.id)
-                        elif isinstance(node, ast.Call) and isinstance(
-                            node.func, ast.Attribute
-                        ):
+                        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                             called_functions.add(node.func.attr)
 
     return called_functions
@@ -104,9 +100,7 @@ def main():
         router_functions.extend(get_functions_from_router(file))
     print("router_functions: ", router_functions)
     called_functions_in_tests = get_all_functions_called_in_tests(tests_dir)
-    untested_functions = [
-        fn for fn in router_functions if fn not in called_functions_in_tests
-    ]
+    untested_functions = [fn for fn in router_functions if fn not in called_functions_in_tests]
 
     if untested_functions:
         all_untested_functions = []

@@ -1,14 +1,14 @@
 """
 LiteLLM Migration Script!
 
-Takes a config.yaml and calls /model/new 
+Takes a config.yaml and calls /model/new
 
 Inputs:
     - File path to config.yaml
     - Proxy base url to your hosted proxy
 
 Step 1: Reads your config.yaml
-Step 2: reads `model_list` and loops through all models 
+Step 2: reads `model_list` and loops through all models
 Step 3: calls `<proxy-base-url>/model/new` for each model
 """
 
@@ -27,7 +27,6 @@ def migrate_models(config_file, proxy_base_url):
     model_list = config.get("model_list", [])
     print("model_list: ", model_list)
     for model in model_list:
-
         model_name = model.get("model_name")
         print("\nAdding model: ", model_name)
         litellm_params = model.get("litellm_params", {})
@@ -60,9 +59,7 @@ def migrate_models(config_file, proxy_base_url):
 
         print("\nlitellm_params: ", litellm_params)
         # Confirm before sending POST request
-        confirm = input(
-            "\033[92mDo you want to send the POST request with the above parameters? (y/n): \033[0m"
-        )
+        confirm = input("\033[92mDo you want to send the POST request with the above parameters? (y/n): \033[0m")
         if confirm.lower() != "y":
             print("Aborting POST request.")
             exit()
@@ -81,9 +78,7 @@ def migrate_models(config_file, proxy_base_url):
             raise Exception(f"Error: {response.status_code} - {response.text}")
 
         # Print the response for each model
-        print(
-            f"Response for model '{model_name}': Status Code:{response.status_code} - {response.text}"
-        )
+        print(f"Response for model '{model_name}': Status Code:{response.status_code} - {response.text}")
 
 
 # Usage

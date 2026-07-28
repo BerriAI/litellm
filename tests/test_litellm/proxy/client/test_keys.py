@@ -5,9 +5,7 @@ import traceback
 import pytest
 import requests
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
 import responses
@@ -94,9 +92,7 @@ def test_list_request_filters(client):
 
 def test_list_request_flags(client):
     """Test list request with boolean flag parameters"""
-    request = client.list(
-        return_full_object=True, include_team_keys=False, return_request=True
-    )
+    request = client.list(return_full_object=True, include_team_keys=False, return_request=True)
 
     assert request.params == {
         "return_full_object": "true",
@@ -328,9 +324,7 @@ def test_delete_request_with_keys_and_aliases(client):
     """Test delete request with both keys and aliases"""
     keys_to_delete = ["key1", "key2"]
     aliases_to_delete = ["alias1", "alias2"]
-    request = client.delete(
-        keys=keys_to_delete, key_aliases=aliases_to_delete, return_request=True
-    )
+    request = client.delete(keys=keys_to_delete, key_aliases=aliases_to_delete, return_request=True)
 
     assert request.json == {"keys": keys_to_delete, "key_aliases": aliases_to_delete}
 
@@ -489,17 +483,13 @@ def test_info_unauthorized_redacts_key_everywhere(client):
 def _http_error_with_key(prefix: str, status: int) -> requests.exceptions.HTTPError:
     resp = requests.Response()
     resp.status_code = status
-    return requests.exceptions.HTTPError(
-        f"{prefix} for url: http://x/key/info?key={LEAKY_KEY}", response=resp
-    )
+    return requests.exceptions.HTTPError(f"{prefix} for url: http://x/key/info?key={LEAKY_KEY}", response=resp)
 
 
 def test_unauthorized_error_redacts_wrapped_key():
     """UnauthorizedError scrubs the key in str(exc) and in the retained
     orig_exception, while preserving the response for structured access."""
-    wrapped = UnauthorizedError(
-        _http_error_with_key("401 Client Error: Unauthorized", 401)
-    )
+    wrapped = UnauthorizedError(_http_error_with_key("401 Client Error: Unauthorized", 401))
     assert LEAKY_KEY not in str(wrapped)
     assert "REDACTED" in str(wrapped)
     assert LEAKY_KEY not in str(wrapped.orig_exception)

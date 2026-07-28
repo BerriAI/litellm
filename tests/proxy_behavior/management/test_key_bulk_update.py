@@ -44,9 +44,7 @@ async def test_key_bulk_update_authz_matrix(
 ):
     caller = world.keys[actor]
     seeder = world.keys[Actor.PROXY_ADMIN].cleartext
-    target = await create_scratch_key(
-        proxy_client, seeder, scratch.prefix, user_id=caller.user_id
-    )
+    target = await create_scratch_key(proxy_client, seeder, scratch.prefix, user_id=caller.user_id)
     hashed = hash_token(target)
 
     resp = await proxy_client.post(
@@ -54,9 +52,7 @@ async def test_key_bulk_update_authz_matrix(
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"keys": [{"key": target, "max_budget": _MARKER_BUDGET}]},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value}: {resp.status_code} {resp.text}"
 
     row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": hashed})
     assert row is not None
@@ -90,15 +86,11 @@ async def test_key_bulk_update_over_max_batch_is_400(proxy_client, world):
     assert resp.status_code == 400, resp.text
 
 
-async def test_key_bulk_update_per_key_failure_is_isolated(
-    proxy_client, prisma, scratch, world
-):
+async def test_key_bulk_update_per_key_failure_is_isolated(proxy_client, prisma, scratch, world):
     """One bad key in the batch does not abort the others — it lands in
     failed_updates while the valid key is still updated."""
     admin = world.keys[Actor.PROXY_ADMIN]
-    valid = await create_scratch_key(
-        proxy_client, admin.cleartext, scratch.prefix, user_id=admin.user_id
-    )
+    valid = await create_scratch_key(proxy_client, admin.cleartext, scratch.prefix, user_id=admin.user_id)
     missing = "sk-" + uuid.uuid4().hex
 
     resp = await proxy_client.post(
@@ -117,7 +109,5 @@ async def test_key_bulk_update_per_key_failure_is_isolated(
     assert len(body["successful_updates"]) == 1
     assert len(body["failed_updates"]) == 1
 
-    row = await prisma.db.litellm_verificationtoken.find_unique(
-        where={"token": hash_token(valid)}
-    )
+    row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": hash_token(valid)})
     assert row is not None and row.max_budget == _MARKER_BUDGET

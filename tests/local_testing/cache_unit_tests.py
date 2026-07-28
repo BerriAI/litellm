@@ -11,9 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import hashlib
 import random
@@ -26,7 +24,6 @@ from litellm import completion, embedding
 
 
 class LLMCachingUnitTests(ABC):
-
     @abstractmethod
     def get_cache_type(self) -> LiteLLMCacheType:
         pass
@@ -88,8 +85,7 @@ class LLMCachingUnitTests(ABC):
                 mock_response="This number is great!",
             )
         if (
-            response1["choices"][0]["message"]["content"]
-            != response2["choices"][0]["message"]["content"]
+            response1["choices"][0]["message"]["content"] != response2["choices"][0]["message"]["content"]
         ):  # 1 and 2 should be the same
             # 1&2 have the exact same input params. This MUST Be a CACHE HIT
             print(f"response1: {response1}")
@@ -127,23 +123,15 @@ class LLMCachingUnitTests(ABC):
         # 1 & 2 should be exactly the same
         # 1 & 3 should be different, since input params are diff
 
-        if (
-            response1["choices"][0]["message"]["content"]
-            == response3["choices"][0]["message"]["content"]
-        ):
+        if response1["choices"][0]["message"]["content"] == response3["choices"][0]["message"]["content"]:
             # if input params like max_tokens, temperature are diff it should NOT be a cache hit
             print(f"response1: {response1}")
             print(f"response3: {response3}")
-            pytest.fail(
-                f"Response 1 == response 3. Same model, diff params shoudl not cache Error"
-                f" occurred:"
-            )
+            pytest.fail(f"Response 1 == response 3. Same model, diff params shoudl not cache Error occurred:")
 
         assert response1.id == response2.id
         assert response1.created == response2.created
-        assert (
-            response1.choices[0].message.content == response2.choices[0].message.content
-        )
+        assert response1.choices[0].message.content == response2.choices[0].message.content
 
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio

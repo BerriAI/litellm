@@ -11,9 +11,7 @@ import io
 import os
 import json
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -36,10 +34,7 @@ async def test_bedrock_agents():
     assert len(response.choices[0].message.content) > 0
 
     # assert we were able to get the response cost
-    assert (
-        response._hidden_params["response_cost"] is not None
-        and response._hidden_params["response_cost"] > 0
-    )
+    assert response._hidden_params["response_cost"] is not None and response._hidden_params["response_cost"] > 0
 
     pass
 

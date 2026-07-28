@@ -36,8 +36,7 @@ def main() -> int:
 
     if not os.getenv("DATABASE_URL"):
         logger.error(
-            "DATABASE_URL is not set and could not be assembled from the "
-            "DATABASE_* env vars — cannot run migrations."
+            "DATABASE_URL is not set and could not be assembled from the DATABASE_* env vars — cannot run migrations."
         )
         return 1
 

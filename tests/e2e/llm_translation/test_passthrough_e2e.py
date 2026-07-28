@@ -51,13 +51,9 @@ def _fetch_cost_breakdown(client: PassthroughClient, result: StreamingResponse) 
 # ---- Gemini passthrough ------------------------------------------------
 
 
-def test_gemini_passthrough_nonstreaming_logs_cost(
-    client: PassthroughClient, scoped_key: str
-) -> None:
+def test_gemini_passthrough_nonstreaming_logs_cost(client: PassthroughClient, scoped_key: str) -> None:
     tag = f"e2e-passthrough-{unique_marker()}"
-    result = client.gemini_generate(
-        scoped_key, "gemini-2.5-flash", "Say hello in one word", tags=[tag, "gemini"]
-    )
+    result = client.gemini_generate(scoped_key, "gemini-2.5-flash", "Say hello in one word", tags=[tag, "gemini"])
     require_successful_call(result)
 
     row = _fetch_cost_breakdown(client, result)
@@ -66,9 +62,7 @@ def test_gemini_passthrough_nonstreaming_logs_cost(
     assert tag in (row.request_tags or []), f"tags not logged: {row.request_tags}"
 
 
-def test_gemini_passthrough_streaming_logs_cost(
-    client: PassthroughClient, scoped_key: str
-) -> None:
+def test_gemini_passthrough_streaming_logs_cost(client: PassthroughClient, scoped_key: str) -> None:
     result = client.gemini_stream(scoped_key, "gemini-2.5-flash", "Count to five")
     require_successful_call(result)
     assert result.chunks > 0, "streaming passthrough produced no events"
@@ -77,9 +71,7 @@ def test_gemini_passthrough_streaming_logs_cost(
     assert row.custom_llm_provider == "gemini"
 
 
-def test_gemini_passthrough_tool_call_logs_cost(
-    client: PassthroughClient, scoped_key: str
-) -> None:
+def test_gemini_passthrough_tool_call_logs_cost(client: PassthroughClient, scoped_key: str) -> None:
     result = client.gemini_generate(
         scoped_key,
         "gemini-2.5-flash",
@@ -110,9 +102,7 @@ def test_gemini_passthrough_tool_call_logs_cost(
 # ---- Anthropic passthrough ---------------------------------------------
 
 
-def test_anthropic_passthrough_nonstreaming_logs_cost(
-    client: PassthroughClient, scoped_key: str
-) -> None:
+def test_anthropic_passthrough_nonstreaming_logs_cost(client: PassthroughClient, scoped_key: str) -> None:
     result = client.anthropic_message(scoped_key, "claude-haiku-4-5", "Say hello")
     require_successful_call(result)
 
@@ -121,12 +111,8 @@ def test_anthropic_passthrough_nonstreaming_logs_cost(
     assert "claude" in (row.model or "")
 
 
-def test_anthropic_passthrough_streaming_logs_cost(
-    client: PassthroughClient, scoped_key: str
-) -> None:
-    result = client.anthropic_message(
-        scoped_key, "claude-haiku-4-5", "Count to five", stream=True
-    )
+def test_anthropic_passthrough_streaming_logs_cost(client: PassthroughClient, scoped_key: str) -> None:
+    result = client.anthropic_message(scoped_key, "claude-haiku-4-5", "Count to five", stream=True)
     require_successful_call(result)
     assert result.chunks > 0, "streaming passthrough produced no events"
 
@@ -134,9 +120,7 @@ def test_anthropic_passthrough_streaming_logs_cost(
     assert row.custom_llm_provider == "anthropic"
 
 
-def test_anthropic_passthrough_tool_call_logs_cost(
-    client: PassthroughClient, scoped_key: str
-) -> None:
+def test_anthropic_passthrough_tool_call_logs_cost(client: PassthroughClient, scoped_key: str) -> None:
     result = client.anthropic_message(
         scoped_key,
         "claude-haiku-4-5",

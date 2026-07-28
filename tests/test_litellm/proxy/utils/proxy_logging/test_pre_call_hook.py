@@ -61,9 +61,7 @@ async def test_process_pre_call_hook_response_string_other_call_type_raises_http
 async def test_process_pre_call_hook_response_exception_reraises(proxy_logging):
     err = RuntimeError("hook said no")
     with pytest.raises(RuntimeError, match="hook said no"):
-        await proxy_logging.process_pre_call_hook_response(
-            response=err, data={}, call_type="completion"
-        )
+        await proxy_logging.process_pre_call_hook_response(response=err, data={}, call_type="completion")
 
 
 @pytest.mark.asyncio
@@ -80,7 +78,9 @@ async def test_process_pre_call_hook_response_other_type_returns_data(proxy_logg
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_returns_data_when_no_callbacks(proxy_logging, make_user_api_key_auth, mock_callbacks_disabled):
+async def test_pre_call_hook_returns_data_when_no_callbacks(
+    proxy_logging, make_user_api_key_auth, mock_callbacks_disabled
+):
     data = {"messages": [{"role": "user", "content": "hi"}], "model": "m", "temperature": 0.7}
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
     out = await proxy_logging.pre_call_hook(
@@ -149,7 +149,9 @@ async def test_pre_call_hook_propagates_callback_error_raises(proxy_logging, mak
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_processes_guardrail_metadata_when_no_overrides(proxy_logging, make_user_api_key_auth, mock_callbacks_disabled):
+async def test_pre_call_hook_processes_guardrail_metadata_when_no_overrides(
+    proxy_logging, make_user_api_key_auth, mock_callbacks_disabled
+):
     """Even when no callback overrides exist, ``_process_guardrail_metadata`` runs."""
     data = {"messages": [{"role": "user"}], "model": "m", "metadata": {"guardrails": ["g1"]}}
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)

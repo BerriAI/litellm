@@ -29,9 +29,7 @@ async def interactive_chat_with_mcp():
     litellm_base_url = setup_litellm_env(config)
 
     # Fetch available models from proxy
-    available_models = await fetch_available_models(
-        litellm_base_url, config.LITELLM_API_KEY
-    )
+    available_models = await fetch_available_models(litellm_base_url, config.LITELLM_API_KEY)
 
     current_model = config.LITELLM_MODEL
 
@@ -58,9 +56,7 @@ async def interactive_chat_with_mcp():
                         "deepwiki2": {
                             "type": "http",
                             "url": mcp_server_url,
-                            "headers": {
-                                "Authorization": f"Bearer {config.LITELLM_API_KEY}"
-                            },
+                            "headers": {"Authorization": f"Bearer {config.LITELLM_API_KEY}"},
                         }
                     },
                 )
@@ -109,9 +105,7 @@ async def interactive_chat_with_mcp():
                         continue
 
                     if user_input.lower() == "model":
-                        new_model, should_restart = handle_model_switch(
-                            available_models, current_model
-                        )
+                        new_model, should_restart = handle_model_switch(available_models, current_model)
                         if should_restart:
                             current_model = new_model
                             conversation_active = False

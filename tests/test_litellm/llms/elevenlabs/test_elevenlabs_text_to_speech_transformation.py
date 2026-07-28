@@ -16,10 +16,7 @@ def test_should_encode_elevenlabs_voice_id_path_segment():
         },
     )
 
-    assert (
-        url
-        == "https://api.elevenlabs.io/v1/text-to-speech/voice%2F..%2F..%2Fmodels%3Fx%3D1%23frag"
-    )
+    assert url == "https://api.elevenlabs.io/v1/text-to-speech/voice%2F..%2F..%2Fmodels%3Fx%3D1%23frag"
 
 
 def test_should_reject_dot_segment_elevenlabs_voice_id():

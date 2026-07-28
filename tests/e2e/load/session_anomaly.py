@@ -69,37 +69,24 @@ class AnomalyReport:
 
     @property
     def warm_cache_read_share(self) -> float:
-        billed = (
-            self.warm_uncached_input_tokens
-            + self.warm_cache_read_tokens
-            + self.warm_cache_creation_tokens
-        )
+        billed = self.warm_uncached_input_tokens + self.warm_cache_read_tokens + self.warm_cache_creation_tokens
         return self.warm_cache_read_tokens / billed if billed else 0.0
 
 
 def _system_prefix_block(marker: str) -> TextBlock:
-    text = " ".join(
-        f"Project context paragraph {index} for session {marker}." for index in range(300)
-    )
+    text = " ".join(f"Project context paragraph {index} for session {marker}." for index in range(300))
     return TextBlock(text=text, cache_control=CacheControl())
 
 
 def _user_turn_text(marker: str, turn_index: int) -> str:
-    notes = " ".join(
-        f"Working note {index} of turn {turn_index} in session {marker}."
-        for index in range(80)
-    )
+    notes = " ".join(f"Working note {index} of turn {turn_index} in session {marker}." for index in range(80))
     return f"Reply with one short sentence.\n{notes}"
 
 
 def _reminder_turn() -> RichMessage:
     return RichMessage(
         role="system",
-        content=[
-            TextBlock(
-                text="<system-reminder>Keep the answer to one short sentence.</system-reminder>"
-            )
-        ],
+        content=[TextBlock(text="<system-reminder>Keep the answer to one short sentence.</system-reminder>")],
     )
 
 
@@ -126,9 +113,7 @@ def retried(
     return retried(call, attempts - 1, backoff_seconds, sleep)
 
 
-def _metric(
-    result: Result[SessionMessagesResponse], turn_index: int, latency_seconds: float
-) -> TurnMetric:
+def _metric(result: Result[SessionMessagesResponse], turn_index: int, latency_seconds: float) -> TurnMetric:
     if isinstance(result, Success):
         usage = result.data.usage
         return TurnMetric(
@@ -166,11 +151,7 @@ def _drive_turns(
         return ()
     user_turn = RichMessage(
         role="user",
-        content=[
-            TextBlock(
-                text=_user_turn_text(marker, turn_index), cache_control=CacheControl()
-            )
-        ],
+        content=[TextBlock(text=_user_turn_text(marker, turn_index), cache_control=CacheControl())],
     )
     started = time.monotonic()
     result = retried(
@@ -189,9 +170,7 @@ def _drive_turns(
     turn = _metric(result, turn_index, time.monotonic() - started)
     if not isinstance(result, Success):
         return (turn,)
-    assistant_turn = RichMessage(
-        role="assistant", content=[TextBlock(text=result.data.text or "Understood.")]
-    )
+    assistant_turn = RichMessage(role="assistant", content=[TextBlock(text=result.data.text or "Understood.")])
     return (
         turn,
         *_drive_turns(
@@ -240,9 +219,7 @@ def run_concurrent_sessions(
 ) -> tuple[TurnMetric, ...]:
     with ThreadPoolExecutor(max_workers=sessions) as pool:
         futures = [
-            pool.submit(
-                run_session, transport, key, model, turns_per_session, attempts_per_turn
-            )
+            pool.submit(run_session, transport, key, model, turns_per_session, attempts_per_turn)
             for _ in range(sessions)
         ]
         return tuple(turn for future in futures for turn in future.result())
@@ -293,7 +270,5 @@ def summarize(turns: tuple[TurnMetric, ...], planned_turns: int) -> AnomalyRepor
         warm_uncached_input_tokens=sum(turn.uncached_input_tokens for turn in warm),
         warm_cache_read_tokens=sum(turn.cache_read_tokens for turn in warm),
         warm_cache_creation_tokens=sum(turn.cache_creation_tokens for turn in warm),
-        p95_turn_seconds=_p95(
-            tuple(turn.latency_seconds for turn in turns if turn.ok)
-        ),
+        p95_turn_seconds=_p95(tuple(turn.latency_seconds for turn in turns if turn.ok)),
     )

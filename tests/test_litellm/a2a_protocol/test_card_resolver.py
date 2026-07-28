@@ -32,9 +32,7 @@ async def test_card_resolver_fallback_from_new_to_old_path():
     paths_called = []
 
     # Create a mock for the parent's get_agent_card method
-    async def mock_parent_get_agent_card(
-        self, relative_card_path=None, http_kwargs=None
-    ):
+    async def mock_parent_get_agent_card(self, relative_card_path=None, http_kwargs=None):
         paths_called.append(relative_card_path)
         if relative_card_path == "/.well-known/agent-card.json":
             # First call (new path) fails
@@ -53,9 +51,7 @@ async def test_card_resolver_fallback_from_new_to_old_path():
         "get_agent_card",
         mock_parent_get_agent_card,
     ):
-        resolver = LiteLLMA2ACardResolver(
-            httpx_client=mock_httpx_client, base_url="http://test-agent:8000"
-        )
+        resolver = LiteLLMA2ACardResolver(httpx_client=mock_httpx_client, base_url="http://test-agent:8000")
         result = await resolver.get_agent_card()
 
         # Verify both paths were tried in correct order

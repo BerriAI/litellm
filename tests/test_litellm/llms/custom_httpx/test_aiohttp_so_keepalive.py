@@ -10,9 +10,7 @@ def _invoke_connector_factory(http_handler_module):
     invoking it directly avoids relying on _get_valid_client_session's internal
     branching to trigger connector construction.
     """
-    transport = http_handler_module.AsyncHTTPHandler._create_aiohttp_transport(
-        shared_session=None
-    )
+    transport = http_handler_module.AsyncHTTPHandler._create_aiohttp_transport(shared_session=None)
     transport._client_factory()
     return transport
 
@@ -26,12 +24,8 @@ def test_socket_factory_omitted_when_disabled(monkeypatch):
     connector_mock = MagicMock(name="connector")
     session_mock = MagicMock(name="session")
 
-    with patch.object(
-        http_handler_module, "TCPConnector", return_value=connector_mock
-    ) as mock_tcp_connector:
-        with patch.object(
-            http_handler_module, "ClientSession", return_value=session_mock
-        ):
+    with patch.object(http_handler_module, "TCPConnector", return_value=connector_mock) as mock_tcp_connector:
+        with patch.object(http_handler_module, "ClientSession", return_value=session_mock):
             _invoke_connector_factory(http_handler_module)
 
     assert mock_tcp_connector.call_count >= 1
@@ -47,12 +41,8 @@ def test_socket_factory_attached_when_enabled(monkeypatch):
     connector_mock = MagicMock(name="connector")
     session_mock = MagicMock(name="session")
 
-    with patch.object(
-        http_handler_module, "TCPConnector", return_value=connector_mock
-    ) as mock_tcp_connector:
-        with patch.object(
-            http_handler_module, "ClientSession", return_value=session_mock
-        ):
+    with patch.object(http_handler_module, "TCPConnector", return_value=connector_mock) as mock_tcp_connector:
+        with patch.object(http_handler_module, "ClientSession", return_value=session_mock):
             _invoke_connector_factory(http_handler_module)
 
     assert mock_tcp_connector.call_count >= 1
@@ -69,12 +59,8 @@ def test_socket_factory_skipped_on_old_aiohttp(monkeypatch):
     connector_mock = MagicMock(name="connector")
     session_mock = MagicMock(name="session")
 
-    with patch.object(
-        http_handler_module, "TCPConnector", return_value=connector_mock
-    ) as mock_tcp_connector:
-        with patch.object(
-            http_handler_module, "ClientSession", return_value=session_mock
-        ):
+    with patch.object(http_handler_module, "TCPConnector", return_value=connector_mock) as mock_tcp_connector:
+        with patch.object(http_handler_module, "ClientSession", return_value=session_mock):
             _invoke_connector_factory(http_handler_module)
 
     assert mock_tcp_connector.call_count >= 1
@@ -99,16 +85,11 @@ def test_socket_factory_sets_keepalive_options(monkeypatch):
     with patch("socket.socket", return_value=fake_sock) as sock_ctor:
         returned = factory(addr_info)
 
-    sock_ctor.assert_called_once_with(
-        family=socket.AF_INET, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
-    )
+    sock_ctor.assert_called_once_with(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
     assert returned is fake_sock
     fake_sock.setblocking.assert_called_once_with(False)
 
-    setsockopt_calls = {
-        (call.args[0], call.args[1]): call.args[2]
-        for call in fake_sock.setsockopt.call_args_list
-    }
+    setsockopt_calls = {(call.args[0], call.args[1]): call.args[2] for call in fake_sock.setsockopt.call_args_list}
     assert setsockopt_calls[(socket.SOL_SOCKET, socket.SO_KEEPALIVE)] == 1
 
     if hasattr(socket, "TCP_KEEPIDLE"):
@@ -150,12 +131,7 @@ def test_socket_factory_uses_tcp_keepalive_when_keepidle_unavailable(monkeypatch
     with patch.object(http_handler_module, "socket", fake_socket_module):
         factory(addr_info)
 
-    setsockopt_calls = {
-        (call.args[0], call.args[1]): call.args[2]
-        for call in fake_sock.setsockopt.call_args_list
-    }
+    setsockopt_calls = {(call.args[0], call.args[1]): call.args[2] for call in fake_sock.setsockopt.call_args_list}
     assert setsockopt_calls[(socket.SOL_SOCKET, socket.SO_KEEPALIVE)] == 1
-    assert (
-        setsockopt_calls[(socket.IPPROTO_TCP, fake_socket_module.TCP_KEEPALIVE)] == 60
-    )
+    assert setsockopt_calls[(socket.IPPROTO_TCP, fake_socket_module.TCP_KEEPALIVE)] == 60
     assert (socket.IPPROTO_TCP, getattr(socket, "TCP_KEEPIDLE", -1)) not in setsockopt_calls

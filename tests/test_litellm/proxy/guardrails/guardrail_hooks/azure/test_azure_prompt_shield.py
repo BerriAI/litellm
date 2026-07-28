@@ -17,9 +17,7 @@ async def test_azure_prompt_shield_guardrail_pre_call_hook():
         api_key="azure_prompt_shield_api_key",
         api_base="azure_prompt_shield_api_base",
     )
-    with patch.object(
-        azure_prompt_shield_guardrail, "async_make_request"
-    ) as mock_async_make_request:
+    with patch.object(azure_prompt_shield_guardrail, "async_make_request") as mock_async_make_request:
         mock_async_make_request.return_value = {
             "userPromptAnalysis": {"attackDetected": False},
             "documentsAnalysis": [],
@@ -39,10 +37,7 @@ async def test_azure_prompt_shield_guardrail_pre_call_hook():
         )
 
         mock_async_make_request.assert_called_once()
-        assert (
-            mock_async_make_request.call_args.kwargs["user_prompt"]
-            == "Hello, how are you?"
-        )
+        assert mock_async_make_request.call_args.kwargs["user_prompt"] == "Hello, how are you?"
 
 
 @pytest.mark.asyncio
@@ -59,9 +54,7 @@ async def test_azure_prompt_shield_guardrail_attack_detected():
         api_base="azure_prompt_shield_api_base",
     )
 
-    with patch.object(
-        azure_prompt_shield_guardrail, "async_make_request"
-    ) as mock_async_make_request:
+    with patch.object(azure_prompt_shield_guardrail, "async_make_request") as mock_async_make_request:
         mock_async_make_request.side_effect = HTTPException(
             status_code=400,
             detail={
@@ -86,9 +79,7 @@ async def test_azure_prompt_shield_guardrail_attack_detected():
             )
 
         assert exc_info.value.status_code == 400
-        assert "Violated Azure Prompt Shield guardrail policy" in str(
-            exc_info.value.detail
-        )
+        assert "Violated Azure Prompt Shield guardrail policy" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -187,9 +178,7 @@ async def test_azure_prompt_shield_attack_detected_in_chunk():
             )
 
         assert exc_info.value.status_code == 400
-        assert "Violated Azure Prompt Shield guardrail policy" in str(
-            exc_info.value.detail
-        )
+        assert "Violated Azure Prompt Shield guardrail policy" in str(exc_info.value.detail)
 
 
 def test_split_text_by_words():
@@ -212,21 +201,9 @@ def test_split_text_by_words():
     assert len(chunks) > 1
     # Verify no word is broken
     for chunk in chunks:
-        assert (
-            "word1" in chunk
-            or "word2" in chunk
-            or "word3" in chunk
-            or "word4" in chunk
-            or "word5" in chunk
-        )
+        assert "word1" in chunk or "word2" in chunk or "word3" in chunk or "word4" in chunk or "word5" in chunk
         # No partial words
-        assert (
-            "word1" in chunk
-            or "word2" in chunk
-            or "word3" in chunk
-            or "word4" in chunk
-            or "word5" in chunk
-        )
+        assert "word1" in chunk or "word2" in chunk or "word3" in chunk or "word4" in chunk or "word5" in chunk
 
     # Test with very long single word (edge case)
     long_word = "supercalifragilisticexpialidocious" * 10

@@ -8,9 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm.proxy.auth.auth_utils import (
@@ -45,9 +43,7 @@ from litellm.router import Router
         ),
     ],
 )
-def test_configurable_clientside_parameters(
-    allowed_param, input_value, should_return_true
-):
+def test_configurable_clientside_parameters(allowed_param, input_value, should_return_true):
     router = Router(
         model_list=[
             {
@@ -80,9 +76,7 @@ def test_get_end_user_id_from_request_body_always_returns_str():
     mock_request.headers = {}
 
     request_body = {"user": 123}
-    end_user_id = get_end_user_id_from_request_body(
-        request_body, dict(mock_request.headers)
-    )
+    end_user_id = get_end_user_id_from_request_body(request_body, dict(mock_request.headers))
     assert end_user_id == "123"
     assert isinstance(end_user_id, str)
 
@@ -194,9 +188,7 @@ def test_get_end_user_id_from_request_body_with_user_header_name(
 
     # Mock general_settings at the proxy_server module level
     with patch("litellm.proxy.proxy_server.general_settings", general_settings_config):
-        end_user_id = get_end_user_id_from_request_body(
-            request_body, dict(mock_request.headers)
-        )
+        end_user_id = get_end_user_id_from_request_body(request_body, dict(mock_request.headers))
         assert end_user_id == expected_user_id
 
 
@@ -220,9 +212,7 @@ def test_get_end_user_id_from_request_body_no_user_found():
     }
 
     with patch("litellm.proxy.proxy_server.general_settings", general_settings_config):
-        end_user_id = get_end_user_id_from_request_body(
-            request_body, dict(mock_request.headers)
-        )
+        end_user_id = get_end_user_id_from_request_body(request_body, dict(mock_request.headers))
         assert end_user_id is None
 
 
@@ -273,9 +263,7 @@ def test_get_end_user_id_from_request_body_backwards_compatibility():
 def test_get_model_from_request(request_data, expected_model):
     from litellm.proxy.auth.auth_utils import get_model_from_request
 
-    request_data = {
-        "target_model_names": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"
-    }
+    request_data = {"target_model_names": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"}
     route = "/openai/deployments/gpt-3.5-turbo"
     model = get_model_from_request(request_data, "/v1/files")
     assert model == ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"]
@@ -295,9 +283,7 @@ def test_get_customer_user_header_from_mapping_returns_customer_header():
 def test_get_customer_user_header_from_mapping_no_customer_returns_none():
     from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
 
-    mappings = [
-        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}
-    ]
+    mappings = [{"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}]
     result = get_customer_user_header_from_mapping(mappings)
     assert result is None
 
@@ -325,17 +311,13 @@ def test_get_internal_user_header_from_mapping_returns_internal_header():
 def test_get_internal_user_header_from_mapping_no_internal_returns_none():
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
-    mappings = [
-        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"}
-    ]
+    mappings = [{"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"}]
     result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings)
     assert result is None
 
     # Also support single mapping dict
     single_mapping = {"header_name": "X-Only-Customer", "litellm_user_role": "customer"}
-    result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(
-        single_mapping
-    )
+    result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(single_mapping)
     assert result is None
 
 
@@ -395,9 +377,7 @@ def test_get_internal_user_header_from_mapping_no_internal_returns_none():
         ),
     ],
 )
-def test_get_model_from_request_vertex_ai_passthrough(
-    request_data, route, expected_model
-):
+def test_get_model_from_request_vertex_ai_passthrough(request_data, route, expected_model):
     """Test that get_model_from_request correctly extracts Vertex AI model from URL"""
     from litellm.proxy.auth.auth_utils import get_model_from_request
 

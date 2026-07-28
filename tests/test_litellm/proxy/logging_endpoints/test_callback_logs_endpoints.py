@@ -77,23 +77,15 @@ async def test_success_record_invokes_success_handler(monkeypatch):
     captured = {}
 
     async def fake_success(self, result=None, start_time=None, end_time=None, **kwargs):
-        captured["standard_logging_object"] = self.model_call_details.get(
-            "standard_logging_object"
-        )
+        captured["standard_logging_object"] = self.model_call_details.get("standard_logging_object")
         captured["result"] = result
 
     monkeypatch.setattr(LiteLLMLogging, "async_success_handler", fake_success)
 
     body = CallbackLogsRequest(
-        records=[
-            CallbackLogRecord(
-                status="success", standard_logging_payload=_sample_payload()
-            )
-        ]
+        records=[CallbackLogRecord(status="success", standard_logging_payload=_sample_payload())]
     )
-    resp = await ingest_callback_logs(
-        body, user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
-    )
+    resp = await ingest_callback_logs(body, user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
     assert resp.processed == 1 and resp.failed == 0
     assert captured["standard_logging_object"]["id"] == REQ_ID
     assert captured["result"]["usage"]["total_tokens"] == 42
@@ -103,9 +95,7 @@ async def test_success_record_invokes_success_handler(monkeypatch):
 async def test_failure_record_invokes_failure_handler(monkeypatch):
     captured = {}
 
-    async def fake_failure(
-        self, exception, traceback_exception, start_time=None, end_time=None
-    ):
+    async def fake_failure(self, exception, traceback_exception, start_time=None, end_time=None):
         captured["exception"] = str(exception)
 
     monkeypatch.setattr(LiteLLMLogging, "async_failure_handler", fake_failure)
@@ -119,9 +109,7 @@ async def test_failure_record_invokes_failure_handler(monkeypatch):
             )
         ]
     )
-    resp = await ingest_callback_logs(
-        body, user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
-    )
+    resp = await ingest_callback_logs(body, user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
     assert resp.processed == 1 and resp.failed == 0
     assert captured["exception"] == "upstream exploded"
 
@@ -134,11 +122,7 @@ async def test_non_admin_is_rejected(monkeypatch):
     monkeypatch.setattr(LiteLLMLogging, "async_success_handler", fake_success)
 
     body = CallbackLogsRequest(
-        records=[
-            CallbackLogRecord(
-                status="success", standard_logging_payload=_sample_payload()
-            )
-        ]
+        records=[CallbackLogRecord(status="success", standard_logging_payload=_sample_payload())]
     )
     with pytest.raises(HTTPException) as exc_info:
         await ingest_callback_logs(
@@ -152,9 +136,7 @@ async def test_non_admin_is_rejected(monkeypatch):
 async def test_one_bad_record_does_not_sink_the_batch(monkeypatch):
     calls = {"n": 0}
 
-    async def flaky_success(
-        self, result=None, start_time=None, end_time=None, **kwargs
-    ):
+    async def flaky_success(self, result=None, start_time=None, end_time=None, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
             raise ValueError("boom on first record")
@@ -163,17 +145,11 @@ async def test_one_bad_record_does_not_sink_the_batch(monkeypatch):
 
     body = CallbackLogsRequest(
         records=[
-            CallbackLogRecord(
-                status="success", standard_logging_payload=_sample_payload()
-            ),
-            CallbackLogRecord(
-                status="success", standard_logging_payload=_sample_payload()
-            ),
+            CallbackLogRecord(status="success", standard_logging_payload=_sample_payload()),
+            CallbackLogRecord(status="success", standard_logging_payload=_sample_payload()),
         ]
     )
-    resp = await ingest_callback_logs(
-        body, user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
-    )
+    resp = await ingest_callback_logs(body, user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
     assert resp.processed == 1 and resp.failed == 1
     # The failed record is reported back by index + error, not silently dropped.
     assert len(resp.failures) == 1

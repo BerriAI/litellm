@@ -281,9 +281,7 @@ def _iter_paginated_json(*api_args: str) -> Any:
             continue
 
 
-def fetch_last_close_event(
-    repo: str, number: int
-) -> tuple[str | None, dt.datetime | None]:
+def fetch_last_close_event(repo: str, number: int) -> tuple[str | None, dt.datetime | None]:
     """Return the actor login and timestamp of the most recent `closed` event.
 
     Either field may be None: actor when the events API returns nothing
@@ -317,9 +315,7 @@ def fetch_last_close_event(
 AGENT_SHIN_CLOSE_MARKER_SKEW_SECONDS = 300
 
 
-def was_closed_by_agent_shin(
-    repo: str, number: int, *, bot_login: str | None = None
-) -> bool:
+def was_closed_by_agent_shin(repo: str, number: int, *, bot_login: str | None = None) -> bool:
     """Return True iff Agent Shin itself most-recently closed this PR/issue.
 
     This is the guard that stops `@agent-shin reconsider` from reopening an
@@ -342,17 +338,11 @@ def was_closed_by_agent_shin(
     the item is treated as "not Agent Shin" so the destructive reopen path
     stays gated.
     """
-    expected = (
-        bot_login
-        or os.environ.get("AGENT_SHIN_BOT_LOGIN")
-        or AGENT_SHIN_DEFAULT_BOT_LOGIN
-    ).lower()
+    expected = (bot_login or os.environ.get("AGENT_SHIN_BOT_LOGIN") or AGENT_SHIN_DEFAULT_BOT_LOGIN).lower()
     actor, closed_at = fetch_last_close_event(repo, number)
     if not actor or actor.lower() != expected or closed_at is None:
         return False
-    marker_seconds = seconds_since_last_agent_shin_close(
-        repo, number, bot_login=bot_login
-    )
+    marker_seconds = seconds_since_last_agent_shin_close(repo, number, bot_login=bot_login)
     if marker_seconds is None:
         return False
     close_age_seconds = (dt.datetime.now(dt.timezone.utc) - closed_at).total_seconds()
@@ -384,9 +374,7 @@ def _seconds_since_latest_marker_comment(
     )
 
 
-def seconds_since_last_reconsider_verdict(
-    repo: str, number: int, *, bot_login: str | None = None
-) -> float | None:
+def seconds_since_last_reconsider_verdict(repo: str, number: int, *, bot_login: str | None = None) -> float | None:
     """Return seconds since the bot's most recent reconsider verdict comment.
 
     Detects comments by matching the HTML marker `RECONSIDER_COMMENT_MARKER`
@@ -396,14 +384,10 @@ def seconds_since_last_reconsider_verdict(
     only matching comments are missing a `created_at` timestamp, which
     shouldn't happen on a real GitHub response).
     """
-    return _seconds_since_latest_marker_comment(
-        repo, number, marker=RECONSIDER_COMMENT_MARKER, bot_login=bot_login
-    )
+    return _seconds_since_latest_marker_comment(repo, number, marker=RECONSIDER_COMMENT_MARKER, bot_login=bot_login)
 
 
-def seconds_since_last_grace_warning(
-    repo: str, number: int, *, bot_login: str | None = None
-) -> float | None:
+def seconds_since_last_grace_warning(repo: str, number: int, *, bot_login: str | None = None) -> float | None:
     """Return seconds since the bot's most recent grace-period warning.
 
     Detects warning comments by matching the HTML marker
@@ -412,14 +396,10 @@ def seconds_since_last_grace_warning(
     grace warning has ever been posted on this PR/issue — that's the
     "first low-quality detection" signal that drives the warning path.
     """
-    return _seconds_since_latest_marker_comment(
-        repo, number, marker=GRACE_COMMENT_MARKER, bot_login=bot_login
-    )
+    return _seconds_since_latest_marker_comment(repo, number, marker=GRACE_COMMENT_MARKER, bot_login=bot_login)
 
 
-def seconds_since_last_agent_shin_close(
-    repo: str, number: int, *, bot_login: str | None = None
-) -> float | None:
+def seconds_since_last_agent_shin_close(repo: str, number: int, *, bot_login: str | None = None) -> float | None:
     """Return seconds since Agent Shin's most recent auto-close comment.
 
     Detects close comments by matching `AGENT_SHIN_CLOSE_MARKER` (stamped by
@@ -428,9 +408,7 @@ def seconds_since_last_agent_shin_close(
     `was_closed_by_agent_shin` uses to keep the reconsider reopen path gated
     against closures performed by other workflows sharing the bot identity.
     """
-    return _seconds_since_latest_marker_comment(
-        repo, number, marker=AGENT_SHIN_CLOSE_MARKER, bot_login=bot_login
-    )
+    return _seconds_since_latest_marker_comment(repo, number, marker=AGENT_SHIN_CLOSE_MARKER, bot_login=bot_login)
 
 
 # ---------------------------------------------------------------------------
@@ -627,19 +605,13 @@ def build_issue_prompt(*, title: str, body: str) -> str:
 # LLM call + verdict parsing
 
 
-def call_llm_judge(
-    prompt: str, *, model: str, api_key: str, base_url: str | None
-) -> str:
+def call_llm_judge(prompt: str, *, model: str, api_key: str, base_url: str | None) -> str:
     """Call an OpenAI-compatible chat completions endpoint. Returns raw text."""
     # Import inside the function so unit tests that monkey-patch this never
     # need the openai package installed.
     from openai import OpenAI
 
-    client = (
-        OpenAI(api_key=api_key, base_url=base_url)
-        if base_url
-        else OpenAI(api_key=api_key)
-    )
+    client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -703,9 +675,7 @@ _ISSUE_BUG_LABELS: tuple[tuple[str, str], ...] = (
     ),
     ("has_expected_vs_actual", "Expected vs. actual behavior"),
 )
-_ISSUE_FEATURE_LABELS: tuple[tuple[str, str], ...] = (
-    ("has_motivation_example", "Motivation and concrete example"),
-)
+_ISSUE_FEATURE_LABELS: tuple[tuple[str, str], ...] = (("has_motivation_example", "Motivation and concrete example"),)
 
 
 def _format_present_for_pr(verdict: dict) -> list[str]:
@@ -1034,23 +1004,18 @@ def format_reconsider_still_failing_comment(kind: str, verdict: dict) -> str:
 _UNSET = object()
 
 
-def _combine_missing(
-    verdict: dict, greptile_score: int | None, min_score: int
-) -> list[str]:
+def _combine_missing(verdict: dict, greptile_score: int | None, min_score: int) -> list[str]:
     """Merge the LLM rubric's `missing` list with a Greptile-score shortfall."""
     missing = list(verdict.get("missing") or [])
     if greptile_score is not None and greptile_score < min_score:
         missing.insert(
             0,
-            f"Greptile's most recent review scored this PR {greptile_score}/5 "
-            f"(below the {min_score}/5 bar)",
+            f"Greptile's most recent review scored this PR {greptile_score}/5 (below the {min_score}/5 bar)",
         )
     return missing or ["(see explanation below)"]
 
 
-def _has_marker(
-    comments: Iterable[dict], marker: str, *, bot_login: str | None = None
-) -> bool:
+def _has_marker(comments: Iterable[dict], marker: str, *, bot_login: str | None = None) -> bool:
     """Return True iff the bot itself posted a comment containing ``marker``.
 
     Filters by author so a contributor who quotes the marker (e.g. via
@@ -1060,11 +1025,7 @@ def _has_marker(
     is selected. Matches the author-filter pattern used by the sibling
     `_seconds_since_latest_marker_comment` helper.
     """
-    expected_login = (
-        bot_login
-        or os.environ.get("AGENT_SHIN_BOT_LOGIN")
-        or AGENT_SHIN_DEFAULT_BOT_LOGIN
-    ).lower()
+    expected_login = (bot_login or os.environ.get("AGENT_SHIN_BOT_LOGIN") or AGENT_SHIN_DEFAULT_BOT_LOGIN).lower()
     for comment in comments:
         author = ((comment.get("user") or {}).get("login") or "").lower()
         if author != expected_login:
@@ -1080,11 +1041,7 @@ def format_ready_for_review_comment(
     min_greptile_score: int = DEFAULT_MIN_GREPTILE_SCORE,
 ) -> str:
     """Posted the first time a PR clears the bar (label added)."""
-    score_line = (
-        f" Greptile scored it **{greptile_score}/5**."
-        if greptile_score is not None
-        else ""
-    )
+    score_line = f" Greptile scored it **{greptile_score}/5**." if greptile_score is not None else ""
     explanation = verdict.get("explanation") or ""
     return (
         "✅ **Triage passed, tagging `ready for review`.**\n"
@@ -1106,11 +1063,7 @@ def format_ready_for_review_comment(
 
 def format_all_clear_comment(verdict: dict, greptile_score: int | None) -> str:
     """Posted when a PR recovers after a regression (label re-added)."""
-    score_line = (
-        f" Greptile is back to **{greptile_score}/5**."
-        if greptile_score is not None
-        else ""
-    )
+    score_line = f" Greptile is back to **{greptile_score}/5**." if greptile_score is not None else ""
     explanation = verdict.get("explanation") or ""
     return (
         "✅ **All clear again, re-adding `ready for review`.**\n"
@@ -1125,9 +1078,7 @@ def format_all_clear_comment(verdict: dict, greptile_score: int | None) -> str:
     )
 
 
-def format_regression_comment(
-    missing: list[str], explanation: str, grace_days: int
-) -> str:
+def format_regression_comment(missing: list[str], explanation: str, grace_days: int) -> str:
     """Posted when a previously-tagged PR regresses (label removed, PR stays open).
 
     Discloses the same ``grace_days`` deadline the state machine enforces:
@@ -1156,9 +1107,7 @@ def format_regression_comment(
     )
 
 
-def format_within_grace_comment(
-    missing: list[str], explanation: str, grace_days: int
-) -> str:
+def format_within_grace_comment(missing: list[str], explanation: str, grace_days: int) -> str:
     """Posted once while a failing PR is still inside its grace window."""
     window = "24 hours" if grace_days == 1 else f"{grace_days} days"
     return (
@@ -1272,9 +1221,7 @@ def review_gate(
             base_url = os.environ.get("OPENAI_BASE_URL") or None
 
             def judge(p: str) -> str:
-                return call_llm_judge(
-                    p, model=model, api_key=api_key, base_url=base_url
-                )
+                return call_llm_judge(p, model=model, api_key=api_key, base_url=base_url)
 
         try:
             verdict = parse_verdict(judge(prompt))
@@ -1303,8 +1250,7 @@ def review_gate(
     # the regression / close comment. Surface the real reason instead.
     if rubric_pass and not greptile_ok:
         explanation = (
-            f"Greptile's most recent review scored this PR "
-            f"{greptile_score}/5 (below the {min_greptile_score}/5 bar)."
+            f"Greptile's most recent review scored this PR {greptile_score}/5 (below the {min_greptile_score}/5 bar)."
         )
         verdict = {**verdict, "explanation": explanation}
     base_result = {
@@ -1322,9 +1268,7 @@ def review_gate(
         comment = (
             format_all_clear_comment(verdict, greptile_score)
             if recovered
-            else format_ready_for_review_comment(
-                verdict, greptile_score, min_greptile_score
-            )
+            else format_ready_for_review_comment(verdict, greptile_score, min_greptile_score)
         )
         if not close:
             return {**base_result, "action": "would-label-ready", "comment": comment}
@@ -1354,9 +1298,7 @@ def review_gate(
     # was abandoned post-regression doesn't sit open forever.
     if _has_marker(comments, REGRESSED_MARKER):
         reference = now or dt.datetime.now(dt.timezone.utc)
-        seconds_since_regression = seconds_since_latest_marker_comment(
-            comments, marker=REGRESSED_MARKER, now=reference
-        )
+        seconds_since_regression = seconds_since_latest_marker_comment(comments, marker=REGRESSED_MARKER, now=reference)
         grace_seconds = grace_days * 86400
         if seconds_since_regression is None or seconds_since_regression < grace_seconds:
             return {**base_result, "action": "regressed-already-notified"}
@@ -1586,9 +1528,7 @@ def triage(
     grace_age = seconds_since_last_grace_warning(repo, number)
     if grace_age is None:
         warning_body = (
-            format_grace_warning_pr_comment(verdict)
-            if kind == "pr"
-            else format_grace_warning_issue_comment(verdict)
+            format_grace_warning_pr_comment(verdict) if kind == "pr" else format_grace_warning_issue_comment(verdict)
         )
         if not close:
             return {
@@ -1620,11 +1560,7 @@ def triage(
     if not close:
         return {**base_result, "action": "would-close", "verdict": verdict}
 
-    comment_body = (
-        format_pr_close_comment(verdict)
-        if kind == "pr"
-        else format_issue_close_comment(verdict)
-    )
+    comment_body = format_pr_close_comment(verdict) if kind == "pr" else format_issue_close_comment(verdict)
     post_comment(repo, number, comment_body)
     if kind == "pr":
         close_pr(repo, number)
@@ -1646,12 +1582,8 @@ def triage(
 def render_summary(result: dict) -> str:
     """Render a human-readable summary block (used for stdout + step summary)."""
     lines = ["## Agent Shin verdict", ""]
-    lines.append(
-        f"- **{result['kind'].upper()} #{result['number']}**: {result.get('title', '')}"
-    )
-    lines.append(
-        f"- **Author**: `{result.get('author', '')}` ({result.get('author_association', '')})"
-    )
+    lines.append(f"- **{result['kind'].upper()} #{result['number']}**: {result.get('title', '')}")
+    lines.append(f"- **Author**: `{result.get('author', '')}` ({result.get('author_association', '')})")
     lines.append(f"- **State**: {result.get('state', '')}")
     lines.append(f"- **Action**: `{result['action']}`")
     verdict = result.get("verdict")

@@ -28,9 +28,7 @@ def test_anthropic_compaction_usage_calculation():
         ],
     }
 
-    usage = anthropic_config.calculate_usage(
-        usage_object=usage_object, reasoning_content=None
-    )
+    usage = anthropic_config.calculate_usage(usage_object=usage_object, reasoning_content=None)
 
     # Assertions
     # Total prompt tokens should be 1000 + 100 = 1100
@@ -77,9 +75,7 @@ def test_anthropic_compaction_usage_with_iteration_cache():
         ],
     }
 
-    usage = anthropic_config.calculate_usage(
-        usage_object=usage_object, reasoning_content=None
-    )
+    usage = anthropic_config.calculate_usage(usage_object=usage_object, reasoning_content=None)
 
     # input_tokens sum = 500 + 100 = 600
     # cache_creation sum = 50 + 10 = 60

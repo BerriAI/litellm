@@ -60,9 +60,7 @@ class TestAgentCoreAcceptHeader:
             )
             # Verify _sign_request was called with Accept header already set
             call_args = mock_sign.call_args
-            passed_headers = call_args.kwargs.get("headers") or call_args[1].get(
-                "headers", {}
-            )
+            passed_headers = call_args.kwargs.get("headers") or call_args[1].get("headers", {})
             assert "Accept" in passed_headers
             assert passed_headers["Accept"] == "application/json, text/event-stream"
 
@@ -81,9 +79,7 @@ class TestAgentCoreAcceptHeader:
         mock_response = Mock(spec=httpx.Response)
         mock_response.status_code = 200
         mock_response.headers = {"content-type": "application/json"}
-        mock_response.json.return_value = {
-            "result": {"role": "assistant", "content": [{"text": "agent reply"}]}
-        }
+        mock_response.json.return_value = {"result": {"role": "assistant", "content": [{"text": "agent reply"}]}}
 
         with patch.object(client, "post", return_value=mock_response) as mock_post:
             response = litellm.completion(
@@ -250,9 +246,7 @@ class TestAgentCoreNonStreamingJsonFormats:
         """
         mock_response = Mock(spec=httpx.Response)
         mock_response.headers = {"content-type": "application/json"}
-        mock_response.json.return_value = {
-            "response": [{"text": "Strands agent response via non-streaming"}]
-        }
+        mock_response.json.return_value = {"response": [{"text": "Strands agent response via non-streaming"}]}
         parsed = config._get_parsed_response(mock_response)
         assert parsed["content"] == "Strands agent response via non-streaming"
         assert parsed["usage"] is None
@@ -323,9 +317,7 @@ class TestAgentCoreStreamingJsonFallback:
         mock_response.headers = {"content-type": "application/json"}
         mock_response.aread = AsyncMock(return_value=json.dumps(json_body).encode())
 
-        with patch.object(
-            client, "post", new_callable=AsyncMock, return_value=mock_response
-        ):
+        with patch.object(client, "post", new_callable=AsyncMock, return_value=mock_response):
             response = await litellm.acompletion(
                 model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent",
                 messages=[{"role": "user", "content": "test"}],
@@ -358,9 +350,7 @@ class TestAgentCoreStreamingJsonFallback:
         mock_response.read.return_value = b"not valid json {{"
 
         with patch.object(client, "post", return_value=mock_response):
-            with pytest.raises(
-                Exception, match="Failed to read/parse JSON response body"
-            ):
+            with pytest.raises(Exception, match="Failed to read/parse JSON response body"):
                 litellm.completion(
                     model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent",
                     messages=[{"role": "user", "content": "test"}],
@@ -385,12 +375,8 @@ class TestAgentCoreStreamingJsonFallback:
         mock_response.headers = {"content-type": "application/json"}
         mock_response.aread = AsyncMock(return_value=b"not valid json {{")
 
-        with patch.object(
-            client, "post", new_callable=AsyncMock, return_value=mock_response
-        ):
-            with pytest.raises(
-                Exception, match="Failed to read/parse JSON response body"
-            ):
+        with patch.object(client, "post", new_callable=AsyncMock, return_value=mock_response):
+            with pytest.raises(Exception, match="Failed to read/parse JSON response body"):
                 await litellm.acompletion(
                     model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent",
                     messages=[{"role": "user", "content": "test"}],
@@ -437,9 +423,7 @@ class TestAgentCoreMultimodalContent:
             "optional_params": {"forward_multimodal_content": True},
         }
 
-    def test_string_content_payload_byte_identical_to_legacy(
-        self, config, transform_kwargs
-    ):
+    def test_string_content_payload_byte_identical_to_legacy(self, config, transform_kwargs):
         """String content → exactly {"prompt": "<text>"}, no extra fields."""
         messages = [{"role": "user", "content": "hello agent"}]
         payload = config.transform_request(messages=messages, **transform_kwargs)

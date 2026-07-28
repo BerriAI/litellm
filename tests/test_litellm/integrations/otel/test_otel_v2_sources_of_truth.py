@@ -137,9 +137,7 @@ def test_llm_call_span_name():
 
 def _all_constants(cls):
     return {
-        getattr(cls, name)
-        for name in vars(cls)
-        if not name.startswith("__") and isinstance(getattr(cls, name), str)
+        getattr(cls, name) for name in vars(cls) if not name.startswith("__") and isinstance(getattr(cls, name), str)
     }
 
 
@@ -264,9 +262,7 @@ def test_mcp_tool_call_content_gated_off_by_default():
     off = MCPToolCallSpanData.from_standard_logging_payload(_mcp_payload())
     assert off.arguments_json is None and off.result_json is None
 
-    on = MCPToolCallSpanData.from_standard_logging_payload(
-        _mcp_payload(), capture_content=True
-    )
+    on = MCPToolCallSpanData.from_standard_logging_payload(_mcp_payload(), capture_content=True)
     assert on.arguments_json is not None and '"Paris"' in on.arguments_json
     assert on.result_json is not None and "21" in on.result_json
 
@@ -398,9 +394,7 @@ def test_content_capture_gated_off_by_default():
     payload = _sample_payload(
         messages=[{"role": "user", "content": "secret prompt"}],
     )
-    payload["response"]["choices"] = [
-        {"finish_reason": "stop", "message": {"role": "assistant", "content": "secret"}}
-    ]
+    payload["response"]["choices"] = [{"finish_reason": "stop", "message": {"role": "assistant", "content": "secret"}}]
     data = LLMCallSpanData.from_standard_logging_payload(payload)
     assert data.messages_in == ()
     assert data.choices_out == ()
@@ -427,9 +421,7 @@ def test_request_identity_prefers_canonical_team_keys():
 def test_request_identity_falls_back_to_legacy_team_keys():
     from litellm.integrations.otel.model.payloads import RequestIdentity
 
-    payload = _sample_payload(
-        metadata={"team_id": "legacy-team", "team_alias": "legacy"}
-    )
+    payload = _sample_payload(metadata={"team_id": "legacy-team", "team_alias": "legacy"})
     ident = RequestIdentity.from_payload(payload)
     assert ident.team_id == "legacy-team"
     assert ident.team_alias == "legacy"
@@ -553,9 +545,7 @@ def test_content_capture_opt_in_retains_bodies():
     payload = _sample_payload(
         messages=[{"role": "user", "content": "secret prompt"}],
     )
-    payload["response"]["choices"] = [
-        {"finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}
-    ]
+    payload["response"]["choices"] = [{"finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}]
     data = LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True)
     assert data.messages_in and data.messages_in[0]["content"] == "secret prompt"
     assert data.choices_out and data.choices_out[0]["message"]["content"] == "hi"
@@ -572,41 +562,17 @@ def test_capture_span_content_resolves_modes():
 
     # default (no_content) → off
     assert OpenTelemetryV2Config().capture_span_content is False
+    assert OpenTelemetryV2Config(capture_message_content=CaptureMessageContent.SPAN_ONLY).capture_span_content is True
     assert (
-        OpenTelemetryV2Config(
-            capture_message_content=CaptureMessageContent.SPAN_ONLY
-        ).capture_span_content
-        is True
-    )
-    assert (
-        OpenTelemetryV2Config(
-            capture_message_content=CaptureMessageContent.SPAN_AND_EVENT
-        ).capture_span_content
-        is True
+        OpenTelemetryV2Config(capture_message_content=CaptureMessageContent.SPAN_AND_EVENT).capture_span_content is True
     )
     # event-only does not authorize span-attribute content
-    assert (
-        OpenTelemetryV2Config(
-            capture_message_content=CaptureMessageContent.EVENT_ONLY
-        ).capture_span_content
-        is False
-    )
+    assert OpenTelemetryV2Config(capture_message_content=CaptureMessageContent.EVENT_ONLY).capture_span_content is False
     # V1 accepted UPPER_SNAKE_CASE; the env value is case-insensitive so an
     # operator carrying ``SPAN_AND_EVENT`` forward still enables capture.
-    assert (
-        OpenTelemetryV2Config(
-            capture_message_content="SPAN_AND_EVENT"
-        ).capture_span_content
-        is True
-    )
-    assert (
-        OpenTelemetryV2Config(capture_message_content="SPAN_ONLY").capture_span_content
-        is True
-    )
-    assert (
-        OpenTelemetryV2Config(capture_message_content="NO_CONTENT").capture_span_content
-        is False
-    )
+    assert OpenTelemetryV2Config(capture_message_content="SPAN_AND_EVENT").capture_span_content is True
+    assert OpenTelemetryV2Config(capture_message_content="SPAN_ONLY").capture_span_content is True
+    assert OpenTelemetryV2Config(capture_message_content="NO_CONTENT").capture_span_content is False
 
 
 def test_capture_message_content_normalizer_only_touches_strings():

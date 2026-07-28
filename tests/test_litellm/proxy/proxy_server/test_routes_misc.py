@@ -75,9 +75,7 @@ def test_get_routes_invalid_method_405(client):
     """POST against the GET-only /routes endpoint is rejected (error path)."""
     response = client.post("/routes")
     assert response.status_code == 405
-    body = response.json() if response.headers.get("content-type", "").startswith(
-        "application/json"
-    ) else {}
+    body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
     assert isinstance(body, dict)
 
 
@@ -96,9 +94,7 @@ def test_adaptive_router_state_returns_snapshots(client, auth_as, monkeypatch):
     bandit.get_state_snapshot = AsyncMock(return_value=snap)
     from litellm.types.router import TaggedPreRoutingStrategy
 
-    fake_router.adaptive_routers = {
-        "ar-1": [TaggedPreRoutingStrategy(tags=(), strategy=bandit)]
-    }
+    fake_router.adaptive_routers = {"ar-1": [TaggedPreRoutingStrategy(tags=(), strategy=bandit)]}
     monkeypatch.setattr(ps, "llm_router", fake_router)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
@@ -202,9 +198,7 @@ def test_get_image_invalid_local_path_falls_back(client, monkeypatch):
     assert response.status_code == 200
     shape = {
         "status": response.status_code,
-        "media_type_image": response.headers.get("content-type", "").startswith(
-            "image/"
-        ),
+        "media_type_image": response.headers.get("content-type", "").startswith("image/"),
         "has_body": len(response.content) > 0,
     }
     assert shape == {"status": 200, "media_type_image": True, "has_body": True}

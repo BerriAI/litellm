@@ -4,9 +4,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy._experimental.mcp_server.tool_registry import MCPToolRegistry
 
@@ -42,12 +40,8 @@ def test_list_tools():
     registry = MCPToolRegistry()
 
     # Register multiple tools
-    registry.register_tool(
-        name="tool1", description="Tool 1", input_schema={}, handler=example_handler
-    )
-    registry.register_tool(
-        name="tool2", description="Tool 2", input_schema={}, handler=example_handler
-    )
+    registry.register_tool(name="tool1", description="Tool 1", input_schema={}, handler=example_handler)
+    registry.register_tool(name="tool2", description="Tool 2", input_schema={}, handler=example_handler)
 
     # Test listing tools
     tools = registry.list_tools()

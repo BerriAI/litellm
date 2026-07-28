@@ -10,9 +10,7 @@ import sys
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm import DualCache
@@ -93,30 +91,26 @@ async def test_batch_rate_limits():
     await asyncio.sleep(1)
 
     # Count requests and token usage in input file
-    tracked_batch_file_usage: BatchFileUsage = (
-        await BATCH_LIMITER.count_input_file_usage(
-            file_id=file_obj.id,
-            custom_llm_provider=CUSTOM_LLM_PROVIDER,
-        )
+    tracked_batch_file_usage: BatchFileUsage = await BATCH_LIMITER.count_input_file_usage(
+        file_id=file_obj.id,
+        custom_llm_provider=CUSTOM_LLM_PROVIDER,
     )
     print(f"Actual total tokens: {tracked_batch_file_usage.total_tokens}")
     print(f"Actual request count: {tracked_batch_file_usage.request_count}")
 
     # Calculate expected values by reading the JSONL file
-    expected_request_count, expected_total_tokens = get_expected_batch_file_usage(
-        file_path=file_path
-    )
+    expected_request_count, expected_total_tokens = get_expected_batch_file_usage(file_path=file_path)
 
     print(f"Expected request count: {expected_request_count}")
     print(f"Expected total tokens: {expected_total_tokens}")
 
     # Verify token counting results
-    assert (
-        tracked_batch_file_usage.request_count == expected_request_count
-    ), f"Expected {expected_request_count} requests, got {tracked_batch_file_usage.request_count}"
-    assert (
-        tracked_batch_file_usage.total_tokens == expected_total_tokens
-    ), f"Expected {expected_total_tokens} total_tokens, got {tracked_batch_file_usage.total_tokens}"
+    assert tracked_batch_file_usage.request_count == expected_request_count, (
+        f"Expected {expected_request_count} requests, got {tracked_batch_file_usage.request_count}"
+    )
+    assert tracked_batch_file_usage.total_tokens == expected_total_tokens, (
+        f"Expected {expected_total_tokens} total_tokens, got {tracked_batch_file_usage.total_tokens}"
+    )
 
 
 @pytest.mark.asyncio()
@@ -133,9 +127,7 @@ async def test_batch_rate_limit_single_file(tmp_path):
     # Setup: Create internal usage cache and rate limiter
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=internal_usage_cache
-    )
+    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache)
 
     # Setup: Get batch rate limiter
     batch_limiter = rate_limiter._get_batch_rate_limiter()
@@ -156,9 +148,7 @@ async def test_batch_rate_limit_single_file(tmp_path):
 {"custom_id": "request-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hi"}]}}
 {"custom_id": "request-3", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hey"}]}}"""
 
-    small_file_path = _write_batch_file(
-        tmp_path, "small-batch-rate-limit.jsonl", small_batch_content
-    )
+    small_file_path = _write_batch_file(tmp_path, "small-batch-rate-limit.jsonl", small_batch_content)
 
     try:
         # Upload file to OpenAI
@@ -195,16 +185,11 @@ async def test_batch_rate_limit_single_file(tmp_path):
     # Reset cache for clean test
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=internal_usage_cache
-    )
+    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache)
     batch_limiter = rate_limiter._get_batch_rate_limiter()
 
     # Create a larger batch file with ~10000+ tokens (100x larger to ensure it exceeds 200 token limit)
-    base_message = (
-        "This is a longer message that will consume more tokens from the rate limit. "
-        * 100
-    )
+    base_message = "This is a longer message that will consume more tokens from the rate limit. " * 100
 
     # Build JSONL content with json.dumps to avoid f-string nesting issues
     import json as json_lib
@@ -224,9 +209,7 @@ async def test_batch_rate_limit_single_file(tmp_path):
 
     large_batch_content = "\n".join(requests)
 
-    large_file_path = _write_batch_file(
-        tmp_path, "large-batch-rate-limit.jsonl", large_batch_content
-    )
+    large_file_path = _write_batch_file(tmp_path, "large-batch-rate-limit.jsonl", large_batch_content)
 
     # Upload file to OpenAI
     with open(large_file_path, "rb") as batch_file:
@@ -254,9 +237,7 @@ async def test_batch_rate_limit_single_file(tmp_path):
         )
 
     assert exc_info.value.status_code == 429, "Should return 429 status code"
-    assert (
-        "tokens" in exc_info.value.detail.lower()
-    ), "Error message should mention tokens"
+    assert "tokens" in exc_info.value.detail.lower(), "Error message should mention tokens"
     print(f"✓ File with 250+ tokens correctly rejected (over limit of 200)")
     print(f"  Error: {exc_info.value.detail}")
 
@@ -275,9 +256,7 @@ async def test_batch_rate_limit_multiple_requests(tmp_path):
     # Setup: Create internal usage cache and rate limiter
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=internal_usage_cache
-    )
+    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache)
 
     # Setup: Get batch rate limiter
     batch_limiter = rate_limiter._get_batch_rate_limiter()
@@ -312,9 +291,7 @@ async def test_batch_rate_limit_multiple_requests(tmp_path):
 
     batch_content_1 = "\n".join(requests_1)
 
-    file_path_1 = _write_batch_file(
-        tmp_path, "batch-rate-limit-request-1.jsonl", batch_content_1
-    )
+    file_path_1 = _write_batch_file(tmp_path, "batch-rate-limit-request-1.jsonl", batch_content_1)
 
     try:
         # Upload file to OpenAI
@@ -341,9 +318,7 @@ async def test_batch_rate_limit_multiple_requests(tmp_path):
             call_type="acreate_batch",
         )
         tokens_used_1 = result1.get("_batch_token_count", 0)
-        print(
-            f"✓ Request 1 with {tokens_used_1} tokens passed ({tokens_used_1}/200 used)"
-        )
+        print(f"✓ Request 1 with {tokens_used_1} tokens passed ({tokens_used_1}/200 used)")
     except HTTPException as e:
         pytest.fail(f"Request 1 should not have hit rate limit: {e.detail}")
 
@@ -351,9 +326,7 @@ async def test_batch_rate_limit_multiple_requests(tmp_path):
     print("\n=== Request 2: File with ~105 tokens (should hit limit) ===")
 
     # Create file with ~105+ tokens
-    message_2 = (
-        "This is another message with more content to exceed the remaining limit. " * 11
-    )
+    message_2 = "This is another message with more content to exceed the remaining limit. " * 11
     requests_2 = []
     for i in range(1, 3):
         request_obj = {
@@ -369,9 +342,7 @@ async def test_batch_rate_limit_multiple_requests(tmp_path):
 
     batch_content_2 = "\n".join(requests_2)
 
-    file_path_2 = _write_batch_file(
-        tmp_path, "batch-rate-limit-request-2.jsonl", batch_content_2
-    )
+    file_path_2 = _write_batch_file(tmp_path, "batch-rate-limit-request-2.jsonl", batch_content_2)
 
     # Upload file to OpenAI
     with open(file_path_2, "rb") as batch_file:
@@ -399,9 +370,7 @@ async def test_batch_rate_limit_multiple_requests(tmp_path):
         )
 
     assert exc_info.value.status_code == 429, "Should return 429 status code"
-    assert (
-        "tokens" in exc_info.value.detail.lower()
-    ), "Error message should mention tokens"
+    assert "tokens" in exc_info.value.detail.lower(), "Error message should mention tokens"
     print(f"✓ Request 2 correctly rejected")
     print(f"  Error: {exc_info.value.detail}")
 
@@ -428,9 +397,7 @@ async def test_batch_rate_limiter_with_managed_files(tmp_path):
     # Setup: Create internal usage cache and rate limiter
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=internal_usage_cache
-    )
+    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache)
 
     # Setup: Get batch rate limiter
     batch_limiter = rate_limiter._get_batch_rate_limiter()
@@ -467,9 +434,7 @@ async def test_batch_rate_limiter_with_managed_files(tmp_path):
 
     batch_content = "\n".join(requests)
 
-    file_path = _write_batch_file(
-        tmp_path, "managed-files-batch-rate-limit.jsonl", batch_content
-    )
+    file_path = _write_batch_file(tmp_path, "managed-files-batch-rate-limit.jsonl", batch_content)
 
     try:
         # Step 1: Upload file to OpenAI (simulating user upload)
@@ -494,10 +459,7 @@ async def test_batch_rate_limiter_with_managed_files(tmp_path):
 
         async def mock_afile_content(*args, **kwargs):
             # Check if user_api_key_dict was passed
-            if (
-                "user_api_key_dict" in kwargs
-                and kwargs["user_api_key_dict"] is not None
-            ):
+            if "user_api_key_dict" in kwargs and kwargs["user_api_key_dict"] is not None:
                 user_context_passed["value"] = True
                 print(f"   ✓ user_api_key_dict passed to afile_content")
                 print(f"     User ID: {kwargs['user_api_key_dict'].user_id}")
@@ -529,15 +491,12 @@ async def test_batch_rate_limiter_with_managed_files(tmp_path):
             print(f"   ✓ Batch submitted successfully")
             print(f"     Tokens counted: {tokens_used}")
             print(f"     Requests counted: {requests_count}")
-            print(
-                f"     Rate limit usage: {tokens_used}/500 TPM, {requests_count}/10 RPM"
-            )
+            print(f"     Rate limit usage: {tokens_used}/500 TPM, {requests_count}/10 RPM")
 
         # Step 4: Verify user context was passed
         print("\n4. Verifying fix for GEN-2166...")
         assert user_context_passed["value"], (
-            "FAILED: user_api_key_dict was not passed to afile_content(). "
-            "This means the bug GEN-2166 is not fixed!"
+            "FAILED: user_api_key_dict was not passed to afile_content(). This means the bug GEN-2166 is not fixed!"
         )
         print("   ✓ Fix verified: user_api_key_dict is correctly passed")
 
@@ -588,9 +547,7 @@ async def test_batch_rate_limiter_without_user_context(tmp_path):
     # Create a simple batch file
     batch_content = """{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hello"}]}}"""
 
-    file_path = _write_batch_file(
-        tmp_path, "without-user-context-batch-rate-limit.jsonl", batch_content
-    )
+    file_path = _write_batch_file(tmp_path, "without-user-context-batch-rate-limit.jsonl", batch_content)
 
     # Upload file
     with open(file_path, "rb") as batch_file:
@@ -609,9 +566,7 @@ async def test_batch_rate_limiter_without_user_context(tmp_path):
             custom_llm_provider=CUSTOM_LLM_PROVIDER,
             user_api_key_dict=None,  # Explicitly passing None
         )
-        print(
-            f"✓ Works for non-managed files (tokens: {usage_without_context.total_tokens})"
-        )
+        print(f"✓ Works for non-managed files (tokens: {usage_without_context.total_tokens})")
         print("  Note: Would fail with 403 for managed files (GEN-2166 bug)")
     except Exception as e:
         print(f"✗ Failed: {str(e)}")
@@ -662,9 +617,7 @@ async def test_batch_rate_limiter_managed_files_regression():
     # Setup: Create batch rate limiter
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=internal_usage_cache
-    )
+    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache)
     batch_limiter = rate_limiter._get_batch_rate_limiter()
     assert batch_limiter is not None
 
@@ -746,23 +699,17 @@ async def test_batch_rate_limiter_managed_files_regression():
         )
 
         # Verify managed files hook was called
-        assert (
-            mock_managed_files._afile_content_called
-        ), "REGRESSION: managed_files_obj.afile_content was not called! Bug GEN-2166 has returned."
+        assert mock_managed_files._afile_content_called, (
+            "REGRESSION: managed_files_obj.afile_content was not called! Bug GEN-2166 has returned."
+        )
 
         # Verify user context was passed
-        assert (
-            mock_managed_files._last_call_args is not None
-        ), "REGRESSION: No arguments passed to afile_content"
-        assert (
-            "file_id" in mock_managed_files._last_call_args
-        ), "REGRESSION: file_id not passed to managed files hook"
-        assert (
-            mock_managed_files._last_call_args["file_id"] == managed_file_id
-        ), "REGRESSION: Incorrect file_id passed"
-        assert (
-            "llm_router" in mock_managed_files._last_call_args
-        ), "REGRESSION: llm_router not passed to managed files hook"
+        assert mock_managed_files._last_call_args is not None, "REGRESSION: No arguments passed to afile_content"
+        assert "file_id" in mock_managed_files._last_call_args, "REGRESSION: file_id not passed to managed files hook"
+        assert mock_managed_files._last_call_args["file_id"] == managed_file_id, "REGRESSION: Incorrect file_id passed"
+        assert "llm_router" in mock_managed_files._last_call_args, (
+            "REGRESSION: llm_router not passed to managed files hook"
+        )
 
         print("   ✓ Managed files hook called correctly")
         print("   ✓ User context passed correctly")
@@ -786,18 +733,18 @@ async def test_batch_rate_limiter_managed_files_regression():
         )
 
         # Verify _fetch_managed_file_content was called
-        assert (
-            mock_fetch.called
-        ), "REGRESSION: _fetch_managed_file_content not called for managed files! Bug GEN-2166 has returned."
+        assert mock_fetch.called, (
+            "REGRESSION: _fetch_managed_file_content not called for managed files! Bug GEN-2166 has returned."
+        )
 
         # Verify correct parameters were passed
         call_kwargs = mock_fetch.call_args.kwargs
-        assert (
-            call_kwargs["file_id"] == managed_file_id
-        ), "REGRESSION: Incorrect file_id passed to _fetch_managed_file_content"
-        assert (
-            call_kwargs["user_api_key_dict"] == user_api_key_dict
-        ), "REGRESSION: user_api_key_dict not passed! Bug GEN-2166 has returned."
+        assert call_kwargs["file_id"] == managed_file_id, (
+            "REGRESSION: Incorrect file_id passed to _fetch_managed_file_content"
+        )
+        assert call_kwargs["user_api_key_dict"] == user_api_key_dict, (
+            "REGRESSION: user_api_key_dict not passed! Bug GEN-2166 has returned."
+        )
 
         # Verify usage was calculated
         assert usage.total_tokens > 0, "Token count should be greater than 0"
@@ -818,9 +765,7 @@ async def test_batch_rate_limiter_managed_files_regression():
             content=batch_content,
             headers={"content-type": "application/octet-stream"},
         )
-        mock_afile_content.return_value = HttpxBinaryResponseContent(
-            response=mock_response
-        )
+        mock_afile_content.return_value = HttpxBinaryResponseContent(response=mock_response)
 
         # Call count_input_file_usage with non-managed file
         usage = await batch_limiter.count_input_file_usage(
@@ -830,9 +775,7 @@ async def test_batch_rate_limiter_managed_files_regression():
         )
 
         # Verify litellm.afile_content was called
-        assert (
-            mock_afile_content.called
-        ), "REGRESSION: litellm.afile_content not called for non-managed files"
+        assert mock_afile_content.called, "REGRESSION: litellm.afile_content not called for non-managed files"
 
         print("   ✓ Standard file path used")
         print(f"   ✓ Token count: {usage.total_tokens}")
@@ -849,9 +792,7 @@ async def test_batch_rate_limiter_managed_files_regression():
         try:
             with patch("litellm.afile_content") as mock_afile_content:
                 # If litellm.afile_content is called for managed files, bug exists
-                mock_afile_content.side_effect = Exception(
-                    "Error code: 403 - User does not have access to the file"
-                )
+                mock_afile_content.side_effect = Exception("Error code: 403 - User does not have access to the file")
 
                 # Reset mock_fetch to return valid content
                 mock_response = httpx.Response(
@@ -860,9 +801,7 @@ async def test_batch_rate_limiter_managed_files_regression():
                     headers={"content-type": "application/octet-stream"},
                 )
                 mock_fetch.side_effect = None
-                mock_fetch.return_value = HttpxBinaryResponseContent(
-                    response=mock_response
-                )
+                mock_fetch.return_value = HttpxBinaryResponseContent(response=mock_response)
 
                 # This should use _fetch_managed_file_content, not litellm.afile_content
                 usage = await batch_limiter.count_input_file_usage(
@@ -872,20 +811,16 @@ async def test_batch_rate_limiter_managed_files_regression():
                 )
 
                 # Verify managed files path was used (not standard path that causes 403)
-                assert (
-                    mock_fetch.called
-                ), "REGRESSION: Managed files path not used! This would cause 403 errors."
-                assert (
-                    not mock_afile_content.called
-                ), "REGRESSION: Standard path used for managed files! This causes 403 errors."
+                assert mock_fetch.called, "REGRESSION: Managed files path not used! This would cause 403 errors."
+                assert not mock_afile_content.called, (
+                    "REGRESSION: Standard path used for managed files! This causes 403 errors."
+                )
 
                 print("   ✓ 403 error prevention verified")
 
         except Exception as e:
             if "403" in str(e):
-                pytest.fail(
-                    f"REGRESSION: 403 error occurred! Bug GEN-2166 has returned. Error: {str(e)}"
-                )
+                pytest.fail(f"REGRESSION: 403 error occurred! Bug GEN-2166 has returned. Error: {str(e)}")
             raise
 
     print("\n=== Regression Test Passed ===")
@@ -962,9 +897,7 @@ async def test_batch_logging_azure_credentials_regression():
 
     extracted_creds = _extract_file_access_credentials(azure_credentials)
     assert "api_key" in extracted_creds, "api_key should be extracted"
-    assert (
-        extracted_creds["api_key"] == "test-azure-key-regression"
-    ), "Incorrect api_key"
+    assert extracted_creds["api_key"] == "test-azure-key-regression", "Incorrect api_key"
     assert "api_base" in extracted_creds, "api_base should be extracted"
     assert "api_version" in extracted_creds, "api_version should be extracted"
     assert "timeout" in extracted_creds, "timeout should be extracted"
@@ -993,9 +926,7 @@ async def test_batch_logging_azure_credentials_regression():
         )
         return HttpxBinaryResponseContent(response=mock_response)
 
-    with patch(
-        "litellm.files.main.afile_content", side_effect=mock_afile_content_tracker
-    ):
+    with patch("litellm.files.main.afile_content", side_effect=mock_afile_content_tracker):
         result = await _get_batch_output_file_content_as_dictionary(
             batch=mock_batch,
             custom_llm_provider="azure",
@@ -1003,16 +934,13 @@ async def test_batch_logging_azure_credentials_regression():
         )
 
         # Verify credentials were passed
-        assert credentials_received[
-            "value"
-        ], "REGRESSION: Azure credentials not passed to afile_content! This causes 'Missing credentials' error."
-        assert (
-            credentials_received["params"]["api_key"] == "test-azure-key-regression"
-        ), "REGRESSION: Incorrect api_key"
-        assert (
-            credentials_received["params"]["api_base"]
-            == "https://test-regression.openai.azure.com"
-        ), "REGRESSION: Incorrect api_base"
+        assert credentials_received["value"], (
+            "REGRESSION: Azure credentials not passed to afile_content! This causes 'Missing credentials' error."
+        )
+        assert credentials_received["params"]["api_key"] == "test-azure-key-regression", "REGRESSION: Incorrect api_key"
+        assert credentials_received["params"]["api_base"] == "https://test-regression.openai.azure.com", (
+            "REGRESSION: Incorrect api_base"
+        )
 
         print("   ✓ Credentials passed to afile_content")
         print(f"   ✓ api_key: {credentials_received['params']['api_key']}")
@@ -1024,9 +952,7 @@ async def test_batch_logging_azure_credentials_regression():
     credentials_received["value"] = False
     credentials_received["params"] = None
 
-    with patch(
-        "litellm.files.main.afile_content", side_effect=mock_afile_content_tracker
-    ):
+    with patch("litellm.files.main.afile_content", side_effect=mock_afile_content_tracker):
         cost, usage, models = await _handle_completed_batch(
             batch=mock_batch,
             custom_llm_provider="azure",
@@ -1034,9 +960,7 @@ async def test_batch_logging_azure_credentials_regression():
         )
 
         # Verify credentials were passed through the entire flow
-        assert credentials_received[
-            "value"
-        ], "REGRESSION: Credentials not passed through _handle_completed_batch"
+        assert credentials_received["value"], "REGRESSION: Credentials not passed through _handle_completed_batch"
 
         # Verify cost and usage were calculated
         assert cost > 0, "Cost should be calculated"
@@ -1060,9 +984,7 @@ async def test_batch_logging_azure_credentials_regression():
         )
 
         # Now test with the fix - should NOT raise the error
-        with patch(
-            "litellm.files.main.afile_content", side_effect=mock_afile_content_tracker
-        ):
+        with patch("litellm.files.main.afile_content", side_effect=mock_afile_content_tracker):
             try:
                 cost, usage, models = await _handle_completed_batch(
                     batch=mock_batch,
@@ -1087,9 +1009,7 @@ async def test_batch_logging_azure_credentials_regression():
             content=batch_output,
             headers={"content-type": "application/octet-stream"},
         )
-        mock_afile_content.return_value = HttpxBinaryResponseContent(
-            response=mock_response
-        )
+        mock_afile_content.return_value = HttpxBinaryResponseContent(response=mock_response)
 
         # Call without litellm_params (should still work for OpenAI)
         result = await _get_batch_output_file_content_as_dictionary(

@@ -16,9 +16,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm  # noqa: E402,F401
 
 from tests._vcr_conftest_common import (  # noqa: E402,F401
@@ -105,9 +103,7 @@ def google_genai_proxy_url() -> Iterator[str]:
     if has_vertex_credentials():
         credentials_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
         if not (credentials_file and os.path.isfile(credentials_file)):
-            vertex_credentials_path = load_vertex_ai_credentials(
-                model="vertex_ai/gemini-2.5-flash-lite"
-            )
+            vertex_credentials_path = load_vertex_ai_credentials(model="vertex_ai/gemini-2.5-flash-lite")
             if vertex_credentials_path:
                 temp_credentials_path = vertex_credentials_path
                 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = vertex_credentials_path
@@ -146,9 +142,7 @@ def setup_and_teardown(request):
     """
     This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
     """
-    sys.path.insert(
-        0, os.path.abspath("../..")
-    )  # Adds the project directory to the system path
+    sys.path.insert(0, os.path.abspath("../.."))  # Adds the project directory to the system path
 
     import litellm
 
@@ -208,9 +202,7 @@ def pytest_collection_modifyitems(config, items):
     )
 
     # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
-    custom_logger_tests = [
-        item for item in items if "custom_logger" in item.parent.name
-    ]
+    custom_logger_tests = [item for item in items if "custom_logger" in item.parent.name]
     other_tests = [item for item in items if "custom_logger" not in item.parent.name]
 
     # Sort tests based on their names

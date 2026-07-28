@@ -34,8 +34,7 @@ def _assert_datadog_logger_active(proxy: ProxyClient) -> None:
         f"/health/readiness/details must answer 200, got {result.status_code}: {result.body[:300]}"
     )
     assert DD_LOGGER_NAME in result.body, (
-        f"the proxy must report the {DD_LOGGER_NAME} callback active "
-        f"(callbacks + DD_* env); got: {result.body[:400]}"
+        f"the proxy must report the {DD_LOGGER_NAME} callback active (callbacks + DD_* env); got: {result.body[:400]}"
     )
 
 
@@ -89,15 +88,12 @@ class TestDatadogMcpRoundTrip:
                     "from": DD_SEARCH_FROM,
                     "to": "now",
                     "max_tokens": 5000,
-                    "telemetry": {
-                        "intent": "e2e assert seeded litellm completion log is searchable via MCP"
-                    },
+                    "telemetry": {"intent": "e2e assert seeded litellm completion log is searchable via MCP"},
                 },
             )
         )
         assert call.is_error is not True, f"search_datadog_logs errored: {call}"
         body = call.all_text
         assert marker in body, (
-            f"search_datadog_logs response must include the seeded marker {marker!r}; "
-            f"got: {body[:800]!r}"
+            f"search_datadog_logs response must include the seeded marker {marker!r}; got: {body[:800]!r}"
         )

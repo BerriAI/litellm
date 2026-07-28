@@ -17,9 +17,7 @@ WORST_CASE_PREFIX = 100
 def overlong_install_paths(wheel, prefix_len=WORST_CASE_PREFIX, max_path=MAX_PATH):
     with zipfile.ZipFile(wheel) as zf:
         names = zf.namelist()
-    return sorted(
-        (n for n in names if prefix_len + len(n) > max_path), key=len, reverse=True
-    )
+    return sorted((n for n in names if prefix_len + len(n) > max_path), key=len, reverse=True)
 
 
 def _deep_venv_dir(target_prefix=WORST_CASE_PREFIX):
@@ -58,17 +56,13 @@ def main():
         return 1
     python = os.path.join(venv, "Scripts", "python.exe")
     if _run(["uv", "pip", "install", "--python", python, wheel]) != 0:
-        print(
-            f"::error::installing {os.path.basename(wheel)} into a deep prefix failed"
-        )
+        print(f"::error::installing {os.path.basename(wheel)} into a deep prefix failed")
         return 1
     if _run([python, "-c", "import litellm; import litellm.types.utils"]) != 0:
         print("::error::litellm did not import after install (half-unpacked package)")
         return 1
 
-    print(
-        f"ok: {os.path.basename(wheel)} installs into a worst-case prefix and imports"
-    )
+    print(f"ok: {os.path.basename(wheel)} installs into a worst-case prefix and imports")
     return 0
 
 

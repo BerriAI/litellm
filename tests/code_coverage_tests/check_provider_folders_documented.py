@@ -68,9 +68,7 @@ def load_provider_endpoints_file() -> Dict:
     file_path = repo_root / "provider_endpoints_support.json"
 
     if not file_path.exists():
-        print(
-            f"❌ ERROR: Could not find provider_endpoints_support.json at {file_path}"
-        )
+        print(f"❌ ERROR: Could not find provider_endpoints_support.json at {file_path}")
         sys.exit(1)
 
     with open(file_path, "r") as f:
@@ -83,9 +81,7 @@ def get_openai_like_providers() -> Set[str]:
     providers_file = repo_root / "litellm" / "llms" / "openai_like" / "providers.json"
 
     if not providers_file.exists():
-        print(
-            f"⚠️  WARNING: Could not find openai_like/providers.json at {providers_file}"
-        )
+        print(f"⚠️  WARNING: Could not find openai_like/providers.json at {providers_file}")
         return set()
 
     with open(providers_file, "r") as f:
@@ -148,9 +144,7 @@ def main():
     # Load the JSON file
     data = load_provider_endpoints_file()
     documented_providers = get_documented_providers(data)
-    print(
-        f"\n✓ Found {len(data.get('providers', {}))} provider entries in provider_endpoints_support.json"
-    )
+    print(f"\n✓ Found {len(data.get('providers', {}))} provider entries in provider_endpoints_support.json")
 
     # Check for undocumented folders
     undocumented_folders = []
@@ -166,9 +160,7 @@ def main():
         # Generate multiple possible variations of the provider name
         variations = {
             provider,  # Original name (e.g., "nano-gpt")
-            provider.replace(
-                "-", "_"
-            ),  # Replace hyphens with underscores (e.g., "nano_gpt")
+            provider.replace("-", "_"),  # Replace hyphens with underscores (e.g., "nano_gpt")
             provider.replace("-", ""),  # Remove hyphens (e.g., "nanogpt")
             provider.replace("_", ""),  # Remove underscores
         }
@@ -198,17 +190,13 @@ def main():
 
         error_msg += "\n" + "=" * 70 + "\n"
         error_msg += f"\n💡 To fix: Add entries for these {len(undocumented_folders)} provider(s)\n"
-        error_msg += (
-            "   in the 'providers' section of provider_endpoints_support.json\n"
-        )
+        error_msg += "   in the 'providers' section of provider_endpoints_support.json\n"
         error_msg += "\nExample format:\n"
         error_msg += '  "providers": {\n'
         for folder in undocumented_folders[:3]:
             error_msg += f'    "{folder}": {{\n'
             error_msg += f'      "display_name": "{folder.replace("_", " ").title()} (`{folder}`)",\n'
-            error_msg += (
-                f'      "url": "https://docs.litellm.ai/docs/providers/{folder}",\n'
-            )
+            error_msg += f'      "url": "https://docs.litellm.ai/docs/providers/{folder}",\n'
             error_msg += '      "endpoints": {\n'
             error_msg += '        "chat_completions": true,\n'
             error_msg += '        "messages": true,\n'
@@ -229,27 +217,23 @@ def main():
     # Report errors for undocumented openai_like providers
     if undocumented_openai_like:
         has_errors = True
-        error_msg = (
-            "\n❌ ERROR: The following openai_like providers are not documented:\n"
-        )
+        error_msg = "\n❌ ERROR: The following openai_like providers are not documented:\n"
         error_msg += "=" * 70 + "\n"
         for provider in undocumented_openai_like:
             error_msg += f"  - {provider}\n"
 
         error_msg += "\n" + "=" * 70 + "\n"
         error_msg += f"\n💡 To fix: Add entries for these {len(undocumented_openai_like)} provider(s)\n"
-        error_msg += (
-            "   in the 'providers' section of provider_endpoints_support.json\n"
-        )
+        error_msg += "   in the 'providers' section of provider_endpoints_support.json\n"
         error_msg += "\nExample format:\n"
         error_msg += '  "providers": {\n'
         for provider in undocumented_openai_like[:3]:
             normalized = provider.replace("-", "_")
             error_msg += f'    "{normalized}": {{\n'
-            error_msg += f'      "display_name": "{provider.replace("-", " ").replace("_", " ").title()} (`{normalized}`)",\n'
             error_msg += (
-                f'      "url": "https://docs.litellm.ai/docs/providers/{normalized}",\n'
+                f'      "display_name": "{provider.replace("-", " ").replace("_", " ").title()} (`{normalized}`)",\n'
             )
+            error_msg += f'      "url": "https://docs.litellm.ai/docs/providers/{normalized}",\n'
             error_msg += '      "endpoints": {\n'
             error_msg += '        "chat_completions": true,\n'
             error_msg += '        "messages": true,\n'
@@ -270,9 +254,7 @@ def main():
     # Raise exception if there are any errors
     if has_errors:
         error_summary = " AND ".join(error_messages)
-        raise UndocumentedProviderError(
-            f"Provider documentation validation failed: {error_summary}"
-        )
+        raise UndocumentedProviderError(f"Provider documentation validation failed: {error_summary}")
 
     print(f"\n✅ All {len(provider_folders)} provider folders are documented!")
     print(f"✅ All {len(openai_like_providers)} openai_like providers are documented!")

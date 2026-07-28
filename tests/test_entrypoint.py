@@ -5,9 +5,7 @@ import pytest
 import sys
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../"))  # Adds the parent directory to the system path
 import litellm
 import subprocess
 
@@ -39,9 +37,7 @@ def test_entrypoint_decrypt_and_reset():
     directory = ".."  # Relative to the current directory
 
     # Run the command using subprocess
-    result = subprocess.run(
-        command, shell=True, cwd=directory, capture_output=True, text=True
-    )
+    result = subprocess.run(command, shell=True, cwd=directory, capture_output=True, text=True)
 
     # Print the output for debugging purposes
     print("STDOUT:", result.stdout)
@@ -49,11 +45,7 @@ def test_entrypoint_decrypt_and_reset():
 
     # Assert the script ran successfully
     assert result.returncode == 0, "The shell script did not execute successfully"
-    assert (
-        "DECRYPTS VALUE" in result.stdout
-    ), "Expected output not found in script output"
-    assert (
-        "Database push successful!" in result.stdout
-    ), "Expected output not found in script output"
+    assert "DECRYPTS VALUE" in result.stdout, "Expected output not found in script output"
+    assert "Database push successful!" in result.stdout, "Expected output not found in script output"
 
     assert False

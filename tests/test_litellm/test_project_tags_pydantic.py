@@ -4,9 +4,7 @@ from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
 
 def test_new_project_request_tags():
     # Test tags correctly stay top level initially
-    req = NewProjectRequest(
-        project_id="test_proj", team_id="team_1", tags=["tag1", "tag2"]
-    )
+    req = NewProjectRequest(project_id="test_proj", team_id="team_1", tags=["tag1", "tag2"])
 
     # tags should be top level initially
     assert req.tags == ["tag1", "tag2"]

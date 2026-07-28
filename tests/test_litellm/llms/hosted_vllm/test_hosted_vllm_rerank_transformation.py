@@ -87,9 +87,7 @@ class TestHostedVLLMRerankTransform:
         assert "instruction" not in body
 
     def test_map_cohere_rerank_params_raises_on_max_chunks_per_doc(self):
-        with pytest.raises(
-            ValueError, match="Hosted VLLM does not support max_chunks_per_doc"
-        ):
+        with pytest.raises(ValueError, match="Hosted VLLM does not support max_chunks_per_doc"):
             self.config.map_cohere_rerank_params(
                 non_default_params=None,
                 model=self.model,
@@ -104,9 +102,7 @@ class TestHostedVLLMRerankTransform:
         url = self.config.get_complete_url(base, self.model)
         assert url == "https://api.example.com/rerank"
         # Already ends with /rerank
-        url2 = self.config.get_complete_url(
-            "https://api.example.com/rerank", self.model
-        )
+        url2 = self.config.get_complete_url("https://api.example.com/rerank", self.model)
         assert url2 == "https://api.example.com/rerank"
         # Raises if api_base is None
         with pytest.raises(ValueError):

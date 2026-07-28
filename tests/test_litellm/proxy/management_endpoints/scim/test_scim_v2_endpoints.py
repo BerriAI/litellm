@@ -2910,9 +2910,7 @@ async def test_patch_group_rename_recomputes_retained_members(mocker):
 
 
 @pytest.mark.asyncio
-async def test_process_group_patch_operations_add_retains_existing_members(
-    mocker, monkeypatch
-):
+async def test_process_group_patch_operations_add_retains_existing_members(mocker, monkeypatch):
     """A SCIM group ``add`` operation must not drop members already in the team.
 
     Team membership lives in members_with_roles; team creation leaves the legacy
@@ -2937,18 +2935,14 @@ async def test_process_group_patch_operations_add_retains_existing_members(
     )
     patch_ops = SCIMPatchOp(
         schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-        Operations=[
-            SCIMPatchOperation(op="add", path="members", value=[{"value": "new-user"}])
-        ],
+        Operations=[SCIMPatchOperation(op="add", path="members", value=[{"value": "new-user"}])],
     )
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     # new-user already exists in the DB
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=mocker.MagicMock(user_id="new-user")
-    )
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock(user_id="new-user"))
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -2960,9 +2954,7 @@ async def test_process_group_patch_operations_add_retains_existing_members(
 
 
 @pytest.mark.asyncio
-async def test_process_group_patch_operations_remove_uses_members_with_roles(
-    mocker, monkeypatch
-):
+async def test_process_group_patch_operations_remove_uses_members_with_roles(mocker, monkeypatch):
     """A ``remove`` op must diff against members_with_roles, so removing one
     member leaves the rest of the team intact rather than emptying it."""
 
@@ -2984,19 +2976,13 @@ async def test_process_group_patch_operations_remove_uses_members_with_roles(
     )
     patch_ops = SCIMPatchOp(
         schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-        Operations=[
-            SCIMPatchOperation(
-                op="remove", path="members", value=[{"value": "drop-user"}]
-            )
-        ],
+        Operations=[SCIMPatchOperation(op="remove", path="members", value=[{"value": "drop-user"}])],
     )
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=mocker.MagicMock(user_id="drop-user")
-    )
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock(user_id="drop-user"))
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -3440,9 +3426,7 @@ async def test_process_group_patch_remove_filtered_path_without_value(mocker):
     prisma_client = mocker.MagicMock()
     prisma_client.db = mocker.MagicMock()
     prisma_client.db.litellm_usertable = mocker.MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=LiteLLM_UserTable(user_id="user-1")
-    )
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id="user-1"))
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -3471,9 +3455,7 @@ async def test_process_group_patch_add_filtered_path_without_value(mocker):
     prisma_client = mocker.MagicMock()
     prisma_client.db = mocker.MagicMock()
     prisma_client.db.litellm_usertable = mocker.MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=LiteLLM_UserTable(user_id="user-3")
-    )
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id="user-3"))
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -3490,9 +3472,7 @@ async def test_process_group_patch_replace_empty_value_does_not_use_path_filter(
     id from the filtered path, which would retain one member and drop the rest."""
     patch_ops = SCIMPatchOp(
         schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-        Operations=[
-            SCIMPatchOperation(op="replace", path='members[value eq "user-1"]', value=[])
-        ],
+        Operations=[SCIMPatchOperation(op="replace", path='members[value eq "user-1"]', value=[])],
     )
 
     existing_team = LiteLLM_TeamTable(
@@ -3508,9 +3488,7 @@ async def test_process_group_patch_replace_empty_value_does_not_use_path_filter(
     prisma_client = mocker.MagicMock()
     prisma_client.db = mocker.MagicMock()
     prisma_client.db.litellm_usertable = mocker.MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=LiteLLM_UserTable(user_id="user-1")
-    )
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id="user-1"))
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,

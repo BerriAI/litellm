@@ -7,9 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os, io
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm import embedding
@@ -18,9 +16,7 @@ from litellm.utils import get_optional_params_embeddings, get_llm_provider
 
 def test_vertex_projects():
     litellm.drop_params = True
-    model, custom_llm_provider, _, _ = get_llm_provider(
-        model="vertex_ai/textembedding-gecko"
-    )
+    model, custom_llm_provider, _, _ = get_llm_provider(model="vertex_ai/textembedding-gecko")
     optional_params = get_optional_params_embeddings(
         model=model,
         user="test-litellm-user-5",
@@ -43,9 +39,7 @@ def test_vertex_projects():
 
 
 def test_bedrock_embed_v2_regular():
-    model, custom_llm_provider, _, _ = get_llm_provider(
-        model="bedrock/amazon.titan-embed-text-v2:0"
-    )
+    model, custom_llm_provider, _, _ = get_llm_provider(model="bedrock/amazon.titan-embed-text-v2:0")
     optional_params = get_optional_params_embeddings(
         model=model,
         dimensions=512,
@@ -57,9 +51,7 @@ def test_bedrock_embed_v2_regular():
 
 def test_bedrock_embed_v2_with_drop_params():
     litellm.drop_params = True
-    model, custom_llm_provider, _, _ = get_llm_provider(
-        model="bedrock/amazon.titan-embed-text-v2:0"
-    )
+    model, custom_llm_provider, _, _ = get_llm_provider(model="bedrock/amazon.titan-embed-text-v2:0")
     optional_params = get_optional_params_embeddings(
         model=model,
         dimensions=512,
@@ -77,9 +69,7 @@ def test_openai_non_text_embedding_3_with_allowed_openai_params():
     when `allowed_openai_params=["dimensions"]` is passed. Without this flag,
     an UnsupportedParamsError would be raised.
     """
-    model, custom_llm_provider, _, _ = get_llm_provider(
-        model="openai/nvidia/llama-3.2-nv-embedqa-1b-v2"
-    )
+    model, custom_llm_provider, _, _ = get_llm_provider(model="openai/nvidia/llama-3.2-nv-embedqa-1b-v2")
     optional_params = get_optional_params_embeddings(
         model=model,
         dimensions=1024,
@@ -101,9 +91,7 @@ def test_openai_non_text_embedding_3_without_allowed_openai_params_raises():
     prev_drop_params = litellm.drop_params
     litellm.drop_params = False
     try:
-        model, custom_llm_provider, _, _ = get_llm_provider(
-            model="openai/nvidia/llama-3.2-nv-embedqa-1b-v2"
-        )
+        model, custom_llm_provider, _, _ = get_llm_provider(model="openai/nvidia/llama-3.2-nv-embedqa-1b-v2")
         with pytest.raises(UnsupportedParamsError):
             get_optional_params_embeddings(
                 model=model,
@@ -125,9 +113,7 @@ def test_openai_non_text_embedding_3_drop_params_per_call():
     prev_drop_params = litellm.drop_params
     litellm.drop_params = False  # ensure only per-call flag is in effect
     try:
-        model, custom_llm_provider, _, _ = get_llm_provider(
-            model="openai/Qwen/Qwen3-Embedding-0.6B"
-        )
+        model, custom_llm_provider, _, _ = get_llm_provider(model="openai/Qwen/Qwen3-Embedding-0.6B")
         optional_params = get_optional_params_embeddings(
             model=model,
             dimensions=1024,
@@ -151,9 +137,7 @@ def test_openai_non_text_embedding_3_drop_params_global():
     prev_drop_params = litellm.drop_params
     litellm.drop_params = True
     try:
-        model, custom_llm_provider, _, _ = get_llm_provider(
-            model="openai/Qwen/Qwen3-Embedding-0.6B"
-        )
+        model, custom_llm_provider, _, _ = get_llm_provider(model="openai/Qwen/Qwen3-Embedding-0.6B")
         optional_params = get_optional_params_embeddings(
             model=model,
             dimensions=1024,

@@ -40,9 +40,7 @@ async def test_allm_passthrough_route_with_hosted_vllm_model_does_not_raise():
         ),
     ):
         # Mock the underlying AsyncClient.send to avoid real network I/O
-        fake_request = httpx.Request(
-            method="POST", url="http://localhost:8090/v1/chat/completions"
-        )
+        fake_request = httpx.Request(method="POST", url="http://localhost:8090/v1/chat/completions")
         fake_response = httpx.Response(
             status_code=200,
             content=b'{\n  "ok": true\n}',
@@ -50,9 +48,7 @@ async def test_allm_passthrough_route_with_hosted_vllm_model_does_not_raise():
             headers={"content-type": "application/json"},
         )
 
-        with patch.object(
-            client.client, "send", new=AsyncMock(return_value=fake_response)
-        ):
+        with patch.object(client.client, "send", new=AsyncMock(return_value=fake_response)):
             # When calling the async passthrough route with a hosted_vllm/* model
             response = await allm_passthrough_route(
                 method="POST",

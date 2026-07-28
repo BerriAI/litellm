@@ -88,18 +88,14 @@ async def test_write_and_read_simple_secret():
         assert write_response["Name"] == test_secret_name
 
         # Read secret back
-        read_value = await secret_manager.async_read_secret(
-            secret_name=test_secret_name
-        )
+        read_value = await secret_manager.async_read_secret(secret_name=test_secret_name)
 
         print("Read Value:", read_value)
 
         assert read_value == test_secret_value
     finally:
         # Cleanup: Delete the secret
-        delete_response = await secret_manager.async_delete_secret(
-            secret_name=test_secret_name
-        )
+        delete_response = await secret_manager.async_delete_secret(secret_name=test_secret_name)
         print("Delete Response:", delete_response)
         assert delete_response is not None
 
@@ -130,9 +126,7 @@ async def test_write_and_read_json_secret():
         print("Write Response:", write_response)
 
         # Read and parse JSON secret
-        read_value = await secret_manager.async_read_secret(
-            secret_name=test_secret_name
-        )
+        read_value = await secret_manager.async_read_secret(secret_name=test_secret_name)
         parsed_value = json.loads(read_value)
 
         print("Read Value:", read_value)
@@ -142,9 +136,7 @@ async def test_write_and_read_json_secret():
         assert parsed_value["metadata"]["team"] == "ml"
     finally:
         # Cleanup: Delete the secret
-        delete_response = await secret_manager.async_delete_secret(
-            secret_name=test_secret_name
-        )
+        delete_response = await secret_manager.async_delete_secret(secret_name=test_secret_name)
         print("Delete Response:", delete_response)
         assert delete_response is not None
 
@@ -197,9 +189,7 @@ async def test_primary_secret_functionality():
         # Test reading individual secrets from the primary secret
         for key, expected_value in primary_secret_value.items():
             # Read using the primary_secret_name parameter
-            value = await secret_manager.async_read_secret(
-                secret_name=key, primary_secret_name=primary_secret_name
-            )
+            value = await secret_manager.async_read_secret(secret_name=key, primary_secret_name=primary_secret_name)
 
             print(f"Read {key} from primary secret:", value)
             assert value == expected_value
@@ -213,9 +203,7 @@ async def test_primary_secret_functionality():
 
     finally:
         # Cleanup: Delete the primary secret
-        delete_response = await secret_manager.async_delete_secret(
-            secret_name=primary_secret_name
-        )
+        delete_response = await secret_manager.async_delete_secret(secret_name=primary_secret_name)
         print("Delete Response:", delete_response)
         assert delete_response is not None
 
@@ -255,9 +243,7 @@ async def test_write_secret_with_description_and_tags():
         # --- Validate the secret metadata via AWS CLI / boto3 ---
         import boto3
 
-        client = boto3.client(
-            "secretsmanager", region_name=os.getenv("AWS_REGION_NAME")
-        )
+        client = boto3.client("secretsmanager", region_name=os.getenv("AWS_REGION_NAME"))
         describe_resp = client.describe_secret(SecretId=test_secret_name)
         print("Describe Response:", describe_resp)
 
@@ -268,24 +254,18 @@ async def test_write_secret_with_description_and_tags():
         if "Tags" in describe_resp:
             tag_dict = {t["Key"]: t["Value"] for t in describe_resp["Tags"]}
             for k, v in test_tags.items():
-                assert (
-                    tag_dict.get(k) == v
-                ), f"Expected tag {k}={v}, got {tag_dict.get(k)}"
+                assert tag_dict.get(k) == v, f"Expected tag {k}={v}, got {tag_dict.get(k)}"
         else:
             pytest.fail("No tags found in describe_secret response")
 
         # --- Validate secret value ---
-        read_value = await secret_manager.async_read_secret(
-            secret_name=test_secret_name
-        )
+        read_value = await secret_manager.async_read_secret(secret_name=test_secret_name)
         print("Read Value:", read_value)
         assert read_value == test_secret_value
 
     finally:
         # Cleanup: Delete the secret
-        delete_response = await secret_manager.async_delete_secret(
-            secret_name=test_secret_name
-        )
+        delete_response = await secret_manager.async_delete_secret(secret_name=test_secret_name)
         print("Delete Response:", delete_response)
         assert delete_response is not None
 
@@ -429,9 +409,7 @@ def test_load_aws_secret_manager_with_settings():
         # Verify settings were passed through
         assert litellm.secret_manager_client.aws_role_name == settings.aws_role_name
         assert litellm.secret_manager_client.aws_region_name == settings.aws_region_name
-        assert (
-            litellm.secret_manager_client.aws_session_name == settings.aws_session_name
-        )
+        assert litellm.secret_manager_client.aws_session_name == settings.aws_session_name
     finally:
         # Cleanup
         litellm.secret_manager_client = None
@@ -488,9 +466,7 @@ async def test_end_to_end_iam_role_secret_write():
         assert "ARN" in response
 
         # Test read operation using IAM role
-        read_value = await secret_manager.async_read_secret(
-            secret_name=test_secret_name
-        )
+        read_value = await secret_manager.async_read_secret(secret_name=test_secret_name)
 
         print("Read Value with IAM Role:", read_value)
         assert read_value == test_secret_value
@@ -498,9 +474,7 @@ async def test_end_to_end_iam_role_secret_write():
     finally:
         # Cleanup: Delete the secret
         try:
-            delete_response = await secret_manager.async_delete_secret(
-                secret_name=test_secret_name
-            )
+            delete_response = await secret_manager.async_delete_secret(secret_name=test_secret_name)
             print("Delete Response:", delete_response)
         except Exception as e:
             print(f"Cleanup failed: {e}")

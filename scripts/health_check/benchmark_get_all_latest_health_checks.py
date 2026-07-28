@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Bench LiteLLM_HealthCheckTable + PrismaClient 
+Bench LiteLLM_HealthCheckTable + PrismaClient
     - set DATABASE_URL to your Postgres
     - Run ```prisma generate``` to install prisma client before running test )
     - This test writes to the default "public" database. Make sure to run cleanup after testing
@@ -19,9 +19,7 @@ import tracemalloc
 from datetime import datetime, timedelta, timezone
 from typing import Any, List
 
-SEED_MARKER = (
-    "benchmark_get_all_latest_health_checks.py"  # Utility Marker for cleanup process.
-)
+SEED_MARKER = "benchmark_get_all_latest_health_checks.py"  # Utility Marker for cleanup process.
 
 
 def _rss_kb_linux() -> int:
@@ -127,9 +125,7 @@ async def _bench(prisma: Any) -> None:
 
 
 async def _amain() -> int:
-    p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("action", choices=("seed", "bench", "cleanup"))
     p.add_argument("--rows", type=int, default=10_000)
     p.add_argument("--batch-size", type=int, default=1000)
@@ -149,9 +145,7 @@ async def _amain() -> int:
     from litellm.proxy.proxy_cli import append_query_params
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
-    db_url = append_query_params(
-        database_url, {"connection_limit": 100, "pool_timeout": 60}
-    )
+    db_url = append_query_params(database_url, {"connection_limit": 100, "pool_timeout": 60})
     prisma = PrismaClient(
         database_url=db_url,
         proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),

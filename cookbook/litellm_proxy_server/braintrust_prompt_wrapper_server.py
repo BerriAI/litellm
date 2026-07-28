@@ -165,9 +165,7 @@ def transform_braintrust_response(
 @app.get("/beta/litellm_prompt_management")
 async def get_prompt(
     prompt_id: str = Query(..., description="The Braintrust prompt ID to fetch"),
-    authorization: Optional[str] = Header(
-        None, description="Bearer token for Braintrust API"
-    ),
+    authorization: Optional[str] = Header(None, description="Bearer token for Braintrust API"),
 ) -> JSONResponse:
     """
     Fetch a prompt from Braintrust and transform it to LiteLLM format.
@@ -263,9 +261,7 @@ def main():
 
     print(f"🚀 Starting Braintrust Prompt Wrapper Server on {host}:{port}")
     print(f"📚 API Documentation available at http://{host}:{port}/docs")
-    print(
-        f"🔑 Make sure to set BRAINTRUST_API_KEY environment variable or pass token in Authorization header"
-    )
+    print(f"🔑 Make sure to set BRAINTRUST_API_KEY environment variable or pass token in Authorization header")
 
     uvicorn.run(app, host=host, port=port)
 

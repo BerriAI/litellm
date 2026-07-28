@@ -7,9 +7,7 @@ from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm import embedding
 from litellm.exceptions import BadRequestError
@@ -75,9 +73,7 @@ class BaseLLMEmbeddingTest(ABC):
 
     def test_embedding_optional_params_max_retries(self):
         embedding_call_args = self.get_base_embedding_call_args()
-        optional_params = get_optional_params_embeddings(
-            **embedding_call_args, max_retries=20
-        )
+        optional_params = get_optional_params_embeddings(**embedding_call_args, max_retries=20)
         assert optional_params["max_retries"] == 20
 
     def test_image_embedding(self):

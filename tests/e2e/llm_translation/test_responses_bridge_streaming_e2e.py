@@ -103,7 +103,9 @@ class TestResponsesBridgeChatCompletionsStreaming:
             resources.key(),
             ChatBody(
                 model=bridged_model,
-                messages=[ChatMessage(role="user", content=f"Count from 1 to 5, one number per line. {unique_marker()}")],
+                messages=[
+                    ChatMessage(role="user", content=f"Count from 1 to 5, one number per line. {unique_marker()}")
+                ],
                 max_tokens=64,
                 stream=True,
             ),
@@ -134,9 +136,9 @@ class TestResponsesBridgeChatCompletionsStreaming:
         chunks = _bridge_chunks(result)
         content = "".join(choice.delta.content or "" for chunk in chunks for choice in chunk.choices)
         assert content.strip(), f"bridged stream completed with no content deltas: {result.stream_events[:3]}"
-        assert any(
-            choice.finish_reason for chunk in chunks for choice in chunk.choices
-        ), f"bridged stream never emitted a finish_reason: {result.stream_events[-3:]}"
+        assert any(choice.finish_reason for chunk in chunks for choice in chunk.choices), (
+            f"bridged stream never emitted a finish_reason: {result.stream_events[-3:]}"
+        )
         assert result.stream_done, f"bridged stream did not terminate with [DONE]: {result.stream_events[-2:]}"
 
     @pytest.mark.covers(

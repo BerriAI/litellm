@@ -98,7 +98,9 @@ async def test_grant_sends_rfc8707_resource_indicator():
 async def test_changing_only_the_resource_mints_a_fresh_token():
     """The resource is part of the mint identity: retargeting a live M2M server must not keep serving
     the token minted for the previous audience."""
-    poster = _FakePoster([_success(access_token="tok-a", expires_in=3600), _success(access_token="tok-b", expires_in=3600)])
+    poster = _FakePoster(
+        [_success(access_token="tok-a", expires_in=3600), _success(access_token="tok-b", expires_in=3600)]
+    )
     source = ClientCredentialsTokenSource(poster)
     first = await source.get("s", _config(upstream_resource="api://one"))
     second = await source.get("s", _config(upstream_resource="api://two"))

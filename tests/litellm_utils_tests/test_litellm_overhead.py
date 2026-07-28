@@ -51,15 +51,10 @@ def _stream_payload(response_id="chatcmpl-stream"):
             "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
         },
     ]
-    return (
-        "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
-        + "data: [DONE]\n\n"
-    ).encode()
+    return ("".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n").encode()
 
 
-def _mock_openai_completion_transport(
-    monkeypatch, *, stream=False, response_id="chatcmpl-test"
-):
+def _mock_openai_completion_transport(monkeypatch, *, stream=False, response_id="chatcmpl-test"):
     from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 
     calls = {"count": 0}
@@ -74,9 +69,7 @@ def _mock_openai_completion_transport(
                 headers={"content-type": "text/event-stream"},
                 request=request,
             )
-        return httpx.Response(
-            200, json=_completion_payload(response_id), request=request
-        )
+        return httpx.Response(200, json=_completion_payload(response_id), request=request)
 
     monkeypatch.setattr(
         LiteLLMAiohttpTransport,
@@ -110,9 +103,7 @@ def reset_litellm_state():
 
 @pytest.mark.asyncio
 async def test_litellm_overhead_non_streaming(monkeypatch):
-    calls = _mock_openai_completion_transport(
-        monkeypatch, response_id="chatcmpl-non-stream"
-    )
+    calls = _mock_openai_completion_transport(monkeypatch, response_id="chatcmpl-non-stream")
 
     start_time = time.perf_counter()
     response = await litellm.acompletion(
@@ -129,9 +120,7 @@ async def test_litellm_overhead_non_streaming(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_litellm_overhead_stream(monkeypatch):
-    calls = _mock_openai_completion_transport(
-        monkeypatch, stream=True, response_id="chatcmpl-stream"
-    )
+    calls = _mock_openai_completion_transport(monkeypatch, stream=True, response_id="chatcmpl-stream")
 
     start_time = time.perf_counter()
     response = await litellm.acompletion(
@@ -179,7 +168,4 @@ async def test_litellm_overhead_cache_hit(monkeypatch):
     assert response1.id == response2.id
     assert "_response_ms" in response2._hidden_params
     assert response2._hidden_params["litellm_overhead_time_ms"] > 0
-    assert (
-        response2._hidden_params["litellm_overhead_time_ms"]
-        < response2._hidden_params["_response_ms"]
-    )
+    assert response2._hidden_params["litellm_overhead_time_ms"] < response2._hidden_params["_response_ms"]

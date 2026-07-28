@@ -26,9 +26,7 @@ class _Upstream:
     def __init__(self, status=200, headers=None, body=_OK_BODY):
         self.calls = 0
         self._status = status
-        self._headers = (
-            headers if headers is not None else [("content-type", "application/json")]
-        )
+        self._headers = headers if headers is not None else [("content-type", "application/json")]
         self._body = body
 
     async def __call__(self):
@@ -37,9 +35,7 @@ class _Upstream:
 
 
 def _recorder(client=None):
-    return OpenAIRecordReplay(
-        client if client is not None else fakeredis.FakeStrictRedis()
-    )
+    return OpenAIRecordReplay(client if client is not None else fakeredis.FakeStrictRedis())
 
 
 def _run(coro):
@@ -52,17 +48,13 @@ def test_miss_forwards_to_upstream_and_records():
     upstream = _Upstream()
 
     status, headers, body = _run(
-        recorder.handle(
-            "POST", "/v1/images/generations", b'{"model":"gpt-image-1"}', upstream
-        )
+        recorder.handle("POST", "/v1/images/generations", b'{"model":"gpt-image-1"}', upstream)
     )
 
     assert upstream.calls == 1
     assert status == 200
     assert body == _OK_BODY
-    key = OpenAIRecordReplay.record_key(
-        "POST", "/v1/images/generations", b'{"model":"gpt-image-1"}'
-    )
+    key = OpenAIRecordReplay.record_key("POST", "/v1/images/generations", b'{"model":"gpt-image-1"}')
     assert key.startswith(RECORD_KEY_PREFIX)
     assert fake.get(key) is not None
 
@@ -84,27 +76,15 @@ def test_different_body_is_a_separate_recording():
     recorder = _recorder()
     upstream = _Upstream()
 
-    _run(
-        recorder.handle(
-            "POST", "/v1/images/generations", b'{"prompt":"otter"}', upstream
-        )
-    )
-    _run(
-        recorder.handle(
-            "POST", "/v1/images/generations", b'{"prompt":"seal"}', upstream
-        )
-    )
+    _run(recorder.handle("POST", "/v1/images/generations", b'{"prompt":"otter"}', upstream))
+    _run(recorder.handle("POST", "/v1/images/generations", b'{"prompt":"seal"}', upstream))
 
     assert upstream.calls == 2
 
 
 def test_record_key_ignores_json_key_order():
-    a = OpenAIRecordReplay.record_key(
-        "POST", "/v1/images/generations", b'{"model":"x","prompt":"y"}'
-    )
-    b = OpenAIRecordReplay.record_key(
-        "POST", "/v1/images/generations", b'{"prompt":"y","model":"x"}'
-    )
+    a = OpenAIRecordReplay.record_key("POST", "/v1/images/generations", b'{"model":"x","prompt":"y"}')
+    b = OpenAIRecordReplay.record_key("POST", "/v1/images/generations", b'{"prompt":"y","model":"x"}')
     assert a == b
 
 
@@ -148,12 +128,8 @@ def test_replay_drops_framing_headers_so_server_recomputes():
     )
     body_in = b'{"model":"gpt-image-1"}'
 
-    _, live_headers, _ = _run(
-        recorder.handle("POST", "/v1/images/generations", body_in, upstream)
-    )
-    _, replay_headers, _ = _run(
-        recorder.handle("POST", "/v1/images/generations", body_in, upstream)
-    )
+    _, live_headers, _ = _run(recorder.handle("POST", "/v1/images/generations", body_in, upstream))
+    _, replay_headers, _ = _run(recorder.handle("POST", "/v1/images/generations", body_in, upstream))
 
     for headers in (live_headers, replay_headers):
         names = {k.lower() for k, _ in headers}
@@ -177,9 +153,7 @@ def test_non_2xx_response_is_not_cached():
     body_in = b'{"model":"gpt-image-1"}'
     key = OpenAIRecordReplay.record_key("POST", "/v1/images/generations", body_in)
 
-    status, _, _ = _run(
-        recorder.handle("POST", "/v1/images/generations", body_in, upstream)
-    )
+    status, _, _ = _run(recorder.handle("POST", "/v1/images/generations", body_in, upstream))
     assert status == 500
     assert fake.get(key) is None
 
@@ -266,16 +240,9 @@ def test_handle_warns_when_recording_not_persisted(caplog):
     upstream = _Upstream()
 
     with caplog.at_level(logging.WARNING, logger="openai_record_replay"):
-        _run(
-            recorder.handle(
-                "POST", "/v1/images/generations", b'{"model":"gpt-image-1"}', upstream
-            )
-        )
+        _run(recorder.handle("POST", "/v1/images/generations", b'{"model":"gpt-image-1"}', upstream))
 
-    assert any(
-        r.levelno == logging.WARNING and "NOT recorded" in r.getMessage()
-        for r in caplog.records
-    )
+    assert any(r.levelno == logging.WARNING and "NOT recorded" in r.getMessage() for r in caplog.records)
 
 
 def test_log_startup_mode_distinguishes_replay_from_passthrough(caplog):
@@ -299,10 +266,7 @@ def test_log_startup_mode_warns_when_redis_configured_but_unreachable(caplog):
     with caplog.at_level(logging.WARNING, logger="openai_record_replay"):
         _recorder(_UnreachableRedis()).log_startup_mode()
 
-    assert any(
-        r.levelno == logging.WARNING and "DEGRADED" in r.getMessage()
-        for r in caplog.records
-    )
+    assert any(r.levelno == logging.WARNING and "DEGRADED" in r.getMessage() for r in caplog.records)
 
 
 def test_record_key_distinguishes_upstreams():
@@ -358,9 +322,7 @@ def test_same_path_and_body_to_different_upstreams_record_separately():
 
 
 def test_resolve_upstream_prefix_selects_host_and_strips_it():
-    upstream, real_path = _resolve_upstream(
-        f"{UPSTREAM_PATH_PREFIX}api.cohere.com/v2/rerank", "https://api.openai.com"
-    )
+    upstream, real_path = _resolve_upstream(f"{UPSTREAM_PATH_PREFIX}api.cohere.com/v2/rerank", "https://api.openai.com")
     assert upstream == "https://api.cohere.com"
     assert real_path == "/v2/rerank"
 
@@ -384,9 +346,7 @@ class _CapturingClient:
     def __init__(self, status=200, headers=None, body=b'{"ok":true}'):
         self.calls = []
         self._status = status
-        self._headers = (
-            headers if headers is not None else [("content-type", "application/json")]
-        )
+        self._headers = headers if headers is not None else [("content-type", "application/json")]
         self._body = body
 
     async def request(self, method, url, *, content, headers):
@@ -405,9 +365,7 @@ def test_upstream_prefix_routes_live_call_to_named_host_and_preserves_auth():
     from tests._openai_record_replay_proxy import create_app
 
     client = _CapturingClient()
-    app = create_app(
-        recorder=OpenAIRecordReplay(fakeredis.FakeStrictRedis()), http_client=client
-    )
+    app = create_app(recorder=OpenAIRecordReplay(fakeredis.FakeStrictRedis()), http_client=client)
 
     with TestClient(app) as tc:
         resp = tc.post(
@@ -431,9 +389,7 @@ def test_no_prefix_falls_back_to_default_openai_upstream():
     from tests._openai_record_replay_proxy import create_app
 
     client = _CapturingClient()
-    app = create_app(
-        recorder=OpenAIRecordReplay(fakeredis.FakeStrictRedis()), http_client=client
-    )
+    app = create_app(recorder=OpenAIRecordReplay(fakeredis.FakeStrictRedis()), http_client=client)
 
     with TestClient(app) as tc:
         tc.post(

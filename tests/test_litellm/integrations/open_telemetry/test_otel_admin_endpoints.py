@@ -105,9 +105,7 @@ def test_key_generate_failure_stamps_server_span(
     )
 
 
-def test_key_generate_success_stamps_server_span(
-    server_span_factory, otel_with_exporter
-):
+def test_key_generate_success_stamps_server_span(server_span_factory, otel_with_exporter):
     otel, exporter = otel_with_exporter
     server_span = server_span_factory(KEY_GENERATE_PATH)
 
@@ -230,9 +228,7 @@ def test_management_wrapper_success_ends_server_span_without_http_request(
     )
 
 
-def test_management_wrapper_failure_ends_server_span(
-    server_span_factory, otel_with_exporter, monkeypatch
-):
+def test_management_wrapper_failure_ends_server_span(server_span_factory, otel_with_exporter, monkeypatch):
     """When the handler raises, the wrapper must route through the failure hook
     and stamp + end the parent SERVER span with the error status — even for an
     ``http_request``-less handler (route falls back to ``func.__name__``)."""
@@ -249,9 +245,7 @@ def test_management_wrapper_failure_ends_server_span(
         raise HttpStatusException(500, "boom")
 
     with pytest.raises(HttpStatusException):
-        asyncio.run(
-            failing_fn(data={}, user_api_key_dict=_real_user_api_key_dict(server_span))
-        )
+        asyncio.run(failing_fn(data={}, user_api_key_dict=_real_user_api_key_dict(server_span)))
 
     assert_server_span_attrs(
         exporter,
@@ -261,9 +255,7 @@ def test_management_wrapper_failure_ends_server_span(
     )
 
 
-def test_management_wrapper_success_with_http_request(
-    server_span_factory, otel_with_exporter, monkeypatch
-):
+def test_management_wrapper_success_with_http_request(server_span_factory, otel_with_exporter, monkeypatch):
     """Cover the branch where the handler DOES declare ``http_request``: the
     route comes from ``http_request.url.path`` and the body is read from it."""
     import litellm.proxy.proxy_server as proxy_server
@@ -302,9 +294,7 @@ def test_management_wrapper_success_with_http_request(
     )
 
 
-def test_management_wrapper_noop_when_otel_logger_absent(
-    server_span_factory, otel_with_exporter, monkeypatch
-):
+def test_management_wrapper_noop_when_otel_logger_absent(server_span_factory, otel_with_exporter, monkeypatch):
     """When no OTEL logger is registered, the helper early-returns and no SERVER
     span is exported — and the handler result is still returned unchanged."""
     import litellm.proxy.proxy_server as proxy_server
@@ -320,17 +310,13 @@ def test_management_wrapper_noop_when_otel_logger_absent(
     async def fake_fn(data=None, user_api_key_dict=None):
         return {"ok": True}
 
-    result = asyncio.run(
-        fake_fn(data={}, user_api_key_dict=_real_user_api_key_dict(server_span))
-    )
+    result = asyncio.run(fake_fn(data={}, user_api_key_dict=_real_user_api_key_dict(server_span)))
 
     assert result == {"ok": True}
     assert get_server_span(exporter) is None
 
 
-def test_management_wrapper_swallows_post_success_errors(
-    server_span_factory, otel_with_exporter, monkeypatch
-):
+def test_management_wrapper_swallows_post_success_errors(server_span_factory, otel_with_exporter, monkeypatch):
     """A failure in post-success bookkeeping (cache invalidation, alerting) must
     not propagate — the handler result is returned regardless (non-blocking)."""
     import litellm.proxy.proxy_server as proxy_server
@@ -351,8 +337,6 @@ def test_management_wrapper_swallows_post_success_errors(
     async def fake_fn(data=None, user_api_key_dict=None):
         return {"ok": True}
 
-    result = asyncio.run(
-        fake_fn(data={}, user_api_key_dict=_real_user_api_key_dict(server_span))
-    )
+    result = asyncio.run(fake_fn(data={}, user_api_key_dict=_real_user_api_key_dict(server_span)))
 
     assert result == {"ok": True}

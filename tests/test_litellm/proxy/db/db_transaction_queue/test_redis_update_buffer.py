@@ -5,9 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.proxy_server import ProxyStartupEvent
@@ -27,9 +25,7 @@ def redis_update_buffer(mock_redis_cache):
 
 
 @pytest.mark.asyncio
-async def test_store_in_memory_spend_updates_uses_pipeline(
-    redis_update_buffer, mock_redis_cache
-):
+async def test_store_in_memory_spend_updates_uses_pipeline(redis_update_buffer, mock_redis_cache):
     """
     Verify store_in_memory_spend_updates_in_redis calls async_rpush_pipeline once
     with the correct operations and skips empty queues.
@@ -38,35 +34,29 @@ async def test_store_in_memory_spend_updates_uses_pipeline(
 
     # Create mock queues - only 3 of 6 have data
     spend_update_queue = AsyncMock()
-    spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions = (
-        AsyncMock(return_value={"key_list_transactions": {"key1": 1.0}})
+    spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions = AsyncMock(
+        return_value={"key_list_transactions": {"key1": 1.0}}
     )
 
     daily_spend_queue = AsyncMock()
-    daily_spend_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
-        AsyncMock(return_value={"user_key1": {"spend": 1.0}})
+    daily_spend_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(
+        return_value={"user_key1": {"spend": 1.0}}
     )
 
     daily_team_queue = AsyncMock()
-    daily_team_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
-        AsyncMock(return_value={"team_key1": {"spend": 2.0}})
+    daily_team_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(
+        return_value={"team_key1": {"spend": 2.0}}
     )
 
     # Empty queues
     daily_org_queue = AsyncMock()
-    daily_org_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
-        AsyncMock(return_value={})
-    )
+    daily_org_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(return_value={})
 
     daily_end_user_queue = AsyncMock()
-    daily_end_user_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
-        AsyncMock(return_value=None)
-    )
+    daily_end_user_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(return_value=None)
 
     daily_agent_queue = AsyncMock()
-    daily_agent_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
-        AsyncMock(return_value={})
-    )
+    daily_agent_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(return_value={})
 
     await redis_update_buffer.store_in_memory_spend_updates_in_redis(
         spend_update_queue=spend_update_queue,
@@ -87,9 +77,7 @@ async def test_store_in_memory_spend_updates_uses_pipeline(
 
 
 @pytest.mark.asyncio
-async def test_store_in_memory_spend_updates_restores_on_rpush_failure(
-    redis_update_buffer, mock_redis_cache
-):
+async def test_store_in_memory_spend_updates_restores_on_rpush_failure(redis_update_buffer, mock_redis_cache):
     """
     If async_rpush_pipeline raises, the already-drained transactions must be
     put back into the in-memory queues so the next scheduler tick retries.
@@ -103,9 +91,7 @@ async def test_store_in_memory_spend_updates_restores_on_rpush_failure(
         SpendUpdateQueue,
     )
 
-    mock_redis_cache.async_rpush_pipeline = AsyncMock(
-        side_effect=ConnectionError("redis went away")
-    )
+    mock_redis_cache.async_rpush_pipeline = AsyncMock(side_effect=ConnectionError("redis went away"))
 
     spend_queue = SpendUpdateQueue()
     daily_user_queue = DailySpendUpdateQueue()
@@ -150,16 +136,12 @@ async def test_store_in_memory_spend_updates_restores_on_rpush_failure(
 
     # After restore, the main spend queue should hold one item per
     # (entity_type, entity_id) pair with the aggregated cost
-    restored_spend = (
-        await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
-    )
+    restored_spend = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
     assert restored_spend["key_list_transactions"] == {"key-abc": 1.5}
     assert restored_spend["team_list_transactions"] == {"team-xyz": 2.5}
 
     # Daily user queue should hold the same aggregated dict
-    restored_daily = (
-        await daily_user_queue.flush_and_get_aggregated_daily_spend_update_transactions()
-    )
+    restored_daily = await daily_user_queue.flush_and_get_aggregated_daily_spend_update_transactions()
     assert restored_daily == {
         "user1_day_model": {
             "spend": 1.0,
@@ -170,9 +152,7 @@ async def test_store_in_memory_spend_updates_restores_on_rpush_failure(
 
 
 @pytest.mark.asyncio
-async def test_store_in_memory_spend_updates_all_empty_returns_early(
-    redis_update_buffer, mock_redis_cache
-):
+async def test_store_in_memory_spend_updates_all_empty_returns_early(redis_update_buffer, mock_redis_cache):
     """
     When all queues are empty, pipeline should never be called.
     """
@@ -180,13 +160,9 @@ async def test_store_in_memory_spend_updates_all_empty_returns_early(
 
     # All queues return empty
     empty_queue = AsyncMock()
-    empty_queue.flush_and_get_aggregated_db_spend_update_transactions = AsyncMock(
-        return_value={}
-    )
+    empty_queue.flush_and_get_aggregated_db_spend_update_transactions = AsyncMock(return_value={})
     empty_daily_queue = AsyncMock()
-    empty_daily_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
-        AsyncMock(return_value={})
-    )
+    empty_daily_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(return_value={})
 
     await redis_update_buffer.store_in_memory_spend_updates_in_redis(
         spend_update_queue=empty_queue,
@@ -201,9 +177,7 @@ async def test_store_in_memory_spend_updates_all_empty_returns_early(
 
 
 @pytest.mark.asyncio
-async def test_get_all_transactions_from_redis_buffer_pipeline(
-    redis_update_buffer, mock_redis_cache
-):
+async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buffer, mock_redis_cache):
     """
     Verify get_all_transactions_from_redis_buffer_pipeline correctly parses
     and aggregates results from async_lpop_pipeline.

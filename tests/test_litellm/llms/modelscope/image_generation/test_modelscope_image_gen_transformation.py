@@ -11,9 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.modelscope.image_generation.transformation import (
     ModelScopeImageGenerationConfig,
@@ -319,10 +317,7 @@ class TestModelScopeImageGenerationTransformation:
         )
 
         assert len(result.data) == 1
-        assert (
-            result.data[0].revised_prompt
-            == "A detailed description of a beautiful sunset"
-        )
+        assert result.data[0].revised_prompt == "A detailed description of a beautiful sunset"
 
     def test_transform_image_generation_response_empty_data(self):
         """Test that transform_image_generation_response handles empty data array."""

@@ -36,9 +36,7 @@ def test_compactifai_completion_basic(respx_mock):
         "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
     }
 
-    respx_mock.post("https://api.compactif.ai/v1/chat/completions").respond(
-        json=mock_response, status_code=200
-    )
+    respx_mock.post("https://api.compactif.ai/v1/chat/completions").respond(json=mock_response, status_code=200)
 
     response = litellm.completion(
         model="compactifai/cai-llama-3-1-8b-slim",
@@ -64,9 +62,7 @@ def test_compactifai_completion_streaming(respx_mock):
                 "object": "chat.completion.chunk",
                 "created": 1677652288,
                 "model": "cai-llama-3-1-8b-slim",
-                "choices": [
-                    {"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}
-                ],
+                "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}],
             }
         )
         + "\n\n",
@@ -77,9 +73,7 @@ def test_compactifai_completion_streaming(respx_mock):
                 "object": "chat.completion.chunk",
                 "created": 1677652288,
                 "model": "cai-llama-3-1-8b-slim",
-                "choices": [
-                    {"index": 0, "delta": {"content": "!"}, "finish_reason": "stop"}
-                ],
+                "choices": [{"index": 0, "delta": {"content": "!"}, "finish_reason": "stop"}],
             }
         )
         + "\n\n",
@@ -168,9 +162,7 @@ def test_compactifai_authentication_error(respx_mock):
         }
     }
 
-    respx_mock.post("https://api.compactif.ai/v1/chat/completions").respond(
-        json=mock_error, status_code=401
-    )
+    respx_mock.post("https://api.compactif.ai/v1/chat/completions").respond(json=mock_error, status_code=401)
 
     with pytest.raises(litellm.APIConnectionError) as exc_info:
         litellm.completion(
@@ -188,9 +180,7 @@ def test_compactifai_provider_detection(respx_mock):
     """Test that CompactifAI provider is properly detected from model name"""
     from litellm.utils import get_llm_provider
 
-    model, provider, dynamic_api_key, api_base = get_llm_provider(
-        model="compactifai/cai-llama-3-1-8b-slim"
-    )
+    model, provider, dynamic_api_key, api_base = get_llm_provider(model="compactifai/cai-llama-3-1-8b-slim")
 
     assert provider == "compactifai"
     assert model == "cai-llama-3-1-8b-slim"
@@ -219,9 +209,9 @@ def test_compactifai_with_optional_params(respx_mock):
         "usage": {"prompt_tokens": 15, "completion_tokens": 20, "total_tokens": 35},
     }
 
-    request_mock = respx_mock.post(
-        "https://api.compactif.ai/v1/chat/completions"
-    ).respond(json=mock_response, status_code=200)
+    request_mock = respx_mock.post("https://api.compactif.ai/v1/chat/completions").respond(
+        json=mock_response, status_code=200
+    )
 
     response = litellm.completion(
         model="compactifai/cai-llama-3-1-8b-slim",
@@ -232,10 +222,7 @@ def test_compactifai_with_optional_params(respx_mock):
         top_p=0.9,
     )
 
-    assert (
-        response.choices[0].message.content
-        == "This is a test response with custom parameters."
-    )
+    assert response.choices[0].message.content == "This is a test response with custom parameters."
 
     # Verify the request was made with correct parameters
     assert request_mock.called
@@ -266,9 +253,9 @@ def test_compactifai_headers_authentication(respx_mock):
         "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
     }
 
-    request_mock = respx_mock.post(
-        "https://api.compactif.ai/v1/chat/completions"
-    ).respond(json=mock_response, status_code=200)
+    request_mock = respx_mock.post("https://api.compactif.ai/v1/chat/completions").respond(
+        json=mock_response, status_code=200
+    )
 
     response = litellm.completion(
         model="compactifai/cai-llama-3-1-8b-slim",
@@ -309,9 +296,7 @@ async def test_compactifai_async_completion(respx_mock):
         "usage": {"prompt_tokens": 8, "completion_tokens": 15, "total_tokens": 23},
     }
 
-    respx_mock.post("https://api.compactif.ai/v1/chat/completions").respond(
-        json=mock_response, status_code=200
-    )
+    respx_mock.post("https://api.compactif.ai/v1/chat/completions").respond(json=mock_response, status_code=200)
 
     response = await litellm.acompletion(
         model="compactifai/cai-llama-3-1-8b-slim",

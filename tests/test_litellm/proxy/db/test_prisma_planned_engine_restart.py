@@ -24,9 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy.db.prisma_client import PrismaWrapper
 
@@ -50,10 +48,7 @@ def _make_wrapper(engine_pid: int = 111, iam: bool = False) -> PrismaWrapper:
 
 def _token_db_url(created: datetime, expires_in: int = 900) -> str:
     """Build a DATABASE_URL whose password is a parseable RDS IAM token."""
-    token = (
-        f"host/?X-Amz-Date={created.strftime('%Y%m%dT%H%M%SZ')}"
-        f"&X-Amz-Expires={expires_in}&X-Amz-Signature=abc"
-    )
+    token = f"host/?X-Amz-Date={created.strftime('%Y%m%dT%H%M%SZ')}&X-Amz-Expires={expires_in}&X-Amz-Signature=abc"
     quoted = urllib.parse.quote(token, safe="")
     return f"postgresql://user:{quoted}@host:5432/db"
 
@@ -100,9 +95,7 @@ async def test_recreate_skips_when_expected_generation_is_stale(mock_prisma_bina
         patch("os.kill") as mock_kill,
         patch("asyncio.sleep", new_callable=AsyncMock),
     ):
-        recreated = await wrapper.recreate_prisma_client(
-            "postgresql://new", expected_generation=2
-        )
+        recreated = await wrapper.recreate_prisma_client("postgresql://new", expected_generation=2)
 
     pinned = {
         "recreated": recreated,
@@ -130,9 +123,7 @@ async def test_recreate_proceeds_when_expected_generation_matches(mock_prisma_bi
         patch("os.kill"),
         patch("asyncio.sleep", new_callable=AsyncMock),
     ):
-        recreated = await wrapper.recreate_prisma_client(
-            "postgresql://new", expected_generation=3
-        )
+        recreated = await wrapper.recreate_prisma_client("postgresql://new", expected_generation=3)
 
     assert recreated is True
     assert wrapper._engine_generation == 4
@@ -200,16 +191,12 @@ async def test_on_engine_replaced_not_invoked_when_recreate_skipped(
 
 
 @pytest.mark.asyncio
-async def test_safe_refresh_token_skips_when_token_still_fresh(
-    mock_prisma_binary, monkeypatch
-):
+async def test_safe_refresh_token_skips_when_token_still_fresh(mock_prisma_binary, monkeypatch):
     """Stacked refresh triggers (e.g. __getattr__ scheduling a refresh task
     that runs after the proactive loop already refreshed) must coalesce
     instead of killing the freshly-spawned engine again."""
     wrapper = _make_wrapper(engine_pid=111, iam=True)
-    monkeypatch.setenv(
-        "DATABASE_URL", _token_db_url(created=datetime.utcnow(), expires_in=900)
-    )
+    monkeypatch.setenv("DATABASE_URL", _token_db_url(created=datetime.utcnow(), expires_in=900))
     wrapper.get_rds_iam_token = MagicMock(return_value="postgresql://fresh")
 
     await wrapper._safe_refresh_token()
@@ -222,9 +209,7 @@ async def test_safe_refresh_token_skips_when_token_still_fresh(
 
 
 @pytest.mark.asyncio
-async def test_safe_refresh_token_refreshes_when_token_expired(
-    mock_prisma_binary, monkeypatch
-):
+async def test_safe_refresh_token_refreshes_when_token_expired(mock_prisma_binary, monkeypatch):
     wrapper = _make_wrapper(engine_pid=111, iam=True)
     expired = datetime.utcnow() - timedelta(seconds=1200)
     monkeypatch.setenv("DATABASE_URL", _token_db_url(created=expired, expires_in=900))
@@ -245,9 +230,7 @@ async def test_safe_refresh_token_refreshes_when_token_expired(
 
 
 @pytest.mark.asyncio
-async def test_safe_refresh_token_refreshes_when_token_unparseable(
-    mock_prisma_binary, monkeypatch
-):
+async def test_safe_refresh_token_refreshes_when_token_unparseable(mock_prisma_binary, monkeypatch):
     """Unparseable tokens follow the fallback-interval path and must always
     refresh — skipping here would mean never refreshing at all."""
     wrapper = _make_wrapper(engine_pid=111, iam=True)
@@ -265,9 +248,7 @@ async def test_safe_refresh_token_refreshes_when_token_unparseable(
 
 
 @pytest.mark.asyncio
-async def test_routing_recreate_skips_reader_when_writer_generation_stale(
-    mock_prisma_binary, monkeypatch
-):
+async def test_routing_recreate_skips_reader_when_writer_generation_stale(mock_prisma_binary, monkeypatch):
     from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 
     monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://reader")
@@ -277,9 +258,7 @@ async def test_routing_recreate_skips_reader_when_writer_generation_stale(
     reader.recreate_prisma_client = AsyncMock()
     routing = RoutingPrismaWrapper(writer=writer, reader=reader)
 
-    recreated = await routing.recreate_prisma_client(
-        "postgresql://new", expected_generation=1
-    )
+    recreated = await routing.recreate_prisma_client("postgresql://new", expected_generation=1)
 
     pinned = {
         "recreated": recreated,
@@ -294,9 +273,7 @@ async def test_routing_recreate_skips_reader_when_writer_generation_stale(
 
 
 @pytest.mark.asyncio
-async def test_routing_recreate_recreates_both_when_generation_matches(
-    mock_prisma_binary, monkeypatch
-):
+async def test_routing_recreate_recreates_both_when_generation_matches(mock_prisma_binary, monkeypatch):
     from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 
     monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://reader")
@@ -310,9 +287,7 @@ async def test_routing_recreate_recreates_both_when_generation_matches(
         patch("os.kill"),
         patch("asyncio.sleep", new_callable=AsyncMock),
     ):
-        recreated = await routing.recreate_prisma_client(
-            "postgresql://new", expected_generation=0
-        )
+        recreated = await routing.recreate_prisma_client("postgresql://new", expected_generation=0)
 
     pinned = {
         "recreated": recreated,

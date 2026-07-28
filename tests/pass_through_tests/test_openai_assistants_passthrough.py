@@ -12,9 +12,7 @@ client = openai.OpenAI(base_url="http://0.0.0.0:4000/openai", api_key="sk-1234")
 
 def test_pass_through_file_operations():
     # Create a temporary file
-    with tempfile.NamedTemporaryFile(
-        mode="w+", suffix=".txt", delete=False
-    ) as temp_file:
+    with tempfile.NamedTemporaryFile(mode="w+", suffix=".txt", delete=False) as temp_file:
         temp_file.write("This is a test file for the OpenAI Assistants API.")
         temp_file.flush()
 

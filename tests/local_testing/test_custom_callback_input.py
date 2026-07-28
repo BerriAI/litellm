@@ -82,14 +82,9 @@ class CompletionCustomHandler(
             assert metadata_value is None or isinstance(metadata_value, dict)
             if metadata_value is not None:
                 if litellm.turn_off_message_logging is True:
-                    assert (
-                        metadata_value["raw_request"]
-                        is LiteLLMCommonStrings.redacted_by_litellm.value
-                    )
+                    assert metadata_value["raw_request"] is LiteLLMCommonStrings.redacted_by_litellm.value
                 else:
-                    assert "raw_request" not in metadata_value or isinstance(
-                        metadata_value["raw_request"], str
-                    )
+                    assert "raw_request" not in metadata_value or isinstance(metadata_value["raw_request"], str)
         except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
@@ -138,23 +133,18 @@ class CompletionCustomHandler(
             assert isinstance(response_obj, litellm.ModelResponseStream)
             ## KWARGS
             assert isinstance(kwargs["model"], str)
-            assert isinstance(kwargs["messages"], list) and isinstance(
-                kwargs["messages"][0], dict
-            )
+            assert isinstance(kwargs["messages"], list) and isinstance(kwargs["messages"][0], dict)
             assert isinstance(kwargs["optional_params"], dict)
             assert isinstance(kwargs["litellm_params"], dict)
             assert isinstance(kwargs["start_time"], (datetime, type(None)))
             assert isinstance(kwargs["stream"], bool)
             assert isinstance(kwargs["user"], (str, type(None)))
-            assert (
-                isinstance(kwargs["input"], list)
-                and isinstance(kwargs["input"][0], dict)
-            ) or isinstance(kwargs["input"], (dict, str))
+            assert (isinstance(kwargs["input"], list) and isinstance(kwargs["input"][0], dict)) or isinstance(
+                kwargs["input"], (dict, str)
+            )
             assert isinstance(kwargs["api_key"], (str, type(None)))
             assert (
-                isinstance(
-                    kwargs["original_response"], (str, litellm.CustomStreamWrapper)
-                )
+                isinstance(kwargs["original_response"], (str, litellm.CustomStreamWrapper))
                 or inspect.isasyncgen(kwargs["original_response"])
                 or inspect.iscoroutine(kwargs["original_response"])
             )
@@ -187,9 +177,7 @@ class CompletionCustomHandler(
             )
             ## KWARGS
             assert isinstance(kwargs["model"], str)
-            assert isinstance(kwargs["messages"], list) and isinstance(
-                kwargs["messages"][0], dict
-            )
+            assert isinstance(kwargs["messages"], list) and isinstance(kwargs["messages"][0], dict)
             assert isinstance(kwargs["optional_params"], dict)
             assert isinstance(kwargs["litellm_params"], dict)
             assert isinstance(kwargs["litellm_params"]["api_base"], str)
@@ -199,10 +187,7 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["user"], (str, type(None)))
             assert (
                 isinstance(kwargs["input"], list)
-                and (
-                    isinstance(kwargs["input"][0], dict)
-                    or isinstance(kwargs["input"][0], str)
-                )
+                and (isinstance(kwargs["input"][0], dict) or isinstance(kwargs["input"][0], str))
             ) or isinstance(kwargs["input"], (dict, str))
             assert isinstance(kwargs["api_key"], (str, type(None)))
             assert isinstance(
@@ -230,9 +215,7 @@ class CompletionCustomHandler(
             assert response_obj == None
             ## KWARGS
             assert isinstance(kwargs["model"], str)
-            assert isinstance(kwargs["messages"], list) and isinstance(
-                kwargs["messages"][0], dict
-            )
+            assert isinstance(kwargs["messages"], list) and isinstance(kwargs["messages"][0], dict)
 
             assert isinstance(kwargs["optional_params"], dict)
             assert isinstance(kwargs["litellm_params"], dict)
@@ -240,15 +223,12 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["start_time"], (datetime, type(None)))
             assert isinstance(kwargs["stream"], bool)
             assert isinstance(kwargs["user"], (str, type(None)))
-            assert (
-                isinstance(kwargs["input"], list)
-                and isinstance(kwargs["input"][0], dict)
-            ) or isinstance(kwargs["input"], (dict, str))
+            assert (isinstance(kwargs["input"], list) and isinstance(kwargs["input"][0], dict)) or isinstance(
+                kwargs["input"], (dict, str)
+            )
             assert isinstance(kwargs["api_key"], (str, type(None)))
             assert (
-                isinstance(
-                    kwargs["original_response"], (str, litellm.CustomStreamWrapper)
-                )
+                isinstance(kwargs["original_response"], (str, litellm.CustomStreamWrapper))
                 or kwargs["original_response"] == None
             )
             assert isinstance(kwargs["additional_args"], (dict, type(None)))
@@ -266,9 +246,7 @@ class CompletionCustomHandler(
             assert isinstance(messages, list) and isinstance(messages[0], dict)
             ## KWARGS
             assert isinstance(kwargs["model"], str)
-            assert isinstance(kwargs["messages"], list) and isinstance(
-                kwargs["messages"][0], dict
-            )
+            assert isinstance(kwargs["messages"], list) and isinstance(kwargs["messages"][0], dict)
             assert isinstance(kwargs["optional_params"], dict)
             assert isinstance(kwargs["litellm_params"], dict)
             assert isinstance(kwargs["start_time"], (datetime, type(None)))
@@ -280,9 +258,7 @@ class CompletionCustomHandler(
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            print(
-                "in async_log_success_event", kwargs, response_obj, start_time, end_time
-            )
+            print("in async_log_success_event", kwargs, response_obj, start_time, end_time)
             self.states.append("async_success")
             ## START TIME
             assert isinstance(start_time, datetime)
@@ -311,9 +287,7 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["input"], (list, dict, str))
             assert isinstance(kwargs["api_key"], (str, type(None)))
             assert (
-                isinstance(
-                    kwargs["original_response"], (str, litellm.CustomStreamWrapper)
-                )
+                isinstance(kwargs["original_response"], (str, litellm.CustomStreamWrapper))
                 or inspect.isasyncgen(kwargs["original_response"])
                 or inspect.iscoroutine(kwargs["original_response"])
             )
@@ -345,9 +319,7 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["input"], (list, str, dict))
             assert isinstance(kwargs["api_key"], (str, type(None)))
             assert (
-                isinstance(
-                    kwargs["original_response"], (str, litellm.CustomStreamWrapper)
-                )
+                isinstance(kwargs["original_response"], (str, litellm.CustomStreamWrapper))
                 or inspect.isasyncgen(kwargs["original_response"])
                 or inspect.iscoroutine(kwargs["original_response"])
                 or kwargs["original_response"] == None
@@ -534,9 +506,7 @@ async def test_async_chat_openai_stream_options():
         litellm.set_verbose = True
         customHandler = CompletionCustomHandler()
         litellm.callbacks = [customHandler]
-        with patch.object(
-            customHandler, "async_log_success_event", new=AsyncMock()
-        ) as mock_client:
+        with patch.object(customHandler, "async_log_success_event", new=AsyncMock()) as mock_client:
             response = await litellm.acompletion(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": "Hi 👋 - i'm async openai"}],
@@ -668,9 +638,7 @@ async def test_async_chat_vertex_ai_stream():
             continue
         await asyncio.sleep(10)
         print(f"customHandler.states: {customHandler.states}")
-        assert (
-            customHandler.states.count("async_success") == 1
-        )  # pre, post, success, pre, post, failure
+        assert customHandler.states.count("async_success") == 1  # pre, post, success, pre, post, failure
         assert len(customHandler.states) >= 3  # pre, post, success
     except Exception as e:
         pytest.fail(f"An exception occurred: {str(e)}")
@@ -811,9 +779,7 @@ def test_amazing_sync_embedding():
         customHandler_success = CompletionCustomHandler()
         customHandler_failure = CompletionCustomHandler()
         litellm.callbacks = [customHandler_success]
-        response = litellm.embedding(
-            model="azure/text-embedding-ada-002", input=["good morning from litellm"]
-        )
+        response = litellm.embedding(model="azure/text-embedding-ada-002", input=["good morning from litellm"])
         print(f"customHandler_success.errors: {customHandler_success.errors}")
         print(f"customHandler_success.states: {customHandler_success.states}")
         time.sleep(2)
@@ -846,9 +812,7 @@ async def test_async_embedding_azure():
         customHandler_success = CompletionCustomHandler()
         customHandler_failure = CompletionCustomHandler()
         litellm.callbacks = [customHandler_success]
-        response = await litellm.aembedding(
-            model="azure/text-embedding-ada-002", input=["good morning from litellm"]
-        )
+        response = await litellm.aembedding(model="azure/text-embedding-ada-002", input=["good morning from litellm"])
         await asyncio.sleep(1)
         print(f"customHandler_success.errors: {customHandler_success.errors}")
         print(f"customHandler_success.states: {customHandler_success.states}")
@@ -1000,9 +964,7 @@ def test_turn_off_message_logging():
 
 @pytest.mark.parametrize(
     "model",
-    [
-        "ft:gpt-3.5-turbo:my-org:custom_suffix:id"
-    ],  # "gpt-3.5-turbo", "azure/gpt-4.1-mini",
+    ["ft:gpt-3.5-turbo:my-org:custom_suffix:id"],  # "gpt-3.5-turbo", "azure/gpt-4.1-mini",
 )
 @pytest.mark.parametrize(
     "turn_off_message_logging",
@@ -1024,9 +986,7 @@ def test_standard_logging_payload(model, turn_off_message_logging):
 
     litellm.turn_off_message_logging = turn_off_message_logging
 
-    with patch.object(
-        customHandler, "log_success_event", new=MagicMock()
-    ) as mock_client:
+    with patch.object(customHandler, "log_success_event", new=MagicMock()) as mock_client:
         _ = litellm.completion(
             model=model,
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
@@ -1036,61 +996,38 @@ def test_standard_logging_payload(model, turn_off_message_logging):
         time.sleep(2)
         mock_client.assert_called_once()
 
-        print(
-            f"mock_client_post.call_args: {mock_client.call_args.kwargs['kwargs'].keys()}"
-        )
+        print(f"mock_client_post.call_args: {mock_client.call_args.kwargs['kwargs'].keys()}")
         assert "standard_logging_object" in mock_client.call_args.kwargs["kwargs"]
-        assert (
-            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
-            is not None
-        )
+        assert mock_client.call_args.kwargs["kwargs"]["standard_logging_object"] is not None
 
-        print(
-            "Standard Logging Object - {}".format(
-                mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
-            )
-        )
+        print("Standard Logging Object - {}".format(mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]))
 
         keys_list = list(StandardLoggingPayload.__annotations__.keys())
 
         for k in keys_list:
-            assert (
-                k in mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
-            )
+            assert k in mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
 
         ## json serializable
-        json_str_payload = json.dumps(
-            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
-        )
+        json_str_payload = json.dumps(mock_client.call_args.kwargs["kwargs"]["standard_logging_object"])
         json.loads(json_str_payload)
 
         ## response cost
+        assert mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]["response_cost"] > 0
         assert (
-            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"][
-                "response_cost"
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]["model_map_information"][
+                "model_map_value"
             ]
-            > 0
-        )
-        assert (
-            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"][
-                "model_map_information"
-            ]["model_map_value"]
             is not None
         )
 
         ## turn off message logging
-        slobject: StandardLoggingPayload = mock_client.call_args.kwargs["kwargs"][
-            "standard_logging_object"
-        ]
+        slobject: StandardLoggingPayload = mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
         if turn_off_message_logging:
             print("checks redacted-by-litellm")
             assert "redacted-by-litellm" == slobject["messages"][0]["content"]
             response = slobject["response"]
             if "choices" in response:
-                assert (
-                    response["choices"][0]["message"]["content"]
-                    == "redacted-by-litellm"
-                )
+                assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
                 assert response["choices"][0]["message"].get("audio") is None
             else:
                 assert response["text"] == "redacted-by-litellm"
@@ -1120,26 +1057,18 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
 
     litellm.turn_off_message_logging = turn_off_message_logging
 
-    with patch.object(
-        customHandler, "log_success_event", new=MagicMock()
-    ) as mock_client:
+    with patch.object(customHandler, "log_success_event", new=MagicMock()) as mock_client:
         try:
             response = litellm.completion(
                 model="gpt-audio-1.5",
                 modalities=["text", "audio"],
                 audio={"voice": "alloy", "format": "pcm16"},
-                messages=[
-                    {"role": "user", "content": "response in 1 word - yes or no"}
-                ],
+                messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
                 stream=stream,
             )
         except Exception as e:
             err = str(e).lower()
-            if (
-                "model_not_found" in err
-                or "does not exist" in err
-                or "openai-internal" in err
-            ):
+            if "model_not_found" in err or "does not exist" in err or "openai-internal" in err:
                 pytest.skip(f"Skipping - upstream gpt-audio-1.5 unavailable: {e}")
             raise
 
@@ -1150,71 +1079,43 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
         time.sleep(2)
         mock_client.assert_called()
 
-        print(
-            f"mock_client_post.call_args: {mock_client.call_args.kwargs['kwargs'].keys()}"
-        )
+        print(f"mock_client_post.call_args: {mock_client.call_args.kwargs['kwargs'].keys()}")
         assert "standard_logging_object" in mock_client.call_args.kwargs["kwargs"]
-        assert (
-            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
-            is not None
-        )
+        assert mock_client.call_args.kwargs["kwargs"]["standard_logging_object"] is not None
 
-        print(
-            "Standard Logging Object - {}".format(
-                mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
-            )
-        )
+        print("Standard Logging Object - {}".format(mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]))
 
         keys_list = list(StandardLoggingPayload.__annotations__.keys())
 
         for k in keys_list:
-            assert (
-                k in mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
-            )
+            assert k in mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
 
         ## json serializable
-        json_str_payload = json.dumps(
-            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
-        )
+        json_str_payload = json.dumps(mock_client.call_args.kwargs["kwargs"]["standard_logging_object"])
         json.loads(json_str_payload)
 
         ## response cost
         # Audio streaming responses may not always report token counts,
         # leading to 0.0 cost. Only assert > 0 for non-streaming.
         if not stream:
-            assert (
-                mock_client.call_args.kwargs["kwargs"]["standard_logging_object"][
-                    "response_cost"
-                ]
-                > 0
-            )
+            assert mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]["response_cost"] > 0
         else:
-            assert (
-                mock_client.call_args.kwargs["kwargs"]["standard_logging_object"][
-                    "response_cost"
-                ]
-                >= 0
-            )
+            assert mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]["response_cost"] >= 0
         assert (
-            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"][
-                "model_map_information"
-            ]["model_map_value"]
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]["model_map_information"][
+                "model_map_value"
+            ]
             is not None
         )
 
         ## turn off message logging
-        slobject: StandardLoggingPayload = mock_client.call_args.kwargs["kwargs"][
-            "standard_logging_object"
-        ]
+        slobject: StandardLoggingPayload = mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
         if turn_off_message_logging:
             print("checks redacted-by-litellm")
             assert "redacted-by-litellm" == slobject["messages"][0]["content"]
             response = slobject["response"]
             if "choices" in response:
-                assert (
-                    response["choices"][0]["message"]["content"]
-                    == "redacted-by-litellm"
-                )
+                assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
                 assert response["choices"][0]["message"].get("audio") is None
             else:
                 assert response["text"] == "redacted-by-litellm"
@@ -1238,9 +1139,7 @@ def test_aaastandard_logging_payload_cache_hit():
     litellm.callbacks = [customHandler]
     litellm.success_callback = []
 
-    with patch.object(
-        customHandler, "log_success_event", new=MagicMock()
-    ) as mock_client:
+    with patch.object(customHandler, "log_success_event", new=MagicMock()) as mock_client:
         _ = litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
@@ -1251,14 +1150,11 @@ def test_aaastandard_logging_payload_cache_hit():
         mock_client.assert_called_once()
 
         assert "standard_logging_object" in mock_client.call_args.kwargs["kwargs"]
-        assert (
-            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
-            is not None
-        )
+        assert mock_client.call_args.kwargs["kwargs"]["standard_logging_object"] is not None
 
-        standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs[
-            "kwargs"
-        ]["standard_logging_object"]
+        standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs["kwargs"][
+            "standard_logging_object"
+        ]
 
         assert standard_logging_object["cache_hit"] is True
         assert standard_logging_object["response_cost"] == 0
@@ -1290,9 +1186,7 @@ def test_logging_async_cache_hit_sync_call(turn_off_message_logging):
     litellm.callbacks = [customHandler]
     litellm.success_callback = []
 
-    with patch.object(
-        customHandler, "log_success_event", new=MagicMock()
-    ) as mock_client:
+    with patch.object(customHandler, "log_success_event", new=MagicMock()) as mock_client:
         resp = litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
@@ -1307,14 +1201,11 @@ def test_logging_async_cache_hit_sync_call(turn_off_message_logging):
         mock_client.assert_called_once()
 
         assert "standard_logging_object" in mock_client.call_args.kwargs["kwargs"]
-        assert (
-            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
-            is not None
-        )
+        assert mock_client.call_args.kwargs["kwargs"]["standard_logging_object"] is not None
 
-        standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs[
-            "kwargs"
-        ]["standard_logging_object"]
+        standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs["kwargs"][
+            "standard_logging_object"
+        ]
 
         assert standard_logging_object["cache_hit"] is True
         assert standard_logging_object["response_cost"] == 0
@@ -1322,15 +1213,9 @@ def test_logging_async_cache_hit_sync_call(turn_off_message_logging):
 
         if turn_off_message_logging:
             print("checks redacted-by-litellm")
-            assert (
-                "redacted-by-litellm"
-                == standard_logging_object["messages"][0]["content"]
-            )
+            assert "redacted-by-litellm" == standard_logging_object["messages"][0]["content"]
             # response is a full ModelResponse dict (choices format) since d84e5e381acf
-            assert (
-                standard_logging_object["response"]["choices"][0]["message"]["content"]
-                == "redacted-by-litellm"
-            )
+            assert standard_logging_object["response"]["choices"][0]["message"]["content"] == "redacted-by-litellm"
 
 
 def test_logging_standard_payload_failure_call():
@@ -1339,9 +1224,7 @@ def test_logging_standard_payload_failure_call():
     customHandler = CompletionCustomHandler()
     litellm.callbacks = [customHandler]
 
-    with patch.object(
-        customHandler, "log_failure_event", new=MagicMock()
-    ) as mock_client:
+    with patch.object(customHandler, "log_failure_event", new=MagicMock()) as mock_client:
         try:
             resp = litellm.completion(
                 model="gpt-3.5-turbo",
@@ -1354,14 +1237,11 @@ def test_logging_standard_payload_failure_call():
         mock_client.assert_called_once()
 
         assert "standard_logging_object" in mock_client.call_args.kwargs["kwargs"]
-        assert (
-            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
-            is not None
-        )
+        assert mock_client.call_args.kwargs["kwargs"]["standard_logging_object"] is not None
 
-        standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs[
-            "kwargs"
-        ]["standard_logging_object"]
+        standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs["kwargs"][
+            "standard_logging_object"
+        ]
         assert "additional_headers" in standard_logging_object["hidden_params"]
 
 
@@ -1373,10 +1253,7 @@ def test_logging_standard_payload_llm_headers(stream):
     customHandler = CompletionCustomHandler()
     litellm.callbacks = [customHandler]
 
-    with patch.object(
-        customHandler, "log_success_event", new=MagicMock()
-    ) as mock_client:
-
+    with patch.object(customHandler, "log_success_event", new=MagicMock()) as mock_client:
         resp = litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
@@ -1390,9 +1267,9 @@ def test_logging_standard_payload_llm_headers(stream):
         time.sleep(2)
         mock_client.assert_called()
 
-        standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs[
-            "kwargs"
-        ]["standard_logging_object"]
+        standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs["kwargs"][
+            "standard_logging_object"
+        ]
 
         print(standard_logging_object["hidden_params"]["additional_headers"])
 
@@ -1402,9 +1279,7 @@ def test_logging_key_masking_gemini():
     litellm.callbacks = [customHandler]
     litellm.success_callback = []
 
-    with patch.object(
-        customHandler, "log_pre_api_call", new=MagicMock()
-    ) as mock_client:
+    with patch.object(customHandler, "log_pre_api_call", new=MagicMock()) as mock_client:
         try:
             resp = litellm.completion(
                 model="gemini/gemini-1.5-pro",
@@ -1473,16 +1348,13 @@ async def test_standard_logging_payload_stream_usage(sync_mode):
 
             mock_client.assert_called_once()
 
-            standard_logging_object: StandardLoggingPayload = (
-                mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
-            )
+            standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs["kwargs"][
+                "standard_logging_object"
+            ]
 
             built_response = stream_chunk_builder(chunks=chunks)
             print(f"built_response: {built_response}")
-            assert (
-                built_response.usage.total_tokens
-                == standard_logging_object["total_tokens"]
-            )
+            assert built_response.usage.total_tokens == standard_logging_object["total_tokens"]
             print(f"standard_logging_object usage: {built_response.usage}")
     except litellm.InternalServerError:
         pass
@@ -1510,9 +1382,7 @@ def test_standard_logging_retries():
         ]
     )
 
-    with patch.object(
-        customHandler, "log_failure_event", new=MagicMock()
-    ) as mock_client:
+    with patch.object(customHandler, "log_failure_event", new=MagicMock()) as mock_client:
         try:
             router.completion(
                 model="gpt-3.5-turbo",
@@ -1524,19 +1394,10 @@ def test_standard_logging_retries():
             pass
 
         assert mock_client.call_count == 2
+        assert mock_client.call_args_list[0].kwargs["kwargs"]["standard_logging_object"]["trace_id"] is not None
         assert (
-            mock_client.call_args_list[0].kwargs["kwargs"]["standard_logging_object"][
-                "trace_id"
-            ]
-            is not None
-        )
-        assert (
-            mock_client.call_args_list[0].kwargs["kwargs"]["standard_logging_object"][
-                "trace_id"
-            ]
-            == mock_client.call_args_list[1].kwargs["kwargs"][
-                "standard_logging_object"
-            ]["trace_id"]
+            mock_client.call_args_list[0].kwargs["kwargs"]["standard_logging_object"]["trace_id"]
+            == mock_client.call_args_list[1].kwargs["kwargs"]["standard_logging_object"]["trace_id"]
         )
 
 

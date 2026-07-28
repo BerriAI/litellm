@@ -150,8 +150,7 @@ async def test_no_leak_on_over_limit_rejection(rate_limiter):
     cached_value = await cache.async_get_cache(key=counter_key, local_only=True)
     cached_int = int(cached_value or 0)
     assert cached_int < estimated, (
-        f"Reservation leaked: counter={cached_int} after rejection of an "
-        f"estimated_tokens={estimated} reservation."
+        f"Reservation leaked: counter={cached_int} after rejection of an estimated_tokens={estimated} reservation."
     )
 
 
@@ -198,9 +197,7 @@ async def test_token_adjustment_on_success(rate_limiter):
                 }
             )
 
-    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = (
-        mock_increment
-    )
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_increment
 
     await handler.async_log_success_event(
         kwargs=mock_kwargs,
@@ -212,8 +209,7 @@ async def test_token_adjustment_on_success(rate_limiter):
     token_adjustments = [i for i in increments if "tokens" in i["key"]]
 
     assert any(i["increment"] == -50 for i in token_adjustments), (
-        f"Expected a -50 token adjustment (50 actual - 100 reserved) but got: "
-        f"{token_adjustments}"
+        f"Expected a -50 token adjustment (50 actual - 100 reserved) but got: {token_adjustments}"
     )
 
 
@@ -248,9 +244,7 @@ async def test_token_release_on_failure(rate_limiter):
                 }
             )
 
-    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = (
-        mock_increment
-    )
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_increment
 
     await handler.async_log_failure_event(
         kwargs=mock_kwargs,
@@ -261,9 +255,9 @@ async def test_token_release_on_failure(rate_limiter):
 
     token_releases = [i for i in increments if "tokens" in i["key"]]
 
-    assert any(
-        i["increment"] == -100 for i in token_releases
-    ), f"Expected the full reservation (-100) to be released, got: {token_releases}"
+    assert any(i["increment"] == -100 for i in token_releases), (
+        f"Expected the full reservation (-100) to be released, got: {token_releases}"
+    )
 
 
 @pytest.mark.asyncio
@@ -294,9 +288,7 @@ async def test_model_scope_refund_targets_reserved_model(rate_limiter):
                 "user_api_key_team_id": team_id,
                 TPM_RESERVED_TOKENS_KEY: 100,
                 TPM_RESERVED_MODEL_KEY: reserved_model,
-                TPM_RESERVED_SCOPES_KEY: [
-                    ["model_per_team", f"{team_id}:{reserved_model}"]
-                ],
+                TPM_RESERVED_SCOPES_KEY: [["model_per_team", f"{team_id}:{reserved_model}"]],
             }
         },
     }
@@ -307,9 +299,7 @@ async def test_model_scope_refund_targets_reserved_model(rate_limiter):
         for op in increment_list:
             increments.append({"key": op["key"], "increment": op["increment_value"]})
 
-    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = (
-        mock_increment
-    )
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_increment
 
     await handler.async_log_failure_event(
         kwargs=mock_kwargs,
@@ -330,8 +320,7 @@ async def test_model_scope_refund_targets_reserved_model(rate_limiter):
         f"{[i['key'] for i in increments]}"
     )
     assert matching[0]["increment"] == -100, (
-        f"Expected full -100 refund on model_per_team counter, got "
-        f"{matching[0]['increment']}"
+        f"Expected full -100 refund on model_per_team counter, got {matching[0]['increment']}"
     )
 
 
@@ -352,9 +341,7 @@ async def test_should_rate_limit_does_not_inflate_tokens_counter(rate_limiter):
         tpm_limit=10_000,
     )
 
-    tokens_counter_key = handler.create_rate_limit_keys(
-        key="api_key", value=api_key, rate_limit_type="tokens"
-    )
+    tokens_counter_key = handler.create_rate_limit_keys(key="api_key", value=api_key, rate_limit_type="tokens")
 
     data = {
         "model": "gpt-3.5-turbo",
@@ -371,9 +358,7 @@ async def test_should_rate_limit_does_not_inflate_tokens_counter(rate_limiter):
         call_type="",
     )
 
-    cached = int(
-        await cache.async_get_cache(key=tokens_counter_key, local_only=True) or 0
-    )
+    cached = int(await cache.async_get_cache(key=tokens_counter_key, local_only=True) or 0)
 
     # The :tokens counter should reflect ONLY the reservation amount — not
     # an additional +1 from the should_rate_limit pre-pass.
@@ -463,9 +448,7 @@ async def test_org_scope_refund_on_failure(rate_limiter):
         for op in increment_list:
             increments.append({"key": op["key"], "increment": op["increment_value"]})
 
-    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = (
-        mock_increment
-    )
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_increment
 
     await handler.async_log_failure_event(
         kwargs=mock_kwargs,
@@ -474,17 +457,13 @@ async def test_org_scope_refund_on_failure(rate_limiter):
         end_time=datetime.now(),
     )
 
-    expected_org_key = handler.create_rate_limit_keys(
-        key="organization", value=org_id, rate_limit_type="tokens"
-    )
+    expected_org_key = handler.create_rate_limit_keys(key="organization", value=org_id, rate_limit_type="tokens")
     matching = [i for i in increments if i["key"] == expected_org_key]
     assert matching, (
         f"Expected a refund on the org tokens counter ({expected_org_key}) "
         f"but got keys: {[i['key'] for i in increments]}"
     )
-    assert (
-        matching[0]["increment"] == -100
-    ), f"Expected full -100 refund on org counter, got {matching[0]['increment']}"
+    assert matching[0]["increment"] == -100, f"Expected full -100 refund on org counter, got {matching[0]['increment']}"
 
 
 @pytest.mark.asyncio
@@ -525,9 +504,7 @@ async def test_org_scope_reconciled_on_success(rate_limiter):
         for op in increment_list:
             increments.append({"key": op["key"], "increment": op["increment_value"]})
 
-    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = (
-        mock_increment
-    )
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_increment
 
     await handler.async_log_success_event(
         kwargs=mock_kwargs,
@@ -536,17 +513,14 @@ async def test_org_scope_reconciled_on_success(rate_limiter):
         end_time=datetime.now(),
     )
 
-    expected_org_key = handler.create_rate_limit_keys(
-        key="organization", value=org_id, rate_limit_type="tokens"
-    )
+    expected_org_key = handler.create_rate_limit_keys(key="organization", value=org_id, rate_limit_type="tokens")
     matching = [i for i in increments if i["key"] == expected_org_key]
     assert matching, (
         f"Expected a reconciliation op on the org tokens counter "
         f"({expected_org_key}), got keys: {[i['key'] for i in increments]}"
     )
     assert matching[0]["increment"] == -50, (
-        f"Expected -50 delta on org counter (50 actual - 100 reserved), got "
-        f"{matching[0]['increment']}"
+        f"Expected -50 delta on org counter (50 actual - 100 reserved), got {matching[0]['increment']}"
     )
 
 
@@ -557,9 +531,7 @@ async def test_estimate_tokens_uses_max_tokens_when_explicit(rate_limiter):
 
     estimate = handler._estimate_tokens_for_request(
         data={
-            "messages": [
-                {"role": "user", "content": "abcd" * 4}
-            ],  # 16 chars ~ 4 tokens
+            "messages": [{"role": "user", "content": "abcd" * 4}],  # 16 chars ~ 4 tokens
             "max_tokens": 25,
         }
     )
@@ -593,9 +565,7 @@ async def test_contentless_request_reserves_minimum(rate_limiter):
     api_key = hash_token("sk-contentless")
     user_api_key_dict = UserAPIKeyAuth(api_key=api_key, tpm_limit=2)
 
-    counter_key = handler.create_rate_limit_keys(
-        key="api_key", value=api_key, rate_limit_type="tokens"
-    )
+    counter_key = handler.create_rate_limit_keys(key="api_key", value=api_key, rate_limit_type="tokens")
 
     # Two contentless requests should consume two slots of the 2-token
     # budget. The third must 429.
@@ -607,16 +577,13 @@ async def test_contentless_request_reserves_minimum(rate_limiter):
             data=data,
             call_type="",
         )
-        assert (data.get("metadata") or {}).get(
-            TPM_RESERVED_TOKENS_KEY
-        ) == 1, "Contentless request should reserve the floor of 1 token"
+        assert (data.get("metadata") or {}).get(TPM_RESERVED_TOKENS_KEY) == 1, (
+            "Contentless request should reserve the floor of 1 token"
+        )
 
-    counter_after_two = int(
-        await cache.async_get_cache(key=counter_key, local_only=True) or 0
-    )
+    counter_after_two = int(await cache.async_get_cache(key=counter_key, local_only=True) or 0)
     assert counter_after_two == 2, (
-        f"After two contentless requests at the floor, the api_key tokens "
-        f"counter should be 2, got {counter_after_two}"
+        f"After two contentless requests at the floor, the api_key tokens counter should be 2, got {counter_after_two}"
     )
 
     with pytest.raises(Exception) as exc_info:
@@ -627,8 +594,7 @@ async def test_contentless_request_reserves_minimum(rate_limiter):
             call_type="",
         )
     assert getattr(exc_info.value, "status_code", None) == 429, (
-        "Third contentless request must be rate-limited; pre-fix it would "
-        "have bypassed the TPM check entirely."
+        "Third contentless request must be rate-limited; pre-fix it would have bypassed the TPM check entirely."
     )
 
 
@@ -705,12 +671,8 @@ async def test_reservation_released_on_proxy_rejection(rate_limiter):
     reserved = (data.get("metadata") or {})[TPM_RESERVED_TOKENS_KEY]
     assert reserved > 0
 
-    counter_key = handler.create_rate_limit_keys(
-        key="api_key", value=api_key, rate_limit_type="tokens"
-    )
-    counter_after_reserve = int(
-        await cache.async_get_cache(key=counter_key, local_only=True) or 0
-    )
+    counter_key = handler.create_rate_limit_keys(key="api_key", value=api_key, rate_limit_type="tokens")
+    counter_after_reserve = int(await cache.async_get_cache(key=counter_key, local_only=True) or 0)
     assert counter_after_reserve == reserved
 
     # Simulate a downstream guardrail rejecting the request.
@@ -720,16 +682,12 @@ async def test_reservation_released_on_proxy_rejection(rate_limiter):
         user_api_key_dict=user_api_key_dict,
     )
 
-    counter_after_release = int(
-        await cache.async_get_cache(key=counter_key, local_only=True) or 0
-    )
+    counter_after_release = int(await cache.async_get_cache(key=counter_key, local_only=True) or 0)
     assert counter_after_release == 0, (
-        f"Reservation leaked: counter={counter_after_release} after "
-        f"proxy-level rejection refund (expected 0)."
+        f"Reservation leaked: counter={counter_after_release} after proxy-level rejection refund (expected 0)."
     )
     assert (data.get("metadata") or {}).get(TPM_RESERVATION_RELEASED_KEY) is True, (
-        "Released marker must be stamped to prevent "
-        "async_log_failure_event from double-refunding."
+        "Released marker must be stamped to prevent async_log_failure_event from double-refunding."
     )
 
 
@@ -750,9 +708,7 @@ async def test_reservation_release_idempotent(rate_limiter):
         for op in increment_list:
             increments.append({"key": op["key"], "increment": op["increment_value"]})
 
-    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = (
-        mock_increment
-    )
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_increment
 
     # Shared metadata dict simulates the propagation between
     # request_data["metadata"] and kwargs["litellm_params"]["metadata"] —
@@ -845,9 +801,7 @@ async def test_unreserved_scopes_charged_actual_not_delta_on_success(rate_limite
         for op in increment_list:
             increments.append({"key": op["key"], "increment": op["increment_value"]})
 
-    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = (
-        mock_increment
-    )
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_increment
 
     await handler.async_log_success_event(
         kwargs=mock_kwargs,
@@ -856,19 +810,14 @@ async def test_unreserved_scopes_charged_actual_not_delta_on_success(rate_limite
         end_time=datetime.now(),
     )
 
-    api_key_token_key = handler.create_rate_limit_keys(
-        key="api_key", value=api_key, rate_limit_type="tokens"
-    )
-    team_token_key = handler.create_rate_limit_keys(
-        key="team", value=team_id, rate_limit_type="tokens"
-    )
+    api_key_token_key = handler.create_rate_limit_keys(key="api_key", value=api_key, rate_limit_type="tokens")
+    team_token_key = handler.create_rate_limit_keys(key="team", value=team_id, rate_limit_type="tokens")
 
     api_key_ops = [i for i in increments if i["key"] == api_key_token_key]
     team_ops = [i for i in increments if i["key"] == team_token_key]
 
     assert api_key_ops and api_key_ops[0]["increment"] == -50, (
-        f"Reserved api_key scope must reconcile via delta (50-100=-50), "
-        f"got {api_key_ops}"
+        f"Reserved api_key scope must reconcile via delta (50-100=-50), got {api_key_ops}"
     )
     assert team_ops and team_ops[0]["increment"] == 50, (
         f"Unreserved team scope must be charged full actual (+50), not the "
@@ -905,9 +854,7 @@ async def test_unreserved_scopes_not_refunded_on_failure(rate_limiter):
         for op in increment_list:
             increments.append({"key": op["key"], "increment": op["increment_value"]})
 
-    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = (
-        mock_increment
-    )
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_increment
 
     await handler.async_log_failure_event(
         kwargs=mock_kwargs,
@@ -916,23 +863,16 @@ async def test_unreserved_scopes_not_refunded_on_failure(rate_limiter):
         end_time=datetime.now(),
     )
 
-    team_token_key = handler.create_rate_limit_keys(
-        key="team", value=team_id, rate_limit_type="tokens"
-    )
-    api_key_token_key = handler.create_rate_limit_keys(
-        key="api_key", value=api_key, rate_limit_type="tokens"
-    )
+    team_token_key = handler.create_rate_limit_keys(key="team", value=team_id, rate_limit_type="tokens")
+    api_key_token_key = handler.create_rate_limit_keys(key="api_key", value=api_key, rate_limit_type="tokens")
 
     team_ops = [i for i in increments if i["key"] == team_token_key]
     api_key_ops = [i for i in increments if i["key"] == api_key_token_key]
 
-    assert not team_ops, (
-        f"Unreserved team scope must NOT be refunded (would drift negative), "
-        f"got {team_ops}"
+    assert not team_ops, f"Unreserved team scope must NOT be refunded (would drift negative), got {team_ops}"
+    assert api_key_ops and api_key_ops[0]["increment"] == -100, (
+        f"Reserved api_key scope must be refunded -100, got {api_key_ops}"
     )
-    assert (
-        api_key_ops and api_key_ops[0]["increment"] == -100
-    ), f"Reserved api_key scope must be refunded -100, got {api_key_ops}"
 
 
 @pytest.mark.asyncio
@@ -967,9 +907,7 @@ async def test_token_rate_limit_headers_present_in_stored_response(rate_limiter)
     )
 
     response = data.get("litellm_proxy_rate_limit_response")
-    assert isinstance(
-        response, dict
-    ), "Expected litellm_proxy_rate_limit_response to be set after pre-call"
+    assert isinstance(response, dict), "Expected litellm_proxy_rate_limit_response to be set after pre-call"
 
     statuses = response.get("statuses") or []
     token_statuses = [s for s in statuses if s.get("rate_limit_type") == "tokens"]
@@ -981,8 +919,7 @@ async def test_token_rate_limit_headers_present_in_stored_response(rate_limiter)
         f"statuses: {[(s.get('descriptor_key'), s.get('rate_limit_type')) for s in statuses]}"
     )
     assert request_statuses, (
-        "RPM rate-limit status was clobbered by the TPM merge — both must "
-        "coexist in the stored response."
+        "RPM rate-limit status was clobbered by the TPM merge — both must coexist in the stored response."
     )
 
     # The token status carries the limit and a positive remaining budget.
@@ -1010,9 +947,7 @@ async def test_estimate_tokens_floor_caps_at_smallest_configured_tpm(rate_limite
     )
     # input ~= 5//4 = 1 token; output floor capped at 1000//4 = 250;
     # total ~= 251 (well under 1000).
-    assert (
-        estimate <= 1000 // 2
-    ), f"With TPM=1000, reservation must stay well under the limit; got {estimate}"
+    assert estimate <= 1000 // 2, f"With TPM=1000, reservation must stay well under the limit; got {estimate}"
     assert estimate >= 1, "Estimate must be at least the call-site floor of 1"
 
 
@@ -1082,10 +1017,7 @@ async def test_small_tpm_cap_admits_no_max_tokens_request(rate_limiter):
 
     reserved = (data.get("metadata") or {}).get(TPM_RESERVED_TOKENS_KEY)
     assert reserved is not None, "Reservation should have been stashed"
-    assert reserved <= 1000 // 2, (
-        f"Capped floor must keep the reservation well under the 1000 TPM "
-        f"cap; got {reserved}"
-    )
+    assert reserved <= 1000 // 2, f"Capped floor must keep the reservation well under the 1000 TPM cap; got {reserved}"
 
 
 @pytest.mark.asyncio
@@ -1120,8 +1052,7 @@ async def test_small_tpm_cap_injects_matching_max_tokens(rate_limiter):
     )
 
     assert data.get("max_tokens") == 1000 // 4, (
-        f"Capped floor must be written to max_tokens to bound the actual "
-        f"model output; got {data.get('max_tokens')}"
+        f"Capped floor must be written to max_tokens to bound the actual model output; got {data.get('max_tokens')}"
     )
 
 
@@ -1154,10 +1085,7 @@ async def test_large_tpm_cap_does_not_inject_max_tokens(rate_limiter):
         call_type="",
     )
 
-    assert "max_tokens" not in data, (
-        f"Large TPM caps should leave max_tokens alone; got "
-        f"{data.get('max_tokens')}"
-    )
+    assert "max_tokens" not in data, f"Large TPM caps should leave max_tokens alone; got {data.get('max_tokens')}"
 
 
 @pytest.mark.asyncio

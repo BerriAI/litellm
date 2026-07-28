@@ -29,26 +29,20 @@ def test_initial_cell_tier_only():
 
 
 def test_initial_cell_with_matching_strength():
-    prefs = AdaptiveRouterPreferences(
-        quality_tier=2, strengths=[RequestType.CODE_GENERATION]
-    )
+    prefs = AdaptiveRouterPreferences(quality_tier=2, strengths=[RequestType.CODE_GENERATION])
     cell = initial_cell(prefs, RequestType.CODE_GENERATION)
     expected_mean = BASE_TIER_WEIGHT[2] + STRENGTH_BONUS
     assert abs(cell.mean - expected_mean) < 0.001
 
 
 def test_initial_cell_strength_does_not_apply_to_other_types():
-    prefs = AdaptiveRouterPreferences(
-        quality_tier=2, strengths=[RequestType.CODE_GENERATION]
-    )
+    prefs = AdaptiveRouterPreferences(quality_tier=2, strengths=[RequestType.CODE_GENERATION])
     cell = initial_cell(prefs, RequestType.WRITING)
     assert abs(cell.mean - BASE_TIER_WEIGHT[2]) < 0.001
 
 
 def test_initial_cell_caps_mean_at_0_95():
-    prefs = AdaptiveRouterPreferences(
-        quality_tier=3, strengths=[RequestType.CODE_GENERATION]
-    )
+    prefs = AdaptiveRouterPreferences(quality_tier=3, strengths=[RequestType.CODE_GENERATION])
     cell = initial_cell(prefs, RequestType.CODE_GENERATION)
     assert cell.mean <= 0.95
 
@@ -129,6 +123,4 @@ def test_thompson_converges_to_better_model():
 
     last_50 = picks[-50:]
     a_share = last_50.count("A") / 50
-    assert (
-        a_share >= 0.80
-    ), f"Expected A to dominate ({a_share=}); priors aren't biasing the sample correctly"
+    assert a_share >= 0.80, f"Expected A to dominate ({a_share=}); priors aren't biasing the sample correctly"

@@ -15,9 +15,7 @@ from litellm.types.guardrails import GuardrailItem
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import logging
 from unittest.mock import patch
 
@@ -84,9 +82,7 @@ async def test_lakera_prompt_injection_detection():
         raise lakera_ai_exception
 
     try:
-        with patch.object(
-            lakera_ai, "_check_response_flagged", side_effect=raise_exception
-        ):
+        with patch.object(lakera_ai, "_check_response_flagged", side_effect=raise_exception):
             await lakera_ai.async_moderation_hook(
                 data={
                     "messages": [
@@ -228,9 +224,7 @@ async def test_messages_for_disabled_role(spy_post):
             {"role": "user", "content": "corgi sploot"},
         ]
     }
-    await moderation.async_moderation_hook(
-        data=data, user_api_key_dict=None, call_type="completion"
-    )
+    await moderation.async_moderation_hook(data=data, user_api_key_dict=None, call_type="completion")
 
     _, kwargs = spy_post.call_args
     assert json.loads(kwargs.get("data")) == expected_data
@@ -273,9 +267,7 @@ async def test_system_message_with_function_input(spy_post):
             {"role": "user", "content": "Where are the best sunsets?"},
         ]
     }
-    await moderation.async_moderation_hook(
-        data=data, user_api_key_dict=None, call_type="completion"
-    )
+    await moderation.async_moderation_hook(data=data, user_api_key_dict=None, call_type="completion")
 
     _, kwargs = spy_post.call_args
     assert json.loads(kwargs.get("data")) == expected_data
@@ -322,9 +314,7 @@ async def test_multi_message_with_function_input(spy_post):
         ]
     }
 
-    await moderation.async_moderation_hook(
-        data=data, user_api_key_dict=None, call_type="completion"
-    )
+    await moderation.async_moderation_hook(data=data, user_api_key_dict=None, call_type="completion")
 
     _, kwargs = spy_post.call_args
     assert json.loads(kwargs.get("data")) == expected_data
@@ -361,9 +351,7 @@ async def test_message_ordering(spy_post):
         ]
     }
 
-    await moderation.async_moderation_hook(
-        data=data, user_api_key_dict=None, call_type="completion"
-    )
+    await moderation.async_moderation_hook(data=data, user_api_key_dict=None, call_type="completion")
 
     _, kwargs = spy_post.call_args
     assert json.loads(kwargs.get("data")) == expected_data
@@ -384,9 +372,7 @@ async def test_callback_specific_param_run_pre_call_check_lakera():
             "prompt_injection": {
                 "callbacks": ["lakera_prompt_injection"],
                 "default_on": True,
-                "callback_args": {
-                    "lakera_prompt_injection": {"moderation_check": "pre_call"}
-                },
+                "callback_args": {"lakera_prompt_injection": {"moderation_check": "pre_call"}},
             }
         }
     ]
@@ -474,9 +460,7 @@ async def test_callback_specific_thresholds():
     }
 
     try:
-        await prompt_injection_obj.async_moderation_hook(
-            data=data, user_api_key_dict=None, call_type="completion"
-        )
+        await prompt_injection_obj.async_moderation_hook(data=data, user_api_key_dict=None, call_type="completion")
     except HTTPException as e:
         assert e.status_code == 400
         assert e.detail["error"] == "Violated prompt_injection threshold"

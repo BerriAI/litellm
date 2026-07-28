@@ -68,9 +68,7 @@ async def test_over_first_window_raises():
         call_count += 1
         return val
 
-    with patch(
-        "litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend
-    ):
+    with patch("litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
             await _virtual_key_multi_budget_check(valid_token=token)
 
@@ -100,9 +98,7 @@ async def test_over_second_window_raises():
         call_count += 1
         return val
 
-    with patch(
-        "litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend
-    ):
+    with patch("litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
             await _virtual_key_multi_budget_check(valid_token=token)
 

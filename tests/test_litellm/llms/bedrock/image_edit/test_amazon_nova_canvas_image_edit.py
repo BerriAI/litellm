@@ -202,9 +202,7 @@ def test_transform_request_image_pathlike_input(tmp_path):
     )
 
     assert body["taskType"] == "IMAGE_VARIATION"
-    assert body["imageVariationParams"]["images"][0] == base64.b64encode(
-        image_bytes
-    ).decode("utf-8")
+    assert body["imageVariationParams"]["images"][0] == base64.b64encode(image_bytes).decode("utf-8")
 
 
 def test_transform_request_inpainting_with_mask():
@@ -365,9 +363,7 @@ def test_transform_request_inpainting_explicit_task_without_mask_raises():
     """INPAINTING taskType without mask or maskPrompt must fail fast."""
     config = BedrockAmazonNovaCanvasImageEditConfig()
     img = io.BytesIO(b"img")
-    with pytest.raises(
-        ValueError, match="INPAINTING requires either maskPrompt or maskImage"
-    ):
+    with pytest.raises(ValueError, match="INPAINTING requires either maskPrompt or maskImage"):
         config.transform_image_edit_request(
             model="amazon.nova-canvas-v1:0",
             prompt="fix it",
@@ -494,10 +490,7 @@ def test_is_nova_canvas_image_edit_model_uses_model_cost_flag(monkeypatch):
             "supports_nova_canvas_image_edit": True,
         },
     )
-    assert (
-        BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(fake_id)
-        is True
-    )
+    assert BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(fake_id) is True
 
     monkeypatch.setitem(
         litellm.model_cost,
@@ -508,10 +501,7 @@ def test_is_nova_canvas_image_edit_model_uses_model_cost_flag(monkeypatch):
         },
     )
     assert (
-        BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(
-            "amazon.not-nova-canvas-v1:0"
-        )
-        is False
+        BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model("amazon.not-nova-canvas-v1:0") is False
     )
 
     # Name-shaped ids do not route without supports_nova_canvas_image_edit (no substring heuristic).
@@ -523,12 +513,7 @@ def test_is_nova_canvas_image_edit_model_uses_model_cost_flag(monkeypatch):
             "mode": "image_generation",
         },
     )
-    assert (
-        BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(
-            "amazon.nova-canvas-v2:0"
-        )
-        is False
-    )
+    assert BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model("amazon.nova-canvas-v2:0") is False
 
 
 def test_transform_response_to_openai_format():

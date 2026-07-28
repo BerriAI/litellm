@@ -40,9 +40,7 @@ def check_direct_instantiation(file_path):
 
             # Check method bodies for direct instantiation
             for method in node.body:
-                if isinstance(method, ast.FunctionDef) or isinstance(
-                    method, ast.AsyncFunctionDef
-                ):
+                if isinstance(method, ast.FunctionDef) or isinstance(method, ast.AsyncFunctionDef):
                     method_name = method.name
 
                     # Skip methods that are specifically for client creation
@@ -63,9 +61,7 @@ def check_direct_instantiation(file_path):
                                     issues.append(
                                         f"Direct instantiation of {subnode.func.id} in {class_name}.{method_name}"
                                     )
-                            elif hasattr(subnode, "func") and hasattr(
-                                subnode.func, "attr"
-                            ):
+                            elif hasattr(subnode, "func") and hasattr(subnode.func, "attr"):
                                 if subnode.func.attr in [
                                     "AzureOpenAI",
                                     "AsyncAzureOpenAI",

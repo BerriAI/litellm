@@ -48,9 +48,7 @@ def _assert_budget_blocks(client: BudgetClient, key: str, *, user: str = "") -> 
 
 def _assert_blocked_429(client: BudgetClient, key: str) -> StreamingResponse:
     blocked = _assert_budget_blocks(client, key)
-    assert blocked.status_code == 429, (
-        f"budget refusal must be 429, got {blocked.status_code}: {blocked.body[:200]}"
-    )
+    assert blocked.status_code == 429, f"budget refusal must be 429, got {blocked.status_code}: {blocked.body[:200]}"
     return blocked
 
 
@@ -79,9 +77,7 @@ class TestBudgetBlocksPerLevel:
         )
 
     @pytest.mark.covers("quota_management.budget.internal_user.blocks_over_limit")
-    def test_user_budget_enforced_across_all_their_keys(
-        self, client: BudgetClient, resources: ResourceManager
-    ) -> None:
+    def test_user_budget_enforced_across_all_their_keys(self, client: BudgetClient, resources: ResourceManager) -> None:
         user_id = client.create_user(max_budget=TINY_CAP)
         resources.defer(lambda: client.delete_user(user_id))
         first_key = client.generate_key(user_id=user_id)
@@ -103,9 +99,7 @@ class TestBudgetBlocksPerLevel:
             )
 
     @pytest.mark.covers("quota_management.budget.end_user.blocks_over_limit")
-    def test_end_user_budget_blocks_attributed_calls(
-        self, client: BudgetClient, resources: ResourceManager
-    ) -> None:
+    def test_end_user_budget_blocks_attributed_calls(self, client: BudgetClient, resources: ResourceManager) -> None:
         customer = f"e2e-budget-cust-{unique_marker()}"
         client.create_customer(customer, max_budget=TINY_CAP)
         resources.defer(lambda: client.delete_customers([customer]))
@@ -156,9 +150,7 @@ class TestKeyBudgetBlocksAcrossKeyKinds:
     the capped key is refused, proving nothing around the key was the blocker."""
 
     @pytest.mark.covers("quota_management.budget.key.blocks_over_limit")
-    def test_personal_key_blocks_over_its_own_budget(
-        self, client: BudgetClient, resources: ResourceManager
-    ) -> None:
+    def test_personal_key_blocks_over_its_own_budget(self, client: BudgetClient, resources: ResourceManager) -> None:
         user_id = client.create_user(max_budget=ROOMY_CAP)
         resources.defer(lambda: client.delete_user(user_id))
         capped_key = client.generate_key(user_id=user_id, max_budget=TINY_CAP)
@@ -182,9 +174,7 @@ class TestKeyBudgetBlocksAcrossKeyKinds:
         require_successful_call(_chat(client, control_key))
 
     @pytest.mark.covers("quota_management.budget.key.blocks_over_limit")
-    def test_team_member_key_blocks_over_its_own_budget(
-        self, client: BudgetClient, resources: ResourceManager
-    ) -> None:
+    def test_team_member_key_blocks_over_its_own_budget(self, client: BudgetClient, resources: ResourceManager) -> None:
         team_id = client.create_team(alias=f"e2e-key-cap-team-{unique_marker()}", max_budget=ROOMY_CAP)
         resources.defer(lambda: client.delete_team(team_id))
         member_id = client.create_user(max_budget=ROOMY_CAP)

@@ -15,9 +15,7 @@ import litellm.litellm_core_utils.prompt_templates.factory
 load_dotenv()
 from unittest.mock import MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 
 import litellm
@@ -46,9 +44,7 @@ def test_completion_pydantic_obj_2():
     class EventsList(BaseModel):
         events: list[CalendarEvent]
 
-    messages = [
-        {"role": "user", "content": "List important events from the 20th century."}
-    ]
+    messages = [{"role": "user", "content": "List important events from the 20th century."}]
     expected_request_body = {
         "contents": [
             {
@@ -196,9 +192,7 @@ def test_vertex_function_translation(tool, expect_parameters):
     if expect_parameters:
         assert "parameters" in optional_params["tools"][0]["function_declarations"][0]
     else:
-        assert (
-            "parameters" not in optional_params["tools"][0]["function_declarations"][0]
-        )
+        assert "parameters" not in optional_params["tools"][0]["function_declarations"][0]
 
 
 def test_vertex_tool_type_field_removal():
@@ -250,10 +244,7 @@ def test_vertex_tool_type_field_removal():
     assert len(optional_params_function["tools"]) == 1
     assert "function_declarations" in optional_params_function["tools"][0]
     assert len(optional_params_function["tools"][0]["function_declarations"]) == 1
-    assert (
-        optional_params_function["tools"][0]["function_declarations"][0]["name"]
-        == "test_function"
-    )
+    assert optional_params_function["tools"][0]["function_declarations"][0]["name"] == "test_function"
 
     # Verify the 'type' field is not present in the final result
     assert "type" not in optional_params_function["tools"][0]
@@ -1193,9 +1184,7 @@ def test_logprobs():
     with patch.object(client, "post", return_value=mock_response):
         resp = litellm.completion(
             model="gemini/gemini-1.5-flash-002",
-            messages=[
-                {"role": "user", "content": "What's the weather like in San Francisco?"}
-            ],
+            messages=[{"role": "user", "content": "What's the weather like in San Francisco?"}],
             logprobs=True,
             api_key="test-api-key",
             client=client,
@@ -1212,15 +1201,11 @@ def test_process_gemini_media():
 
     # Test GCS URI
     gcs_result = _process_gemini_media("gs://bucket/image.png")
-    assert gcs_result["file_data"] == FileDataType(
-        mime_type="image/png", file_uri="gs://bucket/image.png"
-    )
+    assert gcs_result["file_data"] == FileDataType(mime_type="image/png", file_uri="gs://bucket/image.png")
 
     # Test gs url with format specified
     gcs_result = _process_gemini_media("gs://bucket/image", format="image/jpeg")
-    assert gcs_result["file_data"] == FileDataType(
-        mime_type="image/jpeg", file_uri="gs://bucket/image"
-    )
+    assert gcs_result["file_data"] == FileDataType(mime_type="image/jpeg", file_uri="gs://bucket/image")
 
     # Test gs url without extension using mime_type from image_url object
     image_message = [
@@ -1241,9 +1226,7 @@ def test_process_gemini_media():
         _gemini_convert_messages_with_history,
     )
 
-    converted = _gemini_convert_messages_with_history(
-        messages=image_message, model="gemini-2.5-flash"
-    )
+    converted = _gemini_convert_messages_with_history(messages=image_message, model="gemini-2.5-flash")
     assert converted[0]["parts"][0]["file_data"] == FileDataType(
         mime_type="image/png", file_uri="gs://bucket/image-without-extension"
     )
@@ -1251,16 +1234,12 @@ def test_process_gemini_media():
     # Test HTTPS JPG URL
     https_result = _process_gemini_media("https://example.com/image.jpg")
     print("https_result JPG", https_result)
-    assert https_result["file_data"] == FileDataType(
-        mime_type="image/jpeg", file_uri="https://example.com/image.jpg"
-    )
+    assert https_result["file_data"] == FileDataType(mime_type="image/jpeg", file_uri="https://example.com/image.jpg")
 
     # Test HTTPS PNG URL
     https_result = _process_gemini_media("https://example.com/image.png")
     print("https_result PNG", https_result)
-    assert https_result["file_data"] == FileDataType(
-        mime_type="image/png", file_uri="https://example.com/image.png"
-    )
+    assert https_result["file_data"] == FileDataType(mime_type="image/png", file_uri="https://example.com/image.png")
 
     # Test HTTPS VIDEO URL
     https_result = _process_gemini_media("https://cloud-samples-data/video/animals.mp4")
@@ -1285,7 +1264,6 @@ def test_process_gemini_media():
     assert base64_result["inline_data"]["data"] == "/9j/4AAQSkZJRg..."
 
 
-
 def test_get_image_mime_type_from_url():
     """Test the _get_image_mime_type_from_url function for different image URLs"""
     from litellm.llms.vertex_ai.gemini.transformation import (
@@ -1293,27 +1271,17 @@ def test_get_image_mime_type_from_url():
     )
 
     # Test JPEG images
-    assert (
-        _get_image_mime_type_from_url("https://example.com/image.jpg") == "image/jpeg"
-    )
-    assert (
-        _get_image_mime_type_from_url("https://example.com/image.jpeg") == "image/jpeg"
-    )
-    assert (
-        _get_image_mime_type_from_url("https://example.com/IMAGE.JPG") == "image/jpeg"
-    )
+    assert _get_image_mime_type_from_url("https://example.com/image.jpg") == "image/jpeg"
+    assert _get_image_mime_type_from_url("https://example.com/image.jpeg") == "image/jpeg"
+    assert _get_image_mime_type_from_url("https://example.com/IMAGE.JPG") == "image/jpeg"
 
     # Test PNG images
     assert _get_image_mime_type_from_url("https://example.com/image.png") == "image/png"
     assert _get_image_mime_type_from_url("https://example.com/IMAGE.PNG") == "image/png"
 
     # Test WebP images
-    assert (
-        _get_image_mime_type_from_url("https://example.com/image.webp") == "image/webp"
-    )
-    assert (
-        _get_image_mime_type_from_url("https://example.com/IMAGE.WEBP") == "image/webp"
-    )
+    assert _get_image_mime_type_from_url("https://example.com/image.webp") == "image/webp"
+    assert _get_image_mime_type_from_url("https://example.com/IMAGE.WEBP") == "image/webp"
 
     # Test audio formats
     assert _get_image_mime_type_from_url("https://example.com/audio.ogg") == "audio/ogg"
@@ -1409,9 +1377,7 @@ def mock_blob():
         "http://subdomain.domain.com/path/to/image.png",
     ],
 )
-def test_process_gemini_media_http_url(
-    http_url: str, mock_convert_url_to_base64: Mock, mock_blob: Mock
-) -> None:
+def test_process_gemini_media_http_url(http_url: str, mock_convert_url_to_base64: Mock, mock_blob: Mock) -> None:
     """
     Test that _process_gemini_media correctly handles HTTP URLs.
 
@@ -1436,9 +1402,7 @@ def test_process_gemini_media_http_url(
         ("Guinea", 1),  # Guinea closer to guinea image
     ],
 )
-def test_aaavertex_embeddings_distances(
-    vertex_client, encoded_images, input_string, expected_closer_index
-):
+def test_aaavertex_embeddings_distances(vertex_client, encoded_images, input_string, expected_closer_index):
     """
     Test cosine distances between image and text embeddings using Vertex AI multimodalembedding@001
     """
@@ -1465,9 +1429,7 @@ def test_aaavertex_embeddings_distances(
         ),
     ):
         for idx, encoded_image in enumerate(encoded_images):
-            mock_response.json.return_value = {
-                "predictions": [{"imageEmbedding": mock_image_embeddings[idx]}]
-            }
+            mock_response.json.return_value = {"predictions": [{"imageEmbedding": mock_image_embeddings[idx]}]}
             mock_response.status_code = 200
             response = litellm.embedding(
                 model="vertex_ai/multimodalembedding@001",
@@ -1478,13 +1440,9 @@ def test_aaavertex_embeddings_distances(
             image_embeddings.append(response.data[0].embedding)
 
     # Mock text embedding based on input string
-    mock_text_embedding = (
-        [0.9] + [0.1] * 767 if input_string == "Duck" else [0.1] * 767 + [0.9]
-    )
+    mock_text_embedding = [0.9] + [0.1] * 767 if input_string == "Duck" else [0.1] * 767 + [0.9]
     text_mock_response = MagicMock()
-    text_mock_response.json.return_value = {
-        "predictions": [{"imageEmbedding": mock_text_embedding}]
-    }
+    text_mock_response.json.return_value = {"predictions": [{"imageEmbedding": mock_text_embedding}]}
     text_mock_response.status_code = 200
     with (
         patch.object(vertex_client, "post", return_value=text_mock_response),
@@ -1522,8 +1480,8 @@ def test_vertex_parallel_tool_calls_true():
 
 def test_vertex_parallel_tool_calls_false_multiple_tools_dropped():
     """
-    parallel_tool_calls=False with multiple tools is dropped for Gemini
-  (unsupported upstream). Request should succeed without the param.
+      parallel_tool_calls=False with multiple tools is dropped for Gemini
+    (unsupported upstream). Request should succeed without the param.
     """
     tools = [
         {"type": "function", "function": {"name": "get_weather"}},
@@ -1595,7 +1553,6 @@ def test_system_prompt_only_adds_blank_user_message():
     #########################################################
     assert len(data["system_instruction"]) == 1
     assert data["system_instruction"]["parts"][0]["text"] == SYSTEM_INSTRUCTION
-
 
 
 def test_gemini_429_with_403_in_retry_delay():

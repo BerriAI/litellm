@@ -51,9 +51,7 @@ class TestRAGOpenAI(BaseRAGTest):
 
         # First ingest a document
         filename, unique_id = self.get_unique_filename("rag_query")
-        text_content = (
-            f"LiteLLM is a unified interface for 100+ LLMs. ID: {unique_id}".encode()
-        )
+        text_content = f"LiteLLM is a unified interface for 100+ LLMs. ID: {unique_id}".encode()
 
         ingest_response = await litellm.rag.aingest(
             ingest_options=self.get_base_ingest_options(),
@@ -98,9 +96,7 @@ class TestRAGOpenAI(BaseRAGTest):
 
         # First ingest a document
         filename, unique_id = self.get_unique_filename("rag_query_rerank")
-        text_content = (
-            f"LiteLLM is a unified interface for 100+ LLMs. ID: {unique_id}".encode()
-        )
+        text_content = f"LiteLLM is a unified interface for 100+ LLMs. ID: {unique_id}".encode()
 
         ingest_response = await litellm.rag.aingest(
             ingest_options=self.get_base_ingest_options(),

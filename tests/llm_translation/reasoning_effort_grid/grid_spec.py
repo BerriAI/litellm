@@ -106,9 +106,7 @@ def _bedrock_clamps_effort(model: "ModelEntry", effort: str) -> bool:
 def expected(model: ModelEntry, effort: str) -> CellExpectation:
     if effort in ("__omit__", "none"):
         if model.mode == "budget":
-            return CellExpectation(
-                status=200, thinking_type=OMIT, max_tokens=BUDGET_MODE_MAX_TOKENS
-            )
+            return CellExpectation(status=200, thinking_type=OMIT, max_tokens=BUDGET_MODE_MAX_TOKENS)
         return CellExpectation(status=200, thinking_type=OMIT)
 
     if effort in _BAD_REQUEST_EFFORTS:
@@ -146,9 +144,7 @@ _VERTEX_REQ = frozenset({"VERTEX_PROJECT"})
 _BEDROCK_REQ = frozenset({"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"})
 
 
-_CAPS_XHIGH_MAX: FrozenSet[str] = frozenset(
-    {"supports_xhigh_reasoning_effort", "supports_max_reasoning_effort"}
-)
+_CAPS_XHIGH_MAX: FrozenSet[str] = frozenset({"supports_xhigh_reasoning_effort", "supports_max_reasoning_effort"})
 _CAPS_4_6: FrozenSet[str] = frozenset({"supports_max_reasoning_effort"})
 _CAPS_NONE: FrozenSet[str] = frozenset()
 

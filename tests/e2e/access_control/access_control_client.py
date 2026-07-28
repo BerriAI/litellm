@@ -24,9 +24,7 @@ class AccessControlClient:
     proxy: ProxyClient
 
     def llm_only_key(self) -> str:
-        return self.proxy.generate_key(
-            KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"])
-        )
+        return self.proxy.generate_key(KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"]))
 
     def delete_key(self, key: str) -> None:
         self.proxy.delete_key(key)
@@ -35,9 +33,7 @@ class AccessControlClient:
         return self.proxy.transport.send(
             "/chat/completions",
             headers=self.proxy.transport.bearer(key),
-            json=ChatBody(
-                model=model, messages=[ChatMessage(role="user", content=content)]
-            ),
+            json=ChatBody(model=model, messages=[ChatMessage(role="user", content=content)]),
         )
 
     def create_model_status(self, key: str, model_name: str) -> StreamingResponse:

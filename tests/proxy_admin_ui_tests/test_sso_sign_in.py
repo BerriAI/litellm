@@ -6,9 +6,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 import sys
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy.proxy_server import app
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -41,14 +39,10 @@ def prisma_client():
     os.environ["DATABASE_URL"] = modified_url
 
     # Assuming PrismaClient is a class that needs to be instantiated
-    prisma_client = PrismaClient(
-        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-    )
+    prisma_client = PrismaClient(database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj)
 
     # Reset litellm.proxy.proxy_server.prisma_client to None
-    litellm.proxy.proxy_server.litellm_proxy_budget_name = (
-        f"litellm-proxy-budget-{time.time()}"
-    )
+    litellm.proxy.proxy_server.litellm_proxy_budget_name = f"litellm-proxy-budget-{time.time()}"
     litellm.proxy.proxy_server.user_custom_key_generate = None
 
     return prisma_client
@@ -82,12 +76,8 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
         mock_sso_result.email = unique_user_email
         mock_sso_result.id = unique_user_id
         mock_sso_result.provider = "google"
-        mock_sso_result.user_role = (
-            None  # Explicitly set to None so it doesn't return a MagicMock
-        )
-        mock_google_sso.return_value.verify_and_process = AsyncMock(
-            return_value=mock_sso_result
-        )
+        mock_sso_result.user_role = None  # Explicitly set to None so it doesn't return a MagicMock
+        mock_google_sso.return_value.verify_and_process = AsyncMock(return_value=mock_sso_result)
 
         # Create a mock Request object
         mock_request = Request(
@@ -107,14 +97,10 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
 
         # Assert the response
         assert response.status_code == 303
-        assert response.headers["location"].startswith(
-            f"http://testserver/ui/?login=success"
-        )
+        assert response.headers["location"].startswith(f"http://testserver/ui/?login=success")
 
         # Verify that the user was added to the database
-        user = await prisma_client.db.litellm_usertable.find_first(
-            where={"user_id": unique_user_id}
-        )
+        user = await prisma_client.db.litellm_usertable.find_first(where={"user_id": unique_user_id})
         print("inserted user from SSO", user)
         assert user is not None
         assert user.user_email == unique_user_email
@@ -123,16 +109,12 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
 
     finally:
         # Clean up: Delete the user from the database
-        await prisma_client.db.litellm_usertable.delete(
-            where={"user_id": unique_user_id}
-        )
+        await prisma_client.db.litellm_usertable.delete(where={"user_id": unique_user_id})
 
 
 @patch("fastapi_sso.sso.google.GoogleSSO")
 @pytest.mark.asyncio
-async def test_auth_callback_new_user_with_sso_default(
-    mock_google_sso, mock_env_vars, prisma_client
-):
+async def test_auth_callback_new_user_with_sso_default(mock_google_sso, mock_env_vars, prisma_client):
     """
     When litellm_settings.default_internal_user_params.user_role = 'INTERNAL_USER'
 
@@ -147,9 +129,7 @@ async def test_auth_callback_new_user_with_sso_default(
     try:
         # Set up the prisma client
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        litellm.default_internal_user_params = {
-            "user_role": LitellmUserRoles.INTERNAL_USER.value
-        }
+        litellm.default_internal_user_params = {"user_role": LitellmUserRoles.INTERNAL_USER.value}
         await litellm.proxy.proxy_server.prisma_client.connect()
 
         # Set up the master key
@@ -160,9 +140,7 @@ async def test_auth_callback_new_user_with_sso_default(
         mock_sso_result.email = unique_user_email
         mock_sso_result.id = unique_user_id
         mock_sso_result.provider = "google"
-        mock_google_sso.return_value.verify_and_process = AsyncMock(
-            return_value=mock_sso_result
-        )
+        mock_google_sso.return_value.verify_and_process = AsyncMock(return_value=mock_sso_result)
 
         # Create a mock Request object
         mock_request = Request(
@@ -182,14 +160,10 @@ async def test_auth_callback_new_user_with_sso_default(
 
         # Assert the response
         assert response.status_code == 303
-        assert response.headers["location"].startswith(
-            f"http://testserver/ui/?login=success"
-        )
+        assert response.headers["location"].startswith(f"http://testserver/ui/?login=success")
 
         # Verify that the user was added to the database
-        user = await prisma_client.db.litellm_usertable.find_first(
-            where={"user_id": unique_user_id}
-        )
+        user = await prisma_client.db.litellm_usertable.find_first(where={"user_id": unique_user_id})
         print("inserted user from SSO", user)
         assert user is not None
         assert user.user_email == unique_user_email
@@ -197,7 +171,5 @@ async def test_auth_callback_new_user_with_sso_default(
 
     finally:
         # Clean up: Delete the user from the database
-        await prisma_client.db.litellm_usertable.delete(
-            where={"user_id": unique_user_id}
-        )
+        await prisma_client.db.litellm_usertable.delete(where={"user_id": unique_user_id})
         litellm.default_internal_user_params = None

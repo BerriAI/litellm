@@ -19,9 +19,7 @@ def mock_dns_public(monkeypatch):
     """Resolve any hostname to 93.184.216.34 (public)."""
 
     def fake_getaddrinfo(host, port, *args, **kwargs):
-        return [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port or 80))
-        ]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port or 80))]
 
     monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake_getaddrinfo)
 
@@ -163,9 +161,7 @@ class TestValidateUrl:
 
     def test_blocks_localhost_hostname(self, monkeypatch):
         def fake(host, port, *a, **kw):
-            return [
-                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port or 80))
-            ]
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port or 80))]
 
         monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
         with pytest.raises(SSRFError):
@@ -175,17 +171,13 @@ class TestValidateUrl:
         with pytest.raises(SSRFError):
             validate_url("http://[::1]/")
 
-    def test_https_rewrites_when_ssl_verify_disabled(
-        self, monkeypatch, mock_dns_public
-    ):
+    def test_https_rewrites_when_ssl_verify_disabled(self, monkeypatch, mock_dns_public):
         monkeypatch.setattr(litellm, "ssl_verify", False)
         rewritten, host = validate_url("https://example.com/image.png")
         assert host == "example.com"
         assert "example.com" not in rewritten  # rewritten to IP
 
-    def test_https_not_rewritten_when_ssl_verify_enabled(
-        self, monkeypatch, mock_dns_public
-    ):
+    def test_https_not_rewritten_when_ssl_verify_enabled(self, monkeypatch, mock_dns_public):
         monkeypatch.setattr(litellm, "ssl_verify", True)
         rewritten, host = validate_url("https://example.com/image.png")
         assert rewritten == "https://example.com/image.png"
@@ -262,9 +254,7 @@ class TestRedirectHostnamePreservation:
 
     def test_relative_redirect_preserves_hostname_for_next_hop(self, monkeypatch):
         def fake(host, port, *a, **kw):
-            return [
-                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))
-            ]
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
 
         monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
 
@@ -497,16 +487,12 @@ def test_assert_same_origin_rejects_different_host():
 
 def test_assert_same_origin_rejects_different_scheme():
     with pytest.raises(SSRFError, match="scheme"):
-        assert_same_origin(
-            "http://api.example.com/poll", "https://api.example.com/generate"
-        )
+        assert_same_origin("http://api.example.com/poll", "https://api.example.com/generate")
 
 
 def test_assert_same_origin_rejects_different_port():
     with pytest.raises(SSRFError, match="port"):
-        assert_same_origin(
-            "https://api.example.com:8443/poll", "https://api.example.com/generate"
-        )
+        assert_same_origin("https://api.example.com:8443/poll", "https://api.example.com/generate")
 
 
 def test_assert_same_origin_rejects_non_http_scheme():
@@ -517,9 +503,7 @@ def test_assert_same_origin_rejects_non_http_scheme():
 
 
 def test_assert_same_origin_case_insensitive_host():
-    assert_same_origin(
-        "https://API.example.com/poll", "https://api.example.com/generate"
-    )
+    assert_same_origin("https://API.example.com/poll", "https://api.example.com/generate")
 
 
 def test_assert_same_origin_error_message_does_not_leak_hostnames():

@@ -202,11 +202,7 @@ class TestExtractConverseTexts:
     def test_tool_config_scanned_even_when_tool_messages_skipped(self):
         body = {
             "messages": [{"role": "user", "content": [{"text": "hi"}]}],
-            "toolConfig": {
-                "tools": [
-                    {"toolSpec": {"name": "fn", "description": "blocked description"}}
-                ]
-            },
+            "toolConfig": {"tools": [{"toolSpec": {"name": "fn", "description": "blocked description"}}]},
         }
         texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=True)
         assert "blocked description" in texts
@@ -214,9 +210,7 @@ class TestExtractConverseTexts:
     def test_extracts_additional_model_request_fields(self):
         body = {
             "messages": [{"role": "user", "content": [{"text": "hi"}]}],
-            "additionalModelRequestFields": {
-                "reasoning_config": {"prompt": "blocked extra field"}
-            },
+            "additionalModelRequestFields": {"reasoning_config": {"prompt": "blocked extra field"}},
         }
         texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=False)
         assert "blocked extra field" in texts
@@ -282,11 +276,7 @@ class TestWriteBackTexts:
         assert body["inferenceConfig"] == original["inferenceConfig"]
 
     def test_fewer_guardrailed_texts_logs_warning(self, monkeypatch):
-        body = {
-            "messages": [
-                {"role": "user", "content": [{"text": "a"}, {"text": "b"}]}
-            ]
-        }
+        body = {"messages": [{"role": "user", "content": [{"text": "a"}, {"text": "b"}]}]}
         _, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
         assert len(holders) == 2
 
@@ -361,9 +351,7 @@ class TestBedrockPassthroughGuardrailHandlerInput:
                 }
             }
         )
-        guardrail = _make_guardrail(
-            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
-        )
+        guardrail = _make_guardrail({"texts": ["You are helpful.", "Hello world", "[REDACTED]"]})
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
@@ -386,9 +374,7 @@ class TestBedrockPassthroughGuardrailHandlerInput:
                 }
             }
         )
-        guardrail = _make_guardrail(
-            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
-        )
+        guardrail = _make_guardrail({"texts": ["You are helpful.", "Hello world", "[REDACTED]"]})
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
@@ -402,12 +388,8 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         """Blocked text hidden in toolUse.input must be scanned and masked."""
         handler = BedrockPassthroughGuardrailHandler()
         data = _converse_data()
-        data["data"]["messages"][0]["content"][1]["toolUse"]["input"] = {
-            "query": "email john@example.com"
-        }
-        guardrail = _make_guardrail(
-            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
-        )
+        data["data"]["messages"][0]["content"][1]["toolUse"]["input"] = {"query": "email john@example.com"}
+        guardrail = _make_guardrail({"texts": ["You are helpful.", "Hello world", "[REDACTED]"]})
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
@@ -421,9 +403,7 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         """A blocking guardrail must reject content hidden in toolUse.input."""
         handler = BedrockPassthroughGuardrailHandler()
         data = _converse_data()
-        data["data"]["messages"][0]["content"][1]["toolUse"]["input"] = {
-            "query": "blocked content"
-        }
+        data["data"]["messages"][0]["content"][1]["toolUse"]["input"] = {"query": "blocked content"}
         guardrail = MagicMock()
         guardrail.guardrail_name = "block-guard"
         guardrail.skip_system_message_in_guardrail = False
@@ -453,9 +433,7 @@ class TestBedrockPassthroughGuardrailHandlerInput:
                 }
             ]
         }
-        guardrail = _make_guardrail(
-            {"texts": ["You are helpful.", "Hello world", "lookup", "[REDACTED]", "object"]}
-        )
+        guardrail = _make_guardrail({"texts": ["You are helpful.", "Hello world", "lookup", "[REDACTED]", "object"]})
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
@@ -469,9 +447,7 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         """A blocking guardrail must reject content hidden in a tool description."""
         handler = BedrockPassthroughGuardrailHandler()
         data = _converse_data()
-        data["data"]["toolConfig"] = {
-            "tools": [{"toolSpec": {"name": "fn", "description": "blocked content"}}]
-        }
+        data["data"]["toolConfig"] = {"tools": [{"toolSpec": {"name": "fn", "description": "blocked content"}}]}
         guardrail = MagicMock()
         guardrail.guardrail_name = "block-guard"
         guardrail.skip_system_message_in_guardrail = False
@@ -491,9 +467,7 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         handler = BedrockPassthroughGuardrailHandler()
         data = _converse_data()
         data["data"]["additionalModelRequestFields"] = {"note": "ssn 123-45-6789"}
-        guardrail = _make_guardrail(
-            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
-        )
+        guardrail = _make_guardrail({"texts": ["You are helpful.", "Hello world", "[REDACTED]"]})
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
@@ -648,13 +622,9 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
             },
             "stopReason": "end_turn",
         }
-        guardrail = _make_guardrail(
-            {"texts": ["[V]", "[REASON]", "[INPUT]"]}
-        )
+        guardrail = _make_guardrail({"texts": ["[V]", "[REASON]", "[INPUT]"]})
 
-        result = await handler.process_output_response(
-            response=response, guardrail_to_apply=guardrail
-        )
+        result = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
         sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
         assert "thinking about john@example.com" in sent_texts
@@ -679,9 +649,7 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
                         {
                             "citationsContent": {
                                 "content": [{"text": "Contact john@example.com"}],
-                                "citations": [
-                                    {"source": "https://example.com", "title": "Example"}
-                                ],
+                                "citations": [{"source": "https://example.com", "title": "Example"}],
                             }
                         }
                     ],
@@ -691,9 +659,7 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
         }
         guardrail = _make_guardrail({"texts": ["[CITED]"]})
 
-        result = await handler.process_output_response(
-            response=response, guardrail_to_apply=guardrail
-        )
+        result = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
         sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
         assert sent_texts == ["Contact john@example.com"]
@@ -1018,9 +984,7 @@ class TestDeAnonymizeConverseStream:
         buf = EventStreamBuffer()
         buf.add_data(result)
         return [
-            json.loads(msg.payload)["delta"]
-            for msg in buf
-            if msg.headers.get(":event-type") == "contentBlockDelta"
+            json.loads(msg.payload)["delta"] for msg in buf if msg.headers.get(":event-type") == "contentBlockDelta"
         ]
 
     @pytest.mark.asyncio
@@ -1045,9 +1009,7 @@ class TestDeAnonymizeConverseStream:
 
         result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
             body_bytes=stream_bytes,
-            proxy_logging_obj=self._make_proxy_logging(
-                self._token_replacing_hook({"<PERSON_1>": "Alice"})
-            ),
+            proxy_logging_obj=self._make_proxy_logging(self._token_replacing_hook({"<PERSON_1>": "Alice"})),
             user_api_key_dict=MagicMock(),
             data={},
         )
@@ -1066,9 +1028,7 @@ class TestDeAnonymizeConverseStream:
 
         result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
             body_bytes=stream_bytes,
-            proxy_logging_obj=self._make_proxy_logging(
-                self._token_replacing_hook({"<PERSON_1>": "Alice"})
-            ),
+            proxy_logging_obj=self._make_proxy_logging(self._token_replacing_hook({"<PERSON_1>": "Alice"})),
             user_api_key_dict=MagicMock(),
             data={},
         )
@@ -1094,9 +1054,7 @@ class TestDeAnonymizeConverseStream:
 
         result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
             body_bytes=stream_bytes,
-            proxy_logging_obj=self._make_proxy_logging(
-                self._token_replacing_hook({"<PERSON_1>": "Alice"})
-            ),
+            proxy_logging_obj=self._make_proxy_logging(self._token_replacing_hook({"<PERSON_1>": "Alice"})),
             user_api_key_dict=MagicMock(),
             data={},
         )
@@ -1111,9 +1069,7 @@ class TestDeAnonymizeConverseStream:
         captured = {}
 
         async def mock_hook(data, user_api_key_dict, response):
-            captured["texts"] = [
-                b["text"] for b in response["output"]["message"]["content"]
-            ]
+            captured["texts"] = [b["text"] for b in response["output"]["message"]["content"]]
             mapping = {"<PERSON_1>": "Alice", "<ORG_2>": "Acme"}
             for block in response["output"]["message"]["content"]:
                 text = block["text"]

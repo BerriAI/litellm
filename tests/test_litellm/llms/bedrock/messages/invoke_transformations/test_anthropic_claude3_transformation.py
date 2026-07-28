@@ -64,9 +64,7 @@ async def test_bedrock_sse_wrapper_encodes_dict_chunks():
         _dummy_stream(),
         litellm_logging_obj=LiteLLMLoggingObj(
             model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
-            messages=[
-                {"role": "user", "content": "Hello, can you tell me a short joke?"}
-            ],
+            messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
             stream=True,
             call_type="chat",
             start_time=datetime.now(),
@@ -243,9 +241,7 @@ async def test_bedrock_sse_wrapper_keeps_usage_in_message_start_and_message_delt
 def test_chunk_parser_usage_transformation():
     """Ensure Bedrock invocation metrics are transformed to Anthropic usage keys."""
 
-    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
-        model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0"
-    )
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0")
 
     chunk = {
         "type": "message_delta",
@@ -502,9 +498,7 @@ def test_bedrock_invoke_messages_skips_thinking_injection_when_already_enabled(
         "max_tokens": 32000,
         "stream": False,
         "thinking": {"type": "enabled", "budget_tokens": 2048},
-        "context_management": {
-            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
-        },
+        "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]},
     }
     result = cfg.transform_anthropic_messages_request(
         model="global.anthropic.claude-sonnet-4-6-v1:0",
@@ -606,9 +600,7 @@ def test_remove_ttl_from_cache_control_processes_tools(local_model_cost_map):
         "messages": [],
     }
 
-    cfg._remove_ttl_from_cache_control(
-        request, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
-    )
+    cfg._remove_ttl_from_cache_control(request, model="anthropic.claude-3-5-sonnet-20241022-v2:0")
 
     # Tool ttl should be stripped
     assert "ttl" not in request["tools"][0]["cache_control"]
@@ -644,9 +636,7 @@ def test_remove_ttl_from_cache_control_preserves_tools_ttl_for_claude_4_5(local_
         ],
     }
 
-    cfg._remove_ttl_from_cache_control(
-        request, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-    )
+    cfg._remove_ttl_from_cache_control(request, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0")
 
     # Both tools and system should preserve ttl for Claude 4.5
     assert request["tools"][0]["cache_control"]["ttl"] == "1h"
@@ -730,9 +720,7 @@ def test_bedrock_messages_strips_output_config():
             headers={},
         )
 
-    assert "output_config" not in result, (
-        "output_config should be stripped for models that don't support it"
-    )
+    assert "output_config" not in result, "output_config should be stripped for models that don't support it"
     assert result.get("max_tokens") == 4096
 
 
@@ -765,9 +753,7 @@ def test_bedrock_messages_preserves_output_config_for_claude_4_6():
             headers={},
         )
 
-    assert "output_config" in result, (
-        "output_config should be preserved for supported models"
-    )
+    assert "output_config" in result, "output_config should be preserved for supported models"
     assert result["output_config"] == {"effort": "high"}
     assert result.get("max_tokens") == 4096
 
@@ -919,9 +905,7 @@ def test_bedrock_messages_converts_output_config_format_to_inline_schema():
         ("anthropic.claude-opus-4-7", "xhigh"),
     ],
 )
-def test_bedrock_messages_normalizes_output_config_effort_for_opus(
-    model, expected_effort
-):
+def test_bedrock_messages_normalizes_output_config_effort_for_opus(model, expected_effort):
     """Bedrock /v1/messages accepts ``xhigh`` and forwards the provider-safe effort."""
     from unittest.mock import patch
 
@@ -979,9 +963,7 @@ def test_bedrock_messages_does_not_mutate_callers_messages_when_embedding_schema
             headers={},
         )
 
-    assert caller_messages == [
-        {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
-    ]
+    assert caller_messages == [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
     assert caller_message == {
         "role": "user",
         "content": [{"type": "text", "text": "Hello"}],
@@ -1297,9 +1279,7 @@ def test_bedrock_messages_strips_context_management():
     messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
     optional_params = {
         "max_tokens": 4096,
-        "context_management": {
-            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
-        },
+        "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]},
     }
 
     result = cfg.transform_anthropic_messages_request(
@@ -1310,9 +1290,7 @@ def test_bedrock_messages_strips_context_management():
         headers={},
     )
 
-    assert "context_management" not in result, (
-        "context_management should be stripped — Bedrock Invoke rejects it"
-    )
+    assert "context_management" not in result, "context_management should be stripped — Bedrock Invoke rejects it"
     assert result.get("max_tokens") == 4096
 
 
@@ -1459,12 +1437,8 @@ def test_bedrock_messages_filters_user_provided_unsupported_beta_header():
     )
 
     betas = result.get("anthropic_beta") or []
-    assert "advisor-tool-2026-03-01" not in betas, (
-        "user-provided beta not in the Bedrock mapping must be dropped"
-    )
-    assert "context-1m-2025-08-07" in betas, (
-        "user-provided beta that IS in the Bedrock mapping should survive"
-    )
+    assert "advisor-tool-2026-03-01" not in betas, "user-provided beta not in the Bedrock mapping must be dropped"
+    assert "context-1m-2025-08-07" in betas, "user-provided beta that IS in the Bedrock mapping should survive"
 
 
 def test_bedrock_messages_renames_user_provided_aliased_beta_header():
@@ -1492,9 +1466,7 @@ def test_bedrock_messages_renames_user_provided_aliased_beta_header():
     assert "advanced-tool-use-2025-11-20" not in betas, (
         "Anthropic-direct spelling should be rewritten, not forwarded verbatim"
     )
-    assert "tool-search-tool-2025-10-19" in betas, (
-        "user-provided beta should be renamed to the Bedrock-side spelling"
-    )
+    assert "tool-search-tool-2025-10-19" in betas, "user-provided beta should be renamed to the Bedrock-side spelling"
 
 
 @pytest.mark.asyncio
@@ -1765,9 +1737,7 @@ async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
         "global.anthropic.claude-fable-5",
     ],
 )
-def test_bedrock_clear_thinking_injects_adaptive_with_effort_for_adaptive_models(
-    local_model_cost_map, model
-):
+def test_bedrock_clear_thinking_injects_adaptive_with_effort_for_adaptive_models(local_model_cost_map, model):
     """clear_thinking_20251015 without a top-level ``thinking`` field must inject
     ``thinking.type=adaptive`` plus ``output_config.effort`` on adaptive-thinking
     models (Opus 4.7/4.8, Fable 5). The legacy ``thinking.type=enabled`` shape is
@@ -1777,9 +1747,7 @@ def test_bedrock_clear_thinking_injects_adaptive_with_effort_for_adaptive_models
     cfg = AmazonAnthropicClaudeMessagesConfig()
     request = {
         "max_tokens": 32000,
-        "context_management": {
-            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
-        },
+        "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]},
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
@@ -1802,9 +1770,7 @@ def test_bedrock_clear_thinking_converts_legacy_enabled_budget_to_effort():
             "type": "enabled",
             "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
         },
-        "context_management": {
-            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
-        },
+        "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]},
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
@@ -1822,10 +1788,7 @@ def test_resolve_clear_thinking_budget_tokens_honors_explicit_zero():
     and only fall back to the minimum when the caller omits the budget."""
     cfg = AmazonAnthropicClaudeMessagesConfig()
     assert cfg._resolve_clear_thinking_budget_tokens(0) == 0
-    assert (
-        cfg._resolve_clear_thinking_budget_tokens(None)
-        == BEDROCK_MIN_THINKING_BUDGET_TOKENS
-    )
+    assert cfg._resolve_clear_thinking_budget_tokens(None) == BEDROCK_MIN_THINKING_BUDGET_TOKENS
     assert cfg._resolve_clear_thinking_budget_tokens(12000) == 12000
 
 
@@ -1835,9 +1798,7 @@ def test_bedrock_clear_thinking_keeps_enabled_for_non_adaptive_models():
     cfg = AmazonAnthropicClaudeMessagesConfig()
     request = {
         "max_tokens": 32000,
-        "context_management": {
-            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
-        },
+        "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]},
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
@@ -1862,9 +1823,7 @@ def test_bedrock_invoke_transform_emits_adaptive_thinking_for_opus_4_8():
     optional_params = {
         "max_tokens": 32000,
         "stream": False,
-        "context_management": {
-            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
-        },
+        "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]},
     }
 
     result = cfg.transform_anthropic_messages_request(
@@ -1901,9 +1860,7 @@ def test_bedrock_invoke_transform_normalizes_system_role_message_into_system():
 
     assert all(m.get("role") != "system" for m in result["messages"])
     assert result["messages"] == [{"role": "user", "content": "hi"}]
-    assert result["system"] == [
-        {"type": "text", "text": "You are a careful assistant."}
-    ]
+    assert result["system"] == [{"type": "text", "text": "You are a careful assistant."}]
 
 
 def test_bedrock_invoke_transform_merges_system_role_into_existing_system():
@@ -2018,9 +1975,7 @@ def test_bedrock_invoke_transform_keeps_mid_conversation_system_role_in_place(lo
     )
 
     assert result["messages"] == messages
-    assert result["system"] == [
-        {"type": "text", "text": "Base.", "cache_control": {"type": "ephemeral"}}
-    ]
+    assert result["system"] == [{"type": "text", "text": "Base.", "cache_control": {"type": "ephemeral"}}]
 
 
 def test_bedrock_invoke_transform_hoists_only_leading_system_run(local_model_cost_map):
@@ -2191,15 +2146,11 @@ def test_as_system_content_blocks_handles_each_shape():
     (e.g. a bare content-block dict) -> wrapped in a single-element list."""
     block = {"type": "text", "text": "x"}
     assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(None) == []
-    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks("hello") == [
-        {"type": "text", "text": "hello"}
-    ]
+    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks("hello") == [{"type": "text", "text": "hello"}]
     blocks = [block]
     out = AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(blocks)
     assert out == blocks and out is not blocks
-    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(block) == [
-        block
-    ]
+    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(block) == [block]
 
 
 @pytest.mark.parametrize(
@@ -2218,10 +2169,7 @@ def test_as_system_content_blocks_handles_each_shape():
 def test_effort_from_thinking_budget_tiers(budget_tokens, expected_effort):
     """The budget -> effort mapping pins each tier boundary so a shifted threshold
     is caught."""
-    assert (
-        AmazonAnthropicClaudeMessagesConfig._effort_from_thinking_budget(budget_tokens)
-        == expected_effort
-    )
+    assert AmazonAnthropicClaudeMessagesConfig._effort_from_thinking_budget(budget_tokens) == expected_effort
 
 
 def test_inject_adaptive_thinking_preserves_existing_effort():
@@ -2230,9 +2178,7 @@ def test_inject_adaptive_thinking_preserves_existing_effort():
     cfg = AmazonAnthropicClaudeMessagesConfig()
     request = {"output_config": {"effort": "max", "other": "keep"}}
 
-    cfg._inject_adaptive_thinking_for_clear_thinking(
-        request, budget_tokens=24000, model="us.anthropic.claude-fable-5"
-    )
+    cfg._inject_adaptive_thinking_for_clear_thinking(request, budget_tokens=24000, model="us.anthropic.claude-fable-5")
 
     assert request["thinking"] == {"type": "adaptive"}
     assert request["output_config"] == {"effort": "max", "other": "keep"}
@@ -2245,9 +2191,7 @@ def test_bedrock_clear_thinking_noops_when_thinking_already_adaptive():
     request = {
         "max_tokens": 32000,
         "thinking": {"type": "adaptive"},
-        "context_management": {
-            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
-        },
+        "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]},
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
@@ -2267,9 +2211,7 @@ def test_bedrock_clear_thinking_replaces_disabled_thinking_on_adaptive_model():
     request = {
         "max_tokens": 32000,
         "thinking": {"type": "disabled"},
-        "context_management": {
-            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
-        },
+        "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]},
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
@@ -2289,9 +2231,7 @@ def test_bedrock_clear_thinking_leaves_enabled_thinking_on_non_adaptive_model():
     request = {
         "max_tokens": 32000,
         "thinking": {"type": "enabled", "budget_tokens": 8000},
-        "context_management": {
-            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
-        },
+        "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]},
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
@@ -2337,9 +2277,7 @@ def test_bedrock_messages_preserves_clear_tool_uses_context_management_and_adds_
     messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
     optional_params = {
         "max_tokens": 4096,
-        "context_management": {
-            "edits": [{"type": "clear_tool_uses_20250919"}]
-        },
+        "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
     }
 
     result = cfg.transform_anthropic_messages_request(
@@ -2350,12 +2288,11 @@ def test_bedrock_messages_preserves_clear_tool_uses_context_management_and_adds_
         headers={},
     )
 
-    assert result.get("context_management") == {
-        "edits": [{"type": "clear_tool_uses_20250919"}]
-    }, "clear_tool_uses_20250919 edit must reach Bedrock InvokeModel body"
+    assert result.get("context_management") == {"edits": [{"type": "clear_tool_uses_20250919"}]}, (
+        "clear_tool_uses_20250919 edit must reach Bedrock InvokeModel body"
+    )
     assert "context-management-2025-06-27" in result.get("anthropic_beta", []), (
-        "context-management-2025-06-27 beta must reach the InvokeModel body so "
-        "the tool-call-clearing edit is accepted"
+        "context-management-2025-06-27 beta must reach the InvokeModel body so the tool-call-clearing edit is accepted"
     )
 
 
@@ -2432,9 +2369,9 @@ def test_bedrock_messages_filters_clear_thinking_keeps_clear_tool_uses(
 
     cm = result.get("context_management")
     assert cm is not None
-    assert [e.get("type") for e in cm["edits"]] == [
-        "clear_tool_uses_20250919"
-    ], "clear_thinking_20251015 must still be stripped (LiteLLM-internal)"
+    assert [e.get("type") for e in cm["edits"]] == ["clear_tool_uses_20250919"], (
+        "clear_thinking_20251015 must still be stripped (LiteLLM-internal)"
+    )
 
     betas = result.get("anthropic_beta", [])
     assert "context-management-2025-06-27" in betas
@@ -2473,10 +2410,7 @@ def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock
     assert out_converse == []
 
 
-
-def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
-    local_model_cost_map, monkeypatch
-):
+def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(local_model_cost_map, monkeypatch):
     """The outbound thinking payload must follow the exact Bedrock cost-map entry.
     Before threading the caller's provider through the capability probes, the probe
     was pinned to ``"anthropic"``: the exact ``global.anthropic.claude-opus-4-8``

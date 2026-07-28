@@ -102,17 +102,14 @@ class TestPresidioGuardrail:
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
         echoed = _poll_until_masked(
-            lambda: _content(
-                unwrap(client.chat(scoped_key, model, ECHO_REQUEST, guardrails=[name], max_tokens=128))
-            )
+            lambda: _content(unwrap(client.chat(scoped_key, model, ECHO_REQUEST, guardrails=[name], max_tokens=128)))
         )
         assert RAW_EMAIL not in echoed, (
             "pre_call masking must strip the raw email before the model sees it, but the "
             f"model echoed it back: {echoed[:300]!r}"
         )
         assert PLACEHOLDER in echoed, (
-            "the model should have echoed the masked placeholder the guardrail substituted, "
-            f"got: {echoed[:300]!r}"
+            f"the model should have echoed the masked placeholder the guardrail substituted, got: {echoed[:300]!r}"
         )
 
     @pytest.mark.covers(
@@ -128,14 +125,9 @@ class TestPresidioGuardrail:
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
         out = _poll_until_masked(
-            lambda: _content(
-                unwrap(client.chat(scoped_key, model, EMIT_REQUEST, guardrails=[name], max_tokens=128))
-            )
+            lambda: _content(unwrap(client.chat(scoped_key, model, EMIT_REQUEST, guardrails=[name], max_tokens=128)))
         )
         assert RAW_EMAIL not in out, (
-            "post_call masking must strip PII the model emitted, but the raw email reached the "
-            f"caller: {out[:300]!r}"
+            f"post_call masking must strip PII the model emitted, but the raw email reached the caller: {out[:300]!r}"
         )
-        assert PLACEHOLDER in out, (
-            f"the masked placeholder should replace the model's PII output, got: {out[:300]!r}"
-        )
+        assert PLACEHOLDER in out, f"the masked placeholder should replace the model's PII output, got: {out[:300]!r}"

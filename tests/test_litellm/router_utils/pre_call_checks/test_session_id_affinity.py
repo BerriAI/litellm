@@ -44,9 +44,7 @@ async def test_async_session_id_affinity_routes_to_same_deployment():
                 "id": "msg_123",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "Hello there!", "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": "Hello there!", "annotations": []}],
             }
         ],
         "parallel_tool_calls": True,
@@ -162,9 +160,7 @@ async def test_async_session_id_affinity_priority_over_user_key():
     )
 
     await callback.cache.async_set_cache(
-        DeploymentAffinityCheck.get_session_affinity_cache_key(
-            "model_group", "session1"
-        ),
+        DeploymentAffinityCheck.get_session_affinity_cache_key("model_group", "session1"),
         {"model_id": "deployment-2"},
     )
 
@@ -173,9 +169,7 @@ async def test_async_session_id_affinity_priority_over_user_key():
         model="model_group",
         healthy_deployments=healthy_deployments,
         messages=[],
-        request_kwargs={
-            "metadata": {"user_api_key_hash": "user1", "session_id": "session1"}
-        },
+        request_kwargs={"metadata": {"user_api_key_hash": "user1", "session_id": "session1"}},
     )
 
     assert len(filtered) == 1

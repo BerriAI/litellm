@@ -1,6 +1,7 @@
 """
 Tests for Crusoe provider integration
 """
+
 import os
 from unittest import mock
 
@@ -54,9 +55,7 @@ def test_crusoe_get_openai_compatible_provider_info():
             "CRUSOE_API_BASE": "https://env.crusoecloud.com/v1",
         },
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            "https://param.crusoecloud.com/v1", "param-key"
-        )
+        api_base, api_key = config._get_openai_compatible_provider_info("https://param.crusoecloud.com/v1", "param-key")
         assert api_base == "https://param.crusoecloud.com/v1"
         assert api_key == "param-key"
 
@@ -66,9 +65,7 @@ def test_get_llm_provider_crusoe():
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
     # Test with crusoe/model-name format
-    model, provider, api_key, api_base = get_llm_provider(
-        "crusoe/meta-llama/Llama-3.3-70B-Instruct"
-    )
+    model, provider, api_key, api_base = get_llm_provider("crusoe/meta-llama/Llama-3.3-70B-Instruct")
     assert model == "meta-llama/Llama-3.3-70B-Instruct"
     assert provider == "crusoe"
 
@@ -96,9 +93,7 @@ def test_crusoe_models_configuration():
         for model in crusoe_models:
             model_info = get_model_info(model)
             assert model_info is not None, f"Model info not found for {model}"
-            assert model_info.get("litellm_provider") == "crusoe", (
-                f"{model} should have crusoe as provider"
-            )
+            assert model_info.get("litellm_provider") == "crusoe", f"{model} should have crusoe as provider"
             assert model_info.get("mode") == "chat", f"{model} should be in chat mode"
     finally:
         litellm.model_cost = original_model_cost

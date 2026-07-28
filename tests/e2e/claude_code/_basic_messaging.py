@@ -104,9 +104,7 @@ def run_basic_messaging_cell(
     """
     base_url, api_key = require_proxy(compat_result, env=env)
 
-    extra_args: Sequence[str] = (
-        ("--include-partial-messages",) if verify_streaming else ()
-    )
+    extra_args: Sequence[str] = ("--include-partial-messages",) if verify_streaming else ()
 
     outcomes = runner(
         models=models,

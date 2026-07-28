@@ -99,9 +99,7 @@ def patched_transcription(monkeypatch):
         return data
 
     monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
-    monkeypatch.setattr(
-        proxy_server, "check_file_size_under_limit", lambda **kwargs: True
-    )
+    monkeypatch.setattr(proxy_server, "check_file_size_under_limit", lambda **kwargs: True)
 
     async def _form_data(request):
         from starlette.datastructures import FormData, UploadFile

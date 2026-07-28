@@ -249,9 +249,7 @@ def test_module_level_provider_key_redaction_catches_proxy_log_format():
     for secret_line, secret in cases:
         result = redact_string(secret_line)
         assert secret not in result
-        assert (
-            "REDACTED" in result
-        ), f"Module-level key redaction missed: {secret_line!r}"
+        assert "REDACTED" in result, f"Module-level key redaction missed: {secret_line!r}"
 
     safe = "cache_key=cache-value-123456"
     assert redact_string(safe) == safe
@@ -295,9 +293,7 @@ def test_key_name_redaction_in_general_settings_dict():
             "enable_jwt_auth": True,
             "store_model_in_db": True,
         }
-        verbose_proxy_logger.debug(
-            f"param_name=general_settings, param_value={general_settings}"
-        )
+        verbose_proxy_logger.debug(f"param_name=general_settings, param_value={general_settings}")
 
     output = _capture_logger_output(log_messages)
     assert "my-random-secret-key-1234" not in output

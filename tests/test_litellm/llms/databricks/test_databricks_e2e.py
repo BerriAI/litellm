@@ -17,13 +17,13 @@ Purpose:
 
 LiteLLM Integration Tests:
     This test file includes tests for different ways of calling Databricks via LiteLLM:
-    
+
     1. LiteLLM SDK Direct - Using litellm.completion() with user_agent parameter
     2. LangChain + LiteLLM - Using ChatLiteLLM wrapper (requires langchain-community)
     3. LiteLLM Async - Using litellm.acompletion() async API
     4. LiteLLM Streaming - Using litellm.completion() with stream=True
     5. LiteLLM Embedding - Using litellm.embedding() with user_agent parameter
-    
+
     All tests use the CUSTOM_USER_AGENT value from the config file and call
     Databricks endpoints through LiteLLM's unified interface.
 
@@ -31,7 +31,7 @@ Prerequisites:
     - Valid Databricks workspace access
     - Configured credentials (OAuth Service Principal, PAT, or Databricks CLI)
     - Access to serving endpoints (e.g., databricks-gpt-oss-120b)
-    
+
 Optional Dependencies (for LiteLLM integration tests):
     - pip install langchain-litellm  # For LangChain tests (recommended)
 
@@ -73,9 +73,7 @@ pytestmark = pytest.mark.skip(
 )
 
 # Add the litellm package to path
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 
 # Config file path - can be overridden with DATABRICKS_TEST_CONFIG env var
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.databricks_litellm_config.txt")
@@ -86,9 +84,7 @@ def load_config(config_file: str) -> dict:
     """Load configuration from file."""
     config = {}
 
-    template_path = os.path.join(
-        os.path.dirname(__file__), "databricks_config.template.txt"
-    )
+    template_path = os.path.join(os.path.dirname(__file__), "databricks_config.template.txt")
 
     if not os.path.exists(config_file):
         raise FileNotFoundError(
@@ -136,13 +132,8 @@ def setup_environment(config: dict, auth_method: str):
 
     # Set auth based on method
     if auth_method == "oauth":
-        if (
-            "DATABRICKS_CLIENT_ID" not in config
-            or "DATABRICKS_CLIENT_SECRET" not in config
-        ):
-            raise ValueError(
-                "OAuth auth requires DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET"
-            )
+        if "DATABRICKS_CLIENT_ID" not in config or "DATABRICKS_CLIENT_SECRET" not in config:
+            raise ValueError("OAuth auth requires DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET")
         # For OAuth, set the API base
         if "DATABRICKS_API_BASE" in config:
             os.environ["DATABRICKS_API_BASE"] = config["DATABRICKS_API_BASE"]
@@ -313,9 +304,7 @@ def test_chat_completion_default_user_agent(config: dict):
 
         print(f"  Response: {response.choices[0].message.content}")
         print("  ✓ Default user-agent test passed!")
-        print(
-            f"  Note: Check Databricks Query History to verify User-Agent is 'litellm/{version}'"
-        )
+        print(f"  Note: Check Databricks Query History to verify User-Agent is 'litellm/{version}'")
         return True
 
     except Exception as e:
@@ -364,9 +353,7 @@ def test_chat_completion_with_custom_user_agent(config: dict):
 
         print(f"  Response: {response.choices[0].message.content}")
         print("  ✓ Custom user-agent test passed!")
-        print(
-            f"  Note: Check Databricks Query History to verify User-Agent is 'testpartner_litellm/{version}'"
-        )
+        print(f"  Note: Check Databricks Query History to verify User-Agent is 'testpartner_litellm/{version}'")
         return True
 
     except Exception as e:
@@ -415,9 +402,7 @@ def test_chat_completion_with_env_user_agent(config: dict):
 
         print(f"  Response: {response.choices[0].message.content}")
         print("  ✓ Env var user-agent test passed!")
-        print(
-            f"  Note: Check Databricks Query History to verify User-Agent is '{test_partner}_litellm/{version}'"
-        )
+        print(f"  Note: Check Databricks Query History to verify User-Agent is '{test_partner}_litellm/{version}'")
         return True
 
     except Exception as e:
@@ -496,9 +481,7 @@ def test_oauth_token_retrieval(config: dict):
         )
 
         # Redact token for display
-        redacted_token = (
-            f"{token[:10]}...[REDACTED]" if len(token) > 10 else "[REDACTED]"
-        )
+        redacted_token = f"{token[:10]}...[REDACTED]" if len(token) > 10 else "[REDACTED]"
         print(f"  Token obtained: {redacted_token}")
         print("  ✓ OAuth M2M token retrieval passed!")
         return True
@@ -605,9 +588,7 @@ def test_langchain_litellm_with_user_agent(config: dict):
                 warnings.filterwarnings("ignore", category=DeprecationWarning)
                 from langchain_community.chat_models import ChatLiteLLM
                 from langchain_core.messages import HumanMessage
-            print(
-                "  Using: langchain-community (deprecated, consider: pip install langchain-litellm)"
-            )
+            print("  Using: langchain-community (deprecated, consider: pip install langchain-litellm)")
         except ImportError:
             print("  Skipped: langchain-litellm not installed")
             print("  Install with: pip install langchain-litellm")
@@ -742,9 +723,7 @@ def test_litellm_streaming_completion(config: dict):
         # Use streaming completion
         response = litellm.completion(
             model=full_model,
-            messages=[
-                {"role": "user", "content": "Say 'LiteLLM streaming test' only."}
-            ],
+            messages=[{"role": "user", "content": "Say 'LiteLLM streaming test' only."}],
             max_tokens=20,
             temperature=0.1,
             user_agent=custom_ua,
@@ -860,9 +839,7 @@ def run_integration_tests_for_auth_method(config: dict, auth_method: str) -> lis
         )
 
     # Test chat completion
-    results.append(
-        (f"[{auth_method.upper()}] Chat Completion", test_chat_completion(config))
-    )
+    results.append((f"[{auth_method.upper()}] Chat Completion", test_chat_completion(config)))
 
     # Test embeddings
     results.append((f"[{auth_method.upper()}] Embeddings", test_embedding(config)))
@@ -1010,11 +987,7 @@ def main():
     skipped = sum(1 for _, r in all_results if r is None)
 
     for name, result in all_results:
-        status = (
-            "✓ PASSED"
-            if result is True
-            else ("✗ FAILED" if result is False else "○ SKIPPED")
-        )
+        status = "✓ PASSED" if result is True else ("✗ FAILED" if result is False else "○ SKIPPED")
         print(f"  {status}: {name}")
 
     print(f"\n  Total: {passed} passed, {failed} failed, {skipped} skipped")

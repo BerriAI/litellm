@@ -40,13 +40,11 @@ class TestTransformation:
             BedrockAgentCoreA2ATransformation,
         )
 
-        url, headers, body = (
-            BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
-                request_id="req-001",
-                params=SAMPLE_PARAMS,
-                litellm_params=SAMPLE_LITELLM_PARAMS,
-                method="message/send",
-            )
+        url, headers, body = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+            request_id="req-001",
+            params=SAMPLE_PARAMS,
+            litellm_params=SAMPLE_LITELLM_PARAMS,
+            method="message/send",
         )
         body_dict = json.loads(body)
         assert body_dict["jsonrpc"] == "2.0"
@@ -199,10 +197,7 @@ class TestTransformation:
         # Runtime user id is the value set from litellm_params, NOT the spoof.
         assert normalized["x-amzn-bedrock-agentcore-runtime-user-id"] == "legit-user"
         # Session id is the auto-generated one, not the spoofed value.
-        assert (
-            normalized["x-amzn-bedrock-agentcore-runtime-session-id"]
-            != "spoofed-session"
-        )
+        assert normalized["x-amzn-bedrock-agentcore-runtime-session-id"] != "spoofed-session"
         # Authorization is the JWT bearer set by the signer, not the spoof.
         assert normalized["authorization"] == "Bearer test-jwt-token"
         # Host / x-amz-* must not have been carried over from the client.
@@ -283,12 +278,10 @@ class TestTransformation:
             "litellm.llms.bedrock.chat.agentcore.transformation.AmazonAgentCoreConfig._sign_request",
             return_value=(fake_sigv4_headers, fake_body),
         ):
-            _, headers, _ = (
-                BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
-                    request_id="req-001",
-                    params=SAMPLE_PARAMS,
-                    litellm_params=litellm_params_no_key,
-                )
+            _, headers, _ = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+                request_id="req-001",
+                params=SAMPLE_PARAMS,
+                litellm_params=litellm_params_no_key,
             )
         # SigV4 produces an Authorization header starting with "AWS4-HMAC-SHA256"
         assert "Authorization" in headers
@@ -425,9 +418,7 @@ class TestConfigManager:
             A2AProviderConfigManager,
         )
 
-        config = A2AProviderConfigManager.get_provider_config(
-            "bedrock", model=SAMPLE_MODEL
-        )
+        config = A2AProviderConfigManager.get_provider_config("bedrock", model=SAMPLE_MODEL)
         assert config is not None
         assert isinstance(config, BedrockAgentCoreA2AConfig)
 
@@ -437,9 +428,7 @@ class TestConfigManager:
             A2AProviderConfigManager,
         )
 
-        config = A2AProviderConfigManager.get_provider_config(
-            "bedrock", model="bedrock/anthropic.claude-3-sonnet"
-        )
+        config = A2AProviderConfigManager.get_provider_config("bedrock", model="bedrock/anthropic.claude-3-sonnet")
         assert config is None
 
     def test_unknown_provider_returns_none(self):
@@ -461,9 +450,7 @@ class TestHandlerIntegration:
         )
 
         mock_config = AsyncMock()
-        mock_config.handle_non_streaming = AsyncMock(
-            return_value={"jsonrpc": "2.0", "id": "req-001", "result": {}}
-        )
+        mock_config.handle_non_streaming = AsyncMock(return_value={"jsonrpc": "2.0", "id": "req-001", "result": {}})
 
         with patch(
             "litellm.a2a_protocol.litellm_completion_bridge.handler.A2AProviderConfigManager.get_provider_config",
@@ -492,9 +479,7 @@ class TestHandlerIntegration:
         )
 
         mock_config = AsyncMock()
-        mock_config.handle_non_streaming = AsyncMock(
-            return_value={"jsonrpc": "2.0", "id": "req-001", "result": {}}
-        )
+        mock_config.handle_non_streaming = AsyncMock(return_value={"jsonrpc": "2.0", "id": "req-001", "result": {}})
 
         with patch(
             "litellm.a2a_protocol.litellm_completion_bridge.handler.A2AProviderConfigManager.get_provider_config",

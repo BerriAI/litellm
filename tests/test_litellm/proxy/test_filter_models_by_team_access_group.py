@@ -215,9 +215,7 @@ async def test_filter_db_fallback_receives_resolved_model_names():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_db)
-    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
-        return_value=[mock_db_model]
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[mock_db_model])
 
     result = await _filter_models_by_team_id(
         all_models=all_models,

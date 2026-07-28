@@ -14,9 +14,7 @@ def test_get_server_root_path_unset():
             del os.environ["SERVER_ROOT_PATH"]
 
         root_path = utils.get_server_root_path()
-        assert (
-            root_path == ""
-        ), "Should return empty string when unset to allow X-Forwarded-Prefix"
+        assert root_path == "", "Should return empty string when unset to allow X-Forwarded-Prefix"
 
 
 def test_get_server_root_path_set():
@@ -34,9 +32,7 @@ def test_get_server_root_path_empty_string():
     """
     with mock.patch.dict(os.environ, {"SERVER_ROOT_PATH": ""}, clear=True):
         root_path = utils.get_server_root_path()
-        assert (
-            root_path == ""
-        ), "Should return empty string when explicitly set to empty"
+        assert root_path == "", "Should return empty string when explicitly set to empty"
 
 
 # Integration test simulation for FastAPI app initialization

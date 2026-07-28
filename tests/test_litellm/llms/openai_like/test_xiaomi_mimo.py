@@ -119,9 +119,7 @@ class TestXiaomiMiMoIntegration:
             content = response.choices[0].message.content.lower()
             assert len(content) > 0
 
-            print(
-                f"✓ Xiaomi MiMo completion successful: {response.choices[0].message.content}"
-            )
+            print(f"✓ Xiaomi MiMo completion successful: {response.choices[0].message.content}")
 
         except Exception as e:
             if pytest:

@@ -29,9 +29,7 @@ class CustomLoggingIntegration(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
 
-    def logging_hook(
-        self, kwargs: dict, result: Any, call_type: str
-    ) -> Tuple[dict, Any]:
+    def logging_hook(self, kwargs: dict, result: Any, call_type: str) -> Tuple[dict, Any]:
         input: Optional[Any] = kwargs.get("input", None)
         messages: Optional[List] = kwargs.get("messages", None)
         if call_type == "completion":
@@ -57,9 +55,7 @@ def test_guardrail_masking_logging_only():
     with patch.object(callback, "log_success_event", new=MagicMock()) as mock_call:
         litellm.callbacks = [callback]
         messages = [{"role": "user", "content": "Hey, my name is Peter."}]
-        response = completion(
-            model="gpt-5-mini", messages=messages, mock_response="Hi Peter!"
-        )
+        response = completion(model="gpt-5-mini", messages=messages, mock_response="Hi Peter!")
 
         assert response.choices[0].message.content == "Hi Peter!"  # type: ignore
 
@@ -68,28 +64,21 @@ def test_guardrail_masking_logging_only():
 
         print(mock_call.call_args.kwargs["kwargs"]["messages"][0]["content"])
 
-        assert (
-            mock_call.call_args.kwargs["kwargs"]["messages"][0]["content"]
-            == "Hey, my name is [NAME]."
-        )
+        assert mock_call.call_args.kwargs["kwargs"]["messages"][0]["content"] == "Hey, my name is [NAME]."
 
 
 def test_guardrail_list_of_event_hooks():
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.types.guardrails import GuardrailEventHooks
 
-    cg = CustomGuardrail(
-        guardrail_name="custom-guard", event_hook=["pre_call", "post_call"]
-    )
+    cg = CustomGuardrail(guardrail_name="custom-guard", event_hook=["pre_call", "post_call"])
 
     data = {"model": "gpt-5-mini", "metadata": {"guardrails": ["custom-guard"]}}
     assert cg.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)
 
     assert cg.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call)
 
-    assert not cg.should_run_guardrail(
-        data=data, event_type=GuardrailEventHooks.during_call
-    )
+    assert not cg.should_run_guardrail(data=data, event_type=GuardrailEventHooks.during_call)
 
 
 def test_guardrail_info_response():

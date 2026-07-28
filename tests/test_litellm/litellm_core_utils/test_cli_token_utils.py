@@ -33,7 +33,6 @@ class TestCLITokenUtils:
                 return_value="/test/.litellm/token.json",
             ),
         ):
-
             result = get_litellm_gateway_api_key()
 
             assert result == "sk-test-cli-key-123"
@@ -47,7 +46,6 @@ class TestCLITokenUtils:
                 return_value="/test/.litellm/token.json",
             ),
         ):
-
             result = get_litellm_gateway_api_key()
 
             assert result is None
@@ -62,7 +60,6 @@ class TestCLITokenUtils:
                 return_value="/test/.litellm/token.json",
             ),
         ):
-
             result = get_litellm_gateway_api_key()
 
             assert result is None
@@ -83,7 +80,6 @@ class TestCLITokenUtils:
                 return_value="/test/.litellm/token.json",
             ),
         ):
-
             result = get_litellm_gateway_api_key()
 
             assert result is None

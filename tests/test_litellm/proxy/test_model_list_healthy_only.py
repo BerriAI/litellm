@@ -17,9 +17,7 @@ def patched_model_list(monkeypatch):
 
     router = MagicMock()
     router.get_fully_blocked_model_names = MagicMock(return_value=set())
-    router.async_get_fully_unhealthy_model_names = AsyncMock(
-        return_value={"claude-sonnet"}
-    )
+    router.async_get_fully_unhealthy_model_names = AsyncMock(return_value={"claude-sonnet"})
 
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "user_model", None)
@@ -36,9 +34,7 @@ def patched_model_list(monkeypatch):
     def _fake_create_model_info_response(model_id, provider="openai", **kwargs):
         return {"id": model_id, "object": "model", "created": 0, "owned_by": provider}
 
-    monkeypatch.setattr(
-        proxy_utils, "create_model_info_response", _fake_create_model_info_response
-    )
+    monkeypatch.setattr(proxy_utils, "create_model_info_response", _fake_create_model_info_response)
 
     return router
 
@@ -64,9 +60,7 @@ async def test_model_list_default_keeps_unhealthy_models(patched_model_list):
 
 
 @pytest.mark.asyncio
-async def test_model_list_healthy_only_applies_to_scope_expand(
-    patched_model_list, monkeypatch
-):
+async def test_model_list_healthy_only_applies_to_scope_expand(patched_model_list, monkeypatch):
     from litellm.proxy.auth import model_checks
     from litellm.proxy.management_endpoints import common_utils
 
@@ -79,9 +73,7 @@ async def test_model_list_healthy_only_applies_to_scope_expand(
         "get_complete_model_list",
         lambda **kwargs: ["gpt-4", "claude-sonnet"],
     )
-    patched_model_list.get_model_names = MagicMock(
-        return_value=["gpt-4", "claude-sonnet"]
-    )
+    patched_model_list.get_model_names = MagicMock(return_value=["gpt-4", "claude-sonnet"])
     patched_model_list.get_model_access_groups = MagicMock(return_value={})
 
     response = await proxy_server.model_list(

@@ -8,9 +8,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.openrouter.common_utils import OpenRouterException
 from litellm.llms.openrouter.image_edit.transformation import (
@@ -196,9 +194,7 @@ class TestOpenRouterImageEditTransformation:
 
     @patch("litellm.llms.openrouter.image_edit.transformation.litellm")
     @patch("litellm.llms.openrouter.image_edit.transformation.get_secret_str")
-    def test_validate_environment_missing_api_key_raises(
-        self, mock_get_secret, mock_litellm
-    ):
+    def test_validate_environment_missing_api_key_raises(self, mock_get_secret, mock_litellm):
         """Test that validate_environment raises ValueError when no API key is available."""
         mock_get_secret.return_value = None
         mock_litellm.api_key = None
@@ -341,9 +337,7 @@ class TestOpenRouterImageEditTransformation:
                         "role": "assistant",
                         "images": [
                             {
-                                "image_url": {
-                                    "url": "data:image/png;base64,iVBORw0KGgoAAAANS"
-                                },
+                                "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANS"},
                                 "type": "image_url",
                             }
                         ],
@@ -460,12 +454,7 @@ class TestOpenRouterImageEditTransformation:
         assert result.usage.input_tokens_details.text_tokens == 42
 
         # Check cost
-        assert (
-            result._hidden_params["additional_headers"][
-                "llm_provider-x-litellm-response-cost"
-            ]
-            == 0.05
-        )
+        assert result._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.05
 
         # Check cost details
         assert result._hidden_params["response_cost_details"]["input_cost"] == 0.01

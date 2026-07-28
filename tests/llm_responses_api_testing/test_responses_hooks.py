@@ -165,9 +165,7 @@ def test_dump_response_object_handles_model_and_unknown_values():
     )
 
     assert streaming_module._dump_response_object(response)["id"] == "resp_dump"
-    assert streaming_module._dump_response_object({"type": "message"}) == {
-        "type": "message"
-    }
+    assert streaming_module._dump_response_object({"type": "message"}) == {"type": "message"}
     assert streaming_module._dump_response_object(object()) == {}
 
 
@@ -233,9 +231,7 @@ async def test_responses_streaming_calls_post_streaming_deployment_hook(monkeypa
     """
 
     class _HookLogger(CustomLogger):
-        async def async_post_call_streaming_deployment_hook(
-            self, request_data, response_chunk, call_type
-        ):
+        async def async_post_call_streaming_deployment_hook(self, request_data, response_chunk, call_type):
             response_chunk.tagged = True
             return response_chunk
 
@@ -247,9 +243,7 @@ async def test_responses_streaming_calls_post_streaming_deployment_hook(monkeypa
 
     class _StubConfig:
         def transform_streaming_response(self, **kwargs):
-            return SimpleNamespace(
-                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, response=None
-            )
+            return SimpleNamespace(type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, response=None)
 
     iterator = ResponsesAPIStreamingIterator(
         response=httpx.Response(200),
@@ -261,12 +255,8 @@ async def test_responses_streaming_calls_post_streaming_deployment_hook(monkeypa
     )
 
     # Call hook helper directly to verify chunk is modified/flagged
-    chunk = SimpleNamespace(
-        type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, response=None
-    )
-    chunk = await streaming_module.call_post_streaming_hooks_for_testing(
-        iterator, chunk
-    )
+    chunk = SimpleNamespace(type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, response=None)
+    chunk = await streaming_module.call_post_streaming_hooks_for_testing(iterator, chunk)
     assert getattr(chunk, "_post_streaming_hooks_ran", False) is True
     assert getattr(chunk, "tagged", False) is True
 
@@ -389,18 +379,12 @@ def test_process_chunk_completed_response_updates_id_and_usage_cost(monkeypatch)
         call_type=CallTypes.responses.value,
     )
     completion_handler = MagicMock()
-    monkeypatch.setattr(
-        iterator, "_handle_logging_completed_response", completion_handler
-    )
+    monkeypatch.setattr(iterator, "_handle_logging_completed_response", completion_handler)
 
     try:
         # Chunk must include a top-level "response" key so BaseResponsesAPIStreamingIterator
         # runs _update_responses_api_response_id_with_model_id (see streaming_iterator.py).
-        event = iterator._process_chunk(
-            json.dumps(
-                {"type": "response.completed", "response": {"id": "resp_live"}}
-            )
-        )
+        event = iterator._process_chunk(json.dumps({"type": "response.completed", "response": {"id": "resp_live"}}))
     finally:
         litellm.include_cost_in_streaming_usage = original_include_cost
 
@@ -531,9 +515,7 @@ def test_process_chunk_cost_annotation_failure_is_nonfatal(monkeypatch):
         call_type=CallTypes.responses.value,
     )
     completion_handler = MagicMock()
-    monkeypatch.setattr(
-        iterator, "_handle_logging_completed_response", completion_handler
-    )
+    monkeypatch.setattr(iterator, "_handle_logging_completed_response", completion_handler)
 
     try:
         event = iterator._process_chunk(json.dumps({"type": "response.completed"}))
@@ -601,16 +583,10 @@ async def test_responses_streaming_completed_event_persists_async_cache():
 
     litellm.cache.async_add_cache.assert_called_once()
     assert litellm.cache.async_add_cache.call_args.kwargs["stream"] is True
-    assert (
-        litellm.cache.async_add_cache.call_args.kwargs["cache_key"]
-        == "responses-stream-cache-key"
-    )
+    assert litellm.cache.async_add_cache.call_args.kwargs["cache_key"] == "responses-stream-cache-key"
     assert "metadata" not in litellm.cache.async_add_cache.call_args.kwargs
     assert "custom_llm_provider" not in litellm.cache.async_add_cache.call_args.kwargs
-    assert (
-        json.loads(litellm.cache.async_add_cache.call_args.args[0])["id"]
-        == iterator.completed_response.response.id
-    )
+    assert json.loads(litellm.cache.async_add_cache.call_args.args[0])["id"] == iterator.completed_response.response.id
     litellm.cache = original_cache
 
 
@@ -652,16 +628,10 @@ def test_responses_streaming_completed_event_persists_sync_cache():
 
     litellm.cache.add_cache.assert_called_once()
     assert litellm.cache.add_cache.call_args.kwargs["stream"] is True
-    assert (
-        litellm.cache.add_cache.call_args.kwargs["cache_key"]
-        == "responses-stream-cache-key"
-    )
+    assert litellm.cache.add_cache.call_args.kwargs["cache_key"] == "responses-stream-cache-key"
     assert "metadata" not in litellm.cache.add_cache.call_args.kwargs
     assert "custom_llm_provider" not in litellm.cache.add_cache.call_args.kwargs
-    assert (
-        json.loads(litellm.cache.add_cache.call_args.args[0])["id"]
-        == iterator.completed_response.response.id
-    )
+    assert json.loads(litellm.cache.add_cache.call_args.args[0])["id"] == iterator.completed_response.response.id
     litellm.cache = original_cache
 
 
@@ -782,9 +752,7 @@ def test_persist_completed_response_to_cache_guard_branches(monkeypatch, scenari
             preset_cache_key=None,
             original_function=litellm.responses,
             dual_cache=None,
-            _should_store_result_in_cache=lambda original_function, kwargs: (
-                scenario != "store_disabled"
-            ),
+            _should_store_result_in_cache=lambda original_function, kwargs: scenario != "store_disabled",
         )
         if scenario == "missing_cache_backend":
             monkeypatch.setattr(streaming_module.litellm, "cache", None)
@@ -849,10 +817,7 @@ def test_build_synthetic_response_events_covers_annotations_function_calls_and_r
     finally:
         litellm.include_cost_in_streaming_usage = original_include_cost
 
-    event_types = [
-        event.type.value if hasattr(event.type, "value") else str(event.type)
-        for event in events
-    ]
+    event_types = [event.type.value if hasattr(event.type, "value") else str(event.type) for event in events]
 
     assert "response.output_text.annotation.added" in event_types
     assert "response.refusal.delta" in event_types

@@ -6,9 +6,7 @@ import traceback, asyncio
 import pytest
 from typing import List
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from litellm import Router
 from litellm.scheduler import FlowItem, Scheduler, SchedulerCacheKeys
 from litellm import ModelResponse
@@ -26,18 +24,8 @@ async def test_scheduler_diff_model_names():
     await scheduler.add_request(item1)
     await scheduler.add_request(item2)
 
-    assert (
-        await scheduler.poll(
-            id="10", model_name="gpt-3.5-turbo", health_deployments=[{"key": "value"}]
-        )
-        == True
-    )
-    assert (
-        await scheduler.poll(
-            id="11", model_name="gpt-4", health_deployments=[{"key": "value"}]
-        )
-        == True
-    )
+    assert await scheduler.poll(id="10", model_name="gpt-3.5-turbo", health_deployments=[{"key": "value"}]) == True
+    assert await scheduler.poll(id="11", model_name="gpt-4", health_deployments=[{"key": "value"}]) == True
 
 
 @pytest.mark.asyncio
@@ -143,9 +131,7 @@ async def test_scheduler_queue_cleanup_on_timeout():
 
     # Verify queue was cleaned up
     queue_after = await scheduler.get_queue(model_name="gpt-3.5-turbo")
-    assert (
-        len(queue_after) == 2
-    ), f"Expected 2 items after cleanup, got {len(queue_after)}"
+    assert len(queue_after) == 2, f"Expected 2 items after cleanup, got {len(queue_after)}"
 
     # Verify the correct request was removed
     remaining_ids = [item[1] for item in queue_after]

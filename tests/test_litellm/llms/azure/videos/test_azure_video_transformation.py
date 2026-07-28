@@ -7,9 +7,7 @@ import pytest
 import httpx
 
 # Add the parent directory to the system path
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 import litellm
 from litellm.llms.azure.videos.transformation import AzureVideoConfig
@@ -78,9 +76,7 @@ class TestAzureVideoConfig:
 
         headers = {"Content-Type": "application/json"}
 
-        result_headers = self.config.validate_environment(
-            headers=headers, model=self.model, api_key=self.api_key
-        )
+        result_headers = self.config.validate_environment(headers=headers, model=self.model, api_key=self.api_key)
 
         # Azure uses "api-key" header, not "Authorization: Bearer"
         assert "api-key" in result_headers
@@ -97,9 +93,7 @@ class TestAzureVideoConfig:
 
         headers = {"Content-Type": "application/json"}
 
-        result_headers = self.config.validate_environment(
-            headers=headers, model=self.model, api_key=None
-        )
+        result_headers = self.config.validate_environment(headers=headers, model=self.model, api_key=None)
 
         assert "api-key" in result_headers
         assert result_headers["api-key"] == "secret-api-key"
@@ -111,9 +105,7 @@ class TestAzureVideoConfig:
             "api_version": "2024-02-15-preview",
         }
 
-        url = self.config.get_complete_url(
-            model=self.model, api_base=self.api_base, litellm_params=litellm_params
-        )
+        url = self.config.get_complete_url(model=self.model, api_base=self.api_base, litellm_params=litellm_params)
 
         # Should contain the Azure base URL and video endpoint
         assert "/openai/v1/videos" in url
@@ -123,9 +115,7 @@ class TestAzureVideoConfig:
         """Test video creation request transformation."""
         video_params = {"seconds": 8, "size": "720x1280"}
 
-        litellm_params = GenericLiteLLMParams(
-            model=self.model, api_base=self.api_base, api_key=self.api_key
-        )
+        litellm_params = GenericLiteLLMParams(model=self.model, api_base=self.api_base, api_key=self.api_key)
 
         headers = {"Authorization": f"Bearer {self.api_key}"}
         api_base = f"{self.api_base}/openai/v1/videos"
@@ -183,9 +173,7 @@ class TestAzureVideoConfig:
 
         logging_obj = MagicMock()
 
-        result = self.config.transform_video_remix_response(
-            raw_response=mock_response, logging_obj=logging_obj
-        )
+        result = self.config.transform_video_remix_response(raw_response=mock_response, logging_obj=logging_obj)
 
         assert isinstance(result, VideoObject)
         assert result.id == "video_remix_azure_123"
@@ -206,9 +194,7 @@ class TestAzureVideoConfig:
 
         logging_obj = MagicMock()
 
-        result = self.config.transform_video_delete_response(
-            raw_response=mock_response, logging_obj=logging_obj
-        )
+        result = self.config.transform_video_delete_response(raw_response=mock_response, logging_obj=logging_obj)
 
         assert isinstance(result, VideoObject)
         assert result.id == "video_azure_123"
@@ -222,9 +208,7 @@ class TestAzureVideoConfig:
 
         logging_obj = MagicMock()
 
-        result = self.config.transform_video_content_response(
-            raw_response=mock_response, logging_obj=logging_obj
-        )
+        result = self.config.transform_video_content_response(raw_response=mock_response, logging_obj=logging_obj)
 
         assert isinstance(result, bytes)
         assert result == b"fake video content"
@@ -263,9 +247,7 @@ class TestAzureVideoConfig:
         """Test video creation with file upload (input_reference)."""
         video_params = {"seconds": 10, "input_reference": "test_image.png"}
 
-        litellm_params = GenericLiteLLMParams(
-            model=self.model, api_base=self.api_base, api_key=self.api_key
-        )
+        litellm_params = GenericLiteLLMParams(model=self.model, api_base=self.api_base, api_key=self.api_key)
 
         headers = {"Authorization": f"Bearer {self.api_key}"}
         api_base = f"{self.api_base}/openai/v1/videos"
@@ -291,9 +273,7 @@ class TestAzureVideoConfig:
     def test_error_handling_in_response_transformation(self):
         """Test error handling in response transformation methods."""
         mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "error": {"message": "Invalid API key", "type": "authentication_error"}
-        }
+        mock_response.json.return_value = {"error": {"message": "Invalid API key", "type": "authentication_error"}}
         mock_response.status_code = 401
 
         logging_obj = MagicMock()
@@ -314,9 +294,7 @@ class TestAzureVideoConfig:
 
         headers = {"Content-Type": "application/json"}
 
-        result_headers = self.config.validate_environment(
-            headers=headers, model=self.model, api_key=None
-        )
+        result_headers = self.config.validate_environment(headers=headers, model=self.model, api_key=None)
 
         assert "api-key" in result_headers
         assert result_headers["api-key"] == "azure-test-key"
@@ -358,9 +336,7 @@ class TestAzureVideoConfig:
 
         logging_obj = MagicMock()
 
-        result = self.config.transform_video_remix_response(
-            raw_response=mock_response, logging_obj=logging_obj
-        )
+        result = self.config.transform_video_remix_response(raw_response=mock_response, logging_obj=logging_obj)
 
         assert hasattr(result, "usage")
         assert result.usage is not None

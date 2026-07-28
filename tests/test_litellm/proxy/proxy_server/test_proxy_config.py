@@ -122,20 +122,14 @@ def test__scrub_db_overlay_remote_module_loads_invalid_non_dict_returns_input():
 
 def test_resolve_complexity_router_plugins_no_plugins_key_is_a_noop():
     config: Dict[str, Any] = {"tiers": {"SIMPLE": "gpt-4o-mini"}}
-    resolve_complexity_router_plugins(
-        model_name="smart-router", complexity_router_config=config, config_file_path=None
-    )
+    resolve_complexity_router_plugins(model_name="smart-router", complexity_router_config=config, config_file_path=None)
     assert config == {"tiers": {"SIMPLE": "gpt-4o-mini"}}
 
 
 def test_resolve_complexity_router_plugins_resolves_dotted_path_to_live_instance(tmp_path):
     plugin_file = tmp_path / "my_plugin.py"
     plugin_file.write_text(
-        "class _Plugin:\n"
-        "    async def run(self, context):\n"
-        "        return context\n"
-        "\n"
-        "my_plugin_instance = _Plugin()\n"
+        "class _Plugin:\n    async def run(self, context):\n        return context\n\nmy_plugin_instance = _Plugin()\n"
     )
     config: Dict[str, Any] = {"plugins": ["my_plugin.my_plugin_instance"]}
 
@@ -195,11 +189,7 @@ def test_resolve_complexity_router_plugins_rejects_synchronous_run_method(tmp_pa
 def test_resolve_routing_plugins_resolves_dotted_paths(tmp_path):
     plugin_file = tmp_path / "rs_plugin.py"
     plugin_file.write_text(
-        "class _Plugin:\n"
-        "    async def run(self, context):\n"
-        "        return context\n"
-        "\n"
-        "rs_plugin_instance = _Plugin()\n"
+        "class _Plugin:\n    async def run(self, context):\n        return context\n\nrs_plugin_instance = _Plugin()\n"
     )
 
     resolved = resolve_routing_plugins(
@@ -990,11 +980,7 @@ async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path
     to `await "some.string".run(context)`."""
     plugin_file = tmp_path / "rs_plugin.py"
     plugin_file.write_text(
-        "class _Plugin:\n"
-        "    async def run(self, context):\n"
-        "        return context\n"
-        "\n"
-        "rs_plugin_instance = _Plugin()\n"
+        "class _Plugin:\n    async def run(self, context):\n        return context\n\nrs_plugin_instance = _Plugin()\n"
     )
     f = tmp_path / "c.yaml"
     f.write_text(
@@ -1009,9 +995,7 @@ async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
 
-    router, _model_list, _general_settings = await ProxyConfig().load_config(
-        router=None, config_file_path=str(f)
-    )
+    router, _model_list, _general_settings = await ProxyConfig().load_config(router=None, config_file_path=str(f))
 
     assert len(router.routing_plugins) == 1
     assert type(router.routing_plugins[0]).__name__ == "_Plugin"
@@ -1078,10 +1062,7 @@ async def test_ProxyConfig_load_config_wires_config_reload_interval(tmp_path, mo
 
     f = tmp_path / "c.yaml"
     f.write_text(
-        "model_list: []\n"
-        "general_settings:\n"
-        "  proxy_config_reload_interval_seconds: 47\n"
-        "litellm_settings: {}\n"
+        "model_list: []\ngeneral_settings:\n  proxy_config_reload_interval_seconds: 47\nlitellm_settings: {}\n"
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)

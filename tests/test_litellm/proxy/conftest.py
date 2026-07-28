@@ -34,8 +34,7 @@ class DisconnectedPrisma:
     @property
     def _engine(self) -> None:
         raise StubClientNotConnectedError(
-            "Client is not connected to the query engine, you must call `connect()` "
-            "before attempting to query data."
+            "Client is not connected to the query engine, you must call `connect()` before attempting to query data."
         )
 
 
@@ -58,10 +57,7 @@ def _isolate_proxy_module_globals():
     from litellm.proxy import proxy_server
 
     sentinel = object()
-    snapshot = {
-        name: getattr(proxy_server, name, sentinel)
-        for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE
-    }
+    snapshot = {name: getattr(proxy_server, name, sentinel) for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE}
     try:
         yield
     finally:
@@ -116,9 +112,7 @@ def build_cache_config(enable_cache: bool = True) -> Optional[Dict]:
     return {"cache": True, "cache_params": cache_params}
 
 
-def build_minimal_proxy_config(
-    database_url: Optional[str] = None, **init_options
-) -> Dict:
+def build_minimal_proxy_config(database_url: Optional[str] = None, **init_options) -> Dict:
     """
     Build a minimal proxy configuration YAML.
 
@@ -150,9 +144,7 @@ def build_minimal_proxy_config(
 
     # Add success_callback if provided (for realistic readiness endpoint)
     if init_options.get("success_callback") is not None:
-        config["litellm_settings"]["success_callback"] = init_options[
-            "success_callback"
-        ]
+        config["litellm_settings"]["success_callback"] = init_options["success_callback"]
 
     # Add any other litellm_settings from init_options
     excluded_keys = {
@@ -169,9 +161,7 @@ def build_minimal_proxy_config(
     return config
 
 
-def set_proxy_environment_variables(
-    monkeypatch, database_url: Optional[str] = None
-) -> None:
+def set_proxy_environment_variables(monkeypatch, database_url: Optional[str] = None) -> None:
     """
     Set environment variables for database and Redis.
 
@@ -194,9 +184,7 @@ def set_proxy_environment_variables(
             monkeypatch.setenv("REDIS_PASSWORD", redis_password)
 
 
-def create_proxy_test_client(
-    monkeypatch, database_url: Optional[str] = None, **init_options
-) -> TestClient:
+def create_proxy_test_client(monkeypatch, database_url: Optional[str] = None, **init_options) -> TestClient:
     """
     Create a proxy TestClient with optional database and Redis cache configuration.
 
@@ -222,9 +210,7 @@ def create_proxy_test_client(
 
     # Get config file path
     filepath = os.path.dirname(os.path.abspath(__file__))
-    default_config_fp = os.path.join(
-        filepath, "test_configs", "test_config_no_auth.yaml"
-    )
+    default_config_fp = os.path.join(filepath, "test_configs", "test_config_no_auth.yaml")
 
     # Check if we need to create a minimal config with Redis/database
     enable_cache = init_options.get("enable_cache", True)
@@ -235,9 +221,7 @@ def create_proxy_test_client(
     # 1. Default config file doesn't exist, OR
     # 2. We need Redis/database config that might not be in the default config
     if not os.path.exists(default_config_fp) or needs_redis or needs_db:
-        minimal_config = build_minimal_proxy_config(
-            database_url=database_url, **init_options
-        )
+        minimal_config = build_minimal_proxy_config(database_url=database_url, **init_options)
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(minimal_config, f)

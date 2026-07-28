@@ -18,9 +18,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 
 from litellm.proxy.proxy_server import (  # noqa: E402
     _scrub_db_overlay_remote_module_loads,
@@ -88,9 +86,7 @@ def test_litellm_settings_guardrails_v1_callbacks_stripped():
         ]
     }
     cleaned = _scrub_db_overlay_remote_module_loads("litellm_settings", overlay)
-    assert cleaned["guardrails"][0]["prompt_injection"]["callbacks"] == [
-        "lakera_prompt_injection"
-    ]
+    assert cleaned["guardrails"][0]["prompt_injection"]["callbacks"] == ["lakera_prompt_injection"]
 
 
 def test_litellm_settings_guardrails_v2_callbacks_and_guardrail_stripped():
@@ -133,9 +129,7 @@ def test_litellm_settings_guardrails_local_dotted_name_preserved():
 
 
 def test_litellm_settings_guardrails_non_list_passthrough():
-    cleaned = _scrub_db_overlay_remote_module_loads(
-        "litellm_settings", {"guardrails": "not-a-list"}
-    )
+    cleaned = _scrub_db_overlay_remote_module_loads("litellm_settings", {"guardrails": "not-a-list"})
     assert cleaned["guardrails"] == "not-a-list"
 
 
@@ -162,9 +156,7 @@ def test_pass_through_endpoints_target_stripped():
 def test_pass_through_endpoints_non_list_passthrough():
     # If pass_through_endpoints is mistyped (not a list), the scrub
     # must not raise.
-    cleaned = _scrub_db_overlay_remote_module_loads(
-        "general_settings", {"pass_through_endpoints": "not-a-list"}
-    )
+    cleaned = _scrub_db_overlay_remote_module_loads("general_settings", {"pass_through_endpoints": "not-a-list"})
     assert cleaned["pass_through_endpoints"] == "not-a-list"
 
 

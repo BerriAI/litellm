@@ -8,14 +8,10 @@ import pytest
 
 from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 
-@pytest.mark.parametrize(
-    "api_base", ["https://api.openai.com/v1", "https://api.openai.com"]
-)
+@pytest.mark.parametrize("api_base", ["https://api.openai.com/v1", "https://api.openai.com"])
 def test_openai_realtime_handler_url_construction(api_base):
     from litellm.llms.openai.realtime.handler import OpenAIRealtime
 
@@ -64,12 +60,8 @@ def test_openai_realtime_handler_model_parameter_inclusion():
     api_base = "https://api.openai.com/"
 
     # Test with just model parameter
-    query_params_model_only: RealtimeQueryParams = {
-        "model": "gpt-4o-mini-realtime-preview"
-    }
-    url = handler._construct_url(
-        api_base=api_base, query_params=query_params_model_only
-    )
+    query_params_model_only: RealtimeQueryParams = {"model": "gpt-4o-mini-realtime-preview"}
+    url = handler._construct_url(api_base=api_base, query_params=query_params_model_only)
 
     # Verify the URL structure
     assert url.startswith("wss://api.openai.com/v1/realtime?")
@@ -80,9 +72,7 @@ def test_openai_realtime_handler_model_parameter_inclusion():
         "model": "gpt-4o-mini-realtime-preview",
         "intent": "chat",
     }
-    url_with_extras = handler._construct_url(
-        api_base=api_base, query_params=query_params_with_extras
-    )
+    url_with_extras = handler._construct_url(api_base=api_base, query_params=query_params_with_extras)
 
     # Verify both parameters are included
     assert url_with_extras.startswith("wss://api.openai.com/v1/realtime?")
@@ -129,12 +119,8 @@ async def test_async_realtime_success():
 
     shared_context = get_shared_realtime_ssl_context()
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
-            "litellm.llms.openai.realtime.handler.RealTimeStreaming"
-        ) as mock_realtime_streaming,
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
     ):
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
@@ -184,14 +170,9 @@ async def test_async_realtime_url_contains_model():
 
     shared_context = get_shared_realtime_ssl_context()
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
-            "litellm.llms.openai.realtime.handler.RealTimeStreaming"
-        ) as mock_realtime_streaming,
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
     ):
-
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -259,12 +240,8 @@ async def test_async_realtime_forwards_openai_beta_header_when_client_sends_it()
             return None
 
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
-            "litellm.llms.openai.realtime.handler.RealTimeStreaming"
-        ) as mock_realtime_streaming,
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
     ):
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
@@ -320,14 +297,9 @@ async def test_async_realtime_uses_max_size_parameter():
 
     shared_context = get_shared_realtime_ssl_context()
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
-            "litellm.llms.openai.realtime.handler.RealTimeStreaming"
-        ) as mock_realtime_streaming,
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
     ):
-
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -390,14 +362,9 @@ async def test_async_realtime_ws_url_has_no_ssl():
             return None
 
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
-            "litellm.llms.openai.realtime.handler.RealTimeStreaming"
-        ) as mock_realtime_streaming,
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
     ):
-
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()

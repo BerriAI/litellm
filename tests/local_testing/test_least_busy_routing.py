@@ -13,9 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 
 import litellm
@@ -114,9 +112,7 @@ async def test_router_get_available_deployments(async_test):
     cache_key = f"{model_group}_request_count"
     if async_test is True:
         await router.cache.async_set_cache(key=cache_key, value=request_count_dict)
-        deployment = await router.async_get_available_deployment(
-            model=model_group, messages=None, request_kwargs={}
-        )
+        deployment = await router.async_get_available_deployment(model=model_group, messages=None, request_kwargs={})
     else:
         router.cache.set_cache(key=cache_key, value=request_count_dict)
         deployment = router.get_available_deployment(model=model_group, messages=None)
@@ -211,9 +207,7 @@ async def test_router_atext_completion_streaming():
 @pytest.mark.asyncio
 async def test_router_completion_streaming():
     litellm.set_verbose = True
-    messages = [
-        {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
-    ]
+    messages = [{"role": "user", "content": "Hello, can you generate a 500 words poem?"}]
     model = "azure-model"
     model_list = [
         {

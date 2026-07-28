@@ -134,15 +134,11 @@ def math_streamable_http_server() -> str:
 
 
 @pytest.fixture(scope="session")
-def proxy_server_url(
-    tmp_path_factory: pytest.TempPathFactory, math_streamable_http_server: str
-):
+def proxy_server_url(tmp_path_factory: pytest.TempPathFactory, math_streamable_http_server: str):
     config_dir = tmp_path_factory.mktemp("mcp_e2e")
     config_path = config_dir / "config.yaml"
     config = yaml.safe_load(CONFIG_TEMPLATE_PATH.read_text())
-    config["mcp_servers"]["math_streamable_http"][
-        "url"
-    ] = f"{math_streamable_http_server}/mcp"
+    config["mcp_servers"]["math_streamable_http"]["url"] = f"{math_streamable_http_server}/mcp"
     config_path.write_text(yaml.safe_dump(config))
 
     server_url, server, thread, sock = _start_proxy_server(str(config_path))
@@ -177,9 +173,7 @@ class TestProxyMcpSimpleConnections:
                     assert text == "7"
 
     @pytest.mark.asyncio
-    async def test_proxy_mcp_streamable_http_roundtrip(
-        self, proxy_server_url: str
-    ) -> None:
+    async def test_proxy_mcp_streamable_http_roundtrip(self, proxy_server_url: str) -> None:
         async with asyncio.timeout(20):
             async with streamablehttp_client(
                 url=f"{proxy_server_url}/mcp",
@@ -200,9 +194,7 @@ class TestProxyMcpSimpleConnections:
                     assert text == "11"
 
     @pytest.mark.asyncio
-    async def test_proxy_mcp_lists_all_servers_without_header(
-        self, proxy_server_url: str
-    ) -> None:
+    async def test_proxy_mcp_lists_all_servers_without_header(self, proxy_server_url: str) -> None:
         async with asyncio.timeout(20):
             async with streamablehttp_client(
                 url=f"{proxy_server_url}/mcp",
@@ -220,20 +212,14 @@ class TestProxyMcpSimpleConnections:
                     }
                     assert expected_tool_names <= tool_names
 
-                    async def _call_and_get_text(
-                        tool_name: str, *, a: int, b: int
-                    ) -> str | None:
-                        result = await session.call_tool(
-                            tool_name, arguments={"a": a, "b": b}
-                        )
+                    async def _call_and_get_text(tool_name: str, *, a: int, b: int) -> str | None:
+                        result = await session.call_tool(tool_name, arguments={"a": a, "b": b})
                         assert result.content
                         first_content = result.content[0]
                         return getattr(first_content, "text", None)
 
                     stdio_result = await _call_and_get_text("math_stdio-add", a=2, b=3)
-                    streamable_result = await _call_and_get_text(
-                        "math_streamable_http-add", a=4, b=5
-                    )
+                    streamable_result = await _call_and_get_text("math_streamable_http-add", a=4, b=5)
                     assert stdio_result == "5"
                     assert streamable_result == "9"
 
@@ -254,9 +240,7 @@ class TestProxyMcpStatelessBehavior:
     """
 
     @pytest.mark.asyncio
-    async def test_independent_clients_no_shared_session(
-        self, proxy_server_url: str
-    ) -> None:
+    async def test_independent_clients_no_shared_session(self, proxy_server_url: str) -> None:
         """Two independent clients connect and operate without sharing session state."""
         async with asyncio.timeout(30):
             # --- Client A: connect, initialize, call tool ---
@@ -269,9 +253,7 @@ class TestProxyMcpStatelessBehavior:
             ) as (read_a, write_a, _get_sid_a):
                 async with ClientSession(read_a, write_a) as session_a:
                     await session_a.initialize()
-                    result_a = await session_a.call_tool(
-                        "add", arguments={"a": 10, "b": 20}
-                    )
+                    result_a = await session_a.call_tool("add", arguments={"a": 10, "b": 20})
                     assert result_a.content
                     text_a = getattr(result_a.content[0], "text", None)
                     assert text_a == "30"
@@ -293,9 +275,7 @@ class TestProxyMcpStatelessBehavior:
                     await session_b.initialize()
                     tools = await session_b.list_tools()
                     assert any(t.name.endswith("add") for t in tools.tools)
-                    result_b = await session_b.call_tool(
-                        "add", arguments={"a": 100, "b": 200}
-                    )
+                    result_b = await session_b.call_tool("add", arguments={"a": 100, "b": 200})
                     assert result_b.content
                     text_b = getattr(result_b.content[0], "text", None)
                     assert text_b == "300"

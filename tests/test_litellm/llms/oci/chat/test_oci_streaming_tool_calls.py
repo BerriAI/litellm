@@ -151,9 +151,7 @@ class TestOCIStreamingToolCalls:
         assert result.choices[0].delta.tool_calls is not None
         assert len(result.choices[0].delta.tool_calls) == 1
         assert result.choices[0].delta.tool_calls[0]["id"] == "call_abc123"
-        assert (
-            result.choices[0].delta.tool_calls[0]["function"]["name"] == "get_weather"
-        )
+        assert result.choices[0].delta.tool_calls[0]["function"]["name"] == "get_weather"
         assert (
             result.choices[0].delta.tool_calls[0]["function"]["arguments"]
             == '{"location": "San Francisco", "unit": "celsius"}'
@@ -191,24 +189,16 @@ class TestOCIStreamingToolCalls:
         assert len(result.choices[0].delta.tool_calls) == 3
 
         assert result.choices[0].delta.tool_calls[0]["id"] == "call_1"
-        assert (
-            result.choices[0].delta.tool_calls[0]["function"]["name"] == "get_weather"
-        )
+        assert result.choices[0].delta.tool_calls[0]["function"]["name"] == "get_weather"
         assert result.choices[0].delta.tool_calls[0]["function"]["arguments"] == ""
 
         assert result.choices[0].delta.tool_calls[1]["id"].startswith("call_")
         assert result.choices[0].delta.tool_calls[1]["function"]["name"] == "get_time"
-        assert (
-            result.choices[0].delta.tool_calls[1]["function"]["arguments"]
-            == '{"timezone": "UTC"}'
-        )
+        assert result.choices[0].delta.tool_calls[1]["function"]["arguments"] == '{"timezone": "UTC"}'
 
         assert result.choices[0].delta.tool_calls[2]["id"] == "call_3"
         assert result.choices[0].delta.tool_calls[2]["function"]["name"] == "calculate"
-        assert (
-            result.choices[0].delta.tool_calls[2]["function"]["arguments"]
-            == '{"expression": "2+2"}'
-        )
+        assert result.choices[0].delta.tool_calls[2]["function"]["arguments"] == '{"expression": "2+2"}'
 
     def test_stream_chunk_missing_id_is_deterministic_across_chunks(self):
         """

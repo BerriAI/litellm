@@ -99,18 +99,14 @@ async def test_anthropic_handler_converts_structured_messages_to_anthropic_forma
     handler = AnthropicMessagesHandler()
     guardrail = _make_guardrail_returning_structured_messages(COMPRESSED_MESSAGES)
 
-    anthropic_messages = [
-        {"role": "user", "content": [{"type": "text", "text": "A" * 5000}]}
-    ]
+    anthropic_messages = [{"role": "user", "content": [{"type": "text", "text": "A" * 5000}]}]
     data = {
         "model": "claude-3-5-sonnet-20241022",
         "messages": anthropic_messages,
         "max_tokens": 1024,
     }
 
-    converted_back = [
-        {"role": "user", "content": [{"type": "text", "text": "A" * 200}]}
-    ]
+    converted_back = [{"role": "user", "content": [{"type": "text", "text": "A" * 200}]}]
 
     with patch(
         "litellm.litellm_core_utils.prompt_templates.factory.anthropic_messages_pt",

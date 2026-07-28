@@ -25,34 +25,19 @@ class TestClassifyCursorRequest:
         assert _classify_cursor_request("GET", "/v0/agents") == "cursor:agent:list"
 
     def test_should_classify_agent_status(self):
-        assert (
-            _classify_cursor_request("GET", "/v0/agents/bc_abc123")
-            == "cursor:agent:status"
-        )
+        assert _classify_cursor_request("GET", "/v0/agents/bc_abc123") == "cursor:agent:status"
 
     def test_should_classify_agent_conversation(self):
-        assert (
-            _classify_cursor_request("GET", "/v0/agents/bc_abc123/conversation")
-            == "cursor:agent:conversation"
-        )
+        assert _classify_cursor_request("GET", "/v0/agents/bc_abc123/conversation") == "cursor:agent:conversation"
 
     def test_should_classify_agent_followup(self):
-        assert (
-            _classify_cursor_request("POST", "/v0/agents/bc_abc123/followup")
-            == "cursor:agent:followup"
-        )
+        assert _classify_cursor_request("POST", "/v0/agents/bc_abc123/followup") == "cursor:agent:followup"
 
     def test_should_classify_agent_stop(self):
-        assert (
-            _classify_cursor_request("POST", "/v0/agents/bc_abc123/stop")
-            == "cursor:agent:stop"
-        )
+        assert _classify_cursor_request("POST", "/v0/agents/bc_abc123/stop") == "cursor:agent:stop"
 
     def test_should_classify_agent_delete(self):
-        assert (
-            _classify_cursor_request("DELETE", "/v0/agents/bc_abc123")
-            == "cursor:agent:delete"
-        )
+        assert _classify_cursor_request("DELETE", "/v0/agents/bc_abc123") == "cursor:agent:delete"
 
     def test_should_classify_me_endpoint(self):
         assert _classify_cursor_request("GET", "/v0/me") == "cursor:account:info"
@@ -61,10 +46,7 @@ class TestClassifyCursorRequest:
         assert _classify_cursor_request("GET", "/v0/models") == "cursor:models:list"
 
     def test_should_classify_repositories_endpoint(self):
-        assert (
-            _classify_cursor_request("GET", "/v0/repositories")
-            == "cursor:repositories:list"
-        )
+        assert _classify_cursor_request("GET", "/v0/repositories") == "cursor:repositories:list"
 
 
 class TestCursorRouteDetection:

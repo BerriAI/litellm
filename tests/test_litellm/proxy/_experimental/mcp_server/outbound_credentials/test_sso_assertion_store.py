@@ -49,9 +49,7 @@ def _make_prisma(stored: dict, db_has_id_jag_server: bool = False):
     ``db_has_id_jag_server`` drives the retention gate's authoritative DB fallback;
     it is wired explicitly so the gate never reads a truthy bare MagicMock."""
     prisma = MagicMock()
-    prisma.db.litellm_mcpservertable.find_first = AsyncMock(
-        return_value=MagicMock() if db_has_id_jag_server else None
-    )
+    prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=MagicMock() if db_has_id_jag_server else None)
 
     async def _upsert(where, data):
         stored[where["user_id"]] = data["update"]["assertion_b64"]

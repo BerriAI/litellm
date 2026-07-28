@@ -7,9 +7,7 @@ import pytest
 import base64
 import httpx
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
@@ -69,9 +67,7 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
         mock_post.return_value = mock_response
 
         # Prepare input based on type
-        input_data = (
-            img_base_64 if input_type == "image" else "Hello world from litellm"
-        )
+        input_data = img_base_64 if input_type == "image" else "Hello world from litellm"
 
         try:
             response = litellm.embedding(
@@ -94,9 +90,7 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
             # Verify AWS params are not in request body
             aws_params = ["aws_region_name", "aws_bedrock_runtime_endpoint"]
             for param in aws_params:
-                assert (
-                    param not in request_data
-                ), f"AWS param {param} should not be in request body"
+                assert param not in request_data, f"AWS param {param} should not be in request body"
 
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
@@ -119,39 +113,27 @@ def test_e2e_bedrock_embedding():
     )
 
     # Validate response structure
-    assert isinstance(
-        response, litellm.EmbeddingResponse
-    ), "Response should be EmbeddingResponse type"
+    assert isinstance(response, litellm.EmbeddingResponse), "Response should be EmbeddingResponse type"
     assert hasattr(response, "data"), "Response should have 'data' attribute"
     assert len(response.data) > 0, "Response data should not be empty"
 
     # Validate first embedding
     embedding_obj = response.data[0]
-    assert hasattr(
-        embedding_obj, "embedding"
-    ), "Embedding object should have 'embedding' attribute"
-    assert isinstance(
-        embedding_obj.embedding, list
-    ), "Embedding should be a list of floats"
+    assert hasattr(embedding_obj, "embedding"), "Embedding object should have 'embedding' attribute"
+    assert isinstance(embedding_obj.embedding, list), "Embedding should be a list of floats"
     assert len(embedding_obj.embedding) > 0, "Embedding vector should not be empty"
-    assert all(
-        isinstance(x, (int, float)) for x in embedding_obj.embedding
-    ), "All embedding values should be numeric"
+    assert all(isinstance(x, (int, float)) for x in embedding_obj.embedding), "All embedding values should be numeric"
 
     # Validate embedding properties
     assert embedding_obj.index == 0, "First embedding should have index 0"
-    assert (
-        embedding_obj.object == "embedding"
-    ), "Embedding object type should be 'embedding'"
+    assert embedding_obj.object == "embedding", "Embedding object type should be 'embedding'"
 
     # Validate usage information
     assert hasattr(response, "usage"), "Response should have usage information"
     assert response.usage is not None, "Usage should not be None"
     assert response.usage.total_tokens >= 0, "Total tokens should be non-negative"
 
-    print(
-        f"Text embedding successful! Vector size: {len(embedding_obj.embedding)}, Response: {response}"
-    )
+    print(f"Text embedding successful! Vector size: {len(embedding_obj.embedding)}, Response: {response}")
 
     # Restore original region name
     if original_region_name:
@@ -182,30 +164,22 @@ def test_e2e_bedrock_embedding_image_twelvelabs_marengo():
         )
 
         # Validate response structure
-        assert isinstance(
-            response, litellm.EmbeddingResponse
-        ), "Response should be EmbeddingResponse type"
+        assert isinstance(response, litellm.EmbeddingResponse), "Response should be EmbeddingResponse type"
         assert hasattr(response, "data"), "Response should have 'data' attribute"
         assert len(response.data) > 0, "Response data should not be empty"
 
         # Validate first embedding
         embedding_obj = response.data[0]
-        assert hasattr(
-            embedding_obj, "embedding"
-        ), "Embedding object should have 'embedding' attribute"
-        assert isinstance(
-            embedding_obj.embedding, list
-        ), "Embedding should be a list of floats"
+        assert hasattr(embedding_obj, "embedding"), "Embedding object should have 'embedding' attribute"
+        assert isinstance(embedding_obj.embedding, list), "Embedding should be a list of floats"
         assert len(embedding_obj.embedding) > 0, "Embedding vector should not be empty"
-        assert all(
-            isinstance(x, (int, float)) for x in embedding_obj.embedding
-        ), "All embedding values should be numeric"
+        assert all(isinstance(x, (int, float)) for x in embedding_obj.embedding), (
+            "All embedding values should be numeric"
+        )
 
         # Validate embedding properties
         assert embedding_obj.index == 0, "First embedding should have index 0"
-        assert (
-            embedding_obj.object == "embedding"
-        ), "Embedding object type should be 'embedding'"
+        assert embedding_obj.object == "embedding", "Embedding object type should be 'embedding'"
 
         # Validate usage information
         assert hasattr(response, "usage"), "Response should have usage information"
@@ -214,13 +188,11 @@ def test_e2e_bedrock_embedding_image_twelvelabs_marengo():
 
         # TwelveLabs Marengo should return 1024-dimensional embeddings
         expected_dimension = 1024
-        assert (
-            len(embedding_obj.embedding) == expected_dimension
-        ), f"TwelveLabs Marengo should return {expected_dimension}-dimensional embeddings, got {len(embedding_obj.embedding)}"
-
-        print(
-            f"Image embedding successful! Vector size: {len(embedding_obj.embedding)}, Response: {response}"
+        assert len(embedding_obj.embedding) == expected_dimension, (
+            f"TwelveLabs Marengo should return {expected_dimension}-dimensional embeddings, got {len(embedding_obj.embedding)}"
         )
+
+        print(f"Image embedding successful! Vector size: {len(embedding_obj.embedding)}, Response: {response}")
 
     # Restore original region name
     if original_region_name:
@@ -238,12 +210,8 @@ def test_e2e_bedrock_async_invoke_embedding_twelvelabs_marengo():
     litellm._turn_on_debug()
 
     # Mock the HTTP call to return async invoke response
-    with patch(
-        "litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_sync_call"
-    ) as mock_call:
-        mock_call.return_value = {
-            "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-job-123"
-        }
+    with patch("litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_sync_call") as mock_call:
+        mock_call.return_value = {"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-job-123"}
 
         response = litellm.embedding(
             model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0",
@@ -254,18 +222,12 @@ def test_e2e_bedrock_async_invoke_embedding_twelvelabs_marengo():
         )
 
         # Validate response structure
-        assert isinstance(
-            response, litellm.EmbeddingResponse
-        ), "Response should be EmbeddingResponse type"
-        assert hasattr(
-            response, "_hidden_params"
-        ), "Response should have _hidden_params"
+        assert isinstance(response, litellm.EmbeddingResponse), "Response should be EmbeddingResponse type"
+        assert hasattr(response, "_hidden_params"), "Response should have _hidden_params"
         assert response._hidden_params is not None, "Hidden params should not be None"
 
         # Validate hidden params contain invocation ARN
-        assert hasattr(
-            response._hidden_params, "_invocation_arn"
-        ), "Hidden params should have _invocation_arn"
+        assert hasattr(response._hidden_params, "_invocation_arn"), "Hidden params should have _invocation_arn"
         assert (
             response._hidden_params._invocation_arn
             == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-job-123"
@@ -273,16 +235,10 @@ def test_e2e_bedrock_async_invoke_embedding_twelvelabs_marengo():
 
         # Validate embedding structure
         assert len(response.data) == 1, "Should have one embedding"
-        assert (
-            response.data[0].object == "embedding"
-        ), "Embedding object should be 'embedding'"
-        assert (
-            response.data[0].embedding == []
-        ), "Embedding should be empty for async jobs"
+        assert response.data[0].object == "embedding", "Embedding object should be 'embedding'"
+        assert response.data[0].embedding == [], "Embedding should be empty for async jobs"
 
-        print(
-            f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}"
-        )
+        print(f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}")
 
     # Restore original region name
     if original_region_name:
@@ -301,9 +257,7 @@ async def test_e2e_bedrock_async_invoke_embedding_async_twelvelabs_marengo():
     litellm._turn_on_debug()
 
     # Mock the async HTTP call to return async invoke response
-    with patch(
-        "litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_async_call"
-    ) as mock_call:
+    with patch("litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_async_call") as mock_call:
         mock_call.return_value = {
             "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-async-job-456"
         }
@@ -317,26 +271,18 @@ async def test_e2e_bedrock_async_invoke_embedding_async_twelvelabs_marengo():
         )
 
         # Validate response structure
-        assert isinstance(
-            response, litellm.EmbeddingResponse
-        ), "Response should be EmbeddingResponse type"
-        assert hasattr(
-            response, "_hidden_params"
-        ), "Response should have _hidden_params"
+        assert isinstance(response, litellm.EmbeddingResponse), "Response should be EmbeddingResponse type"
+        assert hasattr(response, "_hidden_params"), "Response should have _hidden_params"
         assert response._hidden_params is not None, "Hidden params should not be None"
 
         # Validate hidden params contain invocation ARN
-        assert hasattr(
-            response._hidden_params, "_invocation_arn"
-        ), "Hidden params should have _invocation_arn"
+        assert hasattr(response._hidden_params, "_invocation_arn"), "Hidden params should have _invocation_arn"
         assert (
             response._hidden_params._invocation_arn
             == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-async-job-456"
         ), "Invocation ARN should be preserved"
 
-        print(
-            f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}"
-        )
+        print(f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}")
 
     # Restore original region name
     if original_region_name:
@@ -386,9 +332,7 @@ def test_bedrock_embedding_uses_correct_region_when_specified():
 
             # The URL should contain us-east-1, NOT ap-northeast-1
             assert "us-east-1" in url, f"URL should contain us-east-1, but got: {url}"
-            assert (
-                "ap-northeast-1" not in url
-            ), f"URL should NOT contain ap-northeast-1, but got: {url}"
+            assert "ap-northeast-1" not in url, f"URL should NOT contain ap-northeast-1, but got: {url}"
 
             print(f"✓ Test passed: URL contains correct region: {url}")
 
@@ -444,19 +388,11 @@ def test_bedrock_embedding_region_bug_reproduction():
             # This assertion will FAIL if the bug exists (it will use ap-northeast-1)
             # This assertion will PASS if the bug is fixed (it will use us-east-1)
             if "ap-northeast-1" in url:
-                print(
-                    "❌ BUG REPRODUCED: Using wrong region from env var instead of explicit parameter"
-                )
-                assert (
-                    False
-                ), f"Bug reproduced: URL contains ap-northeast-1 instead of us-east-1. URL: {url}"
+                print("❌ BUG REPRODUCED: Using wrong region from env var instead of explicit parameter")
+                assert False, f"Bug reproduced: URL contains ap-northeast-1 instead of us-east-1. URL: {url}"
             else:
-                print(
-                    "✓ Bug NOT reproduced: Using correct region from explicit parameter"
-                )
-                assert (
-                    "us-east-1" in url
-                ), f"URL should contain us-east-1, but got: {url}"
+                print("✓ Bug NOT reproduced: Using correct region from explicit parameter")
+                assert "us-east-1" in url, f"URL should contain us-east-1, but got: {url}"
 
     finally:
         # Restore original env var

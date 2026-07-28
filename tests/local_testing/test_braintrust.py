@@ -15,9 +15,7 @@ from fastapi import Request
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -76,6 +74,4 @@ def test_braintrust_logging_specific_project_id():
         mock_client.assert_called()
         _, kwargs = mock_client.call_args
         assert "url" in kwargs
-        assert (
-            kwargs["url"] == "https://api.braintrustdata.com/v1/project_logs/123/insert"
-        )
+        assert kwargs["url"] == "https://api.braintrustdata.com/v1/project_logs/123/insert"

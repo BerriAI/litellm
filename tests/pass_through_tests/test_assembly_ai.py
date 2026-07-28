@@ -32,8 +32,7 @@ def _transcribe_and_verify(virtual_key: str, base_url: str):
     )
     if create_response.status_code != 200:
         pytest.fail(
-            "Failed to create transcript request: "
-            f"status={create_response.status_code}, body={create_response.text}"
+            f"Failed to create transcript request: status={create_response.status_code}, body={create_response.text}"
         )
 
     transcript = create_response.json()
@@ -49,8 +48,7 @@ def _transcribe_and_verify(virtual_key: str, base_url: str):
         )
         if poll_response.status_code != 200:
             pytest.fail(
-                "Failed to poll transcript status: "
-                f"status={poll_response.status_code}, body={poll_response.text}"
+                f"Failed to poll transcript status: status={poll_response.status_code}, body={poll_response.text}"
             )
         transcript = poll_response.json()
         if transcript.get("status") in ("completed", "error"):

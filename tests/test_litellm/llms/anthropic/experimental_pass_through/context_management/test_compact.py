@@ -193,10 +193,7 @@ def test_select_last_user_question_strips_tool_result_from_mixed_turn():
     content = selected[0]["content"]
     assert isinstance(content, list)
     assert all(b.get("type") != "tool_result" for b in content)
-    assert any(
-        b.get("type") == "text" and b.get("text") == "follow-up question"
-        for b in content
-    )
+    assert any(b.get("type") == "text" and b.get("text") == "follow-up question" for b in content)
 
 
 def test_select_last_user_question_skips_pure_tool_result_turn():
@@ -425,9 +422,7 @@ def test_client_compaction_block_history_without_context_management():
 
 
 def test_client_compaction_block_history_no_compaction_returns_none():
-    result = apply_client_compaction_block_history(
-        messages=_simple_messages(), system="base"
-    )
+    result = apply_client_compaction_block_history(messages=_simple_messages(), system="base")
     assert result is None
 
 
@@ -512,9 +507,7 @@ async def test_slice_only_no_compaction_block_under_threshold():
 async def test_full_summary_path():
     """Over threshold: summary call fires, compaction_block and iterations_usage returned."""
     messages = _simple_messages()
-    mock_response = _make_mock_response(
-        "<summary>Condensed history</summary>", prompt_tokens=200, completion_tokens=50
-    )
+    mock_response = _make_mock_response("<summary>Condensed history</summary>", prompt_tokens=200, completion_tokens=50)
 
     with (
         patch(
@@ -1068,13 +1061,11 @@ async def test_summary_call_does_not_emit_consecutive_user_turns():
         )
 
     summary_messages = captured_calls[0]["summary_messages"]
-    user_indices = [
-        idx for idx, msg in enumerate(summary_messages) if msg.get("role") == "user"
-    ]
+    user_indices = [idx for idx, msg in enumerate(summary_messages) if msg.get("role") == "user"]
     # No two adjacent indices.
-    assert all(
-        b - a > 1 for a, b in zip(user_indices, user_indices[1:])
-    ), f"two consecutive user turns produced: {summary_messages}"
+    assert all(b - a > 1 for a, b in zip(user_indices, user_indices[1:])), (
+        f"two consecutive user turns produced: {summary_messages}"
+    )
 
 
 async def test_summary_call_sends_default_max_tokens():
@@ -1157,9 +1148,9 @@ def test_summary_max_tokens_setting_falls_back_for_invalid_values():
             "litellm.proxy.proxy_server.general_settings",
             {"context_management_summary_max_tokens": bad},
         ):
-            assert (
-                _read_summary_max_tokens_setting() == COMPACT_SUMMARY_MAX_TOKENS
-            ), f"expected default for invalid override {bad!r}"
+            assert _read_summary_max_tokens_setting() == COMPACT_SUMMARY_MAX_TOKENS, (
+                f"expected default for invalid override {bad!r}"
+            )
 
 
 async def test_summary_call_sends_default_timeout():
@@ -1278,9 +1269,7 @@ async def test_summary_model_denied_when_team_not_in_allowlist():
             tools=None,
             system=None,
             edit_spec=_EDIT_SPEC_DEFAULT,
-            user_api_key_auth=_fake_user_api_key_auth(
-                key_models=["all-proxy-models"], team_models=["gpt-4o"]
-            ),
+            user_api_key_auth=_fake_user_api_key_auth(key_models=["all-proxy-models"], team_models=["gpt-4o"]),
         )
 
     mock_call.assert_not_awaited()
@@ -1309,9 +1298,7 @@ async def test_summary_model_allowed_when_in_key_allowlist():
             tools=None,
             system=None,
             edit_spec=_EDIT_SPEC_DEFAULT,
-            user_api_key_auth=_fake_user_api_key_auth(
-                key_models=["claude-haiku-4-5", "gpt-4o"]
-            ),
+            user_api_key_auth=_fake_user_api_key_auth(key_models=["claude-haiku-4-5", "gpt-4o"]),
         )
 
     mock_call.assert_awaited_once()
@@ -1517,9 +1504,7 @@ async def test_summary_model_denied_when_key_over_model_budget():
 
     limiter = MagicMock()
     limiter.is_key_within_model_budget = AsyncMock(
-        side_effect=litellm.BudgetExceededError(
-            message="over budget", current_cost=10, max_budget=5
-        )
+        side_effect=litellm.BudgetExceededError(message="over budget", current_cost=10, max_budget=5)
     )
 
     with (
@@ -1565,9 +1550,7 @@ async def test_summary_model_denied_when_end_user_over_model_budget():
     limiter = MagicMock()
     limiter.is_key_within_model_budget = AsyncMock(return_value=True)
     limiter.is_end_user_within_model_budget = AsyncMock(
-        side_effect=litellm.BudgetExceededError(
-            message="over budget", current_cost=10, max_budget=5
-        )
+        side_effect=litellm.BudgetExceededError(message="over budget", current_cost=10, max_budget=5)
     )
 
     with (
@@ -1880,9 +1863,7 @@ async def test_model_budget_metadata_propagated_to_summary_call():
     parent_litellm_metadata = {
         "user_api_key": "sk-test",
         "user_api_key_model_max_budget": {"claude-haiku-4-5": {"budget_limit": 5}},
-        "user_api_key_end_user_model_max_budget": {
-            "claude-haiku-4-5": {"budget_limit": 2}
-        },
+        "user_api_key_end_user_model_max_budget": {"claude-haiku-4-5": {"budget_limit": 2}},
     }
 
     with (
@@ -1907,12 +1888,8 @@ async def test_model_budget_metadata_propagated_to_summary_call():
         )
 
     propagated = mock_call.call_args.kwargs["metadata"]
-    assert propagated["user_api_key_model_max_budget"] == {
-        "claude-haiku-4-5": {"budget_limit": 5}
-    }
-    assert propagated["user_api_key_end_user_model_max_budget"] == {
-        "claude-haiku-4-5": {"budget_limit": 2}
-    }
+    assert propagated["user_api_key_model_max_budget"] == {"claude-haiku-4-5": {"budget_limit": 5}}
+    assert propagated["user_api_key_end_user_model_max_budget"] == {"claude-haiku-4-5": {"budget_limit": 2}}
 
 
 async def test_summary_call_propagates_allowed_model_region():
@@ -2384,9 +2361,7 @@ def test_endpoint_returns_anthropic_400_on_context_management_error():
     mock_proxy_server.version = "test"
 
     with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
-        with patch(
-            "litellm.proxy.anthropic_endpoints.endpoints.ProxyBaseLLMRequestProcessing"
-        ) as mock_cls:
+        with patch("litellm.proxy.anthropic_endpoints.endpoints.ProxyBaseLLMRequestProcessing") as mock_cls:
             mock_instance = MagicMock()
             mock_instance.base_process_llm_request = AsyncMock(
                 side_effect=AnthropicContextManagementError(
@@ -2445,9 +2420,7 @@ def test_endpoint_runs_failure_hook_on_500_context_management_error():
     mock_proxy_server.version = "test"
 
     with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
-        with patch(
-            "litellm.proxy.anthropic_endpoints.endpoints.ProxyBaseLLMRequestProcessing"
-        ) as mock_cls:
+        with patch("litellm.proxy.anthropic_endpoints.endpoints.ProxyBaseLLMRequestProcessing") as mock_cls:
             mock_instance = MagicMock()
             mock_instance.base_process_llm_request = AsyncMock(
                 side_effect=AnthropicContextManagementError(

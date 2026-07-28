@@ -25,9 +25,7 @@ from fastapi import HTTPException
 # ---------------------------------------------------------------------------
 
 _MCP_MANAGER = "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-_HANDLE_HTTP = (
-    "litellm.proxy._experimental.mcp_server.server.handle_streamable_http_mcp"
-)
+_HANDLE_HTTP = "litellm.proxy._experimental.mcp_server.server.handle_streamable_http_mcp"
 _STREAM_ASGI = "litellm.proxy.proxy_server._stream_mcp_asgi_response"
 _PRISMA = "litellm.proxy.proxy_server.prisma_client"
 _IS_ACCESS_GROUP = "litellm.proxy.proxy_server._is_mcp_access_group_cached"
@@ -237,9 +235,7 @@ async def test_resolve_mcp_csv_tokens_drops_unknown_and_resolves_access_groups()
     fake_mgr = MagicMock()
     # Only "registered_srv" is a known server alias.
     fake_mgr.get_mcp_server_by_name = MagicMock(
-        side_effect=lambda name, client_ip=None: (
-            _fake_server(name) if name == "registered_srv" else None
-        )
+        side_effect=lambda name, client_ip=None: _fake_server(name) if name == "registered_srv" else None
     )
 
     # "dev_group" is a real access group; "ghost" is not.
@@ -249,9 +245,7 @@ async def test_resolve_mcp_csv_tokens_drops_unknown_and_resolves_access_groups()
         patch(_MCP_MANAGER, fake_mgr),
         patch(_IS_ACCESS_GROUP, new=is_group),
     ):
-        resolved = await _resolve_mcp_csv_tokens(
-            "registered_srv,dev_group,ghost", client_ip=None
-        )
+        resolved = await _resolve_mcp_csv_tokens("registered_srv,dev_group,ghost", client_ip=None)
 
     assert resolved == ["registered_srv", "dev_group"]
     # Access-group lookup must NOT be called for "registered_srv" (already
@@ -502,9 +496,7 @@ async def test_dynamic_mcp_route_unexpected_exception_returns_500_without_traceb
     request = _make_request("/boom/mcp")
 
     fake_mgr = MagicMock()
-    fake_mgr.get_mcp_server_by_name = MagicMock(
-        side_effect=RuntimeError("internal host: redis://10.0.0.1:6379")
-    )
+    fake_mgr.get_mcp_server_by_name = MagicMock(side_effect=RuntimeError("internal host: redis://10.0.0.1:6379"))
 
     with patch(_MCP_MANAGER, fake_mgr):
         with pytest.raises(HTTPException) as exc_info:
@@ -525,9 +517,7 @@ async def test_toolset_mcp_route_unexpected_exception_returns_500_without_traceb
     request = _make_request("/toolset/broken_toolset/mcp")
 
     fake_mgr = MagicMock()
-    fake_mgr.get_toolset_by_name_cached = AsyncMock(
-        side_effect=RuntimeError("connection to db-host:5432 refused")
-    )
+    fake_mgr.get_toolset_by_name_cached = AsyncMock(side_effect=RuntimeError("connection to db-host:5432 refused"))
 
     with (
         patch(_MCP_MANAGER, fake_mgr),

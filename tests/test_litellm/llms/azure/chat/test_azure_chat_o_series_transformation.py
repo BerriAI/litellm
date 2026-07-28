@@ -7,9 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 
@@ -23,8 +21,6 @@ async def test_azure_chat_o_series_transformation():
     litellm_params = {}
     headers = {}
 
-    response = await provider_config.async_transform_request(
-        model, messages, optional_params, litellm_params, headers
-    )
+    response = await provider_config.async_transform_request(model, messages, optional_params, litellm_params, headers)
     print(response)
     assert response["model"] == "web-interface-o1-mini"

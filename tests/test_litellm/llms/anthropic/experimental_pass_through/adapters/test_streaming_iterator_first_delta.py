@@ -65,9 +65,7 @@ def _thinking_chunk(thinking: str, signature: str = "") -> MagicMock:
     return _make_chunk(Delta(content=None, thinking_blocks=[block]))
 
 
-def _tool_chunk(
-    call_id: str, name: Optional[str], arguments: Optional[str]
-) -> MagicMock:
+def _tool_chunk(call_id: str, name: Optional[str], arguments: Optional[str]) -> MagicMock:
     return _make_chunk(
         Delta(
             content=None,
@@ -109,8 +107,7 @@ def _text_deltas(events: List[dict]) -> List[str]:
     return [
         e["delta"]["text"]
         for e in events
-        if e.get("type") == "content_block_delta"
-        and e["delta"].get("type") == "text_delta"
+        if e.get("type") == "content_block_delta" and e["delta"].get("type") == "text_delta"
     ]
 
 
@@ -118,8 +115,7 @@ def _input_json_deltas(events: List[dict]) -> List[str]:
     return [
         e["delta"]["partial_json"]
         for e in events
-        if e.get("type") == "content_block_delta"
-        and e["delta"].get("type") == "input_json_delta"
+        if e.get("type") == "content_block_delta" and e["delta"].get("type") == "input_json_delta"
     ]
 
 
@@ -127,8 +123,7 @@ def _thinking_deltas(events: List[dict]) -> List[str]:
     return [
         e["delta"]["thinking"]
         for e in events
-        if e.get("type") == "content_block_delta"
-        and e["delta"].get("type") == "thinking_delta"
+        if e.get("type") == "content_block_delta" and e["delta"].get("type") == "thinking_delta"
     ]
 
 
@@ -136,8 +131,7 @@ def _signature_deltas(events: List[dict]) -> List[str]:
     return [
         e["delta"]["signature"]
         for e in events
-        if e.get("type") == "content_block_delta"
-        and e["delta"].get("type") == "signature_delta"
+        if e.get("type") == "content_block_delta" and e["delta"].get("type") == "signature_delta"
     ]
 
 
@@ -228,9 +222,7 @@ async def test_first_text_delta_after_tool_use_is_not_dropped_async():
         _make_chunk(Delta(content=" Bye.")),
         _make_chunk(Delta(content=None), finish_reason="stop"),
     ]
-    wrapper = AnthropicStreamWrapper(
-        completion_stream=_AsyncStream(chunks), model="claude-x"
-    )
+    wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
     events = await _drain_async(wrapper)
 
     assert _input_json_deltas(events) == ['{"city": "NY"}']

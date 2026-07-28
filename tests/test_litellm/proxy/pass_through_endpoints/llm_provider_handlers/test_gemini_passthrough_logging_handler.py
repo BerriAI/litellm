@@ -7,9 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.gemini_passthrough_logging_handler import (
@@ -144,12 +142,8 @@ class TestGeminiPassthroughLoggingHandler:
         assert model == "gemini-1.5-pro"
 
     @patch("litellm.completion_cost")
-    @patch(
-        "litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload"
-    )
-    def test_gemini_passthrough_handler_success(
-        self, mock_get_standard_logging, mock_completion_cost
-    ):
+    @patch("litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload")
+    def test_gemini_passthrough_handler_success(self, mock_get_standard_logging, mock_completion_cost):
         """Test successful cost tracking for Gemini generateContent endpoint"""
         # Arrange
         mock_completion_cost.return_value = 0.000045
@@ -278,9 +272,7 @@ class TestGeminiPassthroughLoggingHandler:
         "litellm.proxy.pass_through_endpoints.llm_provider_handlers.gemini_passthrough_logging_handler.litellm.completion_cost",
         return_value=0.000050,
     )
-    async def test_pass_through_success_handler_gemini_routing(
-        self, mock_completion_cost
-    ):
+    async def test_pass_through_success_handler_gemini_routing(self, mock_completion_cost):
         """Test that the success handler correctly routes Gemini requests to the Gemini handler"""
         handler = PassThroughEndpointLogging()
 
@@ -346,11 +338,7 @@ class TestGeminiPassthroughLoggingHandler:
 
         # Request body with durationSeconds
         request_body = {
-            "instances": [
-                {
-                    "prompt": "A close up of two people staring at a cryptic drawing on a wall,"
-                }
-            ],
+            "instances": [{"prompt": "A close up of two people staring at a cryptic drawing on a wall,"}],
             "parameters": {"durationSeconds": 8},
         }
 

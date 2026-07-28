@@ -19,9 +19,7 @@ def get_thread_count() -> int:
 @pytest.fixture
 def otel_logger():
     """Fixture to provide a clean OTEL logger for each test"""
-    config = OpenTelemetryConfig(
-        exporter="console", enable_metrics=False, service_name="litellm-unit-test"
-    )
+    config = OpenTelemetryConfig(exporter="console", enable_metrics=False, service_name="litellm-unit-test")
     return OpenTelemetry(config=config)
 
 
@@ -67,7 +65,7 @@ def test_otel_thread_leak_dynamic_headers(otel_logger):
 
         latency_ms = (end_time - start_time) * 1000
         latencies.append(latency_ms)
-        print(f"   Request {i+1:2d}: Latency = {latency_ms:6.2f} ms")
+        print(f"   Request {i + 1:2d}: Latency = {latency_ms:6.2f} ms")
 
         # Verify a tracer was actually returned
         assert tracer is not None

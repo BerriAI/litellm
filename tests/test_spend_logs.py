@@ -183,9 +183,7 @@ async def test_spend_logs_with_org_id():
         key = key_gen["key"]
         response = await chat_completion(session=session, key=key)
         await asyncio.sleep(20)
-        spend_logs_response = await get_spend_logs(
-            session=session, request_id=response["id"]
-        )
+        spend_logs_response = await get_spend_logs(session=session, request_id=response["id"])
         print(
             "spend_logs_response: ",
             json.dumps(spend_logs_response, indent=4, default=str),
@@ -224,9 +222,7 @@ async def get_predict_spend_logs(session):
 async def get_spend_report(session, start_date, end_date):
     url = "http://0.0.0.0:4000/global/spend/report"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
-    async with session.get(
-        url, headers=headers, params={"start_date": start_date, "end_date": end_date}
-    ) as response:
+    async with session.get(url, headers=headers, params={"start_date": start_date, "end_date": end_date}) as response:
         status = response.status
         response_text = await response.text()
 
@@ -275,11 +271,9 @@ async def test_spend_logs_high_traffic():
             ) as e:
                 if attempt + 1 == _max_attempts:
                     raise  # re-raise the last ClientOSError if all attempts failed
-                print(f"Attempt {attempt+1} failed, retrying...")
+                print(f"Attempt {attempt + 1} failed, retrying...")
 
-    async with aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=600)
-    ) as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600)) as session:
         start = time.time()
         key_gen = await generate_key(session=session)
         key = key_gen["key"]
@@ -310,21 +304,15 @@ async def test_spend_logs_high_traffic():
 
 @pytest.mark.asyncio
 async def test_spend_report_endpoint():
-    async with aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=600)
-    ) as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600)) as session:
         import datetime
 
         todays_date = datetime.date.today() + datetime.timedelta(days=1)
         todays_date = todays_date.strftime("%Y-%m-%d")
 
         print("todays_date", todays_date)
-        thirty_days_ago = (
-            datetime.date.today() - datetime.timedelta(days=30)
-        ).strftime("%Y-%m-%d")
-        spend_report = await get_spend_report(
-            session=session, start_date=thirty_days_ago, end_date=todays_date
-        )
+        thirty_days_ago = (datetime.date.today() - datetime.timedelta(days=30)).strftime("%Y-%m-%d")
+        spend_report = await get_spend_report(session=session, start_date=thirty_days_ago, end_date=todays_date)
         print("spend report", spend_report)
 
         for row in spend_report:

@@ -132,9 +132,7 @@ class TestIterSseEventsAsync:
         ]
 
     def test_event_split_across_two_reads(self):
-        assert _collect_async(['data: {"index":0,"text":"hel', 'lo"}\n\n']) == [
-            'data: {"index":0,"text":"hello"}'
-        ]
+        assert _collect_async(['data: {"index":0,"text":"hel', 'lo"}\n\n']) == ['data: {"index":0,"text":"hello"}']
 
     def test_event_split_into_many_tiny_reads(self):
         full = 'data: {"k":"value with spaces"}\n\n'
@@ -149,9 +147,11 @@ class TestIterSseEventsAsync:
         ]
 
     def test_mixed_separators_in_one_read(self):
-        assert _collect_async(
-            ['data: {"a":1}\ndata: {"a":2}\n\ndata: {"a":3}\n\n']
-        ) == ['data: {"a":1}', 'data: {"a":2}', 'data: {"a":3}']
+        assert _collect_async(['data: {"a":1}\ndata: {"a":2}\n\ndata: {"a":3}\n\n']) == [
+            'data: {"a":1}',
+            'data: {"a":2}',
+            'data: {"a":3}',
+        ]
 
     def test_keepalive_and_comment_lines_dropped(self):
         reads = [
@@ -171,9 +171,7 @@ class TestIterSseEventsAsync:
         ]
 
     def test_trailing_non_data_line_dropped_at_eof(self):
-        assert _collect_async(['data: {"a":1}\n\n: trailing-comment']) == [
-            'data: {"a":1}'
-        ]
+        assert _collect_async(['data: {"a":1}\n\n: trailing-comment']) == ['data: {"a":1}']
 
     def test_empty_stream(self):
         assert _collect_async([]) == []

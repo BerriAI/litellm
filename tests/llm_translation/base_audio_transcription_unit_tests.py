@@ -7,9 +7,7 @@ from unittest.mock import MagicMock, Mock, patch
 import os
 from litellm._uuid import uuid
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm import transcription
 from litellm.litellm_core_utils.get_supported_openai_params import (
@@ -62,9 +60,7 @@ class BaseLLMAudioTranscriptionTest(ABC):
         litellm._turn_on_debug()
         AUDIO_FILE = open(file_path, "rb")
         transcription_call_args = self.get_base_audio_transcription_call_args()
-        transcript = await litellm.atranscription(
-            **transcription_call_args, file=AUDIO_FILE
-        )
+        transcript = await litellm.atranscription(**transcription_call_args, file=AUDIO_FILE)
         print(f"transcript: {transcript.model_dump()}")
         print(f"transcript hidden params: {transcript._hidden_params}")
 
@@ -84,9 +80,7 @@ class BaseLLMAudioTranscriptionTest(ABC):
         )
         print(f"optional_params: {optional_params}")
         assert optional_params is not None
-        assert (
-            "max_completion_tokens" not in optional_params
-        )  # assert default chat completion response not returned
+        assert "max_completion_tokens" not in optional_params  # assert default chat completion response not returned
 
     def test_audio_transcription_config(self):
         """

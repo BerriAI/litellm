@@ -46,14 +46,12 @@ class TestVolcEngineEmbedding(BaseLLMEmbeddingTest):
             mock_response.data = [
                 {
                     "object": "embedding",
-                    "embedding": [0.1, 0.2, 0.3]
-                    + [0.01 * i for i in range(1021)],  # 1024-dim embedding
+                    "embedding": [0.1, 0.2, 0.3] + [0.01 * i for i in range(1021)],  # 1024-dim embedding
                     "index": 0,
                 },
                 {
                     "object": "embedding",
-                    "embedding": [0.4, 0.5, 0.6]
-                    + [0.02 * i for i in range(1021)],  # 1024-dim embedding
+                    "embedding": [0.4, 0.5, 0.6] + [0.02 * i for i in range(1021)],  # 1024-dim embedding
                     "index": 1,
                 },
             ]
@@ -155,9 +153,7 @@ def test_volcengine_embedding_with_user_parameter():
         mock_response = MagicMock()
         mock_response.model = "doubao-embedding-text-240715"
         mock_response.object = "list"
-        mock_response.data = [
-            {"object": "embedding", "embedding": [0.1] * 1024, "index": 0}
-        ]
+        mock_response.data = [{"object": "embedding", "embedding": [0.1] * 1024, "index": 0}]
         mock_response.usage.prompt_tokens = 5
         mock_response.usage.total_tokens = 5
         mock_embedding.return_value = mock_response
@@ -199,16 +195,11 @@ def test_volcengine_embedding_error_scenarios():
 
             # Test that errors are properly raised
             with pytest.raises(Exception) as exc_info:
-                test_params = {
-                    k: v for k, v in scenario.items() if k != "expected_error_pattern"
-                }
+                test_params = {k: v for k, v in scenario.items() if k != "expected_error_pattern"}
                 litellm.embedding(input=["test"], **test_params)
 
             # Verify error message contains expected pattern
-            assert (
-                scenario["expected_error_pattern"].lower()
-                in str(exc_info.value).lower()
-            )
+            assert scenario["expected_error_pattern"].lower() in str(exc_info.value).lower()
 
 
 def test_volcengine_embedding_with_multiple_inputs():
@@ -244,16 +235,12 @@ def test_volcengine_embedding_with_multiple_inputs():
                 }
                 for i in range(len(test_input))
             ]
-            mock_response.usage.prompt_tokens = (
-                len(test_input) * 5
-            )  # Realistic token estimate
+            mock_response.usage.prompt_tokens = len(test_input) * 5  # Realistic token estimate
             mock_response.usage.total_tokens = len(test_input) * 5
             mock_embedding.return_value = mock_response
 
             # Test the call
-            response = litellm.embedding(
-                model="volcengine/doubao-embedding-text-240715", input=test_input
-            )
+            response = litellm.embedding(model="volcengine/doubao-embedding-text-240715", input=test_input)
 
             # Verify response matches input count
             assert len(response.data) == len(test_input)

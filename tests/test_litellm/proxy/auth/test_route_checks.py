@@ -2,9 +2,7 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import pytest
 from fastapi import HTTPException, Request
@@ -45,9 +43,8 @@ def test_non_admin_config_update_route_rejected():
         )
 
     # Verify the exception is raised with the correct message
-    assert (
-        "Only proxy admin can be used to generate, delete, update info for new keys/users/teams"
-        in str(exc_info.value)
+    assert "Only proxy admin can be used to generate, delete, update info for new keys/users/teams" in str(
+        exc_info.value
     )
     assert "Route=/config/update" in str(exc_info.value)
     assert "Your role=internal_user" in str(exc_info.value)
@@ -569,9 +566,7 @@ def test_virtual_key_llm_api_route_includes_passthrough_prefix(route):
 
     valid_token = UserAPIKeyAuth(user_id="test_user", allowed_routes=["llm_api_routes"])
 
-    result = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route=route, valid_token=valid_token
-    )
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token)
 
     assert result is True
 
@@ -596,9 +591,7 @@ def test_virtual_key_llm_api_routes_allows_google_routes(route):
 
     valid_token = UserAPIKeyAuth(user_id="test_user", allowed_routes=["llm_api_routes"])
 
-    result = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route=route, valid_token=valid_token
-    )
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token)
 
     assert result is True
 
@@ -668,18 +661,14 @@ def test_google_routes_with_dynamic_model_names_accessible_to_internal_users():
         )
         # If no exception is raised, the test passes
     except Exception as e:
-        pytest.fail(
-            f"Internal user should be able to access Google generateContent route. Got error: {str(e)}"
-        )
+        pytest.fail(f"Internal user should be able to access Google generateContent route. Got error: {str(e)}")
 
 
 def test_virtual_key_allowed_routes_with_multiple_litellm_routes_member_names():
     """Test that virtual key works with multiple LiteLLMRoutes member names in allowed_routes"""
 
     # Create a UserAPIKeyAuth with multiple LiteLLMRoutes member names
-    valid_token = UserAPIKeyAuth(
-        user_id="test_user", allowed_routes=["openai_routes", "info_routes"]
-    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", allowed_routes=["openai_routes", "info_routes"])
 
     # Test that routes from both groups are allowed
     result1 = RouteChecks.is_virtual_key_allowed_to_call_route(
@@ -733,13 +722,9 @@ def test_virtual_key_allowed_routes_with_no_member_names_only_explicit():
     )
 
     # Test that explicit routes are allowed
-    result1 = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/chat/completions", valid_token=valid_token
-    )
+    result1 = RouteChecks.is_virtual_key_allowed_to_call_route(route="/chat/completions", valid_token=valid_token)
 
-    result2 = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/custom/route", valid_token=valid_token
-    )
+    result2 = RouteChecks.is_virtual_key_allowed_to_call_route(route="/custom/route", valid_token=valid_token)
 
     assert result1 is True
     assert result2 is True
@@ -1107,9 +1092,7 @@ def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
             )
 
         assert exc_info.value.status_code == 403
-        assert "Virtual key is not allowed to call this route" in str(
-            exc_info.value.detail
-        )
+        assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
 
 
 def test_check_passthrough_route_access_key_metadata_exact_match():
@@ -1568,9 +1551,7 @@ def test_videos_route_accessible_to_internal_users():
         )
         # If no exception is raised, the test passes
     except Exception as e:
-        pytest.fail(
-            f"Internal user should be able to access /v1/videos route. Got error: {str(e)}"
-        )
+        pytest.fail(f"Internal user should be able to access /v1/videos route. Got error: {str(e)}")
 
 
 def test_videos_route_with_virtual_key_llm_api_routes():
@@ -1592,12 +1573,8 @@ def test_videos_route_with_virtual_key_llm_api_routes():
     ]
 
     for route in test_routes:
-        result = RouteChecks.is_virtual_key_allowed_to_call_route(
-            route=route, valid_token=valid_token
-        )
-        assert (
-            result is True
-        ), f"Virtual key with llm_api_routes should be able to access {route}"
+        result = RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token)
+        assert result is True, f"Virtual key with llm_api_routes should be able to access {route}"
 
 
 def test_non_proxy_admin_wildcard_allowed_routes():
@@ -1668,9 +1645,7 @@ def test_proxy_admin_viewer_can_access_global_spend_tags():
         )
         # If no exception is raised, the test passes
     except Exception as e:
-        pytest.fail(
-            f"proxy_admin_viewer should be able to access /global/spend/tags route. Got error: {str(e)}"
-        )
+        pytest.fail(f"proxy_admin_viewer should be able to access /global/spend/tags route. Got error: {str(e)}")
 
 
 # Routes returning proxy-wide spend across every team / customer / api_key.
@@ -1830,9 +1805,7 @@ def test_proxy_admin_viewer_can_access_audit_logs(route):
             request_data={},
         )
     except Exception as e:
-        pytest.fail(
-            f"proxy_admin_viewer should be able to access {route} route. Got error: {str(e)}"
-        )
+        pytest.fail(f"proxy_admin_viewer should be able to access {route} route. Got error: {str(e)}")
 
 
 # ── Admin Viewer parity: Logs page endpoints ──────────────────────────────────
@@ -1895,9 +1868,7 @@ def test_proxy_admin_viewer_can_access_logs_page_endpoints(route):
             request_data={},
         )
     except Exception as e:
-        pytest.fail(
-            f"proxy_admin_viewer should be able to access {route}. Got error: {str(e)}"
-        )
+        pytest.fail(f"proxy_admin_viewer should be able to access {route}. Got error: {str(e)}")
 
 
 @pytest.mark.parametrize("route", ADMIN_VIEWER_LOGS_PAGE_ROUTES)
@@ -2006,9 +1977,7 @@ def test_proxy_admin_viewer_can_access_settings_read_endpoints(route):
             request_data={},
         )
     except Exception as e:
-        pytest.fail(
-            f"proxy_admin_viewer should be able to access {route}. Got error: {str(e)}"
-        )
+        pytest.fail(f"proxy_admin_viewer should be able to access {route}. Got error: {str(e)}")
 
 
 # ── Admin Viewer parity: default-allow GET semantics ─────────────────────────
@@ -2207,9 +2176,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         )
         local_file = os.path.abspath(local_file)
 
-        spec = importlib.util.spec_from_file_location(
-            "local_enterprise_route_checks", local_file
-        )
+        spec = importlib.util.spec_from_file_location("local_enterprise_route_checks", local_file)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod.EnterpriseRouteChecks
@@ -2220,9 +2187,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
         with (
-            patch.object(
-                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
-            ),
+            patch.object(EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True),
             patch.object(
                 EnterpriseRouteChecks,
                 "is_management_routes_disabled",
@@ -2238,9 +2203,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
         with (
-            patch.object(
-                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
-            ),
+            patch.object(EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True),
             patch.object(
                 EnterpriseRouteChecks,
                 "is_management_routes_disabled",
@@ -2256,9 +2219,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
         with (
-            patch.object(
-                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
-            ),
+            patch.object(EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True),
             patch.object(
                 EnterpriseRouteChecks,
                 "is_management_routes_disabled",
@@ -2269,9 +2230,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
                 EnterpriseRouteChecks.should_call_route("/v1/chat/completions")
 
             assert exc_info.value.status_code == 403
-            assert "LLM API routes are disabled for this instance." in str(
-                exc_info.value.detail
-            )
+            assert "LLM API routes are disabled for this instance." in str(exc_info.value.detail)
 
     @patch("litellm.proxy.proxy_server.premium_user", True)
     def test_should_embeddings_still_blocked_when_llm_api_disabled(self):
@@ -2279,9 +2238,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
         with (
-            patch.object(
-                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
-            ),
+            patch.object(EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True),
             patch.object(
                 EnterpriseRouteChecks,
                 "is_management_routes_disabled",
@@ -2299,9 +2256,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
         with (
-            patch.object(
-                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=False
-            ),
+            patch.object(EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=False),
             patch.object(
                 EnterpriseRouteChecks,
                 "is_management_routes_disabled",
@@ -2320,9 +2275,7 @@ def test_route_in_additional_public_routes_wildcard_match():
     from litellm.proxy.auth.auth_utils import route_in_additonal_public_routes
 
     with (
-        patch(
-            "litellm.proxy.proxy_server.general_settings", {"public_routes": ["/api/*"]}
-        ),
+        patch("litellm.proxy.proxy_server.general_settings", {"public_routes": ["/api/*"]}),
         patch("litellm.proxy.proxy_server.premium_user", True),
     ):
         # Wildcard should match subpaths
@@ -2629,9 +2582,7 @@ async def test_add_team_org_context_noop_when_org_id_already_present():
         raise AssertionError("must not resolve when organization_id is present")
 
     body = {"team_id": "team-1", "organization_id": "org-explicit"}
-    out = await add_team_org_context_to_request_body(
-        route="/team/update", request_body=body, fetch_team_org_id=fetch
-    )
+    out = await add_team_org_context_to_request_body(route="/team/update", request_body=body, fetch_team_org_id=fetch)
     assert out == body
 
 
@@ -2643,9 +2594,7 @@ async def test_add_team_org_context_noop_for_other_routes():
         raise AssertionError("must not resolve for a non-opted-in route")
 
     body = {"team_id": "team-1"}
-    out = await add_team_org_context_to_request_body(
-        route="/team/delete", request_body=body, fetch_team_org_id=fetch
-    )
+    out = await add_team_org_context_to_request_body(route="/team/delete", request_body=body, fetch_team_org_id=fetch)
     assert out == body
 
 
@@ -2658,9 +2607,7 @@ async def test_add_team_org_context_noop_when_team_has_no_org():
         return None
 
     body = {"team_id": "team-1"}
-    out = await add_team_org_context_to_request_body(
-        route="/team/update", request_body=body, fetch_team_org_id=fetch
-    )
+    out = await add_team_org_context_to_request_body(route="/team/update", request_body=body, fetch_team_org_id=fetch)
     assert out == body
 
 
@@ -2944,9 +2891,7 @@ async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
             # Removing the endpoint should clean up openai_routes
             # remove_endpoint_routes takes endpoint_id (UUID portion of
             # the route key "{id}:exact:{path}:{methods}")
-            registered = (
-                InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
-            )
+            registered = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
             endpoint_ids = {k.split(":")[0] for k in registered}
             for eid in endpoint_ids:
                 InitPassThroughEndpointHelpers.remove_endpoint_routes(eid)
@@ -2956,9 +2901,7 @@ async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
         LiteLLMRoutes.openai_routes.value[:] = original_routes
         # Clean up any routes registered during this test to avoid
         # polluting the module-level _registered_pass_through_routes
-        registered = (
-            InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
-        )
+        registered = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
         for k in registered:
             InitPassThroughEndpointHelpers.remove_endpoint_routes(k.split(":")[0])
 
@@ -2989,8 +2932,7 @@ def test_provider_name_substring_not_classified_as_llm_route(route):
     from litellm.proxy.auth.route_checks import RouteChecks
 
     assert RouteChecks.is_llm_api_route(route=route) is False, (
-        f"{route!r} should NOT be classified as an LLM API route — "
-        "provider-name substring match bypass"
+        f"{route!r} should NOT be classified as an LLM API route — provider-name substring match bypass"
     )
 
 
@@ -3012,9 +2954,7 @@ def test_legitimate_passthrough_routes_still_classified_as_llm_route(route):
     """Legitimate passthrough routes must still pass is_llm_api_route."""
     from litellm.proxy.auth.route_checks import RouteChecks
 
-    assert (
-        RouteChecks.is_llm_api_route(route=route) is True
-    ), f"{route!r} should be classified as an LLM API route"
+    assert RouteChecks.is_llm_api_route(route=route) is True, f"{route!r} should be classified as an LLM API route"
 
 
 @pytest.mark.parametrize(

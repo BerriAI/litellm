@@ -35,9 +35,7 @@ def test_budget_fallback_reroutes_anthropic_messages_to_openai(
     served_by = None
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
-        result = client.messages(
-            key, PRIMARY_MODEL, f"hi {unique_marker()}", max_tokens=16
-        )
+        result = client.messages(key, PRIMARY_MODEL, f"hi {unique_marker()}", max_tokens=16)
         if not result.ok:
             pytest.fail(
                 "budget_fallbacks must reroute transparently, never surface a "

@@ -5,9 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
 def test_qdrant_semantic_cache_initialization(monkeypatch):
@@ -17,12 +15,9 @@ def test_qdrant_semantic_cache_initialization(monkeypatch):
     """
     # Mock the httpx clients and API calls
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -77,12 +72,9 @@ def test_qdrant_semantic_cache_get_cache_hit():
     Verifies that cached results are properly retrieved and parsed.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -120,20 +112,14 @@ def test_qdrant_semantic_cache_get_cache_hit():
         qdrant_cache.sync_client.post = MagicMock(return_value=mock_search_response)
 
         # Mock the embedding function
-        with patch(
-            "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]}
-        ):
+        with patch("litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]}):
             # Test get_cache with a message
-            result = qdrant_cache.get_cache(
-                key="test_key", messages=[{"content": "What is the capital of France?"}]
-            )
+            result = qdrant_cache.get_cache(key="test_key", messages=[{"content": "What is the capital of France?"}])
 
             # Verify result is properly parsed
             expected_result = {
                 "id": "test-123",
-                "choices": [
-                    {"message": {"content": "Paris is the capital of France."}}
-                ],
+                "choices": [{"message": {"content": "Paris is the capital of France."}}],
             }
             assert result == expected_result
 
@@ -157,12 +143,9 @@ def test_qdrant_semantic_cache_rejects_unscoped_cache_hit():
     safely migrated to a generated LiteLLM cache key.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"result": {"exists": True}}
@@ -195,9 +178,7 @@ def test_qdrant_semantic_cache_rejects_unscoped_cache_hit():
         }
         qdrant_cache.sync_client.post = MagicMock(return_value=mock_search_response)
 
-        with patch(
-            "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]}
-        ):
+        with patch("litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]}):
             metadata = {}
             result = qdrant_cache.get_cache(
                 key="test_key",
@@ -269,9 +250,7 @@ def test_qdrant_semantic_cache_get_cache_sets_metadata_on_empty_miss(qdrant_resu
     qdrant_cache, _ = _mock_qdrant_get_cache_result(qdrant_result)
     metadata = {}
 
-    with patch(
-        "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]}
-    ):
+    with patch("litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]}):
         result = qdrant_cache.get_cache(
             key="test_key",
             messages=[{"content": "What is the capital of Spain?"}],
@@ -299,9 +278,7 @@ def test_qdrant_semantic_cache_get_cache_sets_metadata_on_below_threshold_miss()
     )
     metadata = {}
 
-    with patch(
-        "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]}
-    ):
+    with patch("litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]}):
         result = qdrant_cache.get_cache(
             key="test_key",
             messages=[{"content": "What is the capital of Spain?"}],
@@ -318,12 +295,9 @@ def test_qdrant_semantic_cache_get_cache_miss():
     Verifies that None is returned when no similar cached results are found.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -350,13 +324,9 @@ def test_qdrant_semantic_cache_get_cache_miss():
         qdrant_cache.sync_client.post = MagicMock(return_value=mock_search_response)
 
         # Mock the embedding function
-        with patch(
-            "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]}
-        ):
+        with patch("litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]}):
             # Test get_cache with a message
-            result = qdrant_cache.get_cache(
-                key="test_key", messages=[{"content": "What is the capital of Spain?"}]
-            )
+            result = qdrant_cache.get_cache(key="test_key", messages=[{"content": "What is the capital of Spain?"}])
 
             # Verify None is returned for cache miss
             assert result is None
@@ -372,14 +342,9 @@ async def test_qdrant_semantic_cache_async_get_cache_hit():
     Verifies that cached results are properly retrieved and parsed asynchronously.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
-        patch(
-            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-        ) as mock_async_client,
+        patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_async_client,
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -436,17 +401,13 @@ async def test_qdrant_semantic_cache_async_get_cache_hit():
             # Verify result is properly parsed
             expected_result = {
                 "id": "test-456",
-                "choices": [
-                    {"message": {"content": "Madrid is the capital of Spain."}}
-                ],
+                "choices": [{"message": {"content": "Madrid is the capital of Spain."}}],
             }
             assert result == expected_result
 
             # Verify async search was called
             qdrant_cache.async_client.post.assert_called()
-            assert qdrant_cache.async_client.post.call_args.kwargs["json"][
-                "filter"
-            ] == {
+            assert qdrant_cache.async_client.post.call_args.kwargs["json"]["filter"] == {
                 "must": [
                     {
                         "key": QdrantSemanticCache.CACHE_KEY_FIELD_NAME,
@@ -463,14 +424,9 @@ async def test_qdrant_semantic_cache_async_get_cache_miss():
     Verifies that None is returned when no similar cached results are found.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
-        patch(
-            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-        ) as mock_async_client,
+        patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_async_client,
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -525,12 +481,9 @@ def test_qdrant_semantic_cache_set_cache():
     Verifies that responses are properly stored in the cache.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -562,9 +515,7 @@ def test_qdrant_semantic_cache_set_cache():
         }
 
         # Mock the embedding function
-        with patch(
-            "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.1, 0.1]}]}
-        ):
+        with patch("litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.1, 0.1]}]}):
             # Test set_cache
             qdrant_cache.set_cache(
                 key="test_key",
@@ -574,12 +525,8 @@ def test_qdrant_semantic_cache_set_cache():
 
             # Verify upsert was called
             qdrant_cache.sync_client.put.assert_called()
-            upsert_payload = qdrant_cache.sync_client.put.call_args.kwargs["json"][
-                "points"
-            ][0]["payload"]
-            assert (
-                upsert_payload[QdrantSemanticCache.CACHE_KEY_FIELD_NAME] == "test_key"
-            )
+            upsert_payload = qdrant_cache.sync_client.put.call_args.kwargs["json"]["points"][0]["payload"]
+            assert upsert_payload[QdrantSemanticCache.CACHE_KEY_FIELD_NAME] == "test_key"
 
 
 @pytest.mark.asyncio
@@ -589,14 +536,9 @@ async def test_qdrant_semantic_cache_async_set_cache():
     Verifies that responses are properly stored in the cache asynchronously.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
-        patch(
-            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-        ) as mock_async_client,
+        patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_async_client,
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -646,12 +588,8 @@ async def test_qdrant_semantic_cache_async_set_cache():
 
             # Verify async upsert was called
             qdrant_cache.async_client.put.assert_called()
-            upsert_payload = qdrant_cache.async_client.put.call_args.kwargs["json"][
-                "points"
-            ][0]["payload"]
-            assert (
-                upsert_payload[QdrantSemanticCache.CACHE_KEY_FIELD_NAME] == "test_key"
-            )
+            upsert_payload = qdrant_cache.async_client.put.call_args.kwargs["json"]["points"][0]["payload"]
+            assert upsert_payload[QdrantSemanticCache.CACHE_KEY_FIELD_NAME] == "test_key"
 
 
 def test_qdrant_semantic_cache_custom_vector_size():
@@ -661,12 +599,9 @@ def test_qdrant_semantic_cache_custom_vector_size():
     creation payload instead of the default 1536.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection does NOT exist (so it will be created)
         mock_exists_response = MagicMock()
         mock_exists_response.status_code = 200
@@ -708,8 +643,7 @@ def test_qdrant_semantic_cache_custom_vector_size():
         put_call = next(
             call
             for call in mock_sync_client_instance.put.call_args_list
-            if call.kwargs["url"]
-            == "http://test.qdrant.local/collections/test_collection_768"
+            if call.kwargs["url"] == "http://test.qdrant.local/collections/test_collection_768"
         )
         create_payload = put_call.kwargs["json"]
         assert create_payload["vectors"]["size"] == 768
@@ -722,12 +656,9 @@ def test_qdrant_semantic_cache_default_vector_size():
     is not provided, and stores it as self.vector_size.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -758,12 +689,9 @@ def test_qdrant_semantic_cache_large_vector_size():
     for models like Stella, bge-en-icl, etc.
     """
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection does NOT exist (so it will be created)
         mock_exists_response = MagicMock()
         mock_exists_response.status_code = 200
@@ -802,8 +730,7 @@ def test_qdrant_semantic_cache_large_vector_size():
         put_call = next(
             call
             for call in mock_sync_client_instance.put.call_args_list
-            if call.kwargs["url"]
-            == "http://test.qdrant.local/collections/test_collection_4096"
+            if call.kwargs["url"] == "http://test.qdrant.local/collections/test_collection_4096"
         )
         create_payload = put_call.kwargs["json"]
         assert create_payload["vectors"]["size"] == 4096
@@ -832,9 +759,7 @@ def test_qdrant_sync_get_cache_routes_through_router(monkeypatch):
     cache.sync_client.post.return_value = search_response
 
     router = MagicMock()
-    router.embedding = MagicMock(
-        return_value={"data": [{"embedding": [0.3, 0.3, 0.3]}]}
-    )
+    router.embedding = MagicMock(return_value={"data": [{"embedding": [0.3, 0.3, 0.3]}]})
     monkeypatch.setitem(
         sys.modules,
         "litellm.proxy.proxy_server",
@@ -872,9 +797,7 @@ def test_qdrant_sync_set_cache_falls_back_to_direct(monkeypatch):
     fake_proxy.llm_model_list = None
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy)
 
-    with patch(
-        "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.1, 0.1]}]}
-    ) as direct_embed:
+    with patch("litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.1, 0.1]}]}) as direct_embed:
         cache.set_cache(
             key="test_key",
             value={"content": "Paris"},

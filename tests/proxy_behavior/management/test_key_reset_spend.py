@@ -44,9 +44,7 @@ _SCENARIOS = [
 
 async def _seed_target(proxy_client, seeder, prefix, world, shape, caller) -> str:
     if shape == "self":
-        return await create_scratch_key(
-            proxy_client, seeder, prefix, user_id=caller.user_id
-        )
+        return await create_scratch_key(proxy_client, seeder, prefix, user_id=caller.user_id)
     if shape == "team_alpha":
         return await create_scratch_key(
             proxy_client,
@@ -82,22 +80,16 @@ async def test_key_reset_spend_authz_matrix(
 ):
     caller = world.keys[actor]
     seeder = world.keys[Actor.PROXY_ADMIN].cleartext
-    target = await _seed_target(
-        proxy_client, seeder, scratch.prefix, world, shape, caller
-    )
+    target = await _seed_target(proxy_client, seeder, scratch.prefix, world, shape, caller)
     hashed = hash_token(target)
-    await prisma.db.litellm_verificationtoken.update(
-        where={"token": hashed}, data={"spend": _SEED_SPEND}
-    )
+    await prisma.db.litellm_verificationtoken.update(where={"token": hashed}, data={"spend": _SEED_SPEND})
 
     resp = await proxy_client.post(
         f"/key/{target}/reset_spend",
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"reset_to": _RESET_TO},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value} {shape}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value} {shape}: {resp.status_code} {resp.text}"
 
     row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": hashed})
     assert row is not None
@@ -107,9 +99,7 @@ async def test_key_reset_spend_authz_matrix(
         assert row.spend == _SEED_SPEND, "denied but spend reset"
 
 
-@pytest.mark.parametrize(
-    "actor", [Actor.PROXY_ADMIN, Actor.TEAM_ADMIN], ids=["proxy_admin", "team_admin"]
-)
+@pytest.mark.parametrize("actor", [Actor.PROXY_ADMIN, Actor.TEAM_ADMIN], ids=["proxy_admin", "team_admin"])
 async def test_key_reset_spend_missing_key_is_404(actor: Actor, proxy_client, world):
     """A well-formed but unseeded key is 404 before any spend validation."""
     resp = await proxy_client.post(
@@ -120,14 +110,10 @@ async def test_key_reset_spend_missing_key_is_404(actor: Actor, proxy_client, wo
     assert resp.status_code == 404, resp.text
 
 
-async def test_key_reset_spend_above_current_spend_is_400(
-    proxy_client, prisma, scratch, world
-):
+async def test_key_reset_spend_above_current_spend_is_400(proxy_client, prisma, scratch, world):
     """reset_to above the key's current spend is rejected 400."""
     admin = world.keys[Actor.PROXY_ADMIN]
-    target = await create_scratch_key(
-        proxy_client, admin.cleartext, scratch.prefix, user_id=admin.user_id
-    )
+    target = await create_scratch_key(proxy_client, admin.cleartext, scratch.prefix, user_id=admin.user_id)
     resp = await proxy_client.post(
         f"/key/{target}/reset_spend",
         headers={"Authorization": f"Bearer {admin.cleartext}"},

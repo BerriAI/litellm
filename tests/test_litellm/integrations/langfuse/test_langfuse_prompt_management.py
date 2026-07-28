@@ -13,9 +13,7 @@ class TestLangfusePromptManagement:
         # This also prevents test-ordering issues when earlier tests remove sys.modules["langfuse"].
         self._mock_langfuse = MagicMock()
         self._mock_langfuse.version.__version__ = "3.0.0"
-        self._langfuse_patcher = patch.dict(
-            "sys.modules", {"langfuse": self._mock_langfuse}
-        )
+        self._langfuse_patcher = patch.dict("sys.modules", {"langfuse": self._mock_langfuse})
         self._langfuse_patcher.start()
 
     def teardown_method(self):
@@ -27,9 +25,7 @@ class TestLangfusePromptManagement:
             patch.object(
                 langfuse_prompt_management, "should_run_prompt_management"
             ) as mock_should_run_prompt_management,
-            patch.object(
-                langfuse_prompt_management, "_get_prompt_from_id"
-            ) as mock_get_prompt_from_id,
+            patch.object(langfuse_prompt_management, "_get_prompt_from_id") as mock_get_prompt_from_id,
         ):
             mock_should_run_prompt_management.return_value = True
             langfuse_prompt_management.get_chat_completion_prompt(
@@ -47,9 +43,7 @@ class TestLangfusePromptManagement:
 
     def test_log_failure_event_runs_async_logger(self):
         langfuse_prompt_management = LangfusePromptManagement()
-        with patch(
-            "litellm.integrations.langfuse.langfuse_prompt_management.run_async_function"
-        ) as mock_run_async:
+        with patch("litellm.integrations.langfuse.langfuse_prompt_management.run_async_function") as mock_run_async:
             kwargs = {"standard_callback_dynamic_params": {}}
             start_time, end_time = 1, 2
 
@@ -61,10 +55,7 @@ class TestLangfusePromptManagement:
             )
 
             mock_run_async.assert_called_once()
-            assert (
-                mock_run_async.call_args[0][0]
-                == langfuse_prompt_management.async_log_failure_event
-            )
+            assert mock_run_async.call_args[0][0] == langfuse_prompt_management.async_log_failure_event
 
     def test_langfuse_client_init_passes_dedicated_httpx_client(self):
         import httpx

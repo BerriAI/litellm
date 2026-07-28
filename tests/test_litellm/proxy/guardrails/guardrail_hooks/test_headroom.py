@@ -1553,8 +1553,6 @@ async def test_apply_guardrail_litellm_timeout_fail_open_forwards_uncompressed()
     assert result["structured_messages"] == ORIGINAL_MESSAGES
 
 
-
-
 # ---------------------------------------------------------------------------
 # Content-parts flattening (LIT-4795)
 #

@@ -17,9 +17,7 @@ import pytest
 
 @pytest.fixture(scope="module")
 def model_data():
-    json_path = os.path.join(
-        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
-    )
+    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
     with open(json_path) as f:
         return json.load(f)
 
@@ -34,14 +32,9 @@ HAIKU_USGOV_KEYS = [
 def test_usgov_haiku_4_5_1hr_cache_write(model_data, model_key):
     assert model_key in model_data, f"Missing model entry: {model_key}"
     info = model_data[model_key]
-    assert (
-        info["cache_creation_input_token_cost"] == 1.5e-06
-    ), f"{model_key}: 5m cache write should be $1.50/MTok"
-    assert (
-        info["cache_creation_input_token_cost_above_1hr"] == 2.4e-06
-    ), f"{model_key}: 1h cache write should be $2.40/MTok"
-    ratio = (
-        info["cache_creation_input_token_cost_above_1hr"]
-        / info["cache_creation_input_token_cost"]
+    assert info["cache_creation_input_token_cost"] == 1.5e-06, f"{model_key}: 5m cache write should be $1.50/MTok"
+    assert info["cache_creation_input_token_cost_above_1hr"] == 2.4e-06, (
+        f"{model_key}: 1h cache write should be $2.40/MTok"
     )
+    ratio = info["cache_creation_input_token_cost_above_1hr"] / info["cache_creation_input_token_cost"]
     assert abs(ratio - 1.6) < 1e-9, f"{model_key}: 1h/5m ratio is {ratio}, expected 1.6"

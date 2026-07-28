@@ -7,9 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os, io
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest, uuid
 from litellm.utils import function_setup, Rules
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -80,9 +78,7 @@ def test_thought_signature_removal_for_non_gemini():
     processed_messages = kwargs["messages"]
     assert processed_messages[1]["tool_calls"][0]["id"] == "call_123"
     assert processed_messages[2]["tool_call_id"] == "call_123"
-    assert (
-        THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[1]["tool_calls"][0]["id"]
-    )
+    assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[1]["tool_calls"][0]["id"]
     assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[2]["tool_call_id"]
 
 

@@ -76,9 +76,7 @@ class TestContainerRouter:
         mock_handler.container_list_handler.return_value = mock_response
 
         # Call the list_containers function with mock response
-        result = litellm.list_containers(
-            custom_llm_provider="openai", mock_response=mock_response
-        )
+        result = litellm.list_containers(custom_llm_provider="openai", mock_response=mock_response)
 
         # Verify the result is a ContainerListResponse with the expected data
         assert result.object == "list"
@@ -194,9 +192,7 @@ class TestContainerRouter:
         mock_handler.container_list_handler.return_value = mock_response
 
         # Call the async list_containers function with mock response
-        result = await litellm.alist_containers(
-            custom_llm_provider="openai", mock_response=mock_response
-        )
+        result = await litellm.alist_containers(custom_llm_provider="openai", mock_response=mock_response)
 
         # Verify the result is a ContainerListResponse with the expected data
         assert result.object == "list"

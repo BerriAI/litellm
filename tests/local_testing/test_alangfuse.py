@@ -26,9 +26,7 @@ import pytest
 def langfuse_client():
     import langfuse
 
-    _langfuse_cache_key = (
-        f"{os.environ['LANGFUSE_PUBLIC_KEY']}-{os.environ['LANGFUSE_SECRET_KEY']}"
-    )
+    _langfuse_cache_key = f"{os.environ['LANGFUSE_PUBLIC_KEY']}-{os.environ['LANGFUSE_SECRET_KEY']}"
     # use a in memory langfuse client for testing, RAM util on ci/cd gets too high when we init many langfuse clients
 
     _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_langfuse_cache_key)
@@ -47,9 +45,7 @@ def langfuse_client():
 
         print("NEW LANGFUSE CLIENT")
 
-    with patch(
-        "langfuse.Langfuse", MagicMock(return_value=langfuse_client)
-    ) as mock_langfuse_client:
+    with patch("langfuse.Langfuse", MagicMock(return_value=langfuse_client)) as mock_langfuse_client:
         yield mock_langfuse_client()
 
 
@@ -89,11 +85,7 @@ def search_logs(log_file_path, num_good_logs=1):
                     if match:
                         status_code = int(match.group(1))
                         print("STATUS CODE", status_code)
-                        if (
-                            status_code != 200
-                            and status_code != 201
-                            and status_code != 207
-                        ):
+                        if status_code != 200 and status_code != 201 and status_code != 207:
                             print("got a BAD log")
                             bad_logs.append(line.strip())
                         else:
@@ -102,9 +94,9 @@ def search_logs(log_file_path, num_good_logs=1):
         print(bad_logs)
         if len(bad_logs) > 0:
             raise Exception(f"bad logs, Bad logs = {bad_logs}")
-        assert (
-            len(good_logs) == num_good_logs
-        ), f"Did not get expected number of good logs, expected {num_good_logs}, got {len(good_logs)}. All logs \n {all_logs}"
+        assert len(good_logs) == num_good_logs, (
+            f"Did not get expected number of good logs, expected {num_good_logs}, got {len(good_logs)}. All logs \n {all_logs}"
+        )
         print("\nGood Logs")
         print(good_logs)
         if len(good_logs) <= 0:
@@ -238,15 +230,11 @@ async def test_langfuse_logging_without_request_response(stream, langfuse_client
 
         _trace_data = trace.data
 
-        if (
-            len(_trace_data) == 0
-        ):  # prevent infrequent list index out of range error from langfuse api
+        if len(_trace_data) == 0:  # prevent infrequent list index out of range error from langfuse api
             return
 
         print(f"_trace_data: {_trace_data}")
-        assert _trace_data[0].input == {
-            "messages": [{"content": "redacted-by-litellm", "role": "user"}]
-        }
+        assert _trace_data[0].input == {"messages": [{"content": "redacted-by-litellm", "role": "user"}]}
         assert _trace_data[0].output == {
             "role": "assistant",
             "content": "redacted-by-litellm",
@@ -269,9 +257,7 @@ audio_file = open(file_path, "rb")
 
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=4, delay=2)
-@pytest.mark.skip(
-    reason="langfuse now takes 5-10 mins to get this trace. Need to figure out how to test this"
-)
+@pytest.mark.skip(reason="langfuse now takes 5-10 mins to get this trace. Need to figure out how to test this")
 async def test_langfuse_logging_audio_transcriptions(langfuse_client):
     """
     Test that creates a trace with masked input and output
@@ -295,9 +281,7 @@ async def test_langfuse_logging_audio_transcriptions(langfuse_client):
     # get trace with _unique_trace_name
     print("lookiing up trace", _unique_trace_name)
     trace = langfuse_client.get_trace(id=_unique_trace_name)
-    generations = list(
-        reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data)
-    )
+    generations = list(reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data))
 
     print("generations for given trace=", generations)
 
@@ -307,9 +291,7 @@ async def test_langfuse_logging_audio_transcriptions(langfuse_client):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="langfuse now takes 5-10 mins to get this trace. Need to figure out how to test this"
-)
+@pytest.mark.skip(reason="langfuse now takes 5-10 mins to get this trace. Need to figure out how to test this")
 async def test_langfuse_masked_input_output(langfuse_client):
     """
     Test that creates a trace with masked input and output
@@ -332,18 +314,14 @@ async def test_langfuse_masked_input_output(langfuse_client):
         )
         print(response)
         expected_input = "redacted-by-litellm" if mask_value else "This is a test"
-        expected_output = (
-            "redacted-by-litellm" if mask_value else "This is a test response"
-        )
+        expected_output = "redacted-by-litellm" if mask_value else "This is a test response"
         langfuse_client.flush()
         await asyncio.sleep(30)
 
         # get trace with _unique_trace_name
         trace = langfuse_client.get_trace(id=_unique_trace_name)
         print("trace_from_langfuse", trace)
-        generations = list(
-            reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data)
-        )
+        generations = list(reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data))
 
         assert expected_input in str(trace.input)
         assert expected_output in str(trace.output)
@@ -409,14 +387,12 @@ async def test_aaalangfuse_logging_metadata(langfuse_client):
             1, trace_num + 1
         ):  # Each trace has a number of generations equal to its trace number
             metadata["trace_user_id"] = f"litellm-test-user{generation_num}-{run_id}"
-            generation_id = (
-                f"litellm-test-trace{trace_num}-generation-{generation_num}-{run_id}"
-            )
+            generation_id = f"litellm-test-trace{trace_num}-generation-{generation_num}-{run_id}"
             metadata["generation_id"] = generation_id
             metadata["generation_name"] = generation_id
-            metadata["trace_metadata"][
-                "generation_id"
-            ] = generation_id  # Update to test if trace_metadata is overwritten by update trace keys
+            metadata["trace_metadata"]["generation_id"] = (
+                generation_id  # Update to test if trace_metadata is overwritten by update trace keys
+            )
             trace_identifiers[trace_id].append(generation_id)
             print(f"Generation: {generation_id}")
             response = await create_async_task(
@@ -452,13 +428,9 @@ async def test_aaalangfuse_logging_metadata(langfuse_client):
         assert trace.id == trace_id
         assert trace.session_id == session_id
         assert trace.metadata != trace_metadata
-        generations = list(
-            reversed(langfuse_client.get_generations(trace_id=trace_id).data)
-        )
+        generations = list(reversed(langfuse_client.get_generations(trace_id=trace_id).data))
         assert len(generations) == len(generation_ids)
-        assert (
-            trace.input == generations[0].input
-        )  # Should be set by the first generation
+        assert trace.input == generations[0].input  # Should be set by the first generation
         assert (
             trace.output == generations[-1].output
         )  # Should be overwritten by the last generation according to update_trace_keys
@@ -473,14 +445,10 @@ async def test_aaalangfuse_logging_metadata(langfuse_client):
             assert generation.trace_id == trace_id
             print(
                 "common keys in trace",
-                set(generation.metadata.keys()).intersection(
-                    expected_filtered_metadata_keys
-                ),
+                set(generation.metadata.keys()).intersection(expected_filtered_metadata_keys),
             )
 
-            assert set(generation.metadata.keys()).isdisjoint(
-                expected_filtered_metadata_keys
-            )
+            assert set(generation.metadata.keys()).isdisjoint(expected_filtered_metadata_keys)
             print("generation_from_langfuse", generation)
 
 
@@ -609,17 +577,11 @@ def test_langfuse_logging_tool_calling():
     def get_current_weather(location, unit="fahrenheit"):
         """Get the current weather in a given location"""
         if "tokyo" in location.lower():
-            return json.dumps(
-                {"location": "Tokyo", "temperature": "10", "unit": "celsius"}
-            )
+            return json.dumps({"location": "Tokyo", "temperature": "10", "unit": "celsius"})
         elif "san francisco" in location.lower():
-            return json.dumps(
-                {"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}
-            )
+            return json.dumps({"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"})
         elif "paris" in location.lower():
-            return json.dumps(
-                {"location": "Paris", "temperature": "22", "unit": "celsius"}
-            )
+            return json.dumps({"location": "Paris", "temperature": "22", "unit": "celsius"})
         else:
             return json.dumps({"location": location, "temperature": "unknown"})
 
@@ -683,9 +645,7 @@ def get_langfuse_prompt(name: str):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="local only test, use this to verify if we can send request to litellm proxy server"
-)
+@pytest.mark.skip(reason="local only test, use this to verify if we can send request to litellm proxy server")
 async def test_make_request():
     response = await litellm.acompletion(
         model="openai/llama3",

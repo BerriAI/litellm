@@ -12,9 +12,7 @@ class TestGetFileContentsFromS3:
     @patch("boto3.client")
     @patch("litellm.main.bedrock_converse_chat_completion")
     @patch("yaml.safe_load")
-    def test_get_file_contents_from_s3_no_temp_file_creation(
-        self, mock_yaml_load, mock_bedrock, mock_boto3_client
-    ):
+    def test_get_file_contents_from_s3_no_temp_file_creation(self, mock_yaml_load, mock_bedrock, mock_boto3_client):
         """
         Test that get_file_contents_from_s3 doesn't create temporary files
         and uses yaml.safe_load directly on the S3 response content.
@@ -74,9 +72,7 @@ class TestGetFileContentsFromS3:
         )
 
         # Verify S3 get_object was called with correct parameters
-        mock_s3_client.get_object.assert_called_once_with(
-            Bucket=bucket_name, Key=object_key
-        )
+        mock_s3_client.get_object.assert_called_once_with(Bucket=bucket_name, Key=object_key)
 
         # Verify the response body was read and decoded
         mock_response_body.read.assert_called_once()

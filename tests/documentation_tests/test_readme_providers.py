@@ -100,10 +100,7 @@ def get_readme_provider_names():
                     if match:
                         provider_name = match.group(1)
                         # Skip header row and separator row
-                        if (
-                            provider_name != "Provider"
-                            and not provider_name.startswith("-")
-                        ):
+                        if provider_name != "Provider" and not provider_name.startswith("-"):
                             provider_names.append(provider_name)
         else:
             raise Exception("Could not find 'Supported Providers' section in README.md")
@@ -139,9 +136,7 @@ def test_all_providers_documented():
             f"Example: [Provider Name (`slug`)](url)"
         )
     else:
-        print(
-            f"\n✓ All {len(enum_providers)} provider slugs are documented in README.md"
-        )
+        print(f"\n✓ All {len(enum_providers)} provider slugs are documented in README.md")
 
 
 def test_providers_alphabetically_ordered():
@@ -162,9 +157,7 @@ def test_providers_alphabetically_ordered():
     out_of_order = []
     for i, (actual, expected) in enumerate(zip(provider_names, sorted_names)):
         if actual != expected:
-            out_of_order.append(
-                {"position": i + 1, "actual": actual, "expected": expected}
-            )
+            out_of_order.append({"position": i + 1, "actual": actual, "expected": expected})
 
     if out_of_order:
         error_msg = "\nProviders are not in alphabetical order:\n"

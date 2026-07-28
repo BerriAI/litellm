@@ -4,13 +4,13 @@
 
 
     Invalid Permissions:
-    - User tries creating a key with team_id = team_id -> expect to fail. Invalid Permissions 
-    - User tries editing a key with team_id = team_id -> expect to fail. Invalid Permissions 
-    - User tries deleting a key with team_id = team_id -> expect to fail. Invalid Permissions 
-    - User tries regenerating a key with team_id = team_id -> expect to fail. Invalid Permissions 
+    - User tries creating a key with team_id = team_id -> expect to fail. Invalid Permissions
+    - User tries editing a key with team_id = team_id -> expect to fail. Invalid Permissions
+    - User tries deleting a key with team_id = team_id -> expect to fail. Invalid Permissions
+    - User tries regenerating a key with team_id = team_id -> expect to fail. Invalid Permissions
 
     Valid Permissions:
-    - User tries calling /key/info with team_id, expect to get valid response 
+    - User tries calling /key/info with team_id, expect to get valid response
 
 
 
@@ -26,7 +26,7 @@
 
     Invalid Permissions:
     - User tries creating a key with team_id = team_id -> expect to fail. Invalid Permissions
-    - User tries calling /key/info with team_id, expect to get valid response 
+    - User tries calling /key/info with team_id, expect to get valid response
 
 
 
@@ -232,9 +232,7 @@ async def test_default_member_permissions():
         team_id = team_data["team_id"]
 
         # create a team key
-        team_key_data = await generate_key(
-            session=session, key=master_key, team_id=team_id
-        )
+        team_key_data = await generate_key(session=session, key=master_key, team_id=team_id)
         team_key = team_key_data["key"]
 
         # create a user
@@ -250,75 +248,61 @@ async def test_default_member_permissions():
         print("New user data: ", user_data)
 
         # Create a user key
-        user_key_data = await generate_key(
-            session=session, key=master_key, user_id=user_id
-        )
+        user_key_data = await generate_key(session=session, key=master_key, user_id=user_id)
         print("new user key: ", user_key_data)
         user_key = user_key_data["key"]
 
         # Test invalid permissions
         # User tries creating a key with team_id
-        print(
-            "Regular team member trying to create a key with team_id. Expecting error."
-        )
-        create_result = await generate_key(
-            session=session, key=user_key, team_id=team_id
-        )
+        print("Regular team member trying to create a key with team_id. Expecting error.")
+        create_result = await generate_key(session=session, key=user_key, team_id=team_id)
         print("result: ", create_result)
-        assert (
-            "status" in create_result and create_result["status"] == 401
-        ), "User should not be able to create keys for team"
+        assert "status" in create_result and create_result["status"] == 401, (
+            "User should not be able to create keys for team"
+        )
         error_data = json.loads(create_result["error"])
         print("error response =", json.dumps(error_data, indent=4))
-        assert (
-            error_data["error"]["type"]
-            == ProxyErrorTypes.team_member_permission_error.value
-        ), "Error should be a team member permission error"
+        assert error_data["error"]["type"] == ProxyErrorTypes.team_member_permission_error.value, (
+            "Error should be a team member permission error"
+        )
 
         # User tries editing a key with team_id
         print("Regular team member trying to edit a key with team_id. Expecting error.")
-        update_result = await update_key(
-            session=session, key=user_key, key_id=team_key, team_id="ATTACKER_TEAM_ID"
+        update_result = await update_key(session=session, key=user_key, key_id=team_key, team_id="ATTACKER_TEAM_ID")
+        assert "status" in update_result and update_result["status"] == 401, (
+            "User should not be able to update keys for team"
         )
-        assert (
-            "status" in update_result and update_result["status"] == 401
-        ), "User should not be able to update keys for team"
         error_data = json.loads(update_result["error"])
         print("error response =", json.dumps(error_data, indent=4))
-        assert (
-            error_data["error"]["type"]
-            == ProxyErrorTypes.team_member_permission_error.value
-        ), "Error should be a team member permission error"
+        assert error_data["error"]["type"] == ProxyErrorTypes.team_member_permission_error.value, (
+            "Error should be a team member permission error"
+        )
 
         # User tries deleting a key with team_id
-        print(
-            "Regular team member trying to delete a key with team_id. Expecting error."
-        )
+        print("Regular team member trying to delete a key with team_id. Expecting error.")
         delete_result = await delete_key(
             session=session,
             key=user_key,
             key_id=team_key,
         )
-        assert (
-            "status" in delete_result and delete_result["status"] == 403
-        ), "User should not be able to delete keys for team"
+        assert "status" in delete_result and delete_result["status"] == 403, (
+            "User should not be able to delete keys for team"
+        )
         error_data = json.loads(delete_result["error"])
         print("error response =", json.dumps(error_data, indent=4))
         # Delete endpoint now returns 403 with authorization error, not team_member_permission_error
         assert "error" in error_data, "Error should contain error field"
 
         # User tries regenerating a key with team_id
-        print(
-            "Regular team member trying to regenerate a key with team_id. Expecting error."
-        )
+        print("Regular team member trying to regenerate a key with team_id. Expecting error.")
         regenerate_result = await regenerate_key(
             session=session,
             key=user_key,
             key_id=team_key,
         )
-        assert (
-            "status" in regenerate_result and regenerate_result["status"] == 401
-        ), "User should not be able to regenerate keys for team"
+        assert "status" in regenerate_result and regenerate_result["status"] == 401, (
+            "User should not be able to regenerate keys for team"
+        )
         error_data = json.loads(regenerate_result["error"])
         print("error response =", json.dumps(error_data, indent=4))
         # Regenerate endpoint now returns 403 with authorization error, not team_member_permission_error
@@ -326,9 +310,7 @@ async def test_default_member_permissions():
 
         # Test valid permissions
         # User tries calling /key/info with team_id
-        print(
-            "Regular team member trying to get key info with team_id. Expecting success."
-        )
+        print("Regular team member trying to get key info with team_id. Expecting success.")
         info_result = await key_info(
             session=session,
             key=user_key,
@@ -368,45 +350,35 @@ async def test_edit_delete_permissions():
         key_id = admin_key_data["key"]
 
         # Create a user key
-        user_key_data = await generate_key(
-            session=session, key=master_key, user_id=user_id
-        )
+        user_key_data = await generate_key(session=session, key=master_key, user_id=user_id)
         user_key = user_key_data["key"]
 
         # Test valid permissions
         # User tries editing a key with team_id
-        update_result = await update_key(
-            session=session, key=user_key, key_id=key_id, team_id=team_id
-        )
-        assert (
-            "status" not in update_result
-        ), "User should be able to update keys for team"
+        update_result = await update_key(session=session, key=user_key, key_id=key_id, team_id=team_id)
+        assert "status" not in update_result, "User should be able to update keys for team"
 
         # User tries deleting a key with team_id
         # Note: Even with /key/delete permission, users can only delete keys they own or if they're team admin
         # The delete endpoint checks ownership/team admin status, not just team member permissions
         delete_result = await delete_key(session=session, key=user_key, key_id=key_id)
-        assert (
-            "status" in delete_result and delete_result["status"] == 403
-        ), "User should not be able to delete keys they don't own (even with /key/delete permission, ownership is required)"
+        assert "status" in delete_result and delete_result["status"] == 403, (
+            "User should not be able to delete keys they don't own (even with /key/delete permission, ownership is required)"
+        )
 
         # Test invalid permissions
         # User tries creating a key with team_id
-        create_result = await generate_key(
-            session=session, key=user_key, team_id=team_id
+        create_result = await generate_key(session=session, key=user_key, team_id=team_id)
+        assert "status" in create_result and create_result["status"] != 200, (
+            "User should not be able to create keys for team"
         )
-        assert (
-            "status" in create_result and create_result["status"] != 200
-        ), "User should not be able to create keys for team"
 
         # User tries regenerating a key with team_id
         # Note: Even with /key/regenerate permission, users can only regenerate keys they own or if they're team admin
-        regenerate_result = await regenerate_key(
-            session=session, key=user_key, key_id=key_id, team_id=team_id
+        regenerate_result = await regenerate_key(session=session, key=user_key, key_id=key_id, team_id=team_id)
+        assert "status" in regenerate_result and regenerate_result["status"] == 401, (
+            "User should not be able to regenerate keys they don't own (even with /key/regenerate permission, ownership is required)"
         )
-        assert (
-            "status" in regenerate_result and regenerate_result["status"] == 401
-        ), "User should not be able to regenerate keys they don't own (even with /key/regenerate permission, ownership is required)"
 
 
 @pytest.mark.asyncio()
@@ -418,9 +390,7 @@ async def test_create_permissions():
         master_key = LITELLM_MASTER_KEY
 
         # Create a team with specific member permissions
-        team_data = await create_team(
-            session=session, key=master_key, member_permissions=["/key/generate"]
-        )
+        team_data = await create_team(session=session, key=master_key, member_permissions=["/key/generate"])
         team_id = team_data["team_id"]
 
         # Create a user in the team
@@ -434,57 +404,42 @@ async def test_create_permissions():
         )
 
         # Generate an admin key for the team
-        admin_key_data = await generate_key(
-            session=session, key=master_key, team_id=team_id
-        )
+        admin_key_data = await generate_key(session=session, key=master_key, team_id=team_id)
         admin_key = admin_key_data["key"]
         key_id = admin_key_data["key"]
 
         # Create a user key
-        user_key_data = await generate_key(
-            session=session, key=master_key, user_id=user_id
-        )
+        user_key_data = await generate_key(session=session, key=master_key, user_id=user_id)
         user_key = user_key_data["key"]
 
         # Test valid permissions
         # User tries creating a key with team_id
-        create_result = await generate_key(
-            session=session, key=user_key, team_id=team_id
-        )
+        create_result = await generate_key(session=session, key=user_key, team_id=team_id)
         print("success, user created key for team=", create_result)
         assert "key" in create_result, "User should be able to create keys for team"
-        assert (
-            create_result["team_id"] == team_id
-        ), "User should be able to create keys for team"
-        assert (
-            "status" not in create_result
-        ), "User should be able to create keys for team"
+        assert create_result["team_id"] == team_id, "User should be able to create keys for team"
+        assert "status" not in create_result, "User should be able to create keys for team"
 
         # Test invalid permissions
         # User tries editing a key with team_id
-        update_result = await update_key(
-            session=session, key=user_key, key_id=key_id, team_id=team_id
+        update_result = await update_key(session=session, key=user_key, key_id=key_id, team_id=team_id)
+        assert "status" in update_result and update_result["status"] != 200, (
+            "User should not be able to update keys for team"
         )
-        assert (
-            "status" in update_result and update_result["status"] != 200
-        ), "User should not be able to update keys for team"
 
         # User tries deleting a key with team_id
         delete_result = await delete_key(session=session, key=user_key, key_id=key_id)
-        assert (
-            "status" in delete_result and delete_result["status"] == 403
-        ), "User should not be able to delete keys for team"
+        assert "status" in delete_result and delete_result["status"] == 403, (
+            "User should not be able to delete keys for team"
+        )
 
         # User tries regenerating a key with team_id
         # User doesn't have /key/regenerate permission, so should get 401 (team member permission error)
-        regenerate_result = await regenerate_key(
-            session=session, key=user_key, key_id=key_id, team_id=team_id
+        regenerate_result = await regenerate_key(session=session, key=user_key, key_id=key_id, team_id=team_id)
+        assert "status" in regenerate_result and regenerate_result["status"] == 401, (
+            "User should not be able to regenerate keys for team (no /key/regenerate permission)"
         )
-        assert (
-            "status" in regenerate_result and regenerate_result["status"] == 401
-        ), "User should not be able to regenerate keys for team (no /key/regenerate permission)"
         error_data = json.loads(regenerate_result["error"])
-        assert (
-            error_data["error"]["type"]
-            == ProxyErrorTypes.team_member_permission_error.value
-        ), "Error should be a team member permission error"
+        assert error_data["error"]["type"] == ProxyErrorTypes.team_member_permission_error.value, (
+            "Error should be a team member permission error"
+        )

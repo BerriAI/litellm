@@ -116,9 +116,7 @@ def test_stream_chunk_builder_counts_prompt_tokens_for_tool_reference():
             model=model,
             object="chat.completion.chunk",
             choices=[
-                StreamingChoices(
-                    finish_reason="stop", index=0, delta=Delta(content="")
-                ),
+                StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="")),
             ],
         ),
     ]
@@ -126,6 +124,4 @@ def test_stream_chunk_builder_counts_prompt_tokens_for_tool_reference():
     response = stream_chunk_builder(chunks, messages=TOOL_SEARCH_MESSAGES)
 
     assert response is not None
-    assert (
-        response.usage.prompt_tokens > 0
-    ), "prompt_tokens collapsed to 0 -> tool-search traffic silently undercounted"
+    assert response.usage.prompt_tokens > 0, "prompt_tokens collapsed to 0 -> tool-search traffic silently undercounted"

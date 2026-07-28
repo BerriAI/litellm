@@ -29,29 +29,16 @@ def find_set_verbose_assignments(file_path):
                         and target.value.id == "litellm"
                         and target.attr == "set_verbose"
                     ):
-
                         # Check if the value being assigned is True
-                        if (
-                            isinstance(node.value, ast.Constant)
-                            and node.value.value is True
-                        ):
+                        if isinstance(node.value, ast.Constant) and node.value.value is True:
                             line_num = node.lineno
-                            line_text = (
-                                content_lines[line_num - 1].strip()
-                                if line_num <= len(content_lines)
-                                else ""
-                            )
+                            line_text = content_lines[line_num - 1].strip() if line_num <= len(content_lines) else ""
                             assignments.append((line_num, line_text))
                         elif (
-                            isinstance(node.value, ast.NameConstant)
-                            and node.value.value is True
+                            isinstance(node.value, ast.NameConstant) and node.value.value is True
                         ):  # For older Python versions
                             line_num = node.lineno
-                            line_text = (
-                                content_lines[line_num - 1].strip()
-                                if line_num <= len(content_lines)
-                                else ""
-                            )
+                            line_text = content_lines[line_num - 1].strip() if line_num <= len(content_lines) else ""
                             assignments.append((line_num, line_text))
 
     return assignments
@@ -132,17 +119,11 @@ def main():
                 total_violations += 1
 
         print(f"\n📊 Total violations found: {total_violations}")
-        print(
-            "\n🚫 REASON: litellm.set_verbose = True should not be hardcoded in production code."
-        )
-        print(
-            "   Instead, use environment variables or configuration files to control verbosity."
-        )
+        print("\n🚫 REASON: litellm.set_verbose = True should not be hardcoded in production code.")
+        print("   Instead, use environment variables or configuration files to control verbosity.")
         print("   Example alternatives:")
         print("   - Use LITELLM_LOG=DEBUG environment variable")
-        print(
-            "   - Use litellm.set_verbose = os.getenv('LITELLM_VERBOSE', 'false').lower() == 'true'"
-        )
+        print("   - Use litellm.set_verbose = os.getenv('LITELLM_VERBOSE', 'false').lower() == 'true'")
         print("   - Use configuration-based verbosity settings")
 
         raise Exception(

@@ -78,9 +78,7 @@ def test_update_router_config_rejects_malformed_model_group_retry_policy():
     """model_group_retry_policy is Dict[str, RetryPolicy], so each per-group
     policy is validated the same way."""
     with pytest.raises(ValidationError):
-        UpdateRouterConfig(
-            model_group_retry_policy={"gpt-4": {"RateLimitErrorRetries": "x"}}
-        )
+        UpdateRouterConfig(model_group_retry_policy={"gpt-4": {"RateLimitErrorRetries": "x"}})
 
 
 # ---------------------------------------------------------------------------
@@ -275,9 +273,7 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
 
     read_back = (
         await proxy_server.get_config(
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
-            )
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234")
         )
     )["router_settings"]["retry_policy"]
     assert read_back.BadRequestErrorRetries == 5

@@ -44,12 +44,8 @@ def _assert_streamed_ok(result: StreamingResponse) -> None:
     assert result.is_streaming, f"response was not streamed: {result.headers}"
     assert not result.stream_error, f"stream errored: {result.stream_error}"
     assert result.stream_events, "stream produced no SSE events"
-    assert any("content_block_delta" in event for event in result.stream_events), (
-        "stream carried no content deltas"
-    )
-    assert any("message_stop" in event for event in result.stream_events), (
-        "stream never reached message_stop"
-    )
+    assert any("content_block_delta" in event for event in result.stream_events), "stream carried no content deltas"
+    assert any("message_stop" in event for event in result.stream_events), "stream never reached message_stop"
     if EXPECT_RUST:
         assert result.headers.get("x-litellm-rust") == "true", (
             "E2E_EXPECT_RUST is set, so this gateway must serve /v1/messages through the "
@@ -60,9 +56,7 @@ def _assert_streamed_ok(result: StreamingResponse) -> None:
 
 
 class TestAzureFoundryMessages:
-    def _register(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> tuple[str, str]:
+    def _register(self, endpoints_client: EndpointsClient, resources: ResourceManager) -> tuple[str, str]:
         model = f"e2e-azure-foundry-messages-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
@@ -76,9 +70,7 @@ class TestAzureFoundryMessages:
         return model, resources.key(models=[model])
 
     @pytest.mark.covers("llm.messages.azure_foundry.basic.nonstream.works")
-    def test_basic_nonstream(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> None:
+    def test_basic_nonstream(self, endpoints_client: EndpointsClient, resources: ResourceManager) -> None:
         model, key = self._register(endpoints_client, resources)
         response = unwrap(
             endpoints_client.proxy.messages(
@@ -95,9 +87,7 @@ class TestAzureFoundryMessages:
         assert text.strip(), f"/v1/messages returned no text: {response}"
 
     @pytest.mark.covers("llm.messages.azure_foundry.basic.stream.works")
-    def test_basic_stream(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> None:
+    def test_basic_stream(self, endpoints_client: EndpointsClient, resources: ResourceManager) -> None:
         model, key = self._register(endpoints_client, resources)
         result = endpoints_client.proxy.messages_stream(
             key,
@@ -111,9 +101,7 @@ class TestAzureFoundryMessages:
         _assert_streamed_ok(result)
 
     @pytest.mark.covers("llm.messages.azure_foundry.tool_use.nonstream.works")
-    def test_tool_use_nonstream(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> None:
+    def test_tool_use_nonstream(self, endpoints_client: EndpointsClient, resources: ResourceManager) -> None:
         model, key = self._register(endpoints_client, resources)
         response = unwrap(
             endpoints_client.proxy.messages(
@@ -122,21 +110,15 @@ class TestAzureFoundryMessages:
                     model=model,
                     max_tokens=256,
                     tools=[WEATHER_TOOL],
-                    messages=[
-                        ChatMessage(role="user", content="What is the weather in Paris? Use the tool.")
-                    ],
+                    messages=[ChatMessage(role="user", content="What is the weather in Paris? Use the tool.")],
                 ),
             )
         )
         assert response.content, f"no content blocks in response: {response}"
-        assert any(block.type == "tool_use" for block in response.content), (
-            f"model did not call the tool: {response}"
-        )
+        assert any(block.type == "tool_use" for block in response.content), f"model did not call the tool: {response}"
 
     @pytest.mark.covers("llm.messages.azure_foundry.tool_use.stream.works")
-    def test_tool_use_stream(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> None:
+    def test_tool_use_stream(self, endpoints_client: EndpointsClient, resources: ResourceManager) -> None:
         model, key = self._register(endpoints_client, resources)
         result = endpoints_client.proxy.messages_stream(
             key,
@@ -145,18 +127,12 @@ class TestAzureFoundryMessages:
                 max_tokens=256,
                 stream=True,
                 tools=[WEATHER_TOOL],
-                messages=[
-                    ChatMessage(role="user", content="What is the weather in Paris? Use the tool.")
-                ],
+                messages=[ChatMessage(role="user", content="What is the weather in Paris? Use the tool.")],
             ),
         )
         require_successful_call(result)
         assert result.is_streaming, f"response was not streamed: {result.headers}"
         assert not result.stream_error, f"stream errored: {result.stream_error}"
         assert result.stream_events, "stream produced no SSE events"
-        assert any("tool_use" in event for event in result.stream_events), (
-            "stream carried no tool_use block"
-        )
-        assert any("message_stop" in event for event in result.stream_events), (
-            "stream never reached message_stop"
-        )
+        assert any("tool_use" in event for event in result.stream_events), "stream carried no tool_use block"
+        assert any("message_stop" in event for event in result.stream_events), "stream never reached message_stop"

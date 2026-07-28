@@ -446,21 +446,15 @@ async def test_id_jag_runs_both_legs_and_returns_the_leg2_bearer():
         ]
     )
     provider = UpstreamCredentialProvider(token_endpoint=endpoint)
-    result = await provider.resolve_credentials(
-        _with_inbound("user-id-token"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(_with_inbound("user-id-token"), _spec(_id_jag_config()))
 
     assert isinstance(result, Ok)
     assert _emitted(result.ok)["Authorization"] == "Bearer final-access"
 
     leg1_endpoint, _, leg1_params = endpoint.calls[0]
     assert leg1_endpoint == "https://idp.example.com/token"
-    assert (
-        leg1_params["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
-    )
-    assert (
-        leg1_params["requested_token_type"] == "urn:ietf:params:oauth:token-type:id-jag"
-    )
+    assert leg1_params["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
+    assert leg1_params["requested_token_type"] == "urn:ietf:params:oauth:token-type:id-jag"
     assert leg1_params["subject_token"] == "user-id-token"
 
     leg2_endpoint, _, leg2_params = endpoint.calls[1]
@@ -474,9 +468,7 @@ async def test_id_jag_runs_both_legs_and_returns_the_leg2_bearer():
 async def test_id_jag_without_inbound_token_is_precondition_required_no_http():
     endpoint = _FakeTokenEndpoint([])
     provider = UpstreamCredentialProvider(token_endpoint=endpoint)
-    result = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "precondition_required"
@@ -485,13 +477,9 @@ async def test_id_jag_without_inbound_token_is_precondition_required_no_http():
 
 @pytest.mark.asyncio
 async def test_id_jag_propagates_a_leg1_error_without_calling_leg2():
-    endpoint = _FakeTokenEndpoint(
-        [Error(CredError.of_upstream_unavailable("leg1 down"))]
-    )
+    endpoint = _FakeTokenEndpoint([Error(CredError.of_upstream_unavailable("leg1 down"))])
     provider = UpstreamCredentialProvider(token_endpoint=endpoint)
-    result = await provider.resolve_credentials(
-        _with_inbound("user-id-token"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(_with_inbound("user-id-token"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
@@ -508,9 +496,7 @@ async def test_id_jag_propagates_a_leg2_error():
         ]
     )
     provider = UpstreamCredentialProvider(token_endpoint=endpoint)
-    result = await provider.resolve_credentials(
-        _with_inbound("user-id-token"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(_with_inbound("user-id-token"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"

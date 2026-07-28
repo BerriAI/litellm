@@ -8,9 +8,7 @@ from fastapi import Request
 from datetime import datetime
 from unittest.mock import AsyncMock, patch, MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from litellm import Router, CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 
@@ -80,9 +78,7 @@ class MyCustomHandler(CustomLogger):
             print("logging a transcript kwargs: ", kwargs)
             print("openai client=", kwargs.get("client"))
             self.openai_client = kwargs.get("client")
-            self.standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object"
-            )
+            self.standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
 
         except Exception:
             pass
@@ -319,9 +315,7 @@ async def test_rerank_endpoint(model_list):
 
 
 @pytest.mark.asyncio()
-@pytest.mark.parametrize(
-    "model", ["omni-moderation-latest", "openai/omni-moderation-latest", None]
-)
+@pytest.mark.parametrize("model", ["omni-moderation-latest", "openai/omni-moderation-latest", None])
 async def test_moderation_endpoint(model):
     litellm.set_verbose = True
     router = Router(
@@ -372,9 +366,7 @@ async def test_moderation_endpoint_with_api_base():
     )
 
     # Mock the OpenAI client to verify api_base is passed
-    with patch(
-        "litellm.main.openai_chat_completions._get_openai_client"
-    ) as mock_get_client:
+    with patch("litellm.main.openai_chat_completions._get_openai_client") as mock_get_client:
         mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.model_dump.return_value = {
@@ -392,16 +384,14 @@ async def test_moderation_endpoint_with_api_base():
         mock_client.moderations.create = AsyncMock(return_value=mock_response)
         mock_get_client.return_value = mock_client
 
-        response = await router.amoderation(
-            model="openai/omni-moderation-latest", input="hello this is a test"
-        )
+        response = await router.amoderation(model="openai/omni-moderation-latest", input="hello this is a test")
 
         # Verify that _get_openai_client was called with the custom api_base
         mock_get_client.assert_called()
         call_kwargs = mock_get_client.call_args.kwargs
-        assert (
-            call_kwargs.get("api_base") == custom_api_base
-        ), f"Expected api_base to be {custom_api_base}, but got {call_kwargs.get('api_base')}"
+        assert call_kwargs.get("api_base") == custom_api_base, (
+            f"Expected api_base to be {custom_api_base}, but got {call_kwargs.get('api_base')}"
+        )
 
         print(f"✓ Moderation endpoint correctly uses api_base: {custom_api_base}")
 
@@ -546,9 +536,7 @@ async def test_aadapter_completion():
     }
 
     # Create a router with a patched _aadapter_completion method
-    with patch.object(
-        Router, "_aadapter_completion", new_callable=AsyncMock
-    ) as mock_method:
+    with patch.object(Router, "_aadapter_completion", new_callable=AsyncMock) as mock_method:
         mock_method.return_value = mock_response
 
         router = Router(
@@ -611,9 +599,7 @@ async def test__aadapter_completion():
     }
 
     # Create a router with a mocked litellm.aadapter_completion
-    with patch(
-        "litellm.aadapter_completion", new_callable=AsyncMock
-    ) as mock_adapter_completion:
+    with patch("litellm.aadapter_completion", new_callable=AsyncMock) as mock_adapter_completion:
         mock_adapter_completion.return_value = mock_response
 
         router = Router(
@@ -734,14 +720,10 @@ async def test_init_responses_api_endpoints():
     router._ageneric_api_call_with_fallbacks = AsyncMock()
 
     # Add a mock implementation of _get_model_id_from_response_id to the Router instance
-    ResponsesAPIRequestUtils.get_model_id_from_response_id = MagicMock(
-        return_value=None
-    )
+    ResponsesAPIRequestUtils.get_model_id_from_response_id = MagicMock(return_value=None)
 
     # Call without a response_id (no model extraction should happen)
-    await router._init_responses_api_endpoints(
-        original_function=AsyncMock(), thread_id="thread_xyz"
-    )
+    await router._init_responses_api_endpoints(original_function=AsyncMock(), thread_id="thread_xyz")
 
     # Verify _ageneric_api_call_with_fallbacks was called but model wasn't changed
     first_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
@@ -752,14 +734,10 @@ async def test_init_responses_api_endpoints():
     router._ageneric_api_call_with_fallbacks.reset_mock()
 
     # Change the return value for the second call
-    ResponsesAPIRequestUtils.get_model_id_from_response_id.return_value = (
-        "claude-3-sonnet"
-    )
+    ResponsesAPIRequestUtils.get_model_id_from_response_id.return_value = "claude-3-sonnet"
 
     # Call with a response_id
-    await router._init_responses_api_endpoints(
-        original_function=AsyncMock(), response_id="resp_claude_123"
-    )
+    await router._init_responses_api_endpoints(original_function=AsyncMock(), response_id="resp_claude_123")
 
     # Verify model was updated in the kwargs
     second_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
@@ -808,9 +786,7 @@ async def test_init_vector_store_api_endpoints():
     )
 
     # Verify custom_llm_provider was added to kwargs
-    mock_original_function.assert_called_once_with(
-        vector_store_id="test-store", custom_llm_provider="openai"
-    )
+    mock_original_function.assert_called_once_with(vector_store_id="test-store", custom_llm_provider="openai")
 
 
 def test_apply_default_settings():
@@ -1213,9 +1189,7 @@ async def test_init_containers_api_endpoints():
         name="Test Container",
     )
 
-    mock_original_function.assert_called_once_with(
-        custom_llm_provider="openai", name="Test Container"
-    )
+    mock_original_function.assert_called_once_with(custom_llm_provider="openai", name="Test Container")
     assert result == mock_response
 
 
@@ -1356,28 +1330,17 @@ def test_router_model_group_encrypted_content_affinity_callback_registration():
 
     try:
         callbacks = router.optional_callbacks or []
-        encrypted_content_callbacks = [
-            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
-        ]
-        deployment_callback = next(
-            cb for cb in callbacks if isinstance(cb, DeploymentAffinityCheck)
-        )
+        encrypted_content_callbacks = [cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)]
+        deployment_callback = next(cb for cb in callbacks if isinstance(cb, DeploymentAffinityCheck))
         assert len(encrypted_content_callbacks) == 1
         assert encrypted_content_callbacks[0].enable_global_affinity is False
-        assert (
-            encrypted_content_callbacks[0].model_group_affinity_config
-            == model_group_affinity_config
-        )
-        assert callbacks.index(encrypted_content_callbacks[0]) < callbacks.index(
-            deployment_callback
-        )
+        assert encrypted_content_callbacks[0].model_group_affinity_config == model_group_affinity_config
+        assert callbacks.index(encrypted_content_callbacks[0]) < callbacks.index(deployment_callback)
 
         router._add_encrypted_content_affinity_check(enable_global_affinity=True)
 
         callbacks = router.optional_callbacks or []
-        encrypted_content_callbacks = [
-            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
-        ]
+        encrypted_content_callbacks = [cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)]
         assert len(encrypted_content_callbacks) == 1
         assert encrypted_content_callbacks[0].enable_global_affinity is True
         assert encrypted_content_callbacks[0].router is router

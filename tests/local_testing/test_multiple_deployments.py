@@ -4,9 +4,7 @@
 import sys, os
 import traceback
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm import completion
@@ -42,9 +40,7 @@ model_list = [
 def test_multiple_deployments():
     try:
         ## LiteLLM completion call ## returns first response
-        response = completion(
-            model="mistral-7b-instruct", messages=messages, model_list=model_list
-        )
+        response = completion(model="mistral-7b-instruct", messages=messages, model_list=model_list)
         print(f"response: {response}")
     except Exception as e:
         traceback.print_exc()

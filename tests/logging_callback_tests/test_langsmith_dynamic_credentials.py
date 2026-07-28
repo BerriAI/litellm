@@ -39,11 +39,7 @@ async def test_dynamic_langsmith_base_url_does_not_inherit_default_api_key(
     )
 
     credentials = logger._get_credentials_to_use_for_request(
-        kwargs={
-            "standard_callback_dynamic_params": {
-                "langsmith_base_url": "https://attacker.example"
-            }
-        }
+        kwargs={"standard_callback_dynamic_params": {"langsmith_base_url": "https://attacker.example"}}
     )
 
     assert credentials["LANGSMITH_API_KEY"] is None

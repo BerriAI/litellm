@@ -78,13 +78,9 @@ async def test_team_member_add_authz_matrix(
             "member": {"user_id": new_member_id, "role": "user"},
         },
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value} {shape}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value} {shape}: {resp.status_code} {resp.text}"
 
-    row = await prisma.db.litellm_teamtable.find_unique(
-        where={"team_id": scratch.prefix}
-    )
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None
     if expected_status == 200:
         assert new_member_id in _member_ids(row)
@@ -120,9 +116,7 @@ async def test_team_member_add_available_team_self_join(
     # Org-less team with no admins: the INTERNAL_USER caller is neither team
     # nor org admin, so it lands on the available-team branch.
     await create_scratch_team(prisma, scratch.prefix)
-    monkeypatch.setattr(
-        litellm, "default_internal_user_params", {"available_teams": [scratch.prefix]}
-    )
+    monkeypatch.setattr(litellm, "default_internal_user_params", {"available_teams": [scratch.prefix]})
 
     caller = world.keys[Actor.INTERNAL_USER]
     member_id = caller.user_id if who == "self" else world.keys[Actor.OWNER].user_id
@@ -135,13 +129,9 @@ async def test_team_member_add_available_team_self_join(
             "member": {"user_id": member_id, "role": role},
         },
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{who}/{role}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{who}/{role}: {resp.status_code} {resp.text}"
 
-    row = await prisma.db.litellm_teamtable.find_unique(
-        where={"team_id": scratch.prefix}
-    )
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None
     if expected_status == 200:
         assert member_id in _member_ids(row)

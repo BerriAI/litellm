@@ -28,7 +28,4 @@ def test_infer_openai_data_residency(api_base, expected):
 
 @pytest.mark.parametrize("custom_llm_provider", [None, "anthropic", "azure", "bedrock"])
 def test_infer_openai_data_residency_non_openai_provider(custom_llm_provider):
-    assert (
-        infer_openai_data_residency(custom_llm_provider, "https://eu.api.openai.com/v1")
-        is None
-    )
+    assert infer_openai_data_residency(custom_llm_provider, "https://eu.api.openai.com/v1") is None

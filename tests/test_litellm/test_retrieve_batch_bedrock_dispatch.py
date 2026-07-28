@@ -68,11 +68,7 @@ def test_async_invoke_arn_routes_to_async_invoke_handler(mock_handlers):
     assert call_kwargs["aws_region_name"] == "us-west-2"
     # Region must be stripped from the forwarded kwargs to avoid TypeError
     # (it's already an explicit positional/keyword arg).
-    assert "aws_region_name" not in {
-        k
-        for k in call_kwargs
-        if k not in {"batch_id", "aws_region_name", "logging_obj"}
-    }
+    assert "aws_region_name" not in {k for k in call_kwargs if k not in {"batch_id", "aws_region_name", "logging_obj"}}
 
 
 def test_async_invoke_arn_falls_back_to_default_region_when_unset(mock_handlers):

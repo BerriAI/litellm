@@ -26,10 +26,7 @@ def test_get_complete_url_defaults_to_openai_compatible_endpoint(monkeypatch):
         litellm_params={},
     )
 
-    assert (
-        url
-        == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
-    )
+    assert url == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
     assert "/ai/run/" not in url
 
 
@@ -44,10 +41,7 @@ def test_get_complete_url_appends_chat_completions_to_explicit_base():
         litellm_params={},
     )
 
-    assert (
-        url
-        == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
-    )
+    assert url == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
     assert "/ai/run/" not in url
 
 
@@ -62,10 +56,7 @@ def test_get_complete_url_is_idempotent_for_full_base():
         litellm_params={},
     )
 
-    assert (
-        url
-        == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
-    )
+    assert url == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
 
 
 def test_get_complete_url_falls_back_to_account_id_when_base_is_empty(monkeypatch):
@@ -80,10 +71,7 @@ def test_get_complete_url_falls_back_to_account_id_when_base_is_empty(monkeypatc
         litellm_params={},
     )
 
-    assert (
-        url
-        == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
-    )
+    assert url == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
 
 
 def test_get_complete_url_raises_when_account_id_and_base_missing(monkeypatch):
@@ -125,10 +113,7 @@ def test_get_complete_url_migrates_legacy_ai_run_base():
         litellm_params={},
     )
 
-    assert (
-        url
-        == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
-    )
+    assert url == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
     assert "/ai/run" not in url
 
 

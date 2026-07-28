@@ -75,11 +75,7 @@ def _detect_leaks(samples):
         net = series[-1] - series[0]
         non_decreasing = all(d >= 0 for d in deltas)
         growing_intervals = sum(1 for d in deltas if d > 0)
-        if (
-            non_decreasing
-            and net >= LEAK_MIN_NET_GROWTH
-            and growing_intervals >= LEAK_MIN_GROWING_INTERVALS
-        ):
+        if non_decreasing and net >= LEAK_MIN_NET_GROWTH and growing_intervals >= LEAK_MIN_GROWING_INTERVALS:
             leaks[t] = series
     return leaks
 
@@ -103,11 +99,7 @@ def _terminal_suspects(samples):
         net = series[-1] - series[0]
         non_decreasing = all(d >= 0 for d in deltas)
         growing = [i for i, d in enumerate(deltas) if d > 0]
-        if (
-            non_decreasing
-            and net >= LEAK_MIN_NET_GROWTH
-            and growing == [len(deltas) - 1]
-        ):
+        if non_decreasing and net >= LEAK_MIN_NET_GROWTH and growing == [len(deltas) - 1]:
             suspects.add(t)
     return suspects
 
@@ -139,10 +131,7 @@ def _format_report(samples, leaks) -> str:
     totals = [sum(s.values()) for s in samples]
     lines.append(f"TOTAL callbacks per sample: {totals}")
     if leaks:
-        lines.append(
-            "Leaking callback types (sustained monotonic growth): "
-            + ", ".join(sorted(leaks))
-        )
+        lines.append("Leaking callback types (sustained monotonic growth): " + ", ".join(sorted(leaks)))
     return "\n".join(lines)
 
 
@@ -254,9 +243,7 @@ async def test_check_num_callbacks():
         # Absorb proxy warmup / in-flight parallel registration before baseline.
         await asyncio.sleep(SETTLE_SECONDS)
 
-        samples, _ = await _sample_callbacks(
-            session, NUM_SAMPLES, SAMPLE_INTERVAL_SECONDS
-        )
+        samples, _ = await _sample_callbacks(session, NUM_SAMPLES, SAMPLE_INTERVAL_SECONDS)
 
         assert sum(samples[0].values()) > 0, "expected some callbacks registered"
 
@@ -287,18 +274,12 @@ async def test_check_num_callbacks_on_lowest_latency():
             # Absorb the deliberate one-time config/update registration step.
             await asyncio.sleep(SETTLE_SECONDS)
 
-            samples, alerts = await _sample_callbacks(
-                session, NUM_SAMPLES, SAMPLE_INTERVAL_SECONDS
-            )
+            samples, alerts = await _sample_callbacks(session, NUM_SAMPLES, SAMPLE_INTERVAL_SECONDS)
 
             leaks, samples = await _detect_leaks_confirmed(session, samples)
             report = _format_report(samples, leaks)
             print(report)
             assert not leaks, f"Callback leak detected.\n{report}"
-            assert (
-                len(set(alerts)) == 1
-            ), f"alerting count changed across samples: {alerts}"
+            assert len(set(alerts)) == 1, f"alerting count changed across samples: {alerts}"
         finally:
-            await config_update(
-                session=session, routing_strategy=original_routing_strategy
-            )
+            await config_update(session=session, routing_strategy=original_routing_strategy)

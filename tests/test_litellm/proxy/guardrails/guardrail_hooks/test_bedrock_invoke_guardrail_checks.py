@@ -41,9 +41,7 @@ def _patched(guardrail: BedrockGuardrail, http_response):
     mock_credentials = MagicMock()
     post = AsyncMock(return_value=http_response)
     return (
-        patch.object(
-            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
-        ),
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
         patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
         patch.object(guardrail.async_handler, "post", new=post),
         post,
@@ -128,9 +126,7 @@ def test_build_input_messages_tags_all_as_user_and_scans_all():
 
 def test_build_output_messages_tags_assistant():
     g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS)
-    response = ModelResponse(
-        choices=[Choices(message=Message(role="assistant", content="bad text"))]
-    )
+    response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="bad text"))])
     built = g._build_invoke_guardrail_checks_messages("OUTPUT", response=response)
     assert built == [{"role": "assistant", "content": [{"text": "bad text"}]}]
 
@@ -165,9 +161,7 @@ async def test_blocks_when_score_meets_threshold():
     assert exc.value.status_code == 400
     detail = exc.value.detail
     violations = detail["bedrock_guardrail_checks"]
-    assert violations == [
-        {"check": "contentFilter", "category": "VIOLENCE", "severityScore": 0.8}
-    ]
+    assert violations == [{"check": "contentFilter", "category": "VIOLENCE", "severityScore": 0.8}]
     # No raw user input / offsets leak into the client-facing detail.
     assert "how to hurt people" not in json.dumps(detail)
 
@@ -175,13 +169,7 @@ async def test_blocks_when_score_meets_threshold():
 @pytest.mark.asyncio
 async def test_allows_when_score_below_threshold():
     g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS, content_filter_threshold=0.5)
-    payload = {
-        "results": {
-            "contentFilter": {
-                "results": [{"category": "VIOLENCE", "severityScore": 0.2}]
-            }
-        }
-    }
+    payload = {"results": {"contentFilter": {"results": [{"category": "VIOLENCE", "severityScore": 0.2}]}}}
     creds, prep, post_patch, _ = _patched(g, _mock_http_response(200, payload))
     with creds, prep, post_patch:
         result = await g.make_bedrock_api_request(
@@ -196,13 +184,7 @@ async def test_allows_when_score_below_threshold():
 async def test_threshold_none_is_detect_only():
     """A null threshold logs the score but never blocks."""
     g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS, content_filter_threshold=None)
-    payload = {
-        "results": {
-            "contentFilter": {
-                "results": [{"category": "VIOLENCE", "severityScore": 1.0}]
-            }
-        }
-    }
+    payload = {"results": {"contentFilter": {"results": [{"category": "VIOLENCE", "severityScore": 1.0}]}}}
     creds, prep, post_patch, _ = _patched(g, _mock_http_response(200, payload))
     with creds, prep, post_patch:
         result = await g.make_bedrock_api_request(
@@ -217,13 +199,7 @@ async def test_threshold_none_is_detect_only():
 async def test_unsolicited_check_scores_are_ignored():
     """Scores for checks the user never configured must not block, even over threshold."""
     g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS, prompt_attack_threshold=0.5)
-    payload = {
-        "results": {
-            "promptAttack": {
-                "results": [{"category": "JAILBREAK", "severityScore": 1.0}]
-            }
-        }
-    }
+    payload = {"results": {"promptAttack": {"results": [{"category": "JAILBREAK", "severityScore": 1.0}]}}}
     creds, prep, post_patch, _ = _patched(g, _mock_http_response(200, payload))
     with creds, prep, post_patch:
         result = await g.make_bedrock_api_request(
@@ -238,13 +214,7 @@ async def test_unsolicited_check_scores_are_ignored():
 async def test_blocks_when_score_equals_threshold():
     """The documented contract is score >= threshold blocks; equality must block."""
     g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS, content_filter_threshold=0.5)
-    payload = {
-        "results": {
-            "contentFilter": {
-                "results": [{"category": "VIOLENCE", "severityScore": 0.5}]
-            }
-        }
-    }
+    payload = {"results": {"contentFilter": {"results": [{"category": "VIOLENCE", "severityScore": 0.5}]}}}
     creds, prep, post_patch, _ = _patched(g, _mock_http_response(200, payload))
     with creds, prep, post_patch:
         with pytest.raises(HTTPException) as exc:
@@ -287,11 +257,7 @@ async def test_truncated_pii_results_block():
 @pytest.mark.asyncio
 async def test_truncated_pii_ignored_when_pii_check_not_configured():
     g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS)
-    payload = {
-        "results": {
-            "sensitiveInformation": {"results": [], "truncated": True}
-        }
-    }
+    payload = {"results": {"sensitiveInformation": {"results": [], "truncated": True}}}
     creds, prep, post_patch, _ = _patched(g, _mock_http_response(200, payload))
     with creds, prep, post_patch:
         result = await g.make_bedrock_api_request(
@@ -331,13 +297,7 @@ async def test_disable_exception_on_block_raises_modify_response_exception():
         content_filter_threshold=0.5,
         disable_exception_on_block=True,
     )
-    payload = {
-        "results": {
-            "contentFilter": {
-                "results": [{"category": "VIOLENCE", "severityScore": 0.8}]
-            }
-        }
-    }
+    payload = {"results": {"contentFilter": {"results": [{"category": "VIOLENCE", "severityScore": 0.8}]}}}
     creds, prep, post_patch, _ = _patched(g, _mock_http_response(200, payload))
     with creds, prep, post_patch:
         with pytest.raises(ModifyResponseException):
@@ -369,9 +329,7 @@ async def test_request_uses_checks_path_and_body():
 
     mock_credentials = MagicMock()
     with (
-        patch.object(
-            g, "_load_credentials", return_value=(mock_credentials, "us-east-1")
-        ),
+        patch.object(g, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
         patch.object(g, "_prepare_request", side_effect=fake_prepare),
         patch.object(
             g.async_handler,
@@ -451,9 +409,7 @@ async def test_pii_offsets_stripped_from_standard_logging():
         )
 
     slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
-    logged_entry = slg["guardrail_response"]["results"]["sensitiveInformation"][
-        "results"
-    ][0]
+    logged_entry = slg["guardrail_response"]["results"]["sensitiveInformation"]["results"][0]
     for offset_key in ("beginOffset", "endOffset", "messageIndex", "contentIndex"):
         assert offset_key not in logged_entry
     # Non-locating fields are preserved for observability.
@@ -471,9 +427,7 @@ async def test_pii_offsets_stripped_from_standard_logging():
 async def test_non_200_raises_and_logs_failed_status():
     g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS)
     request_data = {"messages": []}
-    creds, prep, post_patch, _ = _patched(
-        g, _mock_http_response(400, {"message": "ValidationException: bad request"})
-    )
+    creds, prep, post_patch, _ = _patched(g, _mock_http_response(400, {"message": "ValidationException: bad request"}))
     with creds, prep, post_patch:
         with pytest.raises(HTTPException) as exc:
             await g.make_bedrock_api_request(
@@ -500,15 +454,11 @@ def test_masking_helpers_noop_on_empty_response():
 
     messages = [{"role": "user", "content": "keep me"}]
     assert (
-        g._update_messages_with_updated_bedrock_guardrail_response(
-            messages=messages, bedrock_guardrail_response=empty
-        )
+        g._update_messages_with_updated_bedrock_guardrail_response(messages=messages, bedrock_guardrail_response=empty)
         == messages
     )
 
-    response = ModelResponse(
-        choices=[Choices(message=Message(role="assistant", content="unchanged"))]
-    )
+    response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="unchanged"))])
     g._apply_masking_to_response(response=response, bedrock_guardrail_response=empty)
     assert response.choices[0].message.content == "unchanged"
 
@@ -539,9 +489,7 @@ async def test_experimental_latest_message_only_with_checks():
 
     mock_credentials = MagicMock()
     with (
-        patch.object(
-            g, "_load_credentials", return_value=(mock_credentials, "us-east-1")
-        ),
+        patch.object(g, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
         patch.object(g, "_prepare_request", side_effect=fake_prepare),
         patch.object(
             g.async_handler,
@@ -557,9 +505,7 @@ async def test_experimental_latest_message_only_with_checks():
         )
 
     # Only the latest user message should be scanned; original data preserved.
-    assert captured["data"]["messages"] == [
-        {"role": "user", "content": [{"text": "latest"}]}
-    ]
+    assert captured["data"]["messages"] == [{"role": "user", "content": [{"text": "latest"}]}]
     assert len(data["messages"]) == 3
 
 
@@ -574,13 +520,7 @@ async def test_blocks_when_prompt_attack_meets_threshold():
         checks={"promptAttack": {"categories": [{"category": "JAILBREAK"}]}},
         prompt_attack_threshold=0.5,
     )
-    payload = {
-        "results": {
-            "promptAttack": {
-                "results": [{"category": "JAILBREAK", "severityScore": 0.8}]
-            }
-        }
-    }
+    payload = {"results": {"promptAttack": {"results": [{"category": "JAILBREAK", "severityScore": 0.8}]}}}
     creds, prep, post_patch, _ = _patched(g, _mock_http_response(200, payload))
     with creds, prep, post_patch:
         with pytest.raises(HTTPException) as exc:
@@ -647,9 +587,7 @@ async def test_mixed_checks_only_over_threshold_reported():
     )
     payload = {
         "results": {
-            "contentFilter": {
-                "results": [{"category": "VIOLENCE", "severityScore": 0.2}]
-            },
+            "contentFilter": {"results": [{"category": "VIOLENCE", "severityScore": 0.2}]},
             "sensitiveInformation": {
                 "results": [{"type": "EMAIL", "confidenceScore": 0.9}],
                 "truncated": False,
@@ -673,17 +611,9 @@ async def test_mixed_checks_only_over_threshold_reported():
 @pytest.mark.asyncio
 async def test_output_source_blocks_and_logs_intervened():
     g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS, content_filter_threshold=0.5)
-    payload = {
-        "results": {
-            "contentFilter": {
-                "results": [{"category": "VIOLENCE", "severityScore": 0.8}]
-            }
-        }
-    }
+    payload = {"results": {"contentFilter": {"results": [{"category": "VIOLENCE", "severityScore": 0.8}]}}}
     request_data = {"messages": []}
-    response = ModelResponse(
-        choices=[Choices(message=Message(role="assistant", content="violent output"))]
-    )
+    response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="violent output"))])
     creds, prep, post_patch, _ = _patched(g, _mock_http_response(200, payload))
     with creds, prep, post_patch:
         with pytest.raises(HTTPException):
@@ -705,12 +635,8 @@ async def test_output_source_blocks_and_logs_intervened():
 async def test_dispatcher_routes_to_apply_mode_when_no_checks():
     g = BedrockGuardrail(guardrailIdentifier="gid", guardrailVersion="DRAFT")
     with (
-        patch.object(
-            g, "_make_apply_guardrail_request", new=AsyncMock(return_value={})
-        ) as apply_mock,
-        patch.object(
-            g, "_make_invoke_guardrail_checks_request", new=AsyncMock(return_value={})
-        ) as checks_mock,
+        patch.object(g, "_make_apply_guardrail_request", new=AsyncMock(return_value={})) as apply_mock,
+        patch.object(g, "_make_invoke_guardrail_checks_request", new=AsyncMock(return_value={})) as checks_mock,
     ):
         await g.make_bedrock_api_request(
             source="INPUT",
@@ -729,9 +655,7 @@ def test_normalize_checks_accepts_pydantic_model():
     )
 
     model = BedrockChecksConfigModel(
-        contentFilter=BedrockChecksContentFilterModel(
-            categories=[{"category": "VIOLENCE"}]
-        )
+        contentFilter=BedrockChecksContentFilterModel(categories=[{"category": "VIOLENCE"}])
     )
     g = BedrockGuardrail(checks=model)
     assert g.checks == {"contentFilter": {"categories": [{"category": "VIOLENCE"}]}}
@@ -758,9 +682,7 @@ def test_input_message_with_many_blocks_is_chunked_not_truncated():
     """
     g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS)
     blocks = [{"type": "text", "text": f"block{i}"} for i in range(23)]
-    built = g._build_invoke_guardrail_checks_messages(
-        "INPUT", messages=[{"role": "user", "content": blocks}]
-    )
+    built = g._build_invoke_guardrail_checks_messages("INPUT", messages=[{"role": "user", "content": blocks}])
     # 23 blocks -> messages of <=10, covering EVERY block in order.
     assert all(m["role"] == "user" for m in built)
     assert all(len(m["content"]) <= 10 for m in built)
@@ -802,13 +724,7 @@ async def test_many_blocks_scanned_at_request_level_and_can_block():
     """
     g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS, content_filter_threshold=0.5)
     blocks = [{"type": "text", "text": f"b{i}"} for i in range(25)]
-    payload = {
-        "results": {
-            "contentFilter": {
-                "results": [{"category": "VIOLENCE", "severityScore": 0.8}]
-            }
-        }
-    }
+    payload = {"results": {"contentFilter": {"results": [{"category": "VIOLENCE", "severityScore": 0.8}]}}}
     captured = {}
 
     def fake_prepare(**kwargs):

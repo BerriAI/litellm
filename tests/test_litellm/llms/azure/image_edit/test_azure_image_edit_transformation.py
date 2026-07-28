@@ -94,10 +94,7 @@ def test_validate_environment_falls_back_to_aad_bearer_when_no_api_key():
 
 
 def test_azure_deployment_image_edit_form_data_strips_model():
-    url = (
-        "https://example.openai.azure.com/openai/deployments/my-dep/"
-        "images/edits?api-version=2025-02-01-preview"
-    )
+    url = "https://example.openai.azure.com/openai/deployments/my-dep/images/edits?api-version=2025-02-01-preview"
     data = {"model": "my-dep", "prompt": "x", "n": 1}
     out = AzureImageEditConfig.azure_deployment_image_edit_form_data(data, url)
     assert "model" not in out
@@ -226,8 +223,7 @@ def test_api_version_in_api_base_query_is_preserved(monkeypatch):
     url = AzureImageEditConfig().get_complete_url(
         model=_FALLBACK_MODEL,
         api_base=(
-            f"{_FALLBACK_API_BASE}/openai/deployments/{_FALLBACK_MODEL}"
-            "/images/edits?api-version=2024-05-01-preview"
+            f"{_FALLBACK_API_BASE}/openai/deployments/{_FALLBACK_MODEL}/images/edits?api-version=2024-05-01-preview"
         ),
         litellm_params={"api_version": "would-be-overridden"},
     )

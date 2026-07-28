@@ -23,8 +23,7 @@ from litellm.llms.openai.openai import (
 )
 
 ASSISTANT_INSTRUCTIONS = (
-    "You are a personal math tutor. When asked a question, write and run Python "
-    "code to answer the question."
+    "You are a personal math tutor. When asked a question, write and run Python code to answer the question."
 )
 ASSISTANT_ID = "asst_test"
 THREAD_ID = "thread_test"
@@ -164,9 +163,7 @@ class _SyncAssistants:
         return _assistant(**kwargs)
 
     def delete(self, assistant_id):
-        return AssistantDeleted(
-            id=assistant_id, object="assistant.deleted", deleted=True
-        )
+        return AssistantDeleted(id=assistant_id, object="assistant.deleted", deleted=True)
 
 
 class _AsyncAssistants:
@@ -177,9 +174,7 @@ class _AsyncAssistants:
         return _assistant(**kwargs)
 
     async def delete(self, assistant_id):
-        return AssistantDeleted(
-            id=assistant_id, object="assistant.deleted", deleted=True
-        )
+        return AssistantDeleted(id=assistant_id, object="assistant.deleted", deleted=True)
 
 
 class _SyncMessages:
@@ -379,9 +374,7 @@ async def test_add_message_litellm(sync_mode, provider, assistant_client):
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("is_streaming", [True, False])
 @pytest.mark.asyncio
-async def test_aarun_thread_litellm(
-    sync_mode, provider, is_streaming, assistant_client
-):
+async def test_aarun_thread_litellm(sync_mode, provider, is_streaming, assistant_client):
     get_assistants_data = _request_data(provider, assistant_client)
     if sync_mode:
         assistants = litellm.get_assistants(**get_assistants_data)
@@ -392,9 +385,7 @@ async def test_aarun_thread_litellm(
     new_thread = await _create_thread_litellm(sync_mode, provider, assistant_client)
     message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
     thread_data = _request_data(provider, assistant_client, thread_id=new_thread.id)
-    message_data = _request_data(
-        provider, assistant_client, thread_id=new_thread.id, **message
-    )
+    message_data = _request_data(provider, assistant_client, thread_id=new_thread.id, **message)
 
     if sync_mode:
         added_message = litellm.add_message(**message_data)
@@ -406,9 +397,7 @@ async def test_aarun_thread_litellm(
                 assert isinstance(run, AssistantEventHandler)
                 run.until_done()
         else:
-            run = litellm.run_thread(
-                assistant_id=assistant_id, stream=is_streaming, **thread_data
-            )
+            run = litellm.run_thread(assistant_id=assistant_id, stream=is_streaming, **thread_data)
             assert run.status == "completed"
             messages = litellm.get_messages(**thread_data)
             assert isinstance(messages.data[0], Message)

@@ -107,9 +107,7 @@ class StreamingLargeImageClient:
             request=Request("GET", url),
         )
         # Mock the iter_bytes method to return our generator
-        response.iter_bytes = lambda chunk_size=8192: generate_chunks(
-            size_bytes, chunk_size
-        )
+        response.iter_bytes = lambda chunk_size=8192: generate_chunks(size_bytes, chunk_size)
         return response
 
 
@@ -207,9 +205,7 @@ def test_streaming_download_handles_petabyte_file(monkeypatch):
     """
     # Simulate a 1 petabyte file (1,000,000 GB)
     # Without streaming protection, this would cause OOM or hang indefinitely
-    client = StreamingLargeImageClient(
-        size_mb=1_000_000_000, include_content_length=False
-    )
+    client = StreamingLargeImageClient(size_mb=1_000_000_000, include_content_length=False)
     monkeypatch.setattr(litellm, "module_level_client", client)
 
     with pytest.raises(litellm.ImageFetchError) as excinfo:

@@ -61,22 +61,12 @@ def mock_response():
     [
         {
             "path": "/v1beta/models/bedrock/claude-sonnet-3.7:generateContent",
-            "payload": {
-                "contents": [
-                    {
-                        "parts": [
-                            {"text": "The quick brown fox jumps over the lazy dog."}
-                        ]
-                    }
-                ]
-            },
+            "payload": {"contents": [{"parts": [{"text": "The quick brown fox jumps over the lazy dog."}]}]},
         }
     ],
     indirect=True,
 )
-async def test_google_generate_content_with_slashes_in_model_name(
-    mock_request, mock_response, mock_user_api_key_dict
-):
+async def test_google_generate_content_with_slashes_in_model_name(mock_request, mock_response, mock_user_api_key_dict):
     """
     Test that the google_generate_content endpoint correctly handles model names with slashes.
     """

@@ -83,10 +83,7 @@ def test_prompt_caching_1h_bedrock_converse(compat_result):
             continue
 
         if _cache_tokens(outcome.usage) <= 0:
-            error = (
-                f"[{model}] usage block reported zero cache tokens with "
-                "1h-TTL opt-in env vars set"
-            )
+            error = f"[{model}] usage block reported zero cache tokens with 1h-TTL opt-in env vars set"
             compat_result.add({"status": "fail", "error": error})
             failures.append(error)
             continue

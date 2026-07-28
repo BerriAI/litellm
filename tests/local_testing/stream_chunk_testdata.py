@@ -33,9 +33,7 @@ chunks = [
             StreamingChoices(
                 finish_reason=None,
                 index=0,
-                delta=Delta(
-                    content=" your", role=None, function_call=None, tool_calls=None
-                ),
+                delta=Delta(content=" your", role=None, function_call=None, tool_calls=None),
                 logprobs=None,
             )
         ],
@@ -70,9 +68,7 @@ chunks = [
             StreamingChoices(
                 finish_reason=None,
                 index=0,
-                delta=Delta(
-                    content=" how", role=None, function_call=None, tool_calls=None
-                ),
+                delta=Delta(content=" how", role=None, function_call=None, tool_calls=None),
                 logprobs=None,
             )
         ],
@@ -127,9 +123,7 @@ chunks = [
             StreamingChoices(
                 finish_reason=None,
                 index=0,
-                delta=Delta(
-                    content="'ll", role=None, function_call=None, tool_calls=None
-                ),
+                delta=Delta(content="'ll", role=None, function_call=None, tool_calls=None),
                 logprobs=None,
             )
         ],
@@ -144,9 +138,7 @@ chunks = [
             StreamingChoices(
                 finish_reason=None,
                 index=0,
-                delta=Delta(
-                    content=" need to", role=None, function_call=None, tool_calls=None
-                ),
+                delta=Delta(content=" need to", role=None, function_call=None, tool_calls=None),
                 logprobs=None,
             )
         ],
@@ -161,9 +153,7 @@ chunks = [
             StreamingChoices(
                 finish_reason=None,
                 index=0,
-                delta=Delta(
-                    content=" run", role=None, function_call=None, tool_calls=None
-                ),
+                delta=Delta(content=" run", role=None, function_call=None, tool_calls=None),
                 logprobs=None,
             )
         ],
@@ -198,9 +188,7 @@ chunks = [
             StreamingChoices(
                 finish_reason=None,
                 index=0,
-                delta=Delta(
-                    content=" Let", role=None, function_call=None, tool_calls=None
-                ),
+                delta=Delta(content=" Let", role=None, function_call=None, tool_calls=None),
                 logprobs=None,
             )
         ],
@@ -215,9 +203,7 @@ chunks = [
             StreamingChoices(
                 finish_reason=None,
                 index=0,
-                delta=Delta(
-                    content=" me", role=None, function_call=None, tool_calls=None
-                ),
+                delta=Delta(content=" me", role=None, function_call=None, tool_calls=None),
                 logprobs=None,
             )
         ],
@@ -232,9 +218,7 @@ chunks = [
             StreamingChoices(
                 finish_reason=None,
                 index=0,
-                delta=Delta(
-                    content=" ", role=None, function_call=None, tool_calls=None
-                ),
+                delta=Delta(content=" ", role=None, function_call=None, tool_calls=None),
                 logprobs=None,
             )
         ],
@@ -269,9 +253,7 @@ chunks = [
             StreamingChoices(
                 finish_reason=None,
                 index=0,
-                delta=Delta(
-                    content=" you.", role=None, function_call=None, tool_calls=None
-                ),
+                delta=Delta(content=" you.", role=None, function_call=None, tool_calls=None),
                 logprobs=None,
             )
         ],
@@ -529,9 +511,7 @@ chunks = [
             StreamingChoices(
                 finish_reason="tool_calls",
                 index=0,
-                delta=Delta(
-                    content=None, role=None, function_call=None, tool_calls=None
-                ),
+                delta=Delta(content=None, role=None, function_call=None, tool_calls=None),
                 logprobs=None,
             )
         ],

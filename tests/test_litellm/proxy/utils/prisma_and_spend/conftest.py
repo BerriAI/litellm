@@ -50,10 +50,7 @@ VOLATILE_KEYS = frozenset(
 def normalize(data: Any, volatile: frozenset = VOLATILE_KEYS) -> Any:
     """Recursively replace values for volatile keys with '<VOLATILE>'."""
     if isinstance(data, dict):
-        return {
-            k: ("<VOLATILE>" if k in volatile else normalize(v, volatile))
-            for k, v in data.items()
-        }
+        return {k: ("<VOLATILE>" if k in volatile else normalize(v, volatile)) for k, v in data.items()}
     if isinstance(data, list):
         return [normalize(v, volatile) for v in data]
     return data

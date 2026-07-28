@@ -57,15 +57,9 @@ class TestResponsePollingHandler:
         # OpenAI format
         assert ResponsePollingHandler.is_polling_id("resp_abc123") is False
         # Anthropic format
-        assert (
-            ResponsePollingHandler.is_polling_id("msg_01XFDUDYJgAACzvnptvVoYEL")
-            is False
-        )
+        assert ResponsePollingHandler.is_polling_id("msg_01XFDUDYJgAACzvnptvVoYEL") is False
         # Generic UUID
-        assert (
-            ResponsePollingHandler.is_polling_id("550e8400-e29b-41d4-a716-446655440000")
-            is False
-        )
+        assert ResponsePollingHandler.is_polling_id("550e8400-e29b-41d4-a716-446655440000") is False
 
     def test_get_cache_key_format(self):
         """Test that cache keys have the correct format"""
@@ -119,9 +113,7 @@ class TestResponsePollingHandler:
         mock_redis.async_set_cache.assert_called_once()
         call_args = mock_redis.async_set_cache.call_args
 
-        assert (
-            call_args.kwargs["key"] == "litellm:polling:response:litellm_poll_test123"
-        )
+        assert call_args.kwargs["key"] == "litellm:polling:response:litellm_poll_test123"
         assert call_args.kwargs["ttl"] == 7200
 
         # Verify the stored value is valid JSON
@@ -266,9 +258,7 @@ class TestResponsePollingHandler:
 
         reasoning_data = {"effort": "medium", "summary": "Step by step analysis"}
         tool_choice_data = {"type": "function", "function": {"name": "get_weather"}}
-        tools_data = [
-            {"type": "function", "function": {"name": "get_weather", "parameters": {}}}
-        ]
+        tools_data = [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}]
 
         await handler.update_state(
             polling_id="litellm_poll_test",
@@ -565,9 +555,7 @@ class TestResponsePollingHandler:
         result = await handler.delete_polling("litellm_poll_test")
 
         assert result is True
-        mock_async_client.delete.assert_called_once_with(
-            "litellm:polling:response:litellm_poll_test"
-        )
+        mock_async_client.delete.assert_called_once_with("litellm:polling:response:litellm_poll_test")
 
     @pytest.mark.asyncio
     async def test_delete_polling_returns_false_without_redis(self):
@@ -885,9 +873,7 @@ class TestProviderResolutionForPolling:
         model_name_to_deployment_indices = {
             "gpt-5": [0],
         }
-        model_list = [
-            {"model_name": "gpt-5", "litellm_params": {"model": "openai/gpt-5"}}
-        ]
+        model_list = [{"model_name": "gpt-5", "litellm_params": {"model": "openai/gpt-5"}}]
 
         model = "unknown-model"  # Not in router
         polling_via_cache_enabled = ["openai"]
@@ -1013,9 +999,7 @@ class TestPollingConditionChecks:
         # Create mock router
         mock_router = Mock()
         mock_router.model_name_to_deployment_indices = {"gpt-5": [0]}
-        mock_router.model_list = [
-            {"model_name": "gpt-5", "litellm_params": {"model": "openai/gpt-5"}}
-        ]
+        mock_router.model_list = [{"model_name": "gpt-5", "litellm_params": {"model": "openai/gpt-5"}}]
 
         result = should_use_polling_for_request(
             background_mode=True,
@@ -1280,9 +1264,7 @@ class TestStreamingEventParsing:
                         content_list = output_items[item_id]["content"]
                         if content_index < len(content_list):
                             if isinstance(content_list[content_index], dict):
-                                content_list[content_index]["text"] = accumulated_text[
-                                    key
-                                ]
+                                content_list[content_index]["text"] = accumulated_text[key]
 
         assert accumulated_text[("item_123", 0)] == "Hello World!"
         assert output_items["item_123"]["content"][0]["text"] == "Hello World!"
@@ -1344,9 +1326,7 @@ class TestStreamingEventParsing:
 
     def test_parse_sse_format(self):
         """Test parsing Server-Sent Events format"""
-        raw_chunk = (
-            b'data: {"type": "response.output_item.added", "item": {"id": "123"}}'
-        )
+        raw_chunk = b'data: {"type": "response.output_item.added", "item": {"id": "123"}}'
 
         # Decode bytes to string
         if isinstance(raw_chunk, bytes):
@@ -1474,9 +1454,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         # Find the final update_state call (last one)
@@ -1518,17 +1496,13 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
         assert final_call.kwargs["status"] == "incomplete"
         assert final_call.kwargs["error"] == error_payload
-        assert final_call.kwargs["incomplete_details"] == {
-            "reason": "max_output_tokens"
-        }
+        assert final_call.kwargs["incomplete_details"] == {"reason": "max_output_tokens"}
         assert final_call.kwargs["usage"] == {"input_tokens": 10, "output_tokens": 4096}
 
     @pytest.mark.asyncio
@@ -1557,9 +1531,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
@@ -1592,9 +1564,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
@@ -1632,9 +1602,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
@@ -1658,9 +1626,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]

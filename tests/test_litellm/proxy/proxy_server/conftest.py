@@ -51,10 +51,7 @@ def normalize(data: Any, volatile: frozenset[str] = VOLATILE_KEYS) -> Any:
     extend or override the default.
     """
     if isinstance(data, dict):
-        return {
-            k: ("<VOLATILE>" if k in volatile else normalize(v, volatile))
-            for k, v in data.items()
-        }
+        return {k: ("<VOLATILE>" if k in volatile else normalize(v, volatile)) for k, v in data.items()}
     if isinstance(data, list):
         return [normalize(v, volatile) for v in data]
     return data
@@ -286,9 +283,7 @@ def make_acompletion_response(
     )
 
 
-async def _stream_chunks(
-    model: str = "gpt-4", content: str = "Hi"
-) -> AsyncIterator[Any]:
+async def _stream_chunks(model: str = "gpt-4", content: str = "Hi") -> AsyncIterator[Any]:
     from litellm.types.utils import (
         Delta,
         ModelResponseStream,
@@ -327,10 +322,7 @@ def make_embedding_response(
         n = 1
     return EmbeddingResponse(
         model=model,
-        data=[
-            {"embedding": [0.0] * dimensions, "index": i, "object": "embedding"}
-            for i in range(n)
-        ],
+        data=[{"embedding": [0.0] * dimensions, "index": i, "object": "embedding"} for i in range(n)],
         object="list",
         usage={"prompt_tokens": n, "total_tokens": n},
     )

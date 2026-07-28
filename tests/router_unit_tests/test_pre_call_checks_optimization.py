@@ -71,13 +71,9 @@ class TestPreCallChecksOptimization:
         # 1. Same number of items
         assert len(deployments) == original_length, "List length changed!"
         # 2. Same deployment objects (not replaced with copies)
-        assert [
-            id(d) for d in deployments
-        ] == original_deployment_ids, "Deployment dicts replaced!"
+        assert [id(d) for d in deployments] == original_deployment_ids, "Deployment dicts replaced!"
         # 3. Same nested objects (not replaced with copies)
-        assert [
-            id(d["litellm_params"]) for d in deployments
-        ] == original_litellm_params_ids, "Nested dicts replaced!"
+        assert [id(d["litellm_params"]) for d in deployments] == original_litellm_params_ids, "Nested dicts replaced!"
         # 4. Same values (catches any mutation)
         assert deployments == snapshot, "Values were mutated!"
 
@@ -120,29 +116,15 @@ class TestPreCallChecksOptimization:
         )
 
         # Verify the filtered result only contains the large deployment
-        assert (
-            len(filtered) == 1
-        ), f"Expected 1 deployment after filtering, got {len(filtered)}"
-        assert (
-            filtered[0]["model_info"]["id"] == "large"
-        ), "Wrong deployment kept after filtering"
+        assert len(filtered) == 1, f"Expected 1 deployment after filtering, got {len(filtered)}"
+        assert filtered[0]["model_info"]["id"] == "large", "Wrong deployment kept after filtering"
 
         # Verify the original list still has both deployments
-        assert (
-            len(deployments) == 2
-        ), f"Original list was modified! Expected 2, got {len(deployments)}"
-        assert (
-            deployments[0] is original_small_deployment
-        ), "First deployment object replaced!"
-        assert (
-            deployments[1] is original_large_deployment
-        ), "Second deployment object replaced!"
-        assert (
-            deployments[0].get("model_info", {}).get("id") == "small"
-        ), "First deployment ID changed!"
-        assert (
-            deployments[1].get("model_info", {}).get("id") == "large"
-        ), "Second deployment ID changed!"
+        assert len(deployments) == 2, f"Original list was modified! Expected 2, got {len(deployments)}"
+        assert deployments[0] is original_small_deployment, "First deployment object replaced!"
+        assert deployments[1] is original_large_deployment, "Second deployment object replaced!"
+        assert deployments[0].get("model_info", {}).get("id") == "small", "First deployment ID changed!"
+        assert deployments[1].get("model_info", {}).get("id") == "large", "Second deployment ID changed!"
 
 
 if __name__ == "__main__":

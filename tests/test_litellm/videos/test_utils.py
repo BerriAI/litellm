@@ -19,9 +19,7 @@ sys.path.insert(0, os.path.abspath("../../.."))
 import litellm
 from litellm.videos.utils import VideoGenerationRequestUtils
 
-get_requested = (
-    VideoGenerationRequestUtils.get_requested_video_generation_optional_param
-)
+get_requested = VideoGenerationRequestUtils.get_requested_video_generation_optional_param
 get_optional = VideoGenerationRequestUtils.get_optional_params_video_generation
 
 
@@ -67,9 +65,7 @@ def test_requested__timeout_always_removed():
 
 
 def test_requested__nested_kwargs_merge_and_override_base():
-    result = get_requested(
-        {"seconds": "8", "kwargs": {"size": "720x1280", "seconds": "override"}}
-    )
+    result = get_requested({"seconds": "8", "kwargs": {"size": "720x1280", "seconds": "override"}})
     # nested kwargs win over the top-level base params on collision.
     assert result == {"seconds": "override", "size": "720x1280"}
 
@@ -84,9 +80,7 @@ def test_requested__none_input_returns_empty():
 
 
 def test_requested__top_level_extra_body_spread_and_preserved():
-    result = get_requested(
-        {"seconds": "8", "extra_body": {"vertex_project": "proj", "foo_param": "bar"}}
-    )
+    result = get_requested({"seconds": "8", "extra_body": {"vertex_project": "proj", "foo_param": "bar"}})
     # extra_body keys are both spread at top level AND kept under "extra_body".
     assert result == {
         "seconds": "8",
@@ -163,9 +157,7 @@ def test_optional__extra_body_overrides_mapped_and_is_removed():
     result = get_optional(
         model="sora-2",
         video_generation_provider_config=config,
-        video_generation_optional_params={
-            "extra_body": {"size": "override", "extra": "x"}
-        },
+        video_generation_optional_params={"extra_body": {"size": "override", "extra": "x"}},
     )
 
     assert result == {"seconds": "8", "size": "override", "extra": "x"}

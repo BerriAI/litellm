@@ -125,9 +125,7 @@ class TestRouterEmbeddingIntegration:
 
         router = Router(
             model_list=model_list,
-            default_litellm_params={
-                "metadata": {"environment": "test", "service": "embedding-service"}
-            },
+            default_litellm_params={"metadata": {"environment": "test", "service": "embedding-service"}},
         )
 
         with patch("litellm.embedding") as mock_embedding:
@@ -243,9 +241,7 @@ class TestRouterEmbeddingIntegration:
         # Make multiple calls and verify headers are always present
         for i in range(5):
             with patch("litellm.embedding") as mock_embedding:
-                mock_embedding.return_value = MagicMock(
-                    data=[{"embedding": [0.1, 0.2]}]
-                )
+                mock_embedding.return_value = MagicMock(data=[{"embedding": [0.1, 0.2]}])
 
                 router.embedding(model="shared-embedding-model", input=[f"test {i}"])
 
@@ -330,9 +326,7 @@ class TestRouterEmbeddingIntegration:
 
         router = Router(
             model_list=model_list,
-            default_litellm_params={
-                "headers": {"X-Custom-Azure-Header": "azure-value"}
-            },
+            default_litellm_params={"headers": {"X-Custom-Azure-Header": "azure-value"}},
         )
 
         with patch("litellm.embedding") as mock_embedding:

@@ -137,9 +137,7 @@ _UPDATED_MAX_BUDGET = 91.25
 
 class TestBudgetManagement:
     @pytest.mark.covers("mgmt.budget.list.happy_path")
-    def test_created_budget_appears_in_budget_list(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_created_budget_appears_in_budget_list(self, client: ManagementClient, resources: ResourceManager) -> None:
         budget_id = _create_budget(client, resources, BudgetNewBody(max_budget=_INITIAL_MAX_BUDGET))
 
         _ = _poll(
@@ -183,9 +181,7 @@ class TestBudgetManagement:
         )
 
     @pytest.mark.covers("mgmt.budget.new.admin_only")
-    def test_new_is_refused_for_a_non_admin_key(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_new_is_refused_for_a_non_admin_key(self, client: ManagementClient, resources: ResourceManager) -> None:
         key = client.proxy.generate_key(KeyGenerateBody())
         resources.defer(lambda: client.proxy.delete_key(key))
 
@@ -232,9 +228,7 @@ class CustomerDeleteResponse(BaseModel):
     deleted_customers: int
 
 
-def _create_customer(
-    client: ManagementClient, resources: ResourceManager, route: str, body: CustomerNewBody
-) -> str:
+def _create_customer(client: ManagementClient, resources: ResourceManager, route: str, body: CustomerNewBody) -> str:
     user_id = unwrap(
         client.proxy.transport.post(
             route,
@@ -295,16 +289,19 @@ class TestCustomerManagement:
         assert deleted == 1, f"/customer/delete reported {deleted} rows removed for one customer"
 
         def gone() -> bool | None:
-            return True if client.proxy.transport.probe(
-                "/customer/info", params=CustomerInfoParams(end_user_id=customer_id)
-            ).status_code == 404 else None
+            return (
+                True
+                if client.proxy.transport.probe(
+                    "/customer/info", params=CustomerInfoParams(end_user_id=customer_id)
+                ).status_code
+                == 404
+                else None
+            )
 
         _ = _poll(client, gone, f"customer {customer_id} still resolved on /customer/info after /customer/delete")
 
     @pytest.mark.covers("mgmt.end_user.new.happy_path")
-    def test_end_user_new_persists_to_end_user_info(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_end_user_new_persists_to_end_user_info(self, client: ManagementClient, resources: ResourceManager) -> None:
         end_user_id = f"e2e-mgmt-euser-{unique_marker()}"
         created = _create_customer(client, resources, "/end_user/new", CustomerNewBody(user_id=end_user_id))
         assert created == end_user_id, f"/end_user/new echoed user_id {created!r}, created {end_user_id!r}"
@@ -320,9 +317,7 @@ class TestCustomerManagement:
 
 class TestUserManagement:
     @pytest.mark.covers("mgmt.user.info.happy_path")
-    def test_new_user_is_readable_via_user_info(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_new_user_is_readable_via_user_info(self, client: ManagementClient, resources: ResourceManager) -> None:
         email = f"e2e-mgmt-{unique_marker()}@example.com"
         user_id = client.create_user(UserNewBody(user_email=email, user_role="internal_user"))
         resources.defer(lambda: client.delete_user(user_id))
@@ -364,9 +359,7 @@ class OrgInfoMembersResponse(BaseModel):
 
 class TestOrganizationMembership:
     @pytest.mark.covers("mgmt.organization.member_add.happy_path")
-    def test_member_add_records_membership(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_member_add_records_membership(self, client: ManagementClient, resources: ResourceManager) -> None:
         org_id = client.create_org(OrgNewBody(organization_alias=f"e2e-mgmt-org-{unique_marker()}"))
         resources.defer(lambda: client.delete_org(org_id))
 
@@ -390,8 +383,7 @@ class TestOrganizationMembership:
             f"/organization/member_add echoed organization_id {added.organization_id!r}, added to {org_id!r}"
         )
         assert any(
-            row.user_id == user_id and row.organization_id == org_id
-            for row in added.updated_organization_memberships
+            row.user_id == user_id and row.organization_id == org_id for row in added.updated_organization_memberships
         ), (
             f"/organization/member_add response does not record {user_id} in org {org_id}: "
             f"{added.updated_organization_memberships}"

@@ -77,17 +77,13 @@ class TestPrismaClientBackoffRetry:
     """Test suite for PrismaClient backoff retry mechanisms"""
 
     @pytest.mark.asyncio
-    async def test_health_check_success_no_retry(
-        self, mock_prisma_client, mock_proxy_logging
-    ):
+    async def test_health_check_success_no_retry(self, mock_prisma_client, mock_proxy_logging):
         """Test health_check succeeds immediately without retries"""
         # Mock successful query response
         mock_prisma_client.db.query_raw.return_value = [{"result": 1}]
 
         # Create real PrismaClient instance with mocked db
-        client = PrismaClient(
-            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
-        )
+        client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
         client.db = mock_prisma_client.db
         client.proxy_logging_obj = mock_prisma_client.proxy_logging_obj
 
@@ -99,9 +95,7 @@ class TestPrismaClientBackoffRetry:
         mock_prisma_client.db.query_raw.assert_called_once_with("SELECT 1")
 
     @pytest.mark.asyncio
-    async def test_health_check_retry_then_success(
-        self, mock_prisma_client, mock_proxy_logging, connection_errors
-    ):
+    async def test_health_check_retry_then_success(self, mock_prisma_client, mock_proxy_logging, connection_errors):
         """Test health_check retries on connection errors and eventually succeeds"""
         # Mock first two calls to fail, third to succeed
         mock_prisma_client.db.query_raw.side_effect = [
@@ -111,9 +105,7 @@ class TestPrismaClientBackoffRetry:
         ]
 
         # Create real PrismaClient instance
-        client = PrismaClient(
-            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
-        )
+        client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
         client.db = mock_prisma_client.db
         client.proxy_logging_obj = mock_prisma_client.proxy_logging_obj
 
@@ -132,17 +124,13 @@ class TestPrismaClientBackoffRetry:
         assert end_time - start_time > 0.01
 
     @pytest.mark.asyncio
-    async def test_health_check_max_retries_exceeded(
-        self, mock_prisma_client, mock_proxy_logging, connection_errors
-    ):
+    async def test_health_check_max_retries_exceeded(self, mock_prisma_client, mock_proxy_logging, connection_errors):
         """Test health_check fails after max retries (3) are exceeded"""
         # Mock all calls to fail
         mock_prisma_client.db.query_raw.side_effect = connection_errors[0]
 
         # Create real PrismaClient instance
-        client = PrismaClient(
-            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
-        )
+        client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
         client.db = mock_prisma_client.db
         client.proxy_logging_obj = mock_prisma_client.proxy_logging_obj
 
@@ -154,17 +142,13 @@ class TestPrismaClientBackoffRetry:
         assert mock_prisma_client.db.query_raw.call_count == 3
 
     @pytest.mark.asyncio
-    async def test_get_spend_logs_row_count_success_no_retry(
-        self, mock_prisma_client, mock_proxy_logging
-    ):
+    async def test_get_spend_logs_row_count_success_no_retry(self, mock_prisma_client, mock_proxy_logging):
         """Test _get_spend_logs_row_count succeeds immediately"""
         # Mock successful query response
         mock_prisma_client.db.query_raw.return_value = [{"reltuples": 1000}]
 
         # Create real PrismaClient instance
-        client = PrismaClient(
-            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
-        )
+        client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
         client.db = mock_prisma_client.db
         client.proxy_logging_obj = mock_prisma_client.proxy_logging_obj
 
@@ -184,9 +168,7 @@ class TestPrismaClientBackoffRetry:
             [{"reltuples": 500}],  # Second call succeeds
         ]
 
-        client = PrismaClient(
-            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
-        )
+        client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
         client.db = mock_prisma_client.db
         client.proxy_logging_obj = mock_prisma_client.proxy_logging_obj
 
@@ -195,16 +177,12 @@ class TestPrismaClientBackoffRetry:
         assert mock_prisma_client.db.query_raw.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_get_spend_logs_row_count_handles_errors_gracefully(
-        self, mock_prisma_client, mock_proxy_logging
-    ):
+    async def test_get_spend_logs_row_count_handles_errors_gracefully(self, mock_prisma_client, mock_proxy_logging):
         """Test _get_spend_logs_row_count returns 0 on persistent errors"""
         # Mock all calls to fail
         mock_prisma_client.db.query_raw.side_effect = PrismaError("Persistent DB error")
 
-        client = PrismaClient(
-            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
-        )
+        client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
         client.db = mock_prisma_client.db
         client.proxy_logging_obj = mock_prisma_client.proxy_logging_obj
 
@@ -214,16 +192,12 @@ class TestPrismaClientBackoffRetry:
         assert mock_prisma_client.db.query_raw.call_count == 3  # Max retries attempted
 
     @pytest.mark.asyncio
-    async def test_set_spend_logs_row_count_in_proxy_state_success(
-        self, mock_prisma_client, mock_proxy_logging
-    ):
+    async def test_set_spend_logs_row_count_in_proxy_state_success(self, mock_prisma_client, mock_proxy_logging):
         """Test _set_spend_logs_row_count_in_proxy_state succeeds"""
         # Mock successful query response
         mock_prisma_client.db.query_raw.return_value = [{"reltuples": 2000}]
 
-        client = PrismaClient(
-            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
-        )
+        client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
         client.db = mock_prisma_client.db
         client.proxy_logging_obj = mock_prisma_client.proxy_logging_obj
 
@@ -248,9 +222,7 @@ class TestPrismaClientBackoffRetry:
             [{"reltuples": 1500}],  # Second call succeeds
         ]
 
-        client = PrismaClient(
-            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
-        )
+        client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
         client.db = mock_prisma_client.db
         client.proxy_logging_obj = mock_prisma_client.proxy_logging_obj
 
@@ -267,9 +239,7 @@ class TestPrismaClientBackoffRetry:
     @pytest.mark.asyncio
     async def test_backoff_configuration_parameters(self, mock_proxy_logging):
         """Test that backoff decorators are configured with correct parameters"""
-        client = PrismaClient(
-            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
-        )
+        client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
 
         # Check that methods have backoff decorators
         assert hasattr(client.health_check, "__wrapped__")
@@ -279,9 +249,7 @@ class TestPrismaClientBackoffRetry:
         # This is implicit verification - the decorators are applied in the source code
 
     @pytest.mark.asyncio
-    async def test_multiple_connection_error_types(
-        self, mock_prisma_client, mock_proxy_logging
-    ):
+    async def test_multiple_connection_error_types(self, mock_prisma_client, mock_proxy_logging):
         """Test that different types of connection errors all trigger retries"""
         error_types = [
             httpx.ConnectError("Connection error"),
@@ -300,9 +268,7 @@ class TestPrismaClientBackoffRetry:
                 [{"result": 1}],  # Second call succeeds
             ]
 
-            client = PrismaClient(
-                database_url="mock://test", proxy_logging_obj=mock_proxy_logging
-            )
+            client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
             client.db = mock_prisma_client.db
             client.proxy_logging_obj = mock_prisma_client.proxy_logging_obj
 
@@ -312,15 +278,11 @@ class TestPrismaClientBackoffRetry:
             assert mock_prisma_client.db.query_raw.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_setup_prisma_client_integration(
-        self, mock_prisma_client, mock_proxy_logging
-    ):
+    async def test_setup_prisma_client_integration(self, mock_prisma_client, mock_proxy_logging):
         """Test simulated _setup_prisma_client flow with intermittent failures"""
         # This simulates the actual flow that happens in proxy_server.py _setup_prisma_client
 
-        client = PrismaClient(
-            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
-        )
+        client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
         client.db = mock_prisma_client.db
         client.proxy_logging_obj = mock_prisma_client.proxy_logging_obj
 
@@ -355,16 +317,12 @@ class TestPrismaClientBackoffRetry:
             assert mock_prisma_client.db.query_raw.call_count >= 4
 
     @pytest.mark.asyncio
-    async def test_backoff_timing_constraints(
-        self, mock_prisma_client, mock_proxy_logging, connection_errors
-    ):
+    async def test_backoff_timing_constraints(self, mock_prisma_client, mock_proxy_logging, connection_errors):
         """Test that backoff respects max_time constraint (10 seconds)"""
         # Mock all calls to fail to test max_time
         mock_prisma_client.db.query_raw.side_effect = connection_errors[0]
 
-        client = PrismaClient(
-            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
-        )
+        client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
         client.db = mock_prisma_client.db
         client.proxy_logging_obj = mock_prisma_client.proxy_logging_obj
 

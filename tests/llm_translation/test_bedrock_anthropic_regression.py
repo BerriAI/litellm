@@ -141,9 +141,7 @@ class TestBedrockAnthropicPromptCachingRegression:
                 headers={},
             )
 
-            print(
-                f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}"
-            )
+            print(f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}")
 
             # For converse, cache_control should be transformed to cachePoint
             assert "messages" in result
@@ -151,13 +149,9 @@ class TestBedrockAnthropicPromptCachingRegression:
             assert "content" in user_msg
 
             # Check that cachePoint is present (Bedrock Converse format)
-            has_cache_point = any(
-                isinstance(c, dict) and "cachePoint" in c for c in user_msg["content"]
-            )
+            has_cache_point = any(isinstance(c, dict) and "cachePoint" in c for c in user_msg["content"])
             # The transformation should preserve the cache marking in some form
-            assert (
-                "messages" in result
-            ), "messages should be present in converse request"
+            assert "messages" in result, "messages should be present in converse request"
 
         else:
             config = AmazonAnthropicClaudeConfig()
@@ -169,9 +163,7 @@ class TestBedrockAnthropicPromptCachingRegression:
                 headers={},
             )
 
-            print(
-                f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}"
-            )
+            print(f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}")
 
             # For invoke, cache_control should be preserved in messages content
             assert "messages" in result
@@ -179,13 +171,8 @@ class TestBedrockAnthropicPromptCachingRegression:
             assert "content" in user_msg
 
             # Check that cache_control is preserved
-            has_cache_control = any(
-                isinstance(c, dict) and "cache_control" in c
-                for c in user_msg["content"]
-            )
-            assert (
-                has_cache_control
-            ), "cache_control should be present in invoke messages"
+            has_cache_control = any(isinstance(c, dict) and "cache_control" in c for c in user_msg["content"])
+            assert has_cache_control, "cache_control should be present in invoke messages"
 
     @pytest.mark.parametrize(
         "model_prefix",
@@ -254,10 +241,7 @@ class TestBedrockAnthropicPromptCachingRegression:
         if "converse" in model_prefix and "additionalModelRequestFields" in result:
             additional_fields = result["additionalModelRequestFields"]
             if "anthropic_beta" in additional_fields:
-                assert (
-                    "prompt-caching-2024-07-31"
-                    not in additional_fields["anthropic_beta"]
-                )
+                assert "prompt-caching-2024-07-31" not in additional_fields["anthropic_beta"]
 
 
 class TestBedrockAnthropic1MContextRegression:
@@ -305,21 +289,19 @@ class TestBedrockAnthropic1MContextRegression:
                 headers=headers,
             )
 
-            print(
-                f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}"
-            )
+            print(f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}")
 
             # For converse, beta header should be in additionalModelRequestFields
-            assert (
-                "additionalModelRequestFields" in result
-            ), f"{model_prefix}: additionalModelRequestFields should be present for anthropic-beta headers"
+            assert "additionalModelRequestFields" in result, (
+                f"{model_prefix}: additionalModelRequestFields should be present for anthropic-beta headers"
+            )
             additional_fields = result["additionalModelRequestFields"]
-            assert (
-                "anthropic_beta" in additional_fields
-            ), f"{model_prefix}: anthropic_beta should be in additionalModelRequestFields"
-            assert (
-                "context-1m-2025-08-07" in additional_fields["anthropic_beta"]
-            ), f"{model_prefix}: context-1m-2025-08-07 should be in anthropic_beta array"
+            assert "anthropic_beta" in additional_fields, (
+                f"{model_prefix}: anthropic_beta should be in additionalModelRequestFields"
+            )
+            assert "context-1m-2025-08-07" in additional_fields["anthropic_beta"], (
+                f"{model_prefix}: context-1m-2025-08-07 should be in anthropic_beta array"
+            )
         else:
             config = AmazonAnthropicClaudeConfig()
             result = config.transform_request(
@@ -330,17 +312,13 @@ class TestBedrockAnthropic1MContextRegression:
                 headers=headers,
             )
 
-            print(
-                f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}"
-            )
+            print(f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}")
 
             # For invoke, beta header should be in top-level request
-            assert (
-                "anthropic_beta" in result
-            ), f"{model_prefix}: anthropic_beta should be in request body"
-            assert (
-                "context-1m-2025-08-07" in result["anthropic_beta"]
-            ), f"{model_prefix}: context-1m-2025-08-07 should be in anthropic_beta array"
+            assert "anthropic_beta" in result, f"{model_prefix}: anthropic_beta should be in request body"
+            assert "context-1m-2025-08-07" in result["anthropic_beta"], (
+                f"{model_prefix}: context-1m-2025-08-07 should be in anthropic_beta array"
+            )
 
     @pytest.mark.parametrize(
         "model_prefix",
@@ -511,9 +489,7 @@ class TestBedrockAnthropicCombinedRegressions:
             assert "context-1m-2025-08-07" in additional_fields["anthropic_beta"]
 
             # Should NOT have prompt-caching header
-            assert (
-                "prompt-caching-2024-07-31" not in additional_fields["anthropic_beta"]
-            )
+            assert "prompt-caching-2024-07-31" not in additional_fields["anthropic_beta"]
 
         else:
             config = AmazonAnthropicClaudeConfig()
@@ -534,8 +510,5 @@ class TestBedrockAnthropicCombinedRegressions:
 
             # Should have cache_control in messages
             user_msg = result["messages"][0]
-            has_cache_control = any(
-                isinstance(c, dict) and "cache_control" in c
-                for c in user_msg["content"]
-            )
+            has_cache_control = any(isinstance(c, dict) and "cache_control" in c for c in user_msg["content"])
             assert has_cache_control

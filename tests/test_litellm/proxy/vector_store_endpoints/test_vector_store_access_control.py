@@ -120,9 +120,7 @@ async def test_delete_vector_store_checks_access():
             "team_id": "team_456",
         }
     )
-    mock_prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
-        return_value=mock_vector_store
-    )
+    mock_prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=mock_vector_store)
 
     # User from different team should get 403
     user_api_key_dict = UserAPIKeyAuth(team_id="team_789")
@@ -134,9 +132,7 @@ async def test_delete_vector_store_checks_access():
     ):
         with patch("litellm.vector_store_registry", None):
             with pytest.raises(HTTPException) as exc_info:
-                await delete_vector_store(
-                    data=request, user_api_key_dict=user_api_key_dict
-                )
+                await delete_vector_store(data=request, user_api_key_dict=user_api_key_dict)
 
             assert exc_info.value.status_code == 403
             assert "Access denied" in exc_info.value.detail

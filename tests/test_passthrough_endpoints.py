@@ -48,9 +48,7 @@ async def cohere_rerank(session):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="new test just added by @ishaan-jaff, still figuring out how to run this in ci/cd"
-)
+@pytest.mark.skip(reason="new test just added by @ishaan-jaff, still figuring out how to run this in ci/cd")
 async def test_basic_passthrough():
     """
     - Make request to pass through endpoint

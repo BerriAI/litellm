@@ -28,9 +28,7 @@ def test_new_metrics_in_defined_metrics():
     ]
 
     for metric in new_metrics:
-        assert (
-            metric in defined_metrics
-        ), f"{metric} should be in DEFINED_PROMETHEUS_METRICS"
+        assert metric in defined_metrics, f"{metric} should be in DEFINED_PROMETHEUS_METRICS"
 
 
 def test_new_metrics_have_correct_labels():
@@ -52,17 +50,15 @@ def test_new_metrics_have_correct_labels():
     for metric in api_key_metrics:
         labels = PrometheusMetricLabels.get_labels(metric)
         for expected_label in expected_api_key_labels:
-            assert (
-                expected_label in labels
-            ), f"{metric} should have label {expected_label}"
+            assert expected_label in labels, f"{metric} should have label {expected_label}"
 
     # Test Callback failure metric labels
     callback_metric = "litellm_callback_logging_failures_metric"
     callback_labels = PrometheusMetricLabels.get_labels(callback_metric)
 
-    assert (
-        UserAPIKeyLabelNames.CALLBACK_NAME.value in callback_labels
-    ), f"{callback_metric} should have label {UserAPIKeyLabelNames.CALLBACK_NAME.value}"
+    assert UserAPIKeyLabelNames.CALLBACK_NAME.value in callback_labels, (
+        f"{callback_metric} should have label {UserAPIKeyLabelNames.CALLBACK_NAME.value}"
+    )
 
 
 def test_callback_name_label_definition():

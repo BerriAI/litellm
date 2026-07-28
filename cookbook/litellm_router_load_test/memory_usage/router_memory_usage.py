@@ -6,9 +6,7 @@ import os
 import time
 import asyncio
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm import Router
 from dotenv import load_dotenv
@@ -41,9 +39,7 @@ model_list = [
     },
 ]
 litellm.set_verbose = True
-litellm.cache = litellm.Cache(
-    type="s3", s3_bucket_name="litellm-my-test-bucket-2", s3_region_name="us-east-1"
-)
+litellm.cache = litellm.Cache(type="s3", s3_bucket_name="litellm-my-test-bucket-2", s3_region_name="us-east-1")
 router = Router(
     model_list=model_list,
     set_verbose=True,
@@ -57,9 +53,7 @@ async def router_acompletion():
     resp = await router.aembedding(model="text-embedding-ada-002", input=question)
     print("embedding-resp", resp)
 
-    response = await router.acompletion(
-        model="gpt-3.5-turbo", messages=[{"role": "user", "content": question}]
-    )
+    response = await router.acompletion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": question}])
     print("completion-resp", response)
     return response
 

@@ -13,9 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 from fastapi import HTTPException, Request, Response
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
@@ -45,14 +43,10 @@ class TestWatsonxProxyRoute:
             "https://us-south.ml.cloud.ibm.com/ml/v1/text/generation",
             {},
         )
-        mock_provider_config.validate_environment.return_value = {
-            "Authorization": "Bearer test-iam-token"
-        }
+        mock_provider_config.validate_environment.return_value = {"Authorization": "Bearer test-iam-token"}
 
         # Mock endpoint function
-        mock_endpoint_func = AsyncMock(
-            return_value={"model_id": "ibm/granite-13b-chat-v2", "results": []}
-        )
+        mock_endpoint_func = AsyncMock(return_value={"model_id": "ibm/granite-13b-chat-v2", "results": []})
 
         with (
             patch(
@@ -79,24 +73,14 @@ class TestWatsonxProxyRoute:
             mock_create_route.assert_called_once()
             call_args = mock_create_route.call_args[1]
             assert call_args["endpoint"] == "ml/v1/text/generation"
-            assert (
-                call_args["target"]
-                == "https://us-south.ml.cloud.ibm.com/ml/v1/text/generation"
-            )
-            assert (
-                call_args["custom_headers"]["Authorization"] == "Bearer test-iam-token"
-            )
+            assert call_args["target"] == "https://us-south.ml.cloud.ibm.com/ml/v1/text/generation"
+            assert call_args["custom_headers"]["Authorization"] == "Bearer test-iam-token"
             assert call_args["is_streaming_request"] is False
             assert call_args["custom_llm_provider"] == "watsonx"
-            assert (
-                call_args["query_params"]["version"]
-                == litellm.WATSONX_DEFAULT_API_VERSION
-            )
+            assert call_args["query_params"]["version"] == litellm.WATSONX_DEFAULT_API_VERSION
 
             # Verify endpoint function was called
-            mock_endpoint_func.assert_called_once_with(
-                mock_request, mock_response, mock_user_api_key_dict
-            )
+            mock_endpoint_func.assert_called_once_with(mock_request, mock_response, mock_user_api_key_dict)
 
             assert result == {"model_id": "ibm/granite-13b-chat-v2", "results": []}
 
@@ -118,9 +102,7 @@ class TestWatsonxProxyRoute:
             "https://us-south.ml.cloud.ibm.com/ml/v1/text/generation_stream",
             {},
         )
-        mock_provider_config.validate_environment.return_value = {
-            "Authorization": "Bearer test-iam-token"
-        }
+        mock_provider_config.validate_environment.return_value = {"Authorization": "Bearer test-iam-token"}
 
         # Mock endpoint function
         mock_endpoint_func = AsyncMock(return_value="streaming_response")
@@ -166,9 +148,7 @@ class TestWatsonxProxyRoute:
             "https://us-south.ml.cloud.ibm.com/ml/v1/models",
             {},
         )
-        mock_provider_config.validate_environment.return_value = {
-            "Authorization": "Bearer test-iam-token"
-        }
+        mock_provider_config.validate_environment.return_value = {"Authorization": "Bearer test-iam-token"}
 
         # Mock endpoint function
         mock_endpoint_func = AsyncMock(return_value={"resources": []})
@@ -217,9 +197,7 @@ class TestWatsonxProxyRoute:
             "https://us-south.ml.cloud.ibm.com/ml/v1/text/tokenization",
             {},
         )
-        mock_provider_config.validate_environment.return_value = {
-            "Authorization": "Bearer test-iam-token"
-        }
+        mock_provider_config.validate_environment.return_value = {"Authorization": "Bearer test-iam-token"}
 
         # Mock endpoint function
         mock_endpoint_func = AsyncMock(return_value={"token_count": 10})
@@ -298,9 +276,7 @@ class TestWatsonxProxyRoute:
             "https://us-south.ml.cloud.ibm.com/ml/v1/text/generation",
             {},
         )
-        mock_provider_config.validate_environment.return_value = {
-            "Authorization": "Bearer test-iam-token"
-        }
+        mock_provider_config.validate_environment.return_value = {"Authorization": "Bearer test-iam-token"}
 
         # Mock endpoint function
         mock_endpoint_func = AsyncMock(return_value={})
@@ -327,10 +303,7 @@ class TestWatsonxProxyRoute:
             call_args = mock_create_route.call_args[1]
             assert "query_params" in call_args
             assert "version" in call_args["query_params"]
-            assert (
-                call_args["query_params"]["version"]
-                == litellm.WATSONX_DEFAULT_API_VERSION
-            )
+            assert call_args["query_params"]["version"] == litellm.WATSONX_DEFAULT_API_VERSION
 
     @pytest.mark.asyncio
     async def test_watsonx_proxy_route_custom_headers_from_validate_environment(self):
@@ -379,9 +352,7 @@ class TestWatsonxProxyRoute:
             mock_create_route.assert_called_once()
             call_args = mock_create_route.call_args[1]
             assert "custom_headers" in call_args
-            assert (
-                call_args["custom_headers"]["Authorization"] == "Bearer test-iam-token"
-            )
+            assert call_args["custom_headers"]["Authorization"] == "Bearer test-iam-token"
             assert call_args["custom_headers"]["X-Custom-Header"] == "custom-value"
 
     @pytest.mark.asyncio
@@ -410,9 +381,7 @@ class TestWatsonxProxyRoute:
                 f"https://us-south.ml.cloud.ibm.com/{endpoint_path}",
                 {},
             )
-            mock_provider_config.validate_environment.return_value = {
-                "Authorization": "Bearer test-iam-token"
-            }
+            mock_provider_config.validate_environment.return_value = {"Authorization": "Bearer test-iam-token"}
 
             # Mock endpoint function
             mock_endpoint_func = AsyncMock(return_value={})
@@ -438,7 +407,4 @@ class TestWatsonxProxyRoute:
                 mock_create_route.assert_called_once()
                 call_args = mock_create_route.call_args[1]
                 assert call_args["endpoint"] == endpoint_path
-                assert (
-                    call_args["target"]
-                    == f"https://us-south.ml.cloud.ibm.com/{endpoint_path}"
-                )
+                assert call_args["target"] == f"https://us-south.ml.cloud.ibm.com/{endpoint_path}"

@@ -63,9 +63,7 @@ class TestRAGFlowVectorStore(BaseVectorStoreTest):
         assert url == "http://custom-host:9999/api/v1/datasets"
 
         # Test with api_base parameter
-        url = config.get_complete_url(
-            api_base="http://test-host:8888", litellm_params={}
-        )
+        url = config.get_complete_url(api_base="http://test-host:8888", litellm_params={})
         assert url == "http://test-host:8888/api/v1/datasets"
 
         # Test with default (no api_base provided)
@@ -74,9 +72,7 @@ class TestRAGFlowVectorStore(BaseVectorStoreTest):
             assert url == "http://localhost:9380/api/v1/datasets"
 
         # Test with trailing slash removal
-        url = config.get_complete_url(
-            api_base="http://test-host:8888/", litellm_params={}
-        )
+        url = config.get_complete_url(api_base="http://test-host:8888/", litellm_params={})
         assert url == "http://test-host:8888/api/v1/datasets"
 
     def test_validate_environment(self):
@@ -107,9 +103,7 @@ class TestRAGFlowVectorStore(BaseVectorStoreTest):
 
         params: VectorStoreCreateOptionalRequestParams = {"name": "test-dataset"}
 
-        url, body = config.transform_create_vector_store_request(
-            params, "http://localhost:9380/api/v1/datasets"
-        )
+        url, body = config.transform_create_vector_store_request(params, "http://localhost:9380/api/v1/datasets")
 
         assert url == "http://localhost:9380/api/v1/datasets"
         assert body["name"] == "test-dataset"
@@ -130,9 +124,7 @@ class TestRAGFlowVectorStore(BaseVectorStoreTest):
             },
         }
 
-        url, body = config.transform_create_vector_store_request(
-            params, "http://localhost:9380/api/v1/datasets"
-        )
+        url, body = config.transform_create_vector_store_request(params, "http://localhost:9380/api/v1/datasets")
 
         assert body["name"] == "test-dataset-advanced"
         assert body["description"] == "Test dataset"
@@ -149,9 +141,7 @@ class TestRAGFlowVectorStore(BaseVectorStoreTest):
         params: VectorStoreCreateOptionalRequestParams = {}
 
         with pytest.raises(ValueError, match="name is required"):
-            config.transform_create_vector_store_request(
-                params, "http://localhost:9380/api/v1/datasets"
-            )
+            config.transform_create_vector_store_request(params, "http://localhost:9380/api/v1/datasets")
 
     def test_transform_create_vector_store_request_mutually_exclusive(self):
         """Test that chunk_method and pipeline_id are mutually exclusive."""
@@ -166,9 +156,7 @@ class TestRAGFlowVectorStore(BaseVectorStoreTest):
         }
 
         with pytest.raises(ValueError, match="mutually exclusive"):
-            config.transform_create_vector_store_request(
-                params, "http://localhost:9380/api/v1/datasets"
-            )
+            config.transform_create_vector_store_request(params, "http://localhost:9380/api/v1/datasets")
 
     def test_transform_create_vector_store_request_with_pipeline(self):
         """Test dataset creation with ingestion pipeline."""
@@ -182,9 +170,7 @@ class TestRAGFlowVectorStore(BaseVectorStoreTest):
             },
         }
 
-        url, body = config.transform_create_vector_store_request(
-            params, "http://localhost:9380/api/v1/datasets"
-        )
+        url, body = config.transform_create_vector_store_request(params, "http://localhost:9380/api/v1/datasets")
 
         assert body["name"] == "test-pipeline-dataset"
         assert body["parse_type"] == 2
@@ -283,35 +269,23 @@ class TestRAGFlowVectorStore(BaseVectorStoreTest):
         """Override to handle RAGFlow-specific response format."""
         # RAGFlow IDs are hex strings (not OpenAI-style vs_* format)
         # So we override the base validation to not check for vs_ prefix
-        assert isinstance(
-            response, dict
-        ), f"Response should be a dict, got {type(response)}"
+        assert isinstance(response, dict), f"Response should be a dict, got {type(response)}"
         assert "id" in response, "Missing required field 'id' in create response"
-        assert (
-            "object" in response
-        ), "Missing required field 'object' in create response"
-        assert (
-            "created_at" in response
-        ), "Missing required field 'created_at' in create response"
+        assert "object" in response, "Missing required field 'object' in create response"
+        assert "created_at" in response, "Missing required field 'created_at' in create response"
 
-        assert (
-            response["object"] == "vector_store"
-        ), f"Expected object to be 'vector_store', got '{response['object']}'"
+        assert response["object"] == "vector_store", f"Expected object to be 'vector_store', got '{response['object']}'"
 
-        assert isinstance(
-            response["id"], str
-        ), f"id should be a string, got {type(response['id'])}"
+        assert isinstance(response["id"], str), f"id should be a string, got {type(response['id'])}"
         assert len(response["id"]) > 0, "id should not be empty"
         # RAGFlow IDs are hex strings, not OpenAI-style vs_* format
 
-        assert isinstance(
-            response["created_at"], int
-        ), f"created_at should be an integer, got {type(response['created_at'])}"
+        assert isinstance(response["created_at"], int), (
+            f"created_at should be an integer, got {type(response['created_at'])}"
+        )
         assert response["created_at"] > 0, "created_at should be a positive timestamp"
 
-        print(
-            f"✅ RAGFlow create response validation passed: Dataset '{response['id']}' created successfully"
-        )
+        print(f"✅ RAGFlow create response validation passed: Dataset '{response['id']}' created successfully")
 
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
@@ -349,19 +323,11 @@ class TestRAGFlowVectorStore(BaseVectorStoreTest):
                 or "connect" in error_str
                 or "APIConnectionError" in error_type
             ):
-                pytest.skip(
-                    f"Skipping test due to connection error (RAGFlow instance may not be running): {e}"
-                )
+                pytest.skip(f"Skipping test due to connection error (RAGFlow instance may not be running): {e}")
 
             # If this is an authentication or permission error, skip the test
-            if (
-                "authentication" in error_str
-                or "permission" in error_str
-                or "unauthorized" in error_str
-            ):
-                pytest.skip(
-                    f"Skipping test due to authentication/permission error: {e}"
-                )
+            if "authentication" in error_str or "permission" in error_str or "unauthorized" in error_str:
+                pytest.skip(f"Skipping test due to authentication/permission error: {e}")
 
             # Re-raise if it's not a handled error
             raise

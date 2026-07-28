@@ -98,9 +98,7 @@ def _build_logging_obj_wired_to_root(
         litellm_call_id="lit-3443-call",
         function_id="1245",
     )
-    payload = PassthroughStandardLoggingPayload(
-        url=URL_ROUTE, request_body=body, request_method="POST"
-    )
+    payload = PassthroughStandardLoggingPayload(url=URL_ROUTE, request_body=body, request_method="POST")
     kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=request,
         user_api_key_dict=user_api_key_dict,
@@ -151,8 +149,7 @@ def _assert_root_closed_and_no_orphan(exporter, root_span, where):
 
     server_spans = [s for s in finished if s.name == LITELLM_PROXY_REQUEST_SPAN_NAME]
     assert server_spans, (
-        f"{where}: SERVER root span was never ended/exported — exporter saw "
-        f"{[s.name for s in finished]}"
+        f"{where}: SERVER root span was never ended/exported — exporter saw {[s.name for s in finished]}"
     )
 
     foreign = [s for s in finished if s.context.trace_id != root_ctx.trace_id]
@@ -169,9 +166,7 @@ def _assert_child_parented_to_root(exporter, root_span, where):
     children = [
         s
         for s in finished
-        if s.name != LITELLM_PROXY_REQUEST_SPAN_NAME
-        and s.parent is not None
-        and s.parent.span_id == root_ctx.span_id
+        if s.name != LITELLM_PROXY_REQUEST_SPAN_NAME and s.parent is not None and s.parent.span_id == root_ctx.span_id
     ]
     assert children, (
         f"{where}: no litellm_request child parented to the SERVER root — "
@@ -196,9 +191,7 @@ def test_non_streaming_passthrough_links_to_server_root(
     _otel, exporter = otel_success_callback
     root = server_span_factory("/anthropic/v1/messages")
 
-    logging_obj, kwargs, start_time = _build_logging_obj_wired_to_root(
-        root, stream=False
-    )
+    logging_obj, kwargs, start_time = _build_logging_obj_wired_to_root(root, stream=False)
     end_time = datetime.now()
     asyncio.run(
         logging_obj.async_success_handler(
@@ -228,9 +221,7 @@ def test_streaming_passthrough_links_to_server_root(
     _otel, exporter = otel_success_callback
     root = server_span_factory("/anthropic/v1/messages")
 
-    logging_obj, _kwargs, start_time = _build_logging_obj_wired_to_root(
-        root, stream=True
-    )
+    logging_obj, _kwargs, start_time = _build_logging_obj_wired_to_root(root, stream=True)
     raw_bytes = ["\n".join(STREAM_CHUNKS).encode("utf-8")]
     end_time = datetime.now()
     asyncio.run(
@@ -294,9 +285,7 @@ def test_init_kwargs_internal_keys_resist_client_metadata(server_span_factory):
     Pure dict assertion, no async or OTEL execution. Fails on the old ordering
     where the client values were merged in last."""
     real_span = server_span_factory("/anthropic/v1/messages")
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="sk-real-key", parent_otel_span=real_span
-    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-real-key", parent_otel_span=real_span)
     body = {
         "model": MODEL,
         "messages": [{"role": "user", "content": "hi"}],
@@ -314,9 +303,7 @@ def test_init_kwargs_internal_keys_resist_client_metadata(server_span_factory):
         litellm_call_id="lit-3443-clobber",
         function_id="1245",
     )
-    payload = PassthroughStandardLoggingPayload(
-        url=URL_ROUTE, request_body=body, request_method="POST"
-    )
+    payload = PassthroughStandardLoggingPayload(url=URL_ROUTE, request_body=body, request_method="POST")
     kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=_make_request(),
         user_api_key_dict=user_api_key_dict,

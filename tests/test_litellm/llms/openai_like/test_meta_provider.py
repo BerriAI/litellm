@@ -95,9 +95,7 @@ class TestMetaProviderConfig:
 
 class TestMetaReasoningParams:
     def test_muse_spark_supports_reasoning_effort(self):
-        params = litellm.get_supported_openai_params(
-            model="muse-spark-1.1", custom_llm_provider="meta"
-        )
+        params = litellm.get_supported_openai_params(model="muse-spark-1.1", custom_llm_provider="meta")
         assert params is not None
         assert "reasoning_effort" in params
 
@@ -116,9 +114,7 @@ class TestMetaReasoningParams:
 
     def test_reasoning_effort_gated_on_capability(self):
         """A meta model without reasoning metadata must not advertise reasoning_effort."""
-        params = litellm.get_supported_openai_params(
-            model="some-non-reasoning-model", custom_llm_provider="meta"
-        )
+        params = litellm.get_supported_openai_params(model="some-non-reasoning-model", custom_llm_provider="meta")
         assert params is not None
         assert "reasoning_effort" not in params
 

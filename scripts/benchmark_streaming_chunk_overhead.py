@@ -124,9 +124,7 @@ def bedrock_invoke_chunks(n: int) -> List[GChunk]:
 
 
 def bedrock_converse_chunks(n: int) -> List[ModelResponseStream]:
-    out: List[ModelResponseStream] = [
-        _make_converse_chunk(f"tok{i} ") for i in range(n)
-    ]
+    out: List[ModelResponseStream] = [_make_converse_chunk(f"tok{i} ") for i in range(n)]
     out.append(
         _make_converse_chunk(
             text="",
@@ -149,9 +147,7 @@ PROVIDERS: dict[str, tuple[str, Callable[[int], list]]] = {
 # ---------------------------------------------------------------------------
 
 
-def _make_wrapper(
-    chunks: list, provider: str, async_stream: bool
-) -> CustomStreamWrapper:
+def _make_wrapper(chunks: list, provider: str, async_stream: bool) -> CustomStreamWrapper:
     logging_obj = _make_logging_obj(provider)
     if async_stream:
 
@@ -176,9 +172,7 @@ class TimingSample:
     cpu_s: float
 
 
-def drive_sync(
-    provider_key: str, chunks_per_stream: int, n_streams: int
-) -> TimingSample:
+def drive_sync(provider_key: str, chunks_per_stream: int, n_streams: int) -> TimingSample:
     provider, factory = PROVIDERS[provider_key]
     # Pre-build the chunk lists; we only measure wrapper iteration cost.
     chunk_lists = [factory(chunks_per_stream) for _ in range(n_streams)]
@@ -198,9 +192,7 @@ def drive_sync(
     return TimingSample(wall_s=wall_elapsed, cpu_s=cpu_elapsed)
 
 
-async def drive_async(
-    provider_key: str, chunks_per_stream: int, n_streams: int
-) -> TimingSample:
+async def drive_async(provider_key: str, chunks_per_stream: int, n_streams: int) -> TimingSample:
     provider, factory = PROVIDERS[provider_key]
     chunk_lists = [factory(chunks_per_stream) for _ in range(n_streams)]
     gc.collect()
@@ -222,6 +214,7 @@ async def drive_async(
 # ---------------------------------------------------------------------------
 # Repeat × take-min runner
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class Result:
@@ -255,23 +248,15 @@ def run_case(
         # Warmup runs amortize import-time and JIT-y caches.
         for _ in range(warmup):
             drive_sync(provider_key, chunks_per_stream, max(1, n_streams // 10))
-        samples = [
-            drive_sync(provider_key, chunks_per_stream, n_streams)
-            for _ in range(repeats)
-        ]
+        samples = [drive_sync(provider_key, chunks_per_stream, n_streams) for _ in range(repeats)]
     elif mode == "async":
 
         async def _warm():
             for _ in range(warmup):
-                await drive_async(
-                    provider_key, chunks_per_stream, max(1, n_streams // 10)
-                )
+                await drive_async(provider_key, chunks_per_stream, max(1, n_streams // 10))
 
         asyncio.run(_warm())
-        samples = [
-            asyncio.run(drive_async(provider_key, chunks_per_stream, n_streams))
-            for _ in range(repeats)
-        ]
+        samples = [asyncio.run(drive_async(provider_key, chunks_per_stream, n_streams)) for _ in range(repeats)]
     else:
         raise ValueError(f"unknown mode {mode!r}")
 
@@ -310,8 +295,8 @@ def run_case(
 def format_result(r: Result) -> str:
     return (
         f"  {r.provider:18s} {r.mode:5s}: "
-        f"min={r.elapsed_min_s*1000:8.2f} ms  "
-        f"median={r.elapsed_median_s*1000:8.2f} ms  "
+        f"min={r.elapsed_min_s * 1000:8.2f} ms  "
+        f"median={r.elapsed_median_s * 1000:8.2f} ms  "
         f"per-chunk={r.per_chunk_us:7.2f} μs  "
         f"cpu/chunk={r.cpu_per_chunk_us:7.2f} μs  "
         f"cpu/wall={r.cpu_to_wall_ratio:5.2f}x  "
@@ -327,9 +312,7 @@ def format_result(r: Result) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument(
-        "--label", required=True, help="Run label (e.g. baseline / optimized)"
-    )
+    ap.add_argument("--label", required=True, help="Run label (e.g. baseline / optimized)")
     ap.add_argument("--streams", type=int, default=500, help="Streams per run")
     ap.add_argument(
         "--chunks",
@@ -338,9 +321,7 @@ def main() -> None:
         help="Text chunks per stream (excl. finish chunk)",
     )
     ap.add_argument("--warmup", type=int, default=2, help="Warmup runs")
-    ap.add_argument(
-        "--repeats", type=int, default=5, help="Measured runs (we report min)"
-    )
+    ap.add_argument("--repeats", type=int, default=5, help="Measured runs (we report min)")
     ap.add_argument(
         "--providers",
         default="anthropic,bedrock_invoke,bedrock_converse",
@@ -351,9 +332,7 @@ def main() -> None:
         default="sync,async",
         help="Comma-separated iteration modes (sync/async)",
     )
-    ap.add_argument(
-        "--json", dest="json_out", help="Write results as JSON to this path"
-    )
+    ap.add_argument("--json", dest="json_out", help="Write results as JSON to this path")
     args = ap.parse_args()
 
     providers = [p.strip() for p in args.providers.split(",") if p.strip()]

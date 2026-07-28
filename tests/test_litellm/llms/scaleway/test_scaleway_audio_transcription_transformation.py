@@ -103,17 +103,15 @@ def _open_test_audio():
 
 def test_scaleway_transform_request_builds_multipart_with_supported_params():
     with _open_test_audio() as audio_file:
-        result = (
-            ScalewayAudioTranscriptionConfig().transform_audio_transcription_request(
-                model="whisper-large-v3",
-                audio_file=audio_file,
-                optional_params={
-                    "language": "en",
-                    "temperature": 0.0,
-                    "response_format": "verbose_json",
-                },
-                litellm_params={},
-            )
+        result = ScalewayAudioTranscriptionConfig().transform_audio_transcription_request(
+            model="whisper-large-v3",
+            audio_file=audio_file,
+            optional_params={
+                "language": "en",
+                "temperature": 0.0,
+                "response_format": "verbose_json",
+            },
+            litellm_params={},
         )
 
     assert isinstance(result.data, dict)
@@ -129,17 +127,15 @@ def test_scaleway_transform_request_builds_multipart_with_supported_params():
 def test_scaleway_transform_request_drops_unsupported_params():
     """Only params in get_supported_openai_params() should land in the form."""
     with _open_test_audio() as audio_file:
-        result = (
-            ScalewayAudioTranscriptionConfig().transform_audio_transcription_request(
-                model="whisper-large-v3",
-                audio_file=audio_file,
-                optional_params={
-                    "language": "en",
-                    "stream": True,  # not supported
-                    "diarize": True,  # not supported
-                },
-                litellm_params={},
-            )
+        result = ScalewayAudioTranscriptionConfig().transform_audio_transcription_request(
+            model="whisper-large-v3",
+            audio_file=audio_file,
+            optional_params={
+                "language": "en",
+                "stream": True,  # not supported
+                "diarize": True,  # not supported
+            },
+            litellm_params={},
         )
 
     assert "stream" not in result.data
@@ -157,11 +153,7 @@ def test_scaleway_transform_response_parses_text():
     mock_response.headers = {"content-type": "application/json"}
     mock_response.json.return_value = {"text": "Four score and seven years ago"}
 
-    response = (
-        ScalewayAudioTranscriptionConfig().transform_audio_transcription_response(
-            mock_response
-        )
-    )
+    response = ScalewayAudioTranscriptionConfig().transform_audio_transcription_response(mock_response)
 
     assert isinstance(response, TranscriptionResponse)
     assert response.text == "Four score and seven years ago"
@@ -179,11 +171,7 @@ def test_scaleway_transform_response_preserves_segments_and_language():
         ],
     }
 
-    response = (
-        ScalewayAudioTranscriptionConfig().transform_audio_transcription_response(
-            mock_response
-        )
-    )
+    response = ScalewayAudioTranscriptionConfig().transform_audio_transcription_response(mock_response)
 
     assert response.text == "hello world"
     assert response["language"] == "en"
@@ -200,9 +188,7 @@ def test_scaleway_transform_response_raises_typed_exception_on_non_json():
     mock_response.status_code = 502
 
     with pytest.raises(ScalewayAudioTranscriptionException):
-        ScalewayAudioTranscriptionConfig().transform_audio_transcription_response(
-            mock_response
-        )
+        ScalewayAudioTranscriptionConfig().transform_audio_transcription_response(mock_response)
 
 
 def test_scaleway_transform_response_returns_plain_text_for_non_json_content_type():
@@ -213,11 +199,7 @@ def test_scaleway_transform_response_returns_plain_text_for_non_json_content_typ
     mock_response.headers = {"content-type": "text/plain; charset=utf-8"}
     mock_response.text = "Four score and seven years ago"
 
-    response = (
-        ScalewayAudioTranscriptionConfig().transform_audio_transcription_response(
-            mock_response
-        )
-    )
+    response = ScalewayAudioTranscriptionConfig().transform_audio_transcription_response(mock_response)
 
     assert isinstance(response, TranscriptionResponse)
     assert response.text == "Four score and seven years ago"

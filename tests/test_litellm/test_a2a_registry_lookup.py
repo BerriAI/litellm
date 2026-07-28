@@ -60,14 +60,10 @@ def test_a2a_registry_integration():
         global_agent_registry.register_agent(test_agent)
 
         try:
-            litellm.completion(
-                model="a2a/test-agent", messages=[{"role": "user", "content": "Hello"}]
-            )
+            litellm.completion(model="a2a/test-agent", messages=[{"role": "user", "content": "Hello"}])
         except Exception as e:
             # Should use registry URL (connection error expected)
-            assert "registry-url.example.com" in str(e) or "APIConnectionError" in str(
-                type(e).__name__
-            )
+            assert "registry-url.example.com" in str(e) or "APIConnectionError" in str(type(e).__name__)
         finally:
             global_agent_registry.agent_list = original_agents
 

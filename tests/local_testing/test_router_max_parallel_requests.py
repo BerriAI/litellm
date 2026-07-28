@@ -77,9 +77,7 @@ def test_scenario(max_parallel_requests, tpm, rpm, default_max_parallel_requests
         for dmp in default_max_parallel_requests
     ],
 )
-def test_setting_mpr_limits_per_model(
-    max_parallel_requests, tpm, rpm, default_max_parallel_requests
-):
+def test_setting_mpr_limits_per_model(max_parallel_requests, tpm, rpm, default_max_parallel_requests):
     deployment = {
         "model_name": "gpt-3.5-turbo",
         "litellm_params": {
@@ -110,9 +108,7 @@ def test_setting_mpr_limits_per_model(
         calculated_rpm = int(tpm / 1000 * 6)
         if calculated_rpm == 0:
             calculated_rpm = 1
-        print(
-            f"test calculated_rpm: {calculated_rpm}, calculated_max_parallel_requests={mpr_client._value}"
-        )
+        print(f"test calculated_rpm: {calculated_rpm}, calculated_max_parallel_requests={mpr_client._value}")
         assert calculated_rpm == mpr_client._value
     elif default_max_parallel_requests is not None:
         assert mpr_client._value == default_max_parallel_requests

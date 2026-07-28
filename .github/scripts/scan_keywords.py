@@ -94,11 +94,7 @@ def main() -> int:
         "vertex ai",
         "anthropic",
     ]
-    keywords = (
-        [k.strip() for k in keywords_env.split(",")]
-        if keywords_env
-        else default_keywords
-    )
+    keywords = [k.strip() for k in keywords_env.split(",")] if keywords_env else default_keywords
 
     matches = detect_keywords(combined_text, keywords)
     found = bool(matches)
@@ -119,12 +115,7 @@ def main() -> int:
         body_preview = _excerpt(body)
         preview_block = f"\n{body_preview}" if body_preview else ""
         payload = {
-            "text": (
-                f"New issue 🚨\n"
-                f"{title_part}\n\n{preview_block}\n"
-                f"<{html_url}|View issue>\n"
-                f"Author: {author}"
-            )
+            "text": (f"New issue 🚨\n{title_part}\n\n{preview_block}\n<{html_url}|View issue>\nAuthor: {author}")
         }
         send_webhook(webhook_url, payload)
 

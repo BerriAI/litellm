@@ -18,9 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
@@ -96,11 +94,7 @@ class TestVertexBaseGetVertexRegionGemma:
 
         with patch.dict(
             litellm.model_cost,
-            {
-                "vertex_ai/google/gemma-4-26b-a4b-it-maas": {
-                    "supported_regions": ["global"]
-                }
-            },
+            {"vertex_ai/google/gemma-4-26b-a4b-it-maas": {"supported_regions": ["global"]}},
             clear=False,
         ):
             result = vertex_base.get_vertex_region(
@@ -114,11 +108,7 @@ class TestVertexBaseGetVertexRegionGemma:
 
         with patch.dict(
             litellm.model_cost,
-            {
-                "vertex_ai/google/gemma-4-26b-a4b-it-maas": {
-                    "supported_regions": ["global"]
-                }
-            },
+            {"vertex_ai/google/gemma-4-26b-a4b-it-maas": {"supported_regions": ["global"]}},
             clear=False,
         ):
             result = vertex_base.get_vertex_region(
@@ -144,9 +134,9 @@ class TestCreateVertexURLGemma:
         which in turn generates the /endpoints/openapi URL shape.  If this mapping
         ever changes, the URL-shape tests below become misleading.
         """
-        assert VertexAIPartnerModels.should_use_openai_handler(
-            "google/gemma-4-26b-a4b-it-maas"
-        ), "Gemma MaaS must use the OpenAI-compatible handler (VertexPartnerProvider.llama path)"
+        assert VertexAIPartnerModels.should_use_openai_handler("google/gemma-4-26b-a4b-it-maas"), (
+            "Gemma MaaS must use the OpenAI-compatible handler (VertexPartnerProvider.llama path)"
+        )
 
     def test_global_location_url_format(self):
         # VertexPartnerProvider.llama is correct: Gemma MaaS reaches create_vertex_url
@@ -187,23 +177,13 @@ class TestCreateVertexURLGemma:
 def test_gemma_maas_supports_function_calling():
     """supports_function_calling=true in model_cost must be surfaced by the utility."""
     with patch.dict(litellm.model_cost, _GEMMA_MODEL_COST_ENTRY, clear=False):
-        assert (
-            litellm.utils.supports_function_calling(
-                model="vertex_ai/google/gemma-4-26b-a4b-it-maas"
-            )
-            is True
-        )
+        assert litellm.utils.supports_function_calling(model="vertex_ai/google/gemma-4-26b-a4b-it-maas") is True
 
 
 def test_gemma_maas_supports_vision():
     """supports_vision=true in model_cost must be surfaced by the utility."""
     with patch.dict(litellm.model_cost, _GEMMA_MODEL_COST_ENTRY, clear=False):
-        assert (
-            litellm.utils.supports_vision(
-                model="vertex_ai/google/gemma-4-26b-a4b-it-maas"
-            )
-            is True
-        )
+        assert litellm.utils.supports_vision(model="vertex_ai/google/gemma-4-26b-a4b-it-maas") is True
 
 
 # ---------------------------------------------------------------------------
@@ -254,9 +234,7 @@ async def test_vertex_ai_gemma_global_endpoint_url():
     mock_vertexai.preview = MagicMock()
 
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
-        ) as mock_http_handler,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler,
         patch(
             "litellm.llms.vertex_ai.vertex_ai_partner_models.main.VertexAIPartnerModels._ensure_access_token",
             return_value=("fake-token", "test-project"),
@@ -267,11 +245,7 @@ async def test_vertex_ai_gemma_global_endpoint_url():
         ),
         patch.dict(
             litellm.model_cost,
-            {
-                "vertex_ai/google/gemma-4-26b-a4b-it-maas": {
-                    "supported_regions": ["global"]
-                }
-            },
+            {"vertex_ai/google/gemma-4-26b-a4b-it-maas": {"supported_regions": ["global"]}},
             clear=False,
         ),
     ):
@@ -330,9 +304,7 @@ async def test_vertex_ai_gemma_function_calling_passthrough():
     mock_vertexai.preview = MagicMock()
 
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
-        ) as mock_http_handler,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler,
         patch(
             "litellm.llms.vertex_ai.vertex_ai_partner_models.main.VertexAIPartnerModels._ensure_access_token",
             return_value=("fake-token", "test-project"),
@@ -403,9 +375,7 @@ async def test_vertex_ai_gemma_vision_passthrough():
     mock_vertexai.preview = MagicMock()
 
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
-        ) as mock_http_handler,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler,
         patch(
             "litellm.llms.vertex_ai.vertex_ai_partner_models.main.VertexAIPartnerModels._ensure_access_token",
             return_value=("fake-token", "test-project"),

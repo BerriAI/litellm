@@ -109,9 +109,7 @@ def _build_upstream_app() -> Starlette:
     )
 
 
-def _fake_get_async_httpx_client(
-    llm_provider: Any = None, params: Optional[Dict[str, Any]] = None
-) -> MagicMock:
+def _fake_get_async_httpx_client(llm_provider: Any = None, params: Optional[Dict[str, Any]] = None) -> MagicMock:
     handler = MagicMock()
     handler.client = httpx.AsyncClient(
         transport=ASGITransport(_build_upstream_app()),
@@ -172,8 +170,7 @@ def _proxy_patches(agent: MagicMock) -> List[Any]:
     return [
         patch.object(a2a_endpoints_mod, "_get_agent", return_value=agent),
         patch(
-            "litellm.proxy.agent_endpoints.auth.agent_permission_handler"
-            ".AgentRequestHandler.is_agent_allowed",
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
             new=AsyncMock(return_value=True),
         ),
         patch(
@@ -227,9 +224,7 @@ async def test_proxy_serves_1_0_when_agent_pinned_and_upstream_speaks_03():
         _a2a10_send_params(),
         headers={"a2a-version": "1.0"},
     )
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="sk-test", user_id="test-user", team_id="test-team"
-    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="test-user", team_id="test-team")
 
     with ExitStack() as stack:
         for item in _proxy_patches(agent):
@@ -257,9 +252,7 @@ async def test_proxy_serves_0_3_when_agent_pinned_passthrough():
 
     agent = _make_agent(protocol_version="0.3")
     request = _make_request("message/send", _wire_send_params())
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="sk-test", user_id="test-user", team_id="test-team"
-    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="test-user", team_id="test-team")
 
     with ExitStack() as stack:
         for item in _proxy_patches(agent):
@@ -289,9 +282,7 @@ async def test_proxy_streaming_serves_1_0_envelopes():
         _a2a10_send_params(),
         headers={"a2a-version": "1.0"},
     )
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="sk-test", user_id="test-user", team_id="test-team"
-    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="test-user", team_id="test-team")
 
     with ExitStack() as stack:
         for item in _proxy_patches(agent):
@@ -306,20 +297,12 @@ async def test_proxy_streaming_serves_1_0_envelopes():
 
         lines: List[Dict[str, Any]] = []
         async for raw_line in response.body_iterator:
-            line = (
-                raw_line.decode().strip()
-                if isinstance(raw_line, (bytes, bytearray))
-                else str(raw_line).strip()
-            )
+            line = raw_line.decode().strip() if isinstance(raw_line, (bytes, bytearray)) else str(raw_line).strip()
             if line:
                 lines.append(json.loads(line))
 
     assert lines, "expected at least one streamed JSON-RPC event"
-    message_events = [
-        line
-        for line in lines
-        if isinstance(line.get("result"), dict) and "message" in line["result"]
-    ]
+    message_events = [line for line in lines if isinstance(line.get("result"), dict) and "message" in line["result"]]
     assert message_events, f"expected a 1.0 message envelope, got: {lines}"
     assert message_events[-1]["result"]["message"]["parts"][0]["text"] == "pong"
     assert _UPSTREAM_CALLS, "expected upstream streaming call"

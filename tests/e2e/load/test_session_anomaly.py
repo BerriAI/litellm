@@ -52,9 +52,7 @@ class TestSummarizePlannedTurns:
         assert report.error_ratio == 0.5
 
     def test_all_planned_turns_completing_reports_zero_failures(self) -> None:
-        report = summarize(
-            tuple(_ok_turn(index) for index in range(1, 7)), planned_turns=6
-        )
+        report = summarize(tuple(_ok_turn(index) for index in range(1, 7)), planned_turns=6)
 
         assert report.failed_turns == 0
         assert report.error_ratio == 0.0
@@ -63,9 +61,7 @@ class TestSummarizePlannedTurns:
 class TestRetried:
     def test_transient_failures_then_success_returns_the_success(self) -> None:
         outcome = Success[SessionMessagesResponse](status_code=200, data=SessionMessagesResponse())
-        calls = iter(
-            (NetworkError(message="overloaded"), NetworkError(message="overloaded"), outcome)
-        )
+        calls = iter((NetworkError(message="overloaded"), NetworkError(message="overloaded"), outcome))
 
         result = retried(lambda: next(calls), attempts=3, sleep=lambda _: None)
 
@@ -74,9 +70,7 @@ class TestRetried:
     def test_exhausted_attempts_return_the_last_failure(self) -> None:
         last_attempt = NetworkError(message="still overloaded")
         never_reached = NetworkError(message="a fourth attempt would break the budget")
-        calls = iter(
-            (NetworkError(message="overloaded"), last_attempt, never_reached)
-        )
+        calls = iter((NetworkError(message="overloaded"), last_attempt, never_reached))
 
         result = retried(lambda: next(calls), attempts=2, sleep=lambda _: None)
 

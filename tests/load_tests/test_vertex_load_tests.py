@@ -73,9 +73,7 @@ async def test_vertex_load():
             print(f"Time with text-only message: {start_time_text}")
             print(f"Time with text + image message: {start_time_image}")
 
-            percentage_diff = (
-                (start_time_image - start_time_text) / start_time_text * 100
-            )
+            percentage_diff = (start_time_image - start_time_text) / start_time_text * 100
             percentage_diffs.append(percentage_diff)
             print(f"Performance difference: {percentage_diff:.2f}%")
 
@@ -85,9 +83,9 @@ async def test_vertex_load():
         print(f"\nAverage performance difference: {avg_percentage_diff:.2f}%")
 
         # Assert that the average difference is not more than 20%
-        assert (
-            avg_percentage_diff < 25
-        ), f"Average performance difference of {avg_percentage_diff:.2f}% exceeds 20% threshold"
+        assert avg_percentage_diff < 25, (
+            f"Average performance difference of {avg_percentage_diff:.2f}% exceeds 20% threshold"
+        )
 
     except litellm.Timeout as e:
         pass
@@ -130,9 +128,7 @@ def create_async_task(message_type):
                     {"type": "text", "text": "What is in this image?"},
                     {
                         "type": "image_url",
-                        "image_url": {
-                            "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
-                        },
+                        "image_url": {"url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"},
                     },
                 ],
             }

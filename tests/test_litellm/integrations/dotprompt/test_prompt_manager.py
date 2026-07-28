@@ -7,9 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
 from unittest.mock import MagicMock, Mock, patch
@@ -23,9 +21,7 @@ from litellm.integrations.dotprompt.prompt_manager import PromptManager, PromptT
 def test_prompt_manager_initialization():
     """Test basic PromptManager initialization and loading."""
     # Test with the existing prompts directory
-    prompt_dir = Path(
-        __file__
-    ).parent  # Current directory when running from tests/test_litellm/prompts
+    prompt_dir = Path(__file__).parent  # Current directory when running from tests/test_litellm/prompts
     manager = PromptManager(prompt_directory=str(prompt_dir))
 
     # Should have loaded at least the sample prompts
@@ -44,9 +40,7 @@ def test_prompt_template_creation():
         "output": {"format": "json"},
     }
 
-    template = PromptTemplate(
-        content="Hello {{name}}!", metadata=metadata, template_id="test_template"
-    )
+    template = PromptTemplate(content="Hello {{name}}!", metadata=metadata, template_id="test_template")
 
     assert template.content == "Hello {{name}}!"
     assert template.model == "gpt-4"
@@ -57,15 +51,11 @@ def test_prompt_template_creation():
 
 def test_render_simple_template():
     """Test rendering a simple template with variables."""
-    prompt_dir = Path(
-        __file__
-    ).parent  # Current directory when running from tests/test_litellm/prompts
+    prompt_dir = Path(__file__).parent  # Current directory when running from tests/test_litellm/prompts
     manager = PromptManager(prompt_directory=str(prompt_dir))
 
     # Test sample_prompt rendering
-    rendered = manager.render(
-        "sample_prompt", {"text": "This is a test article about AI."}
-    )
+    rendered = manager.render("sample_prompt", {"text": "This is a test article about AI."})
 
     expected_content = "Extract the requested information from the given text. If a piece of information is not present, omit that field from the output.\n\nText: This is a test article about AI."
     assert rendered == expected_content
@@ -73,9 +63,7 @@ def test_render_simple_template():
 
 def test_render_chat_prompt():
     """Test rendering the chat prompt with conditional content."""
-    prompt_dir = Path(
-        __file__
-    ).parent  # Current directory when running from tests/test_litellm/prompts
+    prompt_dir = Path(__file__).parent  # Current directory when running from tests/test_litellm/prompts
     manager = PromptManager(prompt_directory=str(prompt_dir))
 
     # Test with system context
@@ -99,9 +87,7 @@ def test_render_chat_prompt():
 
 def test_render_coding_assistant():
     """Test rendering the coding assistant prompt with complex logic."""
-    prompt_dir = Path(
-        __file__
-    ).parent  # Current directory when running from tests/test_litellm/prompts
+    prompt_dir = Path(__file__).parent  # Current directory when running from tests/test_litellm/prompts
     manager = PromptManager(prompt_directory=str(prompt_dir))
 
     rendered = manager.render(
@@ -141,9 +127,7 @@ Hello {{name}}, you are {{age}} years old and {'active' if active else 'inactive
         manager = PromptManager(prompt_directory=str(temp_dir))
 
         # Valid input should work
-        rendered = manager.render(
-            "test_validation", {"name": "Alice", "age": 30, "active": True}
-        )
+        rendered = manager.render("test_validation", {"name": "Alice", "age": 30, "active": True})
         assert "Hello Alice, you are 30 years old" in rendered
 
         # Invalid type should raise error
@@ -160,9 +144,7 @@ Hello {{name}}, you are {{age}} years old and {'active' if active else 'inactive
 
 def test_prompt_not_found():
     """Test error handling for non-existent prompts."""
-    prompt_dir = Path(
-        __file__
-    ).parent  # Current directory when running from tests/test_litellm/prompts
+    prompt_dir = Path(__file__).parent  # Current directory when running from tests/test_litellm/prompts
     manager = PromptManager(prompt_directory=str(prompt_dir))
 
     with pytest.raises(KeyError, match="Prompt 'nonexistent' not found"):
@@ -171,9 +153,7 @@ def test_prompt_not_found():
 
 def test_list_prompts():
     """Test listing available prompts."""
-    prompt_dir = Path(
-        __file__
-    ).parent  # Current directory when running from tests/test_litellm/prompts
+    prompt_dir = Path(__file__).parent  # Current directory when running from tests/test_litellm/prompts
     manager = PromptManager(prompt_directory=str(prompt_dir))
 
     prompts = manager.list_prompts()
@@ -185,9 +165,7 @@ def test_list_prompts():
 
 def test_get_prompt_metadata():
     """Test retrieving prompt metadata."""
-    prompt_dir = Path(
-        __file__
-    ).parent  # Current directory when running from tests/test_litellm/prompts
+    prompt_dir = Path(__file__).parent  # Current directory when running from tests/test_litellm/prompts
     manager = PromptManager(prompt_directory=str(prompt_dir))
 
     metadata = manager.get_prompt_metadata("sample_prompt")
@@ -222,9 +200,7 @@ def test_get_prompt_with_version():
 
 def test_add_prompt_programmatically():
     """Test adding prompts programmatically."""
-    prompt_dir = Path(
-        __file__
-    ).parent  # Current directory when running from tests/test_litellm/prompts
+    prompt_dir = Path(__file__).parent  # Current directory when running from tests/test_litellm/prompts
     manager = PromptManager(prompt_directory=str(prompt_dir))
 
     initial_count = len(manager.prompts)
@@ -495,9 +471,7 @@ def test_json_prompt_rendering_with_validation():
 
     # Invalid input should raise error
     with pytest.raises(ValueError, match="Invalid type for field 'user_id'"):
-        manager.render(
-            "validated_prompt", {"data": "test data", "user_id": "not_an_int"}
-        )
+        manager.render("validated_prompt", {"data": "test data", "user_id": "not_an_int"})
 
 
 def test_round_trip_conversion():
@@ -533,10 +507,7 @@ Original prompt content: {{variable}}"""
         # Content should be the same
         assert original_template.content == converted_template.content
         assert original_template.model == converted_template.model
-        assert (
-            original_template.optional_params["temperature"]
-            == converted_template.optional_params["temperature"]
-        )
+        assert original_template.optional_params["temperature"] == converted_template.optional_params["temperature"]
 
 
 def test_prompt_main():

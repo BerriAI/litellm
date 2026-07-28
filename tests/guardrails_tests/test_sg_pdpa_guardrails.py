@@ -34,8 +34,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
 POLICY_DIR = os.path.abspath(
     os.path.join(
         os.path.dirname(__file__),
-        "../../litellm/proxy/guardrails/guardrail_hooks/"
-        "litellm_content_filter/policy_templates",
+        "../../litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates",
     )
 )
 
@@ -69,9 +68,9 @@ async def _expect_block(guardrail: ContentFilterGuardrail, sentence: str, reason
             input_type="request",
         )
     err = str(exc_info.value).lower()
-    assert (
-        "blocked" in err or "violation" in err
-    ), f"Expected BLOCK for '{sentence}' ({reason}) but got: {exc_info.value}"
+    assert "blocked" in err or "violation" in err, (
+        f"Expected BLOCK for '{sentence}' ({reason}) but got: {exc_info.value}"
+    )
 
 
 async def _expect_allow(guardrail: ContentFilterGuardrail, sentence: str, reason: str):
@@ -82,9 +81,9 @@ async def _expect_allow(guardrail: ContentFilterGuardrail, sentence: str, reason
         request_data=request_data,
         input_type="request",
     )
-    assert (
-        result is None or result["texts"][0] == sentence
-    ), f"Expected ALLOW for '{sentence}' ({reason}) but it was blocked/modified"
+    assert result is None or result["texts"][0] == sentence, (
+        f"Expected ALLOW for '{sentence}' ({reason}) but it was blocked/modified"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -151,9 +150,7 @@ PERSONAL_IDENTIFIERS_CASES = [
 
 @pytest.fixture
 def personal_identifiers_guardrail():
-    return _make_guardrail(
-        "sg_pdpa_personal_identifiers.yaml", "sg_pdpa_personal_identifiers"
-    )
+    return _make_guardrail("sg_pdpa_personal_identifiers.yaml", "sg_pdpa_personal_identifiers")
 
 
 class TestSGPDPAPersonalIdentifiers:
@@ -162,12 +159,10 @@ class TestSGPDPAPersonalIdentifiers:
     @pytest.mark.parametrize(
         "sentence,expected,reason",
         PERSONAL_IDENTIFIERS_CASES,
-        ids=[f"pi_{i+1}" for i in range(len(PERSONAL_IDENTIFIERS_CASES))],
+        ids=[f"pi_{i + 1}" for i in range(len(PERSONAL_IDENTIFIERS_CASES))],
     )
     @pytest.mark.asyncio
-    async def test_sentence(
-        self, personal_identifiers_guardrail, sentence, expected, reason
-    ):
+    async def test_sentence(self, personal_identifiers_guardrail, sentence, expected, reason):
         if expected == "BLOCK":
             await _expect_block(personal_identifiers_guardrail, sentence, reason)
         else:
@@ -245,7 +240,7 @@ class TestSGPDPASensitiveData:
     @pytest.mark.parametrize(
         "sentence,expected,reason",
         SENSITIVE_DATA_CASES,
-        ids=[f"sd_{i+1}" for i in range(len(SENSITIVE_DATA_CASES))],
+        ids=[f"sd_{i + 1}" for i in range(len(SENSITIVE_DATA_CASES))],
     )
     @pytest.mark.asyncio
     async def test_sentence(self, sensitive_data_guardrail, sentence, expected, reason):
@@ -314,7 +309,7 @@ class TestSGPDPADoNotCall:
     @pytest.mark.parametrize(
         "sentence,expected,reason",
         DNC_CASES,
-        ids=[f"dnc_{i+1}" for i in range(len(DNC_CASES))],
+        ids=[f"dnc_{i + 1}" for i in range(len(DNC_CASES))],
     )
     @pytest.mark.asyncio
     async def test_sentence(self, dnc_guardrail, sentence, expected, reason):
@@ -413,7 +408,7 @@ class TestSGPDPADataTransfer:
     @pytest.mark.parametrize(
         "sentence,expected,reason",
         DATA_TRANSFER_CASES,
-        ids=[f"dt_{i+1}" for i in range(len(DATA_TRANSFER_CASES))],
+        ids=[f"dt_{i + 1}" for i in range(len(DATA_TRANSFER_CASES))],
     )
     @pytest.mark.asyncio
     async def test_sentence(self, data_transfer_guardrail, sentence, expected, reason):
@@ -513,7 +508,7 @@ class TestSGPDPAProfilingAutomatedDecisions:
     @pytest.mark.parametrize(
         "sentence,expected,reason",
         PROFILING_CASES,
-        ids=[f"prof_{i+1}" for i in range(len(PROFILING_CASES))],
+        ids=[f"prof_{i + 1}" for i in range(len(PROFILING_CASES))],
     )
     @pytest.mark.asyncio
     async def test_sentence(self, profiling_guardrail, sentence, expected, reason):
@@ -559,9 +554,7 @@ class TestSGPDPAEdgeCases:
     async def test_exception_overrides_violation(self, personal_identifiers_guardrail):
         """Exception phrase should override a conditional match."""
         sentence = "research on NRIC collection and scraping practices"
-        await _expect_allow(
-            personal_identifiers_guardrail, sentence, "exception overrides violation"
-        )
+        await _expect_allow(personal_identifiers_guardrail, sentence, "exception overrides violation")
 
     @pytest.mark.asyncio
     async def test_zero_cost_no_api_calls(self, personal_identifiers_guardrail):
@@ -582,9 +575,7 @@ class TestSGPDPAEdgeCases:
     async def test_multiple_violations(self, personal_identifiers_guardrail):
         """Sentence with multiple violations should still be blocked."""
         sentence = "collect NRIC and harvest FIN numbers from the database"
-        await _expect_block(
-            personal_identifiers_guardrail, sentence, "multiple violations"
-        )
+        await _expect_block(personal_identifiers_guardrail, sentence, "multiple violations")
 
 
 class TestSGPDPAPerformance:
@@ -601,24 +592,21 @@ class TestSGPDPAPerformance:
             "profiling": PROFILING_CASES,
         }
         total = sum(len(c) for c in all_cases.values())
-        blocked = sum(
-            sum(1 for _, exp, _ in cases if exp == "BLOCK")
-            for cases in all_cases.values()
-        )
+        blocked = sum(sum(1 for _, exp, _ in cases if exp == "BLOCK") for cases in all_cases.values())
         allowed = total - blocked
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("Singapore PDPA Guardrail Test Summary")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         print(f"Total test cases : {total}")
-        print(f"Expected BLOCK   : {blocked} ({blocked/total*100:.1f}%)")
-        print(f"Expected ALLOW   : {allowed} ({allowed/total*100:.1f}%)")
-        print(f"{'='*60}")
+        print(f"Expected BLOCK   : {blocked} ({blocked / total * 100:.1f}%)")
+        print(f"Expected ALLOW   : {allowed} ({allowed / total * 100:.1f}%)")
+        print(f"{'=' * 60}")
         for name, cases in all_cases.items():
             b = sum(1 for _, e, _ in cases if e == "BLOCK")
             a = len(cases) - b
             print(f"  {name:35s}  BLOCK={b:2d}  ALLOW={a:2d}")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
 
 if __name__ == "__main__":

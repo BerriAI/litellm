@@ -104,7 +104,9 @@ class TestA2AAgentLifecycle:
         assert fetched.agent_card_params.protocol_version == "0.3"
 
     @pytest.mark.covers("other.a2a.register.semver_version_accepted")
-    def test_semver_protocol_version_registers_and_serves(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
+    def test_semver_protocol_version_registers_and_serves(
+        self, client: A2AClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
         agent = _register(client, resources, "0.3.0")
         assert agent.agent_card_params.protocol_version == "0.3"
         card = unwrap(client.agent_card(agent.agent_id, scoped_key))
@@ -116,7 +118,9 @@ class TestA2AAgentLifecycle:
         assert result.text != ""
 
     @pytest.mark.covers("other.a2a.message_send.real_world_agent_replies")
-    def test_real_world_agent_replies_to_property_query(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
+    def test_real_world_agent_replies_to_property_query(
+        self, client: A2AClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
         upstream = unwrap(fetch_agent_card(MOVEHOME_AGENT_CARD_URL)).model_copy(update={"url": MOVEHOME_ORIGIN})
         assert upstream.protocol_version == "0.3.0"
         marker = unique_marker()
@@ -152,7 +156,9 @@ class TestA2AAgentLifecycle:
         assert all(listing.location.un_locode == location for listing in results.listings)
 
     @pytest.mark.covers("other.a2a.discovery.proxy_fronted_card")
-    def test_discovery_card_is_proxy_fronted(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
+    def test_discovery_card_is_proxy_fronted(
+        self, client: A2AClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
         agent = _register(client, resources, "0.3")
         card = unwrap(client.agent_card(agent.agent_id, scoped_key))
         assert card.url is not None and card.url.endswith(f"/a2a/{agent.agent_id}")
@@ -163,7 +169,9 @@ class TestA2AAgentLifecycle:
         assert card.supported_interfaces[0].url == card.url
 
     @pytest.mark.covers("other.a2a.message_send.bridge_invokes")
-    def test_message_send_runs_completion_bridge(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
+    def test_message_send_runs_completion_bridge(
+        self, client: A2AClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
         agent = _register(client, resources, "0.3")
         request = _ask("Reply with exactly the word PONG and nothing else")
         response = unwrap(client.send_message(agent.agent_id, scoped_key, request))
@@ -177,7 +185,9 @@ class TestA2AAgentLifecycle:
         assert rows[0].model == f"a2a_agent/{agent.agent_card_params.name}"
 
     @pytest.mark.covers("other.a2a.version.serves_pinned_0_3")
-    def test_pinned_v0_3_serves_flat_message_shape(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
+    def test_pinned_v0_3_serves_flat_message_shape(
+        self, client: A2AClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
         agent = _register(client, resources, "0.3")
         request = _ask("Say hi in one word")
         result = unwrap(client.send_message(agent.agent_id, scoped_key, request)).result
@@ -188,7 +198,9 @@ class TestA2AAgentLifecycle:
         assert result.text != ""
 
     @pytest.mark.covers("other.a2a.version.serves_pinned_1_0")
-    def test_pinned_v1_0_serves_nested_message_shape(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
+    def test_pinned_v1_0_serves_nested_message_shape(
+        self, client: A2AClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
         agent = _register(client, resources, "1.0")
         request = _ask("Say hi in one word")
         result = unwrap(client.send_message(agent.agent_id, scoped_key, request)).result

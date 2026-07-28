@@ -15,9 +15,7 @@ import json
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 import asyncio
 from typing import Optional
@@ -78,9 +76,7 @@ async def test_stream_token_counting_gpt_4o():
     print("\n\n\n\n\n")
 
     assert actual_usage.prompt_tokens == custom_logger.recorded_usage.prompt_tokens
-    assert (
-        actual_usage.completion_tokens == custom_logger.recorded_usage.completion_tokens
-    )
+    assert actual_usage.completion_tokens == custom_logger.recorded_usage.completion_tokens
     assert actual_usage.total_tokens == custom_logger.recorded_usage.total_tokens
 
 
@@ -117,9 +113,7 @@ async def test_stream_token_counting_without_include_usage():
     print("\n\n\n\n\n")
 
     assert actual_usage.prompt_tokens == custom_logger.recorded_usage.prompt_tokens
-    assert (
-        actual_usage.completion_tokens == custom_logger.recorded_usage.completion_tokens
-    )
+    assert actual_usage.completion_tokens == custom_logger.recorded_usage.completion_tokens
     assert actual_usage.total_tokens == custom_logger.recorded_usage.total_tokens
 
 
@@ -155,9 +149,7 @@ async def test_stream_token_counting_with_redaction():
     print("\n\n\n\n\n")
 
     assert actual_usage.prompt_tokens == custom_logger.recorded_usage.prompt_tokens
-    assert (
-        actual_usage.completion_tokens == custom_logger.recorded_usage.completion_tokens
-    )
+    assert actual_usage.completion_tokens == custom_logger.recorded_usage.completion_tokens
     assert actual_usage.total_tokens == custom_logger.recorded_usage.total_tokens
 
 
@@ -245,9 +237,4 @@ async def test_stream_token_counting_anthropic_with_include_usage():
     assert anthropic_api_input_tokens == custom_logger.recorded_usage.prompt_tokens
 
     # output tokens can have at max abs diff of 10. We can't guarantee the response from two api calls will be exactly the same
-    assert (
-        abs(
-            anthropic_api_output_tokens - custom_logger.recorded_usage.completion_tokens
-        )
-        <= 10
-    )
+    assert abs(anthropic_api_output_tokens - custom_logger.recorded_usage.completion_tokens) <= 10

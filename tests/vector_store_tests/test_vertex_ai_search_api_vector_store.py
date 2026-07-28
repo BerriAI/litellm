@@ -134,9 +134,7 @@ class TestVertexAISearchAPIVectorStore:
         ) as mock_auth:
             mock_auth.return_value = ("mock_token", "test-vector-store-db")
 
-            with patch(
-                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
-            ) as mock_post:
+            with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
                 mock_post.return_value = mock_response
 
                 # Make the search request

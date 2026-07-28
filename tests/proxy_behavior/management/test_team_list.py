@@ -15,11 +15,7 @@ def _seeded_visible(resp_json, world) -> set:
         world.team_beta_id: "beta",
         world.team_gamma_id: "gamma",
     }
-    return {
-        known[entry["team_id"]]
-        for entry in resp_json
-        if isinstance(entry, dict) and entry.get("team_id") in known
-    }
+    return {known[entry["team_id"]] for entry in resp_json if isinstance(entry, dict) and entry.get("team_id") in known}
 
 
 # Family 1 — bare GET /team/list (no query params). _authorize_and_filter_teams
@@ -55,16 +51,11 @@ async def test_team_list_bare_authz(
         "/team/list",
         headers={"Authorization": f"Bearer {caller.cleartext}"},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value}: {resp.status_code} {resp.text}"
 
     if expected_status == 200:
         visible = _seeded_visible(resp.json(), world)
-        assert visible == expected_visible, (
-            f"{actor.value}: expected {sorted(expected_visible)}, "
-            f"got {sorted(visible)}"
-        )
+        assert visible == expected_visible, f"{actor.value}: expected {sorted(expected_visible)}, got {sorted(visible)}"
 
 
 # Family 2 — GET /team/list?user_id=<caller's own id> ("own query"). Every
@@ -89,9 +80,7 @@ _OWN = {
     list(_OWN.items()),
     ids=[a.value for a in _OWN],
 )
-async def test_team_list_own_query(
-    actor: Actor, expected_visible: FrozenSet[str], proxy_client, world
-):
+async def test_team_list_own_query(actor: Actor, expected_visible: FrozenSet[str], proxy_client, world):
     caller = world.keys[actor]
     resp = await proxy_client.get(
         f"/team/list?user_id={caller.user_id}",
@@ -101,5 +90,5 @@ async def test_team_list_own_query(
 
     visible = _seeded_visible(resp.json(), world)
     assert visible == set(expected_visible), (
-        f"{actor.value}: expected {sorted(expected_visible)}, " f"got {sorted(visible)}"
+        f"{actor.value}: expected {sorted(expected_visible)}, got {sorted(visible)}"
     )

@@ -34,9 +34,7 @@ class _AsyncTx:
         return False
 
 
-def _make_invite(
-    *, is_accepted: bool, expired: bool = False, claimed: bool = False
-) -> MagicMock:
+def _make_invite(*, is_accepted: bool, expired: bool = False, claimed: bool = False) -> MagicMock:
     now = litellm.utils.get_utc_datetime()
     invite = MagicMock()
     invite.id = "invite-abc"
@@ -324,9 +322,7 @@ async def test_claim_token_rejects_wrong_onboarding_session():
         user_id="user-123",
         password="NewP@ssw0rd",
     )
-    request = _make_claim_request(
-        _make_onboarding_token(invitation_link="other-invite")
-    )
+    request = _make_claim_request(_make_onboarding_token(invitation_link="other-invite"))
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
@@ -496,9 +492,7 @@ async def test_claim_token_rolls_back_invite_when_session_key_mint_fails():
     assert exc_info.value.status_code == 500
     assert "Failed to create onboarding session" in exc_info.value.detail["error"]
     assert prisma.db.litellm_invitationlink.update_many.call_count == 2
-    rollback_kwargs = prisma.db.litellm_invitationlink.update_many.call_args_list[
-        1
-    ].kwargs
+    rollback_kwargs = prisma.db.litellm_invitationlink.update_many.call_args_list[1].kwargs
     assert rollback_kwargs["where"] == {
         "id": "invite-abc",
         "is_accepted": True,

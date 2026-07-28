@@ -64,9 +64,7 @@ def _verify_only_requested_name_imported(name: str, all_names: tuple):
     litellm_globals = sys.modules["litellm"].__dict__
     for other_name in all_names:
         if other_name != name:
-            assert (
-                other_name not in litellm_globals
-            ), f"{other_name} should not be imported when importing {name}"
+            assert other_name not in litellm_globals, f"{other_name} should not be imported when importing {name}"
 
 
 def _verify_only_requested_name_imported_in_utils(name: str, all_names: tuple):
@@ -75,9 +73,7 @@ def _verify_only_requested_name_imported_in_utils(name: str, all_names: tuple):
     utils_globals = sys.modules["litellm.utils"].__dict__
     for other_name in all_names:
         if other_name != name:
-            assert (
-                other_name not in utils_globals
-            ), f"{other_name} should not be imported when importing {name}"
+            assert other_name not in utils_globals, f"{other_name} should not be imported when importing {name}"
 
 
 def test_cost_calculator_lazy_imports():

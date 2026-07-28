@@ -42,9 +42,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 # ---------------------------------------------------------------------------
 
 
-async def test_org_team_guaranteed_throughput_model_over_bound_rejected(
-    proxy_client, prisma, scratch, world
-):
+async def test_org_team_guaranteed_throughput_model_over_bound_rejected(proxy_client, prisma, scratch, world):
     org_id = await create_scratch_org(
         prisma,
         scratch.prefix,
@@ -82,9 +80,7 @@ async def test_org_team_guaranteed_throughput_model_over_bound_rejected(
     assert rows == []
 
 
-async def test_org_team_guaranteed_throughput_model_tpm_over_bound_rejected(
-    proxy_client, prisma, scratch, world
-):
+async def test_org_team_guaranteed_throughput_model_tpm_over_bound_rejected(proxy_client, prisma, scratch, world):
     """Mirror of the rpm scenario but for the model_tpm side — pins
     _check_team_model_specific_limits's tpm branch (lines 503–521) which
     the rpm scenario doesn't exercise."""
@@ -121,9 +117,7 @@ async def test_org_team_guaranteed_throughput_model_tpm_over_bound_rejected(
     assert rows == []
 
 
-async def test_org_team_guaranteed_throughput_aggregate_runs(
-    proxy_client, prisma, scratch, world
-):
+async def test_org_team_guaranteed_throughput_aggregate_runs(proxy_client, prisma, scratch, world):
     """Aggregate guard's no-op path (line 549-566 — entity_rpm_limit is None
     because include_budget_table=False at the call site). The helper still
     executes its `allocated_tpm = sum(...)` and `allocated_rpm = sum(...)`
@@ -163,9 +157,7 @@ async def test_org_team_guaranteed_throughput_aggregate_runs(
 # ---------------------------------------------------------------------------
 
 
-async def test_key_generate_with_unknown_project_id_rejected(
-    proxy_client, prisma, scratch, world
-):
+async def test_key_generate_with_unknown_project_id_rejected(proxy_client, prisma, scratch, world):
     seeder = world.keys[Actor.PROXY_ADMIN].cleartext
     body = {
         "key_alias": scratch.prefix,
@@ -180,9 +172,7 @@ async def test_key_generate_with_unknown_project_id_rejected(
     # The route's exception handler may wrap it; pin both shapes.
     assert resp.status_code in (400, 404), resp.text
     assert "project" in resp.text.lower() or "not found" in resp.text.lower(), resp.text
-    rows = await prisma.db.litellm_verificationtoken.find_many(
-        where={"key_alias": scratch.prefix}
-    )
+    rows = await prisma.db.litellm_verificationtoken.find_many(where={"key_alias": scratch.prefix})
     assert rows == [], "rejected key leaked a row"
 
 
@@ -194,9 +184,7 @@ async def test_key_generate_with_unknown_project_id_rejected(
 # ---------------------------------------------------------------------------
 
 
-async def _seed_key_for_relocation(
-    prisma, scratch_prefix: str, *, user_id: str, team_id: str
-) -> str:
+async def _seed_key_for_relocation(prisma, scratch_prefix: str, *, user_id: str, team_id: str) -> str:
     cleartext = "sk-" + uuid.uuid4().hex
     await prisma.db.litellm_verificationtoken.create(
         data={
@@ -211,9 +199,7 @@ async def _seed_key_for_relocation(
     return cleartext
 
 
-async def test_team_new_with_team_member_budget_creates_budget_row(
-    proxy_client, prisma, scratch, world
-):
+async def test_team_new_with_team_member_budget_creates_budget_row(proxy_client, prisma, scratch, world):
     """/team/new with `team_member_budget` routes through
     TeamMemberBudgetHandler.create_team_member_budget_table (lines 196–248).
     Observable end-state: a litellm_budgettable row is created and the
@@ -235,18 +221,14 @@ async def test_team_new_with_team_member_budget_creates_budget_row(
     team_row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": team_id})
     assert team_row is not None
     budget_id = (team_row.metadata or {}).get("team_member_budget_id")
-    assert (
-        budget_id is not None
-    ), f"team_member_budget_id not stamped on team metadata: {team_row.metadata!r}"
+    assert budget_id is not None, f"team_member_budget_id not stamped on team metadata: {team_row.metadata!r}"
 
     # The handler writes the per-member budget row under a non-scratch id
     # pattern (`team-<alias>-budget-<uuid>`), so the prefix sweep can't
     # reclaim it. Cleanup must run even when a downstream assertion fires;
     # otherwise orphan rows accumulate across CI re-runs.
     try:
-        budget_row = await prisma.db.litellm_budgettable.find_unique(
-            where={"budget_id": budget_id}
-        )
+        budget_row = await prisma.db.litellm_budgettable.find_unique(where={"budget_id": budget_id})
         assert budget_row is not None, "team_member_budget row was not created"
         assert budget_row.max_budget == 10.0
         assert budget_row.rpm_limit == 100
@@ -259,9 +241,7 @@ async def test_team_new_with_team_member_budget_creates_budget_row(
         await prisma.db.litellm_budgettable.delete(where={"budget_id": budget_id})
 
 
-async def test_team_update_team_member_budget_upserts(
-    proxy_client, prisma, scratch, world
-):
+async def test_team_update_team_member_budget_upserts(proxy_client, prisma, scratch, world):
     """/team/update with `team_member_budget` against a team that has no
     pre-existing team_member_budget_id routes through
     TeamMemberBudgetHandler.upsert_team_member_budget_table's else-branch
@@ -297,9 +277,7 @@ async def test_team_update_team_member_budget_upserts(
         await prisma.db.litellm_budgettable.delete(where={"budget_id": budget_id})
 
 
-async def test_key_team_change_accepted_by_target_team_admin(
-    proxy_client, prisma, scratch, world
-):
+async def test_key_team_change_accepted_by_target_team_admin(proxy_client, prisma, scratch, world):
     """Caller is admin of the destination team AND the key's owner — the
     common_key_access_checks gate requires user_id-match for non-proxy-admin
     callers, so the team-admin-accepts branch of validate_key_team_change
@@ -307,9 +285,7 @@ async def test_key_team_change_accepted_by_target_team_admin(
     Hits validate_key_team_change line 3007–3011."""
     actor_user_id = f"{scratch.prefix}-self-admin"
     actor_cleartext = "sk-" + uuid.uuid4().hex
-    await prisma.db.litellm_usertable.create(
-        data={"user_id": actor_user_id, "user_role": "internal_user"}
-    )
+    await prisma.db.litellm_usertable.create(data={"user_id": actor_user_id, "user_role": "internal_user"})
     await prisma.db.litellm_verificationtoken.create(
         data={
             "token": hash_token(actor_cleartext),
@@ -330,17 +306,13 @@ async def test_key_team_change_accepted_by_target_team_admin(
         team_id=scratch.tag("target"),
         admin_user_ids=[actor_user_id],
     )
-    key_cleartext = await _seed_key_for_relocation(
-        prisma, scratch.prefix, user_id=actor_user_id, team_id=source_team
-    )
+    key_cleartext = await _seed_key_for_relocation(prisma, scratch.prefix, user_id=actor_user_id, team_id=source_team)
     resp = await proxy_client.post(
         "/key/update",
         headers={"Authorization": f"Bearer {actor_cleartext}"},
         json={"key": key_cleartext, "team_id": target_team},
     )
     assert resp.status_code == 200, resp.text
-    row = await prisma.db.litellm_verificationtoken.find_unique(
-        where={"token": hash_token(key_cleartext)}
-    )
+    row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": hash_token(key_cleartext)})
     assert row is not None
     assert row.team_id == target_team, "key did not move under team-admin initiator"

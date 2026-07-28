@@ -11,9 +11,7 @@ import io
 import os
 from typing import Optional, Dict
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -46,26 +44,19 @@ def assert_response_shape(response, custom_llm_provider):
     assert isinstance(response.results, expected_response_shape["results"])
     for result in response.results:
         assert isinstance(result["index"], expected_results_shape["index"])
-        assert isinstance(
-            result["relevance_score"], expected_results_shape["relevance_score"]
-        )
+        assert isinstance(result["relevance_score"], expected_results_shape["relevance_score"])
         if "document" in result:
             assert isinstance(result["document"], Dict)
             assert isinstance(result["document"]["text"], str)
     assert isinstance(response.meta, expected_response_shape["meta"])
 
     if custom_llm_provider == "cohere":
-
-        assert isinstance(
-            response.meta["api_version"], expected_meta_shape["api_version"]
-        )
+        assert isinstance(response.meta["api_version"], expected_meta_shape["api_version"])
         assert isinstance(
             response.meta["api_version"]["version"],
             expected_api_version_shape["version"],
         )
-        assert isinstance(
-            response.meta["billed_units"], expected_meta_shape["billed_units"]
-        )
+        assert isinstance(response.meta["billed_units"], expected_meta_shape["billed_units"])
         assert isinstance(
             response.meta["billed_units"]["search_units"],
             expected_billed_units_shape["search_units"],
@@ -200,10 +191,7 @@ async def test_rerank_custom_api_base(version):
         _url = mock_post.call_args.kwargs["url"]
         print("Arguments passed to API=", args_to_api)
         print("url = ", _url)
-        assert (
-            _url
-            == f"https://exampleopenaiendpoint-production.up.railway.app/{version}/rerank"
-        )
+        assert _url == f"https://exampleopenaiendpoint-production.up.railway.app/{version}/rerank"
 
         request_data = json.loads(args_to_api)
         assert request_data["query"] == expected_payload["query"]
@@ -218,7 +206,6 @@ async def test_rerank_custom_api_base(version):
 
 
 class TestLogger(CustomLogger):
-
     def __init__(self):
         self.kwargs = None
         self.response_obj = None

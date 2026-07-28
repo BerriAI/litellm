@@ -20,9 +20,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from typing import Literal
 
 import pytest
@@ -49,7 +47,6 @@ from litellm.router import Router
 
 
 class testLogger(CustomLogger):
-
     def __init__(self):
         self.reaches_sync_failure_event = False
         self.reaches_async_failure_event = False
@@ -70,9 +67,7 @@ class testLogger(CustomLogger):
             "rerank",
         ],
     ):
-        raise HTTPException(
-            status_code=429, detail={"error": "Max parallel request limit reached"}
-        )
+        raise HTTPException(status_code=429, detail={"error": "Max parallel request limit reached"})
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         self.reaches_async_failure_event = True

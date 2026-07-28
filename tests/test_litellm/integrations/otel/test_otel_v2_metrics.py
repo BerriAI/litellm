@@ -111,9 +111,7 @@ def _build_call(stream: bool = True):
 
 def _logger(reader, *, enable_metrics: bool):
     return OpenTelemetryV2(
-        config=OpenTelemetryV2Config(
-            exporter="in_memory", enable_metrics=enable_metrics
-        ),
+        config=OpenTelemetryV2Config(exporter="in_memory", enable_metrics=enable_metrics),
         meter_provider=MeterProvider(metric_readers=[reader]),
     )
 
@@ -137,9 +135,7 @@ def _drive_success(reader, callback_settings_attributes=None):
     logger = _logger(reader, enable_metrics=True)
     previous = litellm.callback_settings
     if callback_settings_attributes is not None:
-        litellm.callback_settings = {
-            "otel": {"attributes": callback_settings_attributes}
-        }
+        litellm.callback_settings = {"otel": {"attributes": callback_settings_attributes}}
     try:
         kwargs, response_obj, start, end = _build_call()
         asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
@@ -277,9 +273,7 @@ def test_metrics_reach_operator_configured_global_provider(monkeypatch):
 def test_resolve_meter_provider_prefers_injected():
     """An injected provider is used verbatim, never replaced by the global."""
     injected = MeterProvider(metric_readers=[InMemoryMetricReader()])
-    resolved = resolve_meter_provider(
-        OpenTelemetryV2Config(exporter="in_memory"), injected
-    )
+    resolved = resolve_meter_provider(OpenTelemetryV2Config(exporter="in_memory"), injected)
     assert resolved is injected
     injected.shutdown()
 

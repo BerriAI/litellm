@@ -236,12 +236,8 @@ class TestXecGuardConfiguration:
 
 class TestXecGuardApplyGuardrailSafePath:
     @pytest.mark.asyncio
-    async def test_request_safe_returns_inputs(
-        self, xecguard_guardrail, mock_request_data
-    ):
-        resp = _make_response(
-            {"decision": "SAFE", "trace_id": "tr-001", "xecguard_result": []}
-        )
+    async def test_request_safe_returns_inputs(self, xecguard_guardrail, mock_request_data):
+        resp = _make_response({"decision": "SAFE", "trace_id": "tr-001", "xecguard_result": []})
         with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp):
             result = await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": ["How do I reset my password?"]},
@@ -251,16 +247,10 @@ class TestXecGuardApplyGuardrailSafePath:
             assert result == {"texts": ["How do I reset my password?"]}
 
     @pytest.mark.asyncio
-    async def test_response_safe_without_documents_skips_grounding(
-        self, xecguard_guardrail, mock_request_data
-    ):
-        mock_request_data["response"] = _build_model_response(
-            "Here is how you reset your password."
-        )
+    async def test_response_safe_without_documents_skips_grounding(self, xecguard_guardrail, mock_request_data):
+        mock_request_data["response"] = _build_model_response("Here is how you reset your password.")
         resp = _make_response({"decision": "SAFE", "trace_id": "tr-002"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             result = await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": ["response text"]},
                 request_data=mock_request_data,
@@ -270,12 +260,8 @@ class TestXecGuardApplyGuardrailSafePath:
             assert mock_post.call_count == 1  # only /scan, not /grounding
 
     @pytest.mark.asyncio
-    async def test_response_safe_with_documents_runs_grounding_safe(
-        self, xecguard_guardrail, mock_request_data
-    ):
-        mock_request_data["response"] = _build_model_response(
-            "Peggy Seeger was American."
-        )
+    async def test_response_safe_with_documents_runs_grounding_safe(self, xecguard_guardrail, mock_request_data):
+        mock_request_data["response"] = _build_model_response("Peggy Seeger was American.")
         mock_request_data["metadata"]["xecguard_grounding_documents"] = [
             {"document_id": "d1", "context": "Peggy Seeger is American."}
         ]
@@ -315,9 +301,7 @@ class TestXecGuardApplyGuardrailSafePath:
         assert result == {"texts": []}
 
     @pytest.mark.asyncio
-    async def test_degenerate_role_without_texts_returns_inputs(
-        self, xecguard_guardrail
-    ):
+    async def test_degenerate_role_without_texts_returns_inputs(self, xecguard_guardrail):
         """Last message not user and no inputs texts → nothing to scan."""
         request_data = {
             "messages": [
@@ -332,9 +316,7 @@ class TestXecGuardApplyGuardrailSafePath:
         assert result == {"texts": []}
 
     @pytest.mark.asyncio
-    async def test_response_without_assistant_text_returns_inputs(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_response_without_assistant_text_returns_inputs(self, xecguard_guardrail, mock_request_data):
         """input_type=response but response has no extractable content."""
         mock_request_data["response"] = None
         result = await xecguard_guardrail.apply_guardrail(
@@ -353,9 +335,7 @@ class TestXecGuardApplyGuardrailSafePath:
             ]
         }
         resp = _make_response({"decision": "SAFE", "trace_id": "tr-x"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": ["hello"]},
                 request_data=request_data,
@@ -372,9 +352,7 @@ class TestXecGuardApplyGuardrailSafePath:
 
 class TestXecGuardScanBlock:
     @pytest.mark.asyncio
-    async def test_unsafe_input_raises_exception(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_unsafe_input_raises_exception(self, xecguard_guardrail, mock_request_data):
         resp = _make_response(
             {
                 "decision": "UNSAFE",
@@ -383,9 +361,7 @@ class TestXecGuardScanBlock:
                     {
                         "type": "VIOLATION_GENERAL_PROMPT",
                         "rationale": "Prompt injection attempt.",
-                        "violated_policy_name": (
-                            "Default_Policy_GeneralPromptAttackProtection"
-                        ),
+                        "violated_policy_name": ("Default_Policy_GeneralPromptAttackProtection"),
                         "violated_rules_list": [],
                     }
                 ],
@@ -399,15 +375,10 @@ class TestXecGuardScanBlock:
                     input_type="request",
                 )
             assert "trace-abc" in exc_info.value.detail["error"]
-            assert (
-                "Default_Policy_GeneralPromptAttackProtection"
-                in exc_info.value.detail["error"]
-            )
+            assert "Default_Policy_GeneralPromptAttackProtection" in exc_info.value.detail["error"]
 
     @pytest.mark.asyncio
-    async def test_unsafe_response_raises_exception(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_unsafe_response_raises_exception(self, xecguard_guardrail, mock_request_data):
         mock_request_data["response"] = _build_model_response("bad answer")
         resp = _make_response(
             {
@@ -417,9 +388,7 @@ class TestXecGuardScanBlock:
                     {
                         "type": "VIOLATION_HARMFUL",
                         "rationale": "Contains harmful instructions.",
-                        "violated_policy_name": (
-                            "Default_Policy_HarmfulContentProtection"
-                        ),
+                        "violated_policy_name": ("Default_Policy_HarmfulContentProtection"),
                     }
                 ],
             }
@@ -431,15 +400,10 @@ class TestXecGuardScanBlock:
                     request_data=mock_request_data,
                     input_type="response",
                 )
-            assert (
-                "Default_Policy_HarmfulContentProtection"
-                in exc_info.value.detail["error"]
-            )
+            assert "Default_Policy_HarmfulContentProtection" in exc_info.value.detail["error"]
 
     @pytest.mark.asyncio
-    async def test_block_message_joins_multiple_policy_names(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_block_message_joins_multiple_policy_names(self, xecguard_guardrail, mock_request_data):
         resp = _make_response(
             {
                 "decision": "UNSAFE",
@@ -474,9 +438,7 @@ class TestXecGuardScanBlock:
         assert msg.count("PolicyA") == 1
 
     @pytest.mark.asyncio
-    async def test_block_message_without_any_rationale(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_block_message_without_any_rationale(self, xecguard_guardrail, mock_request_data):
         resp = _make_response(
             {
                 "decision": "UNSAFE",
@@ -496,9 +458,7 @@ class TestXecGuardScanBlock:
         assert "rationale=" in exc_info.value.detail["error"]
 
     @pytest.mark.asyncio
-    async def test_block_message_no_policy_names_uses_unknown(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_block_message_no_policy_names_uses_unknown(self, xecguard_guardrail, mock_request_data):
         resp = _make_response(
             {
                 "decision": "UNSAFE",
@@ -516,12 +476,8 @@ class TestXecGuardScanBlock:
         assert "policies=[unknown]" in exc_info.value.detail["error"]
 
     @pytest.mark.asyncio
-    async def test_block_message_non_list_xecguard_result(
-        self, xecguard_guardrail, mock_request_data
-    ):
-        resp = _make_response(
-            {"decision": "UNSAFE", "trace_id": "t", "xecguard_result": "oops"}
-        )
+    async def test_block_message_non_list_xecguard_result(self, xecguard_guardrail, mock_request_data):
+        resp = _make_response({"decision": "UNSAFE", "trace_id": "t", "xecguard_result": "oops"})
         with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp):
             with pytest.raises(HTTPException) as exc_info:
                 await xecguard_guardrail.apply_guardrail(
@@ -532,9 +488,7 @@ class TestXecGuardScanBlock:
         assert "policies=[unknown]" in exc_info.value.detail["error"]
 
     @pytest.mark.asyncio
-    async def test_block_message_skips_non_dict_violations(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_block_message_skips_non_dict_violations(self, xecguard_guardrail, mock_request_data):
         resp = _make_response(
             {
                 "decision": "UNSAFE",
@@ -556,9 +510,7 @@ class TestXecGuardScanBlock:
         assert "PolicyZ" in exc_info.value.detail["error"]
 
     @pytest.mark.asyncio
-    async def test_block_message_rationale_truncated(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_block_message_rationale_truncated(self, xecguard_guardrail, mock_request_data):
         long = "R" * 500
         resp = _make_response(
             {
@@ -587,15 +539,11 @@ class TestXecGuardScanBlock:
 
 class TestXecGuardGrounding:
     def _setup_response_with_docs(self, mock_request_data, docs):
-        mock_request_data["response"] = _build_model_response(
-            "Peggy Seeger was British."
-        )
+        mock_request_data["response"] = _build_model_response("Peggy Seeger was British.")
         mock_request_data["metadata"]["xecguard_grounding_documents"] = docs
 
     @pytest.mark.asyncio
-    async def test_grounding_unsafe_raises_exception(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_grounding_unsafe_raises_exception(self, xecguard_guardrail, mock_request_data):
         self._setup_response_with_docs(
             mock_request_data,
             [{"document_id": "d1", "context": "Peggy Seeger is American."}],
@@ -606,9 +554,7 @@ class TestXecGuardGrounding:
                 "decision": "UNSAFE",
                 "trace_id": "g-trace",
                 "xecguard_result": {
-                    "violated_policy_name": (
-                        "Default_Policy_ContextGroundingValidation"
-                    ),
+                    "violated_policy_name": ("Default_Policy_ContextGroundingValidation"),
                     "violated_rules_list": ["CONFLICT", "BASELESS"],
                     "rationale": "Contradicts document.",
                     "violated_type": "VIOLATION_CONTEXT_GROUNDING",
@@ -660,16 +606,10 @@ class TestXecGuardGrounding:
         assert grounding_payload["strictness"] == "STRICT"
 
     @pytest.mark.asyncio
-    async def test_grounding_not_called_on_request_side(
-        self, xecguard_guardrail, mock_request_data
-    ):
-        mock_request_data["metadata"]["xecguard_grounding_documents"] = [
-            {"document_id": "d", "context": "c"}
-        ]
+    async def test_grounding_not_called_on_request_side(self, xecguard_guardrail, mock_request_data):
+        mock_request_data["metadata"]["xecguard_grounding_documents"] = [{"document_id": "d", "context": "c"}]
         scan_ok = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=scan_ok
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=scan_ok) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": ["a"]},
                 request_data=mock_request_data,
@@ -679,15 +619,11 @@ class TestXecGuardGrounding:
         assert mock_post.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_grounding_skipped_when_docs_empty(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_grounding_skipped_when_docs_empty(self, xecguard_guardrail, mock_request_data):
         mock_request_data["response"] = _build_model_response("answer")
         mock_request_data["metadata"]["xecguard_grounding_documents"] = []
         scan_ok = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=scan_ok
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=scan_ok) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": ["a"]},
                 request_data=mock_request_data,
@@ -696,15 +632,11 @@ class TestXecGuardGrounding:
         assert mock_post.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_grounding_skipped_when_metadata_absent(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_grounding_skipped_when_metadata_absent(self, xecguard_guardrail, mock_request_data):
         mock_request_data["response"] = _build_model_response("answer")
         # no xecguard_grounding_documents in metadata
         scan_ok = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=scan_ok
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=scan_ok) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": ["a"]},
                 request_data=mock_request_data,
@@ -713,9 +645,7 @@ class TestXecGuardGrounding:
         assert mock_post.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_grounding_malformed_docs_dropped_entirely(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_grounding_malformed_docs_dropped_entirely(self, xecguard_guardrail, mock_request_data):
         mock_request_data["response"] = _build_model_response("answer")
         mock_request_data["metadata"]["xecguard_grounding_documents"] = [
             "string-not-a-dict",
@@ -724,9 +654,7 @@ class TestXecGuardGrounding:
             {"document_id": 1, "context": "id not string"},
         ]
         scan_ok = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=scan_ok
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=scan_ok) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": ["a"]},
                 request_data=mock_request_data,
@@ -735,9 +663,7 @@ class TestXecGuardGrounding:
         assert mock_post.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_grounding_mixed_valid_and_malformed_docs_keeps_valid(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_grounding_mixed_valid_and_malformed_docs_keeps_valid(self, xecguard_guardrail, mock_request_data):
         mock_request_data["response"] = _build_model_response("answer")
         mock_request_data["metadata"]["xecguard_grounding_documents"] = [
             "bad",
@@ -760,18 +686,14 @@ class TestXecGuardGrounding:
         assert sent_docs == [{"document_id": "good", "context": "good context"}]
 
     @pytest.mark.asyncio
-    async def test_grounding_metadata_falls_back_to_litellm_metadata(
-        self, xecguard_guardrail
-    ):
+    async def test_grounding_metadata_falls_back_to_litellm_metadata(self, xecguard_guardrail):
         request_data = {
             "messages": [
                 {"role": "system", "content": "sys"},
                 {"role": "user", "content": "q"},
             ],
             "response": _build_model_response("a"),
-            "litellm_metadata": {
-                "xecguard_grounding_documents": [{"document_id": "d", "context": "c"}]
-            },
+            "litellm_metadata": {"xecguard_grounding_documents": [{"document_id": "d", "context": "c"}]},
         }
         scan_ok = _make_response({"decision": "SAFE"})
         grounding_ok = _make_response({"decision": "SAFE"})
@@ -797,9 +719,7 @@ class TestXecGuardGrounding:
             "response": _build_model_response("a"),
         }
         scan_ok = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=scan_ok
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=scan_ok) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": []},
                 request_data=request_data,
@@ -809,19 +729,14 @@ class TestXecGuardGrounding:
 
     def test_extract_grounding_documents_metadata_not_dict(self, xecguard_guardrail):
         """Direct coverage of the non-dict metadata branch."""
-        assert (
-            xecguard_guardrail._extract_grounding_documents({"metadata": "not a dict"})
-            == []
-        )
+        assert xecguard_guardrail._extract_grounding_documents({"metadata": "not a dict"}) == []
 
     @pytest.mark.asyncio
     async def test_grounding_docs_not_list(self, xecguard_guardrail, mock_request_data):
         mock_request_data["response"] = _build_model_response("answer")
         mock_request_data["metadata"]["xecguard_grounding_documents"] = "not-a-list"
         scan_ok = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=scan_ok
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=scan_ok) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": []},
                 request_data=mock_request_data,
@@ -830,21 +745,15 @@ class TestXecGuardGrounding:
         assert mock_post.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_grounding_skipped_without_user_or_assistant_message(
-        self, xecguard_guardrail
-    ):
+    async def test_grounding_skipped_without_user_or_assistant_message(self, xecguard_guardrail):
         """If we cannot extract a user prompt, _call_grounding returns None."""
         request_data = {
             "messages": [],  # empty; build_full_history appends assistant only
             "response": _build_model_response("only assistant"),
-            "metadata": {
-                "xecguard_grounding_documents": [{"document_id": "d", "context": "c"}]
-            },
+            "metadata": {"xecguard_grounding_documents": [{"document_id": "d", "context": "c"}]},
         }
         scan_ok = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=scan_ok
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=scan_ok) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": []},
                 request_data=request_data,
@@ -854,18 +763,14 @@ class TestXecGuardGrounding:
         assert mock_post.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_grounding_block_message_non_dict_detail(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_grounding_block_message_non_dict_detail(self, xecguard_guardrail, mock_request_data):
         """xecguard_result not dict -> formatting yields unknown rules."""
         self._setup_response_with_docs(
             mock_request_data,
             [{"document_id": "d", "context": "c"}],
         )
         scan_ok = _make_response({"decision": "SAFE"})
-        grounding_bad = _make_response(
-            {"decision": "UNSAFE", "trace_id": "g", "xecguard_result": None}
-        )
+        grounding_bad = _make_response({"decision": "UNSAFE", "trace_id": "g", "xecguard_result": None})
         with patch.object(
             xecguard_guardrail.async_handler,
             "post",
@@ -880,9 +785,7 @@ class TestXecGuardGrounding:
         assert "rules=[unknown]" in exc_info.value.detail["error"]
 
     @pytest.mark.asyncio
-    async def test_grounding_block_message_rules_not_list(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_grounding_block_message_rules_not_list(self, xecguard_guardrail, mock_request_data):
         self._setup_response_with_docs(
             mock_request_data,
             [{"document_id": "d", "context": "c"}],
@@ -912,9 +815,7 @@ class TestXecGuardGrounding:
         assert "rules=[unknown]" in exc_info.value.detail["error"]
 
     @pytest.mark.asyncio
-    async def test_grounding_block_message_filters_non_string_rules(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_grounding_block_message_filters_non_string_rules(self, xecguard_guardrail, mock_request_data):
         self._setup_response_with_docs(
             mock_request_data,
             [{"document_id": "d", "context": "c"}],
@@ -953,9 +854,7 @@ class TestXecGuardMessageAssembly:
     @pytest.mark.asyncio
     async def test_full_history_forwarded(self, xecguard_guardrail, mock_request_data):
         resp = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": ["ignored"]},
                 request_data=mock_request_data,
@@ -982,9 +881,7 @@ class TestXecGuardMessageAssembly:
             ]
         }
         resp = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": []},
                 request_data=request_data,
@@ -994,9 +891,7 @@ class TestXecGuardMessageAssembly:
         assert sent["messages"][-1]["content"] == "hello\nworld"
 
     @pytest.mark.asyncio
-    async def test_multimodal_content_no_text_parts_empty_string(
-        self, xecguard_guardrail
-    ):
+    async def test_multimodal_content_no_text_parts_empty_string(self, xecguard_guardrail):
         request_data = {
             "messages": [
                 {"role": "user", "content": "hi"},
@@ -1009,9 +904,7 @@ class TestXecGuardMessageAssembly:
             ]
         }
         resp = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": []},
                 request_data=request_data,
@@ -1021,14 +914,10 @@ class TestXecGuardMessageAssembly:
         assert sent["messages"][-1] == {"role": "user", "content": ""}
 
     @pytest.mark.asyncio
-    async def test_non_string_non_list_content_becomes_empty_string(
-        self, xecguard_guardrail
-    ):
+    async def test_non_string_non_list_content_becomes_empty_string(self, xecguard_guardrail):
         request_data = {"messages": [{"role": "user", "content": 42}]}
         resp = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": []},
                 request_data=request_data,
@@ -1041,9 +930,7 @@ class TestXecGuardMessageAssembly:
     async def test_missing_role_defaults_user(self, xecguard_guardrail):
         request_data = {"messages": [{"content": "hi"}]}
         resp = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": []},
                 request_data=request_data,
@@ -1062,9 +949,7 @@ class TestXecGuardMessageAssembly:
             ]
         }
         resp = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": []},
                 request_data=request_data,
@@ -1074,16 +959,10 @@ class TestXecGuardMessageAssembly:
         assert sent["messages"] == [{"role": "user", "content": "real"}]
 
     @pytest.mark.asyncio
-    async def test_assistant_text_extracted_from_dict_response(
-        self, xecguard_guardrail, mock_request_data
-    ):
-        mock_request_data["response"] = {
-            "choices": [{"message": {"content": "dict-style response"}}]
-        }
+    async def test_assistant_text_extracted_from_dict_response(self, xecguard_guardrail, mock_request_data):
+        mock_request_data["response"] = {"choices": [{"message": {"content": "dict-style response"}}]}
         resp = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": []},
                 request_data=mock_request_data,
@@ -1096,9 +975,7 @@ class TestXecGuardMessageAssembly:
         }
 
     @pytest.mark.asyncio
-    async def test_assistant_text_extracted_from_list_content(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_assistant_text_extracted_from_list_content(self, xecguard_guardrail, mock_request_data):
         msg = MagicMock()
         msg.content = [
             {"type": "text", "text": "partA"},
@@ -1110,9 +987,7 @@ class TestXecGuardMessageAssembly:
         resp_obj.choices = [choice]
         mock_request_data["response"] = resp_obj
         resp = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": []},
                 request_data=mock_request_data,
@@ -1128,70 +1003,44 @@ class TestXecGuardMessageAssembly:
         assert xecguard_guardrail._extract_assistant_text_from_response({}) is None
 
     def test_extract_assistant_text_empty_choices(self, xecguard_guardrail):
-        assert (
-            xecguard_guardrail._extract_assistant_text_from_response({"choices": []})
-            is None
-        )
+        assert xecguard_guardrail._extract_assistant_text_from_response({"choices": []}) is None
 
     def test_extract_assistant_text_first_choice_unknown_type(self, xecguard_guardrail):
         resp = MagicMock(spec=[])  # no 'choices'
         assert xecguard_guardrail._extract_assistant_text_from_response(resp) is None
 
     def test_extract_assistant_text_first_choice_scalar(self, xecguard_guardrail):
-        assert (
-            xecguard_guardrail._extract_assistant_text_from_response({"choices": [42]})
-            is None
-        )
+        assert xecguard_guardrail._extract_assistant_text_from_response({"choices": [42]}) is None
 
     def test_extract_assistant_text_message_none(self, xecguard_guardrail):
-        assert (
-            xecguard_guardrail._extract_assistant_text_from_response(
-                {"choices": [{"message": None}]}
-            )
-            is None
-        )
+        assert xecguard_guardrail._extract_assistant_text_from_response({"choices": [{"message": None}]}) is None
 
     def test_extract_assistant_text_message_scalar(self, xecguard_guardrail):
-        assert (
-            xecguard_guardrail._extract_assistant_text_from_response(
-                {"choices": [{"message": 42}]}
-            )
-            is None
-        )
+        assert xecguard_guardrail._extract_assistant_text_from_response({"choices": [{"message": 42}]}) is None
 
     def test_extract_assistant_text_content_none(self, xecguard_guardrail):
         assert (
-            xecguard_guardrail._extract_assistant_text_from_response(
-                {"choices": [{"message": {"content": None}}]}
-            )
+            xecguard_guardrail._extract_assistant_text_from_response({"choices": [{"message": {"content": None}}]})
             is None
         )
 
     def test_extract_assistant_text_content_empty_string(self, xecguard_guardrail):
         assert (
-            xecguard_guardrail._extract_assistant_text_from_response(
-                {"choices": [{"message": {"content": ""}}]}
-            )
+            xecguard_guardrail._extract_assistant_text_from_response({"choices": [{"message": {"content": ""}}]})
             is None
         )
 
     def test_extract_assistant_text_content_list_all_images(self, xecguard_guardrail):
         assert (
             xecguard_guardrail._extract_assistant_text_from_response(
-                {
-                    "choices": [
-                        {"message": {"content": [{"type": "image_url", "url": "x"}]}}
-                    ]
-                }
+                {"choices": [{"message": {"content": [{"type": "image_url", "url": "x"}]}}]}
             )
             is None
         )
 
     def test_extract_assistant_text_content_scalar(self, xecguard_guardrail):
         assert (
-            xecguard_guardrail._extract_assistant_text_from_response(
-                {"choices": [{"message": {"content": 42}}]}
-            )
+            xecguard_guardrail._extract_assistant_text_from_response({"choices": [{"message": {"content": 42}}]})
             is None
         )
 
@@ -1222,39 +1071,22 @@ class TestXecGuardMessageAssembly:
         assert xecguard_guardrail._synthesize_user_from_inputs({}) is None
 
     def test_synthesize_user_texts_filtered_to_empty(self, xecguard_guardrail):
-        assert (
-            xecguard_guardrail._synthesize_user_from_inputs({"texts": [None, "", 42]})
-            is None
-        )
+        assert xecguard_guardrail._synthesize_user_from_inputs({"texts": [None, "", 42]}) is None
 
     def test_synthesize_user_joins_strings(self, xecguard_guardrail):
-        assert xecguard_guardrail._synthesize_user_from_inputs(
-            {"texts": ["a", "b"]}
-        ) == {"role": "user", "content": "a\nb"}
+        assert xecguard_guardrail._synthesize_user_from_inputs({"texts": ["a", "b"]}) == {
+            "role": "user",
+            "content": "a\nb",
+        }
 
     def test_extract_last_text_by_role_not_found(self, xecguard_guardrail):
-        assert (
-            xecguard_guardrail._extract_last_text_by_role(
-                [{"role": "user", "content": "hi"}], "assistant"
-            )
-            is None
-        )
+        assert xecguard_guardrail._extract_last_text_by_role([{"role": "user", "content": "hi"}], "assistant") is None
 
     def test_extract_last_text_by_role_empty_content(self, xecguard_guardrail):
-        assert (
-            xecguard_guardrail._extract_last_text_by_role(
-                [{"role": "user", "content": ""}], "user"
-            )
-            is None
-        )
+        assert xecguard_guardrail._extract_last_text_by_role([{"role": "user", "content": ""}], "user") is None
 
     def test_extract_last_text_by_role_non_string_content(self, xecguard_guardrail):
-        assert (
-            xecguard_guardrail._extract_last_text_by_role(
-                [{"role": "user", "content": 42}], "user"
-            )
-            is None
-        )
+        assert xecguard_guardrail._extract_last_text_by_role([{"role": "user", "content": 42}], "user") is None
 
     @pytest.mark.asyncio
     async def test_multimodal_text_field_non_string_ignored(self, xecguard_guardrail):
@@ -1271,9 +1103,7 @@ class TestXecGuardMessageAssembly:
             ]
         }
         resp = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": []},
                 request_data=request_data,
@@ -1292,9 +1122,7 @@ class TestXecGuardRequestPayload:
     @pytest.mark.asyncio
     async def test_bearer_auth_header(self, xecguard_guardrail, mock_request_data):
         resp = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": ["x"]},
                 request_data=mock_request_data,
@@ -1307,26 +1135,18 @@ class TestXecGuardRequestPayload:
     @pytest.mark.asyncio
     async def test_scan_url_path(self, xecguard_guardrail, mock_request_data):
         resp = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": ["x"]},
                 request_data=mock_request_data,
                 input_type="request",
             )
-        assert mock_post.call_args.kwargs["url"] == (
-            "https://api.test.xecguard.local/xecguard/v1/scan"
-        )
+        assert mock_post.call_args.kwargs["url"] == ("https://api.test.xecguard.local/xecguard/v1/scan")
 
     @pytest.mark.asyncio
-    async def test_scan_payload_contains_model_and_scan_type(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_scan_payload_contains_model_and_scan_type(self, xecguard_guardrail, mock_request_data):
         resp = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": ["x"]},
                 request_data=mock_request_data,
@@ -1337,14 +1157,10 @@ class TestXecGuardRequestPayload:
         assert payload["scan_type"] == "input"
 
     @pytest.mark.asyncio
-    async def test_scan_type_response_on_post_call(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_scan_type_response_on_post_call(self, xecguard_guardrail, mock_request_data):
         mock_request_data["response"] = _build_model_response("answer")
         resp = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": []},
                 request_data=mock_request_data,
@@ -1360,9 +1176,7 @@ class TestXecGuardRequestPayload:
             policy_names=["PolicyA", "PolicyB"],
         )
         resp = _make_response({"decision": "SAFE"})
-        with patch.object(
-            guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(guardrail.async_handler, "post", return_value=resp) as mock_post:
             await guardrail.apply_guardrail(
                 inputs={"texts": ["x"]},
                 request_data=mock_request_data,
@@ -1372,9 +1186,7 @@ class TestXecGuardRequestPayload:
         assert payload["policy_names"] == ["PolicyA", "PolicyB"]
 
     @pytest.mark.asyncio
-    async def test_policy_names_defaults_when_unconfigured(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_policy_names_defaults_when_unconfigured(self, xecguard_guardrail, mock_request_data):
         """XecGuard rejects requests without ``policy_names``. When the
         guardrail has no configured policies we fall back to the module
         default set (System Prompt Enforcement + Harmful Content
@@ -1385,9 +1197,7 @@ class TestXecGuardRequestPayload:
         )
 
         resp = _make_response({"decision": "SAFE"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await xecguard_guardrail.apply_guardrail(
                 inputs={"texts": ["x"]},
                 request_data=mock_request_data,
@@ -1399,9 +1209,7 @@ class TestXecGuardRequestPayload:
     @pytest.mark.asyncio
     async def test_grounding_url_path(self, xecguard_guardrail, mock_request_data):
         mock_request_data["response"] = _build_model_response("answer")
-        mock_request_data["metadata"]["xecguard_grounding_documents"] = [
-            {"document_id": "d", "context": "c"}
-        ]
+        mock_request_data["metadata"]["xecguard_grounding_documents"] = [{"document_id": "d", "context": "c"}]
         scan_ok = _make_response({"decision": "SAFE"})
         grounding_ok = _make_response({"decision": "SAFE"})
         with patch.object(
@@ -1415,16 +1223,12 @@ class TestXecGuardRequestPayload:
                 input_type="response",
             )
         grounding_url = mock_post.call_args_list[1].kwargs["url"]
-        assert grounding_url == (
-            "https://api.test.xecguard.local/xecguard/v1/grounding"
-        )
+        assert grounding_url == ("https://api.test.xecguard.local/xecguard/v1/grounding")
 
     @pytest.mark.asyncio
     async def test_grounding_payload_shape(self, xecguard_guardrail, mock_request_data):
         mock_request_data["response"] = _build_model_response("response text")
-        mock_request_data["metadata"]["xecguard_grounding_documents"] = [
-            {"document_id": "d1", "context": "ctx1"}
-        ]
+        mock_request_data["metadata"]["xecguard_grounding_documents"] = [{"document_id": "d1", "context": "ctx1"}]
         scan_ok = _make_response({"decision": "SAFE"})
         grounding_ok = _make_response({"decision": "SAFE"})
         with patch.object(
@@ -1452,9 +1256,7 @@ class TestXecGuardRequestPayload:
 
 class TestXecGuardErrorHandling:
     @pytest.mark.asyncio
-    async def test_scan_http_error_block_on_error_raises(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_scan_http_error_block_on_error_raises(self, xecguard_guardrail, mock_request_data):
         request = httpx.Request("POST", "https://api.test")
         resp = httpx.Response(status_code=500, request=request)
         with patch.object(
@@ -1471,9 +1273,7 @@ class TestXecGuardErrorHandling:
             assert "block_on_error=True" in exc_info.value.detail["error"]
 
     @pytest.mark.asyncio
-    async def test_scan_connect_error_block_on_error_raises(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_scan_connect_error_block_on_error_raises(self, xecguard_guardrail, mock_request_data):
         with patch.object(
             xecguard_guardrail.async_handler,
             "post",
@@ -1527,13 +1327,9 @@ class TestXecGuardErrorHandling:
             assert result == {"texts": ["x"]}
 
     @pytest.mark.asyncio
-    async def test_grounding_http_error_block_on_error_raises(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_grounding_http_error_block_on_error_raises(self, xecguard_guardrail, mock_request_data):
         mock_request_data["response"] = _build_model_response("answer")
-        mock_request_data["metadata"]["xecguard_grounding_documents"] = [
-            {"document_id": "d", "context": "c"}
-        ]
+        mock_request_data["metadata"]["xecguard_grounding_documents"] = [{"document_id": "d", "context": "c"}]
         scan_ok = _make_response({"decision": "SAFE"})
         request = httpx.Request("POST", "https://api.test")
         resp = httpx.Response(status_code=500, request=request)
@@ -1553,18 +1349,14 @@ class TestXecGuardErrorHandling:
                 )
 
     @pytest.mark.asyncio
-    async def test_grounding_http_error_fail_open_returns_inputs(
-        self, mock_request_data
-    ):
+    async def test_grounding_http_error_fail_open_returns_inputs(self, mock_request_data):
         guardrail = XecGuardGuardrail(
             api_base="https://api.test.xecguard.local",
             api_key="xgs_test",
             block_on_error=False,
         )
         mock_request_data["response"] = _build_model_response("answer")
-        mock_request_data["metadata"]["xecguard_grounding_documents"] = [
-            {"document_id": "d", "context": "c"}
-        ]
+        mock_request_data["metadata"]["xecguard_grounding_documents"] = [{"document_id": "d", "context": "c"}]
         scan_ok = _make_response({"decision": "SAFE"})
         request = httpx.Request("POST", "https://api.test")
         resp = httpx.Response(status_code=500, request=request)
@@ -1584,9 +1376,7 @@ class TestXecGuardErrorHandling:
             assert result == {"texts": []}
 
     @pytest.mark.asyncio
-    async def test_unknown_decision_treated_as_safe(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_unknown_decision_treated_as_safe(self, xecguard_guardrail, mock_request_data):
         resp = _make_response({"decision": "MAYBE"})
         with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp):
             result = await xecguard_guardrail.apply_guardrail(
@@ -1597,9 +1387,7 @@ class TestXecGuardErrorHandling:
             assert result == {"texts": ["x"]}
 
     @pytest.mark.asyncio
-    async def test_missing_decision_treated_as_safe(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_missing_decision_treated_as_safe(self, xecguard_guardrail, mock_request_data):
         resp = _make_response({"trace_id": "t"})
         with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp):
             result = await xecguard_guardrail.apply_guardrail(
@@ -1610,9 +1398,7 @@ class TestXecGuardErrorHandling:
             assert result == {"texts": ["x"]}
 
     @pytest.mark.asyncio
-    async def test_null_decision_treated_as_safe(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_null_decision_treated_as_safe(self, xecguard_guardrail, mock_request_data):
         resp = _make_response({"decision": None})
         with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp):
             result = await xecguard_guardrail.apply_guardrail(
@@ -1630,9 +1416,7 @@ class TestXecGuardErrorHandling:
 
 class TestXecGuardLoggingHook:
     @pytest.mark.asyncio
-    async def test_async_logging_hook_with_response_records_info(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_async_logging_hook_with_response_records_info(self, xecguard_guardrail, mock_request_data):
         resp = _make_response({"decision": "SAFE", "trace_id": "lg-1"})
         with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp):
             kwargs = {**mock_request_data, "standard_logging_object": {}}
@@ -1654,9 +1438,7 @@ class TestXecGuardLoggingHook:
         assert info["guardrail_response"]["trace_id"] == "lg-1"
 
     @pytest.mark.asyncio
-    async def test_async_logging_hook_appends_to_existing_guardrail_info(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_async_logging_hook_appends_to_existing_guardrail_info(self, xecguard_guardrail, mock_request_data):
         resp = _make_response({"decision": "SAFE", "trace_id": "lg-4"})
         prior_entry = {"guardrail_name": "other-guardrail"}
         with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp):
@@ -1676,9 +1458,7 @@ class TestXecGuardLoggingHook:
         assert info_list[1]["guardrail_response"]["trace_id"] == "lg-4"
 
     @pytest.mark.asyncio
-    async def test_async_logging_hook_sanitizes_scan_result(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_async_logging_hook_sanitizes_scan_result(self, xecguard_guardrail, mock_request_data):
         resp = _make_response(
             {
                 "decision": "SAFE",
@@ -1703,13 +1483,9 @@ class TestXecGuardLoggingHook:
         assert guardrail_response["trace_id"] == "lg-5"
 
     @pytest.mark.asyncio
-    async def test_async_logging_hook_without_response_records_info(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_async_logging_hook_without_response_records_info(self, xecguard_guardrail, mock_request_data):
         resp = _make_response({"decision": "SAFE", "trace_id": "lg-2"})
-        with patch.object(
-            xecguard_guardrail.async_handler, "post", return_value=resp
-        ) as mock_post:
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await xecguard_guardrail.async_logging_hook(
                 kwargs={**mock_request_data},
                 result=None,
@@ -1719,12 +1495,8 @@ class TestXecGuardLoggingHook:
         assert payload["scan_type"] == "input"
 
     @pytest.mark.asyncio
-    async def test_async_logging_hook_unsafe_decision_recorded(
-        self, xecguard_guardrail, mock_request_data
-    ):
-        resp = _make_response(
-            {"decision": "UNSAFE", "trace_id": "lg-3", "xecguard_result": []}
-        )
+    async def test_async_logging_hook_unsafe_decision_recorded(self, xecguard_guardrail, mock_request_data):
+        resp = _make_response({"decision": "UNSAFE", "trace_id": "lg-3", "xecguard_result": []})
         with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp):
             kwargs = {**mock_request_data, "standard_logging_object": {}}
             await xecguard_guardrail.async_logging_hook(
@@ -1738,9 +1510,7 @@ class TestXecGuardLoggingHook:
         assert info["guardrail_status"] == "guardrail_intervened"
 
     @pytest.mark.asyncio
-    async def test_async_logging_hook_does_not_raise_on_http_error(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_async_logging_hook_does_not_raise_on_http_error(self, xecguard_guardrail, mock_request_data):
         result_obj = _build_model_response("x")
         with patch.object(
             xecguard_guardrail.async_handler,
@@ -1756,9 +1526,7 @@ class TestXecGuardLoggingHook:
         assert out_result is result_obj
 
     @pytest.mark.asyncio
-    async def test_async_logging_hook_no_messages_returns_unchanged(
-        self, xecguard_guardrail
-    ):
+    async def test_async_logging_hook_no_messages_returns_unchanged(self, xecguard_guardrail):
         kwargs = {"messages": []}
         with patch.object(xecguard_guardrail.async_handler, "post") as mock_post:
             out_kwargs, out_result = await xecguard_guardrail.async_logging_hook(
@@ -1769,22 +1537,16 @@ class TestXecGuardLoggingHook:
         assert out_result is None
 
     @pytest.mark.asyncio
-    async def test_async_logging_hook_role_mismatch_returns_unchanged(
-        self, xecguard_guardrail
-    ):
+    async def test_async_logging_hook_role_mismatch_returns_unchanged(self, xecguard_guardrail):
         kwargs = {
             "messages": [{"role": "system", "content": "sys"}],
         }
         with patch.object(xecguard_guardrail.async_handler, "post") as mock_post:
-            await xecguard_guardrail.async_logging_hook(
-                kwargs=kwargs, result=None, call_type="acompletion"
-            )
+            await xecguard_guardrail.async_logging_hook(kwargs=kwargs, result=None, call_type="acompletion")
         mock_post.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_async_logging_hook_swallows_arbitrary_exception(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    async def test_async_logging_hook_swallows_arbitrary_exception(self, xecguard_guardrail, mock_request_data):
         """The hook must never raise. Here we force an unexpected error
         by making ``_build_full_history`` blow up; the outer try/except
         must absorb it and still return (kwargs, result).
@@ -1808,9 +1570,7 @@ class TestXecGuardLoggingHook:
                 assert out_kwargs is mock_request_data
                 assert out_result is result_obj
 
-    def test_sync_logging_hook_loop_running_returns_unchanged(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    def test_sync_logging_hook_loop_running_returns_unchanged(self, xecguard_guardrail, mock_request_data):
         """When `asyncio.get_event_loop()` returns a running loop, the
         hook returns without driving the async path."""
         fake_loop = MagicMock()
@@ -1824,9 +1584,7 @@ class TestXecGuardLoggingHook:
         assert out == (mock_request_data, None)
         fake_loop.run_until_complete.assert_not_called()
 
-    def test_sync_logging_hook_loop_not_running_drives_async(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    def test_sync_logging_hook_loop_not_running_drives_async(self, xecguard_guardrail, mock_request_data):
         """Idle loop path: run_until_complete is driven."""
         fake_loop = MagicMock()
         fake_loop.is_running.return_value = False
@@ -1842,9 +1600,7 @@ class TestXecGuardLoggingHook:
         assert out[0] is mock_request_data
         fake_loop.run_until_complete.assert_called_once()
 
-    def test_sync_logging_hook_runtime_error_creates_new_loop(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    def test_sync_logging_hook_runtime_error_creates_new_loop(self, xecguard_guardrail, mock_request_data):
         new_loop = MagicMock()
         new_loop.is_running.return_value = False
         new_loop.run_until_complete.side_effect = lambda coro: coro.close()
@@ -1862,9 +1618,7 @@ class TestXecGuardLoggingHook:
         new_loop.run_until_complete.assert_called_once()
         mock_set.assert_called_once_with(new_loop)
 
-    def test_sync_logging_hook_swallows_outer_exception(
-        self, xecguard_guardrail, mock_request_data
-    ):
+    def test_sync_logging_hook_swallows_outer_exception(self, xecguard_guardrail, mock_request_data):
         """If both get_event_loop and new_event_loop blow up, the outer
         except swallows the error and returns kwargs, result."""
         with patch(
@@ -1918,22 +1672,12 @@ class TestXecGuardConfigModel:
         extra = field.json_schema_extra or {}
         assert extra.get("ui_type") == "multiselect"
         assert extra.get("options") == XECGUARD_DEFAULT_POLICY_OPTIONS
-        assert (
-            "Default_Policy_SystemPromptEnforcement" in XECGUARD_DEFAULT_POLICY_OPTIONS
-        )
-        assert (
-            "Default_Policy_GeneralPromptAttackProtection"
-            in XECGUARD_DEFAULT_POLICY_OPTIONS
-        )
+        assert "Default_Policy_SystemPromptEnforcement" in XECGUARD_DEFAULT_POLICY_OPTIONS
+        assert "Default_Policy_GeneralPromptAttackProtection" in XECGUARD_DEFAULT_POLICY_OPTIONS
         assert "Default_Policy_ContentBiasProtection" in XECGUARD_DEFAULT_POLICY_OPTIONS
-        assert (
-            "Default_Policy_HarmfulContentProtection" in XECGUARD_DEFAULT_POLICY_OPTIONS
-        )
+        assert "Default_Policy_HarmfulContentProtection" in XECGUARD_DEFAULT_POLICY_OPTIONS
         assert "Default_Policy_SkillsProtection" in XECGUARD_DEFAULT_POLICY_OPTIONS
-        assert (
-            "Default_Policy_PIISensitiveDataProtection"
-            in XECGUARD_DEFAULT_POLICY_OPTIONS
-        )
+        assert "Default_Policy_PIISensitiveDataProtection" in XECGUARD_DEFAULT_POLICY_OPTIONS
 
 
 class TestXecGuardInitializer:

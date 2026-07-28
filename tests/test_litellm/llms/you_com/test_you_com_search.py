@@ -232,20 +232,14 @@ class TestYouComSearch:
 
         config = YouComSearchConfig()
         assert (
-            config.get_complete_url(
-                api_base="https://x.example/v1/search/", optional_params={}
-            )
+            config.get_complete_url(api_base="https://x.example/v1/search/", optional_params={})
             == "https://x.example/v1/search"
         )
         assert (
-            config.get_complete_url(api_base="https://x.example/", optional_params={})
-            == "https://x.example/v1/search"
+            config.get_complete_url(api_base="https://x.example/", optional_params={}) == "https://x.example/v1/search"
         )
         # With an API key configured, default base is the keyed endpoint.
-        assert (
-            config.get_complete_url(api_base=None, optional_params={})
-            == "https://ydc-index.io/v1/search"
-        )
+        assert config.get_complete_url(api_base=None, optional_params={}) == "https://ydc-index.io/v1/search"
 
     @pytest.mark.asyncio
     async def test_you_com_search_keyless_free_tier(self, monkeypatch):
@@ -294,9 +288,7 @@ class TestYouComSearch:
             assert response.results[0].title == "Keyless Result"
 
     @pytest.mark.asyncio
-    async def test_you_com_search_programmatic_api_key_selects_keyed_endpoint(
-        self, monkeypatch
-    ):
+    async def test_you_com_search_programmatic_api_key_selects_keyed_endpoint(self, monkeypatch):
         """
         When the key is passed programmatically (no YOUCOM_API_KEY in the env),
         the keyed endpoint must be selected and the X-API-Key header sent, instead
@@ -339,9 +331,7 @@ class TestYouComSearch:
 
         config = YouComSearchConfig()
         assert (
-            config.get_complete_url(
-                api_base=None, optional_params={}, api_key="my-programmatic-key"
-            )
+            config.get_complete_url(api_base=None, optional_params={}, api_key="my-programmatic-key")
             == "https://ydc-index.io/v1/search"
         )
         assert (
@@ -378,7 +368,5 @@ class TestYouComSearch:
         assert headers["Accept-Encoding"] == "identity"
 
         # setdefault: a caller-supplied Accept-Encoding should win
-        headers = config.validate_environment(
-            headers={"Accept-Encoding": "gzip"}, api_key=None
-        )
+        headers = config.validate_environment(headers={"Accept-Encoding": "gzip"}, api_key=None)
         assert headers["Accept-Encoding"] == "gzip"

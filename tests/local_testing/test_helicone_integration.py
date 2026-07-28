@@ -161,6 +161,4 @@ def test_helicone_removes_otel_span_from_metadata():
     assert result_metadata["request_id"] == "test_request_123"
     assert result_metadata["other_metadata"] == "some_value"
 
-    print(
-        "✅ Test passed: litellm_parent_otel_span was successfully removed from metadata"
-    )
+    print("✅ Test passed: litellm_parent_otel_span was successfully removed from metadata")

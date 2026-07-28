@@ -122,26 +122,19 @@ class TestKeyRotationManager:
                 token="token-2",
                 auto_rotate=True,
                 rotation_interval="60s",
-                key_rotation_at=now
-                - timedelta(seconds=10),  # Should rotate (past time)
+                key_rotation_at=now - timedelta(seconds=10),  # Should rotate (past time)
                 rotation_count=1,
             ),
         ]
 
-        mock_prisma_client.db.litellm_verificationtoken.find_many.return_value = (
-            mock_keys
-        )
+        mock_prisma_client.db.litellm_verificationtoken.find_many.return_value = mock_keys
 
         # Mock datetime.now to return our fixed timestamp
         from unittest.mock import patch
 
-        with patch(
-            "litellm.proxy.common_utils.key_rotation_manager.datetime"
-        ) as mock_datetime:
+        with patch("litellm.proxy.common_utils.key_rotation_manager.datetime") as mock_datetime:
             mock_datetime.now.return_value = now
-            mock_datetime.side_effect = lambda *args, **kwargs: datetime(
-                *args, **kwargs
-            )
+            mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
             # Execute
             keys_needing_rotation = await manager._find_keys_needing_rotation()
@@ -187,9 +180,7 @@ class TestKeyRotationManager:
         )
 
         # Mock regenerate_key_fn response
-        mock_response = GenerateKeyResponse(
-            key="new-api-key", token_id="new-token-id", user_id="test-user"
-        )
+        mock_response = GenerateKeyResponse(key="new-api-key", token_id="new-token-id", user_id="test-user")
 
         # Mock the regenerate function
         from unittest.mock import patch
@@ -224,9 +215,7 @@ class TestKeyRotationManager:
         now = datetime.now(timezone.utc)
         next_rotation = update_data["key_rotation_at"]
         time_diff = (next_rotation - now).total_seconds()
-        assert (
-            25 <= time_diff <= 35
-        )  # Should be around 30 seconds, allow some tolerance
+        assert 25 <= time_diff <= 35  # Should be around 30 seconds, allow some tolerance
 
     @pytest.mark.asyncio
     async def test_cleanup_expired_deprecated_keys(self):
@@ -234,17 +223,13 @@ class TestKeyRotationManager:
         Test that _cleanup_expired_deprecated_keys deletes expired deprecated keys.
         """
         mock_prisma_client = AsyncMock()
-        mock_prisma_client.db.litellm_deprecatedverificationtoken.delete_many.return_value = (
-            3
-        )
+        mock_prisma_client.db.litellm_deprecatedverificationtoken.delete_many.return_value = 3
         manager = KeyRotationManager(mock_prisma_client)
 
         await manager._cleanup_expired_deprecated_keys()
 
         mock_prisma_client.db.litellm_deprecatedverificationtoken.delete_many.assert_called_once()
-        call_args = (
-            mock_prisma_client.db.litellm_deprecatedverificationtoken.delete_many.call_args
-        )
+        call_args = mock_prisma_client.db.litellm_deprecatedverificationtoken.delete_many.call_args
         assert "revoke_at" in call_args[1]["where"]
         assert call_args[1]["where"]["revoke_at"]["lt"] is not None
 

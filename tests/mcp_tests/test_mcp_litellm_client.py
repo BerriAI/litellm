@@ -4,9 +4,7 @@ import sys
 import pytest
 import asyncio
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -17,9 +15,7 @@ import pytest
 import json
 
 
-@pytest.mark.xfail(
-    reason="Fails due to missing 'mcp' package and connection issues in CI/local env."
-)
+@pytest.mark.xfail(reason="Fails due to missing 'mcp' package and connection issues in CI/local env.")
 @pytest.mark.asyncio
 async def test_mcp_agent():
     """Test MCP agent functionality with a simple math server"""
@@ -28,11 +24,7 @@ async def test_mcp_agent():
         ci_cd_server_path = "tests/mcp_tests/mcp_server.py"
 
         # Use the correct path for the server
-        server_path = (
-            ci_cd_server_path
-            if os.path.exists(ci_cd_server_path)
-            else local_server_path
-        )
+        server_path = ci_cd_server_path if os.path.exists(ci_cd_server_path) else local_server_path
 
         if not os.path.exists(server_path):
             pytest.skip(f"MCP server file not found at {server_path}")
@@ -50,9 +42,7 @@ async def test_mcp_agent():
                     await session.initialize()
 
                     # Get tools
-                    tools = await experimental_mcp_client.load_mcp_tools(
-                        session=session, format="openai"
-                    )
+                    tools = await experimental_mcp_client.load_mcp_tools(session=session, format="openai")
                     print("MCP TOOLS: ", tools)
 
                     # Create and run the agent
@@ -69,16 +59,9 @@ async def test_mcp_agent():
                         json.dumps(llm_response, indent=4, default=str),
                     )
                     # Add assertions to verify the response
-                    assert (
-                        llm_response["choices"][0]["message"]["tool_calls"] is not None
-                    )
+                    assert llm_response["choices"][0]["message"]["tool_calls"] is not None
 
-                    assert (
-                        llm_response["choices"][0]["message"]["tool_calls"][0][
-                            "function"
-                        ]["name"]
-                        == "add"
-                    )
+                    assert llm_response["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "add"
                     openai_tool = llm_response["choices"][0]["message"]["tool_calls"][0]
 
                     # Call the tool using MCP client

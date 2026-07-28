@@ -204,15 +204,11 @@ def test_opus_5_supports_fast_mode(local_model_cost_map):
     )
     from litellm.types.utils import Usage
 
-    assert (
-        AnthropicConfig._model_supports_speed_param("claude-opus-5", "anthropic") is True
-    )
+    assert AnthropicConfig._model_supports_speed_param("claude-opus-5", "anthropic") is True
 
     usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
     usage.speed = "fast"
-    prompt_cost, completion_cost = anthropic_cost_per_token(
-        model="claude-opus-5", usage=usage
-    )
+    prompt_cost, completion_cost = anthropic_cost_per_token(model="claude-opus-5", usage=usage)
     assert prompt_cost == pytest.approx(1000 * 5e-06 * 2.0)
     assert completion_cost == pytest.approx(500 * 2.5e-05 * 2.0)
 
@@ -255,9 +251,7 @@ def test_opus_5_all_variants_carry_adaptive_thinking_flag(cost_map):
     Opus 5 rejects with a 400."""
     variants = [k for k in cost_map if "claude-opus-5" in k]
     assert variants, "no claude-opus-5 entries found in cost map"
-    missing = [
-        k for k in variants if cost_map[k].get("supports_adaptive_thinking") is not True
-    ]
+    missing = [k for k in variants if cost_map[k].get("supports_adaptive_thinking") is not True]
     assert not missing, f"missing supports_adaptive_thinking: {missing}"
 
 

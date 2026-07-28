@@ -61,9 +61,7 @@ class BaseInteractionsTest(ABC):
                 )
             else:
                 # If it's an object, check attributes
-                assert hasattr(response.usage, "input_tokens") or hasattr(
-                    response.usage, "output_tokens"
-                )
+                assert hasattr(response.usage, "input_tokens") or hasattr(response.usage, "output_tokens")
 
     def test_create_with_system_instruction(self):
         """Test creating an interaction with system_instruction."""

@@ -56,26 +56,22 @@ def test_cost_calculation_uses_debug_level():
 
         # Call completion_cost to trigger logs
         try:
-            cost = completion_cost(
-                completion_response=mock_response, model="gpt-3.5-turbo"
-            )
+            cost = completion_cost(completion_response=mock_response, model="gpt-3.5-turbo")
         except Exception:
             pass  # Cost calculation may fail, but we're checking log levels
 
         # Find the cost calculation log records
         cost_calc_records = [
-            record
-            for record in handler.records
-            if "selected model name for cost calculation" in record.getMessage()
+            record for record in handler.records if "selected model name for cost calculation" in record.getMessage()
         ]
 
         # Verify that cost calculation logs are at DEBUG level
         assert len(cost_calc_records) > 0, "No cost calculation logs found"
 
         for record in cost_calc_records:
-            assert (
-                record.levelno == logging.DEBUG
-            ), f"Cost calculation log should be DEBUG level, but was {record.levelname}"
+            assert record.levelno == logging.DEBUG, (
+                f"Cost calculation log should be DEBUG level, but was {record.levelname}"
+            )
     finally:
         # Clean up: remove handler and restore original logger level
         verbose_logger.removeHandler(handler)
@@ -115,25 +111,21 @@ def test_batch_cost_calculation_uses_debug_level():
 
         # Call batch_cost_calculator to trigger logs
         try:
-            batch_cost_calculator(
-                usage=usage, model="gpt-3.5-turbo", custom_llm_provider="openai"
-            )
+            batch_cost_calculator(usage=usage, model="gpt-3.5-turbo", custom_llm_provider="openai")
         except Exception:
             pass  # May fail, but we're checking log levels
 
         # Find batch cost calculation log records
         batch_cost_records = [
-            record
-            for record in handler.records
-            if "Calculating batch cost per token" in record.getMessage()
+            record for record in handler.records if "Calculating batch cost per token" in record.getMessage()
         ]
 
         # Verify logs exist and are at DEBUG level
         if batch_cost_records:  # May not always log depending on the code path
             for record in batch_cost_records:
-                assert (
-                    record.levelno == logging.DEBUG
-                ), f"Batch cost calculation log should be DEBUG level, but was {record.levelname}"
+                assert record.levelno == logging.DEBUG, (
+                    f"Batch cost calculation log should be DEBUG level, but was {record.levelname}"
+                )
     finally:
         # Clean up: remove handler and restore original logger level
         verbose_logger.removeHandler(handler)

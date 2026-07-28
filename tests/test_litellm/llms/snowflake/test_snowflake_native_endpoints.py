@@ -69,6 +69,7 @@ def _make_anthropic_response(content: str = "Hello!") -> httpx.Response:
 
 # ─── SnowflakeConfig (OpenAI-compatible) ───────────────────────────────────
 
+
 class TestSnowflakeConfigURL:
     def setup_method(self):
         self.cfg = SnowflakeConfig()
@@ -265,6 +266,7 @@ class TestSnowflakeConfigResponse:
 
 
 # ─── SnowflakeConfig ────────────────────────────────────────
+
 
 class TestAnthropicConfigURL:
     def setup_method(self):
@@ -475,6 +477,7 @@ class TestAnthropicConfigResponse:
 
 # ─── Model detection helper ────────────────────────────────────────────────
 
+
 class TestIsClaudeModel:
     def test_claude_model_detected(self):
         assert _is_claude_model("snowflake/claude-sonnet-4-5") is True
@@ -489,6 +492,7 @@ class TestIsClaudeModel:
 
 
 # ─── Anthropic Tool Transformation Tests ──────────────────────────────────
+
 
 class TestAnthropicToolTransformation:
     def setup_method(self):

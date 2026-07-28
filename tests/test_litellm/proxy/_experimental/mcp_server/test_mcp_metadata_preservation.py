@@ -52,9 +52,7 @@ class TestMCPMetadataPreservation:
         }
 
         # Create prefixed tools
-        prefixed_tools = manager._create_prefixed_tools(
-            [tool_with_metadata], mock_server, add_prefix=True
-        )
+        prefixed_tools = manager._create_prefixed_tools([tool_with_metadata], mock_server, add_prefix=True)
 
         # Verify
         assert len(prefixed_tools) == 1

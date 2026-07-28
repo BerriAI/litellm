@@ -37,9 +37,7 @@ HAPPY_RESPONSE = {
 @pytest.fixture
 def patched_completion(monkeypatch):
     monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
-    monkeypatch.setattr(
-        proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock())
-    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock()))
 
     async def _fake_process(self, *args, **kwargs):
         return dict(HAPPY_RESPONSE)
@@ -55,9 +53,7 @@ def patched_completion(monkeypatch):
 @pytest.fixture
 def completion_pipeline_raises(monkeypatch):
     monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
-    monkeypatch.setattr(
-        proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock())
-    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock()))
 
     async def _raise(self, *args, **kwargs):
         raise ValueError("boom")

@@ -121,9 +121,7 @@ class TestVertexGemmaCompletion:
 
         # Mock the async HTTP handler and Vertex authentication
         with (
-            patch(
-                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-            ) as mock_get_client,
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
             patch(
                 "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
@@ -156,9 +154,7 @@ class TestVertexGemmaCompletion:
 
             # Validate exact URL matches what we sent
             expected_url = "https://32277599999999999.us-central1-10582012152.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict"
-            assert (
-                request_url == expected_url
-            ), f"Expected URL: {expected_url}\nActual URL: {request_url}"
+            assert request_url == expected_url, f"Expected URL: {expected_url}\nActual URL: {request_url}"
 
             # Validate Request Body matches expected format
             assert "instances" in request_data
@@ -211,9 +207,7 @@ class TestVertexGemmaCompletion:
         }
 
         with (
-            patch(
-                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-            ) as mock_get_client,
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
             patch(
                 "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "test-project"),
@@ -286,9 +280,7 @@ class TestVertexGemmaCompletion:
         }
 
         with (
-            patch(
-                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-            ) as mock_get_client,
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
             patch(
                 "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
@@ -312,9 +304,7 @@ class TestVertexGemmaCompletion:
             )
 
             # Verify the response is a MockResponseIterator
-            assert isinstance(
-                response, MockResponseIterator
-            ), f"Expected MockResponseIterator, got {type(response)}"
+            assert isinstance(response, MockResponseIterator), f"Expected MockResponseIterator, got {type(response)}"
 
             # Verify the request sent to Vertex does NOT include 'stream'
             call_args = mock_client.post.call_args
@@ -324,9 +314,7 @@ class TestVertexGemmaCompletion:
             instance = request_data["instances"][0]
 
             # Critical: Verify stream parameter is NOT sent to Vertex API
-            assert (
-                "stream" not in instance
-            ), "stream parameter should not be sent to Vertex API"
+            assert "stream" not in instance, "stream parameter should not be sent to Vertex API"
 
             # Verify we can iterate the fake stream and get the response
             chunks = []
@@ -334,9 +322,7 @@ class TestVertexGemmaCompletion:
                 chunks.append(chunk)
 
             # Should get exactly one chunk (fake streaming)
-            assert (
-                len(chunks) == 1
-            ), f"Expected 1 chunk from fake stream, got {len(chunks)}"
+            assert len(chunks) == 1, f"Expected 1 chunk from fake stream, got {len(chunks)}"
 
             # Verify the chunk has the expected content
             chunk = chunks[0]
@@ -388,9 +374,7 @@ class TestVertexGemmaCompletion:
         }
 
         with (
-            patch(
-                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-            ) as mock_get_client,
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
             patch(
                 "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
@@ -423,12 +407,8 @@ class TestVertexGemmaCompletion:
             instance = request_data["instances"][0]
 
             # Critical: Verify both stream and stream_options are NOT sent to Vertex API
-            assert (
-                "stream" not in instance
-            ), "stream parameter should not be sent to Vertex API"
-            assert (
-                "stream_options" not in instance
-            ), "stream_options parameter should not be sent to Vertex API"
+            assert "stream" not in instance, "stream parameter should not be sent to Vertex API"
+            assert "stream_options" not in instance, "stream_options parameter should not be sent to Vertex API"
 
             # Verify other parameters are present
             assert "messages" in instance
@@ -479,9 +459,7 @@ class TestVertexGemmaCompletion:
         }
 
         with (
-            patch(
-                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-            ) as mock_get_client,
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
             patch(
                 "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
@@ -502,9 +480,7 @@ class TestVertexGemmaCompletion:
             await litellm.acompletion(
                 model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
                 messages=[{"role": "user", "content": "Test"}],
-                context_management=[
-                    {"type": "compaction", "compact_threshold": 200000}
-                ],
+                context_management=[{"type": "compaction", "compact_threshold": 200000}],
                 allowed_openai_params=["context_management"],
                 api_base="https://test.us-central1-project.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
                 vertex_project="PROJECT_ID",
@@ -518,9 +494,7 @@ class TestVertexGemmaCompletion:
             print("request body=", json.dumps(request_data, indent=4))
             instance = request_data["instances"][0]
 
-            assert (
-                "context_management" not in instance
-            ), "context_management should not be forwarded to Vertex Gemma"
+            assert "context_management" not in instance, "context_management should not be forwarded to Vertex Gemma"
             assert instance["@requestFormat"] == "chatCompletions"
             assert "messages" in instance
 
@@ -540,9 +514,7 @@ class TestVertexGemmaCompletion:
             messages=[{"role": "user", "content": "hi"}],
             optional_params={
                 "max_tokens": 32,
-                "context_management": [
-                    {"type": "compaction", "compact_threshold": 200000}
-                ],
+                "context_management": [{"type": "compaction", "compact_threshold": 200000}],
             },
             litellm_params={},
             headers={},

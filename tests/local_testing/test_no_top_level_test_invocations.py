@@ -24,9 +24,7 @@ def test_no_module_level_test_invocations():
         except SyntaxError:
             continue
         for name, lineno in _top_level_test_invocations(tree):
-            offenders.append(
-                f"{path.relative_to(LOCAL_TESTING_DIR)}:{lineno} calls {name}()"
-            )
+            offenders.append(f"{path.relative_to(LOCAL_TESTING_DIR)}:{lineno} calls {name}()")
 
     assert not offenders, (
         "Test functions are invoked at module scope, so they run during pytest "

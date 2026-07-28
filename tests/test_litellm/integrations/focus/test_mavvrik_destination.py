@@ -609,10 +609,7 @@ async def test_run_scheduled_export_skips_catchup_when_marker_is_unparseable():
     await logger._run_scheduled_export()
 
     assert db_mock.get_usage_data.call_count == 1
-    assert (
-        db_mock.get_usage_data.call_args.kwargs["start_time_utc"].date()
-        == yesterday.date()
-    )
+    assert db_mock.get_usage_data.call_args.kwargs["start_time_utc"].date() == yesterday.date()
 
 
 @pytest.mark.asyncio

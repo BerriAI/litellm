@@ -33,9 +33,7 @@ class TestRouterSettingsEndpoints:
         Test GET /router/fields endpoint successfully returns field definitions without values.
         """
         # Make request to router fields endpoint
-        response = client.get(
-            "/router/fields", headers={"Authorization": "Bearer sk-1234"}
-        )
+        response = client.get("/router/fields", headers={"Authorization": "Bearer sk-1234"})
 
         # Verify response
         assert response.status_code == 200
@@ -66,11 +64,7 @@ class TestRouterSettingsEndpoints:
 
         # Verify routing_strategy field has options populated
         routing_strategy_field = next(
-            (
-                f
-                for f in response_data["fields"]
-                if f["field_name"] == "routing_strategy"
-            ),
+            (f for f in response_data["fields"] if f["field_name"] == "routing_strategy"),
             None,
         )
         assert routing_strategy_field is not None
@@ -79,9 +73,7 @@ class TestRouterSettingsEndpoints:
         assert len(routing_strategy_field["options"]) > 0
 
     @pytest.mark.asyncio
-    async def test_get_router_settings_includes_routing_groups_from_live_router(
-        self, monkeypatch
-    ):
+    async def test_get_router_settings_includes_routing_groups_from_live_router(self, monkeypatch):
         """GET /router/settings returns routing_groups from the live router."""
         groups = [
             {
@@ -109,13 +101,9 @@ class TestRouterSettingsEndpoints:
         async def fake_get_config(self, config_file_path=None):
             return {}
 
-        monkeypatch.setattr(
-            proxy_server.ProxyConfig, "get_config", fake_get_config, raising=True
-        )
+        monkeypatch.setattr(proxy_server.ProxyConfig, "get_config", fake_get_config, raising=True)
 
-        admin_user = UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-x"
-        )
+        admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-x")
         response = await get_router_settings(user_api_key_dict=admin_user)
 
         assert response.current_values.get("routing_groups") == groups

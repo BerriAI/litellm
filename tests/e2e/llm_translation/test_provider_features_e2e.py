@@ -30,18 +30,12 @@ SERVICE_TIER = "priority"
 
 
 class TestServiceTier:
-    @pytest.mark.covers(
-        "llm.chat_completions.openai.service_tier.nonstream.works", exercised_on=[]
-    )
-    def test_openai_service_tier_is_echoed(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    @pytest.mark.covers("llm.chat_completions.openai.service_tier.nonstream.works", exercised_on=[])
+    def test_openai_service_tier_is_echoed(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-service-tier-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
-            LiteLLMParamsBody(
-                model="openai/gpt-5.5", api_key="os.environ/OPENAI_API_KEY"
-            ),
+            LiteLLMParamsBody(model="openai/gpt-5.5", api_key="os.environ/OPENAI_API_KEY"),
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
         key = resources.key()
@@ -58,6 +52,5 @@ class TestServiceTier:
             )
         )
         assert response.service_tier == SERVICE_TIER, (
-            f"service_tier not honored: sent {SERVICE_TIER!r}, response reported "
-            f"{response.service_tier!r} ({response})"
+            f"service_tier not honored: sent {SERVICE_TIER!r}, response reported {response.service_tier!r} ({response})"
         )

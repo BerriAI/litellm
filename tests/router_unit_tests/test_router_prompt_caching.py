@@ -6,9 +6,7 @@ from dotenv import load_dotenv
 from fastapi import Request
 from datetime import datetime
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from litellm import Router
 import pytest
 import litellm
@@ -105,8 +103,7 @@ async def test_router_prompt_caching_same_cacheable_prefix_routes_to_same_deploy
                     # BLOCK 2: Has cache_control → INCLUDED (this is the last cacheable block)
                     {
                         "type": "text",
-                        "text": "Here 3 is the full text of a complex legal agreement"
-                        * 400,
+                        "text": "Here 3 is the full text of a complex legal agreement" * 400,
                         "cache_control": {"type": "ephemeral"},
                     },
                 ],
@@ -138,9 +135,7 @@ async def test_router_prompt_caching_same_cacheable_prefix_routes_to_same_deploy
 
     # Create test messages matching user's exact scenario
     # Same cacheable prefix (system blocks 1+2) but different user messages
-    messages1 = create_messages(
-        "what are the key terms and conditions in this agreement?"
-    )
+    messages1 = create_messages("what are the key terms and conditions in this agreement?")
     messages2 = create_messages("how many words are there?")
     messages3 = create_messages("how many sentences are there?")
 
@@ -152,9 +147,7 @@ async def test_router_prompt_caching_same_cacheable_prefix_routes_to_same_deploy
     key3 = PromptCachingCache.get_prompt_caching_cache_key(messages3, None)
 
     assert key1 is not None, "Cache key should not be None"
-    assert (
-        key1 == key2 == key3
-    ), "Cache keys should be the same for same cacheable prefix"
+    assert key1 == key2 == key3, "Cache keys should be the same for same cacheable prefix"
 
     # Make first request
     try:
@@ -170,9 +163,7 @@ async def test_router_prompt_caching_same_cacheable_prefix_routes_to_same_deploy
     cached_2 = await cache.async_get_model_id(messages2, None)
     # Cache should be found if first request succeeded
     if model_id_1 != "unknown":
-        assert (
-            cached_2 is not None
-        ), "Cache lookup should work for same cacheable prefix"
+        assert cached_2 is not None, "Cache lookup should work for same cacheable prefix"
 
     # Make second request
     try:
@@ -192,9 +183,9 @@ async def test_router_prompt_caching_same_cacheable_prefix_routes_to_same_deploy
 
     # Test 3: All requests should route to same deployment (if API calls succeeded)
     if model_id_1 != "unknown" and model_id_2 != "unknown" and model_id_3 != "unknown":
-        assert (
-            model_id_1 == model_id_2 == model_id_3
-        ), f"All requests should route to same deployment, but got: {model_id_1}, {model_id_2}, {model_id_3}"
+        assert model_id_1 == model_id_2 == model_id_3, (
+            f"All requests should route to same deployment, but got: {model_id_1}, {model_id_2}, {model_id_3}"
+        )
 
 
 def test_extract_cacheable_prefix_with_string_content_and_message_level_cache_control():

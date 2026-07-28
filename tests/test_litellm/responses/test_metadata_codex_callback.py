@@ -95,9 +95,7 @@ async def test_metadata_passed_to_custom_callback_codex_models():
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             new_callable=AsyncMock,
         ) as mock_post:
-            mock_post.return_value = _make_mock_http_response(
-                mock_response.model_dump()
-            )
+            mock_post.return_value = _make_mock_http_response(mock_response.model_dump())
             # gpt-5.1-codex has mode=responses - routes through responses bridge
             await litellm.acompletion(
                 model="gpt-5.1-codex",
@@ -161,9 +159,7 @@ async def test_metadata_passed_via_litellm_metadata_responses_api():
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             new_callable=AsyncMock,
         ) as mock_post:
-            mock_post.return_value = _make_mock_http_response(
-                mock_response.model_dump()
-            )
+            mock_post.return_value = _make_mock_http_response(mock_response.model_dump())
             await litellm.aresponses(
                 model="gpt-4o",
                 input="hi",

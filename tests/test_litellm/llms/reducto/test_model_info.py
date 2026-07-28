@@ -6,9 +6,7 @@ from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
 def test_reducto_provider_registration():
-    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-        model="reducto/parse-v3"
-    )
+    model, custom_llm_provider, _, _ = litellm.get_llm_provider(model="reducto/parse-v3")
 
     assert model == "parse-v3"
     assert custom_llm_provider == "reducto"

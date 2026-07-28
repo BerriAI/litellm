@@ -47,9 +47,7 @@ class EnterpriseImportFinder(ast.NodeVisitor):
 
     def visit_ImportFrom(self, node):
         # Check for from litellm_enterprise imports
-        if node.module and (
-            "litellm_enterprise" in node.module or "enterprise" in node.module
-        ):
+        if node.module and ("litellm_enterprise" in node.module or "enterprise" in node.module):
             if not self.in_try_block:
                 self.unsafe_imports.append(
                     {

@@ -42,9 +42,7 @@ def test_cache_key_debug_log_does_not_include_prompt_material(caplog):
     assert re.fullmatch(r"[0-9a-f]{64}", cache_key)
 
     created_cache_key_logs = [
-        record.getMessage()
-        for record in caplog.records
-        if "Created cache key:" in record.getMessage()
+        record.getMessage() for record in caplog.records if "Created cache key:" in record.getMessage()
     ]
     assert created_cache_key_logs
     assert all(prompt_marker not in message for message in created_cache_key_logs)
@@ -54,13 +52,8 @@ def test_cache_key_debug_log_does_not_include_prompt_material(caplog):
 def _embedding_response(prompt_tokens, num_items):
     return EmbeddingResponse(
         model="amazon.titan-embed-image-v1",
-        data=[
-            Embedding(embedding=[0.0], index=i, object="embedding")
-            for i in range(num_items)
-        ],
-        usage=Usage(
-            prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens
-        ),
+        data=[Embedding(embedding=[0.0], index=i, object="embedding") for i in range(num_items)],
+        usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens),
     )
 
 
@@ -97,9 +90,7 @@ def test_semantic_cache_key_excludes_prompt_so_paraphrases_share_a_bucket():
     )
     key_b = cache.get_cache_key(
         model="gpt-4o-mini",
-        messages=[
-            {"role": "user", "content": "Tell me the colour of the daytime sky."}
-        ],
+        messages=[{"role": "user", "content": "Tell me the colour of the daytime sky."}],
         metadata=dict(tenant),
     )
     assert key_a == key_b
@@ -108,12 +99,8 @@ def test_semantic_cache_key_excludes_prompt_so_paraphrases_share_a_bucket():
 def test_semantic_cache_key_isolates_tenants():
     messages = [{"role": "user", "content": "What color is the sky?"}]
     cache = _semantic_cache()
-    key_a = cache.get_cache_key(
-        model="gpt-4o-mini", messages=messages, metadata={"user_api_key": "hash-A"}
-    )
-    key_b = cache.get_cache_key(
-        model="gpt-4o-mini", messages=messages, metadata={"user_api_key": "hash-B"}
-    )
+    key_a = cache.get_cache_key(model="gpt-4o-mini", messages=messages, metadata={"user_api_key": "hash-A"})
+    key_b = cache.get_cache_key(model="gpt-4o-mini", messages=messages, metadata={"user_api_key": "hash-B"})
     key_team = cache.get_cache_key(
         model="gpt-4o-mini",
         messages=messages,
@@ -127,22 +114,16 @@ def test_semantic_cache_key_still_separates_models_and_params():
     cache = _semantic_cache()
     messages = [{"role": "user", "content": "hi"}]
     tenant = {"user_api_key": "hash-A"}
-    assert cache.get_cache_key(
-        model="gpt-4o-mini", messages=messages, metadata=dict(tenant)
-    ) != cache.get_cache_key(model="gpt-4o", messages=messages, metadata=dict(tenant))
+    assert cache.get_cache_key(model="gpt-4o-mini", messages=messages, metadata=dict(tenant)) != cache.get_cache_key(
+        model="gpt-4o", messages=messages, metadata=dict(tenant)
+    )
     assert cache.get_cache_key(
         model="gpt-4o-mini", messages=messages, temperature=0, metadata=dict(tenant)
-    ) != cache.get_cache_key(
-        model="gpt-4o-mini", messages=messages, temperature=1, metadata=dict(tenant)
-    )
+    ) != cache.get_cache_key(model="gpt-4o-mini", messages=messages, temperature=1, metadata=dict(tenant))
 
 
 def test_exact_cache_key_still_includes_prompt():
     cache = Cache(type=LiteLLMCacheType.LOCAL)
-    key_a = cache.get_cache_key(
-        model="gpt-4o-mini", messages=[{"role": "user", "content": "a"}]
-    )
-    key_b = cache.get_cache_key(
-        model="gpt-4o-mini", messages=[{"role": "user", "content": "b"}]
-    )
+    key_a = cache.get_cache_key(model="gpt-4o-mini", messages=[{"role": "user", "content": "a"}])
+    key_b = cache.get_cache_key(model="gpt-4o-mini", messages=[{"role": "user", "content": "b"}])
     assert key_a != key_b

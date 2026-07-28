@@ -33,9 +33,7 @@ def mock_logging_obj():
 class TestImageGenerationExtraHeaders:
     """Test that extra_headers are properly injected into OpenAI image generation calls."""
 
-    def test_sync_image_generation_with_headers(
-        self, openai_chat_completions, mock_logging_obj
-    ):
+    def test_sync_image_generation_with_headers(self, openai_chat_completions, mock_logging_obj):
         """Sync image_generation should pass headers as extra_headers to images.generate()."""
         mock_image_data = MagicMock()
         mock_image_data.model_dump.return_value = {
@@ -64,9 +62,7 @@ class TestImageGenerationExtraHeaders:
         _, kwargs = mock_openai_client.images.generate.call_args
         assert kwargs.get("extra_headers") == test_headers
 
-    def test_sync_image_generation_without_headers(
-        self, openai_chat_completions, mock_logging_obj
-    ):
+    def test_sync_image_generation_without_headers(self, openai_chat_completions, mock_logging_obj):
         """Sync image_generation without headers should not inject extra_headers."""
         mock_image_data = MagicMock()
         mock_image_data.model_dump.return_value = {
@@ -93,9 +89,7 @@ class TestImageGenerationExtraHeaders:
         assert "extra_headers" not in kwargs
 
     @pytest.mark.asyncio
-    async def test_async_image_generation_with_headers(
-        self, openai_chat_completions, mock_logging_obj
-    ):
+    async def test_async_image_generation_with_headers(self, openai_chat_completions, mock_logging_obj):
         """Async aimage_generation should pass headers as extra_headers to images.generate()."""
         mock_image_data = MagicMock()
         mock_image_data.model_dump.return_value = {
@@ -124,9 +118,7 @@ class TestImageGenerationExtraHeaders:
         assert kwargs.get("extra_headers") == test_headers
 
     @pytest.mark.asyncio
-    async def test_async_image_generation_without_headers(
-        self, openai_chat_completions, mock_logging_obj
-    ):
+    async def test_async_image_generation_without_headers(self, openai_chat_completions, mock_logging_obj):
         """Async aimage_generation without headers should not inject extra_headers."""
         mock_image_data = MagicMock()
         mock_image_data.model_dump.return_value = {
@@ -151,13 +143,9 @@ class TestImageGenerationExtraHeaders:
         _, kwargs = mock_openai_client.images.generate.call_args
         assert "extra_headers" not in kwargs
 
-    def test_sync_image_generation_forwards_headers_to_async(
-        self, openai_chat_completions, mock_logging_obj
-    ):
+    def test_sync_image_generation_forwards_headers_to_async(self, openai_chat_completions, mock_logging_obj):
         """When aimg_generation=True, image_generation should forward headers to aimage_generation."""
-        with patch.object(
-            openai_chat_completions, "aimage_generation"
-        ) as mock_aimage_gen:
+        with patch.object(openai_chat_completions, "aimage_generation") as mock_aimage_gen:
             mock_aimage_gen.return_value = MagicMock()
 
             test_headers = {"x-custom-header": "value"}

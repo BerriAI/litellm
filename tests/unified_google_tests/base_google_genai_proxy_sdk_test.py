@@ -22,10 +22,7 @@ def has_vertex_credentials() -> bool:
     credentials_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
     if credentials_file and os.path.isfile(credentials_file):
         return True
-    return bool(
-        os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
-        and os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
-    )
+    return bool(os.environ.get("VERTEX_AI_PRIVATE_KEY", "") and os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", ""))
 
 
 def _make_client(proxy_url: str) -> "genai.Client":
@@ -91,9 +88,7 @@ class BaseGoogleGenAIProxySDKTest(ABC):
         assert response.text is not None
         assert len(response.text.strip()) > 0
 
-    def test_proxy_genai_sdk_streaming_completes_without_errors(
-        self, google_genai_proxy_url: str
-    ) -> None:
+    def test_proxy_genai_sdk_streaming_completes_without_errors(self, google_genai_proxy_url: str) -> None:
         self._require_proxy_sdk()
 
         client = _make_client(google_genai_proxy_url)
@@ -112,15 +107,11 @@ class BaseGoogleGenAIProxySDKTest(ABC):
         except Exception as exc:
             stream_error = exc
 
-        assert (
-            stream_error is None
-        ), f"Streaming raised {type(stream_error).__name__}: {stream_error}"
+        assert stream_error is None, f"Streaming raised {type(stream_error).__name__}: {stream_error}"
         assert len(chunks) > 0, "Expected at least one streaming chunk"
         assert _collect_stream_text(chunks).strip(), "Expected non-empty streamed text"
 
-    def test_proxy_genai_sdk_streaming_dict_style(
-        self, google_genai_proxy_url: str
-    ) -> None:
+    def test_proxy_genai_sdk_streaming_dict_style(self, google_genai_proxy_url: str) -> None:
         self._require_proxy_sdk()
 
         client = _make_client(google_genai_proxy_url)

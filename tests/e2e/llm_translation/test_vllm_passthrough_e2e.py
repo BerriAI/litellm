@@ -31,12 +31,8 @@ VLLM_PASSTHROUGH_MODEL = "qwen2.5-0.5b-instruct"
 
 class TestVllmChatPassthrough:
     @pytest.mark.covers("llm.chat_completions.hosted_vllm.passthrough.nonstream.works")
-    def test_vllm_chat_passthrough_returns_completion(
-        self, client: PassthroughClient, scoped_key: str
-    ) -> None:
-        result = client.vllm_chat(
-            scoped_key, VLLM_PASSTHROUGH_MODEL, f"Say hello in one word ({unique_marker()})"
-        )
+    def test_vllm_chat_passthrough_returns_completion(self, client: PassthroughClient, scoped_key: str) -> None:
+        result = client.vllm_chat(scoped_key, VLLM_PASSTHROUGH_MODEL, f"Say hello in one word ({unique_marker()})")
         require_successful_call(result)
 
         parsed = ChatResponse.model_validate_json(result.body)

@@ -104,11 +104,7 @@ def fetch_pr_author_association(pr_number: int, repo: str | None) -> str:
     Values: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR,
     FIRST_TIMER, MANNEQUIN, NONE. Returns "" on lookup failure.
     """
-    endpoint = (
-        f"repos/{repo}/pulls/{pr_number}"
-        if repo
-        else f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"
-    )
+    endpoint = f"repos/{repo}/pulls/{pr_number}" if repo else f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"
     try:
         data = json.loads(gh("api", endpoint))
     except subprocess.CalledProcessError:
@@ -246,10 +242,7 @@ def post_grace_warning(
     repo_args = ["--repo", repo] if repo else []
 
     if dry_run:
-        print(
-            f"  [DRY RUN] Would post grace warning to PR #{pr_number} "
-            f"(greptile={score}/5): {pr['title']}"
-        )
+        print(f"  [DRY RUN] Would post grace warning to PR #{pr_number} (greptile={score}/5): {pr['title']}")
         return
 
     comment_body = format_grace_warning_comment(score, threshold)
@@ -310,10 +303,7 @@ def close_pr(
     repo_args = ["--repo", repo] if repo else []
 
     if dry_run:
-        print(
-            f"  [DRY RUN] Would close PR #{pr_number} "
-            f"(age={age_days}d, greptile={score}/5): {pr['title']}"
-        )
+        print(f"  [DRY RUN] Would close PR #{pr_number} (age={age_days}d, greptile={score}/5): {pr['title']}")
         return
 
     comment_body = format_close_comment(score, threshold)
@@ -500,10 +490,7 @@ def main() -> int:
 
             if action == "warn-grace":
                 assert score is not None
-                print(
-                    f"#{pr['number']}: \"{pr['title']}\" "
-                    f"(age={age_days}d, greptile={score}/5) -> warn-grace"
-                )
+                print(f'#{pr["number"]}: "{pr["title"]}" (age={age_days}d, greptile={score}/5) -> warn-grace')
                 post_grace_warning(
                     pr,
                     score=score,
@@ -514,10 +501,7 @@ def main() -> int:
                 if not dry_run:
                     warned += 1
                     if args.limit is not None and (warned + closed) >= args.limit:
-                        print(
-                            f"\nReached --limit={args.limit} "
-                            f"(closed={closed}, warned={warned}); stopping."
-                        )
+                        print(f"\nReached --limit={args.limit} (closed={closed}, warned={warned}); stopping.")
                         break
                 continue
 
@@ -525,10 +509,7 @@ def main() -> int:
                 continue
 
             assert score is not None and age_days is not None
-            print(
-                f"#{pr['number']}: \"{pr['title']}\" "
-                f"(age={age_days}d, greptile={score}/5) -> close"
-            )
+            print(f'#{pr["number"]}: "{pr["title"]}" (age={age_days}d, greptile={score}/5) -> close')
             close_pr(
                 pr,
                 score=score,
@@ -542,10 +523,7 @@ def main() -> int:
             if not dry_run:
                 closed += 1
                 if args.limit is not None and (warned + closed) >= args.limit:
-                    print(
-                        f"\nReached --limit={args.limit} "
-                        f"(closed={closed}, warned={warned}); stopping."
-                    )
+                    print(f"\nReached --limit={args.limit} (closed={closed}, warned={warned}); stopping.")
                     break
         except Exception as exc:  # noqa: BLE001 - per-PR errors don't abort the sweep
             summary["error"] = summary.get("error", 0) + 1
@@ -562,10 +540,7 @@ def main() -> int:
         print(f"\nTotal would close: {summary['close']}")
     else:
         print(f"\nTotal closed: {closed}")
-    print(
-        f"Total {'would warn (grace)' if dry_run else 'warned (grace)'}: "
-        f"{summary['warn-grace']}"
-    )
+    print(f"Total {'would warn (grace)' if dry_run else 'warned (grace)'}: {summary['warn-grace']}")
     return 0
 
 

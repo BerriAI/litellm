@@ -123,9 +123,7 @@ class MockAnthropicProvider:
     def _sse(event: str, data: dict[str, Any]) -> bytes:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
 
-    async def _streaming_response(
-        self, request: web.Request, body: dict[str, Any]
-    ) -> web.StreamResponse:
+    async def _streaming_response(self, request: web.Request, body: dict[str, Any]) -> web.StreamResponse:
         model = body.get("model", DEFAULT_MODEL)
         response = web.StreamResponse(
             status=200,
@@ -180,9 +178,7 @@ class MockAnthropicProvider:
                 )
             )
 
-        await response.write(
-            self._sse("content_block_stop", {"type": "content_block_stop", "index": 0})
-        )
+        await response.write(self._sse("content_block_stop", {"type": "content_block_stop", "index": 0}))
         await response.write(
             self._sse(
                 "message_delta",
@@ -424,15 +420,11 @@ async def run_benchmark(
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         if warmup > 0:
             wcounter = [0]
-            await asyncio.gather(
-                *[worker(session, wcounter, warmup, []) for _ in range(concurrency)]
-            )
+            await asyncio.gather(*[worker(session, wcounter, warmup, []) for _ in range(concurrency)])
         samples: list[StreamSample] = []
         counter = [0]
         wall_start = time.perf_counter()
-        await asyncio.gather(
-            *[worker(session, counter, requests, samples) for _ in range(concurrency)]
-        )
+        await asyncio.gather(*[worker(session, counter, requests, samples) for _ in range(concurrency)])
         wall_time_s = time.perf_counter() - wall_start
     return summarize(samples, wall_time_s)
 

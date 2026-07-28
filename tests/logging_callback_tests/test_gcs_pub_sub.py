@@ -47,9 +47,7 @@ ignored_keys = [
 ]
 
 
-def _compare_nested_dicts(
-    actual: dict, expected: dict, path: str = "", ignore_keys: list[str] = []
-) -> list[str]:
+def _compare_nested_dicts(actual: dict, expected: dict, path: str = "", ignore_keys: list[str] = []) -> list[str]:
     """Compare nested dictionaries and return a list of differences in a human-friendly format."""
     differences = []
 
@@ -86,15 +84,9 @@ def _compare_nested_dicts(
                 pass
 
         if isinstance(expected_value, dict) and isinstance(actual_value, dict):
-            differences.extend(
-                _compare_nested_dicts(
-                    actual_value, expected_value, current_path, ignore_keys
-                )
-            )
+            differences.extend(_compare_nested_dicts(actual_value, expected_value, current_path, ignore_keys))
         elif isinstance(expected_value, dict) or isinstance(actual_value, dict):
-            differences.append(
-                f"Type mismatch at {current_path}: expected dict, got {type(actual_value).__name__}"
-            )
+            differences.append(f"Type mismatch at {current_path}: expected dict, got {type(actual_value).__name__}")
         else:
             # For non-dict values, only report if they're different
             if actual_value != expected_value:
@@ -129,9 +121,7 @@ def assert_gcs_pubsub_request_matches_expected(
         expected_request_body = json.load(f)
 
     # Replace dynamic values in actual request body
-    differences = _compare_nested_dicts(
-        actual_request_body, expected_request_body, ignore_keys=ignored_keys
-    )
+    differences = _compare_nested_dicts(actual_request_body, expected_request_body, ignore_keys=ignored_keys)
     if differences:
         assert False, f"Dictionary mismatch: {differences}"
 
@@ -166,9 +156,7 @@ def assert_gcs_pubsub_request_matches_expected_standard_logging_payload(
     ]
 
     actual_request_body["response"]["id"] = expected_request_body["response"]["id"]
-    actual_request_body["response"]["created"] = expected_request_body["response"][
-        "created"
-    ]
+    actual_request_body["response"]["created"] = expected_request_body["response"]["created"]
 
     for field in FIELDS_TO_VALIDATE:
         assert field in actual_request_body
@@ -193,9 +181,7 @@ async def test_async_gcs_pub_sub():
     mock_post.return_value.text = "Accepted"
 
     # Initialize the GcsPubSubLogger and set the mock
-    gcs_pub_sub_logger = GcsPubSubLogger(
-        project_id="STUBBED_PROJECT_ID", topic_id="STUBBED_TOPIC_ID", flush_interval=1
-    )
+    gcs_pub_sub_logger = GcsPubSubLogger(project_id="STUBBED_PROJECT_ID", topic_id="STUBBED_TOPIC_ID", flush_interval=1)
     gcs_pub_sub_logger.async_httpx_client.post = mock_post
 
     mock_construct_request_headers = AsyncMock()
@@ -218,10 +204,7 @@ async def test_async_gcs_pub_sub():
     # Get the actual request body from the mock
     actual_url = mock_post.call_args[1]["url"]
     print("sent to url", actual_url)
-    assert (
-        actual_url
-        == "https://pubsub.googleapis.com/v1/projects/STUBBED_PROJECT_ID/topics/STUBBED_TOPIC_ID:publish"
-    )
+    assert actual_url == "https://pubsub.googleapis.com/v1/projects/STUBBED_PROJECT_ID/topics/STUBBED_TOPIC_ID:publish"
     actual_request = mock_post.call_args[1]["json"]
 
     # Extract and decode the base64 encoded message
@@ -236,9 +219,7 @@ async def test_async_gcs_pub_sub():
     print(json.dumps(actual_request, indent=4))
     print("##########\n")
     # Verify the request body matches expected format
-    assert_gcs_pubsub_request_matches_expected_standard_logging_payload(
-        actual_request, "standard_logging_payload.json"
-    )
+    assert_gcs_pubsub_request_matches_expected_standard_logging_payload(actual_request, "standard_logging_payload.json")
 
 
 @pytest.mark.asyncio
@@ -250,9 +231,7 @@ async def test_async_gcs_pub_sub_v1():
     mock_post.return_value.text = "Accepted"
 
     # Initialize the GcsPubSubLogger and set the mock
-    gcs_pub_sub_logger = GcsPubSubLogger(
-        project_id="STUBBED_PROJECT_ID", topic_id="STUBBED_TOPIC_ID", flush_interval=1
-    )
+    gcs_pub_sub_logger = GcsPubSubLogger(project_id="STUBBED_PROJECT_ID", topic_id="STUBBED_TOPIC_ID", flush_interval=1)
     gcs_pub_sub_logger.async_httpx_client.post = mock_post
 
     mock_construct_request_headers = AsyncMock()
@@ -275,10 +254,7 @@ async def test_async_gcs_pub_sub_v1():
     # Get the actual request body from the mock
     actual_url = mock_post.call_args[1]["url"]
     print("sent to url", actual_url)
-    assert (
-        actual_url
-        == "https://pubsub.googleapis.com/v1/projects/STUBBED_PROJECT_ID/topics/STUBBED_TOPIC_ID:publish"
-    )
+    assert actual_url == "https://pubsub.googleapis.com/v1/projects/STUBBED_PROJECT_ID/topics/STUBBED_TOPIC_ID:publish"
     actual_request = mock_post.call_args[1]["json"]
 
     # Extract and decode the base64 encoded message
@@ -293,6 +269,4 @@ async def test_async_gcs_pub_sub_v1():
     print(json.dumps(actual_request, indent=4))
     print("##########\n")
     # Verify the request body matches expected format
-    assert_gcs_pubsub_request_matches_expected(
-        actual_request, "spend_logs_payload.json"
-    )
+    assert_gcs_pubsub_request_matches_expected(actual_request, "spend_logs_payload.json")

@@ -21,12 +21,7 @@ create_cache = httpx_client.post(
         "contents": [
             {
                 "role": "user",
-                "parts": [
-                    {
-                        "text": "This is sample text to demonstrate explicit caching."
-                        * 4000
-                    }
-                ],
+                "parts": [{"text": "This is sample text to demonstrate explicit caching." * 4000}],
             }
         ],
     },

@@ -3,9 +3,7 @@ import sys
 import json
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
@@ -17,27 +15,19 @@ fireworks = FireworksAIConfig()
 
 def test_map_openai_params_tool_choice():
     # Test case 1: tool_choice is "required"
-    result = fireworks.map_openai_params(
-        {"tool_choice": "required"}, {}, "some_model", drop_params=False
-    )
+    result = fireworks.map_openai_params({"tool_choice": "required"}, {}, "some_model", drop_params=False)
     assert result == {"tool_choice": "any"}
 
     # Test case 2: tool_choice is "auto"
-    result = fireworks.map_openai_params(
-        {"tool_choice": "auto"}, {}, "some_model", drop_params=False
-    )
+    result = fireworks.map_openai_params({"tool_choice": "auto"}, {}, "some_model", drop_params=False)
     assert result == {"tool_choice": "auto"}
 
     # Test case 3: tool_choice is not present
-    result = fireworks.map_openai_params(
-        {"some_other_param": "value"}, {}, "some_model", drop_params=False
-    )
+    result = fireworks.map_openai_params({"some_other_param": "value"}, {}, "some_model", drop_params=False)
     assert result == {}
 
     # Test case 4: tool_choice is None
-    result = fireworks.map_openai_params(
-        {"tool_choice": None}, {}, "some_model", drop_params=False
-    )
+    result = fireworks.map_openai_params({"tool_choice": None}, {}, "some_model", drop_params=False)
     assert result == {"tool_choice": None}
 
 
@@ -64,9 +54,7 @@ def test_map_response_format():
             "strict": True,
         },
     }
-    result = fireworks.map_openai_params(
-        {"response_format": response_format}, {}, "some_model", drop_params=False
-    )
+    result = fireworks.map_openai_params({"response_format": response_format}, {}, "some_model", drop_params=False)
     assert result == {"response_format": response_format}
 
 
@@ -231,7 +219,4 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
 
         mock_post.assert_called_once()
         json_data = json.loads(mock_post.call_args.kwargs["data"])
-        assert (
-            "#transform=inline"
-            not in json_data["messages"][0]["content"][1]["image_url"]["url"]
-        )
+        assert "#transform=inline" not in json_data["messages"][0]["content"][1]["image_url"]["url"]

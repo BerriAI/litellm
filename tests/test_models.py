@@ -62,18 +62,12 @@ async def test_get_models_multiple_tests():
         assert len(models["data"]) > 0
 
         ## Test only_model_access_groups
-        new_response = await get_models(
-            session=session, key=key, only_model_access_groups=True
-        )
+        new_response = await get_models(session=session, key=key, only_model_access_groups=True)
         print(f"\n\nnew_response: {new_response}")
-        assert (
-            len(new_response["data"]) == 0
-        )  # no model access groups set on config.yaml
+        assert len(new_response["data"]) == 0  # no model access groups set on config.yaml
 
 
-async def add_models(
-    session, model_id="123", model_name="azure-gpt-3.5", key="sk-1234", team_id=None
-):
+async def add_models(session, model_id="123", model_name="azure-gpt-3.5", key="sk-1234", team_id=None):
     url = "http://0.0.0.0:4000/model/new"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -105,9 +99,7 @@ async def add_models(
         return response_json
 
 
-async def update_model(
-    session, model_id="123", model_name="azure-gpt-3.5", key="sk-1234"
-):
+async def update_model(session, model_id="123", model_name="azure-gpt-3.5", key="sk-1234"):
     url = "http://0.0.0.0:4000/model/update"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -235,13 +227,9 @@ async def test_get_specific_model():
             litellm_model_id = response["data"][idx]["model_info"]["id"]
             model_specific_info = response["data"][idx]
         assert litellm_model_id is not None
-        response = await get_model_info(
-            session=session, key=key, litellm_model_id=litellm_model_id
-        )
+        response = await get_model_info(session=session, key=key, litellm_model_id=litellm_model_id)
         assert response["data"][0]["model_info"]["id"] == litellm_model_id
-        assert (
-            response["data"][0] == model_specific_info
-        ), "Model info is not the same. Got={}, Expected={}".format(
+        assert response["data"][0] == model_specific_info, "Model info is not the same. Got={}, Expected={}".format(
             response["data"][0], model_specific_info
         )
 
@@ -286,9 +274,7 @@ async def test_add_and_delete_models():
         key = key_gen["key"]
         model_id = f"12345_{uuid.uuid4()}"
         model_name = f"{uuid.uuid4()}"
-        response = await add_models(
-            session=session, model_id=model_id, model_name=model_name
-        )
+        response = await add_models(session=session, model_id=model_id, model_name=model_name)
         assert response["model_id"] == model_id
         await asyncio.sleep(10)
         await chat_completion(session=session, key=key, model=model_name)
@@ -411,9 +397,7 @@ async def test_add_model_run_health():
         model_name = f"azure-model-health-check-{model_id}"
         print("adding model", model_name)
         await add_model_for_health_checking(session=session, model_id=model_id)
-        _old_model_info = await get_specific_model_info_v2(
-            session=session, key=key, model_name=model_name
-        )
+        _old_model_info = await get_specific_model_info_v2(session=session, key=key, model_name=model_name)
         print("model info before test", _old_model_info)
 
         await asyncio.sleep(30)
@@ -426,23 +410,17 @@ async def test_add_model_run_health():
         await chat_completion(session=session, key=key, model=model_name)
 
         print("calling /health?model=", model_name)
-        _health_info = await get_model_health(
-            session=session, key=master_key, model_name=model_name
-        )
+        _health_info = await get_model_health(session=session, key=master_key, model_name=model_name)
         _healthy_endpooint = _health_info["healthy_endpoints"][0]
 
         assert _health_info["healthy_count"] == 1
-        assert (
-            _healthy_endpooint["model"] == "gpt-4.1-nano"
-        )  # this is the model that got added
+        assert _healthy_endpooint["model"] == "gpt-4.1-nano"  # this is the model that got added
 
         # assert httpx client is is unchanges
 
         await asyncio.sleep(10)
 
-        _model_info_after_test = await get_specific_model_info_v2(
-            session=session, key=key, model_name=model_name
-        )
+        _model_info_after_test = await get_specific_model_info_v2(session=session, key=key, model_name=model_name)
 
         print("model info after test", _model_info_after_test)
         old_openai_client = _old_model_info["openai_client"]
@@ -455,9 +433,9 @@ async def test_add_model_run_health():
         The OpenAI client used should be the same after 30 seconds
         It is a serious bug if the openai client does not match here
         """
-        assert (
-            old_openai_client == new_openai_client
-        ), "OpenAI client does not match for the same model after 30 seconds"
+        assert old_openai_client == new_openai_client, (
+            "OpenAI client does not match for the same model after 30 seconds"
+        )
 
         # cleanup
         await delete_model(session=session, model_id=model_id)
@@ -503,8 +481,7 @@ async def test_model_group_info_e2e():
                 has_anthropic_wildcard = True
 
         assert has_anthropic_wildcard, (
-            f"Expected 'anthropic/*' in model groups, got: "
-            f"{[m['model_group'] for m in model_group_info['data']]}"
+            f"Expected 'anthropic/*' in model groups, got: {[m['model_group'] for m in model_group_info['data']]}"
         )
 
 
@@ -550,9 +527,7 @@ async def test_team_model_e2e():
         model_id = model_data["model_id"]
 
         # Update model
-        model_data = await update_model(
-            session=session, model_id=model_id, model_name=model_name, key=user_api_key
-        )
+        model_data = await update_model(session=session, model_id=model_id, model_name=model_name, key=user_api_key)
         model_id = model_data["model_id"]
 
         # Delete model

@@ -21,15 +21,11 @@ VIOLENT_TEXT = "I am going to find you and kill you, and I will hurt everyone yo
 BENIGN_TEXT = "I enjoyed the sunny afternoon and a relaxing walk in the park today."
 
 
-def _register_moderation_model(
-    endpoints_client: EndpointsClient, resources: ResourceManager
-) -> str:
+def _register_moderation_model(endpoints_client: EndpointsClient, resources: ResourceManager) -> str:
     model = f"e2e-moderation-{unique_marker()}"
     model_id = endpoints_client.create_model(
         model,
-        LiteLLMParamsBody(
-            model="openai/omni-moderation-latest", api_key="os.environ/OPENAI_API_KEY"
-        ),
+        LiteLLMParamsBody(model="openai/omni-moderation-latest", api_key="os.environ/OPENAI_API_KEY"),
     )
     resources.defer(lambda: endpoints_client.delete_model(model_id))
     return model
@@ -47,9 +43,7 @@ class TestModerations:
         item = result.first
         assert item is not None, f"/moderations returned no results: {result}"
         assert item.flagged, f"violent text was not flagged: {item}"
-        assert item.flagged_categories, (
-            f"flagged result reported no true category: {item}"
-        )
+        assert item.flagged_categories, f"flagged result reported no true category: {item}"
 
     def test_moderations_passes_benign_content(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
@@ -60,6 +54,4 @@ class TestModerations:
         result = unwrap(endpoints_client.moderations(key, model, BENIGN_TEXT))
         item = result.first
         assert item is not None, f"/moderations returned no results: {result}"
-        assert not item.flagged, (
-            f"benign text was flagged as {item.flagged_categories}: {item}"
-        )
+        assert not item.flagged, f"benign text was flagged as {item.flagged_categories}: {item}"

@@ -92,9 +92,7 @@ class TestArizeIntegrationWithProxy:
             arize_logger = ArizeLogger()
 
             # Store original callbacks
-            original_callbacks = (
-                litellm.success_callback.copy() if litellm.success_callback else []
-            )
+            original_callbacks = litellm.success_callback.copy() if litellm.success_callback else []
 
             try:
                 # Add ArizeLogger to callbacks

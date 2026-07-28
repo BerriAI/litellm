@@ -158,9 +158,7 @@ class TestPrometheusQueueTimeMetric:
             if len(call[0]) > 0 and call[0][0] == 0.5:  # Our test queue time value
                 queue_time_called = True
                 break
-        assert (
-            not queue_time_called
-        ), "Queue time metric should not be recorded when queue_time_seconds is missing"
+        assert not queue_time_called, "Queue time metric should not be recorded when queue_time_seconds is missing"
 
     def test_queue_time_metric_not_recorded_when_negative(self):
         """Test that queue time metric is not recorded when queue_time_seconds is negative"""
@@ -224,9 +222,7 @@ class TestPrometheusQueueTimeMetric:
             if len(call[0]) > 0 and call[0][0] == -0.1:
                 negative_value_called = True
                 break
-        assert (
-            not negative_value_called
-        ), "Queue time metric should not be recorded for negative values"
+        assert not negative_value_called, "Queue time metric should not be recorded for negative values"
 
 
 class TestPrometheusGuardrailMetrics:
@@ -268,9 +264,7 @@ class TestPrometheusGuardrailMetrics:
             error_type="none",
             hook_type=hook_type,
         )
-        mock_latency_metric.labels.return_value.observe.assert_called_once_with(
-            latency_seconds
-        )
+        mock_latency_metric.labels.return_value.observe.assert_called_once_with(latency_seconds)
 
         # Assert - requests metric should be incremented
         mock_requests_metric.labels.assert_called_once_with(
@@ -319,9 +313,7 @@ class TestPrometheusGuardrailMetrics:
             error_type=error_type,
             hook_type=hook_type,
         )
-        mock_latency_metric.labels.return_value.observe.assert_called_once_with(
-            latency_seconds
-        )
+        mock_latency_metric.labels.return_value.observe.assert_called_once_with(latency_seconds)
 
         # Assert - requests metric should be incremented
         mock_requests_metric.labels.assert_called_once_with(

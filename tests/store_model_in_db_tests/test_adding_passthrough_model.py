@@ -75,9 +75,7 @@ def test_e2e_assemblyai_passthrough():
     add_assembly_ai_model_to_db(api_base="https://api.assemblyai.com")
     virtual_key = create_virtual_key()
     # make request
-    make_assemblyai_basic_transcribe_request(
-        virtual_key=virtual_key, assemblyai_base_url=US_BASE_URL
-    )
+    make_assemblyai_basic_transcribe_request(virtual_key=virtual_key, assemblyai_base_url=US_BASE_URL)
 
     pass
 
@@ -91,9 +89,7 @@ def test_e2e_assemblyai_passthrough_eu():
     add_assembly_ai_model_to_db(api_base="https://api.eu.assemblyai.com")
     virtual_key = create_virtual_key()
     # make request
-    make_assemblyai_basic_transcribe_request(
-        virtual_key=virtual_key, assemblyai_base_url=EU_BASE_URL
-    )
+    make_assemblyai_basic_transcribe_request(virtual_key=virtual_key, assemblyai_base_url=EU_BASE_URL)
 
     pass
 
@@ -115,20 +111,12 @@ def test_assemblyai_routes_with_bad_api_key():
     }
 
     # Test EU endpoint
-    eu_response = httpx.post(
-        f"{PROXY_BASE_URL}/eu.assemblyai/v2/transcript", headers=headers, json=payload
-    )
-    assert (
-        eu_response.status_code == 401
-    ), f"Expected 401 unauthorized, got {eu_response.status_code}"
+    eu_response = httpx.post(f"{PROXY_BASE_URL}/eu.assemblyai/v2/transcript", headers=headers, json=payload)
+    assert eu_response.status_code == 401, f"Expected 401 unauthorized, got {eu_response.status_code}"
 
     # Test US endpoint
-    us_response = httpx.post(
-        f"{PROXY_BASE_URL}/assemblyai/v2/transcript", headers=headers, json=payload
-    )
-    assert (
-        us_response.status_code == 401
-    ), f"Expected 401 unauthorized, got {us_response.status_code}"
+    us_response = httpx.post(f"{PROXY_BASE_URL}/assemblyai/v2/transcript", headers=headers, json=payload)
+    assert us_response.status_code == 401, f"Expected 401 unauthorized, got {us_response.status_code}"
 
 
 def create_virtual_key():
@@ -170,9 +158,7 @@ def add_assembly_ai_model_to_db(
     pass
 
 
-def make_assemblyai_basic_transcribe_request(
-    virtual_key: str, assemblyai_base_url: str
-):
+def make_assemblyai_basic_transcribe_request(virtual_key: str, assemblyai_base_url: str):
     print("making basic transcribe request to assemblyai passthrough")
     file_url = "https://assembly.ai/wildfires.mp3"
     headers = {
@@ -192,8 +178,7 @@ def make_assemblyai_basic_transcribe_request(
     )
     if create_response.status_code != 200:
         pytest.fail(
-            "Failed to create transcript request: "
-            f"status={create_response.status_code}, body={create_response.text}"
+            f"Failed to create transcript request: status={create_response.status_code}, body={create_response.text}"
         )
 
     transcript = create_response.json()
@@ -209,8 +194,7 @@ def make_assemblyai_basic_transcribe_request(
         )
         if poll_response.status_code != 200:
             pytest.fail(
-                "Failed to poll transcript status: "
-                f"status={poll_response.status_code}, body={poll_response.text}"
+                f"Failed to poll transcript status: status={poll_response.status_code}, body={poll_response.text}"
             )
         transcript = poll_response.json()
         if transcript.get("status") in ("completed", "error"):

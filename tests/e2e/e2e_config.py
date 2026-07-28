@@ -24,9 +24,7 @@ MASTER_KEY = os.environ.get("LITELLM_MASTER_KEY", "sk-1234")
 # single path-routing host (stage ALB, compose monolith) works for both planes.
 # Set LITELLM_CONTROL_PLANE_URL only when management is a different base than
 # the LLM host and you are not going through an ingress that path-routes.
-CONTROL_PLANE_BASE_URL = os.environ.get(
-    "LITELLM_CONTROL_PLANE_URL", PROXY_BASE_URL
-).rstrip("/")
+CONTROL_PLANE_BASE_URL = os.environ.get("LITELLM_CONTROL_PLANE_URL", PROXY_BASE_URL).rstrip("/")
 
 UI_USERNAME = os.environ.get("E2E_UI_USERNAME", "admin")
 UI_PASSWORD = os.environ.get("E2E_UI_PASSWORD", MASTER_KEY)
@@ -94,18 +92,10 @@ ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
 ANOMALY_TURNS_PER_SESSION = int(os.environ.get("E2E_ANOMALY_TURNS_PER_SESSION", "6"))
 ANOMALY_TURN_ATTEMPTS = int(os.environ.get("E2E_ANOMALY_TURN_ATTEMPTS", "3"))
 ANOMALY_MAX_ERROR_RATIO = float(os.environ.get("E2E_ANOMALY_MAX_ERROR_RATIO", "0.05"))
-ANOMALY_MIN_WARM_CACHE_READ_SHARE = float(
-    os.environ.get("E2E_ANOMALY_MIN_WARM_CACHE_READ_SHARE", "0.65")
-)
-ANOMALY_MAX_P95_TURN_SECONDS = float(
-    os.environ.get("E2E_ANOMALY_MAX_P95_TURN_SECONDS", "30")
-)
-ANOMALY_MAX_KEY_SPEND_USD = float(
-    os.environ.get("E2E_ANOMALY_MAX_KEY_SPEND_USD", "0.60")
-)
-ANOMALY_SPEND_SETTLE_SECONDS = float(
-    os.environ.get("E2E_ANOMALY_SPEND_SETTLE_SECONDS", "75")
-)
+ANOMALY_MIN_WARM_CACHE_READ_SHARE = float(os.environ.get("E2E_ANOMALY_MIN_WARM_CACHE_READ_SHARE", "0.65"))
+ANOMALY_MAX_P95_TURN_SECONDS = float(os.environ.get("E2E_ANOMALY_MAX_P95_TURN_SECONDS", "30"))
+ANOMALY_MAX_KEY_SPEND_USD = float(os.environ.get("E2E_ANOMALY_MAX_KEY_SPEND_USD", "0.60"))
+ANOMALY_SPEND_SETTLE_SECONDS = float(os.environ.get("E2E_ANOMALY_SPEND_SETTLE_SECONDS", "75"))
 
 
 def datadog_mcp_url(*, toolsets: str = "core") -> str:
@@ -116,8 +106,12 @@ def datadog_mcp_url(*, toolsets: str = "core") -> str:
     belong to a non-US1 org.
     """
     site = (
-        os.environ.get("DD_SITE", DD_SITE) or "datadoghq.com"
-    ).strip().removeprefix("https://").removeprefix("http://").rstrip("/")
+        (os.environ.get("DD_SITE", DD_SITE) or "datadoghq.com")
+        .strip()
+        .removeprefix("https://")
+        .removeprefix("http://")
+        .rstrip("/")
+    )
     if site.startswith("app."):
         site = site[len("app.") :]
     host = "mcp.datadoghq.com" if site in ("", "datadoghq.com") else f"mcp.{site}"

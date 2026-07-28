@@ -77,9 +77,7 @@ def test_dynamic_cred_presets_tag_exporter_with_matching_owner(monkeypatch):
 
 def test_agentops_exporter_mints_jwt_lazily(monkeypatch):
     pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
-    monkeypatch.setattr(
-        agentops_mod, "_fetch_agentops_jwt", lambda _k: {"token": "jwt-xyz"}
-    )
+    monkeypatch.setattr(agentops_mod, "_fetch_agentops_jwt", lambda _k: {"token": "jwt-xyz"})
     spec = ExporterSpec(
         kind=_AGENTOPS_EXPORTER_KIND,
         endpoint=_AGENTOPS_ENDPOINT,

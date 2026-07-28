@@ -3,9 +3,7 @@ import os
 import sys
 from unittest.mock import patch, MagicMock, AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 import pytest
@@ -45,9 +43,7 @@ def mock_embedding_async_http_handler():
 class TestHuggingFaceEmbedding:
     @pytest.fixture(autouse=True)
     def setup(self, mock_embedding_http_handler, mock_embedding_async_http_handler):
-        self.mock_get_task_patcher = patch(
-            "litellm.llms.huggingface.embedding.handler.get_hf_task_embedding_for_model"
-        )
+        self.mock_get_task_patcher = patch("litellm.llms.huggingface.embedding.handler.get_hf_task_embedding_for_model")
         self.mock_get_task = self.mock_get_task_patcher.start()
 
         def mock_get_task_side_effect(model, task_type, api_base):

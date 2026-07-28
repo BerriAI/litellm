@@ -66,7 +66,9 @@ class TestBuildToolUsageTransaction:
                 mcp_namespaced_tool_name=None,
                 spend=0.5,
                 total_tokens=100,
-                completion_response=SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=None))]),
+                completion_response=SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=None))]
+                ),
             )
             is None
         )

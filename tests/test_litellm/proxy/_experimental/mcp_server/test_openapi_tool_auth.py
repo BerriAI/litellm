@@ -115,9 +115,7 @@ async def test_openapi_local_tool_blocked_when_pre_call_check_raises():
     fake_tool = MagicMock()
     fake_tool.name = "delete_pet"
 
-    pre_call = AsyncMock(
-        side_effect=HTTPException(status_code=403, detail="not allowed")
-    )
+    pre_call = AsyncMock(side_effect=HTTPException(status_code=403, detail="not allowed"))
     handle_local = AsyncMock(return_value=[])
 
     with (

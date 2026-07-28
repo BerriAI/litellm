@@ -265,16 +265,12 @@ class TestCalculateRequestDuration:
         duration = calculate_request_duration(file_obj)
 
         # Verify it succeeded (returns a duration, not None)
-        assert (
-            duration is not None
-        ), "Duration should be calculated even when BytesIO is at end"
+        assert duration is not None, "Duration should be calculated even when BytesIO is at end"
         assert isinstance(duration, float), "Duration should be a float"
         assert duration > 0, "Duration should be positive"
 
         # Verify the file position was restored
-        assert file_obj.tell() == len(
-            wav_header
-        ), "File position should be restored to original position"
+        assert file_obj.tell() == len(wav_header), "File position should be restored to original position"
 
 
 class TestGetAudioFileContentHash:
@@ -300,9 +296,7 @@ class TestGetAudioFileContentHash:
         hash1 = get_audio_file_content_hash((filename1, content))
         hash2 = get_audio_file_content_hash((filename2, content))
 
-        assert (
-            hash1 == hash2
-        ), "Same content should produce same hash regardless of filename"
+        assert hash1 == hash2, "Same content should produce same hash regardless of filename"
 
     def test_bytes_input(self):
         """Test that raw bytes input works"""

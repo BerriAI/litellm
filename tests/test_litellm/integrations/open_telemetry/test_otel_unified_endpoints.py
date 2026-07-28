@@ -97,9 +97,7 @@ def test_chat_completions_failure_stamps_server_span(
     server_span = server_span_factory(CHAT_PATH)
     uakd = _real_user_api_key_dict(server_span)
 
-    _drive_unified_failure(
-        exception=exception, server_span=server_span, user_api_key_dict=uakd
-    )
+    _drive_unified_failure(exception=exception, server_span=server_span, user_api_key_dict=uakd)
 
     assert_server_span_attrs(
         exporter,
@@ -109,9 +107,7 @@ def test_chat_completions_failure_stamps_server_span(
     )
 
 
-def test_chat_completions_success_path_stamps_200(
-    otel_with_exporter, server_span_factory
-):
+def test_chat_completions_success_path_stamps_200(otel_with_exporter, server_span_factory):
     otel, exporter = otel_with_exporter
     server_span = server_span_factory(CHAT_PATH)
     _real_user_api_key_dict(server_span)
@@ -131,12 +127,8 @@ def test_chat_completions_success_path_stamps_200(
 
 # /v1/responses ends the proxy span before async_post_call_success_hook fires,
 # so the 200 stamp must happen at span close (here), not in the hook.
-@pytest.mark.parametrize(
-    "path", ["/v1/chat/completions", "/v1/messages", "/v1/responses"]
-)
-def test_end_proxy_span_from_kwargs_stamps_200(
-    path, otel_with_exporter, server_span_factory
-):
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/messages", "/v1/responses"])
+def test_end_proxy_span_from_kwargs_stamps_200(path, otel_with_exporter, server_span_factory):
     from datetime import datetime
 
     otel, exporter = otel_with_exporter
@@ -154,9 +146,7 @@ def test_end_proxy_span_from_kwargs_stamps_200(
 
 # Bare TypeError has no .code/.status_code, so error_information.error_code is
 # empty and _record_exception_on_span skips the stamp — must default to 500.
-def test_async_post_call_failure_hook_defaults_to_500(
-    otel_with_exporter, server_span_factory
-):
+def test_async_post_call_failure_hook_defaults_to_500(otel_with_exporter, server_span_factory):
     otel, exporter = otel_with_exporter
     server_span = server_span_factory("/v1/responses")
     uakd = _real_user_api_key_dict(server_span)
@@ -211,9 +201,7 @@ def test_unified_endpoint_failure_stamps_server_span(
     server_span = server_span_factory(path)
     uakd = _real_user_api_key_dict(server_span)
 
-    _drive_unified_failure(
-        exception=exception, server_span=server_span, user_api_key_dict=uakd
-    )
+    _drive_unified_failure(exception=exception, server_span=server_span, user_api_key_dict=uakd)
 
     assert_server_span_attrs(
         exporter,

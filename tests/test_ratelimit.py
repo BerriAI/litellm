@@ -9,9 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../"))  # Adds the parent directory to the system path
 
 import litellm
 from pydantic import BaseModel
@@ -55,10 +53,7 @@ def generate_list_of_messages(num_messages):
     """
     create num_messages new chat conversations
     """
-    return [
-        [{"role": "user", "content": f"{i}. Hey, how's it going? {random.random()}"}]
-        for i in range(num_messages)
-    ]
+    return [[{"role": "user", "content": f"{i}. Hey, how's it going? {random.random()}"}] for i in range(num_messages)]
 
 
 def calculate_limits(list_of_messages):
@@ -66,23 +61,17 @@ def calculate_limits(list_of_messages):
     Return the min rpm and tpm level that would let all messages in list_of_messages be sent this minute
     """
     rpm = len(list_of_messages)
-    tpm = sum(
-        (utils.token_counter(messages=m) + COMPLETION_TOKENS for m in list_of_messages)
-    )
+    tpm = sum((utils.token_counter(messages=m) + COMPLETION_TOKENS for m in list_of_messages))
     return rpm, tpm
 
 
 async def async_call(router: Router, list_of_messages) -> Any:
-    tasks = [
-        router.acompletion(model="gpt-5-mini", messages=m) for m in list_of_messages
-    ]
+    tasks = [router.acompletion(model="gpt-5-mini", messages=m) for m in list_of_messages]
     return await asyncio.gather(*tasks)
 
 
 def sync_call(router: Router, list_of_messages) -> Any:
-    return [
-        router.completion(model="gpt-5-mini", messages=m) for m in list_of_messages
-    ]
+    return [router.completion(model="gpt-5-mini", messages=m) for m in list_of_messages]
 
 
 class ExpectNoException(Exception):
@@ -98,9 +87,7 @@ class ExpectNoException(Exception):
         # (10, 9),  # Sending more than allowed, ValueError
     ],
 )
-@pytest.mark.parametrize(
-    "sync_mode", [True, False]
-)  # Use parametrization for sync/async
+@pytest.mark.parametrize("sync_mode", [True, False])  # Use parametrization for sync/async
 @pytest.mark.parametrize(
     "routing_strategy",
     [
@@ -110,9 +97,7 @@ class ExpectNoException(Exception):
         # "latency-based-routing",
     ],
 )
-def test_async_rate_limit(
-    router_factory, num_try_send, num_allowed_send, sync_mode, routing_strategy
-):
+def test_async_rate_limit(router_factory, num_try_send, num_allowed_send, sync_mode, routing_strategy):
     """
     Check if router.completion and router.acompletion can send more messages than they've been limited to.
     Args:
@@ -128,9 +113,7 @@ def test_async_rate_limit(
     litellm.logging_callback_manager._reset_all_callbacks()
     args = locals()
     print(f"args: {args}")
-    expected_exception = (
-        ExpectNoException if num_try_send <= num_allowed_send else ValueError
-    )
+    expected_exception = ExpectNoException if num_try_send <= num_allowed_send else ValueError
 
     # usage-based-routing tracks RPM in log_success_event which runs in a
     # background ThreadPoolExecutor.  The cache update races with the next

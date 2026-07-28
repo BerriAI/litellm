@@ -3,9 +3,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -69,9 +67,7 @@ async def test__transform_request_body_metadata():
         {"role": "user", "content": "hi"},
     ]
     optional_params = {}
-    litellm_params = {
-        "metadata": {"requester_metadata": {"rparam1": "rvalue1", "rparam2": "rvalue2"}}
-    }
+    litellm_params = {"metadata": {"requester_metadata": {"rparam1": "rvalue1", "rparam2": "rvalue2"}}}
     transform_request_params = {
         "messages": messages,
         "model": model,
@@ -112,9 +108,7 @@ async def test__transform_request_body_labels_and_metadata():
         {"role": "user", "content": "hi"},
     ]
     optional_params = {"labels": {"lparam1": "lvalue1", "lparam2": "lvalue2"}}
-    litellm_params = {
-        "metadata": {"requester_metadata": {"rparam1": "rvalue1", "rparam2": "rvalue2"}}
-    }
+    litellm_params = {"metadata": {"requester_metadata": {"rparam1": "rvalue1", "rparam2": "rvalue2"}}}
     transform_request_params = {
         "messages": messages,
         "model": model,
@@ -219,9 +213,7 @@ async def test__transform_request_body_image_config_with_image_size():
     messages = [
         {
             "role": "user",
-            "content": [
-                {"type": "text", "text": "Generate a 4K image of Tokyo skyline"}
-            ],
+            "content": [{"type": "text", "text": "Generate a 4K image of Tokyo skyline"}],
         }
     ]
     optional_params = {
@@ -318,13 +310,7 @@ def test_map_function_google_search_retrieval_snake_case():
     config = VertexGeminiConfig()
     optional_params = {}
 
-    tools = [
-        {
-            "google_search_retrieval": {
-                "dynamic_retrieval_config": {"mode": "MODE_DYNAMIC"}
-            }
-        }
-    ]
+    tools = [{"google_search_retrieval": {"dynamic_retrieval_config": {"mode": "MODE_DYNAMIC"}}}]
     result = config._map_function(tools, optional_params)
 
     assert len(result) == 1

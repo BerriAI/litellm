@@ -88,8 +88,7 @@ _TOOL_SEARCH_TOOLS: tuple[AnthropicTool, ...] = (
 )
 
 _TOOL_SEARCH_PROMPT = (
-    "If you have a tool to discover other tools, use it to "
-    "find one. Otherwise reply with the word 'done'."
+    "If you have a tool to discover other tools, use it to find one. Otherwise reply with the word 'done'."
 )
 
 

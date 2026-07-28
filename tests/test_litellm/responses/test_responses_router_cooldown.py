@@ -79,9 +79,7 @@ async def test_responses_api_rate_limit_marks_deployment_for_cooldown():
                 input="hi",
             )
 
-    cooldown_ids = await _async_get_cooldown_deployments(
-        litellm_router_instance=router, parent_otel_span=None
-    )
+    cooldown_ids = await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
     assert failing_deployment_id in cooldown_ids, (
         f"Responses API failure callback did not register cooldown for "
         f"{failing_deployment_id!r}; cooldown set was {cooldown_ids}"

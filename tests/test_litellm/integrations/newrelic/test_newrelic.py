@@ -141,9 +141,7 @@ class TestNewRelicLoggerInit:
         assert logger.enabled is True
 
     def test_disabled_on_import_error(self):
-        with patch.object(
-            _mock_newrelic_agent, "register_application", side_effect=ImportError
-        ):
+        with patch.object(_mock_newrelic_agent, "register_application", side_effect=ImportError):
             with patch.dict(os.environ, NR_ENV):
                 logger = NewRelicLogger()
         assert logger.enabled is False
@@ -282,9 +280,7 @@ class TestGetTraceContext:
         self.logger = make_logger()
 
     def test_extracts_trace_id_from_traceparent(self):
-        kwargs = make_kwargs(
-            traceparent="00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
-        )
+        kwargs = make_kwargs(traceparent="00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00")
         trace_id = self.logger._get_trace_context(kwargs)
         assert trace_id == "4bf92f3577b34da6a3ce929d0e0e4736"
 
@@ -292,9 +288,7 @@ class TestGetTraceContext:
         kwargs = make_kwargs()
         trace_id = self.logger._get_trace_context(kwargs)
         assert trace_id is not None
-        assert (
-            len(trace_id) == 32
-        )  # 32-char lowercase hex, matches W3C traceparent format
+        assert len(trace_id) == 32  # 32-char lowercase hex, matches W3C traceparent format
 
     def test_generates_uuid_when_traceparent_malformed(self):
         kwargs = make_kwargs(traceparent="not-valid")
@@ -380,9 +374,7 @@ class TestExtractAllMessagesContentDisabled:
         kwargs = make_kwargs(messages=[{"role": "user", "content": "secret"}])
         response = make_response(content="also secret")
 
-        messages = logger._extract_all_messages(
-            kwargs, response, response_model="gpt-4", vendor="openai"
-        )
+        messages = logger._extract_all_messages(kwargs, response, response_model="gpt-4", vendor="openai")
 
         for msg in messages:
             assert "content" not in msg
@@ -402,15 +394,11 @@ class TestExtractAllMessagesRespectsLitellmRedaction:
     def _assert_no_content(self, logger, kwargs):
         response = make_response(content="streamed assistant text")
 
-        messages = logger._extract_all_messages(
-            kwargs, response, response_model="gpt-4", vendor="openai"
-        )
+        messages = logger._extract_all_messages(kwargs, response, response_model="gpt-4", vendor="openai")
 
         # All extracted messages must carry no content payload
         for msg in messages:
-            assert (
-                "content" not in msg
-            ), f"content leaked despite redaction signal: {msg}"
+            assert "content" not in msg, f"content leaked despite redaction signal: {msg}"
         # And there must actually be at least one user + one assistant entry,
         # otherwise the test would pass vacuously.
         assert any(not m.get("is_response") for m in messages)
@@ -457,9 +445,7 @@ class TestExtractAllMessagesRespectsLitellmRedaction:
         }
         response = make_response(content="response text")
 
-        messages = logger._extract_all_messages(
-            kwargs, response, response_model="gpt-4", vendor="openai"
-        )
+        messages = logger._extract_all_messages(kwargs, response, response_model="gpt-4", vendor="openai")
 
         request_msg = next(m for m in messages if not m.get("is_response"))
         response_msg = next(m for m in messages if m.get("is_response"))
@@ -476,9 +462,7 @@ class TestExtractAllMessagesTimestamps:
         # make_kwargs sets start_time=1_000_000.0 and end_time=1_000_001.5
         response = make_response()
 
-        messages = self.logger._extract_all_messages(
-            kwargs, response, response_model="gpt-4", vendor="openai"
-        )
+        messages = self.logger._extract_all_messages(kwargs, response, response_model="gpt-4", vendor="openai")
 
         input_msg = next(m for m in messages if not m.get("is_response"))
         assert input_msg["timestamp"] == int(1_000_000.0 * 1000.0)
@@ -487,9 +471,7 @@ class TestExtractAllMessagesTimestamps:
         kwargs = make_kwargs(messages=[{"role": "user", "content": "Hi"}])
         response = make_response()
 
-        messages = self.logger._extract_all_messages(
-            kwargs, response, response_model="gpt-4", vendor="openai"
-        )
+        messages = self.logger._extract_all_messages(kwargs, response, response_model="gpt-4", vendor="openai")
 
         output_msg = next(m for m in messages if m.get("is_response"))
         assert output_msg["timestamp"] == int(1_000_001.5 * 1000.0)
@@ -509,9 +491,7 @@ class TestExtractAllMessagesTimestamps:
             logger._process_success(kwargs, response, start_time=1.0, end_time=2.5)
 
         calls = mock_app.record_custom_event.call_args_list
-        message_events = [
-            c[0][1] for c in calls if c[0][0] == "LlmChatCompletionMessage"
-        ]
+        message_events = [c[0][1] for c in calls if c[0][0] == "LlmChatCompletionMessage"]
         for event in message_events:
             assert "timestamp" in event
 
@@ -562,9 +542,7 @@ class TestStreamingResponse:
         kwargs = make_kwargs(messages=[{"role": "user", "content": "Hi"}])
         response = make_streaming_response(content="Streamed reply")
 
-        messages = self.logger._extract_all_messages(
-            kwargs, response, response_model="gpt-4", vendor="openai"
-        )
+        messages = self.logger._extract_all_messages(kwargs, response, response_model="gpt-4", vendor="openai")
 
         response_msgs = [m for m in messages if m.get("is_response")]
         assert len(response_msgs) == 1
@@ -595,9 +573,7 @@ class TestStreamingResponse:
         assert "LlmChatCompletionSummary" in event_types
         assert "LlmChatCompletionMessage" in event_types
 
-        message_events = [
-            c[0][1] for c in calls if c[0][0] == "LlmChatCompletionMessage"
-        ]
+        message_events = [c[0][1] for c in calls if c[0][0] == "LlmChatCompletionMessage"]
         response_msg = next((e for e in message_events if e.get("is_response")), None)
         assert response_msg is not None
         assert response_msg["content"] == "Streamed reply"
@@ -612,9 +588,7 @@ class TestStreamingResponse:
         response = make_streaming_response()
 
         with patch("newrelic.agent.application", return_value=mock_app):
-            await self.logger.async_log_success_event(
-                kwargs, response, start_time=1.0, end_time=2.0
-            )
+            await self.logger.async_log_success_event(kwargs, response, start_time=1.0, end_time=2.0)
 
         calls = mock_app.record_custom_event.call_args_list
         event_types = [c[0][0] for c in calls]
@@ -626,9 +600,7 @@ class TestStreamingResponse:
         kwargs = make_kwargs(messages=[{"role": "user", "content": "secret"}])
         response = make_streaming_response(content="also secret")
 
-        messages = logger._extract_all_messages(
-            kwargs, response, response_model="gpt-4", vendor="openai"
-        )
+        messages = logger._extract_all_messages(kwargs, response, response_model="gpt-4", vendor="openai")
 
         for msg in messages:
             assert "content" not in msg
@@ -670,9 +642,7 @@ class TestExplicitNoneValues:
 
     # _get_model_names
     def test_model_names_model_none_in_kwargs(self):
-        request_model, _ = self.logger._get_model_names(
-            {"model": None}, make_response()
-        )
+        request_model, _ = self.logger._get_model_names({"model": None}, make_response())
         assert request_model == "unknown"
 
     def test_model_names_model_none_in_response(self):
@@ -686,9 +656,7 @@ class TestExplicitNoneValues:
         kwargs = make_kwargs()
         kwargs["messages"] = None
         response = make_response()
-        messages = self.logger._extract_all_messages(
-            kwargs, response, response_model="gpt-4", vendor="openai"
-        )
+        messages = self.logger._extract_all_messages(kwargs, response, response_model="gpt-4", vendor="openai")
         # No request messages, but response message should still be extracted
         assert any(m.get("is_response") for m in messages)
 
@@ -696,9 +664,7 @@ class TestExplicitNoneValues:
         kwargs = make_kwargs(messages=[{"role": "user", "content": "Hi"}])
         response = make_response()
         response["choices"] = None
-        messages = self.logger._extract_all_messages(
-            kwargs, response, response_model="gpt-4", vendor="openai"
-        )
+        messages = self.logger._extract_all_messages(kwargs, response, response_model="gpt-4", vendor="openai")
         # No response messages, but request message should still be extracted
         assert any(not m.get("is_response") for m in messages)
 
@@ -829,9 +795,7 @@ class TestProcessSuccess:
         assert "LlmChatCompletionMessage" in event_types
 
         # Verify summary event fields
-        summary_data = next(
-            c[0][1] for c in calls if c[0][0] == "LlmChatCompletionSummary"
-        )
+        summary_data = next(c[0][1] for c in calls if c[0][0] == "LlmChatCompletionSummary")
         assert summary_data["vendor"] == "openai"
         assert summary_data["request.model"] == "gpt-4"
         assert summary_data["response.model"] == "gpt-4"
@@ -845,9 +809,7 @@ class TestProcessSuccess:
         assert summary_data["trace_id"] == "aabbccddeeff00112233445566778899"
 
         # Verify message event id format: "{llm_response_id}-{sequence}"
-        message_events = [
-            c[0][1] for c in calls if c[0][0] == "LlmChatCompletionMessage"
-        ]
+        message_events = [c[0][1] for c in calls if c[0][0] == "LlmChatCompletionMessage"]
         assert any(e["id"].startswith("chatcmpl-xyz-") for e in message_events)
         response_msg = next(e for e in message_events if e.get("is_response"))
         assert response_msg["content"] == "Hi there!"
@@ -893,9 +855,7 @@ class TestRecordErrorMetric:
         mock_app.record_custom_metric.assert_not_called()
 
     def test_calls_check_and_emit_periodic_metric(self):
-        with patch.object(
-            self.logger, "_check_and_emit_periodic_metric"
-        ) as mock_periodic:
+        with patch.object(self.logger, "_check_and_emit_periodic_metric") as mock_periodic:
             with patch("newrelic.agent.application", return_value=MagicMock()):
                 self.logger._record_error_metric()
 
@@ -908,9 +868,7 @@ class TestRecordErrorMetric:
         mock_app.assert_not_called()
 
     def test_handles_exception(self):
-        with patch(
-            "newrelic.agent.application", side_effect=RuntimeError("agent down")
-        ):
+        with patch("newrelic.agent.application", side_effect=RuntimeError("agent down")):
             self.logger._record_error_metric()  # must not raise
 
 
@@ -928,13 +886,9 @@ class TestEmitSupportabilityMetric:
         mock_app = MagicMock()
         mock_app.enabled = True
         with patch("newrelic.agent.application", return_value=mock_app):
-            with patch.object(
-                self.logger, "_get_litellm_version", return_value="1.80.0"
-            ):
+            with patch.object(self.logger, "_get_litellm_version", return_value="1.80.0"):
                 self.logger._emit_supportability_metric()
-        mock_app.record_custom_metric.assert_called_once_with(
-            "Supportability/Python/ML/LiteLLM/1.80.0", 1
-        )
+        mock_app.record_custom_metric.assert_called_once_with("Supportability/Python/ML/LiteLLM/1.80.0", 1)
 
     def test_updates_last_emission_time(self):
         mock_app = MagicMock()
@@ -965,9 +919,7 @@ class TestEmitSupportabilityMetric:
         assert NewRelicLogger._last_metric_emission_time != 0.0
 
     def test_handles_exception(self):
-        with patch(
-            "newrelic.agent.application", side_effect=RuntimeError("agent down")
-        ):
+        with patch("newrelic.agent.application", side_effect=RuntimeError("agent down")):
             self.logger._emit_supportability_metric()  # must not raise
 
 
@@ -1072,9 +1024,7 @@ class TestRecordSummaryEvent:
         mock_app.record_custom_event.assert_not_called()
 
     def test_handles_exception(self):
-        with patch(
-            "newrelic.agent.application", side_effect=RuntimeError("agent down")
-        ):
+        with patch("newrelic.agent.application", side_effect=RuntimeError("agent down")):
             self._call()  # must not raise
 
 
@@ -1082,9 +1032,7 @@ class TestRecordSummaryEvent:
 # _record_message_events — disabled-app and exception paths
 # ---------------------------------------------------------------------------
 
-_MESSAGES = [
-    {"role": "user", "sequence": 0, "response.model": "gpt-4", "vendor": "openai"}
-]
+_MESSAGES = [{"role": "user", "sequence": 0, "response.model": "gpt-4", "vendor": "openai"}]
 
 
 class TestRecordMessageEvents:
@@ -1107,9 +1055,7 @@ class TestRecordMessageEvents:
         mock_app.record_custom_event.assert_not_called()
 
     def test_handles_exception(self):
-        with patch(
-            "newrelic.agent.application", side_effect=RuntimeError("agent down")
-        ):
+        with patch("newrelic.agent.application", side_effect=RuntimeError("agent down")):
             self._call()  # must not raise
 
 
@@ -1134,18 +1080,14 @@ class TestLogSuccessEvent:
     async def test_async_delegates_to_process_success(self):
         logger = make_logger()
         with patch.object(logger, "_process_success") as mock_process:
-            await logger.async_log_success_event(
-                make_kwargs(), make_response(), 1.0, 2.0
-            )
+            await logger.async_log_success_event(make_kwargs(), make_response(), 1.0, 2.0)
         mock_process.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_async_exception_is_handled(self):
         logger = make_logger()
         with patch.object(logger, "_process_success", side_effect=RuntimeError("boom")):
-            await logger.async_log_success_event(
-                make_kwargs(), make_response(), 1.0, 2.0
-            )
+            await logger.async_log_success_event(make_kwargs(), make_response(), 1.0, 2.0)
 
 
 class TestLogFailureEvent:
@@ -1157,9 +1099,7 @@ class TestLogFailureEvent:
 
     def test_sync_exception_is_handled(self):
         logger = make_logger()
-        with patch.object(
-            logger, "_record_error_metric", side_effect=RuntimeError("boom")
-        ):
+        with patch.object(logger, "_record_error_metric", side_effect=RuntimeError("boom")):
             logger.log_failure_event(make_kwargs(), None, 1.0, 2.0)
 
     @pytest.mark.asyncio
@@ -1172,9 +1112,7 @@ class TestLogFailureEvent:
     @pytest.mark.asyncio
     async def test_async_exception_is_handled(self):
         logger = make_logger()
-        with patch.object(
-            logger, "_record_error_metric", side_effect=RuntimeError("boom")
-        ):
+        with patch.object(logger, "_record_error_metric", side_effect=RuntimeError("boom")):
             await logger.async_log_failure_event(make_kwargs(), None, 1.0, 2.0)
 
 
@@ -1224,9 +1162,7 @@ class TestAsyncHealthCheck:
     @pytest.mark.asyncio
     async def test_exception_returns_unhealthy(self):
         logger = make_logger()
-        with patch(
-            "newrelic.agent.application", side_effect=RuntimeError("agent down")
-        ):
+        with patch("newrelic.agent.application", side_effect=RuntimeError("agent down")):
             result = await logger.async_health_check()
         assert result["status"] == "unhealthy"
         assert "agent down" in result["error_message"]
@@ -1282,18 +1218,13 @@ class TestStandardLoggingPayloadPreference:
 
     def test_trace_context_uses_slo_trace_id_when_no_traceparent(self):
         kwargs = {"litellm_params": {"metadata": {"headers": {}}}}
-        trace_id = self.logger._get_trace_context(
-            kwargs, standard_logging_object=make_slo()
-        )
+        trace_id = self.logger._get_trace_context(kwargs, standard_logging_object=make_slo())
         assert trace_id == "slo-trace-abc"
 
     def test_vendor_from_slo(self):
         # kwargs carries a different provider; SLO must win.
         kwargs = {"litellm_params": {"custom_llm_provider": "kwargs-provider"}}
-        assert (
-            self.logger._get_vendor(kwargs, standard_logging_object=make_slo())
-            == "slo-provider"
-        )
+        assert self.logger._get_vendor(kwargs, standard_logging_object=make_slo()) == "slo-provider"
 
     def test_model_names_uses_slo_model(self):
         request_model, _ = self.logger._get_model_names(
@@ -1305,9 +1236,7 @@ class TestStandardLoggingPayloadPreference:
 
     def test_usage_from_slo_when_any_token_field_present(self):
         # make_response defaults to 10/20/30 tokens; SLO sentinels are 100/200/300.
-        usage = self.logger._extract_usage(
-            make_response(), standard_logging_object=make_slo()
-        )
+        usage = self.logger._extract_usage(make_response(), standard_logging_object=make_slo())
         assert usage == {
             "prompt_tokens": 100,
             "completion_tokens": 200,

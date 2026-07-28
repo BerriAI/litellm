@@ -12,9 +12,7 @@ from typing import Any, Optional, List, Literal
 _ALLOW_CLIENT_MOCK_METADATA = {"allow_client_mock_response": True}
 
 
-async def generate_key(
-    session, models: Optional[List[str]] = None, team_id: Optional[str] = None
-):
+async def generate_key(session, models: Optional[List[str]] = None, team_id: Optional[str] = None):
     """Helper function to generate a key with specific model access controls"""
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
@@ -88,9 +86,7 @@ async def test_model_access_patterns(key_models, test_model, expect_success):
             )
             if not expect_success:
                 pytest.fail(f"Expected request to fail for model {test_model}")
-            assert (
-                response is not None
-            ), "Should get valid response when access is allowed"
+            assert response is not None, "Should get valid response when access is allowed"
         except Exception as e:
             if expect_success:
                 pytest.fail(f"Expected request to succeed but got error: {e}")
@@ -135,35 +131,23 @@ async def test_model_access_update():
 
         # Should fail with gpt-5-mini
         with pytest.raises(Exception) as exc_info:
-            await mock_chat_completion(
-                session=session, key=key, model="openai/gpt-5-mini"
-            )
-        _validate_model_access_exception(
-            exc_info.value, expected_type="key_model_access_denied"
-        )
+            await mock_chat_completion(session=session, key=key, model="openai/gpt-5-mini")
+        _validate_model_access_exception(exc_info.value, expected_type="key_model_access_denied")
 
     # Update key with new model access
-    response = await client.post(
-        "/key/update", json={"key": key, "models": ["openai/*"]}, headers=headers
-    )
+    response = await client.post("/key/update", json={"key": key, "models": ["openai/*"]}, headers=headers)
     assert response.status_code == 200
 
     # Test updated access
     async with aiohttp.ClientSession() as session:
         # Both models should now work
         await mock_chat_completion(session=session, key=key, model="openai/gpt-5.5")
-        await mock_chat_completion(
-            session=session, key=key, model="openai/gpt-5-mini"
-        )
+        await mock_chat_completion(session=session, key=key, model="openai/gpt-5-mini")
 
         # Non-OpenAI model should still fail
         with pytest.raises(Exception) as exc_info:
-            await mock_chat_completion(
-                session=session, key=key, model="anthropic/claude-2"
-            )
-        _validate_model_access_exception(
-            exc_info.value, expected_type="key_model_access_denied"
-        )
+            await mock_chat_completion(session=session, key=key, model="anthropic/claude-2")
+        _validate_model_access_exception(exc_info.value, expected_type="key_model_access_denied")
 
 
 @pytest.mark.parametrize(
@@ -199,15 +183,11 @@ async def test_team_model_access_patterns(team_models, test_model, expect_succes
             )
             if not expect_success:
                 pytest.fail(f"Expected request to fail for model {test_model}")
-            assert (
-                response is not None
-            ), "Should get valid response when access is allowed"
+            assert response is not None, "Should get valid response when access is allowed"
         except Exception as e:
             if expect_success:
                 pytest.fail(f"Expected request to succeed but got error: {e}")
-            _validate_model_access_exception(
-                e, expected_type="team_model_access_denied"
-            )
+            _validate_model_access_exception(e, expected_type="team_model_access_denied")
 
 
 @pytest.mark.asyncio
@@ -255,12 +235,8 @@ async def test_team_model_access_update():
 
         # Should fail with gpt-5-mini
         with pytest.raises(Exception) as exc_info:
-            await mock_chat_completion(
-                session=session, key=key, model="openai/gpt-5-mini"
-            )
-        _validate_model_access_exception(
-            exc_info.value, expected_type="team_model_access_denied"
-        )
+            await mock_chat_completion(session=session, key=key, model="openai/gpt-5-mini")
+        _validate_model_access_exception(exc_info.value, expected_type="team_model_access_denied")
 
     # Update team with new model access
     response = await client.post(
@@ -274,18 +250,12 @@ async def test_team_model_access_update():
     async with aiohttp.ClientSession() as session:
         # Both models should now work
         await mock_chat_completion(session=session, key=key, model="openai/gpt-5.5")
-        await mock_chat_completion(
-            session=session, key=key, model="openai/gpt-5-mini"
-        )
+        await mock_chat_completion(session=session, key=key, model="openai/gpt-5-mini")
 
         # Non-OpenAI model should still fail
         with pytest.raises(Exception) as exc_info:
-            await mock_chat_completion(
-                session=session, key=key, model="anthropic/claude-2"
-            )
-        _validate_model_access_exception(
-            exc_info.value, expected_type="team_model_access_denied"
-        )
+            await mock_chat_completion(session=session, key=key, model="anthropic/claude-2")
+        _validate_model_access_exception(exc_info.value, expected_type="team_model_access_denied")
 
 
 def _validate_model_access_exception(

@@ -21,9 +21,7 @@ async def test_a_scratch_key_lands_in_db(proxy_client, prisma, scratch):
     )
     assert resp.status_code == 200, resp.text
 
-    rows = await prisma.db.litellm_verificationtoken.find_many(
-        where={"key_alias": scratch.prefix}
-    )
+    rows = await prisma.db.litellm_verificationtoken.find_many(where={"key_alias": scratch.prefix})
     assert len(rows) == 1
 
 
@@ -34,27 +32,17 @@ async def test_a2_scratch_actor_lands_in_db(proxy_client, prisma, scratch):
         user_role=LitellmUserRoles.ORG_ADMIN.value,
         org_admin_of=(ORG_A, ORG_B),
     )
-    user_row = await prisma.db.litellm_usertable.find_unique(
-        where={"user_id": actor.user_id}
-    )
+    user_row = await prisma.db.litellm_usertable.find_unique(where={"user_id": actor.user_id})
     assert user_row is not None
-    info = await proxy_client.get(
-        "/key/info", headers={"Authorization": f"Bearer {actor.cleartext}"}
-    )
+    info = await proxy_client.get("/key/info", headers={"Authorization": f"Bearer {actor.cleartext}"})
     assert info.status_code == 200, info.text
-    memberships = await prisma.db.litellm_organizationmembership.find_many(
-        where={"user_id": actor.user_id}
-    )
+    memberships = await prisma.db.litellm_organizationmembership.find_many(where={"user_id": actor.user_id})
     assert {m.organization_id for m in memberships} == {ORG_A, ORG_B}
 
 
 async def test_b_scratch_namespace_is_clean(prisma):
-    tokens = await prisma.db.litellm_verificationtoken.find_many(
-        where={"key_alias": {"startswith": SCRATCH_PREFIX}}
-    )
-    users = await prisma.db.litellm_usertable.find_many(
-        where={"user_id": {"startswith": SCRATCH_PREFIX}}
-    )
+    tokens = await prisma.db.litellm_verificationtoken.find_many(where={"key_alias": {"startswith": SCRATCH_PREFIX}})
+    users = await prisma.db.litellm_usertable.find_many(where={"user_id": {"startswith": SCRATCH_PREFIX}})
     memberships = await prisma.db.litellm_organizationmembership.find_many(
         where={"user_id": {"startswith": SCRATCH_PREFIX}}
     )

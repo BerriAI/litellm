@@ -69,9 +69,7 @@ class TestPerplexityCostCalculator:
         """Test basic cost calculation without additional fields."""
         usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
 
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
+        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
 
         # Expected costs:
         # Input: 100 tokens * $2e-6 = $0.0002
@@ -89,9 +87,7 @@ class TestPerplexityCostCalculator:
         # Add citation tokens
         usage.citation_tokens = 25
 
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
+        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
 
         # Expected costs:
         # Input: 100 tokens * $2e-6 = $0.0002
@@ -113,9 +109,7 @@ class TestPerplexityCostCalculator:
             prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=3),
         )
 
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
+        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
 
         # Expected costs:
         # Input: 100 tokens * $2e-6 = $0.0002
@@ -135,9 +129,7 @@ class TestPerplexityCostCalculator:
         # Set reasoning tokens directly
         usage.reasoning_tokens = 20
 
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
+        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
 
         # `completion_tokens` includes `reasoning_tokens` per the OpenAI/Perplexity
         # convention codified in PR #18607. Non-reasoning portion = 50 - 20 = 30.
@@ -160,9 +152,7 @@ class TestPerplexityCostCalculator:
             reasoning_tokens=20,  # This should be stored in completion_tokens_details
         )
 
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
+        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
 
         # Same convention as the direct-attribute case above; reasoning is a subset of
         # completion_tokens, so non-reasoning portion = 50 - 20 = 30.
@@ -185,9 +175,7 @@ class TestPerplexityCostCalculator:
         # Add custom fields
         usage.citation_tokens = 30
 
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
+        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
 
         # Expected costs (reasoning is a subset of completion_tokens):
         # Input:         100 tokens        * $2e-6 = $0.0002
@@ -215,9 +203,7 @@ class TestPerplexityCostCalculator:
         # These should not raise errors and should not affect cost
         usage.citation_tokens = 0
 
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
+        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
 
         # Should be same as basic calculation
         expected_prompt_cost = 100 * 2e-6
@@ -238,18 +224,14 @@ class TestPerplexityCostCalculator:
         usage.citation_tokens = 25
 
         # Mock get_model_info to return incomplete model info
-        with patch(
-            "litellm.llms.perplexity.cost_calculator.get_model_info"
-        ) as mock_get_model_info:
+        with patch("litellm.llms.perplexity.cost_calculator.get_model_info") as mock_get_model_info:
             mock_get_model_info.return_value = {
                 "input_cost_per_token": 2e-6,
                 "output_cost_per_token": 8e-6,
                 # Missing search_queries_cost_per_query
             }
 
-            prompt_cost, completion_cost = perplexity_cost_per_token(
-                model="sonar-deep-research", usage=usage
-            )
+            prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
 
             # Should only calculate basic costs when fields are missing
             expected_prompt_cost = 100 * 2e-6
@@ -278,9 +260,7 @@ class TestPerplexityCostCalculator:
         )
 
         # Should match direct call to perplexity cost calculator
-        expected_prompt, expected_completion = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
+        expected_prompt, expected_completion = perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
 
         assert math.isclose(prompt_cost, expected_prompt, rel_tol=1e-6)
         assert math.isclose(completion_cost_val, expected_completion, rel_tol=1e-6)
@@ -304,24 +284,18 @@ class TestPerplexityCostCalculator:
         response.model = "sonar-deep-research"
 
         # Test completion_cost function
-        total_cost = completion_cost(
-            completion_response=response, custom_llm_provider="perplexity"
-        )
+        total_cost = completion_cost(completion_response=response, custom_llm_provider="perplexity")
 
         # Calculate expected total cost (reasoning is a subset of completion_tokens)
         expected_prompt_cost = (100 * 2e-6) + (15 * 2e-6)  # Input + citation
-        expected_completion_cost = (
-            ((50 - 10) * 8e-6) + (10 * 3e-6) + (1 * 0.005)
-        )  # Output (text) + reasoning + search
+        expected_completion_cost = ((50 - 10) * 8e-6) + (10 * 3e-6) + (1 * 0.005)  # Output (text) + reasoning + search
         expected_total = expected_prompt_cost + expected_completion_cost
 
         assert math.isclose(total_cost, expected_total, rel_tol=1e-6)
 
     def test_model_info_access(self):
         """Test that model info correctly returns the new cost fields."""
-        model_info = get_model_info(
-            model="sonar-deep-research", custom_llm_provider="perplexity"
-        )
+        model_info = get_model_info(model="sonar-deep-research", custom_llm_provider="perplexity")
 
         # Check that the new fields are accessible
         assert "citation_cost_per_token" in model_info
@@ -335,33 +309,25 @@ class TestPerplexityCostCalculator:
     @pytest.mark.parametrize("citation_tokens", [0, 10, 25, 100])
     @pytest.mark.parametrize("search_queries", [0, 1, 5, 10])
     @pytest.mark.parametrize("reasoning_tokens", [0, 15, 30])
-    def test_cost_calculation_combinations(
-        self, citation_tokens, search_queries, reasoning_tokens
-    ):
+    def test_cost_calculation_combinations(self, citation_tokens, search_queries, reasoning_tokens):
         """Test various combinations of citation tokens, search queries, and reasoning tokens."""
         usage = Usage(
             prompt_tokens=100,
             completion_tokens=50,
             total_tokens=150,
             reasoning_tokens=reasoning_tokens,
-            prompt_tokens_details=PromptTokensDetailsWrapper(
-                web_search_requests=search_queries
-            ),
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=search_queries),
         )
 
         usage.citation_tokens = citation_tokens
 
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
+        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
 
         # Calculate expected costs. `completion_tokens` includes `reasoning_tokens`,
         # so non-reasoning portion = 50 - reasoning_tokens.
         expected_prompt_cost = (100 * 2e-6) + (citation_tokens * 2e-6)
         expected_completion_cost = (
-            ((50 - reasoning_tokens) * 8e-6)
-            + (reasoning_tokens * 3e-6)
-            + (search_queries * 0.005)
+            ((50 - reasoning_tokens) * 8e-6) + (reasoning_tokens * 3e-6) + (search_queries * 0.005)
         )
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
@@ -390,9 +356,7 @@ class TestPerplexityCostCalculator:
             "total_cost": 0.008,
         }
 
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-pro", usage=usage
-        )
+        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-pro", usage=usage)
 
         # When Perplexity provides total_cost, we use it directly
         # prompt_cost should be 0, completion_cost should be total_cost
@@ -408,9 +372,7 @@ class TestPerplexityCostCalculator:
         usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
         # No cost object - should use manual calculation
 
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
+        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
 
         # Should calculate manually: 100 * 2e-6 + 50 * 8e-6
         expected_prompt = 100 * 2e-6
@@ -434,14 +396,10 @@ class TestPerplexityCostCalculator:
             prompt_tokens=9,
             completion_tokens=20,
             total_tokens=29,
-            completion_tokens_details=CompletionTokensDetailsWrapper(
-                reasoning_tokens=15
-            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=15),
         )
 
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
+        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
 
         # sonar-deep-research rates: input 2e-6, output 8e-6, reasoning 3e-6.
         # Non-reasoning portion of the 20 completion tokens = 20 - 15 = 5.

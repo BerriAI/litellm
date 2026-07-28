@@ -185,9 +185,7 @@ class TestFunctionCallArgsSerialization:
 
         # This should raise KeyError because args key is missing
         with pytest.raises(KeyError):
-            VertexGeminiConfig._transform_parts(
-                parts=parts, cumulative_tool_call_idx=0, is_function_call=False
-            )
+            VertexGeminiConfig._transform_parts(parts=parts, cumulative_tool_call_idx=0, is_function_call=False)
 
     def test_multiple_function_calls(self):
         """Test case: multiple function calls in parts."""

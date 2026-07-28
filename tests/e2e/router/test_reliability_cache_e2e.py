@@ -25,9 +25,7 @@ class TestReliabilityCache:
 
         first = chat_override(client.proxy, scoped_key, "gpt-5.5", prompt)
         assert first.status_code == 200, f"first call should succeed, got {first.status_code}: {first.body[:300]}"
-        assert "x-litellm-cache-key" not in first.headers, (
-            "first (uncached) call must not report a cache-key header"
-        )
+        assert "x-litellm-cache-key" not in first.headers, "first (uncached) call must not report a cache-key header"
 
         second = chat_override(client.proxy, scoped_key, "gpt-5.5", prompt)
         assert second.status_code == 200, f"second call should succeed, got {second.status_code}: {second.body[:300]}"

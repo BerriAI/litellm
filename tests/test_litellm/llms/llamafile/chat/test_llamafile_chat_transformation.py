@@ -108,9 +108,7 @@ def test_resolve_api_base(
         ),
     ],
 )
-def test_get_openai_compatible_provider_info(
-    api_base, api_key, env_base, env_key, expected_base, expected_key
-):
+def test_get_openai_compatible_provider_info(api_base, api_key, env_base, env_key, expected_base, expected_key):
     config = LlamafileChatConfig()
 
     env = {}
@@ -135,9 +133,7 @@ def test_get_openai_compatible_provider_info(
         patch_base as mock_base,
         patch_key as mock_key,
     ):
-        result_base, result_key = config._get_openai_compatible_provider_info(
-            api_base, api_key
-        )
+        result_base, result_key = config._get_openai_compatible_provider_info(api_base, api_key)
 
         assert result_base == expected_base
         assert result_key == expected_key
@@ -147,12 +143,8 @@ def test_get_openai_compatible_provider_info(
 
 
 def test_completion_with_custom_llamafile_model():
-    with patch(
-        "litellm.main.openai_chat_completions.completion"
-    ) as mock_llamafile_completion_func:
-        mock_llamafile_completion_func.return_value = (
-            {}
-        )  # Return an empty dictionary for the mocked response
+    with patch("litellm.main.openai_chat_completions.completion") as mock_llamafile_completion_func:
+        mock_llamafile_completion_func.return_value = {}  # Return an empty dictionary for the mocked response
 
         provider = "llamafile"
         model_name = "my-custom-test-model"

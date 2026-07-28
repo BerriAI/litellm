@@ -37,9 +37,7 @@ def main(system_prompt):
 
         with tqdm(total=len(models)) as pbar:
             for model in models:
-                colored_description = colored(
-                    f"Running question: {question} for model: {model}", "green"
-                )
+                colored_description = colored(f"Running question: {question} for model: {model}", "green")
                 pbar.set_description(colored_description)
                 start_time = time.time()
 

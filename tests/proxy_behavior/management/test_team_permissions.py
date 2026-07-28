@@ -56,9 +56,7 @@ async def test_team_permissions_list_authz_matrix(
         f"/team/permissions_list?team_id={scratch.prefix}",
         headers={"Authorization": f"Bearer {world.keys[actor].cleartext}"},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value}: {resp.status_code} {resp.text}"
     if expected_status == 200:
         assert resp.json()["team_id"] == scratch.prefix
 
@@ -77,13 +75,9 @@ async def test_team_permissions_update_authz_matrix(
         headers={"Authorization": f"Bearer {world.keys[actor].cleartext}"},
         json={"team_id": scratch.prefix, "team_member_permissions": [_PERM]},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value}: {resp.status_code} {resp.text}"
 
-    row = await prisma.db.litellm_teamtable.find_unique(
-        where={"team_id": scratch.prefix}
-    )
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None
     if expected_status == 200:
         assert _PERM in (row.team_member_permissions or [])
@@ -91,17 +85,13 @@ async def test_team_permissions_update_authz_matrix(
         assert _PERM not in (row.team_member_permissions or []), "denied but mutated"
 
 
-async def test_team_permissions_available_team_self_join_divergence(
-    proxy_client, prisma, scratch, world, monkeypatch
-):
+async def test_team_permissions_available_team_self_join_divergence(proxy_client, prisma, scratch, world, monkeypatch):
     """permissions_list honours the available-team self-join — a non-admin can
     READ an available team's permissions — but permissions_update deliberately
     does not: the same caller is 403 on update. default_internal_user_params is
     module-level litellm.* state, so monkeypatch save/restores it."""
     await create_scratch_team(prisma, scratch.prefix, organization_id=world.org_a_id)
-    monkeypatch.setattr(
-        litellm, "default_internal_user_params", {"available_teams": [scratch.prefix]}
-    )
+    monkeypatch.setattr(litellm, "default_internal_user_params", {"available_teams": [scratch.prefix]})
     caller = world.keys[Actor.CROSS_ORG_USER]  # non-admin, unrelated to the team
 
     listed = await proxy_client.get(
@@ -146,13 +136,9 @@ async def test_team_permissions_bulk_update_authz_matrix(
         headers={"Authorization": f"Bearer {world.keys[actor].cleartext}"},
         json={"team_ids": [scratch.prefix], "permissions": [_PERM]},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value}: {resp.status_code} {resp.text}"
 
-    row = await prisma.db.litellm_teamtable.find_unique(
-        where={"team_id": scratch.prefix}
-    )
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None
     if expected_status == 200:
         assert _PERM in (row.team_member_permissions or [])

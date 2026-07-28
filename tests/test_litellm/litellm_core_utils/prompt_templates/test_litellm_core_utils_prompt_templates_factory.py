@@ -28,9 +28,7 @@ def _get_gemini_function_response_inline_data_parts(result):
     assert isinstance(result, list), "expected Gemini parts list"
     assert len(result) == 1, "multimodal function responses should stay in one part"
     function_response_part = result[0]
-    assert (
-        "inline_data" not in function_response_part
-    ), "inline_data should be nested under function_response.parts"
+    assert "inline_data" not in function_response_part, "inline_data should be nested under function_response.parts"
     function_response = function_response_part["function_response"]
     nested_parts = function_response["parts"]
     return [part["inline_data"] for part in nested_parts if "inline_data" in part]
@@ -46,7 +44,9 @@ def test_ollama_pt_simple_messages():
 
     result = ollama_pt(model="llama2", messages=messages)
 
-    expected_prompt = "### System:\nYou are a helpful assistant\n\n### Assistant:\nHow can I help you?\n\n### User:\nHello\n\n"
+    expected_prompt = (
+        "### System:\nYou are a helpful assistant\n\n### Assistant:\nHow can I help you?\n\n### User:\nHello\n\n"
+    )
     assert isinstance(result, dict)
     assert result["prompt"] == expected_prompt
     assert result["images"] == []
@@ -101,10 +101,7 @@ async def test_anthropic_bedrock_thinking_blocks_with_none_content():
 
     # verify the result
     assert len(result) == 2
-    assert (
-        result[1]["content"][0]["reasoningContent"]["reasoningText"]["text"]
-        == "This is a test thinking block"
-    )
+    assert result[1]["content"][0]["reasoningContent"]["reasoningText"]["text"] == "This is a test thinking block"
 
 
 def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
@@ -172,11 +169,7 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
     assert len(assistant_blocks) == 1
     for block in assistant_blocks[0]["content"]:
         if "text" in block:
-            assert block[
-                "text"
-            ].strip(), (
-                f"Bedrock Converse rejects blank-text ContentBlocks; got {block!r}"
-            )
+            assert block["text"].strip(), f"Bedrock Converse rejects blank-text ContentBlocks; got {block!r}"
     # toolUse blocks must still be present
     tool_use_blocks = [b for b in assistant_blocks[0]["content"] if "toolUse" in b]
     assert len(tool_use_blocks) == 2
@@ -209,19 +202,16 @@ def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
         {"role": "user", "content": "Now what is 3+3?"},
     ]
 
-    result = anthropic_messages_pt(
-        messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic"
-    )
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
 
     assistant = next(m for m in result if m["role"] == "assistant")
     content = assistant["content"]
-    assert all(
-        block.get("type") != "thinking" for block in content
-    ), f"unsignable thinking block must be dropped, got {content!r}"
-    assert any(
-        block.get("type") == "text" and block.get("text") == "2+2 equals 4."
-        for block in content
-    ), f"assistant answer text must be preserved, got {content!r}"
+    assert all(block.get("type") != "thinking" for block in content), (
+        f"unsignable thinking block must be dropped, got {content!r}"
+    )
+    assert any(block.get("type") == "text" and block.get("text") == "2+2 equals 4." for block in content), (
+        f"assistant answer text must be preserved, got {content!r}"
+    )
 
 
 def test_anthropic_messages_pt_keeps_signed_thinking_block():
@@ -244,9 +234,7 @@ def test_anthropic_messages_pt_keeps_signed_thinking_block():
         {"role": "user", "content": "Now what is 3+3?"},
     ]
 
-    result = anthropic_messages_pt(
-        messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic"
-    )
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
 
     assistant = next(m for m in result if m["role"] == "assistant")
     thinking_blocks = [b for b in assistant["content"] if b.get("type") == "thinking"]
@@ -334,9 +322,7 @@ def test_bedrock_get_document_format_fallback_mimes():
     from unittest.mock import patch
 
     # Test DOCX fallback
-    docx_mime = (
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
+    docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     supported_formats = ["pdf", "docx", "xlsx", "csv"]
 
     # Mock mimetypes.guess_all_extensions to return empty list (simulating Docker container scenario)
@@ -360,15 +346,11 @@ def test_bedrock_get_document_format_mimetypes_success():
     """
     Test the _get_document_format method when mimetypes.guess_all_extensions works normally.
     """
-    docx_mime = (
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
+    docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     supported_formats = ["pdf", "docx", "xlsx", "csv"]
 
     # Test normal mimetypes behavior (should not hit fallback)
-    result = BedrockImageProcessor._get_document_format(
-        mime_type=docx_mime, supported_doc_formats=supported_formats
-    )
+    result = BedrockImageProcessor._get_document_format(mime_type=docx_mime, supported_doc_formats=supported_formats)
     assert result == "docx", f"Expected 'docx', got '{result}'"
 
 
@@ -584,9 +566,7 @@ async def test_bedrock_process_image_async_factory():
 
     image_url = "data:application/pdf; qs=0.001;base64,JVBERi0xLjQKJcOkw7zDtsOfCjIgMCBvYmoKPDwvTGVuZ3RoIDMgMCBSL0ZpbHRlci9GbGF0ZURlY29kZT4"
 
-    content_block = await BedrockImageProcessor.process_image_async(
-        image_url=image_url, format=None
-    )
+    content_block = await BedrockImageProcessor.process_image_async(image_url=image_url, format=None)
     print(f"content_block: {content_block}")
 
 
@@ -629,9 +609,7 @@ def test_unpack_defs_resolves_nested_ref_inside_anyof_items():
     items_schema = schema["properties"]["vatAmounts"]["anyOf"][0]["items"]
 
     # Assertions: items_schema should now be the resolved object, not an empty dict
-    assert isinstance(
-        items_schema, dict
-    ), "Items schema should be a dict after unpacking"
+    assert isinstance(items_schema, dict), "Items schema should be a dict after unpacking"
     assert items_schema.get("type") == "object"
     # Ensure essential properties are present
     assert set(items_schema.get("properties", {}).keys()) == {"vatRate", "vatAmount"}
@@ -822,9 +800,7 @@ def test_convert_gemini_tool_call_result_with_multiple_anthropic_image_blocks():
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
     inline_parts = _get_gemini_function_response_inline_data_parts(result)
-    assert (
-        len(inline_parts) == 2
-    ), f"expected 2 inline_data parts, got {len(inline_parts)}"
+    assert len(inline_parts) == 2, f"expected 2 inline_data parts, got {len(inline_parts)}"
     mime_types = {p["mime_type"] for p in inline_parts}
     assert mime_types == {"image/png", "image/jpeg"}
 
@@ -860,9 +836,7 @@ def test_convert_gemini_tool_call_result_with_data_url_string():
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
     inline_parts = _get_gemini_function_response_inline_data_parts(result)
-    assert (
-        len(inline_parts) == 1
-    ), "data-URL image string was not converted to inline_data"
+    assert len(inline_parts) == 1, "data-URL image string was not converted to inline_data"
     assert inline_parts[0]["mime_type"] == "image/png"
     assert inline_parts[0]["data"] == tiny_png_b64
 
@@ -898,9 +872,9 @@ def test_convert_gemini_tool_call_result_with_data_url_extra_params():
     )
     inline_parts = _get_gemini_function_response_inline_data_parts(result)
     assert len(inline_parts) == 1
-    assert (
-        inline_parts[0]["mime_type"] == "image/png"
-    ), f"expected clean 'image/png', got '{inline_parts[0]['mime_type']}'"
+    assert inline_parts[0]["mime_type"] == "image/png", (
+        f"expected clean 'image/png', got '{inline_parts[0]['mime_type']}'"
+    )
 
 
 def test_bedrock_tools_unpack_defs():
@@ -997,9 +971,7 @@ def test_bedrock_tools_pt_strict_parameter():
             },
         }
     ]
-    result = _bedrock_tools_pt(
-        tools_with_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
-    )
+    result = _bedrock_tools_pt(tools_with_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0")
     assert result[0]["toolSpec"]["strict"] is True
     assert result[0]["toolSpec"]["inputSchema"]["json"]["additionalProperties"] is False
 
@@ -1021,9 +993,7 @@ def test_bedrock_tools_pt_strict_parameter():
             },
         }
     ]
-    result = _bedrock_tools_pt(
-        tools_without_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
-    )
+    result = _bedrock_tools_pt(tools_without_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0")
     assert "strict" not in result[0]["toolSpec"]
     assert "additionalProperties" not in result[0]["toolSpec"]["inputSchema"]["json"]
 
@@ -1046,9 +1016,7 @@ def test_bedrock_image_processor_content_type_fallback_url_extension():
 
     # Test with .png URL
     image_url = "https://example.com/test-image.png"
-    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
-        mock_response, image_url
-    )
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(mock_response, image_url)
 
     assert content_type == "image/png"
     assert base64_bytes == base64.b64encode(png_content).decode("utf-8")
@@ -1072,9 +1040,7 @@ def test_bedrock_image_processor_content_type_fallback_binary_detection():
 
     # Test with URL without extension
     image_url = "https://example.com/test-image-without-extension"
-    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
-        mock_response, image_url
-    )
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(mock_response, image_url)
 
     assert content_type == "image/jpeg"
     assert base64_bytes == base64.b64encode(jpeg_content).decode("utf-8")
@@ -1097,9 +1063,7 @@ def test_bedrock_image_processor_content_type_fallback_application_octet_stream(
 
     # Test with .gif URL
     image_url = "https://s3.amazonaws.com/bucket/image.gif"
-    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
-        mock_response, image_url
-    )
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(mock_response, image_url)
 
     assert content_type == "image/gif"
     assert base64_bytes == base64.b64encode(gif_content).decode("utf-8")
@@ -1122,9 +1086,7 @@ def test_bedrock_image_processor_content_type_with_query_params():
 
     # Test with URL containing query parameters (common in S3 signed URLs)
     image_url = "https://s3.amazonaws.com/bucket/image.webp?AWSAccessKeyId=123&Expires=456&Signature=789"
-    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
-        mock_response, image_url
-    )
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(mock_response, image_url)
 
     assert content_type == "image/webp"
     assert base64_bytes == base64.b64encode(webp_content).decode("utf-8")
@@ -1146,9 +1108,7 @@ def test_bedrock_image_processor_content_type_normal_header():
     mock_response.content = png_content
 
     image_url = "https://example.com/test-image.png"
-    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
-        mock_response, image_url
-    )
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(mock_response, image_url)
 
     assert content_type == "image/png"
     assert base64_bytes == base64.b64encode(png_content).decode("utf-8")
@@ -1188,16 +1148,12 @@ def test_bedrock_image_processor_content_type_jpeg_variants():
 
     # Test with .jpg extension
     image_url_jpg = "https://example.com/photo.jpg"
-    _, content_type_jpg = BedrockImageProcessor._post_call_image_processing(
-        mock_response, image_url_jpg
-    )
+    _, content_type_jpg = BedrockImageProcessor._post_call_image_processing(mock_response, image_url_jpg)
     assert content_type_jpg == "image/jpeg"
 
     # Test with .jpeg extension
     image_url_jpeg = "https://example.com/photo.jpeg"
-    _, content_type_jpeg = BedrockImageProcessor._post_call_image_processing(
-        mock_response, image_url_jpeg
-    )
+    _, content_type_jpeg = BedrockImageProcessor._post_call_image_processing(mock_response, image_url_jpeg)
     assert content_type_jpeg == "image/jpeg"
 
 
@@ -1219,9 +1175,7 @@ def test_bedrock_image_processor_content_type_pdf_document():
 
     # Test with .pdf URL
     pdf_url = "https://s3.amazonaws.com/bucket/document.pdf"
-    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
-        mock_response, pdf_url
-    )
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(mock_response, pdf_url)
 
     assert content_type == "application/pdf"
     assert base64_bytes == base64.b64encode(pdf_content).decode("utf-8")
@@ -1255,12 +1209,8 @@ def test_bedrock_image_processor_content_type_document_formats():
     ]
 
     for url, expected_mime in test_cases:
-        _, content_type = BedrockImageProcessor._post_call_image_processing(
-            mock_response, url
-        )
-        assert (
-            content_type == expected_mime
-        ), f"Expected {expected_mime} for {url}, got {content_type}"
+        _, content_type = BedrockImageProcessor._post_call_image_processing(mock_response, url)
+        assert content_type == expected_mime, f"Expected {expected_mime} for {url}, got {content_type}"
 
 
 def test_bedrock_image_processor_content_type_s3_pdf_with_query():
@@ -1279,9 +1229,7 @@ def test_bedrock_image_processor_content_type_s3_pdf_with_query():
     # S3 signed URL with query parameters
     s3_url = "https://my-bucket.s3.us-east-1.amazonaws.com/documents/report.pdf?AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Expires=1234567890&Signature=abcdef123456"
 
-    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
-        mock_response, s3_url
-    )
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(mock_response, s3_url)
 
     assert content_type == "application/pdf"
     assert base64_bytes == base64.b64encode(pdf_content).decode("utf-8")
@@ -1390,12 +1338,8 @@ def test_bedrock_create_bedrock_block_normalized_base64():
     base64_content = base64.b64encode(pdf_content).decode("utf-8")
 
     # Create versions with different whitespace
-    base64_with_newlines = "\n".join(
-        [base64_content[i : i + 64] for i in range(0, len(base64_content), 64)]
-    )
-    base64_with_spaces = " ".join(
-        [base64_content[i : i + 32] for i in range(0, len(base64_content), 32)]
-    )
+    base64_with_newlines = "\n".join([base64_content[i : i + 64] for i in range(0, len(base64_content), 64)])
+    base64_with_spaces = " ".join([base64_content[i : i + 32] for i in range(0, len(base64_content), 32)])
 
     # Create blocks
     block1 = BedrockImageProcessor._create_bedrock_block(
@@ -1527,9 +1471,7 @@ def test_bedrock_create_bedrock_block_document_name_format():
 
     # Check format: DocumentPDFmessages_{16_hex_chars}_{format}
     pattern = r"^DocumentPDFmessages_[0-9a-f]{16}_pdf$"
-    assert re.match(
-        pattern, document_name
-    ), f"Document name format mismatch: {document_name}"
+    assert re.match(pattern, document_name), f"Document name format mismatch: {document_name}"
 
 
 def test_bedrock_create_bedrock_block_different_document_formats():
@@ -1582,9 +1524,7 @@ def test_bedrock_nova_web_search_options_mapping():
     assert system_tool["name"] == "nova_grounding"
 
     # Test with search_context_size (should be ignored for Nova)
-    result2 = config._map_web_search_options(
-        {"search_context_size": "high"}, "us.amazon.nova-premier-v1:0"
-    )
+    result2 = config._map_web_search_options({"search_context_size": "high"}, "us.amazon.nova-premier-v1:0")
 
     assert result2 is not None
     system_tool2 = result2.get("systemTool")
@@ -1650,9 +1590,7 @@ def test_bedrock_tools_pt_drops_unmappable_responses_builtin_tools():
         {"type": "custom", "name": "free_form"},
     ]
 
-    result = _bedrock_tools_pt(
-        tools=tools, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
-    )
+    result = _bedrock_tools_pt(tools=tools, model="anthropic.claude-sonnet-4-5-20250929-v1:0")
 
     names = [block["toolSpec"]["name"] for block in result if "toolSpec" in block]
     assert names == ["noop"]
@@ -1682,9 +1620,7 @@ def test_bedrock_tools_pt_keeps_anthropic_input_schema_tools():
         },
     ]
 
-    result = _bedrock_tools_pt(
-        tools=tools, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
-    )
+    result = _bedrock_tools_pt(tools=tools, model="anthropic.claude-sonnet-4-5-20250929-v1:0")
 
     names = [block["toolSpec"]["name"] for block in result if "toolSpec" in block]
     assert names == ["lookup"]
@@ -1886,9 +1822,7 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
                     "tool_use_id": "srvtoolu_01ABC123",
                     "content": {
                         "type": "tool_search_tool_search_result",
-                        "tool_references": [
-                            {"type": "tool_reference", "tool_name": "get_time"}
-                        ],
+                        "tool_references": [{"type": "tool_reference", "tool_name": "get_time"}],
                     },
                 },
                 {"type": "text", "text": "I found the time tool. How can I help you?"},
@@ -1916,20 +1850,14 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
 
     # Verify server_tool_use block is preserved
     assert "server_tool_use" in content_types
-    server_tool_use_block = next(
-        b for b in assistant_msg["content"] if b.get("type") == "server_tool_use"
-    )
+    server_tool_use_block = next(b for b in assistant_msg["content"] if b.get("type") == "server_tool_use")
     assert server_tool_use_block["id"] == "srvtoolu_01ABC123"
     assert server_tool_use_block["name"] == "tool_search_tool_regex"
     assert server_tool_use_block["input"] == {"query": ".*time.*"}
 
     # Verify tool_search_tool_result block is preserved
     assert "tool_search_tool_result" in content_types
-    tool_result_block = next(
-        b
-        for b in assistant_msg["content"]
-        if b.get("type") == "tool_search_tool_result"
-    )
+    tool_result_block = next(b for b in assistant_msg["content"] if b.get("type") == "tool_search_tool_result")
     assert tool_result_block["tool_use_id"] == "srvtoolu_01ABC123"
     assert tool_result_block["content"]["type"] == "tool_search_tool_search_result"
     assert tool_result_block["content"]["tool_references"][0]["tool_name"] == "get_time"
@@ -1981,9 +1909,7 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
                 "anyOf": [
                     {"$ref": "#/$defs/Literal"},
                     {"$ref": "#/$defs/FieldRef"},
-                    {
-                        "$ref": "#/$defs/Expression"
-                    },  # Circular: Operand -> Expression -> Operand
+                    {"$ref": "#/$defs/Expression"},  # Circular: Operand -> Expression -> Operand
                 ],
             },
             "Literal": {
@@ -2117,9 +2043,7 @@ def test_anthropic_messages_pt_file_block_preserves_cache_control():
 
     file_block = content_blocks[0]
     assert file_block["type"] == "document"
-    assert (
-        "cache_control" in file_block
-    ), "cache_control should be preserved on file/document content blocks"
+    assert "cache_control" in file_block, "cache_control should be preserved on file/document content blocks"
     assert file_block["cache_control"]["type"] == "ephemeral"
 
     text_block = content_blocks[1]
@@ -2229,22 +2153,16 @@ def test_bedrock_tool_call_invoke_concatenated_json():
     # First block keeps original tool id
     assert result[0]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN"
     assert result[0]["toolUse"]["name"] == "shell"
-    assert result[0]["toolUse"]["input"] == {
-        "command": ["curl", "-i", "http://localhost:9009", "-m", "10"]
-    }
+    assert result[0]["toolUse"]["input"] == {"command": ["curl", "-i", "http://localhost:9009", "-m", "10"]}
 
     # Subsequent blocks get suffixed ids
     assert result[1]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN_1"
     assert result[1]["toolUse"]["name"] == "shell"
-    assert result[1]["toolUse"]["input"] == {
-        "command": ["curl", "-i", "http://localhost:9009/robots.txt", "-m", "5"]
-    }
+    assert result[1]["toolUse"]["input"] == {"command": ["curl", "-i", "http://localhost:9009/robots.txt", "-m", "5"]}
 
     assert result[2]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN_2"
     assert result[2]["toolUse"]["name"] == "shell"
-    assert result[2]["toolUse"]["input"] == {
-        "command": ["curl", "-i", "http://localhost:9009/sitemap.xml", "-m", "5"]
-    }
+    assert result[2]["toolUse"]["input"] == {"command": ["curl", "-i", "http://localhost:9009/sitemap.xml", "-m", "5"]}
 
 
 def test_bedrock_tool_call_invoke_concatenated_json_with_cache_control():
@@ -2289,9 +2207,7 @@ def test_bedrock_tool_call_invoke_non_dict_arguments():
 def test_make_valid_bedrock_tool_name_preserves_hyphens():
     assert make_valid_bedrock_tool_name("my-tool") == "my-tool"
     assert (
-        make_valid_bedrock_tool_name(
-            "CreateCaseKnowledgeArticle_foTWsqR6yDt-OnSsvR5e6Q"
-        )
+        make_valid_bedrock_tool_name("CreateCaseKnowledgeArticle_foTWsqR6yDt-OnSsvR5e6Q")
         == "CreateCaseKnowledgeArticle_foTWsqR6yDt-OnSsvR5e6Q"
     )
 
@@ -2318,9 +2234,7 @@ def test_bedrock_tool_name_sanitized_consistently_in_tools_and_tool_use():
             "function": {"name": raw_name, "arguments": "{}"},
         }
     ]
-    tool_use_name = _convert_to_bedrock_tool_call_invoke(tool_calls)[0]["toolUse"][
-        "name"
-    ]
+    tool_use_name = _convert_to_bedrock_tool_call_invoke(tool_calls)[0]["toolUse"]["name"]
 
     assert tool_spec_name == "foo_bar"
     assert tool_use_name == tool_spec_name
@@ -2343,15 +2257,8 @@ def test_bedrock_converse_messages_pt_tool_use_matches_tool_spec_hyphen_name():
             ],
         },
     ]
-    translated = _bedrock_converse_messages_pt(
-        messages=messages, model="", llm_provider=""
-    )
-    tool_use_blocks = [
-        block
-        for msg in translated
-        for block in msg.get("content", [])
-        if "toolUse" in block
-    ]
+    translated = _bedrock_converse_messages_pt(messages=messages, model="", llm_provider="")
+    tool_use_blocks = [block for msg in translated for block in msg.get("content", []) if "toolUse" in block]
     assert len(tool_use_blocks) == 1
     assert tool_use_blocks[0]["toolUse"]["name"] == tool_name
 
@@ -2448,11 +2355,7 @@ def test_sanitize_messages_deduplicates_tool_results():
         result = sanitize_messages_for_tool_calling(messages)
 
         # Count tool messages with this ID — should be exactly 1
-        tool_results = [
-            m
-            for m in result
-            if m.get("role") == "tool" and m.get("tool_call_id") == "call_abc123"
-        ]
+        tool_results = [m for m in result if m.get("role") == "tool" and m.get("tool_call_id") == "call_abc123"]
         assert len(tool_results) == 1
         # Should keep the LAST occurrence (most complete)
         assert tool_results[0]["content"] == '{"temperature": 72, "condition": "sunny"}'
@@ -2587,11 +2490,7 @@ def test_sanitize_messages_dedup_scoped_per_turn_preserves_cross_turn():
         result = sanitize_messages_for_tool_calling(messages)
 
         # Both tool results must survive — one per turn
-        tool_results = [
-            m
-            for m in result
-            if m.get("role") == "tool" and m.get("tool_call_id") == "call_X"
-        ]
+        tool_results = [m for m in result if m.get("role") == "tool" and m.get("tool_call_id") == "call_X"]
         assert len(tool_results) == 2, (
             f"Expected 2 tool results (one per turn), got {len(tool_results)}. "
             "Dedup may be global instead of per-turn scoped."
@@ -2645,32 +2544,26 @@ def test_sanitize_messages_combined_case_a_and_case_d():
         tool_results = [m for m in result if m.get("role") in ("tool", "function")]
 
         # Case A: call_missing should have a dummy result injected
-        missing_results = [
-            m for m in tool_results if m.get("tool_call_id") == "call_missing"
-        ]
-        assert (
-            len(missing_results) == 1
-        ), f"Expected 1 dummy result for call_missing (Case A), got {len(missing_results)}"
+        missing_results = [m for m in tool_results if m.get("tool_call_id") == "call_missing"]
+        assert len(missing_results) == 1, (
+            f"Expected 1 dummy result for call_missing (Case A), got {len(missing_results)}"
+        )
 
         # Case D: call_duped should have exactly 1 result (the fresh one)
-        duped_results = [
-            m for m in tool_results if m.get("tool_call_id") == "call_duped"
-        ]
-        assert (
-            len(duped_results) == 1
-        ), f"Expected 1 result for call_duped after dedup (Case D), got {len(duped_results)}"
-        assert (
-            duped_results[0]["content"] == "fresh_result"
-        ), f"Expected last-wins 'fresh_result', got '{duped_results[0]['content']}'"
+        duped_results = [m for m in tool_results if m.get("tool_call_id") == "call_duped"]
+        assert len(duped_results) == 1, (
+            f"Expected 1 result for call_duped after dedup (Case D), got {len(duped_results)}"
+        )
+        assert duped_results[0]["content"] == "fresh_result", (
+            f"Expected last-wins 'fresh_result', got '{duped_results[0]['content']}'"
+        )
 
         # Verify tool results immediately follow the assistant message
         asst_idx = next(i for i, m in enumerate(result) if m.get("role") == "assistant")
-        tool_msgs_after_asst = [
-            m for m in result[asst_idx + 1 :] if m.get("role") in ("tool", "function")
-        ]
-        assert (
-            len(tool_msgs_after_asst) == 2
-        ), f"Expected 2 tool results after assistant, got {len(tool_msgs_after_asst)}"
+        tool_msgs_after_asst = [m for m in result[asst_idx + 1 :] if m.get("role") in ("tool", "function")]
+        assert len(tool_msgs_after_asst) == 2, (
+            f"Expected 2 tool results after assistant, got {len(tool_msgs_after_asst)}"
+        )
         # Both tool_call_ids should be present (order may vary)
         tool_ids = {m["tool_call_id"] for m in tool_msgs_after_asst}
         assert tool_ids == {
@@ -2712,9 +2605,7 @@ def test_anthropic_messages_pt_file_block_preserves_cache_control():
         }
     ]
 
-    result = anthropic_messages_pt(
-        messages, model="claude-sonnet-4-20250514", llm_provider="anthropic"
-    )
+    result = anthropic_messages_pt(messages, model="claude-sonnet-4-20250514", llm_provider="anthropic")
 
     content_blocks = result[0]["content"]
     assert len(content_blocks) == 2
@@ -2722,9 +2613,7 @@ def test_anthropic_messages_pt_file_block_preserves_cache_control():
     # Document block (from file) should preserve cache_control
     doc_block = content_blocks[0]
     assert doc_block["type"] == "document"
-    assert (
-        "cache_control" in doc_block
-    ), "cache_control was dropped from file/document block"
+    assert "cache_control" in doc_block, "cache_control was dropped from file/document block"
     assert doc_block["cache_control"]["type"] == "ephemeral"
 
     # Text block should also preserve cache_control
@@ -2767,9 +2656,7 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
         }
 
         # Claude 4.5 model: ttl should be preserved
-        result = add_cache_point_tool_block(
-            tool_with_1h, model="jp.anthropic.claude-opus-4-7"
-        )
+        result = add_cache_point_tool_block(tool_with_1h, model="jp.anthropic.claude-opus-4-7")
         assert result is not None
         assert result["cachePoint"]["type"] == "default"
         assert result["cachePoint"]["ttl"] == "1h"
@@ -2778,16 +2665,12 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
         tool_with_5m = {
             "cache_control": {"type": "ephemeral", "ttl": "5m"},
         }
-        result_5m = add_cache_point_tool_block(
-            tool_with_5m, model="jp.anthropic.claude-opus-4-7"
-        )
+        result_5m = add_cache_point_tool_block(tool_with_5m, model="jp.anthropic.claude-opus-4-7")
         assert result_5m is not None
         assert result_5m["cachePoint"]["ttl"] == "5m"
 
         # Older model: ttl should be stripped
-        result_old = add_cache_point_tool_block(
-            tool_with_1h, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
-        )
+        result_old = add_cache_point_tool_block(tool_with_1h, model="anthropic.claude-3-5-sonnet-20241022-v2:0")
         assert result_old is not None
         assert result_old["cachePoint"]["type"] == "default"
         assert "ttl" not in result_old["cachePoint"]
@@ -2806,9 +2689,7 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
 
         # cache_control without ttl: returns default cachePoint (unchanged behavior)
         tool_no_ttl = {"cache_control": {"type": "ephemeral"}}
-        result_no_ttl = add_cache_point_tool_block(
-            tool_no_ttl, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-        )
+        result_no_ttl = add_cache_point_tool_block(tool_no_ttl, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0")
         assert result_no_ttl is not None
         assert result_no_ttl["cachePoint"]["type"] == "default"
         assert "ttl" not in result_no_ttl["cachePoint"]
@@ -2859,9 +2740,7 @@ def test_bedrock_tools_pt_passes_ttl_for_claude_4_5():
         assert cache_blocks[0]["cachePoint"]["ttl"] == "1h"
 
         # Older model: cachePoint should not have ttl
-        result_old = _bedrock_tools_pt(
-            tools, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
-        )
+        result_old = _bedrock_tools_pt(tools, model="anthropic.claude-3-5-sonnet-20241022-v2:0")
         cache_blocks_old = [b for b in result_old if "cachePoint" in b]
         assert len(cache_blocks_old) == 1
         assert "ttl" not in cache_blocks_old[0]["cachePoint"]
@@ -2936,9 +2815,7 @@ def test_bedrock_converse_messages_pt_document_various_formats():
             }
         ]
 
-        result = _bedrock_converse_messages_pt(
-            messages, "anthropic.claude-sonnet-4-6", "bedrock"
-        )
+        result = _bedrock_converse_messages_pt(messages, "anthropic.claude-sonnet-4-6", "bedrock")
 
         doc_block = result[0]["content"][0]
         assert doc_block["document"]["format"] == expected_format, (
@@ -2965,12 +2842,8 @@ def test_bedrock_converse_messages_pt_document_deterministic_name():
         }
     ]
 
-    result1 = _bedrock_converse_messages_pt(
-        messages, "anthropic.claude-sonnet-4-6", "bedrock"
-    )
-    result2 = _bedrock_converse_messages_pt(
-        messages, "anthropic.claude-sonnet-4-6", "bedrock"
-    )
+    result1 = _bedrock_converse_messages_pt(messages, "anthropic.claude-sonnet-4-6", "bedrock")
+    result2 = _bedrock_converse_messages_pt(messages, "anthropic.claude-sonnet-4-6", "bedrock")
 
     name1 = result1[0]["content"][0]["document"]["name"]
     name2 = result2[0]["content"][0]["document"]["name"]
@@ -3004,34 +2877,18 @@ def test_bedrock_converse_messages_pt_renames_duplicate_document_names():
         },
     ]
 
-    result1 = _bedrock_converse_messages_pt(
-        messages, "anthropic.claude-sonnet-4-6", "bedrock"
-    )
-    result2 = _bedrock_converse_messages_pt(
-        messages, "anthropic.claude-sonnet-4-6", "bedrock"
-    )
+    result1 = _bedrock_converse_messages_pt(messages, "anthropic.claude-sonnet-4-6", "bedrock")
+    result2 = _bedrock_converse_messages_pt(messages, "anthropic.claude-sonnet-4-6", "bedrock")
 
-    names1 = [
-        block["document"]["name"]
-        for message in result1
-        for block in message["content"]
-        if "document" in block
-    ]
-    names2 = [
-        block["document"]["name"]
-        for message in result2
-        for block in message["content"]
-        if "document" in block
-    ]
+    names1 = [block["document"]["name"] for message in result1 for block in message["content"] if "document" in block]
+    names2 = [block["document"]["name"] for message in result2 for block in message["content"] if "document" in block]
 
     assert len(names1) == 2
     assert len(set(names1)) == 2
     assert names1[1] == f"{names1[0]}_2"
     assert names1 == names2
 
-    single_turn = _bedrock_converse_messages_pt(
-        [messages[0]], "anthropic.claude-sonnet-4-6", "bedrock"
-    )
+    single_turn = _bedrock_converse_messages_pt([messages[0]], "anthropic.claude-sonnet-4-6", "bedrock")
     assert names1[0] == single_turn[0]["content"][0]["document"]["name"]
 
 
@@ -3053,14 +2910,10 @@ def test_rename_duplicate_bedrock_document_names_skips_organic_suffixes():
     def _names(contents):
         return [block["document"]["name"] for block in contents[0]["content"]]
 
-    organic_first = _rename_duplicate_bedrock_document_names(
-        _contents(["report", "report_2", "report"])
-    )
+    organic_first = _rename_duplicate_bedrock_document_names(_contents(["report", "report_2", "report"]))
     assert _names(organic_first) == ["report", "report_2", "report_3"]
 
-    organic_last = _rename_duplicate_bedrock_document_names(
-        _contents(["report", "report", "report_2"])
-    )
+    organic_last = _rename_duplicate_bedrock_document_names(_contents(["report", "report", "report_2"]))
     assert _names(organic_last) == ["report", "report_3", "report_2"]
 
 
@@ -3082,18 +2935,11 @@ def test_bedrock_converse_messages_pt_document_rejects_url_source():
     ]
 
     with pytest.raises(ValueError, match="only supports base64-encoded"):
-        _bedrock_converse_messages_pt(
-            messages, "anthropic.claude-sonnet-4-6", "bedrock"
-        )
+        _bedrock_converse_messages_pt(messages, "anthropic.claude-sonnet-4-6", "bedrock")
 
 
 def _collect_cache_points(blocks):
-    return [
-        block["cachePoint"]
-        for message in blocks
-        for block in message["content"]
-        if "cachePoint" in block
-    ]
+    return [block["cachePoint"] for message in blocks for block in message["content"] if "cachePoint" in block]
 
 
 @pytest.mark.parametrize(

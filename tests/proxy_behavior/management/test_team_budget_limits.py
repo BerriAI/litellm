@@ -132,9 +132,7 @@ async def test_check_org_team_limits_models_subset(
         headers={"Authorization": f"Bearer {seeder}"},
         json=body,
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{body!r} → {resp.status_code}: {resp.text}"
+    assert resp.status_code == expected_status, f"{body!r} → {resp.status_code}: {resp.text}"
 
     rows = await prisma.db.litellm_teamtable.find_many(where={"team_id": team_id})
     assert len(rows) == (1 if expected_status == 200 else 0)
@@ -279,9 +277,9 @@ async def test_check_user_team_limits(
             **body_extras,
         },
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"caps={actor_caps} body={body_extras} → {resp.status_code}: {resp.text}"
+    assert resp.status_code == expected_status, (
+        f"caps={actor_caps} body={body_extras} → {resp.status_code}: {resp.text}"
+    )
 
     rows = await prisma.db.litellm_teamtable.find_many(where={"team_id": team_id})
     assert len(rows) == (1 if expected_status == 200 else 0)
@@ -376,9 +374,7 @@ async def test_proxy_admin_raise_budget_allowed(proxy_client, prisma, scratch):
 async def test_team_admin_remove_budget_cap_blocked(proxy_client, prisma, scratch):
     """A team admin cannot strip the team's cap (max_budget=null); removing the
     ceiling is the strongest possible raise -> proxy-admin only."""
-    caller_cleartext = await _seed_scratch_actor_with_caps(
-        prisma, scratch.prefix, max_budget=100000.0
-    )
+    caller_cleartext = await _seed_scratch_actor_with_caps(prisma, scratch.prefix, max_budget=100000.0)
     team_id = await create_scratch_team(
         prisma,
         team_id=scratch.tag("team"),

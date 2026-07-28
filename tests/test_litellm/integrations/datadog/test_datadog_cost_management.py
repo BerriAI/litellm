@@ -50,9 +50,7 @@ async def test_init(clean_env):
     logger = DatadogCostManagementLogger()
     assert logger.dd_api_key == "test_api_key"
     assert logger.dd_app_key == "test_app_key"
-    assert (
-        logger.upload_url == "https://api.test.datadoghq.com/api/v2/cost/custom_costs"
-    )
+    assert logger.upload_url == "https://api.test.datadoghq.com/api/v2/cost/custom_costs"
 
 
 @pytest.mark.asyncio
@@ -177,9 +175,7 @@ async def test_async_send_batch_clears_queue_on_success(clean_env):
     """Bug 1 regression: log_queue must be empty after a successful upload."""
     logger = DatadogCostManagementLogger()
     logger.async_client = AsyncMock()
-    logger.async_client.put.return_value = Response(
-        202, json={"status": "ok"}, request=_PUT_REQUEST
-    )
+    logger.async_client.put.return_value = Response(202, json={"status": "ok"}, request=_PUT_REQUEST)
     logger.log_queue = [
         StandardLoggingPayload(
             custom_llm_provider="openai",
@@ -361,9 +357,7 @@ async def test_extract_tags_allowlist_cannot_override_reserved_dimensions(clean_
     metadata_attack["user_api_key_alias"] = "trusted-user"
     metadata_attack["user_api_key_team_alias"] = "trusted-team"
     metadata_attack["model_group"] = "trusted-group"
-    metadata_attack["spend_logs_metadata"] = {
-        k: f"attacker-spend-{k}" for k in reserved
-    }
+    metadata_attack["spend_logs_metadata"] = {k: f"attacker-spend-{k}" for k in reserved}
     metadata_attack["requester_metadata"] = {k: f"attacker-req-{k}" for k in reserved}
 
     log = StandardLoggingPayload(
@@ -391,6 +385,5 @@ async def test_extract_tags_allowlist_cannot_override_reserved_dimensions(clean_
     # No reserved key carries an attacker-supplied prefix from any path.
     for k in reserved:
         assert not tags[k].startswith("attacker-"), (
-            f"reserved key {k!r} was overwritten by user-controlled input: "
-            f"{tags[k]!r}"
+            f"reserved key {k!r} was overwritten by user-controlled input: {tags[k]!r}"
         )

@@ -5,9 +5,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.integrations.gitlab.gitlab_client import GitLabClient
 
@@ -22,9 +20,7 @@ class HTTPError(Exception):
 
 
 class FakeResponse:
-    def __init__(
-        self, *, status_code=200, headers=None, text="", content=b"", json_data=None
-    ):
+    def __init__(self, *, status_code=200, headers=None, text="", content=b"", json_data=None):
         self.status_code = status_code
         self.headers = headers or {}
         self.text = text
@@ -61,9 +57,7 @@ class StubHTTPHandler:
             raise resp_or_exc
         if resp_or_exc is None:
             # default: 404 not found
-            return FakeResponse(
-                status_code=404, headers={"content-type": "application/json"}, text="{}"
-            )
+            return FakeResponse(status_code=404, headers={"content-type": "application/json"}, text="{}")
         return resp_or_exc
 
     def close(self):
@@ -254,9 +248,7 @@ def test_get_repository_info_success():
 
 def test_test_connection_true_and_false():
     c = make_client()
-    ok_url = (
-        f"https://gitlab.example.com/api/v4/projects/{enc_project('group/sub/repo')}"
-    )
+    ok_url = f"https://gitlab.example.com/api/v4/projects/{enc_project('group/sub/repo')}"
     c.http_handler.routes[ok_url] = FakeResponse(status_code=200, json_data={"id": 1})
     assert c.test_connection() is True
 
@@ -268,9 +260,7 @@ def test_test_connection_true_and_false():
 def test_get_branches_returns_list():
     c = make_client()
     url = f"https://gitlab.example.com/api/v4/projects/{enc_project('group/sub/repo')}/repository/branches"
-    c.http_handler.routes[url] = FakeResponse(
-        status_code=200, json_data=[{"name": "main"}]
-    )
+    c.http_handler.routes[url] = FakeResponse(status_code=200, json_data=[{"name": "main"}])
     branches = c.get_branches()
     assert isinstance(branches, list)
     assert branches[0]["name"] == "main"

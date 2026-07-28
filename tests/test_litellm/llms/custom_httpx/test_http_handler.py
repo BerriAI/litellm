@@ -12,9 +12,7 @@ import httpx
 import pytest
 from aiohttp import ClientSession, TCPConnector
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
@@ -57,9 +55,7 @@ async def test_async_post_streaming_status_error_should_not_wait_forever_for_bod
 
     litellm_handler = AsyncHTTPHandler()
     await litellm_handler.client.aclose()
-    litellm_handler.client = httpx.AsyncClient(
-        transport=httpx.MockTransport(mock_handler)
-    )
+    litellm_handler.client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
     try:
         with pytest.raises(MaskedHTTPStatusError) as exc_info:
             await asyncio.wait_for(
@@ -222,9 +218,7 @@ async def test_ssl_verification_with_aiohttp_transport():
             transport_connector = transport._get_valid_client_session().connector
             assert isinstance(transport_connector, TCPConnector)
 
-            aiohttp_session = aiohttp.ClientSession(
-                connector=aiohttp.TCPConnector(ssl=False)
-            )
+            aiohttp_session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False))
             try:
                 aiohttp_connector = aiohttp_session.connector
                 assert isinstance(aiohttp_connector, aiohttp.TCPConnector)
@@ -413,7 +407,8 @@ async def test_get_async_httpx_client_with_shared_session():
 
     # Test with shared session
     client = get_async_httpx_client(
-        llm_provider=LlmProviders.ANTHROPIC, shared_session=mock_session  # type: ignore
+        llm_provider=LlmProviders.ANTHROPIC,
+        shared_session=mock_session,  # type: ignore
     )
 
     # Verify the client was created successfully
@@ -432,9 +427,7 @@ async def test_get_async_httpx_client_without_shared_session():
     from litellm.types.utils import LlmProviders
 
     # Test without shared session
-    client = get_async_httpx_client(
-        llm_provider=LlmProviders.ANTHROPIC, shared_session=None
-    )
+    client = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC, shared_session=None)
 
     # Verify the client was created successfully
     assert client is not None
@@ -511,11 +504,13 @@ async def test_session_reuse_integration():
 
     # Create two clients with the same session
     client1 = get_async_httpx_client(
-        llm_provider=LlmProviders.ANTHROPIC, shared_session=mock_session  # type: ignore
+        llm_provider=LlmProviders.ANTHROPIC,
+        shared_session=mock_session,  # type: ignore
     )
 
     client2 = get_async_httpx_client(
-        llm_provider=LlmProviders.OPENAI, shared_session=mock_session  # type: ignore
+        llm_provider=LlmProviders.OPENAI,
+        shared_session=mock_session,  # type: ignore
     )
 
     # Both clients should be created successfully
@@ -547,9 +542,7 @@ async def test_session_reuse_integration():
         (None, None, None, False),  # None value - skip configuration
     ],
 )
-def test_ssl_ecdh_curve(
-    env_curve, litellm_curve, expected_curve, should_call, monkeypatch
-):
+def test_ssl_ecdh_curve(env_curve, litellm_curve, expected_curve, should_call, monkeypatch):
     """Test SSL ECDH curve configuration with valid curves and precedence"""
     from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
 
@@ -781,9 +774,7 @@ class TestDefaultCachedClientTimeoutHonorsRequestTimeout:
         assert resolved.read == 300.0
         assert resolved.connect == 5.0
 
-    def test_cached_async_client_built_with_explicit_request_timeout(
-        self, restore_request_timeout
-    ):
+    def test_cached_async_client_built_with_explicit_request_timeout(self, restore_request_timeout):
         from litellm.caching.llm_caching_handler import LLMClientCache
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
         from litellm.types.utils import LlmProviders

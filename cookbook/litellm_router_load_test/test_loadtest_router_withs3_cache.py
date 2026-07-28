@@ -3,18 +3,14 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 from litellm import Router, Timeout
 import time
 from litellm.caching.caching import Cache
 import litellm
 
-litellm.cache = Cache(
-    type="s3", s3_bucket_name="cache-bucket-litellm", s3_region_name="us-west-2"
-)
+litellm.cache = Cache(type="s3", s3_bucket_name="cache-bucket-litellm", s3_region_name="us-west-2")
 
 ### Test calling router with s3 Cache
 

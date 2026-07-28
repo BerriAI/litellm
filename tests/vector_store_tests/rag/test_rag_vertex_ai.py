@@ -151,9 +151,7 @@ class TestRAGVertexAI(BaseRAGTest):
         Test document {unique_id} for Vertex AI RAG corpus creation.
         This tests the automatic corpus creation feature.
         The corpus should be created and the file should be uploaded successfully.
-        """.encode(
-            "utf-8"
-        )
+        """.encode("utf-8")
         file_data = (filename, text_content, "text/plain")
 
         # Get base options WITHOUT corpus_id to trigger creation
@@ -176,9 +174,7 @@ class TestRAGVertexAI(BaseRAGTest):
             assert "id" in response
             assert response["id"].startswith("ingest_")
             assert "status" in response
-            assert (
-                response["status"] == "completed"
-            ), f"Expected completed, got {response['status']}"
+            assert response["status"] == "completed", f"Expected completed, got {response['status']}"
             assert "vector_store_id" in response
             assert response["vector_store_id"], "vector_store_id should not be empty"
 
@@ -215,9 +211,7 @@ class TestRAGVertexAI(BaseRAGTest):
         text_content = f"""
         Test document {unique_id} for existing Vertex AI RAG corpus.
         This tests file upload to a pre-existing corpus.
-        """.encode(
-            "utf-8"
-        )
+        """.encode("utf-8")
         file_data = (filename, text_content, "text/plain")
 
         ingest_options = self.get_base_ingest_options()
@@ -232,10 +226,7 @@ class TestRAGVertexAI(BaseRAGTest):
             print(f"Existing Corpus Ingest Response: {response}")
 
             assert response["status"] == "completed"
-            assert (
-                response["vector_store_id"] == corpus_id
-                or corpus_id in response["vector_store_id"]
-            )
+            assert response["vector_store_id"] == corpus_id or corpus_id in response["vector_store_id"]
             assert response.get("file_id"), "file_id should be present"
 
             print(f"✓ Successfully uploaded to existing corpus: {corpus_id}")

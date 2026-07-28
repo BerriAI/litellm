@@ -35,7 +35,7 @@ import httpx
 class EvalCase:
     category: str
     prompt: str
-    ideal: str          # criteria the judge checks the response against
+    ideal: str  # criteria the judge checks the response against
 
 
 EVAL_CASES: List[EvalCase] = [
@@ -86,10 +86,7 @@ EVAL_CASES: List[EvalCase] = [
     # writing
     EvalCase(
         category="writing",
-        prompt=(
-            "Write a short, polite email declining a meeting request because of "
-            "a scheduling conflict."
-        ),
+        prompt=("Write a short, polite email declining a meeting request because of a scheduling conflict."),
         ideal=(
             "A professional email that: (1) thanks the sender for the invitation, "
             "(2) clearly declines, (3) mentions a scheduling conflict as the reason, "
@@ -184,7 +181,10 @@ async def evaluate(
             # Round 1: single-turn real request — get the actual LLM response to judge.
             try:
                 response, chosen = await _chat(
-                    client, proxy_url, api_key, router,
+                    client,
+                    proxy_url,
+                    api_key,
+                    router,
                     [{"role": "user", "content": case.prompt}],
                     session_id=session_id,
                 )
@@ -203,7 +203,11 @@ async def evaluate(
             ]
             try:
                 verdict, _ = await _chat(
-                    client, proxy_url, api_key, judge_model, judge_msgs,
+                    client,
+                    proxy_url,
+                    api_key,
+                    judge_model,
+                    judge_msgs,
                 )
             except Exception as exc:  # noqa: BLE001
                 print(f"  ERROR calling judge: {exc}", file=sys.stderr)
@@ -227,22 +231,26 @@ async def evaluate(
             # On PASS → satisfaction follow-up (+alpha). On FAIL → neutral (no signal).
             follow_up = SATISFY_FOLLOWUP if is_pass else NEUTRAL_FOLLOWUP
             bandit_msgs = [
-                {"role": "user",      "content": case.prompt},
+                {"role": "user", "content": case.prompt},
                 {"role": "assistant", "content": response},
-                {"role": "user",      "content": "ok continue"},
+                {"role": "user", "content": "ok continue"},
                 {"role": "assistant", "content": FAB_ASSISTANT},
-                {"role": "user",      "content": follow_up},
+                {"role": "user", "content": follow_up},
             ]
             try:
                 await _chat(
-                    client, proxy_url, api_key, router, bandit_msgs,
+                    client,
+                    proxy_url,
+                    api_key,
+                    router,
+                    bandit_msgs,
                     session_id=session_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 print(f"  WARNING: bandit update failed: {exc}", file=sys.stderr)
 
     total = passed + failed
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Results: {passed}/{total} passed  ({failed} failed)")
     if passed == total:
         print("All test cases passed — the adaptive router is working well!")
@@ -258,10 +266,10 @@ async def evaluate(
 # ---------------------------------------------------------------------------
 def main() -> None:
     ap = argparse.ArgumentParser(description="Evaluate the adaptive router with LLM-as-judge.")
-    ap.add_argument("--proxy-url",    default="http://localhost:4000")
-    ap.add_argument("--api-key",      required=True, help="proxy API key")
-    ap.add_argument("--router",       default="smart-cheap-router", help="adaptive router model name")
-    ap.add_argument("--judge-model",  default="smart", help="model name for the judge (via proxy)")
+    ap.add_argument("--proxy-url", default="http://localhost:4000")
+    ap.add_argument("--api-key", required=True, help="proxy API key")
+    ap.add_argument("--router", default="smart-cheap-router", help="adaptive router model name")
+    ap.add_argument("--judge-model", default="smart", help="model name for the judge (via proxy)")
     args = ap.parse_args()
 
     asyncio.run(evaluate(args.proxy_url, args.api_key, args.router, args.judge_model))

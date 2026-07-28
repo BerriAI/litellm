@@ -109,9 +109,7 @@ class Assessment(BaseModel):
 
 
 class BedrockGuardrailResponse(BaseModel):
-    usage: Dict[str, int] = Field(
-        default_factory=lambda: {"topicPolicyUnits": 1, "contentPolicyUnits": 1}
-    )
+    usage: Dict[str, int] = Field(default_factory=lambda: {"topicPolicyUnits": 1, "contentPolicyUnits": 1})
     action: Literal["NONE", "GUARDRAIL_INTERVENED"] = "NONE"
     outputs: List[BedrockGuardrailOutput] = Field(default_factory=list)
     assessments: List[Assessment] = Field(default_factory=list)
@@ -125,9 +123,7 @@ class BedrockGuardrailResponse(BaseModel):
 class GuardrailConfig(BaseModel):
     """Configuration for mock guardrail behavior"""
 
-    blocked_words: List[str] = Field(
-        default_factory=lambda: ["offensive", "inappropriate", "badword"]
-    )
+    blocked_words: List[str] = Field(default_factory=lambda: ["offensive", "inappropriate", "badword"])
     blocked_topics: List[str] = Field(default_factory=lambda: ["violence", "illegal"])
     pii_patterns: Dict[str, str] = Field(
         default_factory=lambda: {
@@ -228,9 +224,7 @@ def check_blocked_topics(text: str) -> Optional[TopicPolicy]:
 
     for topic in GUARDRAIL_CONFIG.blocked_topics:
         if topic.lower() in text_lower:
-            found_topics.append(
-                TopicPolicyItem(name=topic, type=topic.upper(), action="BLOCKED")
-            )
+            found_topics.append(TopicPolicyItem(name=topic, type=topic.upper(), action="BLOCKED"))
 
     if found_topics:
         return TopicPolicy(topics=found_topics)
@@ -255,15 +249,11 @@ def check_pii(text: str) -> tuple[Optional[SensitiveInformationPolicy], str]:
             matches = compiled_pattern.finditer(text)
             for match in matches:
                 matched_text = match.group()
-                pii_entities.append(
-                    PiiEntity(type=pii_type, match=matched_text, action=action)
-                )
+                pii_entities.append(PiiEntity(type=pii_type, match=matched_text, action=action))
 
                 # Anonymize the text if configured
                 if GUARDRAIL_CONFIG.anonymize_pii:
-                    anonymized_text = anonymized_text.replace(
-                        matched_text, f"[{pii_type}_REDACTED]"
-                    )
+                    anonymized_text = anonymized_text.replace(matched_text, f"[{pii_type}_REDACTED]")
         except re.error:
             # Invalid regex pattern - skip it and log a warning
             print(f"Warning: Invalid regex pattern for PII type {pii_type}: {pattern}")
@@ -431,24 +421,17 @@ async def beta_litellm_basic_guardrail_api(
     """
     print(f"request: {request}")
     if any("ishaan" in text.lower() for text in request.texts):
-        return LitellmBasicGuardrailResponse(
-            action="BLOCKED", blocked_reason="Ishaan is not allowed"
-        )
+        return LitellmBasicGuardrailResponse(action="BLOCKED", blocked_reason="Ishaan is not allowed")
     elif any("pii_value" in text for text in request.texts):
         return LitellmBasicGuardrailResponse(
             action="GUARDRAIL_INTERVENED",
-            texts=[
-                text.replace("pii_value", "pii_value_redacted")
-                for text in request.texts
-            ],
+            texts=[text.replace("pii_value", "pii_value_redacted") for text in request.texts],
         )
     return LitellmBasicGuardrailResponse(action="NONE")
 
 
 @app.post("/config/update")
-async def update_config(
-    config: GuardrailConfig, token: str = Depends(verify_bearer_token)
-):
+async def update_config(config: GuardrailConfig, token: str = Depends(verify_bearer_token)):
     """
     Update the guardrail configuration.
 

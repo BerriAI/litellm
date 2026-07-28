@@ -53,9 +53,7 @@ class TestPartnerModelsCredentialReuse:
                 "_ensure_access_token",
                 return_value=("cached-token", "test-project"),
             ) as mock_ensure,
-            patch(
-                "litellm.llms.vertex_ai.vertex_ai_partner_models.main.base_llm_http_handler"
-            ) as mock_handler,
+            patch("litellm.llms.vertex_ai.vertex_ai_partner_models.main.base_llm_http_handler") as mock_handler,
         ):
             mock_handler.completion.return_value = "response"
 
@@ -95,12 +93,8 @@ class TestPartnerModelsCredentialReuse:
 
         with (
             patch.dict(sys.modules, {"vertexai": _mock_vertexai()}),
-            patch.object(
-                partner, "load_auth", return_value=(mock_creds, "proj")
-            ) as mock_load,
-            patch(
-                "litellm.llms.vertex_ai.vertex_ai_partner_models.main.base_llm_http_handler"
-            ) as mock_handler,
+            patch.object(partner, "load_auth", return_value=(mock_creds, "proj")) as mock_load,
+            patch("litellm.llms.vertex_ai.vertex_ai_partner_models.main.base_llm_http_handler") as mock_handler,
         ):
             mock_handler.completion.return_value = "resp"
 

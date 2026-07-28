@@ -10,9 +10,7 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import json
 import warnings
 from typing import List
@@ -121,9 +119,7 @@ def trade(model_name: str) -> List[Trade]:  # type: ignore
                 ```
                 {portfolio}
                 ```
-                """.replace(
-                        "{market_data}", "BTC: 64,000 USD\nETH: 3,500 USD"
-                    ).replace(
+                """.replace("{market_data}", "BTC: 64,000 USD\nETH: 3,500 USD").replace(
                         "{portfolio}", "USD: 1000, BTC: 0.1, ETH: 0.2"
                     ),
                 },
@@ -141,9 +137,7 @@ def trade(model_name: str) -> List[Trade]:  # type: ignore
         pass
 
 
-@pytest.mark.parametrize(
-    "model", ["claude-haiku-4-5-20251001", "anthropic.claude-3-haiku-20240307-v1:0"]
-)
+@pytest.mark.parametrize("model", ["claude-haiku-4-5-20251001", "anthropic.claude-3-haiku-20240307-v1:0"])
 @pytest.mark.flaky(retries=6, delay=10)
 def test_function_call_parsing(model):
     trades = trade(model)

@@ -65,10 +65,7 @@ def test_snowflake_pat_key_account_id(mock_post):
     # PAT key was used
     post_kwargs = mock_post.call_args_list[-1][1]
     assert "xxxxx" in post_kwargs["headers"]["Authorization"]
-    assert (
-        post_kwargs["headers"]["X-Snowflake-Authorization-Token-Type"]
-        == "PROGRAMMATIC_ACCESS_TOKEN"
-    )
+    assert post_kwargs["headers"]["X-Snowflake-Authorization-Token-Type"] == "PROGRAMMATIC_ACCESS_TOKEN"
 
     # account id was used
     assert "AAAA-BBBB" in post_kwargs["url"]

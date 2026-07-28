@@ -193,9 +193,7 @@ class TestRelayElicitationToDownstream:
         session.elicit_form.assert_not_awaited()
 
     async def test_should_decline_when_downstream_relay_raises(self):
-        session = SimpleNamespace(
-            elicit_form=AsyncMock(side_effect=RuntimeError("transport closed"))
-        )
+        session = SimpleNamespace(elicit_form=AsyncMock(side_effect=RuntimeError("transport closed")))
 
         result = await _relay_elicitation_to_downstream(
             params=_form_params(),

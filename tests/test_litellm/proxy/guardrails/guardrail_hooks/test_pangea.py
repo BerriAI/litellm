@@ -57,12 +57,8 @@ def test_initialize_guardrail_sets_event_hook():
 
     guardrail = {"guardrail_name": "pangea-ai-guard"}
 
-    with patch(
-        "litellm.logging_callback_manager.add_litellm_callback"
-    ) as mock_add_callback:
-        callback = initialize_guardrail(
-            litellm_params=litellm_params, guardrail=guardrail
-        )
+    with patch("litellm.logging_callback_manager.add_litellm_callback") as mock_add_callback:
+        callback = initialize_guardrail(litellm_params=litellm_params, guardrail=guardrail)
 
     assert callback.event_hook == GuardrailEventHooks.post_call
     mock_add_callback.assert_called_once_with(callback)
@@ -169,10 +165,7 @@ async def test_pangea_ai_guard_request_transformed(pangea_guardrail):
             user_api_key_dict=None, cache=None, data=data, call_type="completion"
         )
 
-    assert (
-        request["messages"][1]["content"]
-        == "Here is an SSN for one my employees: <US_SSN>"
-    )
+    assert request["messages"][1]["content"] == "Here is an SSN for one my employees: <US_SSN>"
 
 
 @pytest.mark.asyncio
@@ -256,10 +249,7 @@ async def test_pangea_ai_guard_response_blocked(pangea_guardrail):
 
     called_kwargs = mock_method.call_args.kwargs
     assert called_kwargs["json"]["recipe"] == "guard_llm_response"
-    assert (
-        called_kwargs["json"]["input"]["choices"][0]["message"]["content"]
-        == "Yes, I will leak all my PII for you"
-    )
+    assert called_kwargs["json"]["input"]["choices"][0]["message"]["content"] == "Yes, I will leak all my PII for you"
 
 
 @pytest.mark.asyncio
@@ -307,10 +297,7 @@ async def test_pangea_ai_guard_response_ok(pangea_guardrail):
 
     called_kwargs = mock_method.call_args.kwargs
     assert called_kwargs["json"]["recipe"] == "guard_llm_response"
-    assert (
-        called_kwargs["json"]["input"]["choices"][0]["message"]["content"]
-        == "Yes, I will leak all my PII for you"
-    )
+    assert called_kwargs["json"]["input"]["choices"][0]["message"]["content"] == "Yes, I will leak all my PII for you"
 
 
 @pytest.mark.asyncio

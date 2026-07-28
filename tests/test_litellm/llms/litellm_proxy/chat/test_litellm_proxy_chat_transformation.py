@@ -35,8 +35,6 @@ def test_litellm_proxy_chat_transformation():
 def test_litellm_gateway_from_sdk_with_user_param():
     from litellm.llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
 
-    supported_params = LiteLLMProxyChatConfig().get_supported_openai_params(
-        "openai/gpt-4o"
-    )
+    supported_params = LiteLLMProxyChatConfig().get_supported_openai_params("openai/gpt-4o")
     print(f"supported_params: {supported_params}")
     assert "user" in supported_params

@@ -1,7 +1,7 @@
 """
 Integration tests for Perplexity cost calculation and transformation.
 
-Tests the end-to-end functionality of Perplexity cost calculation 
+Tests the end-to-end functionality of Perplexity cost calculation
 including integration with the main LiteLLM cost calculator.
 """
 
@@ -93,20 +93,14 @@ class TestPerplexityIntegration:
         config._enhance_usage_with_perplexity_fields(model_response, raw_response_dict)
 
         # Now calculate the cost with the enhanced usage
-        total_cost = completion_cost(
-            completion_response=model_response, custom_llm_provider="perplexity"
-        )
+        total_cost = completion_cost(completion_response=model_response, custom_llm_provider="perplexity")
 
         # Calculate expected cost
-        citation_chars = sum(
-            len(citation) for citation in raw_response_dict["citations"]
-        )
+        citation_chars = sum(len(citation) for citation in raw_response_dict["citations"])
         citation_tokens = citation_chars // 4
 
         expected_prompt_cost = (100 * 2e-6) + (citation_tokens * 2e-6)
-        expected_completion_cost = (
-            ((50 - 10) * 8e-6) + (10 * 3e-6) + (2 * 0.005)
-        )  # Output (text) + reasoning + search
+        expected_completion_cost = ((50 - 10) * 8e-6) + (10 * 3e-6) + (2 * 0.005)  # Output (text) + reasoning + search
         expected_total = expected_prompt_cost + expected_completion_cost
 
         assert math.isclose(total_cost, expected_total, rel_tol=1e-6)
@@ -116,14 +110,10 @@ class TestPerplexityIntegration:
         # Create a standard response without Perplexity-specific fields
         model_response = ModelResponse()
         model_response.model = "sonar-deep-research"
-        model_response.usage = Usage(
-            prompt_tokens=100, completion_tokens=50, total_tokens=150
-        )
+        model_response.usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
 
         # Calculate cost without custom fields
-        total_cost = completion_cost(
-            completion_response=model_response, custom_llm_provider="perplexity"
-        )
+        total_cost = completion_cost(completion_response=model_response, custom_llm_provider="perplexity")
 
         # Should only include basic input/output costs
         expected_cost = (100 * 2e-6) + (50 * 8e-6)
@@ -150,18 +140,14 @@ class TestPerplexityIntegration:
         )
 
         expected_prompt_cost = (200 * 2e-6) + (40 * 2e-6)
-        expected_completion_cost = (
-            ((100 - 25) * 8e-6) + (25 * 3e-6) + (3 * 0.005)
-        )  # Output (text) + reasoning + search
+        expected_completion_cost = ((100 - 25) * 8e-6) + (25 * 3e-6) + (3 * 0.005)  # Output (text) + reasoning + search
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
         assert math.isclose(completion_cost_val, expected_completion_cost, rel_tol=1e-6)
 
     def test_model_info_includes_custom_fields(self):
         """Test that get_model_info returns the custom Perplexity cost fields."""
-        model_info = get_model_info(
-            model="sonar-deep-research", custom_llm_provider="perplexity"
-        )
+        model_info = get_model_info(model="sonar-deep-research", custom_llm_provider="perplexity")
 
         # Verify custom fields are included
         required_fields = [
@@ -194,9 +180,7 @@ class TestPerplexityIntegration:
         for citations, expected_approx_tokens in test_cases:
             model_response = ModelResponse()
             model_response.model = "sonar-deep-research"
-            model_response.usage = Usage(
-                prompt_tokens=100, completion_tokens=50, total_tokens=150
-            )
+            model_response.usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
 
             raw_response_dict = {
                 "usage": {
@@ -207,9 +191,7 @@ class TestPerplexityIntegration:
                 "citations": citations,
             }
 
-            config._enhance_usage_with_perplexity_fields(
-                model_response, raw_response_dict
-            )
+            config._enhance_usage_with_perplexity_fields(model_response, raw_response_dict)
 
             citation_tokens = getattr(model_response.usage, "citation_tokens", 0)
 
@@ -250,9 +232,7 @@ class TestPerplexityIntegration:
         )
 
         usage.citation_tokens = 5000
-        usage.prompt_tokens_details = PromptTokensDetailsWrapper(
-            web_search_requests=100
-        )
+        usage.prompt_tokens_details = PromptTokensDetailsWrapper(web_search_requests=100)
 
         total_cost = completion_cost(
             completion_response=ModelResponse(usage=usage, model="sonar-deep-research"),
@@ -260,9 +240,7 @@ class TestPerplexityIntegration:
         )
 
         expected_prompt_cost = (50000 * 2e-6) + (5000 * 2e-6)
-        expected_completion_cost = (
-            ((25000 - 10000) * 8e-6) + (10000 * 3e-6) + (100 * 0.005)
-        )  # $0.65
+        expected_completion_cost = ((25000 - 10000) * 8e-6) + (10000 * 3e-6) + (100 * 0.005)  # $0.65
         expected_total = expected_prompt_cost + expected_completion_cost  # $0.76
 
         assert math.isclose(total_cost, expected_total, rel_tol=1e-6)
@@ -307,9 +285,7 @@ class TestPerplexityIntegration:
         assert hasattr(model_response.usage, "citation_tokens")
         assert model_response.usage.prompt_tokens_details.web_search_requests == 3
 
-    @pytest.mark.parametrize(
-        "provider_name", ["perplexity", "PERPLEXITY", "Perplexity"]
-    )
+    @pytest.mark.parametrize("provider_name", ["perplexity", "PERPLEXITY", "Perplexity"])
     def test_case_insensitive_provider_matching(self, provider_name):
         """Test that cost calculation works with different case variations of provider name."""
         usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)

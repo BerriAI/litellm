@@ -7,9 +7,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 import httpx
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.google_genai import agenerate_content, agenerate_content_stream
@@ -87,29 +85,23 @@ async def test_vertex_anthropic_mocked():
         # Validate URL
         print(f"Expected URL: {expected_url}")
         print(f"Actual URL: {actual_url}")
-        assert (
-            actual_url == expected_url
-        ), f"Expected URL {expected_url}, but got {actual_url}"
+        assert actual_url == expected_url, f"Expected URL {expected_url}, but got {actual_url}"
 
         # Validate headers
         actual_headers = call_kwargs.get("headers", {})
         print(f"Actual headers: {actual_headers}")
 
         # Validate Authorization header exists
-        auth_header_found = any(
-            k.lower() == "authorization" for k in actual_headers.keys()
+        auth_header_found = any(k.lower() == "authorization" for k in actual_headers.keys())
+        assert auth_header_found, (
+            f"Authorization header should be present. Found headers: {list(actual_headers.keys())}"
         )
-        assert (
-            auth_header_found
-        ), f"Authorization header should be present. Found headers: {list(actual_headers.keys())}"
 
         # Validate request body
         request_body = None
         if "data" in call_kwargs:
             request_body = (
-                json.loads(call_kwargs["data"])
-                if isinstance(call_kwargs["data"], str)
-                else call_kwargs["data"]
+                json.loads(call_kwargs["data"]) if isinstance(call_kwargs["data"], str) else call_kwargs["data"]
             )
         elif "json" in call_kwargs:
             request_body = call_kwargs["json"]
@@ -119,42 +111,36 @@ async def test_vertex_anthropic_mocked():
 
         # Validate required keys in request body
         actual_body_keys = set(request_body.keys())
-        assert expected_body_keys.issubset(
-            actual_body_keys
-        ), f"Expected keys {expected_body_keys} not found in {actual_body_keys}"
+        assert expected_body_keys.issubset(actual_body_keys), (
+            f"Expected keys {expected_body_keys} not found in {actual_body_keys}"
+        )
 
         # Validate message content
         messages = request_body.get("messages", [])
         assert len(messages) > 0, "Messages should not be empty"
-        assert (
-            messages[0]["role"] == "user"
-        ), f"Expected first message role to be 'user', got {messages[0]['role']}"
+        assert messages[0]["role"] == "user", f"Expected first message role to be 'user', got {messages[0]['role']}"
 
         # Check message content structure
         content = messages[0]["content"]
         if isinstance(content, list):
-            text_content = next(
-                (item["text"] for item in content if item.get("type") == "text"), None
-            )
+            text_content = next((item["text"] for item in content if item.get("type") == "text"), None)
         else:
             text_content = content
 
-        assert (
-            text_content == expected_message_content
-        ), f"Expected message content '{expected_message_content}', got '{text_content}'"
+        assert text_content == expected_message_content, (
+            f"Expected message content '{expected_message_content}', got '{text_content}'"
+        )
 
         # Validate anthropic_version
-        assert (
-            request_body["anthropic_version"] == "vertex-2023-10-16"
-        ), f"Expected anthropic_version 'vertex-2023-10-16', got {request_body['anthropic_version']}"
+        assert request_body["anthropic_version"] == "vertex-2023-10-16", (
+            f"Expected anthropic_version 'vertex-2023-10-16', got {request_body['anthropic_version']}"
+        )
 
         # Validate max_tokens
-        assert (
-            "max_tokens" in request_body
-        ), "max_tokens should be present in request body"
-        assert isinstance(
-            request_body["max_tokens"], int
-        ), f"max_tokens should be integer, got {type(request_body['max_tokens'])}"
+        assert "max_tokens" in request_body, "max_tokens should be present in request body"
+        assert isinstance(request_body["max_tokens"], int), (
+            f"max_tokens should be integer, got {type(request_body['max_tokens'])}"
+        )
 
         print("✅ All validations passed!")
         print(f"Response: {response}")
@@ -272,37 +258,29 @@ async def test_vertex_anthropic_streaming_mocked():
         # Validate URL (same as non-streaming)
         print(f"Expected URL: {expected_url}")
         print(f"Actual URL: {actual_url}")
-        assert (
-            actual_url == expected_url
-        ), f"Expected URL {expected_url}, but got {actual_url}"
+        assert actual_url == expected_url, f"Expected URL {expected_url}, but got {actual_url}"
 
         # Validate headers
         actual_headers = call_kwargs.get("headers", {})
         print(f"Actual headers: {actual_headers}")
 
         # Validate Authorization header exists
-        auth_header_found = any(
-            k.lower() == "authorization" for k in actual_headers.keys()
+        auth_header_found = any(k.lower() == "authorization" for k in actual_headers.keys())
+        assert auth_header_found, (
+            f"Authorization header should be present. Found headers: {list(actual_headers.keys())}"
         )
-        assert (
-            auth_header_found
-        ), f"Authorization header should be present. Found headers: {list(actual_headers.keys())}"
 
         # Validate anthropic-version header exists and has correct value
         anthropic_version_found = False
         for header_name, header_value in actual_headers.items():
             if header_name.lower() == "anthropic-version":
-                assert (
-                    header_value == "2023-06-01"
-                ), f"Expected anthropic-version: 2023-06-01, but got {header_value}"
+                assert header_value == "2023-06-01", f"Expected anthropic-version: 2023-06-01, but got {header_value}"
                 anthropic_version_found = True
                 break
         assert anthropic_version_found, "anthropic-version header should be present"
 
         # Validate content-type and accept headers
-        content_type_found = any(
-            k.lower() == "content-type" for k in actual_headers.keys()
-        )
+        content_type_found = any(k.lower() == "content-type" for k in actual_headers.keys())
         accept_found = any(k.lower() == "accept" for k in actual_headers.keys())
         assert content_type_found, "content-type header should be present"
         assert accept_found, "accept header should be present"
@@ -311,9 +289,7 @@ async def test_vertex_anthropic_streaming_mocked():
         request_body = None
         if "data" in call_kwargs:
             request_body = (
-                json.loads(call_kwargs["data"])
-                if isinstance(call_kwargs["data"], str)
-                else call_kwargs["data"]
+                json.loads(call_kwargs["data"]) if isinstance(call_kwargs["data"], str) else call_kwargs["data"]
             )
         elif "json" in call_kwargs:
             request_body = call_kwargs["json"]
@@ -323,42 +299,36 @@ async def test_vertex_anthropic_streaming_mocked():
 
         # Validate required keys in request body
         actual_body_keys = set(request_body.keys())
-        assert expected_body_keys.issubset(
-            actual_body_keys
-        ), f"Expected keys {expected_body_keys} not found in {actual_body_keys}"
+        assert expected_body_keys.issubset(actual_body_keys), (
+            f"Expected keys {expected_body_keys} not found in {actual_body_keys}"
+        )
 
         # Validate message content
         messages = request_body.get("messages", [])
         assert len(messages) > 0, "Messages should not be empty"
-        assert (
-            messages[0]["role"] == "user"
-        ), f"Expected first message role to be 'user', got {messages[0]['role']}"
+        assert messages[0]["role"] == "user", f"Expected first message role to be 'user', got {messages[0]['role']}"
 
         # Check message content structure
         content = messages[0]["content"]
         if isinstance(content, list):
-            text_content = next(
-                (item["text"] for item in content if item.get("type") == "text"), None
-            )
+            text_content = next((item["text"] for item in content if item.get("type") == "text"), None)
         else:
             text_content = content
 
-        assert (
-            text_content == expected_message_content
-        ), f"Expected message content '{expected_message_content}', got '{text_content}'"
+        assert text_content == expected_message_content, (
+            f"Expected message content '{expected_message_content}', got '{text_content}'"
+        )
 
         # Validate anthropic_version in body
-        assert (
-            request_body["anthropic_version"] == "vertex-2023-10-16"
-        ), f"Expected anthropic_version 'vertex-2023-10-16', got {request_body['anthropic_version']}"
+        assert request_body["anthropic_version"] == "vertex-2023-10-16", (
+            f"Expected anthropic_version 'vertex-2023-10-16', got {request_body['anthropic_version']}"
+        )
 
         # Validate max_tokens
-        assert (
-            "max_tokens" in request_body
-        ), "max_tokens should be present in request body"
-        assert isinstance(
-            request_body["max_tokens"], int
-        ), f"max_tokens should be integer, got {type(request_body['max_tokens'])}"
+        assert "max_tokens" in request_body, "max_tokens should be present in request body"
+        assert isinstance(request_body["max_tokens"], int), (
+            f"max_tokens should be integer, got {type(request_body['max_tokens'])}"
+        )
 
         # Test that we can iterate over the streaming response
         chunks_received = []

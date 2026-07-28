@@ -70,9 +70,7 @@ async def _seed_token(
 # ---------------------------------------------------------------------------
 
 
-async def test_key_health_with_logging_metadata_runs_test_logging(
-    proxy_client, prisma, scratch, world
-):
+async def test_key_health_with_logging_metadata_runs_test_logging(proxy_client, prisma, scratch, world):
     cleartext = await _seed_token(
         prisma,
         scratch.prefix,
@@ -95,9 +93,7 @@ async def test_key_health_with_logging_metadata_runs_test_logging(
     assert body["logging_callbacks"]["callbacks"] == ["noop-scratch-callback"]
 
 
-async def test_key_health_with_missing_callback_name_rejected(
-    proxy_client, prisma, scratch, world
-):
+async def test_key_health_with_missing_callback_name_rejected(proxy_client, prisma, scratch, world):
     """test_key_logging raises ValueError if a callback dict lacks
     callback_name — wrapped by the outer try/except into a 500."""
     cleartext = await _seed_token(
@@ -151,9 +147,7 @@ async def test_reset_spend_happy_path(proxy_client, prisma, scratch, world):
     assert resp.json()["spend"] == 1.0
     assert resp.json()["previous_spend"] == 5.0
 
-    row = await prisma.db.litellm_verificationtoken.find_unique(
-        where={"token": hash_token(cleartext)}
-    )
+    row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": hash_token(cleartext)})
     assert row is not None
     assert row.spend == 1.0
 
@@ -188,15 +182,11 @@ async def test_reset_spend_validate_value_branches(
     assert resp.status_code == 400, resp.text
     assert expected_detail in resp.text, resp.text
     # Row spend must be unchanged.
-    row = await prisma.db.litellm_verificationtoken.find_unique(
-        where={"token": hash_token(cleartext)}
-    )
+    row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": hash_token(cleartext)})
     assert row.spend == 5.0, "spend mutated despite validation rejection"
 
 
-async def test_reset_spend_non_numeric_caught_by_pydantic(
-    proxy_client, prisma, scratch, world
-):
+async def test_reset_spend_non_numeric_caught_by_pydantic(proxy_client, prisma, scratch, world):
     """Pin: non-float reset_to is rejected at the Pydantic layer with 422
     before reaching _validate_reset_spend_value. This documents that the
     helper's `isinstance(reset_to, (int, float))` guard at line 4568 is
@@ -216,9 +206,7 @@ async def test_reset_spend_non_numeric_caught_by_pydantic(
     assert resp.status_code == 422, resp.text
 
 
-async def test_reset_spend_non_admin_caller_rejected(
-    proxy_client, prisma, scratch, world
-):
+async def test_reset_spend_non_admin_caller_rejected(proxy_client, prisma, scratch, world):
     """_check_proxy_or_team_admin_for_key raises 403 when caller is neither
     proxy admin nor admin of the key's team."""
     # Seed a key against TEAM_BETA (no actor in our world is admin of beta).
@@ -239,9 +227,7 @@ async def test_reset_spend_non_admin_caller_rejected(
     # Route-level admin gate may fire first (401) or the helper's own 403 —
     # both prove the path is guarded; pin either as rejection.
     assert resp.status_code in (401, 403), resp.text
-    row = await prisma.db.litellm_verificationtoken.find_unique(
-        where={"token": hash_token(cleartext)}
-    )
+    row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": hash_token(cleartext)})
     assert row.spend == 5.0, "spend mutated despite rejection"
 
 
@@ -294,15 +280,11 @@ async def test_regenerate_happy_path(proxy_client, prisma, scratch, world):
     assert new_hash != old_hash
 
     # Old token should no longer be in active tokens (deleted by regenerate).
-    old_row = await prisma.db.litellm_verificationtoken.find_unique(
-        where={"token": old_hash}
-    )
+    old_row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": old_hash})
     assert old_row is None, "old token still present after regenerate"
 
     # New token should be active.
-    new_row = await prisma.db.litellm_verificationtoken.find_unique(
-        where={"token": new_hash}
-    )
+    new_row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": new_hash})
     assert new_row is not None, "new token not written after regenerate"
 
 
@@ -322,9 +304,7 @@ async def test_regenerate_with_explicit_new_key(proxy_client, prisma, scratch, w
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["key"] == new_key
-    new_row = await prisma.db.litellm_verificationtoken.find_unique(
-        where={"token": hash_token(new_key)}
-    )
+    new_row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": hash_token(new_key)})
     assert new_row is not None
 
 
@@ -358,9 +338,7 @@ async def test_generate_duplicate_alias_rejected(proxy_client, prisma, scratch, 
 # ---------------------------------------------------------------------------
 
 
-async def test_generate_with_invalid_model_max_budget_rejected(
-    proxy_client, scratch, world
-):
+async def test_generate_with_invalid_model_max_budget_rejected(proxy_client, scratch, world):
     seeder = world.keys[Actor.PROXY_ADMIN].cleartext
     resp = await proxy_client.post(
         "/key/generate",
@@ -400,9 +378,7 @@ async def test_generate_with_invalid_model_max_budget_rejected(
     ],
     ids=["user_mismatch", "team_mismatch", "org_mismatch"],
 )
-async def test_key_list_non_admin_authz_branches(
-    filter_kwarg, expected_substring: str, proxy_client, world
-):
+async def test_key_list_non_admin_authz_branches(filter_kwarg, expected_substring: str, proxy_client, world):
     """Non-admin caller hits validate_key_list_check's three rejection
     branches. INTERNAL_USER (Org A, TEAM_ALPHA member) is the caller; each
     filter targets a foreign user/team/org and trips the matching guard."""
@@ -423,9 +399,7 @@ async def test_key_list_non_admin_authz_branches(
 # ---------------------------------------------------------------------------
 
 
-async def test_key_bulk_update_mixed_success_and_failure(
-    proxy_client, prisma, scratch, world
-):
+async def test_key_bulk_update_mixed_success_and_failure(proxy_client, prisma, scratch, world):
     seeder = world.keys[Actor.PROXY_ADMIN].cleartext
     existing = await _seed_token(
         prisma,
@@ -449,9 +423,7 @@ async def test_key_bulk_update_mixed_success_and_failure(
     assert len(body["successful_updates"]) == 1
     assert len(body["failed_updates"]) == 1
     # Re-read confirms the successful key was actually updated.
-    row = await prisma.db.litellm_verificationtoken.find_unique(
-        where={"token": hash_token(existing)}
-    )
+    row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": hash_token(existing)})
     assert row.max_budget == 5.0
 
 
@@ -500,9 +472,7 @@ async def test_key_bulk_update_exceeds_max_batch_rejected(proxy_client, world):
 # ---------------------------------------------------------------------------
 
 
-async def test_key_update_with_duration_and_budget_duration(
-    proxy_client, prisma, scratch, world
-):
+async def test_key_update_with_duration_and_budget_duration(proxy_client, prisma, scratch, world):
     cleartext = await _seed_token(
         prisma,
         scratch.prefix,
@@ -519,9 +489,7 @@ async def test_key_update_with_duration_and_budget_duration(
         },
     )
     assert resp.status_code == 200, resp.text
-    row = await prisma.db.litellm_verificationtoken.find_unique(
-        where={"token": hash_token(cleartext)}
-    )
+    row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": hash_token(cleartext)})
     assert row.expires is not None, "expires not stamped from duration"
     assert row.budget_reset_at is not None, "budget_reset_at not stamped"
 
@@ -547,9 +515,7 @@ async def test_key_update_with_clear_duration(proxy_client, prisma, scratch, wor
         json={"key": cleartext, "duration": "-1"},
     )
     assert resp.status_code == 200, resp.text
-    row = await prisma.db.litellm_verificationtoken.find_unique(
-        where={"token": hash_token(cleartext)}
-    )
+    row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": hash_token(cleartext)})
     assert row.expires is None, "expires not cleared by duration=-1"
 
 
@@ -592,9 +558,7 @@ async def test_team_key_bulk_update_no_selector_rejected(proxy_client, world):
     assert "key_ids" in resp.text or "all_keys_in_team" in resp.text
 
 
-async def test_team_key_bulk_update_all_keys_in_team(
-    proxy_client, prisma, scratch, world
-):
+async def test_team_key_bulk_update_all_keys_in_team(proxy_client, prisma, scratch, world):
     """Pin the all_keys_in_team branch (lines 2818–2841) plus the
     per-key success path. Seed two scratch keys against the scratch team."""
     seeder = world.keys[Actor.PROXY_ADMIN].cleartext
@@ -631,15 +595,11 @@ async def test_team_key_bulk_update_all_keys_in_team(
     assert body["total_requested"] == 2
     # Re-read both keys; max_budget should be set.
     for k in (k1, k2):
-        row = await prisma.db.litellm_verificationtoken.find_unique(
-            where={"token": hash_token(k)}
-        )
+        row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": hash_token(k)})
         assert row.max_budget == 7.0
 
 
-async def test_team_key_bulk_update_explicit_key_ids_mixed(
-    proxy_client, prisma, scratch, world
-):
+async def test_team_key_bulk_update_explicit_key_ids_mixed(proxy_client, prisma, scratch, world):
     """Pin the explicit-key_ids dedupe + per-key 404 path (lines 2842–2944).
     Send a real key + a ghost key under the same team_id."""
     seeder = world.keys[Actor.PROXY_ADMIN].cleartext
@@ -766,9 +726,7 @@ async def test_key_aliases_proxy_admin_unscoped(proxy_client, prisma, scratch, w
     assert "total_count" in body
     assert body["current_page"] == 1
     assert body["size"] == 10
-    assert (
-        alias in body["aliases"]
-    ), f"newly created alias not in list: {body['aliases']}"
+    assert alias in body["aliases"], f"newly created alias not in list: {body['aliases']}"
 
 
 async def test_key_aliases_with_search_filter(proxy_client, prisma, scratch, world):
@@ -835,9 +793,7 @@ async def test_key_list_filter_branches(query: str, proxy_client, world):
 # ---------------------------------------------------------------------------
 
 
-async def test_regenerate_with_grace_period_inserts_deprecated_row(
-    proxy_client, prisma, scratch, world
-):
+async def test_regenerate_with_grace_period_inserts_deprecated_row(proxy_client, prisma, scratch, world):
     cleartext = await _seed_token(
         prisma,
         scratch.prefix,
@@ -854,21 +810,15 @@ async def test_regenerate_with_grace_period_inserts_deprecated_row(
     assert resp.status_code == 200, resp.text
     new_key = resp.json()["key"]
     # Old token should now be in the deprecated table.
-    deprecated_row = await prisma.db.litellm_deprecatedverificationtoken.find_unique(
-        where={"token": old_hash}
-    )
+    deprecated_row = await prisma.db.litellm_deprecatedverificationtoken.find_unique(where={"token": old_hash})
     assert deprecated_row is not None, "old token not retained in deprecated table"
     assert deprecated_row.active_token_id == hash_token(new_key)
     assert deprecated_row.revoke_at is not None
     # Manual cleanup — scratch prefix sweep doesn't cover this table.
-    await prisma.db.litellm_deprecatedverificationtoken.delete(
-        where={"token": old_hash}
-    )
+    await prisma.db.litellm_deprecatedverificationtoken.delete(where={"token": old_hash})
 
 
-async def test_regenerate_with_invalid_grace_period_format(
-    proxy_client, prisma, scratch, world
-):
+async def test_regenerate_with_invalid_grace_period_format(proxy_client, prisma, scratch, world):
     """Invalid grace_period format falls through silently (line 4170–4175);
     regenerate still succeeds but no deprecated row is inserted."""
     cleartext = await _seed_token(
@@ -885,15 +835,11 @@ async def test_regenerate_with_invalid_grace_period_format(
         json={"grace_period": "totally-not-a-duration"},
     )
     assert resp.status_code == 200, resp.text
-    deprecated_row = await prisma.db.litellm_deprecatedverificationtoken.find_unique(
-        where={"token": old_hash}
-    )
+    deprecated_row = await prisma.db.litellm_deprecatedverificationtoken.find_unique(where={"token": old_hash})
     assert deprecated_row is None, "deprecated row created despite invalid grace_period"
 
 
-async def test_key_list_key_hash_filter_unauthorized(
-    proxy_client, prisma, scratch, world
-):
+async def test_key_list_key_hash_filter_unauthorized(proxy_client, prisma, scratch, world):
     """validate_key_list_check's key_hash branch (lines 4766–4789): a
     cross-tenant non-admin caller asks for a key_hash they don't own → 403.
 

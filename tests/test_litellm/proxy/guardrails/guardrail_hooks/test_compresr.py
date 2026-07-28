@@ -1614,9 +1614,7 @@ def test_recovery_markers_respect_per_call_byte_cap():
     messages = [{"role": "tool", "content": text} for text in contexts]
     results = [{"compressed_context": f"small-{i}"} for i in range(3)]
 
-    applied = guardrail._apply_compression_results(
-        messages, [0, 1, 2], contexts, results, recovery_enabled=True
-    )
+    applied = guardrail._apply_compression_results(messages, [0, 1, 2], contexts, results, recovery_enabled=True)
 
     # 400 + 400 fit under 1000; the third (which would reach 1200) is skipped.
     assert applied.messages_compressed == 3
@@ -1629,9 +1627,7 @@ def test_recovery_markers_respect_per_call_byte_cap():
     guardrail._store_originals("c", applied.originals)
     for hash_value in applied.originals:
         assert guardrail._retrieve_original("c", hash_value) is not None
-        assert f"compresr hash={hash_value}" in "".join(
-            str(m["content"]) for m in applied.compressed_messages
-        )
+        assert f"compresr hash={hash_value}" in "".join(str(m["content"]) for m in applied.compressed_messages)
 
 
 def test_recovery_markers_respect_byte_cap_across_reused_store_key():
@@ -1657,9 +1653,7 @@ def test_recovery_markers_respect_byte_cap_across_reused_store_key():
     # No marker shipped this turn may dangle after the store enforces the cap.
     for hash_value in applied.originals:
         assert guardrail._retrieve_original("k", hash_value) is not None
-        assert f"compresr hash={hash_value}" in "".join(
-            str(m["content"]) for m in applied.compressed_messages
-        )
+        assert f"compresr hash={hash_value}" in "".join(str(m["content"]) for m in applied.compressed_messages)
     # The zero-cost repeat of an already-stored original stays retrievable.
     assert old_hash in applied.originals
     assert guardrail._retrieve_original("k", old_hash) is not None

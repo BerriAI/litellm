@@ -6,9 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
@@ -44,9 +42,7 @@ def test_update_model_params_with_health_check_tracking_information():
 
             # Verify that litellm_metadata was added
             assert "litellm_metadata" in result
-            assert result["litellm_metadata"]["tags"] == [
-                LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
-            ]
+            assert result["litellm_metadata"]["tags"] == [LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME]
 
             # Verify the auth setup was called
             mock_add_auth.assert_called_once()
@@ -125,16 +121,12 @@ async def test_ahealth_check_failure_masks_raw_request_headers():
     if "Authorization" in headers:
         auth_header = headers["Authorization"]
         # Should be masked (e.g., "Be****90" or similar)
-        assert (
-            auth_header != f"Bearer {test_api_key}"
-        ), "Authorization header must be masked"
-        assert (
-            auth_header != test_api_key
-        ), "API key must not appear in Authorization header"
+        assert auth_header != f"Bearer {test_api_key}", "Authorization header must be masked"
+        assert auth_header != test_api_key, "API key must not appear in Authorization header"
         # Masked headers typically have asterisks or are truncated
-        assert "*" in auth_header or len(auth_header) < len(
-            f"Bearer {test_api_key}"
-        ), f"Authorization header should be masked but got: {auth_header}"
+        assert "*" in auth_header or len(auth_header) < len(f"Bearer {test_api_key}"), (
+            f"Authorization header should be masked but got: {auth_header}"
+        )
 
     # Content-Type should remain unmasked (not sensitive)
     if "Content-Type" in headers:
@@ -213,9 +205,7 @@ async def test_batch_health_check_skips_bridge_when_no_logging_obj():
         "litellm_metadata": litellm_metadata,
     }
 
-    with patch(
-        "litellm.alist_batches", new_callable=AsyncMock, return_value={}
-    ) as mock_alist:
+    with patch("litellm.alist_batches", new_callable=AsyncMock, return_value={}) as mock_alist:
         await HealthCheckHelpers._batch_health_check(
             custom_llm_provider="openai",
             model_params={"model": "openai/gpt-4"},
@@ -239,9 +229,7 @@ async def test_batch_health_check_uses_alist_batches_for_supported_providers():
             "litellm_metadata": litellm_metadata,
         }
 
-        with patch(
-            "litellm.alist_batches", new_callable=AsyncMock, return_value={}
-        ) as mock_alist:
+        with patch("litellm.alist_batches", new_callable=AsyncMock, return_value={}) as mock_alist:
             await HealthCheckHelpers._batch_health_check(
                 custom_llm_provider=provider,
                 model_params={"model": f"{provider}/some-model"},
@@ -300,9 +288,7 @@ async def test_realtime_health_check_uses_model_level_vertex_params():
 
     fake_vertex_base = MagicMock()
     fake_vertex_base.get_vertex_region = MagicMock(return_value="us-central1")
-    fake_vertex_base._ensure_access_token_async = AsyncMock(
-        return_value=("model-level-token", "model-level-project")
-    )
+    fake_vertex_base._ensure_access_token_async = AsyncMock(return_value=("model-level-token", "model-level-project"))
     connect_calls = []
 
     with (
@@ -337,8 +323,7 @@ async def test_realtime_health_check_uses_model_level_vertex_params():
         custom_llm_provider="vertex_ai",
     )
     assert connect_calls[0]["url"] == (
-        "wss://us-central1-aiplatform.googleapis.com/ws/"
-        "google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+        "wss://us-central1-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
     )
     assert connect_calls[0]["additional_headers"] == {
         "Authorization": "Bearer model-level-token",

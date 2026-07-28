@@ -16,9 +16,7 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
@@ -316,9 +314,7 @@ def test_process_anthropic_headers_with_partial_headers():
 
 
 def test_process_anthropic_headers_with_no_matching_headers():
-    input_headers = Headers(
-        {"unrelated-header-1": "value1", "unrelated-header-2": "value2"}
-    )
+    input_headers = Headers({"unrelated-header-1": "value1", "unrelated-header-2": "value2"})
 
     expected_output = {
         "llm_provider-unrelated-header-1": "value1",
@@ -390,9 +386,7 @@ def test_anthropic_tool_use(tool_type, tool_config, message_content):
         (False, False, False),
     ],
 )
-def test_anthropic_beta_header(
-    computer_tool_used, prompt_caching_set, expected_beta_header
-):
+def test_anthropic_beta_header(computer_tool_used, prompt_caching_set, expected_beta_header):
     headers = litellm.AnthropicConfig().get_anthropic_headers(
         api_key="fake-api-key",
         computer_tool_used=computer_tool_used,
@@ -615,9 +609,7 @@ def test_convert_tool_response_to_message_invalid_json():
         ChatCompletionToolCallChunk(
             id="test_id",
             type="function",
-            function=ChatCompletionToolCallFunctionChunk(
-                name="json_tool_call", arguments="invalid json"
-            ),
+            function=ChatCompletionToolCallFunctionChunk(name="json_tool_call", arguments="invalid json"),
             index=0,
         )
     ]
@@ -809,9 +801,7 @@ def test_anthropic_map_openai_params_tools_with_defs():
 
     tool = mapped_params["tools"][0]
     assert tool["input_schema"]["properties"]["user"]["$ref"] == "#/$defs/User"
-    assert (
-        tool["input_schema"]["$defs"]["User"]["properties"]["name"]["type"] == "string"
-    )
+    assert tool["input_schema"]["$defs"]["User"]["properties"]["name"]["type"] == "string"
 
 
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
@@ -867,17 +857,15 @@ from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
         ),
     ],
 )
-def test_anthropic_json_mode_and_tool_call_response(
-    json_mode, tool_calls, expect_null_response
-):
+def test_anthropic_json_mode_and_tool_call_response(json_mode, tool_calls, expect_null_response):
     result, _, _ = litellm.AnthropicConfig()._resolve_json_mode_non_streaming(
         json_mode=json_mode,
         tool_calls=tool_calls,
     )
 
-    assert (
-        result is None if expect_null_response else result is not None
-    ), f"Expected result to be {None if expect_null_response else 'not None'}, but got {result}"
+    assert result is None if expect_null_response else result is not None, (
+        f"Expected result to be {None if expect_null_response else 'not None'}, but got {result}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1101,9 +1089,7 @@ def test_anthropic_thinking_output_stream(model):
                 print(chunk.choices[0].delta.thinking_blocks[0])
                 if chunk.choices[0].delta.thinking_blocks[0].get("signature"):
                     signature_block_exists = True
-                    assert (
-                        chunk.choices[0].delta.thinking_blocks[0]["type"] == "thinking"
-                    )
+                    assert chunk.choices[0].delta.thinking_blocks[0]["type"] == "thinking"
         assert reasoning_content_exists
         assert signature_block_exists
     except litellm.Timeout:
@@ -1135,9 +1121,7 @@ def test_anthropic_custom_headers():
             resp = completion(
                 model="claude-sonnet-4-5-20250929",
                 headers={"anthropic-beta": "computer-use-2025-01-24"},
-                messages=[
-                    {"role": "user", "content": "What is the capital of France?"}
-                ],
+                messages=[{"role": "user", "content": "What is the capital of France?"}],
                 client=client,
                 tools=tools,
             )
@@ -1279,9 +1263,7 @@ async def test_anthropic_api_max_completion_tokens(model: str):
         print("request_body: ", request_body)
 
         assert request_body == {
-            "messages": [
-                {"role": "user", "content": [{"type": "text", "text": "Hello!"}]}
-            ],
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello!"}]}],
             "max_tokens": 10,
             "model": model.split("/")[-1],
         }
@@ -1336,9 +1318,7 @@ def test_anthropic_text_editor():
                 "content": "There'''s a syntax error in my primes.py file. Can you help me fix it?",
             }
         ],
-        "tools": [
-            {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"}
-        ],
+        "tools": [{"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"}],
     }
 
     try:
@@ -1350,9 +1330,7 @@ def test_anthropic_text_editor():
 
 
 @pytest.mark.parametrize("spec", ["anthropic", "openai"])
-@pytest.mark.skipif(
-    os.getenv("ZAPIER_CI_CD_MCP_TOKEN") is None, reason="ZAPIER_CI_CD_MCP_TOKEN not set"
-)
+@pytest.mark.skipif(os.getenv("ZAPIER_CI_CD_MCP_TOKEN") is None, reason="ZAPIER_CI_CD_MCP_TOKEN not set")
 def test_anthropic_mcp_server_tool_use(spec: str):
     litellm._turn_on_debug()
 
@@ -1371,9 +1349,7 @@ def test_anthropic_mcp_server_tool_use(spec: str):
                 "type": "mcp",
                 "server_label": "zapier",
                 "server_url": "https://mcp.zapier.com/api/mcp/mcp",
-                "headers": {
-                    "Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"
-                },
+                "headers": {"Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"},
                 "require_approval": "never",
             },
         ]
@@ -1391,12 +1367,8 @@ def test_anthropic_mcp_server_tool_use(spec: str):
         pytest.skip(f"Skipping test due to internal server error: {e}")
 
 
-@pytest.mark.parametrize(
-    "model", ["openai/gpt-4.1", "anthropic/claude-sonnet-4-5-20250929"]
-)
-@pytest.mark.skipif(
-    os.getenv("ZAPIER_CI_CD_MCP_TOKEN") is None, reason="ZAPIER_CI_CD_MCP_TOKEN not set"
-)
+@pytest.mark.parametrize("model", ["openai/gpt-4.1", "anthropic/claude-sonnet-4-5-20250929"])
+@pytest.mark.skipif(os.getenv("ZAPIER_CI_CD_MCP_TOKEN") is None, reason="ZAPIER_CI_CD_MCP_TOKEN not set")
 def test_anthropic_mcp_server_responses_api(model: str):
     from litellm import responses
 
@@ -1407,9 +1379,7 @@ def test_anthropic_mcp_server_responses_api(model: str):
             "server_label": "zapier",
             "server_url": "https://mcp.zapier.com/api/mcp/mcp",
             "require_approval": "never",
-            "headers": {
-                "Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"
-            },
+            "headers": {"Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"},
         },
     ]
 
@@ -1441,9 +1411,7 @@ def test_anthropic_prefix_prompt():
 @pytest.mark.asyncio
 async def test_claude_tool_use_with_anthropic_acreate():
     response = await litellm.anthropic.messages.acreate(
-        messages=[
-            {"role": "user", "content": "Hello, can you tell me the weather in Boston?"}
-        ],
+        messages=[{"role": "user", "content": "Hello, can you tell me the weather in Boston?"}],
         model="anthropic/claude-sonnet-4-5-20250929",
         stream=True,
         max_tokens=100,
@@ -1522,9 +1490,7 @@ def test_anthropic_tool_cache_control():
 
     print(result["raw_request_body"]["messages"][2])
 
-    assert "cache_control" in json.dumps(
-        result["raw_request_body"]["messages"][2]["content"]
-    )
+    assert "cache_control" in json.dumps(result["raw_request_body"]["messages"][2]["content"])
 
 
 def test_anthropic_streaming():
@@ -1693,14 +1659,10 @@ def test_anthropic_via_responses_api():
 
     # Assert we saw all expected events
     print(f"Events seen: {events_seen}")
-    assert (
-        events_seen == expected_events
-    ), f"Event sequence mismatch. Expected: {expected_events}, Got: {events_seen}"
+    assert events_seen == expected_events, f"Event sequence mismatch. Expected: {expected_events}, Got: {events_seen}"
 
     # Assert we saw at least one text delta
-    assert (
-        text_delta_count > 0
-    ), f"Expected at least one response.output_text.delta event, got {text_delta_count}"
+    assert text_delta_count > 0, f"Expected at least one response.output_text.delta event, got {text_delta_count}"
 
     print(f"✓ All {len(events_seen)} events matched expected structure")
     print(f"✓ Received {text_delta_count} text delta chunks")
@@ -1794,9 +1756,7 @@ def test_anthropic_structured_output_chat_completion_api():
                 "strict": True,
                 "schema": {
                     "description": 'Progress report for the thinking process\n\nThis model represents a snapshot of the agent\'s current progress during\nthe thinking process, providing a brief description of the current activity.\n\nAttributes:\n    agent_doing: Brief description of what the agent is currently doing.\n                Should be kept under 10 words. Example: "Learning about home automation"',
-                    "properties": {
-                        "agent_doing": {"title": "Agent Doing", "type": "string"}
-                    },
+                    "properties": {"agent_doing": {"title": "Agent Doing", "type": "string"}},
                     "required": ["agent_doing"],
                     "title": "ThinkingStep",
                     "type": "object",

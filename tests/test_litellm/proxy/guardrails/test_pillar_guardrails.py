@@ -184,9 +184,7 @@ def pillar_clean_response():
             "evidence": [],
         },
         status_code=200,
-        request=Request(
-            method="POST", url="https://api.pillar.security/api/v1/protect"
-        ),
+        request=Request(method="POST", url="https://api.pillar.security/api/v1/protect"),
     )
 
 
@@ -212,9 +210,7 @@ def pillar_flagged_response():
             },
         },
         status_code=200,
-        request=Request(
-            method="POST", url="https://api.pillar.security/api/v1/protect"
-        ),
+        request=Request(method="POST", url="https://api.pillar.security/api/v1/protect"),
     )
 
 
@@ -241,9 +237,7 @@ def pillar_async_response():
     return Response(
         json={"status": "queued", "session_id": "async-session", "position": 1},
         status_code=202,
-        request=Request(
-            method="POST", url="https://api.pillar.security/api/v1/protect"
-        ),
+        request=Request(method="POST", url="https://api.pillar.security/api/v1/protect"),
     )
 
 
@@ -311,9 +305,7 @@ def test_pillar_guard_config_missing_api_key(pillar_guardrail_config, monkeypatc
     # Ensure PILLAR_API_KEY environment variable is not set
     monkeypatch.delenv("PILLAR_API_KEY", raising=False)
 
-    with pytest.raises(
-        PillarGuardrailMissingSecrets, match="Couldn't get Pillar API key"
-    ):
+    with pytest.raises(PillarGuardrailMissingSecrets, match="Couldn't get Pillar API key"):
         init_guardrails_v2(
             all_guardrails=[pillar_guardrail_config],
             config_file_path="",
@@ -418,20 +410,10 @@ async def test_pre_call_hook_flagged_content_monitor(
     assert "metadata" in malicious_request_data
     metadata = malicious_request_data["metadata"]
     assert metadata.get("pillar_flagged") is True
-    assert (
-        metadata.get("pillar_session_id")
-        == pillar_flagged_response.json()["session_id"]
-    )
-    assert (
-        metadata.get("pillar_session_id_response")
-        == pillar_flagged_response.json()["session_id"]
-    )
-    assert metadata.get("pillar_scanners") == pillar_flagged_response.json().get(
-        "scanners", {}
-    )
-    assert metadata.get("pillar_evidence") == pillar_flagged_response.json().get(
-        "evidence", []
-    )
+    assert metadata.get("pillar_session_id") == pillar_flagged_response.json()["session_id"]
+    assert metadata.get("pillar_session_id_response") == pillar_flagged_response.json()["session_id"]
+    assert metadata.get("pillar_scanners") == pillar_flagged_response.json().get("scanners", {})
+    assert metadata.get("pillar_evidence") == pillar_flagged_response.json().get("evidence", [])
 
 
 @pytest.mark.asyncio
@@ -460,23 +442,14 @@ async def test_pre_call_hook_clean_content_returns_scanners_and_evidence(
     # Even when not flagged, we should get scanners and evidence
     assert metadata.get("pillar_flagged") is False
     # pillar_session_id preserves existing value, pillar_session_id_response is always from response
-    assert (
-        metadata.get("pillar_session_id_response")
-        == pillar_clean_response.json()["session_id"]
-    )
-    assert metadata.get("pillar_scanners") == pillar_clean_response.json().get(
-        "scanners", {}
-    )
-    assert metadata.get("pillar_evidence") == pillar_clean_response.json().get(
-        "evidence", []
-    )
+    assert metadata.get("pillar_session_id_response") == pillar_clean_response.json()["session_id"]
+    assert metadata.get("pillar_scanners") == pillar_clean_response.json().get("scanners", {})
+    assert metadata.get("pillar_evidence") == pillar_clean_response.json().get("evidence", [])
 
     # Verify headers are also built
     headers = get_logging_caching_headers(sample_request_data)
     assert headers["x-pillar-flagged"] == "false"
-    assert json.loads(
-        unquote(headers["x-pillar-scanners"])
-    ) == pillar_clean_response.json().get("scanners", {})
+    assert json.loads(unquote(headers["x-pillar-scanners"])) == pillar_clean_response.json().get("scanners", {})
 
 
 def test_get_logging_caching_headers_pillar_metadata():
@@ -499,10 +472,7 @@ def test_get_logging_caching_headers_pillar_metadata():
     assert json.loads(unquote(headers["x-pillar-scanners"])) == scanners
     assert json.loads(unquote(headers["x-pillar-evidence"])) == evidence
     assert unquote(headers["x-pillar-session-id"]) == "test-session-123"
-    assert (
-        request_data["metadata"]["pillar_response_headers"]["x-pillar-flagged"]
-        == "true"
-    )
+    assert request_data["metadata"]["pillar_response_headers"]["x-pillar-flagged"] == "true"
 
 
 def test_get_logging_caching_headers_ignores_untrusted_pillar_headers():
@@ -556,10 +526,7 @@ def test_get_logging_caching_headers_truncates_large_evidence():
     assert decoded_evidence[0]["evidence"].endswith("...[truncated]")
     assert decoded_evidence[0].get("evidence_truncated") is True
     assert request_data["metadata"]["pillar_evidence_truncated"] is True
-    assert (
-        request_data["metadata"]["pillar_response_headers"]["x-pillar-evidence"]
-        == evidence_header
-    )
+    assert request_data["metadata"]["pillar_response_headers"]["x-pillar-evidence"] == evidence_header
 
 
 @pytest.mark.asyncio
@@ -595,17 +562,10 @@ async def test_post_call_hook_flagged_content_monitor_updates_metadata_and_heade
 
     headers = get_logging_caching_headers(request_data)
     assert headers["x-pillar-flagged"] == "true"
-    assert json.loads(unquote(headers["x-pillar-scanners"])) == pillar_json.get(
-        "scanners", {}
-    )
-    assert json.loads(unquote(headers["x-pillar-evidence"])) == pillar_json.get(
-        "evidence", []
-    )
+    assert json.loads(unquote(headers["x-pillar-scanners"])) == pillar_json.get("scanners", {})
+    assert json.loads(unquote(headers["x-pillar-evidence"])) == pillar_json.get("evidence", [])
     assert unquote(headers["x-pillar-session-id"]) == pillar_json["session_id"]
-    assert (
-        request_data["metadata"]["pillar_response_headers"]["x-pillar-session-id"]
-        == headers["x-pillar-session-id"]
-    )
+    assert request_data["metadata"]["pillar_response_headers"]["x-pillar-session-id"] == headers["x-pillar-session-id"]
 
 
 @pytest.mark.asyncio
@@ -954,9 +914,7 @@ async def test_empty_messages(pillar_guardrail_instance, user_api_key_dict, dual
 
 
 @pytest.mark.asyncio
-async def test_api_error_handling(
-    pillar_guardrail_instance, sample_request_data, user_api_key_dict, dual_cache
-):
+async def test_api_error_handling(pillar_guardrail_instance, sample_request_data, user_api_key_dict, dual_cache):
     """Test handling of API connection errors with block fallback."""
     # Note: pillar_guardrail_instance has fallback_on_error defaulting to "allow"
     # so this test sets it to "block" to test error handling
@@ -1090,9 +1048,7 @@ def test_invalid_fallback_action_defaults_to_allow(env_setup):
 
 
 @pytest.mark.asyncio
-async def test_post_call_hook_empty_response(
-    pillar_guardrail_instance, sample_request_data, user_api_key_dict
-):
+async def test_post_call_hook_empty_response(pillar_guardrail_instance, sample_request_data, user_api_key_dict):
     """Test post-call hook with empty response content."""
     mock_empty_response = Mock()
     mock_empty_response.model_dump.return_value = {"choices": []}
@@ -1223,9 +1179,7 @@ def pillar_masked_response():
         json={
             "session_id": "test-session-123",
             "flagged": True,
-            "masked_session_messages": [
-                {"role": "user", "content": "My email is [MASKED_EMAIL]"}
-            ],
+            "masked_session_messages": [{"role": "user", "content": "My email is [MASKED_EMAIL]"}],
             "evidence": [
                 {
                     "category": "pii",
@@ -1241,9 +1195,7 @@ def pillar_masked_response():
             },
         },
         status_code=200,
-        request=Request(
-            method="POST", url="https://api.pillar.security/api/v1/protect"
-        ),
+        request=Request(method="POST", url="https://api.pillar.security/api/v1/protect"),
     )
 
 
@@ -1281,9 +1233,7 @@ async def test_pre_call_hook_masking_mode(
         )
 
     # Messages should be replaced with masked messages
-    assert (
-        result["messages"] == pillar_masked_response.json()["masked_session_messages"]
-    )
+    assert result["messages"] == pillar_masked_response.json()["masked_session_messages"]
     assert result["messages"] != original_messages
 
 
@@ -1302,9 +1252,7 @@ async def test_pre_call_hook_masking_no_masked_messages(
             # No masked_session_messages
         },
         status_code=200,
-        request=Request(
-            method="POST", url="https://api.pillar.security/api/v1/protect"
-        ),
+        request=Request(method="POST", url="https://api.pillar.security/api/v1/protect"),
     )
 
     original_messages = sample_request_data["messages"].copy()
@@ -1508,9 +1456,7 @@ async def test_mcp_call_masking(
         )
 
     # Messages should be replaced with masked messages
-    assert (
-        result["messages"] == pillar_masked_response.json()["masked_session_messages"]
-    )
+    assert result["messages"] == pillar_masked_response.json()["masked_session_messages"]
     assert result["messages"] != original_messages
 
 

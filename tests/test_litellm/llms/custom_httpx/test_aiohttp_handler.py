@@ -5,9 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import aiohttp
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
@@ -39,9 +37,7 @@ class TestBaseLLMAIOHTTPHandler:
 
         dynamic_session = Mock()
 
-        result = handler._get_async_client_session(
-            dynamic_client_session=dynamic_session
-        )
+        result = handler._get_async_client_session(dynamic_client_session=dynamic_session)
 
         assert result is dynamic_session
 
@@ -133,9 +129,7 @@ class TestBaseLLMAIOHTTPHandler:
 
         handler = BaseLLMAIOHTTPHandler(client_session=instance_session)
 
-        result = handler._get_async_client_session(
-            dynamic_client_session=dynamic_session
-        )
+        result = handler._get_async_client_session(dynamic_client_session=dynamic_session)
 
         assert result is dynamic_session
         assert result is not instance_session
@@ -238,9 +232,7 @@ class TestBaseLLMAIOHTTPHandler:
         mock_transport = Mock(spec=LiteLLMAiohttpTransport)
         mock_session = Mock()
 
-        handler = BaseLLMAIOHTTPHandler(
-            client_session=mock_session, transport=mock_transport
-        )
+        handler = BaseLLMAIOHTTPHandler(client_session=mock_session, transport=mock_transport)
 
         assert handler.transport is mock_transport
         assert handler._owns_transport is False
@@ -293,9 +285,7 @@ class TestBaseLLMAIOHTTPHandler:
         mock_session_from_transport = Mock()
 
         mock_transport = Mock(spec=LiteLLMAiohttpTransport)
-        mock_transport._get_valid_client_session = Mock(
-            return_value=mock_session_from_transport
-        )
+        mock_transport._get_valid_client_session = Mock(return_value=mock_session_from_transport)
 
         handler = BaseLLMAIOHTTPHandler(transport=mock_transport)
 
@@ -413,15 +403,11 @@ class TestBaseLLMAIOHTTPHandler:
         # Test with transport having _get_valid_client_session
         mock_transport = Mock(spec=LiteLLMAiohttpTransport)
         mock_session_from_transport = Mock()
-        mock_transport._get_valid_client_session = Mock(
-            return_value=mock_session_from_transport
-        )
+        mock_transport._get_valid_client_session = Mock(return_value=mock_session_from_transport)
 
         mock_connector = Mock(spec=aiohttp.BaseConnector)
 
-        handler = BaseLLMAIOHTTPHandler(
-            transport=mock_transport, connector=mock_connector
-        )
+        handler = BaseLLMAIOHTTPHandler(transport=mock_transport, connector=mock_connector)
 
         result = handler._create_client_session_with_transport()
 

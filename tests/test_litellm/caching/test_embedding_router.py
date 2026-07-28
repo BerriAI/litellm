@@ -12,24 +12,16 @@ from litellm.caching._embedding_router import (
 
 def test_resolve_returns_router_when_model_is_a_deployment():
     router = MagicMock()
-    assert (
-        resolve_embedding_router("sem-embed", router, [{"model_name": "sem-embed"}])
-        is router
-    )
+    assert resolve_embedding_router("sem-embed", router, [{"model_name": "sem-embed"}]) is router
 
 
 def test_resolve_returns_none_when_model_not_in_router():
     router = MagicMock()
-    assert (
-        resolve_embedding_router("sem-embed", router, [{"model_name": "other"}]) is None
-    )
+    assert resolve_embedding_router("sem-embed", router, [{"model_name": "other"}]) is None
 
 
 def test_resolve_returns_none_when_router_is_none():
-    assert (
-        resolve_embedding_router("sem-embed", None, [{"model_name": "sem-embed"}])
-        is None
-    )
+    assert resolve_embedding_router("sem-embed", None, [{"model_name": "sem-embed"}]) is None
 
 
 def test_resolve_returns_none_when_model_list_is_none():
@@ -48,9 +40,7 @@ def test_resolve_skips_entries_missing_model_name():
 
 
 def test_build_metadata_preserves_request_fields_and_adds_flag():
-    md = build_router_embedding_metadata(
-        {"user_api_key": "sk-x", "user_api_key_team_id": "team-1", "trace_id": "t-1"}
-    )
+    md = build_router_embedding_metadata({"user_api_key": "sk-x", "user_api_key_team_id": "team-1", "trace_id": "t-1"})
     assert md == {
         "user_api_key": "sk-x",
         "user_api_key_team_id": "team-1",

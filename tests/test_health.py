@@ -55,9 +55,7 @@ async def test_health():
     async with aiohttp.ClientSession() as session:
         # as admin #
         all_healthy_models = await health(session=session, call_key="sk-1234")
-        total_model_count = (
-            all_healthy_models["healthy_count"] + all_healthy_models["unhealthy_count"]
-        )
+        total_model_count = all_healthy_models["healthy_count"] + all_healthy_models["unhealthy_count"]
         assert total_model_count > 0
 
 

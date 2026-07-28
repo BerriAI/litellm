@@ -78,9 +78,7 @@ class VeoVideoGenerator:
                     print(f"Error response: {e.response.text}")
             return None
 
-    def wait_for_completion(
-        self, operation_name: str, max_wait_time: int = 600
-    ) -> Optional[str]:
+    def wait_for_completion(self, operation_name: str, max_wait_time: int = 600) -> Optional[str]:
         """
         Poll operation status until video generation is complete.
 
@@ -99,9 +97,7 @@ class VeoVideoGenerator:
 
         while time.time() - start_time < max_wait_time:
             try:
-                print(
-                    f"🔍 Polling status... ({int(time.time() - start_time)}s elapsed)"
-                )
+                print(f"🔍 Polling status... ({int(time.time() - start_time)}s elapsed)")
 
                 response = requests.get(operation_url, headers=self.headers)
                 response.raise_for_status()
@@ -122,9 +118,7 @@ class VeoVideoGenerator:
 
                     try:
                         # Extract video URI from nested response
-                        video_uri = data["response"]["generateVideoResponse"][
-                            "generatedSamples"
-                        ][0]["video"]["uri"]
+                        video_uri = data["response"]["generateVideoResponse"]["generatedSamples"][0]["video"]["uri"]
                         print(f"📹 Video URI: {video_uri}")
                         return video_uri
                     except KeyError as e:
@@ -144,9 +138,7 @@ class VeoVideoGenerator:
         print(f"⏰ Timeout after {max_wait_time} seconds")
         return None
 
-    def download_video(
-        self, video_uri: str, output_filename: str = "generated_video.mp4"
-    ) -> bool:
+    def download_video(self, video_uri: str, output_filename: str = "generated_video.mp4") -> bool:
         """
         Download the generated video file.
 
@@ -190,9 +182,7 @@ class VeoVideoGenerator:
 
                         # Progress indicator for large files
                         if downloaded_size % (1024 * 1024) == 0:  # Every MB
-                            print(
-                                f"📦 Downloaded {downloaded_size / (1024*1024):.1f} MB..."
-                            )
+                            print(f"📦 Downloaded {downloaded_size / (1024 * 1024):.1f} MB...")
 
             # Verify file was created and has content
             if os.path.exists(output_filename):
@@ -200,7 +190,7 @@ class VeoVideoGenerator:
                 if file_size > 0:
                     print(f"✅ Video downloaded successfully!")
                     print(f"📁 Saved as: {output_filename}")
-                    print(f"📏 File size: {file_size / (1024*1024):.2f} MB")
+                    print(f"📏 File size: {file_size / (1024 * 1024):.2f} MB")
                     return True
                 else:
                     print("❌ Downloaded file is empty")
@@ -231,12 +221,8 @@ class VeoVideoGenerator:
         # Auto-generate filename if not provided
         if output_filename is None:
             timestamp = int(time.time())
-            safe_prompt = "".join(
-                c for c in prompt[:30] if c.isalnum() or c in (" ", "-", "_")
-            ).rstrip()
-            output_filename = (
-                f"veo_video_{safe_prompt.replace(' ', '_')}_{timestamp}.mp4"
-            )
+            safe_prompt = "".join(c for c in prompt[:30] if c.isalnum() or c in (" ", "-", "_")).rstrip()
+            output_filename = f"veo_video_{safe_prompt.replace(' ', '_')}_{timestamp}.mp4"
 
         print("=" * 60)
         print("🎬 VEO VIDEO GENERATION WORKFLOW")

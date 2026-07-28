@@ -88,22 +88,19 @@ def _ref_line(branch: str, local_oid: str = _NONZERO_OID, remote_oid: str = _ZER
 )
 def test_commit_msg_accepts_conventional_subjects(tmp_path, subject):
     result = _run_commit_msg(subject, tmp_path)
-    assert result.returncode == 0, (
-        f"hook rejected a valid subject:\n  subject: {subject!r}\n"
-        f"  stderr: {result.stderr}"
-    )
+    assert result.returncode == 0, f"hook rejected a valid subject:\n  subject: {subject!r}\n  stderr: {result.stderr}"
 
 
 @pytest.mark.parametrize(
     "subject",
     [
-        "add stuff",                          # no type
-        "feat add router strategy",           # missing colon
-        "feat:add router strategy",           # missing space after colon
-        "feat():",                            # empty description
-        "ux: thing",                          # unknown type
-        "Feat(router): capital type",         # types are lowercase
-        "feat(router):",                      # empty description
+        "add stuff",  # no type
+        "feat add router strategy",  # missing colon
+        "feat:add router strategy",  # missing space after colon
+        "feat():",  # empty description
+        "ux: thing",  # unknown type
+        "Feat(router): capital type",  # types are lowercase
+        "feat(router):",  # empty description
         # Description must start with a lowercase letter — kept in sync with
         # the CI workflow's subjectPattern so the local hook never accepts a
         # subject that CI will later reject.
@@ -116,8 +113,7 @@ def test_commit_msg_accepts_conventional_subjects(tmp_path, subject):
 def test_commit_msg_rejects_invalid_subjects(tmp_path, subject):
     result = _run_commit_msg(subject, tmp_path)
     assert result.returncode == 1, (
-        f"hook accepted an invalid subject:\n  subject: {subject!r}\n"
-        f"  stderr: {result.stderr}"
+        f"hook accepted an invalid subject:\n  subject: {subject!r}\n  stderr: {result.stderr}"
     )
     assert "Conventional Commits" in result.stderr
 
@@ -136,8 +132,7 @@ def test_commit_msg_rejects_invalid_subjects(tmp_path, subject):
 def test_commit_msg_accepts_non_uppercase_starts(tmp_path, subject):
     result = _run_commit_msg(subject, tmp_path)
     assert result.returncode == 0, (
-        f"hook rejected a valid non-uppercase-start subject:\n"
-        f"  subject: {subject!r}\n  stderr: {result.stderr}"
+        f"hook rejected a valid non-uppercase-start subject:\n  subject: {subject!r}\n  stderr: {result.stderr}"
     )
 
 
@@ -154,8 +149,7 @@ def test_commit_msg_accepts_non_uppercase_starts(tmp_path, subject):
 def test_commit_msg_passes_git_generated_messages(tmp_path, subject):
     result = _run_commit_msg(subject, tmp_path)
     assert result.returncode == 0, (
-        f"hook should pass git-generated subject:\n  subject: {subject!r}\n"
-        f"  stderr: {result.stderr}"
+        f"hook should pass git-generated subject:\n  subject: {subject!r}\n  stderr: {result.stderr}"
     )
 
 
@@ -184,11 +178,7 @@ def test_commit_msg_uses_first_non_comment_line(tmp_path):
     # below the subject. Make sure leading comment lines are skipped too.
     msg_file = tmp_path / "COMMIT_EDITMSG"
     msg_file.write_text(
-        "# On branch feature/foo\n"
-        "\n"
-        "feat(router): add weighted round-robin\n"
-        "\n"
-        "# Please enter the commit message...\n",
+        "# On branch feature/foo\n\nfeat(router): add weighted round-robin\n\n# Please enter the commit message...\n",
         encoding="utf-8",
     )
     result = subprocess.run(
@@ -216,10 +206,7 @@ def test_commit_msg_uses_first_non_comment_line(tmp_path):
 )
 def test_pre_push_accepts_conventional_branches(branch):
     result = _run_pre_push(_ref_line(branch))
-    assert result.returncode == 0, (
-        f"hook rejected a valid branch:\n  branch: {branch!r}\n"
-        f"  stderr: {result.stderr}"
-    )
+    assert result.returncode == 0, f"hook rejected a valid branch:\n  branch: {branch!r}\n  stderr: {result.stderr}"
 
 
 @pytest.mark.parametrize(
@@ -227,18 +214,15 @@ def test_pre_push_accepts_conventional_branches(branch):
     [
         "random-branch-name",
         "litellm_fix/optimize-streaming",  # legacy pattern is now rejected
-        "ui/navbar-notifications",         # not in the allow list
-        "feature/",                        # empty description
-        "Feature/foo",                     # type is case-sensitive
-        "feat/foo",                        # angular commit type, not branch type
+        "ui/navbar-notifications",  # not in the allow list
+        "feature/",  # empty description
+        "Feature/foo",  # type is case-sensitive
+        "feat/foo",  # angular commit type, not branch type
     ],
 )
 def test_pre_push_rejects_non_conventional_branches(branch):
     result = _run_pre_push(_ref_line(branch))
-    assert result.returncode == 1, (
-        f"hook accepted an invalid branch:\n  branch: {branch!r}\n"
-        f"  stderr: {result.stderr}"
-    )
+    assert result.returncode == 1, f"hook accepted an invalid branch:\n  branch: {branch!r}\n  stderr: {result.stderr}"
     assert "Conventional Branches" in result.stderr
 
 
@@ -253,10 +237,7 @@ def test_pre_push_rejects_non_conventional_branches(branch):
 )
 def test_pre_push_bypasses_protected_branches(branch):
     result = _run_pre_push(_ref_line(branch))
-    assert result.returncode == 0, (
-        f"protected branch was rejected:\n  branch: {branch!r}\n"
-        f"  stderr: {result.stderr}"
-    )
+    assert result.returncode == 0, f"protected branch was rejected:\n  branch: {branch!r}\n  stderr: {result.stderr}"
 
 
 def test_pre_push_skips_tag_pushes():

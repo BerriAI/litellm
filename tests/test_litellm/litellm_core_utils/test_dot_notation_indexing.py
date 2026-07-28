@@ -78,16 +78,10 @@ class TestGetNestedValue:
 
         # Test accessing nested values within kubernetes.io
         assert get_nested_value(jwt_token, "kubernetes\\.io.pod.name") == "pod-name"
-        assert (
-            get_nested_value(jwt_token, "kubernetes\\.io.serviceaccount.name")
-            == "serviceaccount-name"
-        )
+        assert get_nested_value(jwt_token, "kubernetes\\.io.serviceaccount.name") == "serviceaccount-name"
 
         # Test accessing regular keys still works
-        assert (
-            get_nested_value(jwt_token, "sub")
-            == "system:serviceaccount:namespace:serviceaccount-name"
-        )
+        assert get_nested_value(jwt_token, "sub") == "system:serviceaccount:namespace:serviceaccount-name"
 
     def test_mixed_escaped_and_regular_dots(self):
         """Test path with both escaped dots (in keys) and regular dots (separators)."""
@@ -114,9 +108,7 @@ class TestDeleteNestedValue:
 
     def test_delete_array_wildcard(self):
         """Test deleting a field from all array elements."""
-        data = {
-            "tools": [{"name": "t1", "secret": "s1"}, {"name": "t2", "secret": "s2"}]
-        }
+        data = {"tools": [{"name": "t1", "secret": "s1"}, {"name": "t2", "secret": "s2"}]}
         result = delete_nested_value(data, "tools[*].secret")
         assert result == {"tools": [{"name": "t1"}, {"name": "t2"}]}
 

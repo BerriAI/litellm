@@ -79,12 +79,7 @@ def test_provider__falsy_top_level_falls_through_to_extra_body(falsy):
 
 
 def test_provider__from_extra_body_dict():
-    assert (
-        get_custom_provider_from_data(
-            {"extra_body": {"custom_llm_provider": "bedrock"}}
-        )
-        == "bedrock"
-    )
+    assert get_custom_provider_from_data({"extra_body": {"custom_llm_provider": "bedrock"}}) == "bedrock"
 
 
 def test_provider__from_extra_body_json_string():
@@ -102,10 +97,7 @@ def test_provider__json_string_parsing_to_non_dict_is_none():
 
 
 def test_provider__extra_body_provider_not_a_string_is_none():
-    assert (
-        get_custom_provider_from_data({"extra_body": {"custom_llm_provider": 123}})
-        is None
-    )
+    assert get_custom_provider_from_data({"extra_body": {"custom_llm_provider": 123}}) is None
 
 
 @pytest.mark.parametrize(
@@ -137,9 +129,7 @@ def test_encode__dict_with_id_mutates_in_place_and_preserves_other_keys():
 
     assert out is response  # same dict, mutated in place
     assert out["object"] == "character" and out["name"] == "hero"
-    assert out["id"] == encode_character_id_with_provider(
-        "char_raw", "azure", "model-1"
-    )
+    assert out["id"] == encode_character_id_with_provider("char_raw", "azure", "model-1")
     decoded = decode_character_id_with_provider(out["id"])
     assert decoded["custom_llm_provider"] == "azure"
     assert decoded["model_id"] == "model-1"

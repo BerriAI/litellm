@@ -19,9 +19,7 @@ def base_aws_llm():
 
 @pytest.fixture
 def mock_credentials():
-    return Credentials(
-        access_key="test_access", secret_key="test_secret", token="test_token"
-    )
+    return Credentials(access_key="test_access", secret_key="test_secret", token="test_token")
 
 
 # Test cache key generation
@@ -128,9 +126,7 @@ def test_auth_with_aws_session_token(base_aws_llm):
 
 # Test access key and secret key authentication
 @patch("boto3.Session")
-def test_auth_with_access_key_and_secret_key(
-    mock_session, base_aws_llm, mock_credentials
-):
+def test_auth_with_access_key_and_secret_key(mock_session, base_aws_llm, mock_credentials):
     # Mock the session
     mock_session_instance = MagicMock()
     mock_session_instance.get_credentials.return_value = mock_credentials

@@ -5,9 +5,7 @@ import sys, os, time
 import traceback, asyncio
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params
@@ -148,10 +146,7 @@ async def test_update_kwargs_before_fallbacks(call_type):
                 input_kwarg = {
                     "messages": [{"role": "user", "content": "Hello, how are you?"}],
                 }
-            elif (
-                call_type.value == "atext_completion"
-                or call_type.value == "aimage_generation"
-            ):
+            elif call_type.value == "atext_completion" or call_type.value == "aimage_generation":
                 input_kwarg = {
                     "prompt": "Hello, how are you?",
                 }
@@ -189,9 +184,7 @@ def test_router_get_model_info_wildcard_routes():
             },
         ]
     )
-    model_info = router.get_router_model_info(
-        deployment=None, received_model_name="gemini/gemini-1.5-flash", id="1"
-    )
+    model_info = router.get_router_model_info(deployment=None, received_model_name="gemini/gemini-1.5-flash", id="1")
     print(model_info)
     assert model_info is not None
     assert model_info["tpm"] is not None
@@ -240,9 +233,7 @@ async def test_call_router_callbacks_on_success():
         ]
     )
 
-    with patch.object(
-        router.cache, "async_increment_cache_pipeline", new=AsyncMock()
-    ) as mock_callback:
+    with patch.object(router.cache, "async_increment_cache_pipeline", new=AsyncMock()) as mock_callback:
         await router.acompletion(
             model="gemini/gemini-1.5-flash",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
@@ -256,14 +247,10 @@ async def test_call_router_callbacks_on_success():
 
         for increment in increment_list:
             if "tpm" in increment["key"]:
-                assert increment["key"].startswith(
-                    "global_router:1:gemini/gemini-1.5-flash:tpm"
-                )
+                assert increment["key"].startswith("global_router:1:gemini/gemini-1.5-flash:tpm")
                 assert increment["increment_value"] == 30
             elif "rpm" in increment["key"]:
-                assert increment["key"].startswith(
-                    "global_router:1:gemini/gemini-1.5-flash:rpm"
-                )
+                assert increment["key"].startswith("global_router:1:gemini/gemini-1.5-flash:rpm")
                 assert increment["increment_value"] == 1
 
 
@@ -280,9 +267,7 @@ async def test_call_router_callbacks_on_failure():
         ]
     )
 
-    with patch.object(
-        router.cache, "async_increment_cache", new=AsyncMock()
-    ) as mock_callback:
+    with patch.object(router.cache, "async_increment_cache", new=AsyncMock()) as mock_callback:
         with pytest.raises(litellm.RateLimitError):
             await router.acompletion(
                 model="gemini/gemini-1.5-flash",
@@ -294,11 +279,7 @@ async def test_call_router_callbacks_on_failure():
         print(mock_callback.call_args_list)
         assert mock_callback.call_count == 1
 
-        assert (
-            mock_callback.call_args_list[0]
-            .kwargs["key"]
-            .startswith("global_router:1:gemini/gemini-1.5-flash:rpm")
-        )
+        assert mock_callback.call_args_list[0].kwargs["key"].startswith("global_router:1:gemini/gemini-1.5-flash:rpm")
 
 
 @pytest.mark.asyncio
@@ -325,10 +306,7 @@ async def test_router_model_group_headers():
         )
         await asyncio.sleep(1)
 
-    assert (
-        resp._hidden_params["additional_headers"]["x-litellm-model-group"]
-        == "gemini/gemini-1.5-flash"
-    )
+    assert resp._hidden_params["additional_headers"]["x-litellm-model-group"] == "gemini/gemini-1.5-flash"
 
     assert "x-ratelimit-remaining-requests" in resp._hidden_params["additional_headers"]
     assert "x-ratelimit-remaining-tokens" in resp._hidden_params["additional_headers"]
@@ -355,18 +333,11 @@ async def test_get_remaining_model_group_usage():
             messages=[{"role": "user", "content": "Hello, how are you?"}],
             mock_response="Hello, I'm good.",
         )
-        assert (
-            "x-ratelimit-remaining-tokens" in resp._hidden_params["additional_headers"]
-        )
-        assert (
-            "x-ratelimit-remaining-requests"
-            in resp._hidden_params["additional_headers"]
-        )
+        assert "x-ratelimit-remaining-tokens" in resp._hidden_params["additional_headers"]
+        assert "x-ratelimit-remaining-requests" in resp._hidden_params["additional_headers"]
         await asyncio.sleep(1)
 
-    remaining_usage = await router.get_remaining_model_group_usage(
-        model_group="gemini/gemini-1.5-flash"
-    )
+    remaining_usage = await router.get_remaining_model_group_usage(model_group="gemini/gemini-1.5-flash")
     assert remaining_usage is not None
     assert "x-ratelimit-remaining-requests" in remaining_usage
     assert "x-ratelimit-remaining-tokens" in remaining_usage
@@ -386,16 +357,12 @@ def test_router_get_model_access_groups(potential_access_group, expected_result)
             },
         ]
     )
-    access_groups = router._is_model_access_group_for_wildcard_route(
-        model_access_group=potential_access_group
-    )
+    access_groups = router._is_model_access_group_for_wildcard_route(model_access_group=potential_access_group)
     assert access_groups == expected_result
 
 
 def test_router_redis_cache():
-    router = Router(
-        model_list=[{"model_name": "gemini/*", "litellm_params": {"model": "gemini/*"}}]
-    )
+    router = Router(model_list=[{"model_name": "gemini/*", "litellm_params": {"model": "gemini/*"}}])
 
     redis_cache = MagicMock()
 
@@ -439,9 +406,7 @@ def test_router_get_async_openai_model_client():
             }
         ]
     )
-    model_client = router._get_async_openai_model_client(
-        deployment=MagicMock(), kwargs={}
-    )
+    model_client = router._get_async_openai_model_client(deployment=MagicMock(), kwargs={})
     assert model_client is None
 
 
@@ -487,9 +452,7 @@ def test_router_get_deployment_credentials_with_provider():
     )
 
     # Test getting credentials by model_id
-    credentials = router.get_deployment_credentials_with_provider(
-        model_id="openai-deployment-1"
-    )
+    credentials = router.get_deployment_credentials_with_provider(model_id="openai-deployment-1")
     assert credentials is not None
     assert credentials["api_key"] == "sk-test-123"
     assert credentials["custom_llm_provider"] == "openai"
@@ -502,9 +465,7 @@ def test_router_get_deployment_credentials_with_provider():
     assert credentials2["custom_llm_provider"] == "anthropic"
 
     # Test with non-existent model
-    credentials3 = router.get_deployment_credentials_with_provider(
-        model_id="non-existent"
-    )
+    credentials3 = router.get_deployment_credentials_with_provider(model_id="non-existent")
     assert credentials3 is None
 
 
@@ -538,26 +499,20 @@ def test_router_get_deployment_credentials_with_provider_wildcard():
     )
 
     # Test wildcard pattern matching for OpenAI
-    credentials = router.get_deployment_credentials_with_provider(
-        model_id="openai/gpt-4o"
-    )
+    credentials = router.get_deployment_credentials_with_provider(model_id="openai/gpt-4o")
     assert credentials is not None
     assert credentials["api_key"] == "sk-wildcard-123"
     assert credentials["custom_llm_provider"] == "openai"
     assert credentials["api_base"] == "https://api.openai.com/v1"
 
     # Test wildcard pattern matching for Anthropic
-    credentials2 = router.get_deployment_credentials_with_provider(
-        model_id="anthropic/claude-3-opus"
-    )
+    credentials2 = router.get_deployment_credentials_with_provider(model_id="anthropic/claude-3-opus")
     assert credentials2 is not None
     assert credentials2["api_key"] == "sk-ant-wildcard-456"
     assert credentials2["custom_llm_provider"] == "anthropic"
 
     # Test with non-matching model
-    credentials3 = router.get_deployment_credentials_with_provider(
-        model_id="vertex_ai/gemini-pro"
-    )
+    credentials3 = router.get_deployment_credentials_with_provider(model_id="vertex_ai/gemini-pro")
     assert credentials3 is None
 
 
@@ -571,7 +526,5 @@ def test_router_get_deployment_model_info():
             }
         ]
     )
-    model_info = router.get_deployment_model_info(
-        model_id="1", model_name="gemini/gemini-1.5-flash"
-    )
+    model_info = router.get_deployment_model_info(model_id="1", model_name="gemini/gemini-1.5-flash")
     assert model_info is not None

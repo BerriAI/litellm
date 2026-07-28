@@ -26,9 +26,7 @@ NONADMIN = SimpleNamespace(user_role=LitellmUserRoles.INTERNAL_USER.value)
 
 def _sample_report() -> cm.MigrationReport:
     report = cm.MigrationReport()
-    report.add(
-        cm.LocationReport(location="model_table", scanned=2, migrated=1, legacy=0)
-    )
+    report.add(cm.LocationReport(location="model_table", scanned=2, migrated=1, legacy=0))
     return report
 
 
@@ -38,9 +36,7 @@ def _sample_report() -> cm.MigrationReport:
 @pytest.mark.asyncio
 async def test_check_endpoint_success(monkeypatch):
     monkeypatch.setattr(proxy_server, "prisma_client", object())
-    monkeypatch.setattr(
-        cm, "check_encryption", AsyncMock(return_value=_sample_report())
-    )
+    monkeypatch.setattr(cm, "check_encryption", AsyncMock(return_value=_sample_report()))
 
     out = await check_encryption_endpoint(user_api_key_dict=ADMIN)
 

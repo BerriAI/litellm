@@ -149,19 +149,13 @@ async def test_standard_logging_payload_includes_guardrail_information():
         json.dumps(test_custom_logger.standard_logging_payload, indent=4, default=str),
     )
     assert test_custom_logger.standard_logging_payload is not None
-    assert (
-        test_custom_logger.standard_logging_payload["guardrail_information"] is not None
-    )
+    assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
 
     # guardrail_information is now a list
-    assert isinstance(
-        test_custom_logger.standard_logging_payload["guardrail_information"], list
-    )
+    assert isinstance(test_custom_logger.standard_logging_payload["guardrail_information"], list)
     assert len(test_custom_logger.standard_logging_payload["guardrail_information"]) > 0
 
-    guardrail_info = test_custom_logger.standard_logging_payload[
-        "guardrail_information"
-    ][0]
+    guardrail_info = test_custom_logger.standard_logging_payload["guardrail_information"][0]
     assert guardrail_info.get("guardrail_name") == "presidio_guard"
     assert guardrail_info.get("guardrail_mode") == GuardrailEventHooks.pre_call
 
@@ -257,10 +251,7 @@ async def test_langfuse_trace_includes_guardrail_information():
         # Look for the guardrail span in the payload
         guardrail_span = None
         for item in actual_payload["batch"]:
-            if (
-                item["type"] == "span-create"
-                and item["body"].get("name") == "guardrail"
-            ):
+            if item["type"] == "span-create" and item["body"].get("name") == "guardrail":
                 guardrail_span = item
                 break
 
@@ -271,17 +262,9 @@ async def test_langfuse_trace_includes_guardrail_information():
         assert guardrail_span["body"]["name"] == "guardrail"
         assert "metadata" in guardrail_span["body"]
         assert guardrail_span["body"]["metadata"]["guardrail_name"] == "presidio_guard"
-        assert (
-            guardrail_span["body"]["metadata"]["guardrail_mode"]
-            == GuardrailEventHooks.pre_call
-        )
+        assert guardrail_span["body"]["metadata"]["guardrail_mode"] == GuardrailEventHooks.pre_call
         assert "guardrail_masked_entity_count" in guardrail_span["body"]["metadata"]
-        assert (
-            guardrail_span["body"]["metadata"]["guardrail_masked_entity_count"][
-                "PHONE_NUMBER"
-            ]
-            == 1
-        )
+        assert guardrail_span["body"]["metadata"]["guardrail_masked_entity_count"]["PHONE_NUMBER"] == 1
 
         # Validate the output format matches the expected structure
         assert "output" in guardrail_span["body"]
@@ -335,13 +318,9 @@ async def test_bedrock_guardrail_status_blocked():
     mock_response.json.return_value = {
         "action": "GUARDRAIL_INTERVENED",
         "outputs": [{"text": "Blocked"}],
-        "assessments": [
-            {"topicPolicy": {"topics": [{"name": "harmful", "action": "BLOCKED"}]}}
-        ],
+        "assessments": [{"topicPolicy": {"topics": [{"name": "harmful", "action": "BLOCKED"}]}}],
     }
-    with patch.object(
-        bedrock_guard.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(bedrock_guard.async_handler, "post", AsyncMock(return_value=mock_response)):
         request_data = {
             "model": "gpt-5.5",
             "messages": [{"role": "user", "content": "harmful content"}],
@@ -370,18 +349,12 @@ async def test_bedrock_guardrail_status_blocked():
 
     # Verify the standard logging payload was captured
     assert test_custom_logger.standard_logging_payload is not None
-    assert (
-        test_custom_logger.standard_logging_payload["guardrail_information"] is not None
-    )
-    assert isinstance(
-        test_custom_logger.standard_logging_payload["guardrail_information"], list
-    )
+    assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
+    assert isinstance(test_custom_logger.standard_logging_payload["guardrail_information"], list)
     assert len(test_custom_logger.standard_logging_payload["guardrail_information"]) > 0
 
     # Verify guardrail information fields (guardrail_information is now a list)
-    guardrail_info = test_custom_logger.standard_logging_payload[
-        "guardrail_information"
-    ][0]
+    guardrail_info = test_custom_logger.standard_logging_payload["guardrail_information"][0]
     assert guardrail_info.get("guardrail_status") == "guardrail_intervened"
     assert guardrail_info.get("guardrail_provider") == "bedrock"
 
@@ -436,9 +409,7 @@ async def test_bedrock_guardrail_status_success():
         "outputs": [{"text": "Safe content"}],
         "assessments": [],
     }
-    with patch.object(
-        bedrock_guard.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(bedrock_guard.async_handler, "post", AsyncMock(return_value=mock_response)):
         request_data = {
             "model": "gpt-5.5",
             "messages": [{"role": "user", "content": "safe content"}],
@@ -461,17 +432,11 @@ async def test_bedrock_guardrail_status_success():
 
     # Check standard logging payload status fields
     assert test_custom_logger.standard_logging_payload is not None
-    assert (
-        test_custom_logger.standard_logging_payload["guardrail_information"] is not None
-    )
-    assert isinstance(
-        test_custom_logger.standard_logging_payload["guardrail_information"], list
-    )
+    assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
+    assert isinstance(test_custom_logger.standard_logging_payload["guardrail_information"], list)
     assert len(test_custom_logger.standard_logging_payload["guardrail_information"]) > 0
 
-    guardrail_info = test_custom_logger.standard_logging_payload[
-        "guardrail_information"
-    ][0]
+    guardrail_info = test_custom_logger.standard_logging_payload["guardrail_information"][0]
     assert guardrail_info.get("guardrail_status") == "success"
     assert guardrail_info.get("guardrail_provider") == "bedrock"
 
@@ -550,17 +515,11 @@ async def test_bedrock_guardrail_status_failure():
 
     # Check standard logging payload status fields
     assert test_custom_logger.standard_logging_payload is not None
-    assert (
-        test_custom_logger.standard_logging_payload["guardrail_information"] is not None
-    )
-    assert isinstance(
-        test_custom_logger.standard_logging_payload["guardrail_information"], list
-    )
+    assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
+    assert isinstance(test_custom_logger.standard_logging_payload["guardrail_information"], list)
     assert len(test_custom_logger.standard_logging_payload["guardrail_information"]) > 0
 
-    guardrail_info = test_custom_logger.standard_logging_payload[
-        "guardrail_information"
-    ][0]
+    guardrail_info = test_custom_logger.standard_logging_payload["guardrail_information"][0]
     assert guardrail_info.get("guardrail_status") == "guardrail_failed_to_respond"
     assert guardrail_info.get("guardrail_provider") == "bedrock"
 
@@ -606,14 +565,10 @@ async def test_noma_guardrail_status_blocked():
     mock_response.json.return_value = {
         "verdict": False,
         "aggregatedScanResult": True,
-        "originalResponse": {
-            "prompt": {"topicDetector": {"harmful": {"result": True}}}
-        },
+        "originalResponse": {"prompt": {"topicDetector": {"harmful": {"result": True}}}},
     }
     mock_response.raise_for_status = MagicMock()
-    with patch.object(
-        noma_guard.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(noma_guard.async_handler, "post", AsyncMock(return_value=mock_response)):
         request_data = {
             "model": "gpt-5.5",
             "messages": [{"role": "user", "content": "harmful content"}],
@@ -640,17 +595,11 @@ async def test_noma_guardrail_status_blocked():
 
     # Check standard logging payload status fields
     assert test_custom_logger.standard_logging_payload is not None
-    assert (
-        test_custom_logger.standard_logging_payload["guardrail_information"] is not None
-    )
-    assert isinstance(
-        test_custom_logger.standard_logging_payload["guardrail_information"], list
-    )
+    assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
+    assert isinstance(test_custom_logger.standard_logging_payload["guardrail_information"], list)
     assert len(test_custom_logger.standard_logging_payload["guardrail_information"]) > 0
 
-    guardrail_info = test_custom_logger.standard_logging_payload[
-        "guardrail_information"
-    ][0]
+    guardrail_info = test_custom_logger.standard_logging_payload["guardrail_information"][0]
     assert guardrail_info.get("guardrail_status") == "guardrail_intervened"
     assert guardrail_info.get("guardrail_provider") == "noma"
 
@@ -699,9 +648,7 @@ async def test_noma_guardrail_status_success():
         "originalResponse": {"prompt": {}},
     }
     mock_response.raise_for_status = MagicMock()
-    with patch.object(
-        noma_guard.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(noma_guard.async_handler, "post", AsyncMock(return_value=mock_response)):
         request_data = {
             "model": "gpt-5.5",
             "messages": [{"role": "user", "content": "safe content"}],
@@ -724,17 +671,11 @@ async def test_noma_guardrail_status_success():
 
     # Check standard logging payload status fields
     assert test_custom_logger.standard_logging_payload is not None
-    assert (
-        test_custom_logger.standard_logging_payload["guardrail_information"] is not None
-    )
-    assert isinstance(
-        test_custom_logger.standard_logging_payload["guardrail_information"], list
-    )
+    assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
+    assert isinstance(test_custom_logger.standard_logging_payload["guardrail_information"], list)
     assert len(test_custom_logger.standard_logging_payload["guardrail_information"]) > 0
 
-    guardrail_info = test_custom_logger.standard_logging_payload[
-        "guardrail_information"
-    ][0]
+    guardrail_info = test_custom_logger.standard_logging_payload["guardrail_information"][0]
     assert guardrail_info.get("guardrail_status") == "success"
     assert guardrail_info.get("guardrail_provider") == "noma"
 
@@ -769,37 +710,27 @@ def test_guardrail_status_fields_computation():
 
     # Test legacy blocked status (for backward compatibility)
     blocked_info = [{"guardrail_status": "blocked"}]
-    status_fields_blocked = _get_status_fields(
-        status="success", guardrail_information=blocked_info, error_str=None
-    )
+    status_fields_blocked = _get_status_fields(status="success", guardrail_information=blocked_info, error_str=None)
     assert status_fields_blocked.get("llm_api_status") == "success"
     assert status_fields_blocked.get("guardrail_status") == "guardrail_intervened"
 
     # Test success status
     success_info = [{"guardrail_status": "success"}]
-    status_fields_success = _get_status_fields(
-        status="success", guardrail_information=success_info, error_str=None
-    )
+    status_fields_success = _get_status_fields(status="success", guardrail_information=success_info, error_str=None)
     assert status_fields_success.get("llm_api_status") == "success"
     assert status_fields_success.get("guardrail_status") == "success"
 
     # Test guardrail_failed_to_respond status
     failed_info = [{"guardrail_status": "guardrail_failed_to_respond"}]
-    status_fields_failed = _get_status_fields(
-        status="failure", guardrail_information=failed_info, error_str=None
-    )
+    status_fields_failed = _get_status_fields(status="failure", guardrail_information=failed_info, error_str=None)
     assert status_fields_failed.get("llm_api_status") == "failure"
     assert status_fields_failed.get("guardrail_status") == "guardrail_failed_to_respond"
 
     # Test legacy failure status (for backward compatibility)
     failure_info = [{"guardrail_status": "failure"}]
-    status_fields_failure = _get_status_fields(
-        status="failure", guardrail_information=failure_info, error_str=None
-    )
+    status_fields_failure = _get_status_fields(status="failure", guardrail_information=failure_info, error_str=None)
     assert status_fields_failure.get("llm_api_status") == "failure"
-    assert (
-        status_fields_failure.get("guardrail_status") == "guardrail_failed_to_respond"
-    )
+    assert status_fields_failure.get("guardrail_status") == "guardrail_failed_to_respond"
 
     # Test no guardrail run
     no_guardrail = None

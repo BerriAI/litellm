@@ -39,46 +39,24 @@ class TestWithKnownPrefixes:
     PREFIXES = {"myserver", "weather_api", "code_tools"}
 
     def test_known_prefix_returns_true(self):
-        assert (
-            is_tool_name_prefixed(
-                "myserver-get_weather", known_server_prefixes=self.PREFIXES
-            )
-            is True
-        )
+        assert is_tool_name_prefixed("myserver-get_weather", known_server_prefixes=self.PREFIXES) is True
 
     def test_hyphenated_non_mcp_tool_returns_false(self):
         """This is the core fix: 'text-to-speech' is NOT an MCP-prefixed tool."""
-        assert (
-            is_tool_name_prefixed("text-to-speech", known_server_prefixes=self.PREFIXES)
-            is False
-        )
+        assert is_tool_name_prefixed("text-to-speech", known_server_prefixes=self.PREFIXES) is False
 
     def test_code_review_not_misclassified(self):
-        assert (
-            is_tool_name_prefixed("code-review", known_server_prefixes=self.PREFIXES)
-            is False
-        )
+        assert is_tool_name_prefixed("code-review", known_server_prefixes=self.PREFIXES) is False
 
     def test_no_separator_returns_false(self):
-        assert (
-            is_tool_name_prefixed("simple_tool", known_server_prefixes=self.PREFIXES)
-            is False
-        )
+        assert is_tool_name_prefixed("simple_tool", known_server_prefixes=self.PREFIXES) is False
 
     def test_empty_prefixes_set_rejects_all(self):
         """With an empty registry, nothing can be prefixed."""
-        assert (
-            is_tool_name_prefixed("myserver-get_weather", known_server_prefixes=set())
-            is False
-        )
+        assert is_tool_name_prefixed("myserver-get_weather", known_server_prefixes=set()) is False
 
     def test_prefix_normalisation(self):
         """Server names with spaces are normalised to underscores."""
         prefixes = {"my_server"}
         # add_server_prefix_to_name normalises spaces → underscores
-        assert (
-            is_tool_name_prefixed(
-                "my_server-list_files", known_server_prefixes=prefixes
-            )
-            is True
-        )
+        assert is_tool_name_prefixed("my_server-list_files", known_server_prefixes=prefixes) is True

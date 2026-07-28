@@ -826,9 +826,7 @@ async def test_get_cache_settings_redacts_password_with_marker(monkeypatch):
     for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
         monkeypatch.delenv(var, raising=False)
     cache_row = MagicMock()
-    cache_row.cache_settings = json.dumps(
-        {"type": "redis", "host": "h", "password": "supersecret", "namespace": "ns"}
-    )
+    cache_row.cache_settings = json.dumps({"type": "redis", "host": "h", "password": "supersecret", "namespace": "ns"})
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=cache_row)
     proxy_config = MagicMock()
@@ -970,9 +968,7 @@ async def test_update_applies_new_password(monkeypatch):
         patch("litellm.proxy.proxy_server.store_model_in_db", True),
     ):
         await update_cache_settings(
-            request=CacheSettingsUpdateRequest(
-                cache_settings={"type": "redis", "host": "h", "password": "brandnewpw"}
-            ),
+            request=CacheSettingsUpdateRequest(cache_settings={"type": "redis", "host": "h", "password": "brandnewpw"}),
             user_api_key_dict=_admin_auth(),
             litellm_changed_by=None,
         )
@@ -1112,9 +1108,7 @@ async def test_test_cache_connection_does_not_replay_saved_password_to_new_host(
     ):
         mock_cache_class.return_value = cache_instance
         await test_cache_connection(
-            request=CacheTestRequest(
-                cache_settings={"type": "redis", "host": "attacker.example.com", "port": "6379"}
-            ),
+            request=CacheTestRequest(cache_settings={"type": "redis", "host": "attacker.example.com", "port": "6379"}),
             user_api_key_dict=_admin_auth(),
         )
 

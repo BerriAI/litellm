@@ -14,9 +14,7 @@ import time
 import pytest
 from fastapi import HTTPException, Request
 
-pytest.importorskip(
-    "onelogin", reason="python3-saml (saml extra) is required for SAML SSO tests"
-)
+pytest.importorskip("onelogin", reason="python3-saml (saml extra) is required for SAML SSO tests")
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -48,6 +46,7 @@ def _shared_cache(store=None):
     two DualCaches simulates two workers sharing one atomic backend."""
     return DualCache(redis_cache=cast(RedisCache, store or InMemoryCache()))
 
+
 IDP_ENTITY = "https://idp.example.com/metadata"
 SP_ENTITY = "https://proxy.example.com/sso/saml/metadata"
 ACS = "https://proxy.example.com/sso/saml/callback"
@@ -78,9 +77,7 @@ def _make_idp_keypair():
 
 
 def _idp_metadata_xml(cert_pem):
-    cert_body = "".join(
-        line for line in cert_pem.splitlines() if "CERTIFICATE" not in line
-    )
+    cert_body = "".join(line for line in cert_pem.splitlines() if "CERTIFICATE" not in line)
     return (
         '<?xml version="1.0"?>'
         f'<EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="{IDP_ENTITY}">'
@@ -156,9 +153,7 @@ def _build_signed_response(
 
     if sign:
         signed = OneLogin_Saml2_Utils.add_sign(assertion, key_pem, cert_pem)
-        assertion = (signed.decode() if isinstance(signed, bytes) else signed).replace(
-            '<?xml version="1.0"?>', ""
-        )
+        assertion = (signed.decode() if isinstance(signed, bytes) else signed).replace('<?xml version="1.0"?>', "")
 
     return (
         '<?xml version="1.0"?>'
@@ -190,9 +185,7 @@ def _fake_request(cookies=None):
 
 
 async def _acs(b64, cache, cookies=None):
-    return await SAMLAuthHandler.handle_acs(
-        _fake_request(cookies), cache, {"SAMLResponse": b64}
-    )
+    return await SAMLAuthHandler.handle_acs(_fake_request(cookies), cache, {"SAMLResponse": b64})
 
 
 @pytest.fixture
@@ -268,9 +261,7 @@ async def test_signature_from_untrusted_key_is_rejected(saml_env):
 @pytest.mark.asyncio
 async def test_expired_assertion_is_rejected(saml_env):
     key_pem, cert_pem = saml_env
-    resp = _build_signed_response(
-        key_pem, cert_pem, not_before_delta=-7200, not_on_or_after_delta=-3600
-    )
+    resp = _build_signed_response(key_pem, cert_pem, not_before_delta=-7200, not_on_or_after_delta=-3600)
 
     with pytest.raises(HTTPException) as exc:
         await _acs(_b64(resp), DualCache())
@@ -292,9 +283,7 @@ async def test_sp_initiated_known_request_succeeds_once_then_replay_rejected(sam
     key_pem, cert_pem = saml_env
     cache = DualCache()
     request_id = "_authn_req_known"
-    cache.set_cache(
-        key=f"{_SAML_AUTHN_REQUEST_CACHE_PREFIX}:{request_id}", value="1", ttl=600
-    )
+    cache.set_cache(key=f"{_SAML_AUTHN_REQUEST_CACHE_PREFIX}:{request_id}", value="1", ttl=600)
     resp = _build_signed_response(key_pem, cert_pem, in_response_to=request_id)
     cookies = {_SAML_AUTHN_STATE_COOKIE: request_id}
 
@@ -311,9 +300,7 @@ async def test_sp_initiated_response_not_bound_to_browser_is_rejected(saml_env):
     key_pem, cert_pem = saml_env
     cache = DualCache()
     request_id = "_authn_req_known"
-    cache.set_cache(
-        key=f"{_SAML_AUTHN_REQUEST_CACHE_PREFIX}:{request_id}", value="1", ttl=600
-    )
+    cache.set_cache(key=f"{_SAML_AUTHN_REQUEST_CACHE_PREFIX}:{request_id}", value="1", ttl=600)
     resp = _build_signed_response(key_pem, cert_pem, in_response_to=request_id)
 
     with pytest.raises(HTTPException) as exc:
@@ -321,9 +308,7 @@ async def test_sp_initiated_response_not_bound_to_browser_is_rejected(saml_env):
     assert exc.value.status_code == 401
 
     with pytest.raises(HTTPException) as exc:
-        await _acs(
-            _b64(resp), cache, cookies={_SAML_AUTHN_STATE_COOKIE: "_attacker_request"}
-        )
+        await _acs(_b64(resp), cache, cookies={_SAML_AUTHN_STATE_COOKIE: "_attacker_request"})
     assert exc.value.status_code == 401
 
 
@@ -337,9 +322,7 @@ async def test_subjectconfirmation_only_in_response_to_without_cookie_is_rejecte
     key_pem, cert_pem = saml_env_idp_initiated
     cache = DualCache()
     request_id = "_authn_req_known"
-    cache.set_cache(
-        key=f"{_SAML_AUTHN_REQUEST_CACHE_PREFIX}:{request_id}", value="1", ttl=600
-    )
+    cache.set_cache(key=f"{_SAML_AUTHN_REQUEST_CACHE_PREFIX}:{request_id}", value="1", ttl=600)
     resp = _build_signed_response(
         key_pem,
         cert_pem,
@@ -357,9 +340,7 @@ async def test_subjectconfirmation_only_in_response_to_with_cookie_succeeds(saml
     key_pem, cert_pem = saml_env
     cache = DualCache()
     request_id = "_authn_req_known"
-    cache.set_cache(
-        key=f"{_SAML_AUTHN_REQUEST_CACHE_PREFIX}:{request_id}", value="1", ttl=600
-    )
+    cache.set_cache(key=f"{_SAML_AUTHN_REQUEST_CACHE_PREFIX}:{request_id}", value="1", ttl=600)
     resp = _build_signed_response(
         key_pem,
         cert_pem,
@@ -367,9 +348,7 @@ async def test_subjectconfirmation_only_in_response_to_with_cookie_succeeds(saml
         response_level_in_response_to=False,
     )
 
-    result = await _acs(
-        _b64(resp), cache, cookies={_SAML_AUTHN_STATE_COOKIE: request_id}
-    )
+    result = await _acs(_b64(resp), cache, cookies={_SAML_AUTHN_STATE_COOKIE: request_id})
     assert result.email == "alice@example.com"
 
 
@@ -414,9 +393,7 @@ async def test_assertion_without_id_is_rejected(saml_env_idp_initiated):
             return None
 
     with pytest.raises(HTTPException) as exc:
-        await SAMLAuthHandler._enforce_response_binding(
-            _AuthNoAssertionId(), _shared_cache(), None
-        )
+        await SAMLAuthHandler._enforce_response_binding(_AuthNoAssertionId(), _shared_cache(), None)
     assert exc.value.status_code == 401
     assert "ID" in exc.value.detail
 
@@ -449,9 +426,7 @@ async def test_invalid_email_in_assertion_is_rejected_cleanly(saml_env_idp_initi
 
 
 @pytest.mark.asyncio
-async def test_email_less_assertion_rejected_when_domain_restriction_configured(
-    saml_env_idp_initiated, monkeypatch
-):
+async def test_email_less_assertion_rejected_when_domain_restriction_configured(saml_env_idp_initiated, monkeypatch):
     key_pem, cert_pem = saml_env_idp_initiated
     monkeypatch.setenv("ALLOWED_EMAIL_DOMAINS", "example.com")
     resp = _build_signed_response(
@@ -524,11 +499,7 @@ async def test_build_login_redirect_targets_idp_and_caches_request_id(saml_env):
     location = redirect.headers["location"]
     assert location.startswith(SSO_URL)
     assert "SAMLRequest=" in location
-    cached = [
-        k
-        for k in cache.in_memory_cache.cache_dict
-        if k.startswith(_SAML_AUTHN_REQUEST_CACHE_PREFIX)
-    ]
+    cached = [k for k in cache.in_memory_cache.cache_dict if k.startswith(_SAML_AUTHN_REQUEST_CACHE_PREFIX)]
     assert len(cached) == 1
 
     request_id = cached[0].split(":", 1)[1]

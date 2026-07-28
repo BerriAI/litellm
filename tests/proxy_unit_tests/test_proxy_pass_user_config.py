@@ -7,9 +7,7 @@ import os, io
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest, logging, asyncio
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
@@ -54,8 +52,7 @@ def client_no_auth():
 
 
 @pytest.mark.skipif(
-    os.environ.get("AZURE_AI_API_KEY") is None
-    or os.environ.get("OPENAI_API_KEY") is None,
+    os.environ.get("AZURE_AI_API_KEY") is None or os.environ.get("OPENAI_API_KEY") is None,
     reason="AZURE_AI_API_KEY or OPENAI_API_KEY not set - skipping integration test",
 )
 def test_chat_completion(client_no_auth):

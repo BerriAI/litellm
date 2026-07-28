@@ -2,6 +2,7 @@
 """
 Test to verify the Google GenAI adapter fixes
 """
+
 import json
 import os
 import sys
@@ -10,9 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
@@ -99,9 +98,7 @@ def test_streaming_tool_call_with_empty_args():
     # Create a tool call with empty arguments
     mock_function = Function(name="test_function", arguments="")  # Empty arguments
 
-    mock_tool_call_delta = ChatCompletionDeltaToolCall(
-        id="call_123", type="function", function=mock_function, index=0
-    )
+    mock_tool_call_delta = ChatCompletionDeltaToolCall(id="call_123", type="function", function=mock_function, index=0)
 
     mock_delta = Delta(content=None, tool_calls=[mock_tool_call_delta])
 
@@ -119,18 +116,12 @@ def test_streaming_tool_call_with_empty_args():
     mock_wrapper = GoogleGenAIStreamWrapper(completion_stream=iter([]))
 
     # Manually set up the accumulated tool call to simulate what would happen during streaming
-    mock_wrapper.accumulated_tool_calls = {
-        0: {"name": "test_function", "arguments": ""}
-    }
+    mock_wrapper.accumulated_tool_calls = {0: {"name": "test_function", "arguments": ""}}
 
     # Create a mock response that has a finish_reason to trigger the final processing
     mock_response_with_finish = ModelResponse(
         id="test-streaming",
-        choices=[
-            StreamingChoices(
-                finish_reason="stop", index=0, delta=Delta(content=None, tool_calls=[])
-            )
-        ],
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=None, tool_calls=[]))],
         created=1234567890,
         model="gpt-3.5-turbo",
         object="chat.completion.chunk",
@@ -153,9 +144,7 @@ def test_streaming_tool_call_with_empty_args():
             if "functionCall" in part:
                 function_call = part["functionCall"]
                 assert function_call["name"] == "test_function"
-                assert (
-                    function_call["args"] == {}
-                )  # Empty args should become empty object
+                assert function_call["args"] == {}  # Empty args should become empty object
     else:
         # If streaming_chunk is None, it's acceptable as it might indicate no meaningful content
         # This is a valid case in streaming where we might skip empty chunks
@@ -191,9 +180,7 @@ def test_tool_config_transformation():
         expected_tool_choice = case["expected_tool_choice"]
 
         # Transform tool config
-        openai_tool_choice = adapter._transform_google_genai_tool_config_to_openai(
-            tool_config
-        )
+        openai_tool_choice = adapter._transform_google_genai_tool_config_to_openai(tool_config)
 
         # Verify transformation
         assert openai_tool_choice == expected_tool_choice
@@ -221,9 +208,7 @@ def test_stream_transformation_error_handling():
 
     # Try to transform - this should handle errors gracefully
     try:
-        streaming_chunk = adapter.translate_streaming_completion_to_generate_content(
-            mock_response, mock_wrapper
-        )
+        streaming_chunk = adapter.translate_streaming_completion_to_generate_content(mock_response, mock_wrapper)
         # If no exception is raised, that's fine - we just want to ensure no crash
         assert True
     except Exception as e:
@@ -299,14 +284,9 @@ def test_extra_headers_forwarding():
     )
 
     # Verify extra_headers is forwarded
-    assert (
-        "extra_headers" in completion_kwargs
-    ), "extra_headers should be forwarded to completion call"
+    assert "extra_headers" in completion_kwargs, "extra_headers should be forwarded to completion call"
     assert completion_kwargs["extra_headers"]["Editor-Version"] == "vscode/1.95.0"
-    assert (
-        completion_kwargs["extra_headers"]["Editor-Plugin-Version"]
-        == "copilot-chat/0.22.4"
-    )
+    assert completion_kwargs["extra_headers"]["Editor-Plugin-Version"] == "copilot-chat/0.22.4"
     assert completion_kwargs["extra_headers"]["Custom-Header"] == "custom-value"
 
     # Verify metadata is also forwarded (existing behavior)

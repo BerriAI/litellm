@@ -4,9 +4,7 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 
 import httpx
@@ -24,17 +22,13 @@ def test_xai_chat_config_get_openai_compatible_provider_info():
     config = XAIChatConfig()
 
     # Test with default values
-    api_base, api_key = config._get_openai_compatible_provider_info(
-        api_base=None, api_key=None
-    )
+    api_base, api_key = config._get_openai_compatible_provider_info(api_base=None, api_key=None)
     assert api_base == XAI_API_BASE
     assert api_key == os.environ.get("XAI_API_KEY")
 
     # Test with custom API key
     custom_api_key = "test_api_key"
-    api_base, api_key = config._get_openai_compatible_provider_info(
-        api_base=None, api_key=custom_api_key
-    )
+    api_base, api_key = config._get_openai_compatible_provider_info(api_base=None, api_key=custom_api_key)
     assert api_base == XAI_API_BASE
     assert api_key == custom_api_key
 
@@ -100,9 +94,7 @@ def test_xai_chat_config_map_openai_params():
     assert result["stream_options"] == {}
     assert result["temperature"] == 0.7
     assert result["tool_choice"] == "auto"
-    assert result["tools"] == [
-        {"type": "function", "function": {"name": "get_weather"}}
-    ]
+    assert result["tools"] == [{"type": "function", "function": {"name": "get_weather"}}]
     assert result["top_logprobs"] == 3
     assert result["top_p"] == 0.9
     assert result["user"] == "test_user"
@@ -112,9 +104,7 @@ def test_xai_chat_config_map_openai_params():
 
 
 def test_xai_check_for_stop_in_supported_params():
-    supported_params = XAIChatConfig().get_supported_openai_params(
-        model="xai/grok-3-mini"
-    )
+    supported_params = XAIChatConfig().get_supported_openai_params(model="xai/grok-3-mini")
     assert "stop" not in supported_params
 
 
@@ -200,9 +190,7 @@ class TestXAIChat(BaseLLMChatTest):
 
         response = completion(
             model=model,
-            messages=[
-                {"role": "user", "content": "What's the weather like in Boston today?"}
-            ],
+            messages=[{"role": "user", "content": "What's the weather like in Boston today?"}],
             web_search_options={},
             max_tokens=100,
         )
@@ -245,21 +233,13 @@ def test_xai_streaming_with_include_usage():
         assert usage_chunk is not None, "Should receive usage in streaming chunks"
 
         # Verify usage has expected fields
-        assert hasattr(
-            usage_chunk.usage, "prompt_tokens"
-        ), "Usage should have prompt_tokens"
-        assert hasattr(
-            usage_chunk.usage, "completion_tokens"
-        ), "Usage should have completion_tokens"
-        assert hasattr(
-            usage_chunk.usage, "total_tokens"
-        ), "Usage should have total_tokens"
+        assert hasattr(usage_chunk.usage, "prompt_tokens"), "Usage should have prompt_tokens"
+        assert hasattr(usage_chunk.usage, "completion_tokens"), "Usage should have completion_tokens"
+        assert hasattr(usage_chunk.usage, "total_tokens"), "Usage should have total_tokens"
 
         # Verify usage values are positive
         assert usage_chunk.usage.prompt_tokens > 0, "prompt_tokens should be positive"
-        assert (
-            usage_chunk.usage.completion_tokens > 0
-        ), "completion_tokens should be positive"
+        assert usage_chunk.usage.completion_tokens > 0, "completion_tokens should be positive"
         assert usage_chunk.usage.total_tokens > 0, "total_tokens should be positive"
 
         print(f"✓ Successfully received usage in streaming chunk: {usage_chunk.usage}")

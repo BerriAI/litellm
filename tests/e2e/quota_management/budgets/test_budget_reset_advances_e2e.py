@@ -53,9 +53,7 @@ def _drive_to_block(client: BudgetClient, key: str) -> None:
 # ---- Rung 1: scheduling exists at creation -----------------------------------
 
 
-def test_key_with_budget_duration_schedules_reset_at_creation(
-    client: BudgetClient, resources: ResourceManager
-) -> None:
+def test_key_with_budget_duration_schedules_reset_at_creation(client: BudgetClient, resources: ResourceManager) -> None:
     """Baseline: a key created with a budget_duration has budget_reset_at populated
     immediately. The reset job can only advance a timestamp that was scheduled in
     the first place; everything below depends on this."""
@@ -88,9 +86,7 @@ def test_key_spend_blocks_at_cap(client: BudgetClient, resources: ResourceManage
 
 
 @pytest.mark.covers("quota_management.budget.key.resets_after_window")
-def test_key_budget_reset_at_advances_after_window(
-    client: BudgetClient, resources: ResourceManager
-) -> None:
+def test_key_budget_reset_at_advances_after_window(client: BudgetClient, resources: ResourceManager) -> None:
     """The core #25109 guard: after the window elapses the reset job must move
     budget_reset_at strictly forward AND zero key.spend. The broken nullable-JSON
     filter left eligible rows untouched, so the timestamp stayed pinned and spend
@@ -114,9 +110,7 @@ def test_key_budget_reset_at_advances_after_window(
             continue
         info = client.proxy.key_info(key)
         assert info.budget_reset_at is not None, "budget_reset_at cleared by reset"
-        assert _as_datetime(info.budget_reset_at) > before, (
-            "budget_reset_at did not advance past the pre-reset value"
-        )
+        assert _as_datetime(info.budget_reset_at) > before, "budget_reset_at did not advance past the pre-reset value"
         assert (info.spend or 0.0) < TINY_CAP, f"spend not cleared after reset: {info.spend}"
         return
     pytest.fail(f"key budget never reset within {RESET_DEADLINE_SECONDS}s")
@@ -126,9 +120,7 @@ def test_key_budget_reset_at_advances_after_window(
 
 
 @pytest.mark.covers("quota_management.budget.key_multi_window.resets_windows_independently")
-def test_multi_window_key_resets_each_window_independently(
-    client: BudgetClient, resources: ResourceManager
-) -> None:
+def test_multi_window_key_resets_each_window_independently(client: BudgetClient, resources: ResourceManager) -> None:
     """The JSON-backed path #25109 specifically touched. A tight 30s window and a
     roomy 1m window: the tight window must reset on its own boundary while the roomy
     window keeps its accumulated spend (independent per-window reset). The
@@ -168,9 +160,7 @@ def test_multi_window_key_resets_each_window_independently(
 
 
 @pytest.mark.covers("quota_management.budget.team_member.resets_after_window")
-def test_team_member_budget_reset_at_advances(
-    client: BudgetClient, resources: ResourceManager
-) -> None:
+def test_team_member_budget_reset_at_advances(client: BudgetClient, resources: ResourceManager) -> None:
     """Per-team member windows are also JSON-backed. member_budget_reset_at must
     advance after the window; the explicit before<after assertion is the #25109
     regression guard (the existing reset test only checks "it eventually moved",
@@ -181,9 +171,7 @@ def test_team_member_budget_reset_at_advances(
     resources.defer(lambda: client.delete_user(user_id))
 
     client.add_team_member(team_id, user_id, max_budget_in_team=1.0)
-    client.update_team_member(
-        team_id, user_id, max_budget_in_team=1.0, budget_duration=f"{WINDOW_SECONDS}s"
-    )
+    client.update_team_member(team_id, user_id, max_budget_in_team=1.0, budget_duration=f"{WINDOW_SECONDS}s")
 
     before_raw = client.member_budget_reset_at(team_id, user_id)
     assert before_raw, "updating the member with a budget_duration set no budget_reset_at"
@@ -205,9 +193,7 @@ def test_team_member_budget_reset_at_advances(
 # ---- Rung 6: error-path edge - resets surface as blocks, never 5xx -----------
 
 
-def test_reset_wait_never_yields_non_budget_error(
-    client: BudgetClient, resources: ResourceManager
-) -> None:
+def test_reset_wait_never_yields_non_budget_error(client: BudgetClient, resources: ResourceManager) -> None:
     """The other #25109 failure mode: a reset job that ERRORS on the nullable-JSON
     column surfaces to the caller as a non-budget 5xx. Across the whole reset wait
     every non-ok response must be a budget block (is_budget_block) and never a

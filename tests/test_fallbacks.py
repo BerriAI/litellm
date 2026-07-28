@@ -87,9 +87,7 @@ async def test_chat_completion():
             {"role": "system", "content": text},
             {"role": "user", "content": "Who was Alexander?"},
         ]
-        await chat_completion(
-            session=session, key="sk-1234", model=model, messages=messages
-        )
+        await chat_completion(session=session, key="sk-1234", model=model, messages=messages)
 
 
 @pytest.mark.parametrize("has_access", [True, False])
@@ -124,9 +122,7 @@ async def test_chat_completion_client_fallbacks(has_access):
                 fallbacks=["gpt-instruct"],
             )
             if not has_access:
-                pytest.fail(
-                    "Expected this to fail, submitted fallback model that key did not have access to"
-                )
+                pytest.fail("Expected this to fail, submitted fallback model that key did not have access to")
         except Exception as e:
             if has_access:
                 pytest.fail("Expected this to work: {}".format(str(e)))
@@ -202,9 +198,7 @@ async def test_chat_completion_with_timeout():
         )
         end_time = time.time()
         print(f"headers: {headers}")
-        assert (
-            headers["x-litellm-timeout"] == "1.0"
-        )  # assert model-specific timeout used
+        assert headers["x-litellm-timeout"] == "1.0"  # assert model-specific timeout used
 
 
 @pytest.mark.asyncio
@@ -234,9 +228,7 @@ async def test_chat_completion_with_timeout_from_request():
         )
         end_time = time.time()
         print(f"headers: {headers}")
-        assert (
-            headers["x-litellm-timeout"] == "0.001"
-        )  # assert model-specific timeout used
+        assert headers["x-litellm-timeout"] == "0.001"  # assert model-specific timeout used
 
 
 @pytest.mark.parametrize("has_access", [True, False])
@@ -281,9 +273,7 @@ async def test_chat_completion_client_fallbacks_with_custom_message(has_access):
                 ],
             )
             if not has_access:
-                pytest.fail(
-                    "Expected this to fail, submitted fallback model that key did not have access to"
-                )
+                pytest.fail("Expected this to fail, submitted fallback model that key did not have access to")
         except Exception as e:
             if has_access:
                 pytest.fail("Expected this to work: {}".format(str(e)))
@@ -332,7 +322,5 @@ async def test_chat_completion_bad_and_good_model():
 
         # Wait only for good model requests
         success = await run_good_model_test(client, num_requests)
-        print(
-            f"Iteration {iteration + 1}: {'✓' if success else '✗'} ({time.time() - start_time:.2f}s)"
-        )
+        print(f"Iteration {iteration + 1}: {'✓' if success else '✗'} ({time.time() - start_time:.2f}s)")
         assert success, "Not all good model requests succeeded"

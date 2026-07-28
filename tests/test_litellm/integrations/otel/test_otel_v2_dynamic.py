@@ -21,31 +21,23 @@ def _cache(callback_name, exporters=None):
 
 
 def test_arize_dynamic_headers():
-    headers = dynamic_otlp_headers(
-        "arize", {"arize_space_id": "S", "arize_api_key": "K"}
-    )
+    headers = dynamic_otlp_headers("arize", {"arize_space_id": "S", "arize_api_key": "K"})
     assert headers == {"arize-space-id": "S", "api_key": "K"}
 
 
 def test_arize_space_key_overrides_space_id():
-    headers = dynamic_otlp_headers(
-        "arize", {"arize_space_id": "S", "arize_space_key": "SK"}
-    )
+    headers = dynamic_otlp_headers("arize", {"arize_space_id": "S", "arize_space_key": "SK"})
     assert headers == {"arize-space-id": "SK"}
 
 
 def test_langfuse_dynamic_headers_need_both_keys():
     assert dynamic_otlp_headers("langfuse_otel", {"langfuse_public_key": "pk"}) is None
-    headers = dynamic_otlp_headers(
-        "langfuse_otel", {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}
-    )
+    headers = dynamic_otlp_headers("langfuse_otel", {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"})
     assert headers is not None and "Authorization" in headers
 
 
 def test_weave_dynamic_headers():
-    headers = dynamic_otlp_headers(
-        "weave_otel", {"wandb_api_key": "w", "weave_project_id": "p"}
-    )
+    headers = dynamic_otlp_headers("weave_otel", {"wandb_api_key": "w", "weave_project_id": "p"})
     assert headers is not None
     assert "Authorization" in headers and headers["project_id"] == "p"
 
@@ -87,9 +79,7 @@ def test_provider_cache_is_bounded_and_evicts_lru(monkeypatch):
 
     monkeypatch.setattr(routing_mod, "_MAX_CACHED_PROVIDERS", 2)
     shut_down = []
-    monkeypatch.setattr(
-        routing_mod, "_shutdown_provider", lambda p: shut_down.append(p)
-    )
+    monkeypatch.setattr(routing_mod, "_shutdown_provider", lambda p: shut_down.append(p))
 
     cache = _cache("arize")
     default = NoOpTracer()
@@ -166,9 +156,7 @@ def test_dynamic_headers_do_not_leak_to_other_owners_exporter():
             ),
         ],
     )
-    new_cfg = cache._config_with_headers(
-        {"arize-space-id": "TEAMX", "api_key": "TEAMX_KEY"}
-    )
+    new_cfg = cache._config_with_headers({"arize-space-id": "TEAMX", "api_key": "TEAMX_KEY"})
     by_owner = {e.owner: e.headers for e in new_cfg.exporters}
     assert by_owner["arize"] == "arize-space-id=TEAMX,api_key=TEAMX_KEY"
     assert by_owner[None] == "x=base-collector"

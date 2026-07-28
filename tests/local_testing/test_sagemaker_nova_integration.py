@@ -37,11 +37,7 @@ def _make_test_png() -> str:
 
     def chunk(ctype, data):
         c = ctype + data
-        return (
-            struct.pack(">I", len(data))
-            + c
-            + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
-        )
+        return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
 
     width, height = 4, 4
     pixels = []
@@ -84,9 +80,7 @@ class TestSagemakerNovaIntegration:
         assert response.choices[0].finish_reason == "stop"
         assert response.usage.prompt_tokens > 0
         assert response.usage.completion_tokens > 0
-        assert response.usage.total_tokens == (
-            response.usage.prompt_tokens + response.usage.completion_tokens
-        )
+        assert response.usage.total_tokens == (response.usage.prompt_tokens + response.usage.completion_tokens)
 
     def test_should_complete_multi_turn_conversation(self):
         """Multi-turn conversation maintains context."""
@@ -136,12 +130,8 @@ class TestSagemakerNovaIntegration:
         assert len(full_content.strip()) > 0, "Expected non-empty streamed content"
 
         # Last chunk should have finish_reason
-        final_chunks_with_finish = [
-            c for c in chunks if c.choices and c.choices[0].finish_reason is not None
-        ]
-        assert (
-            len(final_chunks_with_finish) > 0
-        ), "Expected at least one chunk with finish_reason"
+        final_chunks_with_finish = [c for c in chunks if c.choices and c.choices[0].finish_reason is not None]
+        assert len(final_chunks_with_finish) > 0, "Expected at least one chunk with finish_reason"
 
     def test_should_return_logprobs(self):
         """Logprobs are returned when requested."""
@@ -163,11 +153,7 @@ class TestSagemakerNovaIntegration:
         assert "token" in first_token or hasattr(first_token, "token")
         assert "logprob" in first_token or hasattr(first_token, "logprob")
 
-        top = (
-            first_token.get("top_logprobs")
-            if isinstance(first_token, dict)
-            else first_token.top_logprobs
-        )
+        top = first_token.get("top_logprobs") if isinstance(first_token, dict) else first_token.top_logprobs
         assert top is not None and len(top) == 3, "Expected 3 top_logprobs"
 
     def test_should_handle_multimodal_image_input(self):
@@ -196,9 +182,7 @@ class TestSagemakerNovaIntegration:
         assert response.choices[0].message.content is not None
         assert len(content) > 0
         # The image has red and blue — model should mention at least one
-        assert (
-            "red" in content or "blue" in content
-        ), f"Expected 'red' or 'blue' in multimodal response, got: {content}"
+        assert "red" in content or "blue" in content, f"Expected 'red' or 'blue' in multimodal response, got: {content}"
 
     def test_should_pass_nova_specific_params(self):
         """Nova-specific parameters (top_k) are accepted."""
@@ -230,9 +214,7 @@ class TestSagemakerNovaIntegration:
         assert response.choices[0].message.content is not None
         # Pirate-themed words likely in response
         pirate_words = ["arr", "ahoy", "matey", "ye", "sail", "sea", "cap"]
-        assert any(
-            w in content for w in pirate_words
-        ), f"Expected pirate speak, got: {content}"
+        assert any(w in content for w in pirate_words), f"Expected pirate speak, got: {content}"
 
 
 NOVA2_ENDPOINT = os.environ.get("SAGEMAKER_NOVA2_LITE_ENDPOINT", "")

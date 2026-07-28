@@ -38,9 +38,7 @@ async def get_user_info(session, get_user, call_user, view_all: Optional[bool] =
         return await response.json()
 
 
-async def wait_for_team_member_spend_update(
-    session, user_id, team_id, expected_min_spend, max_wait=10
-):
+async def wait_for_team_member_spend_update(session, user_id, team_id, expected_min_spend, max_wait=10):
     """
     Wait for the team member spend update to be committed to the database.
     Polls the user info endpoint until the spend is updated.
@@ -61,9 +59,7 @@ async def wait_for_team_member_spend_update(
                                 print(f"Initial team member spend: {spend}")
 
                             if spend >= expected_min_spend:
-                                print(
-                                    f"[OK] Team member spend updated: {spend} >= {expected_min_spend}"
-                                )
+                                print(f"[OK] Team member spend updated: {spend} >= {expected_min_spend}")
                                 return True
 
                             print(
@@ -73,9 +69,7 @@ async def wait_for_team_member_spend_update(
         except Exception as e:
             print(f"Error checking team member spend: {e}")
             await asyncio.sleep(0.5)
-    print(
-        f"[TIMEOUT] Timeout waiting for team member spend update (expected >= {expected_min_spend})"
-    )
+    print(f"[TIMEOUT] Timeout waiting for team member spend update (expected >= {expected_min_spend})")
     return False
 
 
@@ -115,16 +109,12 @@ async def new_user(
         print()
 
         if status != 200:
-            raise Exception(
-                f"Request {i} did not return a 200 status code: {status}, response: {response_text}"
-            )
+            raise Exception(f"Request {i} did not return a 200 status code: {status}, response: {response_text}")
 
         return await response.json()
 
 
-async def add_member(
-    session, i, team_id, user_id=None, user_email=None, max_budget=None, members=None
-):
+async def add_member(session, i, team_id, user_id=None, user_email=None, max_budget=None, members=None):
     url = "http://localhost:4000/team/member_add"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {"team_id": team_id, "member": {"role": "user"}}
@@ -182,9 +172,7 @@ async def update_member(
         print()
 
         if status != 200:
-            raise Exception(
-                f"Request {i} did not return a 200 status code: {status}, response: {response_text}"
-            )
+            raise Exception(f"Request {i} did not return a 200 status code: {status}, response: {response_text}")
 
         return await response.json()
 
@@ -271,9 +259,7 @@ async def chat_completion(session, key, model="gpt-4"):
                 print()
 
                 if status != 200:
-                    raise Exception(
-                        f"Request did not return a 200 status code: {status}. Response: {response_text}"
-                    )
+                    raise Exception(f"Request did not return a 200 status code: {status}. Response: {response_text}")
 
                 return await response.json()
         except Exception as e:
@@ -402,9 +388,7 @@ async def get_team_info(session, get_team, call_key):
         print()
 
         if status == 404:
-            raise openai.NotFoundError(
-                message="404 received", response=MagicMock(), body=None
-            )
+            raise openai.NotFoundError(message="404 received", response=MagicMock(), body=None)
 
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
@@ -487,33 +471,22 @@ async def test_team_update_sc_2():
         ]
         team_data = await new_team(session=session, i=0, member_list=member_list)
         ## Create 10 normal users
-        members = [
-            {"role": "user", "user_id": f"krrish_{uuid.uuid4()}@berri.ai"}
-            for _ in range(10)
-        ]
-        await add_member(
-            session=session, i=0, team_id=team_data["team_id"], members=members
-        )
+        members = [{"role": "user", "user_id": f"krrish_{uuid.uuid4()}@berri.ai"} for _ in range(10)]
+        await add_member(session=session, i=0, team_id=team_data["team_id"], members=members)
         ## ASSERT TEAM SIZE
-        team_info = await get_team_info(
-            session=session, get_team=team_data["team_id"], call_key="sk-1234"
-        )
+        team_info = await get_team_info(session=session, get_team=team_data["team_id"], call_key="sk-1234")
 
         assert len(team_info["team_info"]["members_with_roles"]) == 12
 
         ## CHANGE TEAM ALIAS
 
-        new_team_data = await update_team(
-            session=session, i=0, team_id=team_data["team_id"], team_alias="my-new-team"
-        )
+        new_team_data = await update_team(session=session, i=0, team_id=team_data["team_id"], team_alias="my-new-team")
 
         assert new_team_data["data"]["team_alias"] == "my-new-team"
         print(f"team_data: {team_data}")
         ## assert rest of object is the same
         for k, v in new_team_data["data"].items():
-            if (
-                k == "members_with_roles"
-            ):  # assert 1 more member (role: "user", user_email: $user_email)
+            if k == "members_with_roles":  # assert 1 more member (role: "user", user_email: $user_email)
                 len(new_team_data["data"][k]) == len(team_data[k]) + 1
             elif (
                 k == "created_at"
@@ -551,14 +524,10 @@ async def test_team_member_add_email():
         user_email = "krrish{}@berri.ai".format(uuid.uuid4())
         new_user_info = await new_user(session=session, i=0, user_email=user_email)
         new_member = {"role": "user", "user_email": user_email}
-        await add_member(
-            session=session, i=0, team_id=team_data["team_id"], members=[new_member]
-        )
+        await add_member(session=session, i=0, team_id=team_data["team_id"], members=[new_member])
 
         ## check user info to confirm user is in team
-        updated_user_info = await get_user_info(
-            session=session, get_user=new_user_info["user_id"], call_user="sk-1234"
-        )
+        updated_user_info = await get_user_info(session=session, get_user=new_user_info["user_id"], call_user="sk-1234")
 
         print(updated_user_info)
 
@@ -593,9 +562,7 @@ async def test_team_delete():
         team_data = await new_team(session=session, i=0, member_list=member_list)
 
         ## ASSERT USER MEMBERSHIP IS CREATED
-        user_info = await get_user_info(
-            session=session, get_user=normal_user, call_user="sk-1234"
-        )
+        user_info = await get_user_info(session=session, get_user=normal_user, call_user="sk-1234")
         assert len(user_info["teams"]) == 1
 
         ## Create key
@@ -607,16 +574,12 @@ async def test_team_delete():
         await delete_team(session=session, i=0, team_id=team_data["team_id"])
 
         ## ASSERT USER MEMBERSHIP IS DELETED
-        user_info = await get_user_info(
-            session=session, get_user=normal_user, call_user="sk-1234"
-        )
+        user_info = await get_user_info(session=session, get_user=normal_user, call_user="sk-1234")
         assert len(user_info["teams"]) == 0
 
         ## ASSERT TEAM INFO NOW RETURNS A 404
         with pytest.raises(openai.NotFoundError):
-            await get_team_info(
-                session=session, get_team=team_data["team_id"], call_key="sk-1234"
-            )
+            await get_team_info(session=session, get_team=team_data["team_id"], call_key="sk-1234")
 
 
 @pytest.mark.parametrize("dimension", ["user_id", "user_email"])
@@ -638,9 +601,7 @@ async def test_member_delete(dimension):
         normal_user = f"{uuid.uuid4()}"
         normal_user_email = "{}@berri.ai".format(normal_user)
         print(f"normal_user: {normal_user}")
-        await new_user(
-            session=session, i=0, user_id=normal_user, user_email=normal_user_email
-        )
+        await new_user(session=session, i=0, user_id=normal_user, user_email=normal_user_email)
         ## Create team with 1 admin and 1 user
         member_list = [
             {"role": "admin", "user_id": admin_user},
@@ -655,15 +616,13 @@ async def test_member_delete(dimension):
         for member in team_data["members_with_roles"]:
             if dimension == "user_id" and member["user_id"] == normal_user:
                 user_in_team = True
-            elif (
-                dimension == "user_email" and member["user_email"] == normal_user_email
-            ):
+            elif dimension == "user_email" and member["user_email"] == normal_user_email:
                 user_in_team = True
 
-        assert (
-            user_in_team is True
-        ), "User not in team. Team list={}, User details - id={}, email={}. Dimension={}".format(
-            team_data["members_with_roles"], normal_user, normal_user_email, dimension
+        assert user_in_team is True, (
+            "User not in team. Team list={}, User details - id={}, email={}. Dimension={}".format(
+                team_data["members_with_roles"], normal_user, normal_user_email, dimension
+            )
         )
         # Delete member
         if dimension == "user_id":
@@ -682,9 +641,7 @@ async def test_member_delete(dimension):
         for member in team_data["members_with_roles"]:
             if dimension == "user_id" and member["user_id"] == normal_user:
                 user_in_team = True
-            elif (
-                dimension == "user_email" and member["user_email"] == normal_user_email
-            ):
+            elif dimension == "user_email" and member["user_email"] == normal_user_email:
                 user_in_team = True
 
         assert user_in_team is True
@@ -716,9 +673,7 @@ async def test_team_alias():
             model_aliases={"cheap-model": "gpt-3.5-turbo"},
         )
         ## Create key
-        key_gen = await generate_key(
-            session=session, i=0, team_id=team_data["team_id"], models=["gpt-3.5-turbo"]
-        )
+        key_gen = await generate_key(session=session, i=0, team_id=team_data["team_id"], models=["gpt-3.5-turbo"])
         key = key_gen["key"]
         ## Test key
         response = await chat_completion(session=session, key=key, model="cheap-model")
@@ -773,9 +728,7 @@ async def test_users_in_team_budget():
                     print(f"  - Team memberships: {team_info.get('team_memberships')}")
 
         # update user to have budget = 0.0000001
-        update_result = await update_member(
-            session, 0, team_id=team["team_id"], user_id=get_user, max_budget=0.0000001
-        )
+        update_result = await update_member(session, 0, team_id=team["team_id"], user_id=get_user, max_budget=0.0000001)
         print(f"[DEBUG] Updated member budget to 0.0000001")
         print(f"[DEBUG] Update result: {update_result}")
 
@@ -810,9 +763,7 @@ async def test_users_in_team_budget():
         # so we need to wait for the spend from Call 1 to be persisted
         print("\n[DEBUG] ===== Waiting for spend to be committed =====")
         print("Waiting for team member spend to be committed to database...")
-        print(
-            "Note: Spend updates are flushed periodically, this may take up to 90 seconds..."
-        )
+        print("Note: Spend updates are flushed periodically, this may take up to 90 seconds...")
         spend_updated = await wait_for_team_member_spend_update(
             session, get_user, team["team_id"], 0.0000001, max_wait=90
         )
@@ -823,9 +774,7 @@ async def test_users_in_team_budget():
             )
 
         # Check user info BEFORE Call 2
-        user_info_before_call2 = await get_user_info(
-            session, get_user, call_user="sk-1234"
-        )
+        user_info_before_call2 = await get_user_info(session, get_user, call_user="sk-1234")
         print(f"\n[DEBUG] User info BEFORE Call 2:")
         print(f"  - User budget: {user_info_before_call2.get('max_budget')}")
         print(f"  - User spend: {user_info_before_call2.get('spend')}")
@@ -840,9 +789,7 @@ async def test_users_in_team_budget():
                             max_budget = budget_table.get("max_budget")
                             print(f"    - Max budget in team: {max_budget}")
                             print(f"    - Current spend in team: {current_spend}")
-                            print(
-                                f"    - Budget remaining: {max_budget - current_spend}"
-                            )
+                            print(f"    - Budget remaining: {max_budget - current_spend}")
                             print(f"    - Should fail?: {current_spend >= max_budget}")
 
         # Call 2
@@ -888,9 +835,7 @@ async def test_users_in_team_budget():
                 print(f"[DEBUG] Call 2 raised exception: {e}")
 
         # Check user info AFTER Call 2
-        user_info_after_call2 = await get_user_info(
-            session, get_user, call_user="sk-1234"
-        )
+        user_info_after_call2 = await get_user_info(session, get_user, call_user="sk-1234")
         print(f"\n[DEBUG] User info AFTER Call 2:")
         print(f"  - User budget: {user_info_after_call2.get('max_budget')}")
         print(f"  - User spend: {user_info_after_call2.get('spend')}")
@@ -921,7 +866,9 @@ async def test_users_in_team_budget():
                         for membership in team_info.get("team_memberships", []):
                             if "litellm_budget_table" in membership:
                                 error_msg += f"Team member spend before call: {membership.get('spend', 0)}\n"
-                                error_msg += f"Team member max budget: {membership['litellm_budget_table'].get('max_budget')}\n"
+                                error_msg += (
+                                    f"Team member max budget: {membership['litellm_budget_table'].get('max_budget')}\n"
+                                )
             pytest.fail(error_msg)
 
         # Check the error message contains budget exceeded
@@ -937,9 +884,4 @@ async def test_users_in_team_budget():
         ## Check user info
         user_info = await get_user_info(session, get_user, call_user="sk-1234")
 
-        assert (
-            user_info["teams"][0]["team_memberships"][0]["litellm_budget_table"][
-                "max_budget"
-            ]
-            == 0.0000001
-        )
+        assert user_info["teams"][0]["team_memberships"][0]["litellm_budget_table"]["max_budget"] == 0.0000001

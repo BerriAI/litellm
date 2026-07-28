@@ -5,9 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 import openai
 import litellm
@@ -83,9 +81,7 @@ async def test_completion_with_retry_policy(sync_mode):
             print(e)
 
         mock_completion_with_retries.assert_called_once()
-        assert (
-            mock_completion_with_retries.call_args.kwargs["num_retries"] == retry_number
-        )
+        assert mock_completion_with_retries.call_args.kwargs["num_retries"] == retry_number
         assert retry_policy.ContentPolicyViolationErrorRetries == retry_number
 
 
@@ -173,9 +169,7 @@ async def test_responses_with_retries(sync_mode):
 
     # Mock the responses/aresponses function
     with patch(
-        "litellm.responses.main.responses"
-        if sync_mode
-        else "litellm.responses.main.aresponses"
+        "litellm.responses.main.responses" if sync_mode else "litellm.responses.main.aresponses"
     ) as mock_responses:
         if sync_mode:
             mock_responses.return_value = MagicMock()

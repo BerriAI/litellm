@@ -5,9 +5,7 @@ from dotenv import load_dotenv
 from fastapi import Request
 from datetime import datetime
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from litellm import Router
 import pytest
 import litellm
@@ -74,9 +72,7 @@ def test_routing_strategy_init(model_list):
 
     router = Router(model_list=model_list)
     for strategy in RoutingStrategy:
-        router.routing_strategy_init(
-            routing_strategy=strategy, routing_strategy_args={}
-        )
+        router.routing_strategy_init(routing_strategy=strategy, routing_strategy_args={})
 
 
 def test_routing_strategy_init_invalid_strategy(model_list):
@@ -90,9 +86,7 @@ def test_routing_strategy_init_invalid_strategy(model_list):
 
     # Test common mistake: "simple" instead of "simple-shuffle"
     with pytest.raises(ValueError) as exc_info:
-        router.routing_strategy_init(
-            routing_strategy="simple", routing_strategy_args={}
-        )
+        router.routing_strategy_init(routing_strategy="simple", routing_strategy_args={})
 
     # Verify error message is helpful
     error_msg = str(exc_info.value)
@@ -106,9 +100,7 @@ def test_routing_strategy_init_invalid_strategy(model_list):
 
     # Test completely invalid strategy
     with pytest.raises(ValueError) as exc_info:
-        router.routing_strategy_init(
-            routing_strategy="not-a-real-strategy", routing_strategy_args={}
-        )
+        router.routing_strategy_init(routing_strategy="not-a-real-strategy", routing_strategy_args={})
     assert "Invalid routing_strategy" in str(exc_info.value)
 
 
@@ -126,9 +118,7 @@ def test_routing_strategy_init_valid_string_strategies(model_list):
 
     for strategy in valid_strategies:
         # Should not raise
-        router.routing_strategy_init(
-            routing_strategy=strategy, routing_strategy_args={}
-        )
+        router.routing_strategy_init(routing_strategy=strategy, routing_strategy_args={})
 
 
 def test_routing_strategy_init_valid_enum_strategies(model_list):
@@ -139,9 +129,7 @@ def test_routing_strategy_init_valid_enum_strategies(model_list):
 
     for strategy in RoutingStrategy:
         # Should not raise when passing enum directly
-        router.routing_strategy_init(
-            routing_strategy=strategy, routing_strategy_args={}
-        )
+        router.routing_strategy_init(routing_strategy=strategy, routing_strategy_args={})
 
 
 def test_print_deployment(model_list):
@@ -267,9 +255,7 @@ async def test_router_schedule_atext_completion(model_list):
     from litellm.types.utils import TextCompletionResponse
 
     router = Router(model_list=model_list)
-    with patch.object(
-        router, "_atext_completion", AsyncMock()
-    ) as mock_atext_completion:
+    with patch.object(router, "_atext_completion", AsyncMock()) as mock_atext_completion:
         mock_atext_completion.return_value = TextCompletionResponse()
         response = await router.atext_completion(
             model="gpt-5-mini",
@@ -286,9 +272,7 @@ async def test_router_schedule_factory(model_list):
     from litellm.types.utils import TextCompletionResponse
 
     router = Router(model_list=model_list)
-    with patch.object(
-        router, "_atext_completion", AsyncMock()
-    ) as mock_atext_completion:
+    with patch.object(router, "_atext_completion", AsyncMock()) as mock_atext_completion:
         mock_atext_completion.return_value = TextCompletionResponse()
         response = await router._schedule_factory(
             model="gpt-5-mini",
@@ -393,9 +377,7 @@ def test_update_kwargs_with_deployment(model_list):
     """Test if the '_update_kwargs_with_deployment' function is working correctly"""
     router = Router(model_list=model_list)
     kwargs: dict = {"metadata": {}}
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-5-mini"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
     router._update_kwargs_with_deployment(
         deployment=deployment,
         kwargs=kwargs,
@@ -485,9 +467,7 @@ async def test_deployment_callback_on_success(sync_mode):
     ]
     router = Router(model_list=model_list)
     # Get the actual deployment ID that was generated
-    gpt_deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-5-mini"
-    )
+    gpt_deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
     deployment_id = gpt_deployment["model_info"]["id"]
 
     standard_logging_payload = create_standard_logging_payload()
@@ -658,29 +638,19 @@ def test_log_retry(model_list):
 def test_update_usage(model_list):
     """Test if the '_update_usage' function is working correctly"""
     router = Router(model_list=model_list)
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-5-mini"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
     deployment_id = deployment["model_info"]["id"]
-    request_count = router._update_usage(
-        deployment_id=deployment_id, parent_otel_span=None
-    )
+    request_count = router._update_usage(deployment_id=deployment_id, parent_otel_span=None)
     assert request_count == 1
 
-    request_count = router._update_usage(
-        deployment_id=deployment_id, parent_otel_span=None
-    )
+    request_count = router._update_usage(deployment_id=deployment_id, parent_otel_span=None)
 
     assert request_count == 2
 
 
-@pytest.mark.parametrize(
-    "finish_reason, expected_fallback", [("content_filter", True), ("stop", False)]
-)
+@pytest.mark.parametrize("finish_reason, expected_fallback", [("content_filter", True), ("stop", False)])
 @pytest.mark.parametrize("fallback_type", ["model-specific", "default"])
-def test_should_raise_content_policy_error(
-    model_list, finish_reason, expected_fallback, fallback_type
-):
+def test_should_raise_content_policy_error(model_list, finish_reason, expected_fallback, fallback_type):
     """Test if the '_should_raise_content_policy_error' function is working correctly"""
     router = Router(
         model_list=model_list,
@@ -701,11 +671,7 @@ def test_should_raise_content_policy_error(
                 usage={"total_tokens": 100},
             ),
             kwargs={
-                "content_policy_fallbacks": (
-                    [{"gpt-5-mini": "gpt-5.5"}]
-                    if fallback_type == "model-specific"
-                    else None
-                )
+                "content_policy_fallbacks": ([{"gpt-5-mini": "gpt-5.5"}] if fallback_type == "model-specific" else None)
             },
         )
         is expected_fallback
@@ -715,9 +681,7 @@ def test_should_raise_content_policy_error(
 def test_get_healthy_deployments(model_list):
     """Test if the '_get_healthy_deployments' function is working correctly"""
     router = Router(model_list=model_list)
-    deployments = router._get_healthy_deployments(
-        model="gpt-5-mini", parent_otel_span=None
-    )
+    deployments = router._get_healthy_deployments(model="gpt-5-mini", parent_otel_span=None)
     assert len(deployments) > 0
 
 
@@ -733,9 +697,7 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode):
 
     router = Router(model_list=model_list)
 
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-5-mini"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
 
     litellm_logging_obj = Logging(
         model="gpt-5-mini",
@@ -750,9 +712,7 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode):
         router.routing_strategy_pre_call_checks(deployment)
     else:
         ## NO EXCEPTION
-        await router.async_routing_strategy_pre_call_checks(
-            deployment, litellm_logging_obj
-        )
+        await router.async_routing_strategy_pre_call_checks(deployment, litellm_logging_obj)
 
         ## WITH EXCEPTION - rate limit error
         with patch.object(
@@ -767,21 +727,15 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode):
             ),
         ):
             try:
-                await router.async_routing_strategy_pre_call_checks(
-                    deployment, litellm_logging_obj
-                )
+                await router.async_routing_strategy_pre_call_checks(deployment, litellm_logging_obj)
                 pytest.fail("Exception was not raised")
             except Exception as e:
                 assert isinstance(e, litellm.RateLimitError)
 
         ## WITH EXCEPTION - generic error
-        with patch.object(
-            callback, "async_pre_call_check", AsyncMock(side_effect=Exception("Error"))
-        ):
+        with patch.object(callback, "async_pre_call_check", AsyncMock(side_effect=Exception("Error"))):
             try:
-                await router.async_routing_strategy_pre_call_checks(
-                    deployment, litellm_logging_obj
-                )
+                await router.async_routing_strategy_pre_call_checks(deployment, litellm_logging_obj)
                 pytest.fail("Exception was not raised")
             except Exception as e:
                 assert isinstance(e, Exception)
@@ -791,9 +745,7 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode):
     "set_supported_environments, supported_environments, is_supported",
     [(True, ["staging"], True), (False, None, True), (True, ["development"], False)],
 )
-def test_create_deployment(
-    model_list, set_supported_environments, supported_environments, is_supported
-):
+def test_create_deployment(model_list, set_supported_environments, supported_environments, is_supported):
     """Test if the '_create_deployment' function is working correctly"""
     router = Router(model_list=model_list)
 
@@ -827,20 +779,14 @@ def test_deployment_is_active_for_environment(
 ):
     """Test if the '_deployment_is_active_for_environment' function is working correctly"""
     router = Router(model_list=model_list)
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-5-mini"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
     if set_supported_environments:
         os.environ["LITELLM_ENVIRONMENT"] = "staging"
     deployment["model_info"]["supported_environments"] = supported_environments
     if is_supported:
-        assert (
-            router.deployment_is_active_for_environment(deployment=deployment) is True
-        )
+        assert router.deployment_is_active_for_environment(deployment=deployment) is True
     else:
-        assert (
-            router.deployment_is_active_for_environment(deployment=deployment) is False
-        )
+        assert router.deployment_is_active_for_environment(deployment=deployment) is False
 
 
 def test_set_model_list(model_list):
@@ -853,9 +799,7 @@ def test_set_model_list(model_list):
 def test_add_deployment(model_list):
     """Test if the '_add_deployment' function is working correctly"""
     router = Router(model_list=model_list)
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-5-mini"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
     deployment["model_info"]["id"] = "100"
     ## Test 1: call user facing function
     router.add_deployment(deployment=deployment)
@@ -869,9 +813,7 @@ def test_upsert_deployment(model_list):
     """Test if the 'upsert_deployment' function is working correctly"""
     router = Router(model_list=model_list)
     print("model list", len(router.model_list))
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-5-mini"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
     deployment.litellm_params.model = "gpt-5.5"
     router.upsert_deployment(deployment=deployment)
     assert len(router.model_list) == len(model_list)
@@ -880,9 +822,7 @@ def test_upsert_deployment(model_list):
 def test_delete_deployment(model_list):
     """Test if the 'delete_deployment' function is working correctly"""
     router = Router(model_list=model_list)
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-5-mini"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
     router.delete_deployment(id=deployment["model_info"]["id"])
     assert len(router.model_list) == len(model_list) - 1
 
@@ -890,9 +830,7 @@ def test_delete_deployment(model_list):
 def test_get_model_info(model_list):
     """Test if the 'get_model_info' function is working correctly"""
     router = Router(model_list=model_list)
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-5-mini"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
     model_info = router.get_model_info(id=deployment["model_info"]["id"])
     assert model_info is not None
 
@@ -900,9 +838,7 @@ def test_get_model_info(model_list):
 def test_get_model_group(model_list):
     """Test if the 'get_model_group' function is working correctly"""
     router = Router(model_list=model_list)
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-5-mini"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
     model_group = router.get_model_group(id=deployment["model_info"]["id"])
     assert model_group is not None
     assert model_group[0]["model_name"] == "gpt-5-mini"
@@ -1050,27 +986,19 @@ async def test_get_model_group_io_token_usage_sums_across_deployments():
     minute = get_utc_datetime().strftime("%H-%M")
     keys_and_values = [
         (
-            RouterCacheEnum.ITPM.value.format(
-                id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute
-            ),
+            RouterCacheEnum.ITPM.value.format(id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute),
             30,
         ),
         (
-            RouterCacheEnum.OTPM.value.format(
-                id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute
-            ),
+            RouterCacheEnum.OTPM.value.format(id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute),
             10,
         ),
         (
-            RouterCacheEnum.ITPM.value.format(
-                id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute
-            ),
+            RouterCacheEnum.ITPM.value.format(id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute),
             70,
         ),
         (
-            RouterCacheEnum.OTPM.value.format(
-                id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute
-            ),
+            RouterCacheEnum.OTPM.value.format(id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute),
             20,
         ),
     ]
@@ -1086,9 +1014,7 @@ async def test_get_model_group_io_token_usage_sums_across_deployments():
 @pytest.mark.asyncio
 async def test_get_model_group_io_token_usage_no_deployments_returns_none():
     router = Router(model_list=[])
-    current_itpm, current_otpm = await router.get_model_group_io_token_usage(
-        "nonexistent-group"
-    )
+    current_itpm, current_otpm = await router.get_model_group_io_token_usage("nonexistent-group")
     assert current_itpm is None
     assert current_otpm is None
 
@@ -1291,9 +1217,7 @@ async def test_set_response_headers_wraps_bare_async_generator(model_list):
 def test_get_all_deployments(model_list):
     """Test if the 'get_all_deployments' function is working correctly"""
     router = Router(model_list=model_list)
-    deployments = router._get_all_deployments(
-        model_name="gpt-5-mini", model_alias="gpt-5-mini"
-    )
+    deployments = router._get_all_deployments(model_name="gpt-5-mini", model_alias="gpt-5-mini")
     assert len(deployments) > 0
 
 
@@ -1342,9 +1266,7 @@ def test_track_deployment_metrics(model_list):
 
     router = Router(model_list=model_list)
     router._track_deployment_metrics(
-        deployment=router.get_deployment_by_model_group_name(
-            model_group_name="gpt-5-mini"
-        ),
+        deployment=router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini"),
         response=ModelResponse(
             model="gpt-5-mini",
             usage={"total_tokens": 100},
@@ -1366,9 +1288,7 @@ def test_track_deployment_metrics(model_list):
         ),
     ],
 )
-def test_get_num_retries_from_retry_policy(
-    model_list, exception_type, exception_name, num_retries
-):
+def test_get_num_retries_from_retry_policy(model_list, exception_type, exception_name, num_retries):
     """Test if the 'get_num_retries_from_retry_policy' function is working correctly"""
     from litellm.router import RetryPolicy
 
@@ -1380,9 +1300,7 @@ def test_get_num_retries_from_retry_policy(
     )
     print("exception_type", exception_type)
     calc_num_retries = router.get_num_retries_from_retry_policy(
-        exception=exception_type(
-            message="test", llm_provider="openai", model="gpt-5-mini"
-        )
+        exception=exception_type(message="test", llm_provider="openai", model="gpt-5-mini")
     )
     assert calc_num_retries == num_retries
 
@@ -1400,20 +1318,14 @@ def test_get_num_retries_from_retry_policy(
         ),
     ],
 )
-def test_get_allowed_fails_from_policy(
-    model_list, exception_type, exception_name, allowed_fails
-):
+def test_get_allowed_fails_from_policy(model_list, exception_type, exception_name, allowed_fails):
     """Test if the 'get_allowed_fails_from_policy' function is working correctly"""
     from litellm.types.router import AllowedFailsPolicy
 
     data = {exception_name + "AllowedFails": allowed_fails}
-    router = Router(
-        model_list=model_list, allowed_fails_policy=AllowedFailsPolicy(**data)
-    )
+    router = Router(model_list=model_list, allowed_fails_policy=AllowedFailsPolicy(**data))
     calc_allowed_fails = router.get_allowed_fails_from_policy(
-        exception=exception_type(
-            message="test", llm_provider="openai", model="gpt-5-mini"
-        )
+        exception=exception_type(message="test", llm_provider="openai", model="gpt-5-mini")
     )
     assert calc_allowed_fails == allowed_fails
 
@@ -1423,9 +1335,7 @@ def test_initialize_alerting(model_list):
     from litellm.types.router import AlertingConfig
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 
-    router = Router(
-        model_list=model_list, alerting_config=AlertingConfig(webhook_url="test")
-    )
+    router = Router(model_list=model_list, alerting_config=AlertingConfig(webhook_url="test"))
     router._initialize_alerting()
 
     callback_added = False
@@ -1590,9 +1500,7 @@ def test_replace_model_in_jsonl(model_list):
         ),
     ],
 )
-def test_pattern_match_deployment_set_model_name(
-    user_request_model, model_name, litellm_model, expected_model
-):
+def test_pattern_match_deployment_set_model_name(user_request_model, model_name, litellm_model, expected_model):
     from re import Match
     from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 
@@ -1647,9 +1555,7 @@ async def test_pass_through_moderation_endpoint_factory(model_list):
 def test_has_default_fallbacks(model_list, has_default_fallbacks, expected_result):
     router = Router(
         model_list=model_list,
-        default_fallbacks=(
-            ["my-default-fallback-model"] if has_default_fallbacks else None
-        ),
+        default_fallbacks=(["my-default-fallback-model"] if has_default_fallbacks else None),
     )
     assert router._has_default_fallbacks() is expected_result
 
@@ -1835,9 +1741,7 @@ def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, mode
     # Add an existing auto-router
     from litellm.types.router import TaggedPreRoutingStrategy
 
-    router.auto_routers["test-auto-router"] = [
-        TaggedPreRoutingStrategy(tags=(), strategy=mock_auto_router_instance)
-    ]
+    router.auto_routers["test-auto-router"] = [TaggedPreRoutingStrategy(tags=(), strategy=mock_auto_router_instance)]
 
     # Try to add another auto-router with the same name
     litellm_params = LiteLLM_Params(
@@ -1852,9 +1756,7 @@ def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, mode
         model_info={"id": "test-id"},
     )
 
-    with pytest.raises(
-        ValueError, match="Auto-router deployment test-auto-router with tags .* already exists"
-    ):
+    with pytest.raises(ValueError, match="Auto-router deployment test-auto-router with tags .* already exists"):
         router.init_auto_router_deployment(deployment)
 
 
@@ -1871,9 +1773,7 @@ def test_generate_model_id_with_deployment_model_name(model_list):
     }
 
     try:
-        result = router._generate_model_id(
-            model_group=model_group, litellm_params=litellm_params
-        )
+        result = router._generate_model_id(model_group=model_group, litellm_params=litellm_params)
         assert isinstance(result, str)
         assert len(result) > 0
         print(f"✓ Success with valid model_group: {result}")
@@ -1882,17 +1782,11 @@ def test_generate_model_id_with_deployment_model_name(model_list):
 
     # Test case 2: Edge case with None model_group (this should fail as expected - our fix prevents this from happening)
     try:
-        result = router._generate_model_id(
-            model_group=None, litellm_params=litellm_params
-        )
-        pytest.fail(
-            "Expected TypeError when model_group is None - this confirms our fix is needed"
-        )
+        result = router._generate_model_id(model_group=None, litellm_params=litellm_params)
+        pytest.fail("Expected TypeError when model_group is None - this confirms our fix is needed")
     except TypeError as e:
         # After optimization, error message changed but still fails appropriately on None
-        assert "unsupported operand type(s) for +=" in str(
-            e
-        ) or "expected str instance, NoneType found" in str(e)
+        assert "unsupported operand type(s) for +=" in str(e) or "expected str instance, NoneType found" in str(e)
         print(f"✓ Correctly failed with None model_group (as expected): {e}")
     except Exception as e:
         pytest.fail(f"Unexpected error with None model_group: {e}")
@@ -1905,9 +1799,7 @@ def test_generate_model_id_with_deployment_model_name(model_list):
     }
 
     try:
-        result = router._generate_model_id(
-            model_group=model_group, litellm_params=litellm_params_with_none_key
-        )
+        result = router._generate_model_id(model_group=model_group, litellm_params=litellm_params_with_none_key)
         assert isinstance(result, str)
         assert len(result) > 0
         print(f"✓ Success with None key in litellm_params: {result}")
@@ -1924,12 +1816,8 @@ def test_generate_model_id_with_deployment_model_name(model_list):
         pytest.fail(f"Failed with empty litellm_params: {e}")
 
     # Test case 5: Verify that the same inputs produce the same result (deterministic)
-    result1 = router._generate_model_id(
-        model_group=model_group, litellm_params=litellm_params
-    )
-    result2 = router._generate_model_id(
-        model_group=model_group, litellm_params=litellm_params
-    )
+    result1 = router._generate_model_id(model_group=model_group, litellm_params=litellm_params)
+    result2 = router._generate_model_id(model_group=model_group, litellm_params=litellm_params)
     assert result1 == result2, "Model ID generation should be deterministic"
 
     print("✓ All _generate_model_id tests passed!")
@@ -1968,9 +1856,7 @@ def test_handle_clientside_credential_with_deployment_model_name(model_list):
         assert model_group == "gpt-4.1"
 
         # Verify that _generate_model_id works with this model_group
-        result = router._generate_model_id(
-            model_group=model_group, litellm_params=dynamic_litellm_params
-        )
+        result = router._generate_model_id(model_group=model_group, litellm_params=dynamic_litellm_params)
         assert isinstance(result, str)
         assert len(result) > 0
 
@@ -2011,10 +1897,7 @@ def test_sync_generic_api_call_preserves_requested_model_group_in_logs():
         assert response == {"status": "ok"}
         assert captured_kwargs["model"] == "bedrock/global.anthropic.claude-sonnet-4-6"
         assert captured_kwargs["litellm_metadata"]["model_group"] == "claude-sonnet-4-6"
-        assert (
-            captured_kwargs["litellm_metadata"]["deployment"]
-            == "bedrock/global.anthropic.claude-sonnet-4-6"
-        )
+        assert captured_kwargs["litellm_metadata"]["deployment"] == "bedrock/global.anthropic.claude-sonnet-4-6"
     finally:
         router.discard()
 
@@ -2073,9 +1956,7 @@ def test_sync_generic_api_call_uses_request_kwargs_for_deployment_selection():
         ("aget_file", "litellm_metadata"),
     ],
 )
-def test_handle_clientside_credential_metadata_loading(
-    model_list, function_name, expected_metadata_key
-):
+def test_handle_clientside_credential_metadata_loading(model_list, function_name, expected_metadata_key):
     """Test that _handle_clientside_credential correctly loads metadata based on function name"""
     router = Router(model_list=model_list)
 
@@ -2130,9 +2011,7 @@ def test_handle_clientside_credential_metadata_loading(
         assert "litellm_metadata" in kwargs
         # Note: acompletion would not have litellm_metadata, but other functions might have both
 
-    print(
-        f"✓ Success with function_name '{function_name}' using '{expected_metadata_key}' metadata key"
-    )
+    print(f"✓ Success with function_name '{function_name}' using '{expected_metadata_key}' metadata key")
 
 
 @pytest.mark.parametrize(
@@ -2142,18 +2021,14 @@ def test_handle_clientside_credential_metadata_loading(
         ("_ageneric_api_call_with_fallbacks", "litellm_metadata"),
     ],
 )
-def test_handle_clientside_credential_metadata_variable_name(
-    model_list, function_name, metadata_key
-):
+def test_handle_clientside_credential_metadata_variable_name(model_list, function_name, metadata_key):
     """Test that _handle_clientside_credential uses the correct metadata variable name based on function name"""
     from litellm.router_utils.batch_utils import _get_router_metadata_variable_name
 
     router = Router(model_list=model_list)
 
     # Verify the metadata variable name is correct for each function
-    expected_metadata_key = _get_router_metadata_variable_name(
-        function_name=function_name
-    )
+    expected_metadata_key = _get_router_metadata_variable_name(function_name=function_name)
     assert expected_metadata_key == metadata_key
 
     # Mock deployment
@@ -2182,9 +2057,7 @@ def test_handle_clientside_credential_metadata_variable_name(
     assert result_deployment.litellm_params.api_key == "client_side_key"
     assert result_deployment.litellm_params.api_base == "https://api.openai.com/v1"
 
-    print(
-        f"✓ Success with function_name '{function_name}' correctly using '{metadata_key}' for metadata"
-    )
+    print(f"✓ Success with function_name '{function_name}' correctly using '{metadata_key}' for metadata")
 
 
 def test_handle_clientside_credential_no_metadata(model_list):
@@ -2276,9 +2149,7 @@ def test_handle_clientside_credential_with_responses_function(model_list):
     # Verify the deployment was added to the router
     assert len(router.model_list) == len(model_list) + 1
 
-    print(
-        "✓ Success with _ageneric_api_call_with_fallbacks function name and litellm_metadata"
-    )
+    print("✓ Success with _ageneric_api_call_with_fallbacks function name and litellm_metadata")
 
 
 def test_get_metadata_variable_name_from_kwargs(model_list):
@@ -2292,9 +2163,7 @@ def test_get_metadata_variable_name_from_kwargs(model_list):
         "litellm_metadata": {"user": "test"},
         "metadata": {"other": "data"},
     }
-    result = router._get_metadata_variable_name_from_kwargs(
-        kwargs_with_litellm_metadata
-    )
+    result = router._get_metadata_variable_name_from_kwargs(kwargs_with_litellm_metadata)
     assert result == "litellm_metadata"
 
     # Test case 2: kwargs only contains metadata - should return "metadata"
@@ -2366,9 +2235,7 @@ async def test_asearch_with_fallbacks(search_tools):
     )
 
     # Mock the async_function_with_fallbacks to return our mock response
-    with patch.object(
-        router, "async_function_with_fallbacks", new_callable=AsyncMock
-    ) as mock_fallbacks:
+    with patch.object(router, "async_function_with_fallbacks", new_callable=AsyncMock) as mock_fallbacks:
         mock_fallbacks.return_value = mock_response
 
         # Mock original function
@@ -2521,9 +2388,7 @@ def test_get_first_default_fallback():
     assert result is None
 
     # Test with fallbacks but no default
-    router_no_default = Router(
-        model_list=model_list, fallbacks=[{"gpt-5.5": ["gpt-5-mini"]}]
-    )
+    router_no_default = Router(model_list=model_list, fallbacks=[{"gpt-5.5": ["gpt-5-mini"]}])
     result = router_no_default._get_first_default_fallback()
     assert result is None
 
@@ -2762,9 +2627,7 @@ def test_sync_deployment_budget_config(monkeypatch):
 
     budget_limiter = router._get_router_deployment_budget_limiter()
     assert budget_limiter is not None
-    config = budget_limiter._get_budget_config_for_deployment(
-        "runtime-budget-deployment"
-    )
+    config = budget_limiter._get_budget_config_for_deployment("runtime-budget-deployment")
     assert config is not None
     assert config.max_budget == 0.000000000001
 

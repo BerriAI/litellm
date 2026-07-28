@@ -10,9 +10,7 @@ from litellm.llms.bedrock.chat.converse_handler import make_sync_call
 from litellm.llms.bedrock.common_utils import _get_all_bedrock_regions
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 
 def test_encode_model_id_with_inference_profile():
@@ -70,9 +68,7 @@ class TestBedrockRegionInModelPath:
             ),
         ],
     )
-    def test_region_and_model_id_extraction(
-        self, model, expected_model_id, expected_region
-    ):
+    def test_region_and_model_id_extraction(self, model, expected_model_id, expected_region):
         """
         Verify that completion() correctly extracts both modelId and aws_region_name
         from the bedrock/{region}/{model} path format.
@@ -104,12 +100,12 @@ class TestBedrockRegionInModelPath:
         if _region_from_model is not None and "aws_region_name" not in optional_params:
             optional_params["aws_region_name"] = _region_from_model
 
-        assert (
-            model_id == expected_model_id
-        ), f"modelId mismatch for {model!r}: got {model_id!r}, expected {expected_model_id!r}"
-        assert (
-            optional_params.get("aws_region_name") == expected_region
-        ), f"region mismatch for {model!r}: got {optional_params.get('aws_region_name')!r}, expected {expected_region!r}"
+        assert model_id == expected_model_id, (
+            f"modelId mismatch for {model!r}: got {model_id!r}, expected {expected_model_id!r}"
+        )
+        assert optional_params.get("aws_region_name") == expected_region, (
+            f"region mismatch for {model!r}: got {optional_params.get('aws_region_name')!r}, expected {expected_region!r}"
+        )
 
     def test_explicit_aws_region_name_not_overridden(self):
         """
@@ -203,9 +199,7 @@ def test_make_sync_call_honors_explicit_stream_chunk_size():
 
 
 def test_completion_plumbs_stream_chunk_size_through_converse():
-    iter_bytes_spy = _stream_completion_with_spied_iter_bytes(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
-    )
+    iter_bytes_spy = _stream_completion_with_spied_iter_bytes(model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
     iter_bytes_spy.assert_called_once_with(chunk_size=None)
 
     iter_bytes_spy = _stream_completion_with_spied_iter_bytes(

@@ -9,9 +9,7 @@ import os
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import logging
 
@@ -58,7 +56,6 @@ def test_routes_on_litellm_proxy():
 
     _all_routes = []
     for route in app.routes:
-
         _path_as_str = str(route.path)
         if ":path" in _path_as_str:
             # remove the :path
@@ -76,13 +73,9 @@ def test_routes_on_litellm_proxy():
         # wildcard patterns like /containers/* - check that base path exists
         elif RouteChecks._is_wildcard_pattern(pattern=route):
             # For wildcard patterns, check that the base path (without * and trailing /) exists
-            base_path = route[:-1].rstrip(
-                "/"
-            )  # Remove the trailing * and any trailing /
+            base_path = route[:-1].rstrip("/")  # Remove the trailing * and any trailing /
             # Check if base path exists (e.g., /containers or /v1/containers)
-            assert (
-                base_path in _all_routes
-            ), f"Wildcard pattern {route} requires base path {base_path} to exist"
+            assert base_path in _all_routes, f"Wildcard pattern {route} requires base path {base_path} to exist"
         else:
             assert route in _all_routes
 
@@ -159,9 +152,7 @@ def create_request(path: str, base_url: str = "http://testserver") -> Request:
 
 
 def test_get_request_route_with_base_url():
-    request = create_request(
-        path="/genai/chat/completions", base_url="http://testserver/genai"
-    )
+    request = create_request(path="/genai/chat/completions", base_url="http://testserver/genai")
     result = get_request_route(request)
     assert result == "/chat/completions"
 
@@ -223,13 +214,11 @@ def test_get_request_route_not_bypassed_by_malformed_host(host_header: str):
         "/key/generate",
         "/get/internal_user_settings",
     ]:
-        request = _create_request_with_host_header(
-            path=protected_path, host_header=host_header
-        )
+        request = _create_request_with_host_header(path=protected_path, host_header=host_header)
         result = get_request_route(request)
-        assert (
-            result == protected_path
-        ), f"Host: {host_header!r} caused route {protected_path!r} to resolve as {result!r}"
+        assert result == protected_path, (
+            f"Host: {host_header!r} caused route {protected_path!r} to resolve as {result!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -324,13 +313,9 @@ _CALL_SITES = [
     _CALL_SITES,
     ids=[c[0] for c in _CALL_SITES],
 )
-def test_call_site_uses_scope_path(
-    label, scope_path, host_suffix_template, predicate, expected, host_header
-):
+def test_call_site_uses_scope_path(label, scope_path, host_suffix_template, predicate, expected, host_header):
     """Each call site that previously read request.url.path must now make its
     decision against scope["path"]. The Host header is crafted so url.path
     would resolve to a value that flips the decision under the old code."""
-    request = _create_request_with_host_header(
-        path=scope_path, host_header=host_suffix_template % host_header
-    )
+    request = _create_request_with_host_header(path=scope_path, host_header=host_suffix_template % host_header)
     assert predicate(request) == expected

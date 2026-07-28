@@ -119,19 +119,13 @@ def test_fast_serialize_returns_none_when_model_field_is_missing():
     # produce a serialized result via the slow-path fallback, and it must
     # not contain ``"model": null``.
     serialized = _serialize_streaming_chunk(chunk)
-    payload_str = (
-        serialized.decode("utf-8") if isinstance(serialized, bytes) else serialized
-    )
+    payload_str = serialized.decode("utf-8") if isinstance(serialized, bytes) else serialized
     assert '"model": null' not in payload_str
     assert '"model":null' not in payload_str
-    assert json.loads(payload_str) == json.loads(
-        chunk.model_dump_json(exclude_none=True, exclude_unset=True)
-    )
+    assert json.loads(payload_str) == json.loads(chunk.model_dump_json(exclude_none=True, exclude_unset=True))
 
 
-def test_proxy_chat_completion_does_not_return_provider_prefixed_model(
-    tmp_path, monkeypatch
-):
+def test_proxy_chat_completion_does_not_return_provider_prefixed_model(tmp_path, monkeypatch):
     """
     Regression test:
 
@@ -161,15 +155,11 @@ def test_proxy_chat_completion_does_not_return_provider_prefixed_model(
     monkeypatch.setattr(
         proxy_server.llm_router,  # type: ignore[arg-type]
         "acompletion",
-        AsyncMock(
-            return_value=_make_minimal_chat_completion_response(model=internal_model)
-        ),
+        AsyncMock(return_value=_make_minimal_chat_completion_response(model=internal_model)),
     )
 
     # Also no-op proxy logging hooks to keep this test focused and deterministic.
-    monkeypatch.setattr(
-        proxy_server.proxy_logging_obj, "during_call_hook", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "during_call_hook", AsyncMock(return_value=None))
     monkeypatch.setattr(
         proxy_server.proxy_logging_obj,
         "update_request_status",

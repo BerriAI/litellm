@@ -482,11 +482,7 @@ class TestCanadianPIIPolicyE2E:
         """Multiple Canadian PII types in same message are all masked"""
         guardrail = self.setup_canadian_guardrail()
 
-        text = (
-            "Employee SIN 123-456-789, "
-            "email jane@example.com, "
-            "postal code M5V 2T6."
-        )
+        text = "Employee SIN 123-456-789, email jane@example.com, postal code M5V 2T6."
         result = await guardrail.apply_guardrail(
             inputs={"texts": [text]},
             request_data={},

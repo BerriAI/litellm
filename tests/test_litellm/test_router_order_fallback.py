@@ -373,29 +373,14 @@ def test_check_non_standard_fallback_format():
     )
 
     # Standard formats
-    assert (
-        _check_non_standard_fallback_format([{"gpt-3.5-turbo": ["claude-3-haiku"]}])
-        == False
-    )
+    assert _check_non_standard_fallback_format([{"gpt-3.5-turbo": ["claude-3-haiku"]}]) == False
     assert _check_non_standard_fallback_format([{"model": ["qwen-backup"]}]) == False
-    assert (
-        _check_non_standard_fallback_format(
-            [{"model": ["qwen-backup"], "region": ["us-east-1"]}]
-        )
-        == False
-    )
+    assert _check_non_standard_fallback_format([{"model": ["qwen-backup"], "region": ["us-east-1"]}]) == False
 
     # Non-standard formats
     assert _check_non_standard_fallback_format([{"model": "qwen-backup"}]) == True
     assert (
-        _check_non_standard_fallback_format(
-            [{"model": "qwen-backup", "messages": [{"role": "user", "content": "hi"}]}]
-        )
+        _check_non_standard_fallback_format([{"model": "qwen-backup", "messages": [{"role": "user", "content": "hi"}]}])
         == True
     )
-    assert (
-        _check_non_standard_fallback_format(
-            [{"model": ["qwen-backup"], "api_key": "some-key"}]
-        )
-        == True
-    )
+    assert _check_non_standard_fallback_format([{"model": ["qwen-backup"], "api_key": "some-key"}]) == True

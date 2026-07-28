@@ -86,10 +86,7 @@ ACTIVATION_TIME_UTC = "09:00 UTC"
 def _format_cutoff(cutoff: dt.date) -> str:
     """Human-readable, timezone-explicit cutoff, e.g. ``Monday, June 1, 2026
     (09:00 UTC)`` — the moment a still-failing PR/issue gets closed."""
-    return (
-        f"{cutoff.strftime('%A, %B')} {cutoff.day}, {cutoff.year} "
-        f"({ACTIVATION_TIME_UTC})"
-    )
+    return f"{cutoff.strftime('%A, %B')} {cutoff.day}, {cutoff.year} ({ACTIVATION_TIME_UTC})"
 
 
 def _rubric_section_pr() -> str:
@@ -185,17 +182,13 @@ def _recovery_section(kind: str) -> str:
     )
 
 
-def format_heads_up_comment(
-    *, kind: str, verdict: dict, greptile_score: int | None, cutoff: dt.date
-) -> str:
+def format_heads_up_comment(*, kind: str, verdict: dict, greptile_score: int | None, cutoff: dt.date) -> str:
     """Compose the friendly 7-day heads-up comment posted on a failing PR/issue."""
     noun = "PR" if kind == "pr" else "issue"
     rubric = _rubric_section_pr() if kind == "pr" else _rubric_section_issue()
     cutoff_str = _format_cutoff(cutoff)
     explanation = (verdict.get("explanation") or "").strip()
-    explanation_block = (
-        f"> _(The judge's note for this one: {explanation})_\n\n" if explanation else ""
-    )
+    explanation_block = f"> _(The judge's note for this one: {explanation})_\n\n" if explanation else ""
 
     return (
         "🚅 **Heads-up: we're turning on the OSS triage bot in "
@@ -240,9 +233,7 @@ def _list_open_numbers(repo: str, kind: str) -> list[int]:
     issue list`` would include PRs, but ``list_open_items`` uses the dedicated
     command per kind, so the two never mix.
     """
-    return [
-        item["number"] for item in list_open_items(kind, repo=repo, fields="number")
-    ]
+    return [item["number"] for item in list_open_items(kind, repo=repo, fields="number")]
 
 
 def _has_heads_up_marker(item: dict) -> bool:
@@ -271,9 +262,7 @@ def _comments_have_marker(repo: str, number: int) -> bool:
     Comments live on the unified issues endpoint regardless of whether the
     item is a PR or an issue, so no ``kind`` argument is required here.
     """
-    expected_login = (
-        os.environ.get("AGENT_SHIN_BOT_LOGIN") or AGENT_SHIN_DEFAULT_BOT_LOGIN
-    ).lower()
+    expected_login = (os.environ.get("AGENT_SHIN_BOT_LOGIN") or AGENT_SHIN_DEFAULT_BOT_LOGIN).lower()
     raw = gh(
         "api",
         "--paginate",
@@ -382,9 +371,7 @@ def _process_one(
 
     verdict = result.get("verdict") or {}
     greptile_score = result.get("greptile_score") if kind == "pr" else None
-    comment = format_heads_up_comment(
-        kind=kind, verdict=verdict, greptile_score=greptile_score, cutoff=cutoff
-    )
+    comment = format_heads_up_comment(kind=kind, verdict=verdict, greptile_score=greptile_score, cutoff=cutoff)
     maybe_post_comment(repo, number, comment, dry_run=dry_run)
     return {
         **base,
@@ -420,9 +407,7 @@ def run(
     """Sweep ``repo`` and post heads-up comments. Returns the per-item results."""
     dry_run = not close
     if dry_run:
-        print(
-            f"[DRY RUN] sweeping {repo}; --close not passed, no comments will be posted."
-        )
+        print(f"[DRY RUN] sweeping {repo}; --close not passed, no comments will be posted.")
     else:
         print(f"[REAL RUN] sweeping {repo}; comments WILL be posted.")
     print(f"Cutoff date in comment body: {cutoff.isoformat()}")
@@ -446,9 +431,7 @@ def run(
                     judge=judge,
                     skip_marker_check=skip_marker_check,
                 )
-            except (
-                Exception
-            ) as exc:  # noqa: BLE001 - per-item errors don't abort the sweep
+            except Exception as exc:  # noqa: BLE001 - per-item errors don't abort the sweep
                 result = {
                     "kind": kind,
                     "number": n,
@@ -469,8 +452,7 @@ def main() -> int:
         "--close",
         action="store_true",
         help=(
-            "Actually post comments. Without this flag the script is in "
-            "dry-run mode and only logs what it would do."
+            "Actually post comments. Without this flag the script is in dry-run mode and only logs what it would do."
         ),
     )
     parser.add_argument(
@@ -517,9 +499,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    cutoff = args.close_on or (
-        dt.datetime.now(dt.timezone.utc).date() + dt.timedelta(days=DEFAULT_GRACE_DAYS)
-    )
+    cutoff = args.close_on or (dt.datetime.now(dt.timezone.utc).date() + dt.timedelta(days=DEFAULT_GRACE_DAYS))
 
     kinds: tuple[str, ...]
     if args.kind == "pr":

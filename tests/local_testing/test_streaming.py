@@ -19,9 +19,7 @@ import litellm.litellm_core_utils.litellm_logging
 from litellm.utils import ModelResponseListIterator
 from litellm.types.utils import ModelResponseStream
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -80,14 +78,12 @@ def validate_first_format(chunk):
 
     for choice in chunk["choices"]:
         assert isinstance(choice["index"], int), "'index' should be an integer."
-        assert isinstance(
-            choice["delta"]["role"], str
-        ), f"'role' should be a string. Got {choice['delta']['role']}"
+        assert isinstance(choice["delta"]["role"], str), f"'role' should be a string. Got {choice['delta']['role']}"
         assert "messages" not in choice
         # openai v1.0.0 returns content as None
-        assert (choice["finish_reason"] is None) or isinstance(
-            choice["finish_reason"], str
-        ), "'finish_reason' should be None or a string."
+        assert (choice["finish_reason"] is None) or isinstance(choice["finish_reason"], str), (
+            "'finish_reason' should be None or a string."
+        )
 
 
 second_openai_chunk_example = {
@@ -114,9 +110,9 @@ def validate_second_format(chunk):
         assert isinstance(choice["index"], int), "'index' should be an integer."
         assert hasattr(choice["delta"], "role"), "'role' should be a string."
         # openai v1.0.0 returns content as None
-        assert (choice["finish_reason"] is None) or isinstance(
-            choice["finish_reason"], str
-        ), "'finish_reason' should be None or a string."
+        assert (choice["finish_reason"] is None) or isinstance(choice["finish_reason"], str), (
+            "'finish_reason' should be None or a string."
+        )
 
 
 last_openai_chunk_example = {
@@ -154,9 +150,7 @@ def validate_last_format(chunk):
         assert choice["delta"]["function_call"] is None
         assert choice["delta"]["role"] is None
         assert choice["delta"]["tool_calls"] is None
-        assert isinstance(
-            choice["finish_reason"], str
-        ), "'finish_reason' should be a string."
+        assert isinstance(choice["finish_reason"], str), "'finish_reason' should be a string."
 
 
 def streaming_format_tests(idx, chunk) -> Tuple[str, bool]:
@@ -172,15 +166,10 @@ def streaming_format_tests(idx, chunk) -> Tuple[str, bool]:
     if idx != 0:  # ensure no role
         if "role" in chunk["choices"][0]["delta"]:
             pass  # openai v1.0.0+ passes role = None
-    if chunk["choices"][0][
-        "finish_reason"
-    ]:  # ensure finish reason is only in last chunk
+    if chunk["choices"][0]["finish_reason"]:  # ensure finish reason is only in last chunk
         validate_last_format(chunk=chunk)
         finished = True
-    if (
-        "content" in chunk["choices"][0]["delta"]
-        and chunk["choices"][0]["delta"]["content"] is not None
-    ):
+    if "content" in chunk["choices"][0]["delta"] and chunk["choices"][0]["delta"]["content"] is not None:
         extracted_chunk = chunk["choices"][0]["delta"]["content"]
     print(f"extracted chunk: {extracted_chunk}")
     return extracted_chunk, finished
@@ -273,9 +262,7 @@ def test_completion_azure_stream_content_filter_no_delta():
             },
             {
                 "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
-                "choices": [
-                    {"delta": {"content": "This"}, "finish_reason": None, "index": 0}
-                ],
+                "choices": [{"delta": {"content": "This"}, "finish_reason": None, "index": 0}],
                 "created": 1716563849,
                 "model": "gpt-4o-2024-05-13",
                 "object": "chat.completion.chunk",
@@ -283,9 +270,7 @@ def test_completion_azure_stream_content_filter_no_delta():
             },
             {
                 "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
-                "choices": [
-                    {"delta": {"content": " is"}, "finish_reason": None, "index": 0}
-                ],
+                "choices": [{"delta": {"content": " is"}, "finish_reason": None, "index": 0}],
                 "created": 1716563849,
                 "model": "gpt-4o-2024-05-13",
                 "object": "chat.completion.chunk",
@@ -293,9 +278,7 @@ def test_completion_azure_stream_content_filter_no_delta():
             },
             {
                 "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
-                "choices": [
-                    {"delta": {"content": " a"}, "finish_reason": None, "index": 0}
-                ],
+                "choices": [{"delta": {"content": " a"}, "finish_reason": None, "index": 0}],
                 "created": 1716563849,
                 "model": "gpt-4o-2024-05-13",
                 "object": "chat.completion.chunk",
@@ -303,9 +286,7 @@ def test_completion_azure_stream_content_filter_no_delta():
             },
             {
                 "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
-                "choices": [
-                    {"delta": {"content": " dummy"}, "finish_reason": None, "index": 0}
-                ],
+                "choices": [{"delta": {"content": " dummy"}, "finish_reason": None, "index": 0}],
                 "created": 1716563849,
                 "model": "gpt-4o-2024-05-13",
                 "object": "chat.completion.chunk",
@@ -350,9 +331,7 @@ def test_completion_azure_stream_content_filter_no_delta():
             },
             {
                 "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
-                "choices": [
-                    {"delta": {"content": "."}, "finish_reason": None, "index": 0}
-                ],
+                "choices": [{"delta": {"content": "."}, "finish_reason": None, "index": 0}],
                 "created": 1716563849,
                 "model": "gpt-4o-2024-05-13",
                 "object": "chat.completion.chunk",
@@ -450,9 +429,7 @@ def test_completion_azure_stream():
                 "content": "how does a court case get to the Supreme Court?",
             },
         ]
-        response = completion(
-            model="azure/gpt-4.1-mini", messages=messages, stream=True, max_tokens=50
-        )
+        response = completion(model="azure/gpt-4.1-mini", messages=messages, stream=True, max_tokens=50)
         complete_response = ""
         # Add any assertions here to check the response
         for idx, init_chunk in enumerate(response):
@@ -549,9 +526,7 @@ def test_completion_model_stream(model):
                 "content": "how does a court case get to the Supreme Court?",
             },
         ]
-        response = completion(
-            model=model, messages=messages, stream=True, max_tokens=50
-        )
+        response = completion(model=model, messages=messages, stream=True, max_tokens=50)
         complete_response = ""
         # Add any assertions here to check the response
         for idx, chunk in enumerate(response):
@@ -645,9 +620,7 @@ async def test_completion_gemini_stream(sync_mode):
         #     raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
 
-        complete_response = litellm.stream_chunk_builder(
-            chunks=chunks, messages=messages
-        )
+        complete_response = litellm.stream_chunk_builder(chunks=chunks, messages=messages)
 
         assert complete_response.choices[0].message.function_call is not None
 
@@ -727,9 +700,7 @@ async def test_completion_gemini_stream_accumulated_json(sync_mode):
         chunks = []
         if sync_mode:
             client = HTTPHandler(concurrent_limit=1)
-            with patch.object(
-                client, "post", side_effect=gemini_mock_post_streaming
-            ) as mock_client:
+            with patch.object(client, "post", side_effect=gemini_mock_post_streaming) as mock_client:
                 response = completion(
                     model="gemini/gemini-2.5-flash-lite",
                     messages=messages,
@@ -752,9 +723,7 @@ async def test_completion_gemini_stream_accumulated_json(sync_mode):
                 mock_client.assert_called_once()
         else:
             client = AsyncHTTPHandler(concurrent_limit=1)
-            with patch.object(
-                client, "post", side_effect=gemini_mock_post_streaming
-            ) as mock_client:
+            with patch.object(client, "post", side_effect=gemini_mock_post_streaming) as mock_client:
                 response = await litellm.acompletion(
                     model="gemini/gemini-2.5-flash-lite",
                     messages=messages,
@@ -1695,9 +1664,7 @@ def test_openai_chat_completion_call():
     litellm.return_response_headers = True
     response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
     assert isinstance(
-        response._hidden_params["additional_headers"][
-            "llm_provider-x-ratelimit-remaining-requests"
-        ],
+        response._hidden_params["additional_headers"]["llm_provider-x-ratelimit-remaining-requests"],
         str,
     )
 
@@ -1794,14 +1761,8 @@ async def test_openai_stream_options_call(model, sync):
 
     # assert all non last chunks have usage=None
     # Improved assertion with detailed error message
-    non_last_chunks_with_usage = [
-        chunk
-        for chunk in chunks[:-1]
-        if hasattr(chunk, "usage") and chunk.usage is not None
-    ]
-    assert (
-        not non_last_chunks_with_usage
-    ), f"Non-last chunks with usage not None:\n" + "\n".join(
+    non_last_chunks_with_usage = [chunk for chunk in chunks[:-1] if hasattr(chunk, "usage") and chunk.usage is not None]
+    assert not non_last_chunks_with_usage, f"Non-last chunks with usage not None:\n" + "\n".join(
         f"Chunk ID: {chunk.id}, Usage: {chunk.usage}, Content: {chunk.choices[0].delta.content}"
         for chunk in non_last_chunks_with_usage
     )
@@ -1851,9 +1812,7 @@ def test_openai_stream_options_call_text_completion():
 def test_openai_text_completion_call():
     try:
         litellm.set_verbose = True
-        response = completion(
-            model="gpt-3.5-turbo-instruct", messages=messages, stream=True
-        )
+        response = completion(model="gpt-3.5-turbo-instruct", messages=messages, stream=True)
         complete_response = ""
         start_time = time.time()
         for idx, chunk in enumerate(response):
@@ -2060,22 +2019,13 @@ function_calling_output_structure = {
 def validate_final_structure(item, structure=function_calling_output_structure):
     if isinstance(item, list):
         if not all(validate_final_structure(i, structure[0]) for i in item):
-            return Exception(
-                "Function calling final output doesn't match expected output format"
-            )
+            return Exception("Function calling final output doesn't match expected output format")
     elif isinstance(item, dict):
-        if not all(
-            k in item and validate_final_structure(item[k], v)
-            for k, v in structure.items()
-        ):
-            return Exception(
-                "Function calling final output doesn't match expected output format"
-            )
+        if not all(k in item and validate_final_structure(item[k], v) for k, v in structure.items()):
+            return Exception("Function calling final output doesn't match expected output format")
     else:
         if not isinstance(item, structure):
-            return Exception(
-                "Function calling final output doesn't match expected output format"
-            )
+            return Exception("Function calling final output doesn't match expected output format")
     return True
 
 
@@ -2112,22 +2062,14 @@ def validate_first_function_call_chunk_structure(item):
 
     required_keys_in_choices_array = {"index", "delta", "finish_reason"}
     for choice in item["choices"]:
-        if not (
-            isinstance(choice, dict)
-            or isinstance(choice, litellm.utils.StreamingChoices)
-        ):
+        if not (isinstance(choice, dict) or isinstance(choice, litellm.utils.StreamingChoices)):
             raise Exception(f"Incorrect format, type of choice: {type(choice)}")
         for key in required_keys_in_choices_array:
             if key not in choice:
                 raise Exception("Incorrect format")
 
-        if not (
-            isinstance(choice["delta"], dict)
-            or isinstance(choice["delta"], litellm.utils.Delta)
-        ):
-            raise Exception(
-                f"Incorrect format, type of choice: {type(choice['delta'])}"
-            )
+        if not (isinstance(choice["delta"], dict) or isinstance(choice["delta"], litellm.utils.Delta)):
+            raise Exception(f"Incorrect format, type of choice: {type(choice['delta'])}")
 
         required_keys_in_delta = {"role", "content", "function_call"}
         for key in required_keys_in_delta:
@@ -2138,9 +2080,7 @@ def validate_first_function_call_chunk_structure(item):
             isinstance(choice["delta"]["function_call"], dict)
             or isinstance(choice["delta"]["function_call"], BaseModel)
         ):
-            raise Exception(
-                f"Incorrect format, type of function call: {type(choice['delta']['function_call'])}"
-            )
+            raise Exception(f"Incorrect format, type of function call: {type(choice['delta']['function_call'])}")
 
         required_keys_in_function_call = {"name", "arguments"}
         for key in required_keys_in_function_call:
@@ -2187,10 +2127,7 @@ def validate_second_function_call_chunk_structure(data):
             if key not in choice:
                 raise Exception("Incorrect format")
 
-        if (
-            "function_call" not in choice["delta"]
-            or "arguments" not in choice["delta"]["function_call"]
-        ):
+        if "function_call" not in choice["delta"] or "arguments" not in choice["delta"]["function_call"]:
             raise Exception("Incorrect format")
 
     return True
@@ -2219,9 +2156,7 @@ def validate_final_function_call_chunk_structure(data):
 
     required_keys_in_choices_array = {"index", "delta", "finish_reason"}
     for choice in data["choices"]:
-        if not (
-            isinstance(choice, dict) or isinstance(choice["delta"], litellm.utils.Delta)
-        ):
+        if not (isinstance(choice, dict) or isinstance(choice["delta"], litellm.utils.Delta)):
             raise Exception("Incorrect format")
         for key in required_keys_in_choices_array:
             if key not in choice:
@@ -2301,12 +2236,8 @@ def test_streaming_and_function_calling(model):
             # continue
             # print("\n{}\n".format(chunk))
             if idx == 0:
-                assert (
-                    chunk.choices[0].delta.tool_calls[0].function.arguments is not None
-                )
-                assert isinstance(
-                    chunk.choices[0].delta.tool_calls[0].function.arguments, str
-                )
+                assert chunk.choices[0].delta.tool_calls[0].function.arguments is not None
+                assert isinstance(chunk.choices[0].delta.tool_calls[0].function.arguments, str)
             if chunk.choices[0].delta.tool_calls is not None:
                 json_str += chunk.choices[0].delta.tool_calls[0].function.arguments
 
@@ -2550,12 +2481,8 @@ def test_azure_streaming_and_function_calling():
         for idx, chunk in enumerate(response):
             print(f"chunk: {chunk}")
             if idx == 0:
-                assert (
-                    chunk.choices[0].delta.tool_calls[0].function.arguments is not None
-                )
-                assert isinstance(
-                    chunk.choices[0].delta.tool_calls[0].function.arguments, str
-                )
+                assert chunk.choices[0].delta.tool_calls[0].function.arguments is not None
+                assert isinstance(chunk.choices[0].delta.tool_calls[0].function.arguments, str)
                 validate_first_streaming_function_calling_chunk(chunk=chunk)
             elif idx == 1:
                 validate_second_streaming_function_calling_chunk(chunk=chunk)
@@ -2623,12 +2550,8 @@ async def test_azure_astreaming_and_function_calling():
         async for chunk in response:
             print(f"chunk: {chunk}")
             if idx == 0:
-                assert (
-                    chunk.choices[0].delta.tool_calls[0].function.arguments is not None
-                )
-                assert isinstance(
-                    chunk.choices[0].delta.tool_calls[0].function.arguments, str
-                )
+                assert chunk.choices[0].delta.tool_calls[0].function.arguments is not None
+                assert isinstance(chunk.choices[0].delta.tool_calls[0].function.arguments, str)
                 validate_first_streaming_function_calling_chunk(chunk=chunk)
             elif idx == 1:
                 validate_second_streaming_function_calling_chunk(chunk=chunk)
@@ -2654,12 +2577,8 @@ async def test_azure_astreaming_and_function_calling():
         async for chunk in response:
             print(f"chunk: {chunk}")
             if idx == 0:
-                assert (
-                    chunk.choices[0].delta.tool_calls[0].function.arguments is not None
-                )
-                assert isinstance(
-                    chunk.choices[0].delta.tool_calls[0].function.arguments, str
-                )
+                assert chunk.choices[0].delta.tool_calls[0].function.arguments is not None
+                assert isinstance(chunk.choices[0].delta.tool_calls[0].function.arguments, str)
                 validate_first_streaming_function_calling_chunk(chunk=chunk)
             elif idx == 1 and chunk.choices[0].finish_reason is None:
                 validate_second_streaming_function_calling_chunk(chunk=chunk)
@@ -2711,12 +2630,8 @@ def test_completion_claude_3_function_call_with_streaming():
         for chunk in response:
             print(f"chunk in response: {chunk}")
             if idx == 0:
-                assert (
-                    chunk.choices[0].delta.tool_calls[0].function.arguments is not None
-                )
-                assert isinstance(
-                    chunk.choices[0].delta.tool_calls[0].function.arguments, str
-                )
+                assert chunk.choices[0].delta.tool_calls[0].function.arguments is not None
+                assert isinstance(chunk.choices[0].delta.tool_calls[0].function.arguments, str)
                 validate_first_streaming_function_calling_chunk(chunk=chunk)
             elif idx == 1 and chunk.choices[0].finish_reason is None:
                 validate_second_streaming_function_calling_chunk(chunk=chunk)
@@ -2782,12 +2697,8 @@ async def test_acompletion_function_call_with_streaming(model):
         async for chunk in response:
             print(f"chunk in test: {chunk}")
             if idx == 0:
-                assert (
-                    chunk.choices[0].delta.tool_calls[0].function.arguments is not None
-                )
-                assert isinstance(
-                    chunk.choices[0].delta.tool_calls[0].function.arguments, str
-                )
+                assert chunk.choices[0].delta.tool_calls[0].function.arguments is not None
+                assert isinstance(chunk.choices[0].delta.tool_calls[0].function.arguments, str)
                 validate_first_streaming_function_calling_chunk(chunk=chunk)
             elif idx == 1 and chunk.choices[0].finish_reason is None:
                 validate_second_streaming_function_calling_chunk(chunk=chunk)
@@ -2840,9 +2751,7 @@ def test_unit_test_custom_stream_wrapper():
         "created": 1694268190,
         "model": "gpt-3.5-turbo-0125",
         "system_fingerprint": "fp_44709d6fcb",
-        "choices": [
-            {"index": 0, "delta": {"content": "How are you?"}, "finish_reason": "stop"}
-        ],
+        "choices": [{"index": 0, "delta": {"content": "How are you?"}, "finish_reason": "stop"}],
     }
     chunk = litellm.ModelResponseStream(**chunk)
 
@@ -2882,9 +2791,7 @@ def test_unit_test_custom_stream_wrapper():
     "chunk_value, expected_chunk_fail",
     [("How are you?", True), ("{", False), ("", False), (None, False)],
 )
-def test_unit_test_custom_stream_wrapper_repeating_chunk(
-    loop_amount, chunk_value, expected_chunk_fail
-):
+def test_unit_test_custom_stream_wrapper_repeating_chunk(loop_amount, chunk_value, expected_chunk_fail):
     """
     Test if InternalServerError raised if model enters infinite loop
 
@@ -2926,9 +2833,7 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     print(f"expected_chunk_fail: {expected_chunk_fail}")
 
     if (loop_amount > litellm.REPEATED_STREAMING_CHUNK_LIMIT) and expected_chunk_fail:
-        with pytest.raises(
-            (litellm.InternalServerError, litellm.exceptions.MidStreamFallbackError)
-        ):
+        with pytest.raises((litellm.InternalServerError, litellm.exceptions.MidStreamFallbackError)):
             for chunk in response:
                 continue
     else:
@@ -3025,9 +2930,7 @@ def test_unit_test_custom_stream_wrapper_openai():
         "id": "chatcmpl-9mWtyDnikZZoB75DyfUzWUxiiE2Pi",
         "choices": [
             litellm.utils.StreamingChoices(
-                delta=litellm.utils.Delta(
-                    content=None, function_call=None, role=None, tool_calls=None
-                ),
+                delta=litellm.utils.Delta(content=None, function_call=None, role=None, tool_calls=None),
                 finish_reason="content_filter",
                 index=0,
                 logprobs=None,
@@ -3253,9 +3156,7 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
             "created": 1714075272,
             "model": "gpt-4-0613",
             "system_fingerprint": None,
-            "choices": [
-                {"index": 0, "delta": {}, "logprobs": None, "finish_reason": "length"}
-            ],
+            "choices": [{"index": 0, "delta": {}, "logprobs": None, "finish_reason": "length"}],
         },
         {
             "id": "chatcmpl-9HzZIMCtVq7CbTmdwEZrktiTeoiYe",
@@ -3263,9 +3164,7 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
             "created": 1714075272,
             "model": "gpt-4-0613",
             "system_fingerprint": None,
-            "choices": [
-                {"index": 1, "delta": {}, "logprobs": None, "finish_reason": "stop"}
-            ],
+            "choices": [{"index": 1, "delta": {}, "logprobs": None, "finish_reason": "stop"}],
         },
     ]
 
@@ -3326,9 +3225,7 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
             if "logprobs" in choice and choice["logprobs"] is None:
                 choice.pop("logprobs")
 
-        assert (
-            chunk_dict == chunks[idx]
-        ), f"idx={idx} translated chunk = {chunk_dict} != openai chunk = {chunks[idx]}"
+        assert chunk_dict == chunks[idx], f"idx={idx} translated chunk = {chunk_dict} != openai chunk = {chunks[idx]}"
 
 
 def test_unit_test_custom_stream_wrapper_function_call():
@@ -3489,9 +3386,7 @@ def test_unit_test_perplexity_citations_chunk():
     finish_reason: Optional[str] = None
     for response_chunk in response:
         if response_chunk.choices[0].delta.content is not None:
-            print(
-                f"response_chunk.choices[0].delta.content: {response_chunk.choices[0].delta.content}"
-            )
+            print(f"response_chunk.choices[0].delta.content: {response_chunk.choices[0].delta.content}")
             assert "citations" in response_chunk
 
 
@@ -3534,9 +3429,7 @@ def test_aastreaming_tool_calls_valid_json_str(model):
         }
     ]
 
-    stream = litellm.completion(
-        model, messages, tools=tools, stream=True, vertex_location=vertex_location
-    )
+    stream = litellm.completion(model, messages, tools=tools, stream=True, vertex_location=vertex_location)
     chunks = [*stream]
     print(f"chunks: {chunks}")
     tool_call_id_arg_map = {}
@@ -3552,9 +3445,7 @@ def test_aastreaming_tool_calls_valid_json_str(model):
                 curr_tool_call_id = chunk.choices[0].delta.tool_calls[0].id
                 tool_call_id_arg_map[curr_tool_call_id] = ""
             if chunk.choices[0].delta.tool_calls[0].function.arguments is not None:
-                curr_tool_call_str += (
-                    chunk.choices[0].delta.tool_calls[0].function.arguments
-                )
+                curr_tool_call_str += chunk.choices[0].delta.tool_calls[0].function.arguments
     # flush prev tool call
     if curr_tool_call_id is not None:
         tool_call_id_arg_map[curr_tool_call_id] = curr_tool_call_str

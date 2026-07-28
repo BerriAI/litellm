@@ -68,8 +68,7 @@ class TestShortPrefixHelpers:
             for attempt in range(4):
                 prefix = compute_short_server_prefix(f"server-{i}", attempt=attempt)
                 assert prefix[0].isalpha(), (
-                    f"prefix {prefix!r} for server-{i} (attempt={attempt}) "
-                    f"starts with a non-alphabetic character"
+                    f"prefix {prefix!r} for server-{i} (attempt={attempt}) starts with a non-alphabetic character"
                 )
 
     def test_short_prefix_is_deterministic(self):
@@ -156,19 +155,14 @@ class TestStripKnownServerPrefix:
 
     def test_clean_prefix_round_trips(self):
         server = _make_server(alias="deepwiki", server_name="deepwiki")
-        live = add_server_prefix_to_name(
-            "read_wiki_contents", get_server_prefix(server)
-        )
+        live = add_server_prefix_to_name("read_wiki_contents", get_server_prefix(server))
         assert strip_known_server_prefix(live, server) == "read_wiki_contents"
 
     def test_hyphenated_alias_does_not_mangle(self):
         server = _make_server(alias="deep-wiki", server_name="deep-wiki")
         assert get_server_prefix(server) == "deep-wiki"
         # the first-separator split would yield "wiki-read_wiki_contents"
-        assert (
-            strip_known_server_prefix("deep-wiki-read_wiki_contents", server)
-            == "read_wiki_contents"
-        )
+        assert strip_known_server_prefix("deep-wiki-read_wiki_contents", server) == "read_wiki_contents"
 
     def test_uuid_fallback_prefix_does_not_mangle(self):
         server = MCPServer(
@@ -178,18 +172,13 @@ class TestStripKnownServerPrefix:
             server_name=None,
             transport="http",
         )
-        live = add_server_prefix_to_name(
-            "read_wiki_contents", get_server_prefix(server)
-        )
+        live = add_server_prefix_to_name("read_wiki_contents", get_server_prefix(server))
         assert live.startswith("117c814c-1a2b-3c4d-9e8f-")
         assert strip_known_server_prefix(live, server) == "read_wiki_contents"
 
     def test_unprefixed_name_returned_unchanged(self):
         server = _make_server(alias="deep-wiki", server_name="deep-wiki")
-        assert (
-            strip_known_server_prefix("read_wiki_contents", server)
-            == "read_wiki_contents"
-        )
+        assert strip_known_server_prefix("read_wiki_contents", server) == "read_wiki_contents"
 
     def test_none_server_falls_back_to_first_separator_split(self):
         assert strip_known_server_prefix("svc-tool", None) == "tool"
@@ -250,13 +239,9 @@ class TestManagerShortPrefix:
             "github_onprem-get_repo",
             "github_onprem-list_issues",
         }
-        assert (
-            manager._get_mcp_server_from_tool_name("github_onprem-get_repo") is None
-        )  # registry empty
+        assert manager._get_mcp_server_from_tool_name("github_onprem-get_repo") is None  # registry empty
         manager.registry[server.server_id] = server
-        assert (
-            manager._get_mcp_server_from_tool_name("github_onprem-get_repo") is server
-        )
+        assert manager._get_mcp_server_from_tool_name("github_onprem-get_repo") is server
 
     def test_total_tool_name_length_short_enough(self, monkeypatch):
         """The short prefix keeps tool names under the 60-char limit even

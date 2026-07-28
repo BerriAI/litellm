@@ -42,9 +42,7 @@ class TestDashscopeCostCalculator:
         usage = Usage(prompt_tokens=1000, completion_tokens=500)
 
         # We call the specific calculator for dashscope
-        prompt_cost, completion_cost = dashscope_cost_per_token(
-            model="qwen-max", usage=usage
-        )
+        prompt_cost, completion_cost = dashscope_cost_per_token(model="qwen-max", usage=usage)
 
         model_info = litellm.get_model_info("dashscope/qwen-max")
         expected_prompt_cost = 1000 * model_info["input_cost_per_token"]
@@ -60,9 +58,7 @@ class TestDashscopeCostCalculator:
         """
         # Tier 1 for qwen-flash is [0, 256,000] tokens
         usage = Usage(prompt_tokens=100000, completion_tokens=50000)
-        prompt_cost, completion_cost = dashscope_cost_per_token(
-            model="qwen-flash", usage=usage
-        )
+        prompt_cost, completion_cost = dashscope_cost_per_token(model="qwen-flash", usage=usage)
 
         model_info = litellm.get_model_info("dashscope/qwen-flash")
         tier_1_pricing = model_info["tiered_pricing"][0]
@@ -80,18 +76,14 @@ class TestDashscopeCostCalculator:
         """
         # Tiering for qwen-flash: Tier 1: [0, 256k], Tier 2: [256k, 1M]
         usage = Usage(prompt_tokens=300000, completion_tokens=300000)
-        prompt_cost, completion_cost = dashscope_cost_per_token(
-            model="qwen-flash", usage=usage
-        )
+        prompt_cost, completion_cost = dashscope_cost_per_token(model="qwen-flash", usage=usage)
 
         model_info = litellm.get_model_info("dashscope/qwen-flash")
         tier_1 = model_info["tiered_pricing"][0]
         tier_2 = model_info["tiered_pricing"][1]
 
         # Expected prompt cost: (256,000 tokens * tier_1_price) + (44,000 tokens * tier_2_price)
-        expected_prompt_cost = (256000 * tier_1["input_cost_per_token"]) + (
-            44000 * tier_2["input_cost_per_token"]
-        )
+        expected_prompt_cost = (256000 * tier_1["input_cost_per_token"]) + (44000 * tier_2["input_cost_per_token"])
 
         # Expected completion cost: (256,000 tokens * tier_1_price) + (44,000 tokens * tier_2_price)
         expected_completion_cost = (256000 * tier_1["output_cost_per_token"]) + (
@@ -123,9 +115,7 @@ class TestDashscopeCostCalculator:
         expected_cache_cost = 10000 * tier_1["cache_read_input_token_cost"]
 
         # 40k new tokens: 32k in tier 1, and the remaining 8k in tier 2
-        expected_text_cost = (32000 * tier_1["input_cost_per_token"]) + (
-            8000 * tier_2["input_cost_per_token"]
-        )
+        expected_text_cost = (32000 * tier_1["input_cost_per_token"]) + (8000 * tier_2["input_cost_per_token"])
 
         expected_total_prompt_cost = expected_cache_cost + expected_text_cost
 
@@ -158,9 +148,7 @@ class TestDashscopeCostCalculator:
         self._register_string_valued_tiered_model("dashscope/qwen-str-tier-test")
 
         usage = Usage(prompt_tokens=500, completion_tokens=200)
-        prompt_cost, completion_cost = dashscope_cost_per_token(
-            model="qwen-str-tier-test", usage=usage
-        )
+        prompt_cost, completion_cost = dashscope_cost_per_token(model="qwen-str-tier-test", usage=usage)
 
         expected_prompt_cost = 500 * float("4e-07")
         expected_completion_cost = 200 * float("1.6e-06")
@@ -178,18 +166,12 @@ class TestDashscopeCostCalculator:
         self._register_string_valued_tiered_model("dashscope/qwen-str-tier-test")
 
         usage = Usage(prompt_tokens=2500, completion_tokens=3000)
-        prompt_cost, completion_cost = dashscope_cost_per_token(
-            model="qwen-str-tier-test", usage=usage
-        )
+        prompt_cost, completion_cost = dashscope_cost_per_token(model="qwen-str-tier-test", usage=usage)
 
         # prompt: 1000 @ tier1 + 1000 @ tier2 + 500 remaining @ tier2 rate
-        expected_prompt_cost = (
-            (1000 * float("4e-07")) + (1000 * float("8e-07")) + (500 * float("8e-07"))
-        )
+        expected_prompt_cost = (1000 * float("4e-07")) + (1000 * float("8e-07")) + (500 * float("8e-07"))
         # completion: 1000 @ tier1 + 1000 @ tier2 + 1000 remaining @ tier2 rate
-        expected_completion_cost = (
-            (1000 * float("1.6e-06")) + (1000 * float("3.2e-06")) + (1000 * float("3.2e-06"))
-        )
+        expected_completion_cost = (1000 * float("1.6e-06")) + (1000 * float("3.2e-06")) + (1000 * float("3.2e-06"))
 
         assert prompt_cost > 0
         assert completion_cost > 0
@@ -201,9 +183,7 @@ class TestDashscopeCostCalculator:
         Tests tiered pricing when token count exceeds the highest defined tier range.
         This replaces the old, incorrect test and validates the new fallback logic.
         """
-        usage = Usage(
-            prompt_tokens=1200000, completion_tokens=1000
-        )  # Max defined range for qwen-flash is 1M
+        usage = Usage(prompt_tokens=1200000, completion_tokens=1000)  # Max defined range for qwen-flash is 1M
 
         prompt_cost, _ = dashscope_cost_per_token(model="qwen-flash", usage=usage)
 

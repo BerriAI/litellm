@@ -9,9 +9,7 @@ import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 from unittest.mock import patch, MagicMock, AsyncMock
 import os
@@ -84,9 +82,7 @@ def test_router_timeouts():
         prompt_tokens = litellm.token_counter(text=question["content"], model="gpt-4")
         print("prompt_tokens = ", prompt_tokens)
 
-        response = router.completion(
-            model="openai-gpt-4", messages=messages, timeout=5, num_retries=0
-        )
+        response = router.completion(model="openai-gpt-4", messages=messages, timeout=5, num_retries=0)
 
         total_tokens_used += response.usage.total_tokens
 
@@ -130,15 +126,11 @@ async def test_router_timeouts_bedrock():
         print(response)
         pytest.fail("Did not raise error `openai.APITimeoutError`")
     except openai.APITimeoutError as e:
-        print(
-            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
-        )
+        print("Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e)
         print(type(e))
         pass
     except Exception as e:
-        pytest.fail(
-            f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}"
-        )
+        pytest.fail(f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}")
 
 
 @pytest.mark.parametrize(

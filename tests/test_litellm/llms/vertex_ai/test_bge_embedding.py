@@ -166,12 +166,8 @@ def test_vertex_ai_bge_with_endpoint_id_pattern():
         print("=" * 50 + "\n")
 
         # Verify URL contains the endpoint ID and uses endpoints/ path
-        assert (
-            "204379420394258432" in api_url_called
-        ), f"Endpoint ID not in URL: {api_url_called}"
-        assert (
-            "endpoints" in api_url_called
-        ), f"Expected 'endpoints' in URL, got: {api_url_called}"
+        assert "204379420394258432" in api_url_called, f"Endpoint ID not in URL: {api_url_called}"
+        assert "endpoints" in api_url_called, f"Expected 'endpoints' in URL, got: {api_url_called}"
 
         # Verify BGE-specific request format (uses "prompt" not "content")
         assert "instances" in request_data
@@ -241,14 +237,10 @@ def test_vertex_ai_bge_psc_endpoint_url_construction():
 
         # Verify the URL is constructed correctly
         expected_url = "http://10.128.16.2/v1/projects/test-gcp-project-id-123/locations/us-central1/endpoints/378943383978115072:predict"
-        assert (
-            api_url_called == expected_url
-        ), f"Expected URL: {expected_url}, Got: {api_url_called}"
+        assert api_url_called == expected_url, f"Expected URL: {expected_url}, Got: {api_url_called}"
 
         # Verify bge/ prefix is NOT in the URL
-        assert (
-            "bge/" not in api_url_called
-        ), f"URL should not contain 'bge/' prefix: {api_url_called}"
+        assert "bge/" not in api_url_called, f"URL should not contain 'bge/' prefix: {api_url_called}"
 
         # Verify response works
         assert isinstance(response.data, list)

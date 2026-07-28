@@ -47,9 +47,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
         startTime=1234567890.0,
         endTime=1234567891.0,
         completionStartTime=1234567890.5,
-        model_map_information=StandardLoggingModelInformation(
-            model_map_key="gpt-5-mini", model_map_value=None
-        ),
+        model_map_information=StandardLoggingModelInformation(model_map_key="gpt-5-mini", model_map_value=None),
         model="gpt-5-mini",
         model_id="model-123",
         model_group="openai-gpt",

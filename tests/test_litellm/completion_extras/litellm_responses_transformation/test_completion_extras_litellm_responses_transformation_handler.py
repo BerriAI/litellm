@@ -18,26 +18,18 @@ from litellm.types.utils import ModelResponse
 def test_is_preformatted_cached_chat_stream_true():
     stream = MagicMock(spec=CustomStreamWrapper)
     stream.custom_llm_provider = "cached_response"
-    assert (
-        ResponsesToCompletionBridgeHandler._is_preformatted_cached_chat_stream(stream)
-        is True
-    )
+    assert ResponsesToCompletionBridgeHandler._is_preformatted_cached_chat_stream(stream) is True
 
 
 def test_is_preformatted_cached_chat_stream_false_wrong_provider():
     stream = MagicMock(spec=CustomStreamWrapper)
     stream.custom_llm_provider = "openai"
-    assert (
-        ResponsesToCompletionBridgeHandler._is_preformatted_cached_chat_stream(stream)
-        is False
-    )
+    assert ResponsesToCompletionBridgeHandler._is_preformatted_cached_chat_stream(stream) is False
 
 
 def test_is_preformatted_cached_chat_stream_false_wrong_type():
     assert (
-        ResponsesToCompletionBridgeHandler._is_preformatted_cached_chat_stream(
-            {"object": "chat.completion.chunk"}
-        )
+        ResponsesToCompletionBridgeHandler._is_preformatted_cached_chat_stream({"object": "chat.completion.chunk"})
         is False
     )
 
@@ -240,9 +232,9 @@ async def test_acompletion_streams_completed_model_response():
 
     assert isinstance(result, CustomStreamWrapper), f"streaming request got {type(result)}"
     chunks = [chunk async for chunk in result]
-    assert "".join(
-        chunk.choices[0].delta.content or "" for chunk in chunks
-    ) == "pong", f"completed response did not stream its content: {chunks}"
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "pong", (
+        f"completed response did not stream its content: {chunks}"
+    )
     assert [c for c in chunks if c.choices[0].finish_reason], "stream never emitted a finish_reason"
 
 

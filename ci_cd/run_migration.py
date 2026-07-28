@@ -16,14 +16,10 @@ DEFAULT_BASE_BRANCH = "litellm_internal_staging"
 
 def _find_destructive_statements(sql: str) -> list:
     """Return SQL lines containing DROP COLUMN, DROP TABLE, or DROP INDEX."""
-    return [
-        line.strip() for line in sql.splitlines() if DESTRUCTIVE_PATTERN.search(line)
-    ]
+    return [line.strip() for line in sql.splitlines() if DESTRUCTIVE_PATTERN.search(line)]
 
 
-def _print_freshness_failure(
-    base_branch: str, reason: str, stderr_text: str = ""
-) -> None:
+def _print_freshness_failure(base_branch: str, reason: str, stderr_text: str = "") -> None:
     """Loudly refuse to run when the freshness check can't be completed."""
     banner = "=" * 72
     out = sys.stderr
@@ -44,9 +40,7 @@ def _print_freshness_failure(
     print("  - Not a git repository", file=out)
     print("", file=out)
     print("Options:", file=out)
-    print(
-        f"  - Fix the above and re-run, OR pass --base-branch <name> if your", file=out
-    )
+    print(f"  - Fix the above and re-run, OR pass --base-branch <name> if your", file=out)
     print(
         f"    base branch is not '{base_branch}', OR pass --skip-freshness-check",
         file=out,
@@ -151,9 +145,7 @@ def _print_destructive_refusal(destructive_lines: list) -> None:
     banner = "=" * 72
     out = sys.stderr
     print(banner, file=out)
-    print(
-        "  DESTRUCTIVE MIGRATION DETECTED — REFUSING TO WRITE MIGRATION FILE", file=out
-    )
+    print("  DESTRUCTIVE MIGRATION DETECTED — REFUSING TO WRITE MIGRATION FILE", file=out)
     print(banner, file=out)
     print("", file=out)
     print(
@@ -173,12 +165,8 @@ def _print_destructive_refusal(destructive_lines: list) -> None:
     )
     print("", file=out)
     print("Before re-running:", file=out)
-    print(
-        "  1. git fetch origin && git status   # confirm branch is up to date", file=out
-    )
-    print(
-        "  2. Re-check all schema.prisma files are in sync (runbook Step 0)", file=out
-    )
+    print("  1. git fetch origin && git status   # confirm branch is up to date", file=out)
+    print("  2. Re-check all schema.prisma files are in sync (runbook Step 0)", file=out)
     print("  3. Review EACH DROP above — is it actually intended?", file=out)
     print("  4. If (and only if) the drops are intentional, re-run with:", file=out)
     print("         --allow-destructive", file=out)
@@ -226,9 +214,7 @@ def create_migration(
         _check_branch_freshness(root_dir, base_branch)
 
     try:
-        migrations_dir = (
-            root_dir / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
-        )
+        migrations_dir = root_dir / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
         schema_path = root_dir / "schema.prisma"
 
         # Create temporary PostgreSQL database
@@ -272,9 +258,7 @@ def create_migration(
                 # there's no real drift. Treat that as "no changes".
                 diff_sql = result.stdout
                 stripped = diff_sql.strip()
-                is_empty_diff = (
-                    not stripped or stripped == "-- This is an empty migration."
-                )
+                is_empty_diff = not stripped or stripped == "-- This is an empty migration."
 
                 if not is_empty_diff:
                     destructive_lines = _find_destructive_statements(diff_sql)
@@ -282,10 +266,7 @@ def create_migration(
                         _print_destructive_refusal(destructive_lines)
                         sys.exit(2)
                     if destructive_lines and allow_destructive:
-                        print(
-                            "WARNING: writing destructive migration "
-                            "(--allow-destructive passed). Statements:"
-                        )
+                        print("WARNING: writing destructive migration (--allow-destructive passed). Statements:")
                         for line in destructive_lines:
                             print(f"    {line}")
 
@@ -321,8 +302,7 @@ def create_migration(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=(
-            "Generate a Prisma migration by diffing the temp DB "
-            "(existing migrations applied) against schema.prisma."
+            "Generate a Prisma migration by diffing the temp DB (existing migrations applied) against schema.prisma."
         )
     )
     parser.add_argument(

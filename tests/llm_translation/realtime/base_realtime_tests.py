@@ -56,13 +56,11 @@ class RealTimeWebSocketClient:
             msg_type = msg_data.get("type", "unknown")
 
             # Pretty print API response
-            print(f"\n{'='*80}")
-            print(
-                f"API RESPONSE #{len(self.messages_received) + 1} - Event: {msg_type}"
-            )
-            print(f"{'='*80}")
+            print(f"\n{'=' * 80}")
+            print(f"API RESPONSE #{len(self.messages_received) + 1} - Event: {msg_type}")
+            print(f"{'=' * 80}")
             print(json.dumps(msg_data, indent=2, sort_keys=False))
-            print(f"{'='*80}\n")
+            print(f"{'=' * 80}\n")
 
             self.messages_received.append(msg_data)
 
@@ -112,10 +110,10 @@ class RealTimeWebSocketClient:
             return msg
 
         # Close connection to end the test
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print(f"TEST COMPLETE - Closing connection")
         print(f"Total messages received from API: {len(self.messages_received)}")
-        print(f"{'='*80}\n")
+        print(f"{'=' * 80}\n")
         raise websockets.exceptions.ConnectionClosed(None, None)
 
     def queue_client_message(self, message: str):
@@ -187,11 +185,11 @@ class BaseRealtimeTest(ABC):
         websocket_client = RealTimeWebSocketClient()
         caught_exception = None
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print(f"STARTING REALTIME CONNECTION TEST")
         print(f"Model: {self.get_model()}")
         print(f"API Key Env Var: {self.get_api_key_env_var()}")
-        print(f"{'='*80}\n")
+        print(f"{'=' * 80}\n")
 
         try:
             await litellm._arealtime(
@@ -209,27 +207,18 @@ class BaseRealtimeTest(ABC):
         # Build debug info
         error_details = []
         error_details.append(f"messages_sent: {len(websocket_client.messages_sent)}")
-        error_details.append(
-            f"messages_received: {len(websocket_client.messages_received)}"
-        )
+        error_details.append(f"messages_received: {len(websocket_client.messages_received)}")
         error_details.append(f"close_code: {websocket_client.close_code}")
         error_details.append(f"close_reason: {websocket_client.close_reason}")
         if caught_exception:
-            error_details.append(
-                f"exception: {type(caught_exception).__name__}: {caught_exception}"
-            )
+            error_details.append(f"exception: {type(caught_exception).__name__}: {caught_exception}")
 
         # Skip on transient connection failures
-        if (
-            not websocket_client.connection_successful
-            and websocket_client.close_code is not None
-        ):
+        if not websocket_client.connection_successful and websocket_client.close_code is not None:
             pytest.skip(f"Transient connection failure: {'; '.join(error_details)}")
 
         # Assertions
-        assert (
-            websocket_client.connection_successful
-        ), f"Failed to connect. Debug: {'; '.join(error_details)}"
+        assert websocket_client.connection_successful, f"Failed to connect. Debug: {'; '.join(error_details)}"
         assert websocket_client.received_initial_event, f"Did not receive initial event"
         assert len(websocket_client.messages_received) > 0, "No messages received"
 
@@ -240,9 +229,9 @@ class BaseRealtimeTest(ABC):
             allowed_event_types: Tuple[str, ...] = (expected_event_type,)
         else:
             allowed_event_types = tuple(expected_event_type)
-        assert (
-            initial_event["type"] in allowed_event_types
-        ), f"Expected one of {allowed_event_types}, got {initial_event.get('type')}"
+        assert initial_event["type"] in allowed_event_types, (
+            f"Expected one of {allowed_event_types}, got {initial_event.get('type')}"
+        )
 
     @pytest.mark.asyncio
     async def test_realtime_with_query_params(self):
@@ -282,25 +271,16 @@ class BaseRealtimeTest(ABC):
         # Build debug info
         error_details = []
         error_details.append(f"messages_sent: {len(websocket_client.messages_sent)}")
-        error_details.append(
-            f"messages_received: {len(websocket_client.messages_received)}"
-        )
+        error_details.append(f"messages_received: {len(websocket_client.messages_received)}")
         if caught_exception:
-            error_details.append(
-                f"exception: {type(caught_exception).__name__}: {caught_exception}"
-            )
+            error_details.append(f"exception: {type(caught_exception).__name__}: {caught_exception}")
 
         # Skip on transient failures
-        if (
-            not websocket_client.connection_successful
-            and websocket_client.close_code is not None
-        ):
+        if not websocket_client.connection_successful and websocket_client.close_code is not None:
             pytest.skip(f"Transient connection failure: {'; '.join(error_details)}")
 
         # Assertions
-        assert (
-            websocket_client.connection_successful
-        ), f"Failed to connect. Debug: {'; '.join(error_details)}"
+        assert websocket_client.connection_successful, f"Failed to connect. Debug: {'; '.join(error_details)}"
         assert len(websocket_client.messages_received) > 0, "No messages received"
 
     @pytest.mark.asyncio
@@ -324,9 +304,9 @@ class BaseRealtimeTest(ABC):
 
             async def receive_text(self):
                 """Enhanced receive that sends a user message after connection"""
-                print(f"\n{'='*80}")
+                print(f"\n{'=' * 80}")
                 print(f"CLIENT-SIDE RECEIVE HANDLER")
-                print(f"{'='*80}\n")
+                print(f"{'=' * 80}\n")
 
                 # Wait for initial connection
                 max_wait = 5.0
@@ -348,18 +328,16 @@ class BaseRealtimeTest(ABC):
                         "item": {
                             "type": "message",
                             "role": "user",
-                            "content": [
-                                {"type": "input_text", "text": "Say hi back to me!"}
-                            ],
+                            "content": [{"type": "input_text", "text": "Say hi back to me!"}],
                         },
                     }
                     user_msg = json.dumps(user_msg_data)
 
-                    print(f"\n{'='*80}")
+                    print(f"\n{'=' * 80}")
                     print(f"STEP 1: SENDING USER MESSAGE TO BACKEND")
-                    print(f"{'='*80}")
+                    print(f"{'=' * 80}")
                     print(json.dumps(user_msg_data, indent=2))
-                    print(f"{'='*80}\n")
+                    print(f"{'=' * 80}\n")
 
                     return user_msg
 
@@ -372,11 +350,11 @@ class BaseRealtimeTest(ABC):
                     response_create_data = {"type": "response.create"}
                     response_create = json.dumps(response_create_data)
 
-                    print(f"\n{'='*80}")
+                    print(f"\n{'=' * 80}")
                     print(f"STEP 2: TRIGGERING LLM RESPONSE")
-                    print(f"{'='*80}")
+                    print(f"{'=' * 80}")
                     print(json.dumps(response_create_data, indent=2))
-                    print(f"{'='*80}\n")
+                    print(f"{'=' * 80}\n")
 
                     return response_create
 
@@ -392,24 +370,22 @@ class BaseRealtimeTest(ABC):
                         if msg_type not in ["conversation.created", "ping"]:
                             self.response_messages.append(msg)
 
-                    print(
-                        f"\nReceived {len(self.response_messages)} response messages (excluding init/ping)\n"
-                    )
+                    print(f"\nReceived {len(self.response_messages)} response messages (excluding init/ping)\n")
 
-                print(f"\n{'='*80}")
+                print(f"\n{'=' * 80}")
                 print(f"CLOSING CONNECTION")
                 print(f"Total messages received: {len(self.messages_received)}")
-                print(f"{'='*80}\n")
+                print(f"{'=' * 80}\n")
                 raise websockets.exceptions.ConnectionClosed(None, None)
 
         websocket_client = InteractiveWebSocketClient()
         caught_exception = None
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print(f"STARTING INTERACTIVE MESSAGE TEST")
         print(f"Model: {self.get_model()}")
         print(f"Message: 'Say hi back to me!'")
-        print(f"{'='*80}\n")
+        print(f"{'=' * 80}\n")
 
         try:
             await litellm._arealtime(
@@ -425,22 +401,20 @@ class BaseRealtimeTest(ABC):
             caught_exception = e
 
         # Print results
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print(f"TEST RESULTS SUMMARY")
-        print(f"{'='*80}")
+        print(f"{'=' * 80}")
         print(f"Connection successful: {websocket_client.connection_successful}")
         print(f"User message sent: {websocket_client.sent_user_message}")
         print(f"Total messages received: {len(websocket_client.messages_received)}")
-        print(
-            f"Response messages (excluding init/ping): {len(websocket_client.response_messages)}"
-        )
+        print(f"Response messages (excluding init/ping): {len(websocket_client.response_messages)}")
 
         if websocket_client.response_messages:
             print(f"\nResponse Event Types:")
             for i, msg in enumerate(websocket_client.response_messages, 1):
                 print(f"  {i}. {msg.get('type', 'unknown')}")
 
-        print(f"{'='*80}\n")
+        print(f"{'=' * 80}\n")
 
         # Skip if no responses (might be timing issue)
         if not websocket_client.response_messages:

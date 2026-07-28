@@ -17,9 +17,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.bedrock.embed.amazon_nova_transformation import (
@@ -147,9 +145,7 @@ class TestNovaTransformationRequest:
         assert params["embeddingDimension"] == 3072
         assert params["video"]["format"] == "mp4"
         assert params["video"]["embeddingMode"] == "AUDIO_VIDEO_COMBINED"
-        assert (
-            params["video"]["source"]["s3Location"]["uri"] == "s3://my-bucket/video.mp4"
-        )
+        assert params["video"]["source"]["s3Location"]["uri"] == "s3://my-bucket/video.mp4"
 
     def test_audio_embedding_request(self):
         """Test audio embedding request transformation."""
@@ -174,9 +170,7 @@ class TestNovaTransformationRequest:
         assert params["embeddingPurpose"] == "AUDIO_RETRIEVAL"
         assert params["embeddingDimension"] == 1024
         assert params["audio"]["format"] == "mp3"
-        assert (
-            params["audio"]["source"]["s3Location"]["uri"] == "s3://my-bucket/audio.mp3"
-        )
+        assert params["audio"]["source"]["s3Location"]["uri"] == "s3://my-bucket/audio.mp3"
 
     def test_async_invoke_requires_output_s3_uri(self):
         """Test that async invoke requires output_s3_uri."""
@@ -247,9 +241,7 @@ class TestNovaTransformationRequest:
         config = AmazonNovaEmbeddingConfig()
 
         # Test with PNG image data URL
-        png_data_url = (
-            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
-        )
+        png_data_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
 
         request = config._transform_request(
             input=png_data_url,
@@ -260,10 +252,7 @@ class TestNovaTransformationRequest:
         params = request["singleEmbeddingParams"]
         assert "image" in params
         assert params["image"]["format"] == "png"
-        assert (
-            params["image"]["source"]["bytes"]
-            == "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
-        )
+        assert params["image"]["source"]["bytes"] == "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
 
     def test_data_url_jpg_format_conversion(self):
         """Test that jpg format is converted to jpeg."""
@@ -279,9 +268,7 @@ class TestNovaTransformationRequest:
         )
 
         params = request["singleEmbeddingParams"]
-        assert (
-            params["image"]["format"] == "jpeg"
-        )  # Should be converted from jpg to jpeg
+        assert params["image"]["format"] == "jpeg"  # Should be converted from jpg to jpeg
 
     def test_data_url_video_parsing(self):
         """Test that data URL videos are properly parsed."""
@@ -336,9 +323,7 @@ class TestNovaTransformationResponse:
             }
         ]
 
-        result = config._transform_response(
-            response_list, model="amazon.nova-2-multimodal-embeddings-v1:0"
-        )
+        result = config._transform_response(response_list, model="amazon.nova-2-multimodal-embeddings-v1:0")
 
         assert result.model == "amazon.nova-2-multimodal-embeddings-v1:0"
         assert len(result.data) == 1
@@ -370,9 +355,7 @@ class TestNovaTransformationResponse:
             },
         ]
 
-        result = config._transform_response(
-            response_list, model="amazon.nova-2-multimodal-embeddings-v1:0"
-        )
+        result = config._transform_response(response_list, model="amazon.nova-2-multimodal-embeddings-v1:0")
 
         assert len(result.data) == 2
         assert result.data[0].embedding == [0.1, 0.2, 0.3]
@@ -399,9 +382,7 @@ class TestNovaTransformationResponse:
             }
         ]
 
-        result = config._transform_response(
-            response_list, model="amazon.nova-2-multimodal-embeddings-v1:0"
-        )
+        result = config._transform_response(response_list, model="amazon.nova-2-multimodal-embeddings-v1:0")
 
         assert len(result.data) == 2
         assert result.data[0].embedding == [0.1, 0.2, 0.3]
@@ -514,13 +495,9 @@ class TestNovaTransformationResponse:
         """Test async invoke response transformation."""
         config = AmazonNovaEmbeddingConfig()
 
-        response = {
-            "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"
-        }
+        response = {"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"}
 
-        result = config._transform_async_invoke_response(
-            response, model="amazon.nova-2-multimodal-embeddings-v1:0"
-        )
+        result = config._transform_async_invoke_response(response, model="amazon.nova-2-multimodal-embeddings-v1:0")
 
         assert result.model == "amazon.nova-2-multimodal-embeddings-v1:0"
         assert len(result.data) == 1
@@ -528,10 +505,7 @@ class TestNovaTransformationResponse:
         assert result.usage.total_tokens == 0
         assert hasattr(result, "_hidden_params")
         assert hasattr(result._hidden_params, "_invocation_arn")
-        assert (
-            result._hidden_params._invocation_arn
-            == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"
-        )
+        assert result._hidden_params._invocation_arn == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"
 
 
 class TestNovaEmbeddingIntegration:
@@ -640,9 +614,7 @@ class TestNovaProviderDetection:
         """Test that Nova provider is correctly detected."""
         from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
-        provider = BaseAWSLLM.get_bedrock_embedding_provider(
-            "amazon.nova-2-multimodal-embeddings-v1:0"
-        )
+        provider = BaseAWSLLM.get_bedrock_embedding_provider("amazon.nova-2-multimodal-embeddings-v1:0")
 
         # Should detect "amazon" as provider since "nova" is in the model name
         # but the provider detection looks at the first part before the dot

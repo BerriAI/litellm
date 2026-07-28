@@ -6,9 +6,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.openrouter.image_generation.transformation import (
     OpenRouterImageGenerationConfig,
@@ -293,9 +291,7 @@ class TestOpenRouterImageGenerationTransformation:
                         "role": "assistant",
                         "images": [
                             {
-                                "image_url": {
-                                    "url": "data:image/png;base64,iVBORw0KGgoAAAANS"
-                                },
+                                "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANS"},
                                 "index": 0,
                                 "type": "image_url",
                             }
@@ -441,12 +437,7 @@ class TestOpenRouterImageGenerationTransformation:
         # Check cost
         assert hasattr(result, "_hidden_params")
         assert "additional_headers" in result._hidden_params
-        assert (
-            result._hidden_params["additional_headers"][
-                "llm_provider-x-litellm-response-cost"
-            ]
-            == 0.0387243
-        )
+        assert result._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.0387243
 
         # Check cost details
         assert "response_cost_details" in result._hidden_params
@@ -466,16 +457,12 @@ class TestOpenRouterImageGenerationTransformation:
                         "role": "assistant",
                         "images": [
                             {
-                                "image_url": {
-                                    "url": "data:image/png;base64,image1data"
-                                },
+                                "image_url": {"url": "data:image/png;base64,image1data"},
                                 "index": 0,
                                 "type": "image_url",
                             },
                             {
-                                "image_url": {
-                                    "url": "data:image/png;base64,image2data"
-                                },
+                                "image_url": {"url": "data:image/png;base64,image2data"},
                                 "index": 1,
                                 "type": "image_url",
                             },
@@ -570,9 +557,7 @@ class TestOpenRouterImageGenerationTransformation:
                 encoding=None,
             )
 
-        assert "Error transforming OpenRouter image generation response" in str(
-            exc_info.value
-        )
+        assert "Error transforming OpenRouter image generation response" in str(exc_info.value)
 
     def test_get_error_class(self):
         """Test that get_error_class returns OpenRouterException."""

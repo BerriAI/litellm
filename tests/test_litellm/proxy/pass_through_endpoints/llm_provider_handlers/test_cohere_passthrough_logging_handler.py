@@ -7,9 +7,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.cohere_passthrough_logging_handler import (
@@ -69,12 +67,8 @@ class TestCoherePassthroughLoggingHandler:
         )
 
     @patch("litellm.completion_cost")
-    @patch(
-        "litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload"
-    )
-    @patch(
-        "litellm.llms.cohere.embed.v1_transformation.CohereEmbeddingConfig._transform_response"
-    )
+    @patch("litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload")
+    @patch("litellm.llms.cohere.embed.v1_transformation.CohereEmbeddingConfig._transform_response")
     def test_cohere_embed_passthrough_cost_tracking(
         self, mock_transform_response, mock_get_standard_logging, mock_completion_cost
     ):
@@ -92,9 +86,7 @@ class TestCoherePassthroughLoggingHandler:
         mock_embedding_response.object = "list"
         from litellm.types.utils import Usage
 
-        mock_embedding_response.usage = Usage(
-            prompt_tokens=3, completion_tokens=0, total_tokens=3
-        )
+        mock_embedding_response.usage = Usage(prompt_tokens=3, completion_tokens=0, total_tokens=3)
 
         mock_transform_response.return_value = mock_embedding_response
         mock_completion_cost.return_value = 3.6e-07  # Expected cost for embed-v4.0

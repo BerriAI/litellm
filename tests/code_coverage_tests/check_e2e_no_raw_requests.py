@@ -62,11 +62,7 @@ def _violations_in(path: Path) -> tuple[str, ...]:
 
 
 def main() -> int:
-    violations = tuple(
-        violation
-        for path in sorted(E2E_DIR.rglob("*.py"))
-        for violation in _violations_in(path)
-    )
+    violations = tuple(violation for path in sorted(E2E_DIR.rglob("*.py")) for violation in _violations_in(path))
     for violation in violations:
         print(violation)
     if violations:

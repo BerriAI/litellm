@@ -138,9 +138,7 @@ class DdLogsReader:
             time.sleep(DD_SEARCH_INTERVAL)
         return self.events_for_marker(marker)
 
-    def _settled_events_for_marker(
-        self, marker: str, events: list[DdLogEvent]
-    ) -> list[DdLogEvent]:
+    def _settled_events_for_marker(self, marker: str, events: list[DdLogEvent]) -> list[DdLogEvent]:
         """Re-read at every search interval until the settle window closes; a
         duplicate ends the watch early because more waiting cannot clear it.
 

@@ -10,9 +10,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.featherless_ai.chat.transformation import FeatherlessAIConfig
 
@@ -95,9 +93,7 @@ class TestFeatherlessAIConfig:
         assert result["tool_choice"] == "none"
 
         # Test with unsupported value and drop_params=True
-        non_default_params = {
-            "tool_choice": {"type": "function", "function": {"name": "get_weather"}}
-        }
+        non_default_params = {"tool_choice": {"type": "function", "function": {"name": "get_weather"}}}
         optional_params = {}
         result = config.map_openai_params(
             non_default_params=non_default_params,
@@ -108,9 +104,7 @@ class TestFeatherlessAIConfig:
         assert "tool_choice" not in result
 
         # Test with unsupported value and drop_params=False
-        non_default_params = {
-            "tool_choice": {"type": "function", "function": {"name": "get_weather"}}
-        }
+        non_default_params = {"tool_choice": {"type": "function", "function": {"name": "get_weather"}}}
         optional_params = {}
         with pytest.raises(Exception) as excinfo:
             config.map_openai_params(
@@ -158,9 +152,7 @@ class TestFeatherlessAIConfig:
         ):
             monkeypatch.delenv(key, raising=False)
         monkeypatch.setenv("FEATHERLESS_AI_API_KEY", "key-from-ai-env")
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            api_base=None, api_key=None
-        )
+        api_base, api_key = config._get_openai_compatible_provider_info(api_base=None, api_key=None)
         assert api_key == "key-from-ai-env"
         assert api_base == "https://api.featherless.ai/v1"
 
@@ -175,15 +167,11 @@ class TestFeatherlessAIConfig:
         ):
             monkeypatch.delenv(key, raising=False)
         monkeypatch.setenv("FEATHERLESS_API_KEY", "key-from-legacy-env")
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            api_base=None, api_key=None
-        )
+        api_base, api_key = config._get_openai_compatible_provider_info(api_base=None, api_key=None)
         assert api_key == "key-from-legacy-env"
         assert api_base == "https://api.featherless.ai/v1"
 
-    def test_get_provider_info_prefers_featherless_ai_key_over_legacy(
-        self, monkeypatch
-    ):
+    def test_get_provider_info_prefers_featherless_ai_key_over_legacy(self, monkeypatch):
         """Test that FEATHERLESS_AI_API_KEY takes precedence over FEATHERLESS_API_KEY"""
         config = FeatherlessAIConfig()
         for key in (
@@ -195,9 +183,7 @@ class TestFeatherlessAIConfig:
             monkeypatch.delenv(key, raising=False)
         monkeypatch.setenv("FEATHERLESS_AI_API_KEY", "preferred-key")
         monkeypatch.setenv("FEATHERLESS_API_KEY", "legacy-key")
-        _, api_key = config._get_openai_compatible_provider_info(
-            api_base=None, api_key=None
-        )
+        _, api_key = config._get_openai_compatible_provider_info(api_base=None, api_key=None)
         assert api_key == "preferred-key"
 
     def test_default_api_base(self):
@@ -232,9 +218,7 @@ class TestFeatherlessAIConfig:
         """
         import litellm
 
-        litellm.disable_aiohttp_transport = (
-            True  # since this uses respx, we need to set use_aiohttp_transport to False
-        )
+        litellm.disable_aiohttp_transport = True  # since this uses respx, we need to set use_aiohttp_transport to False
         from litellm import completion
 
         # Set up environment variables for the test
@@ -272,9 +256,7 @@ class TestFeatherlessAIConfig:
         # Make the actual API call through LiteLLM
         response = completion(
             model=model,
-            messages=[
-                {"role": "user", "content": "write code for saying hi from LiteLLM"}
-            ],
+            messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}],
             api_key=api_key,
             api_base=api_base,
         )

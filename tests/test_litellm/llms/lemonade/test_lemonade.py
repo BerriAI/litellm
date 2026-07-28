@@ -1,9 +1,7 @@
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -13,9 +11,7 @@ from litellm.types.utils import ModelResponse
 
 def test_lemonade_config_initialization():
     """Test that LemonadeChatConfig can be initialized with various parameters"""
-    config = LemonadeChatConfig(
-        temperature=0.7, max_tokens=100, top_p=0.9, top_k=50, repeat_penalty=1.1
-    )
+    config = LemonadeChatConfig(temperature=0.7, max_tokens=100, top_p=0.9, top_k=50, repeat_penalty=1.1)
 
     assert config.custom_llm_provider == "lemonade"
     assert config.temperature == 0.7
@@ -32,9 +28,7 @@ def test_get_openai_compatible_provider_info(monkeypatch):
     monkeypatch.setattr(litellm, "api_key", None)
     config = LemonadeChatConfig()
 
-    api_base, key = config._get_openai_compatible_provider_info(
-        api_base=None, api_key=None
-    )
+    api_base, key = config._get_openai_compatible_provider_info(api_base=None, api_key=None)
 
     assert api_base == "http://localhost:8000/api/v1"
     assert key == "lemonade"
@@ -48,9 +42,7 @@ def test_get_openai_compatible_provider_info_with_custom_base(monkeypatch):
     config = LemonadeChatConfig()
 
     custom_api_base = "https://custom.lemonade.ai/v1"
-    api_base, key = config._get_openai_compatible_provider_info(
-        api_base=custom_api_base, api_key=None
-    )
+    api_base, key = config._get_openai_compatible_provider_info(api_base=custom_api_base, api_key=None)
 
     assert api_base == custom_api_base
     assert key == "lemonade"
@@ -63,9 +55,7 @@ def test_get_openai_compatible_provider_info_with_api_key_env(monkeypatch):
     monkeypatch.setattr(litellm, "api_key", None)
     config = LemonadeChatConfig()
 
-    api_base, key = config._get_openai_compatible_provider_info(
-        api_base=None, api_key=None
-    )
+    api_base, key = config._get_openai_compatible_provider_info(api_base=None, api_key=None)
 
     assert api_base == "http://localhost:8000/api/v1"
     assert key == "test-key"
@@ -80,9 +70,7 @@ def test_get_openai_compatible_provider_info_skips_env_key_for_custom_base(
     monkeypatch.setattr(litellm, "api_key", None)
     config = LemonadeChatConfig()
 
-    api_base, key = config._get_openai_compatible_provider_info(
-        api_base="https://attacker.example/v1", api_key=None
-    )
+    api_base, key = config._get_openai_compatible_provider_info(api_base="https://attacker.example/v1", api_key=None)
 
     assert api_base == "https://attacker.example/v1"
     assert key == "lemonade"
@@ -104,9 +92,7 @@ def test_get_openai_compatible_provider_info_uses_explicit_key_for_custom_base(
 
     assert api_base == "https://lemonade.example/v1"
     assert key == "explicit-lemonade-key"
-    assert config._get_auth_headers(key) == {
-        "Authorization": "Bearer explicit-lemonade-key"
-    }
+    assert config._get_auth_headers(key) == {"Authorization": "Bearer explicit-lemonade-key"}
 
 
 def test_get_openai_compatible_provider_info_empty_key_does_not_leak_to_custom_base(
@@ -118,9 +104,7 @@ def test_get_openai_compatible_provider_info_empty_key_does_not_leak_to_custom_b
     monkeypatch.setattr(litellm, "api_key", None)
     config = LemonadeChatConfig()
 
-    api_base, key = config._get_openai_compatible_provider_info(
-        api_base="https://attacker.example/v1", api_key=""
-    )
+    api_base, key = config._get_openai_compatible_provider_info(api_base="https://attacker.example/v1", api_key="")
 
     assert api_base == "https://attacker.example/v1"
     assert key == "lemonade"
@@ -134,9 +118,7 @@ def test_get_openai_compatible_provider_info_ignores_global_api_key(monkeypatch)
     monkeypatch.setattr(litellm, "api_key", "global-openai-key")
     config = LemonadeChatConfig()
 
-    api_base, key = config._get_openai_compatible_provider_info(
-        api_base="http://lemonade.test/v1", api_key=None
-    )
+    api_base, key = config._get_openai_compatible_provider_info(api_base="http://lemonade.test/v1", api_key=None)
 
     assert api_base == "http://lemonade.test/v1"
     assert key == "lemonade"
@@ -153,9 +135,7 @@ def test_get_models_does_not_leak_lemonade_key_to_custom_base(monkeypatch):
     response.status_code = 200
     response.json.return_value = {"data": []}
 
-    with patch.object(
-        litellm.module_level_client, "get", return_value=response
-    ) as mock_get:
+    with patch.object(litellm.module_level_client, "get", return_value=response) as mock_get:
         models = config.get_models(api_base="https://attacker.example/v1")
 
     assert models == []
@@ -173,9 +153,7 @@ def test_get_model_info_uses_loaded_context_size():
         "max_context_window": 262144,
     }
 
-    with patch.object(
-        litellm.module_level_client, "get", return_value=response
-    ) as mock_get:
+    with patch.object(litellm.module_level_client, "get", return_value=response) as mock_get:
         model_info = config.get_model_info(
             model="lemonade/Qwen3.6-35B-A3B-GGUF",
             api_base="http://lemonade.test/v1",
@@ -198,9 +176,7 @@ def test_get_model_info_falls_back_when_server_unavailable():
     """Test that Lemonade metadata lookup failures return safe defaults."""
     config = LemonadeChatConfig()
 
-    with patch.object(
-        litellm.module_level_client, "get", side_effect=Exception("boom")
-    ):
+    with patch.object(litellm.module_level_client, "get", side_effect=Exception("boom")):
         model_info = config.get_model_info(
             model="lemonade/Qwen3.6-35B-A3B-GGUF",
             api_base="http://lemonade.test/v1",
@@ -259,9 +235,7 @@ def test_get_model_info_sends_lemonade_api_key_for_configured_base(monkeypatch):
         "recipe_options": {"ctx_size": 65536},
     }
 
-    with patch.object(
-        litellm.module_level_client, "get", return_value=response
-    ) as mock_get:
+    with patch.object(litellm.module_level_client, "get", return_value=response) as mock_get:
         config.get_model_info(
             model="lemonade/Qwen3.6-35B-A3B-GGUF",
         )
@@ -282,18 +256,14 @@ def test_get_model_info_sends_explicit_lemonade_api_key_for_custom_base(monkeypa
         "recipe_options": {"ctx_size": 65536},
     }
 
-    with patch.object(
-        litellm.module_level_client, "get", return_value=response
-    ) as mock_get:
+    with patch.object(litellm.module_level_client, "get", return_value=response) as mock_get:
         config.get_model_info(
             model="lemonade/Qwen3.6-35B-A3B-GGUF",
             api_base="http://lemonade.test/v1",
             api_key="explicit-test-key",
         )
 
-    assert mock_get.call_args.kwargs["headers"] == {
-        "Authorization": "Bearer explicit-test-key"
-    }
+    assert mock_get.call_args.kwargs["headers"] == {"Authorization": "Bearer explicit-test-key"}
 
 
 def test_litellm_get_model_info_does_not_leak_lemonade_key_to_custom_base(
@@ -312,9 +282,7 @@ def test_litellm_get_model_info_does_not_leak_lemonade_key_to_custom_base(
     }
 
     litellm.get_model_info.cache_clear()
-    with patch.object(
-        litellm.module_level_client, "get", return_value=response
-    ) as mock_get:
+    with patch.object(litellm.module_level_client, "get", return_value=response) as mock_get:
         try:
             model_info = litellm.get_model_info(
                 model="lemonade/Qwen3.6-35B-A3B-GGUF",
@@ -342,9 +310,7 @@ def test_litellm_get_model_info_forwards_explicit_lemonade_key_to_custom_base(
     }
 
     litellm.get_model_info.cache_clear()
-    with patch.object(
-        litellm.module_level_client, "get", return_value=response
-    ) as mock_get:
+    with patch.object(litellm.module_level_client, "get", return_value=response) as mock_get:
         try:
             model_info = litellm.get_model_info(
                 model="lemonade/Qwen3.6-35B-A3B-GGUF",
@@ -355,9 +321,7 @@ def test_litellm_get_model_info_forwards_explicit_lemonade_key_to_custom_base(
             litellm.get_model_info.cache_clear()
 
     assert model_info["max_input_tokens"] == 65536
-    assert mock_get.call_args.kwargs["headers"] == {
-        "Authorization": "Bearer explicit-lemonade-key"
-    }
+    assert mock_get.call_args.kwargs["headers"] == {"Authorization": "Bearer explicit-lemonade-key"}
 
 
 def test_litellm_get_model_info_uses_lemonade_api_base():
@@ -398,9 +362,7 @@ def test_transform_response():
     model_response = ModelResponse()
 
     # Mock the parent class transform_response method
-    with patch.object(
-        config.__class__.__bases__[0], "transform_response"
-    ) as mock_parent:
+    with patch.object(config.__class__.__bases__[0], "transform_response") as mock_parent:
         mock_parent.return_value = model_response
 
         result = config.transform_response(

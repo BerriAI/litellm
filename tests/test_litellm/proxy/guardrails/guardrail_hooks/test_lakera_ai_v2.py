@@ -22,9 +22,7 @@ async def test_lakera_post_call_success_hook_returns_model_response_when_pii_mas
     """
     lakera_guardrail = LakeraAIGuardrail(api_key="test_key")
     mock_response = {
-        "payload": [
-            {"detector_type": "pii/email", "start": 11, "end": 26, "message_id": 1}
-        ],
+        "payload": [{"detector_type": "pii/email", "start": 11, "end": 26, "message_id": 1}],
         "flagged": True,
         "breakdown": [
             {"detector_type": "pii/email", "detected": True, "message_id": 1},
@@ -42,9 +40,7 @@ async def test_lakera_post_call_success_hook_returns_model_response_when_pii_mas
         ]
     }
 
-    with patch.object(
-        lakera_guardrail, "call_v2_guard", new_callable=AsyncMock
-    ) as mock_call:
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
         data = {
             "messages": [{"role": "user", "content": "Hello"}],
@@ -59,9 +55,9 @@ async def test_lakera_post_call_success_hook_returns_model_response_when_pii_mas
             response=llm_response,
         )
 
-    assert isinstance(
-        result, ModelResponse
-    ), "Must return ModelResponse so deployment hook does not discard masked response"
+    assert isinstance(result, ModelResponse), (
+        "Must return ModelResponse so deployment hook does not discard masked response"
+    )
     result_dict = result.model_dump()
     assert "[MASKED" in result_dict["choices"][0]["message"]["content"]
     assert "test@example.com" not in result_dict["choices"][0]["message"]["content"]

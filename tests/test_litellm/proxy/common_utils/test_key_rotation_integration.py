@@ -52,9 +52,7 @@ class TestKeyRotationManagerPassesKeyAlias:
 
         # Create mock prisma client
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_verificationtoken.update = AsyncMock(
-            return_value=mock_key
-        )
+        mock_prisma.db.litellm_verificationtoken.update = AsyncMock(return_value=mock_key)
 
         # Create mock response
         mock_response = GenerateKeyResponse(
@@ -66,9 +64,7 @@ class TestKeyRotationManagerPassesKeyAlias:
         # Capture the RegenerateKeyRequest passed to regenerate_key_fn
         captured_request = None
 
-        async def capture_regenerate_key_fn(
-            data, user_api_key_dict, litellm_changed_by
-        ):
+        async def capture_regenerate_key_fn(data, user_api_key_dict, litellm_changed_by):
             nonlocal captured_request
             captured_request = data
             return mock_response
@@ -109,9 +105,7 @@ class TestKeyRotationManagerPassesKeyAlias:
         mock_key.rotation_count = 0
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_verificationtoken.update = AsyncMock(
-            return_value=mock_key
-        )
+        mock_prisma.db.litellm_verificationtoken.update = AsyncMock(return_value=mock_key)
 
         mock_response = GenerateKeyResponse(
             key="sk-new-key-value",
@@ -120,9 +114,7 @@ class TestKeyRotationManagerPassesKeyAlias:
 
         captured_request = None
 
-        async def capture_regenerate_key_fn(
-            data, user_api_key_dict, litellm_changed_by
-        ):
+        async def capture_regenerate_key_fn(data, user_api_key_dict, litellm_changed_by):
             nonlocal captured_request
             captured_request = data
             return mock_response
@@ -140,9 +132,7 @@ class TestKeyRotationManagerPassesKeyAlias:
 
         assert captured_request is not None
         assert captured_request.key == test_token
-        assert (
-            captured_request.key_alias is None
-        ), "key_alias should be None for keys without alias"
+        assert captured_request.key_alias is None, "key_alias should be None for keys without alias"
 
 
 class TestKeyRotationSecretNamingStability:
@@ -176,9 +166,7 @@ class TestKeyRotationSecretNamingStability:
 
         # 2. Rotation response (new token ID)
         new_token_id = "hashed-new-token"
-        response = GenerateKeyResponse(
-            key="sk-new-key", token_id=new_token_id, key_alias=None
-        )
+        response = GenerateKeyResponse(key="sk-new-key", token_id=new_token_id, key_alias=None)
 
         # 3. Request data without alias
         request_data = RegenerateKeyRequest(key=initial_token_hash, key_alias=None)
@@ -191,9 +179,7 @@ class TestKeyRotationSecretNamingStability:
                 data=request_data,
                 existing_key_row=existing_key,
                 response=response,
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_role="proxy_admin", api_key="sk-1234", user_id="1234"
-                ),
+                user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin", api_key="sk-1234", user_id="1234"),
             )
 
             # ASSERT: The new_secret_name MUST be the same as initial_secret_name
@@ -201,9 +187,9 @@ class TestKeyRotationSecretNamingStability:
             mock_rotate.assert_called_once()
             call_kwargs = mock_rotate.call_args.kwargs
             assert call_kwargs["current_secret_name"] == initial_secret_name
-            assert (
-                call_kwargs["new_secret_name"] == initial_secret_name
-            ), f"Secret name drift! Expected {initial_secret_name}, got {call_kwargs['new_secret_name']}. This causes secret sprawl."
+            assert call_kwargs["new_secret_name"] == initial_secret_name, (
+                f"Secret name drift! Expected {initial_secret_name}, got {call_kwargs['new_secret_name']}. This causes secret sprawl."
+            )
 
     @pytest.mark.asyncio
     async def test_rotation_hook_pre_rotation_alias_consistency(self):
@@ -222,9 +208,7 @@ class TestKeyRotationSecretNamingStability:
         existing_key.token = "old-hash"
         existing_key.key_alias = test_alias
 
-        response = GenerateKeyResponse(
-            token_id="new-hash", key="sk-new", key_alias=test_alias
-        )
+        response = GenerateKeyResponse(token_id="new-hash", key="sk-new", key_alias=test_alias)
         request_data = RegenerateKeyRequest(key="old-hash", key_alias=test_alias)
 
         with patch(
@@ -235,9 +219,7 @@ class TestKeyRotationSecretNamingStability:
                 data=request_data,
                 existing_key_row=existing_key,
                 response=response,
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_role="proxy_admin", api_key="sk-123", user_id="1"
-                ),
+                user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin", api_key="sk-123", user_id="1"),
             )
             mock_rotate.assert_called_once()
             assert mock_rotate.call_args.kwargs["current_secret_name"] == test_alias
@@ -265,9 +247,7 @@ class TestKeyRotationSecretNamingStability:
 
             # Should raise ProxyException 400
             with pytest.raises(ProxyException) as exc:
-                _set_key_rotation_fields(
-                    data, auto_rotate=True, rotation_interval="30d"
-                )
+                _set_key_rotation_fields(data, auto_rotate=True, rotation_interval="30d")
 
             assert str(exc.value.code) == "400"
             assert "key_alias is required" in str(exc.value.message)

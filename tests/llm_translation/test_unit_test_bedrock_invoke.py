@@ -32,10 +32,7 @@ def test_get_complete_url_basic(bedrock_transformer):
         litellm_params={},
     )
 
-    assert (
-        url
-        == "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v2/invoke"
-    )
+    assert url == "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v2/invoke"
 
 
 def test_get_complete_url_streaming(bedrock_transformer):
@@ -50,8 +47,7 @@ def test_get_complete_url_streaming(bedrock_transformer):
     )
 
     assert (
-        url
-        == "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v2/invoke-with-response-stream"
+        url == "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v2/invoke-with-response-stream"
     )
 
 
@@ -130,9 +126,7 @@ def test_transform_request_cohere_command(bedrock_transformer):
         headers={},
     )
 
-    print(
-        "transformed request for invoke cohere command=", json.dumps(result, indent=4)
-    )
+    print("transformed request for invoke cohere command=", json.dumps(result, indent=4))
     expected_result = {"message": "Hello", "max_tokens": 2048, "chat_history": []}
     assert result == expected_result
 
@@ -251,9 +245,7 @@ def test_filter_headers_for_aws_signature():
         "x-amz-security-token": "test-token",
     }
 
-    assert (
-        filtered_headers == expected_aws_headers
-    ), f"Expected {expected_aws_headers}, got {filtered_headers}"
+    assert filtered_headers == expected_aws_headers, f"Expected {expected_aws_headers}, got {filtered_headers}"
 
     # Verify that non-AWS headers are excluded
     excluded_headers = [
@@ -265,9 +257,7 @@ def test_filter_headers_for_aws_signature():
         "x-envoy-external-address",
     ]
     for header in excluded_headers:
-        assert (
-            header not in filtered_headers
-        ), f"Header {header} should not be in filtered headers"
+        assert header not in filtered_headers, f"Header {header} should not be in filtered headers"
 
     # Test with empty headers
     empty_filtered = aws_llm._filter_headers_for_aws_signature({})

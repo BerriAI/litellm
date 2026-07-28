@@ -52,9 +52,7 @@ class TestJSONProviderLoader:
         assert api_base == "https://api.publicai.co/v1"
 
         # Test with custom base
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            "https://custom.api.com", "test-key"
-        )
+        api_base, api_key = config._get_openai_compatible_provider_info("https://custom.api.com", "test-key")
         assert api_base == "https://custom.api.com"
         assert api_key == "test-key"
 
@@ -70,9 +68,7 @@ class TestJSONProviderLoader:
         # Test parameter mapping
         optional_params = {}
         non_default_params = {"max_completion_tokens": 100, "temperature": 0.7}
-        result = config.map_openai_params(
-            non_default_params, optional_params, "gpt-4", False
-        )
+        result = config.map_openai_params(non_default_params, optional_params, "gpt-4", False)
 
         # max_completion_tokens should be mapped to max_tokens
         assert "max_tokens" in result
@@ -121,9 +117,9 @@ class TestJSONProviderLoader:
             "parallel_tool_calls",
         ]
         for param in tool_params:
-            assert (
-                param not in supported
-            ), f"'{param}' should not be in supported params when function calling is not supported"
+            assert param not in supported, (
+                f"'{param}' should not be in supported params when function calling is not supported"
+            )
 
         # Non-tool params should still be present
         assert "temperature" in supported
@@ -168,9 +164,7 @@ class TestJSONProviderLoader:
         from litellm import LlmProviders
         from litellm.utils import ProviderConfigManager
 
-        config = ProviderConfigManager.get_provider_chat_config(
-            model="gpt-4", provider=LlmProviders.PUBLICAI
-        )
+        config = ProviderConfigManager.get_provider_chat_config(model="gpt-4", provider=LlmProviders.PUBLICAI)
 
         assert config is not None
         assert config.custom_llm_provider == "publicai"
@@ -218,9 +212,7 @@ class TestPinstripes:
         api_base, api_key = config._get_openai_compatible_provider_info(None, None)
         assert api_base == "https://pinstripes.io/v1"
 
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            "https://custom.pinstripes.io/v1", "test-key"
-        )
+        api_base, api_key = config._get_openai_compatible_provider_info("https://custom.pinstripes.io/v1", "test-key")
         assert api_base == "https://custom.pinstripes.io/v1"
         assert api_key == "test-key"
 
@@ -235,9 +227,7 @@ class TestPinstripes:
 
         optional_params = {}
         non_default_params = {"max_completion_tokens": 100, "temperature": 0.7}
-        result = config.map_openai_params(
-            non_default_params, optional_params, "ps/glm-4.5-air", False
-        )
+        result = config.map_openai_params(non_default_params, optional_params, "ps/glm-4.5-air", False)
 
         assert "max_tokens" in result
         assert result["max_tokens"] == 100
@@ -282,9 +272,7 @@ class TestDarkbloom:
         api_base, api_key = config._get_openai_compatible_provider_info(None, None)
         assert api_base == "https://api.darkbloom.dev/v1"
 
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            "https://custom.darkbloom.dev/v1", "test-key"
-        )
+        api_base, api_key = config._get_openai_compatible_provider_info("https://custom.darkbloom.dev/v1", "test-key")
         assert api_base == "https://custom.darkbloom.dev/v1"
         assert api_key == "test-key"
 
@@ -311,17 +299,13 @@ class TestDarkbloom:
         from litellm import LlmProviders
         from litellm.utils import ProviderConfigManager
 
-        config = ProviderConfigManager.get_provider_chat_config(
-            model="gemma-4-26b", provider=LlmProviders.DARKBLOOM
-        )
+        config = ProviderConfigManager.get_provider_chat_config(model="gemma-4-26b", provider=LlmProviders.DARKBLOOM)
 
         assert config is not None
         assert config.custom_llm_provider == "darkbloom"
 
     def test_darkbloom_model_cost_map(self):
-        with open(
-            os.path.join(workspace_path, "model_prices_and_context_window.json")
-        ) as f:
+        with open(os.path.join(workspace_path, "model_prices_and_context_window.json")) as f:
             model_cost = json.load(f)
 
         expected_models = {
@@ -373,9 +357,7 @@ class TestPublicAIIntegration:
             content = response.choices[0].message.content.lower()
             assert len(content) > 0
 
-            print(
-                f"✓ PublicAI completion successful: {response.choices[0].message.content}"
-            )
+            print(f"✓ PublicAI completion successful: {response.choices[0].message.content}")
 
         except Exception as e:
             if pytest:
@@ -403,9 +385,7 @@ class TestPublicAIIntegration:
             chunks = []
             for chunk in response:
                 assert chunk is not None
-                if hasattr(chunk.choices[0], "delta") and hasattr(
-                    chunk.choices[0].delta, "content"
-                ):
+                if hasattr(chunk.choices[0], "delta") and hasattr(chunk.choices[0].delta, "content"):
                     if chunk.choices[0].delta.content:
                         chunks.append(chunk.choices[0].delta.content)
 
@@ -461,9 +441,7 @@ class TestPublicAIIntegration:
             # Send message with content as list (should be converted to string)
             response = litellm.completion(
                 model="publicai/swiss-ai/apertus-8b-instruct",
-                messages=[
-                    {"role": "user", "content": [{"type": "text", "text": "Say hello"}]}
-                ],
+                messages=[{"role": "user", "content": [{"type": "text", "text": "Say hello"}]}],
                 max_tokens=10,
             )
 

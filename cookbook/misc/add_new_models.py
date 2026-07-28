@@ -8,9 +8,7 @@ def get_initial_config():
 
 
 def get_user_input():
-    model_name = input(
-        "Enter model_name (this is the 'model' passed in /chat/completions requests):"
-    )
+    model_name = input("Enter model_name (this is the 'model' passed in /chat/completions requests):")
     model = input("litellm_params: Enter model eg. 'azure/<your-deployment-name>': ")
     tpm = int(input("litellm_params: Enter tpm (tokens per minute): "))
     rpm = int(input("litellm_params: Enter rpm (requests per minute): "))
@@ -18,9 +16,7 @@ def get_user_input():
     api_base = input("litellm_params: Enter api_base: ")
     api_version = input("litellm_params: Enter api_version: ")
     timeout = int(input("litellm_params: Enter timeout (0 for default): "))
-    stream_timeout = int(
-        input("litellm_params: Enter stream_timeout (0 for default): ")
-    )
+    stream_timeout = int(input("litellm_params: Enter stream_timeout (0 for default): "))
     max_retries = int(input("litellm_params: Enter max_retries (0 for default): "))
 
     return {

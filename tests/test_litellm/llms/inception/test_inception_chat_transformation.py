@@ -188,21 +188,15 @@ def test_inception_does_not_leak_key_to_caller_api_base():
     caller also supplies their own key.
     """
     config = InceptionChatConfig()
-    with mock.patch.dict(
-        os.environ, {"INCEPTION_API_KEY": "server-secret"}, clear=True
-    ):
+    with mock.patch.dict(os.environ, {"INCEPTION_API_KEY": "server-secret"}, clear=True):
         with mock.patch.object(litellm, "inception_key", "module-secret"):
             # caller overrides api_base without a key -> server key withheld
-            api_base, api_key = config._get_openai_compatible_provider_info(
-                "https://attacker.example/v1", None
-            )
+            api_base, api_key = config._get_openai_compatible_provider_info("https://attacker.example/v1", None)
             assert api_base == "https://attacker.example/v1"
             assert api_key is None
 
             # caller overrides api_base AND supplies their own key -> used as-is
-            _, api_key = config._get_openai_compatible_provider_info(
-                "https://attacker.example/v1", "caller-key"
-            )
+            _, api_key = config._get_openai_compatible_provider_info("https://attacker.example/v1", "caller-key")
             assert api_key == "caller-key"
 
             # default/server base -> server-managed key resolved
@@ -217,9 +211,7 @@ def test_get_llm_provider_inception():
     assert model == "mercury-2"
     assert provider == "inception"
 
-    model, provider, _, api_base = get_llm_provider(
-        "mercury-2", api_base="https://api.inceptionlabs.ai/v1"
-    )
+    model, provider, _, api_base = get_llm_provider("mercury-2", api_base="https://api.inceptionlabs.ai/v1")
     assert model == "mercury-2"
     assert provider == "inception"
     assert api_base == "https://api.inceptionlabs.ai/v1"

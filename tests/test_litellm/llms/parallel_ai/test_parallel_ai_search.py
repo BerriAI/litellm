@@ -138,9 +138,7 @@ class TestParallelAISearch:
             json_data = mock_post.call_args.kwargs.get("json")
             assert json_data["mode"] == "basic"
 
-    @pytest.mark.parametrize(
-        "processor,expected_mode", [("base", "basic"), ("pro", "advanced")]
-    )
+    @pytest.mark.parametrize("processor,expected_mode", [("base", "basic"), ("pro", "advanced")])
     @pytest.mark.asyncio
     async def test_legacy_processor_maps_to_mode(self, processor, expected_mode):
         with patch(
@@ -225,9 +223,7 @@ class TestParallelAISearch:
                 "arxiv.org",
                 "nature.com",
             ]
-            assert advanced_settings["source_policy"]["exclude_domains"] == [
-                "reddit.com"
-            ]
+            assert advanced_settings["source_policy"]["exclude_domains"] == ["reddit.com"]
             assert advanced_settings["excerpt_settings"]["max_chars_per_result"] == 1500
 
             assert "max_results" not in json_data
@@ -309,10 +305,7 @@ class TestParallelAISearch:
             )
 
             call_args = mock_post.call_args
-            assert (
-                call_args.kwargs["url"]
-                == "https://proxy.internal.example.com/v1/search"
-            )
+            assert call_args.kwargs["url"] == "https://proxy.internal.example.com/v1/search"
 
     @pytest.mark.asyncio
     async def test_caller_api_base_without_key_is_refused(self, monkeypatch):

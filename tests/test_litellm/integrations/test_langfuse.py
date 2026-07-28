@@ -59,17 +59,13 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.mock_langfuse_client.trace.side_effect = _trace_side_effect
 
         # Mock the langfuse module that's imported locally in methods
-        self.langfuse_module_patcher = patch.dict(
-            "sys.modules", {"langfuse": MagicMock()}
-        )
+        self.langfuse_module_patcher = patch.dict("sys.modules", {"langfuse": MagicMock()})
         self.mock_langfuse_module = self.langfuse_module_patcher.start()
 
         # Create a mock for the langfuse module with version
         self.mock_langfuse = MagicMock()
         self.mock_langfuse.version = MagicMock()
-        self.mock_langfuse.version.__version__ = (
-            "3.0.0"  # Set a version that supports all features
-        )
+        self.mock_langfuse.version.__version__ = "3.0.0"  # Set a version that supports all features
 
         # Mock the Langfuse class
         self.mock_langfuse_class = MagicMock()
@@ -115,9 +111,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             )
 
         # Bind the method to the instance
-        self.logger.log_event_on_langfuse = types.MethodType(
-            log_event_on_langfuse, self.logger
-        )
+        self.logger.log_event_on_langfuse = types.MethodType(log_event_on_langfuse, self.logger)
 
         # Make sure _is_langfuse_v2 returns True
         def mock_is_langfuse_v2(self):
@@ -704,12 +698,8 @@ def test_failure_handler_langfuse_kwargs_excludes_original_response():
 
     try:
         # Mock LangFuseHandler to return our capturing mock logger
-        with patch(
-            "litellm.litellm_core_utils.litellm_logging.LangFuseHandler"
-        ) as mock_handler_class:
-            mock_handler_class.get_langfuse_logger_for_request.return_value = (
-                mock_langfuse_logger
-            )
+        with patch("litellm.litellm_core_utils.litellm_logging.LangFuseHandler") as mock_handler_class:
+            mock_handler_class.get_langfuse_logger_for_request.return_value = mock_langfuse_logger
 
             # Call the actual failure_handler
             test_exception = Exception("TestError: model not found")
@@ -721,23 +711,19 @@ def test_failure_handler_langfuse_kwargs_excludes_original_response():
             )
 
         # Verify log_event_on_langfuse was actually called
-        assert (
-            mock_langfuse_logger.log_event_on_langfuse.called
-        ), "log_event_on_langfuse was not called"
+        assert mock_langfuse_logger.log_event_on_langfuse.called, "log_event_on_langfuse was not called"
 
         # Verify original_response is NOT in the kwargs passed to Langfuse
         langfuse_kwargs = captured_kwargs.get("kwargs", {})
-        assert (
-            "original_response" not in langfuse_kwargs
-        ), "original_response should be excluded from kwargs passed to Langfuse"
+        assert "original_response" not in langfuse_kwargs, (
+            "original_response should be excluded from kwargs passed to Langfuse"
+        )
 
         # Verify session_id metadata is preserved in the kwargs
-        langfuse_metadata = langfuse_kwargs.get("litellm_params", {}).get(
-            "metadata", {}
+        langfuse_metadata = langfuse_kwargs.get("litellm_params", {}).get("metadata", {})
+        assert langfuse_metadata.get("session_id") == "test-session-failure", (
+            "session_id should be preserved in kwargs passed to Langfuse"
         )
-        assert (
-            langfuse_metadata.get("session_id") == "test-session-failure"
-        ), "session_id should be preserved in kwargs passed to Langfuse"
 
         # Verify level is ERROR
         assert captured_kwargs.get("level") == "ERROR"
@@ -779,9 +765,7 @@ async def test_async_log_failure_event_logs_to_langfuse():
             "generation_id": "mock-gen",
         }
 
-        with patch(
-            "litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler"
-        ) as mock_handler:
+        with patch("litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler") as mock_handler:
             mock_handler.get_langfuse_logger_for_request.return_value = mock_logger
 
             kwargs = {
@@ -806,9 +790,7 @@ async def test_async_log_failure_event_logs_to_langfuse():
             )
 
             # Verify log_event_on_langfuse was called
-            assert (
-                mock_logger.log_event_on_langfuse.called
-            ), "log_event_on_langfuse was not called for failure event"
+            assert mock_logger.log_event_on_langfuse.called, "log_event_on_langfuse was not called for failure event"
             call_kwargs = mock_logger.log_event_on_langfuse.call_args[1]
             assert call_kwargs["level"] == "ERROR"
             assert call_kwargs["status_message"] == "API error: model not found"
@@ -848,9 +830,7 @@ async def test_async_log_failure_event_works_without_standard_logging_object():
             "generation_id": "mock-gen",
         }
 
-        with patch(
-            "litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler"
-        ) as mock_handler:
+        with patch("litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler") as mock_handler:
             mock_handler.get_langfuse_logger_for_request.return_value = mock_logger
 
             kwargs = {

@@ -50,16 +50,12 @@ class TestBytezChatConfig:
                 api_base=API_BASE,
             )
 
-        assert "Missing api_key, make sure you pass in your api key" in str(
-            excinfo.value
-        )
+        assert "Missing api_key, make sure you pass in your api key" in str(excinfo.value)
 
     def test_bytez_completion_mock_sync(self, respx_mock):
         import litellm
 
-        input_messages = [
-            {"role": "user", "content": "What is your favorite kind of cat?"}
-        ]
+        input_messages = [{"role": "user", "content": "What is your favorite kind of cat?"}]
 
         output_content = "Hello, how can I help you today?"
 
@@ -122,9 +118,7 @@ class TestBytezChatConfig:
                 expected_output=[
                     {
                         "role": "user",
-                        "content": [
-                            {"type": "text", "text": "What color is this cat?"}
-                        ],
+                        "content": [{"type": "text", "text": "What color is this cat?"}],
                     }
                 ],
             ),
@@ -138,9 +132,7 @@ class TestBytezChatConfig:
                 expected_output=[
                     {
                         "role": "user",
-                        "content": [
-                            {"type": "text", "text": "What color is this cat?"}
-                        ],
+                        "content": [{"type": "text", "text": "What color is this cat?"}],
                     }
                 ],
             ),

@@ -13,9 +13,7 @@ def test_azure_ai_gpt_5_5_model_info(model):
         model_cost = json.load(f)
 
     info = model_cost.get(model)
-    assert (
-        info is not None
-    ), f"{model} not found in model_prices_and_context_window.json"
+    assert info is not None, f"{model} not found in model_prices_and_context_window.json"
 
     assert info["litellm_provider"] == "azure_ai"
     assert info["mode"] == "chat"
@@ -63,6 +61,6 @@ def test_azure_ai_gpt_5_5_backup_matches_main():
         backup_cost = json.load(f)
 
     for model in ("azure_ai/gpt-5.5", "azure_ai/gpt-5.5-2026-04-23"):
-        assert backup_cost.get(model) == main_cost.get(
-            model
-        ), f"{model} differs between main and backup model cost maps"
+        assert backup_cost.get(model) == main_cost.get(model), (
+            f"{model} differs between main and backup model cost maps"
+        )

@@ -130,9 +130,7 @@ def run_scenario(
     if scenario_key == "no_chunk":
         runner = lambda: bench_no_chunk(wrapper, iterations)  # noqa: E731
     else:
-        runner = lambda: bench_with_chunk(
-            wrapper, spec["chunk_factory"], iterations
-        )  # noqa: E731
+        runner = lambda: bench_with_chunk(wrapper, spec["chunk_factory"], iterations)  # noqa: E731
 
     for _ in range(warmup):
         runner()
@@ -169,14 +167,12 @@ def main() -> None:
     )
     results: List[Result] = []
     for scenario in SCENARIOS:
-        r = run_scenario(
-            args.label, scenario, args.iterations, args.repeats, args.warmup
-        )
+        r = run_scenario(args.label, scenario, args.iterations, args.repeats, args.warmup)
         results.append(r)
         print(
             f"  {r.scenario:12s}: "
-            f"min={r.elapsed_min_s*1000:8.2f} ms  "
-            f"median={r.elapsed_median_s*1000:8.2f} ms  "
+            f"min={r.elapsed_min_s * 1000:8.2f} ms  "
+            f"median={r.elapsed_median_s * 1000:8.2f} ms  "
             f"per-call={r.per_call_us:7.3f} μs  "
             f"calls/s={r.calls_per_sec:>12,.0f}"
         )

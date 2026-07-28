@@ -78,9 +78,7 @@ def test_completion_forwards_extra_headers_to_provider(mock_completions_endpoint
 
 
 @respx.mock
-async def test_acompletion_forwards_client_headers_to_provider(
-    mock_completions_endpoint, monkeypatch
-):
+async def test_acompletion_forwards_client_headers_to_provider(mock_completions_endpoint, monkeypatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     await atext_completion(
         model="gpt-3.5-turbo-instruct",

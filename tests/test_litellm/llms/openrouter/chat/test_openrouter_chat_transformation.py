@@ -4,9 +4,7 @@ import sys
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openrouter.chat.transformation import (
@@ -18,9 +16,7 @@ from litellm.llms.openrouter.chat.transformation import (
 
 class TestOpenRouterChatCompletionStreamingHandler:
     def test_chunk_parser_successful(self):
-        handler = OpenRouterChatCompletionStreamingHandler(
-            streaming_response=None, sync_stream=True
-        )
+        handler = OpenRouterChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
         # Test input chunk
         chunk = {
@@ -28,9 +24,7 @@ class TestOpenRouterChatCompletionStreamingHandler:
             "created": 1234567890,
             "model": "test_model",
             "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
-            "choices": [
-                {"delta": {"content": "test content", "reasoning": "test reasoning"}}
-            ],
+            "choices": [{"delta": {"content": "test content", "reasoning": "test reasoning"}}],
         }
 
         # Parse chunk
@@ -48,9 +42,7 @@ class TestOpenRouterChatCompletionStreamingHandler:
         assert result.choices[0]["delta"]["reasoning_content"] == "test reasoning"
 
     def test_chunk_parser_error_response(self):
-        handler = OpenRouterChatCompletionStreamingHandler(
-            streaming_response=None, sync_stream=True
-        )
+        handler = OpenRouterChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
         # Test error chunk
         error_chunk = {
@@ -70,9 +62,7 @@ class TestOpenRouterChatCompletionStreamingHandler:
         assert exc_info.value.status_code == 400
 
     def test_chunk_parser_key_error(self):
-        handler = OpenRouterChatCompletionStreamingHandler(
-            streaming_response=None, sync_stream=True
-        )
+        handler = OpenRouterChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
         # Test invalid chunk missing required fields
         invalid_chunk = {"incomplete": "data"}
@@ -96,9 +86,7 @@ def test_openrouter_extra_body_transformation():
 
     # https://github.com/BerriAI/litellm/issues/8425, validate its not contained in extra_body still
     assert transformed_request["provider"]["order"] == ["DeepSeek"]
-    assert transformed_request["messages"] == [
-        {"role": "user", "content": "Hello, world!"}
-    ]
+    assert transformed_request["messages"] == [{"role": "user", "content": "Hello, world!"}]
 
 
 def test_openrouter_cache_control_flag_removal():
@@ -359,9 +347,7 @@ def test_openrouter_transform_request_multiple_cache_controls():
 
     # Only the last block should have cache_control
     for i in range(4):
-        assert (
-            "cache_control" not in system_message["content"][i]
-        ), f"Block {i} should not have cache_control"
+        assert "cache_control" not in system_message["content"][i], f"Block {i} should not have cache_control"
 
     assert system_message["content"][4]["cache_control"] == {"type": "ephemeral"}
     assert "cache_control" not in system_message
@@ -427,9 +413,7 @@ def test_openrouter_cost_tracking_non_streaming():
         usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
     )
 
-    with patch.object(
-        OpenAIGPTConfig, "transform_response", return_value=model_response
-    ):
+    with patch.object(OpenAIGPTConfig, "transform_response", return_value=model_response):
         result = config.transform_response(
             model="openrouter/anthropic/claude-sonnet-4.5",
             raw_response=mock_response,
@@ -443,16 +427,8 @@ def test_openrouter_cost_tracking_non_streaming():
         )
 
     assert hasattr(result, "_hidden_params")
-    assert (
-        "llm_provider-x-litellm-response-cost"
-        in result._hidden_params["additional_headers"]
-    )
-    assert (
-        result._hidden_params["additional_headers"][
-            "llm_provider-x-litellm-response-cost"
-        ]
-        == 0.00015
-    )
+    assert "llm_provider-x-litellm-response-cost" in result._hidden_params["additional_headers"]
+    assert result._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.00015
 
 
 def test_openrouter_cost_tracking_streaming():
@@ -478,9 +454,7 @@ def test_openrouter_cost_tracking_streaming():
     assert transformed_request["usage"] == {"include": True}
 
     # Test streaming chunks preserve cost data
-    handler = OpenRouterChatCompletionStreamingHandler(
-        streaming_response=None, sync_stream=True
-    )
+    handler = OpenRouterChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
     # First chunk - content only
     chunk1 = {
@@ -534,9 +508,7 @@ def test_openrouter_reasoning_models_allow_reasoning_effort_param():
     """
     config = OpenrouterConfig()
 
-    supported_params = config.get_supported_openai_params(
-        model="openrouter/deepseek/deepseek-v3.2"
-    )
+    supported_params = config.get_supported_openai_params(model="openrouter/deepseek/deepseek-v3.2")
 
     assert "reasoning_effort" in supported_params
     assert supported_params.count("reasoning_effort") == 1
@@ -548,9 +520,7 @@ def test_openrouter_non_reasoning_models_do_not_add_reasoning_effort():
     """
     config = OpenrouterConfig()
 
-    supported_params = config.get_supported_openai_params(
-        model="openrouter/anthropic/claude-3-5-haiku"
-    )
+    supported_params = config.get_supported_openai_params(model="openrouter/anthropic/claude-3-5-haiku")
 
     assert "reasoning_effort" not in supported_params
 

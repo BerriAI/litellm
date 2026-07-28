@@ -26,9 +26,7 @@ import pytest
 
 @pytest.fixture(scope="module")
 def model_data():
-    json_path = os.path.join(
-        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
-    )
+    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
     with open(json_path) as f:
         return json.load(f)
 
@@ -51,21 +49,14 @@ def test_usgov_sonnet_4_5_pricing(model_data, model_key):
     info = model_data[model_key]
 
     assert info["input_cost_per_token"] == 3.6e-06, (
-        f"{model_key}: input_cost_per_token should be $3.60/MTok "
-        f"(got {info['input_cost_per_token']})"
+        f"{model_key}: input_cost_per_token should be $3.60/MTok (got {info['input_cost_per_token']})"
     )
-    assert (
-        info["output_cost_per_token"] == 1.8e-05
-    ), f"{model_key}: output_cost_per_token should be $18.00/MTok"
-    assert (
-        info["cache_creation_input_token_cost"] == 4.5e-06
-    ), f"{model_key}: 5m cache write should be $4.50/MTok"
-    assert (
-        info["cache_creation_input_token_cost_above_1hr"] == 7.2e-06
-    ), f"{model_key}: 1h cache write should be $7.20/MTok"
-    assert (
-        info["cache_read_input_token_cost"] == 3.6e-07
-    ), f"{model_key}: cache read should be $0.36/MTok"
+    assert info["output_cost_per_token"] == 1.8e-05, f"{model_key}: output_cost_per_token should be $18.00/MTok"
+    assert info["cache_creation_input_token_cost"] == 4.5e-06, f"{model_key}: 5m cache write should be $4.50/MTok"
+    assert info["cache_creation_input_token_cost_above_1hr"] == 7.2e-06, (
+        f"{model_key}: 1h cache write should be $7.20/MTok"
+    )
+    assert info["cache_read_input_token_cost"] == 3.6e-07, f"{model_key}: cache read should be $0.36/MTok"
 
 
 def test_usgov_carries_20_percent_premium_over_global(model_data):
@@ -84,9 +75,7 @@ def test_usgov_carries_20_percent_premium_over_global(model_data):
         "cache_read_input_token_cost",
     ):
         ratio = usgov_info[field] / global_info[field]
-        assert (
-            abs(ratio - 1.2) < 1e-9
-        ), f"{field}: us-gov / global ratio is {ratio}, expected 1.2"
+        assert abs(ratio - 1.2) < 1e-9, f"{field}: us-gov / global ratio is {ratio}, expected 1.2"
 
 
 # The us-gov.anthropic.* cross-region inference profile is the only us-gov
@@ -112,9 +101,7 @@ def test_usgov_cross_region_above_200k_carries_gov_premium(model_data, field, ex
     """
     info = model_data[USGOV_CROSS_REGION_KEY]
     assert field in info, f"{USGOV_CROSS_REGION_KEY}: missing field {field}"
-    assert (
-        info[field] == expected
-    ), f"{USGOV_CROSS_REGION_KEY}: {field} should be {expected} (got {info[field]})"
+    assert info[field] == expected, f"{USGOV_CROSS_REGION_KEY}: {field} should be {expected} (got {info[field]})"
 
 
 def test_usgov_cross_region_above_200k_ratio_to_global(model_data):
@@ -127,6 +114,4 @@ def test_usgov_cross_region_above_200k_ratio_to_global(model_data):
     usgov_info = model_data[USGOV_CROSS_REGION_KEY]
     for field in EXPECTED_USGOV_ABOVE_200K:
         ratio = usgov_info[field] / global_info[field]
-        assert (
-            abs(ratio - 1.2) < 1e-9
-        ), f"{field}: us-gov / global ratio is {ratio}, expected 1.2"
+        assert abs(ratio - 1.2) < 1e-9, f"{field}: us-gov / global ratio is {ratio}, expected 1.2"

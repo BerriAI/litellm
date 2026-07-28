@@ -8338,6 +8338,8 @@ async def test_authorize_wall_names_the_issuer_for_anchored_servers():
     assert "verify the Issuer" in detail_text
     assert "Servers with no url" not in detail_text
     assert "idp.example.com" not in detail_text
+
+
 def test_passthrough_authorization_code_round_trips_and_rejects_hostile_input():
     """The passthrough gateway code seals and recovers the ephemeral DCR client and upstream code,
     and is total over hostile input: a raw upstream code opens to None, and a tampered or
@@ -8746,7 +8748,9 @@ async def test_mint_ephemeral_dcr_client_unusable_registration_response_is_502(p
     )
     from litellm.types.mcp import MCPAuth
 
-    server = _bridge_server(auth_type=MCPAuth.true_passthrough, dcr_bridge=None, server_id=server_id, server_name=server_id)
+    server = _bridge_server(
+        auth_type=MCPAuth.true_passthrough, dcr_bridge=None, server_id=server_id, server_name=server_id
+    )
     mock_response = MagicMock()
     mock_response.text = json.dumps(payload)
     mock_response.raise_for_status = MagicMock()
@@ -8822,8 +8826,6 @@ async def test_token_exchange_authenticates_with_the_sealed_clients_own_auth_met
         assert "Authorization" not in sent_headers
         assert sent_body["client_id"] == "minted-77"
         assert sent_body["client_secret"] == "mint-secret"
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -9078,7 +9080,9 @@ def test_upstream_resource_auto_keeps_the_path_because_it_identifies_the_server(
     sets ``upstream_resource`` explicitly instead of using ``auto``."""
     from litellm.proxy._experimental.mcp_server.oauth_utils import resolve_upstream_resource
 
-    first = resolve_upstream_resource(_resource_server(url="https://gw.example.com/team-a/mcp", upstream_resource="auto"))
+    first = resolve_upstream_resource(
+        _resource_server(url="https://gw.example.com/team-a/mcp", upstream_resource="auto")
+    )
     second = resolve_upstream_resource(
         _resource_server(url="https://gw.example.com/team-b/mcp", upstream_resource="auto")
     )

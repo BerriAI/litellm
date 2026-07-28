@@ -5,9 +5,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm import completion
@@ -30,9 +28,7 @@ class TestPerplexityReasoning:
             ("perplexity/sonar-reasoning-pro", "high"),
         ],
     )
-    def test_perplexity_reasoning_effort_parameter_mapping(
-        self, model, reasoning_effort
-    ):
+    def test_perplexity_reasoning_effort_parameter_mapping(self, model, reasoning_effort):
         """
         Test that reasoning_effort parameter is correctly mapped for Perplexity Sonar reasoning models
         """
@@ -109,7 +105,6 @@ class TestPerplexityReasoning:
             "create",
             side_effect=_return_pydantic_obj,
         ) as mock_client:
-
             response = completion(
                 model=model,
                 messages=[
@@ -135,10 +130,7 @@ class TestPerplexityReasoning:
 
             # Verify response structure
             assert response.choices[0].message.content is not None
-            assert (
-                response.choices[0].message.content
-                == "This is a test response from the reasoning model."
-            )
+            assert response.choices[0].message.content == "This is a test response from the reasoning model."
 
     def test_perplexity_reasoning_models_support_reasoning(self):
         """
@@ -192,18 +184,14 @@ class TestPerplexityReasoning:
             ("perplexity/sonar-reasoning-pro", "https://api.perplexity.ai"),
         ],
     )
-    def test_perplexity_reasoning_api_base_configuration(
-        self, model, expected_api_base
-    ):
+    def test_perplexity_reasoning_api_base_configuration(self, model, expected_api_base):
         """
         Test that Perplexity reasoning models use the correct API base
         """
         from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
 
         config = PerplexityChatConfig()
-        api_base, _ = config._get_openai_compatible_provider_info(
-            api_base=None, api_key="test-key"
-        )
+        api_base, _ = config._get_openai_compatible_provider_info(api_base=None, api_key="test-key")
 
         assert api_base == expected_api_base
 
@@ -214,8 +202,6 @@ class TestPerplexityReasoning:
         from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
 
         config = PerplexityChatConfig()
-        supported_params = config.get_supported_openai_params(
-            model="perplexity/sonar-reasoning"
-        )
+        supported_params = config.get_supported_openai_params(model="perplexity/sonar-reasoning")
 
         assert "reasoning_effort" in supported_params

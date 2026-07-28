@@ -23,9 +23,7 @@ def _mock_post_response():
 def test_model_name_with_https_substring_uses_api_base():
     api_base = "https://legit.example"
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
         mock_post.return_value = _mock_post_response()
 
         litellm.completion(
@@ -40,9 +38,7 @@ def test_model_name_with_https_substring_uses_api_base():
 
 
 def test_url_valued_model_still_targets_that_url():
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
         mock_post.return_value = _mock_post_response()
 
         litellm.completion(

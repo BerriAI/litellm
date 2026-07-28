@@ -75,17 +75,11 @@ class MockTable:
         record_data = dict(data)
         if self._pk_field and self._pk_field not in record_data:
             record_data[self._pk_field] = f"{self._pk_field}-{len(self._records)}"
-        key = (
-            record_data.get(self._pk_field)
-            if self._pk_field
-            else record_data.get("id", str(len(self._records)))
-        )
+        key = record_data.get(self._pk_field) if self._pk_field else record_data.get("id", str(len(self._records)))
         self._records[key] = record_data
         return MockRecord(record_data)
 
-    async def update(
-        self, where: Dict[str, Any], data: Dict[str, Any]
-    ) -> Optional[MockRecord]:
+    async def update(self, where: Dict[str, Any], data: Dict[str, Any]) -> Optional[MockRecord]:
         key_field = list(where.keys())[0]
         key_value = where[key_field]
         if key_value in self._records:
@@ -137,9 +131,7 @@ class MockPrismaClient:
         self.db.litellm_config = MockTable()
         self.db.litellm_organizationtable = MockTable()
         self.db.litellm_projecttable = MockTable(pk_field="project_id")
-        self.db.litellm_objectpermissiontable = MockTable(
-            pk_field="object_permission_id"
-        )
+        self.db.litellm_objectpermissiontable = MockTable(pk_field="object_permission_id")
         self.db.litellm_credentialstable = MockTable()
 
 
@@ -197,9 +189,7 @@ class TestBaseRepository:
         prisma_client.db.litellm_budgettable._records = {
             "b1": {"budget_id": "b1", "max_budget": 100.0},
         }
-        budgets = await repo.find_many(
-            where={"budget_id": "b1"}, skip=0, take=10, order={"budget_id": "asc"}
-        )
+        budgets = await repo.find_many(where={"budget_id": "b1"}, skip=0, take=10, order={"budget_id": "asc"})
         assert len(budgets) == 1
 
     def test_record_to_dict_branches(self):
@@ -1491,9 +1481,7 @@ class TestConfigRepository:
 
     @pytest.mark.asyncio
     @patch("litellm.repositories.config_repository.decrypt_value_helper")
-    async def test_reconcile_config_with_environment_variables(
-        self, mock_decrypt, repo
-    ):
+    async def test_reconcile_config_with_environment_variables(self, mock_decrypt, repo):
         mock_decrypt.side_effect = lambda value, **kw: f"decrypted_{value}"
         repo._prisma_client.db.litellm_config._records["environment_variables"] = {
             "param_name": "environment_variables",
@@ -1576,9 +1564,7 @@ class TestVerificationTokenRepositoryExtended:
 
         class MockTx:
             def __init__(self, client):
-                self.litellm_deletedverificationtoken = (
-                    client.db.litellm_deletedverificationtoken
-                )
+                self.litellm_deletedverificationtoken = client.db.litellm_deletedverificationtoken
                 self.litellm_verificationtoken = client.db.litellm_verificationtoken
 
             async def __aenter__(self):
@@ -1621,9 +1607,7 @@ class TestVerificationTokenRepositoryExtended:
 
         class MockTx:
             def __init__(self, client):
-                self.litellm_deletedverificationtoken = (
-                    client.db.litellm_deletedverificationtoken
-                )
+                self.litellm_deletedverificationtoken = client.db.litellm_deletedverificationtoken
                 self.litellm_verificationtoken = client.db.litellm_verificationtoken
 
             async def __aenter__(self):
@@ -1636,9 +1620,7 @@ class TestVerificationTokenRepositoryExtended:
 
         await repo.delete_token("sk-arch", deleted_by="admin")
 
-        archived = list(
-            repo._prisma_client.db.litellm_deletedverificationtoken._records.values()
-        )[0]
+        archived = list(repo._prisma_client.db.litellm_deletedverificationtoken._records.values())[0]
 
         assert isinstance(archived["aliases"], str)
         assert json.loads(archived["aliases"]) == {"a": "b"}
@@ -1657,9 +1639,7 @@ class TestVerificationTokenRepositoryExtended:
         ):
             assert relation_field not in archived
 
-        assert (
-            "sk-arch" not in repo._prisma_client.db.litellm_verificationtoken._records
-        )
+        assert "sk-arch" not in repo._prisma_client.db.litellm_verificationtoken._records
 
     @pytest.mark.asyncio
     async def test_find_by_id_maps_org_and_budget_columns(self, repo):
@@ -2013,9 +1993,7 @@ class TestDomainModelExtended:
             DomainModel.from_db_record(None)
 
     def test_from_db_record_dict(self):
-        model = _SampleDomainModel.from_db_record(
-            {"budget_id": "b1", "max_budget": 100.0}
-        )
+        model = _SampleDomainModel.from_db_record({"budget_id": "b1", "max_budget": 100.0})
         assert model.budget_id == "b1"
 
     def test_from_db_record_model_dump(self):
@@ -2220,9 +2198,7 @@ class TestPrismaTableRepository:
             assert repo_cls(prisma_client).table is getattr(prisma_client.db, name)
 
 
-def _json_path_equals(
-    metadata: Optional[Dict[str, Any]], path: List[str], expected: Any
-) -> bool:
+def _json_path_equals(metadata: Optional[Dict[str, Any]], path: List[str], expected: Any) -> bool:
     """Reproduce Postgres jsonb path-equals semantics: a missing path yields
     SQL NULL, which never matches `equals`."""
     value: Any = metadata
@@ -2247,11 +2223,7 @@ class _ScimAwareUserTable:
         json_filter = where["metadata"]
         path = json_filter["path"]
         expected = getattr(json_filter["equals"], "data", json_filter["equals"])
-        return sum(
-            1
-            for metadata in self._metadatas
-            if _json_path_equals(metadata, path, expected)
-        )
+        return sum(1 for metadata in self._metadatas if _json_path_equals(metadata, path, expected))
 
 
 class TestCountBillableUsers:
