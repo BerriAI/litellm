@@ -2487,8 +2487,8 @@ export interface paths {
          *
          *     Proxy-admin only (a proxy-admin-viewer may read). Credentials, including
          *     admin-owned logging destinations, are managed exclusively by the proxy admin;
-         *     tenants never read them over the API. Values are masked for the admin and
-         *     fully redacted for the admin-viewer.
+         *     tenants never read them over the API. Secret values are masked for both
+         *     admin-tier readers, exactly as they were before this feature.
          */
         get: operations["get_credentials_credentials_get"];
         put?: never;
