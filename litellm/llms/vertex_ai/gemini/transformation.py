@@ -1082,6 +1082,25 @@ def _rewrite_google_maps_response_format(data: RequestBody) -> None:
         _rewrite_mime_type_to_response_format(generation_config)
 
 
+_SERVICE_TIER_ENUM_PREFIX = "service_tier_"
+
+
+def _transform_service_tier(
+    service_tier: str,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+) -> str:
+    """
+    Google AI Studio accepts the lowercase enum names ('standard', 'flex', 'priority'), while
+    Vertex AI validates against google.cloud.aiplatform.v1.ServiceTier, whose names are prefixed
+    and uppercased ('SERVICE_TIER_FLEX').
+    """
+    normalized = service_tier.lower().removeprefix(_SERVICE_TIER_ENUM_PREFIX)
+    tier = "standard" if normalized == "default" else normalized
+    if custom_llm_provider == LlmProviders.GEMINI:
+        return tier
+    return f"{_SERVICE_TIER_ENUM_PREFIX}{tier}".upper()
+
+
 def _transform_request_body(
     messages: List[AllMessageValues],
     model: str,
@@ -1177,10 +1196,9 @@ def _transform_request_body(
 
         if service_tier := optional_params.pop("service_tier", None):
             if isinstance(service_tier, str):
-                if service_tier.lower() == "default":
-                    data["serviceTier"] = "standard"
-                else:
-                    data["serviceTier"] = service_tier.lower()
+                data["serviceTier"] = _transform_service_tier(
+                    service_tier=service_tier, custom_llm_provider=custom_llm_provider
+                )
             else:
                 data["serviceTier"] = service_tier
 

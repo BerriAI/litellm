@@ -1,3 +1,5 @@
+import pytest
+
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
@@ -197,23 +199,54 @@ def test_vertex_ai_includes_labels():
     assert result["labels"] == {"project": "test", "team": "ai"}
 
 
-def test_service_tier_forwarded_to_vertex_ai():
-    """Test that service_tier in optional_params is mapped to serviceTier in request body."""
-    messages = [{"role": "user", "content": "test"}]
-    optional_params = {"service_tier": "flex"}
-    litellm_params = {}
-
+@pytest.mark.parametrize(
+    "service_tier, expected",
+    [
+        ("flex", "SERVICE_TIER_FLEX"),
+        ("FLEX", "SERVICE_TIER_FLEX"),
+        ("priority", "SERVICE_TIER_PRIORITY"),
+        ("standard", "SERVICE_TIER_STANDARD"),
+        ("default", "SERVICE_TIER_STANDARD"),
+        ("SERVICE_TIER_FLEX", "SERVICE_TIER_FLEX"),
+    ],
+)
+def test_service_tier_forwarded_to_vertex_ai_as_proto_enum_name(service_tier, expected):
+    """
+    Vertex AI validates serviceTier against google.cloud.aiplatform.v1.ServiceTier, so anything
+    other than the prefixed, uppercased enum name is rejected with a 400
+    """
     result = _transform_request_body(
-        messages=messages,
+        messages=[{"role": "user", "content": "test"}],
         model="gemini-2.5-pro",
-        optional_params=optional_params,
+        optional_params={"service_tier": service_tier},
         custom_llm_provider="vertex_ai",
-        litellm_params=litellm_params,
+        litellm_params={},
         cached_content=None,
     )
 
-    assert "serviceTier" in result
-    assert result["serviceTier"] == "flex"
+    assert result["serviceTier"] == expected
+
+
+@pytest.mark.parametrize(
+    "service_tier, expected",
+    [
+        ("flex", "flex"),
+        ("PRIORITY", "priority"),
+        ("default", "standard"),
+    ],
+)
+def test_service_tier_forwarded_to_google_ai_studio_as_lowercase(service_tier, expected):
+    """Google AI Studio's generativelanguage API only accepts the lowercase enum names"""
+    result = _transform_request_body(
+        messages=[{"role": "user", "content": "test"}],
+        model="gemini-2.5-pro",
+        optional_params={"service_tier": service_tier},
+        custom_llm_provider="gemini",
+        litellm_params={},
+        cached_content=None,
+    )
+
+    assert result["serviceTier"] == expected
 
 
 def test_extra_body_cache_not_forwarded_to_vertex_ai():
