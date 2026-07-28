@@ -725,9 +725,10 @@ class ComplexityRouter(CustomLogger):
     def _resolve_pinned_model(
         self,
         pinned_model: str,
+        pinned_tier: ComplexityTier,
         user_message: str | None,
         system_prompt: str | None,
-    ) -> tuple[str | None, str]:
+    ) -> tuple[str | None, ComplexityTier, str]:
         """Resolve the model a pinned session serves this turn, with its routing cause.
 
         A pin is a floor rather than a lock: the heuristic scorer runs on each pinned turn
@@ -738,37 +739,51 @@ class ComplexityRouter(CustomLogger):
         Scores with ``classify`` rather than ``aclassify`` so a pinned turn never pays for an
         LLM classifier call or an embedding lookup.
 
-        Returns ``None`` when the pin no longer maps to a configured tier, signalling a full
-        reclassification instead.
+        ``pinned_tier`` is the tier the pin was stored under rather than one re-derived from
+        the model, so a model shared across tier pools is compared at the tier that actually
+        selected it.
+
+        Returns ``None`` for the model when the pin no longer maps to a configured tier,
+        signalling a full reclassification instead.
         """
         if user_message is None:
-            return pinned_model, "session_affinity_pin"
+            return pinned_model, pinned_tier, "session_affinity_pin"
         if self.escalation_keywords and self._escalation_triggered(user_message):
-            return self._escalated_pin(pinned_model), "session_affinity_escalation"
-        pinned_tier = self._tier_for_model(pinned_model)
-        if pinned_tier is None:
-            return pinned_model, "session_affinity_pin"
+            return self._escalated_pin(pinned_model), self._escalate_tier(pinned_tier), "session_affinity_escalation"
         classified_tier, _, _ = self.classify(user_message, system_prompt)
         if TIER_SEVERITY_ORDER.index(classified_tier) <= TIER_SEVERITY_ORDER.index(pinned_tier):
-            return pinned_model, "session_affinity_pin"
-        return self.get_model_for_tier(classified_tier), "session_affinity_complexity_escalation"
+            return pinned_model, pinned_tier, "session_affinity_pin"
+        return (
+            self.get_model_for_tier(classified_tier),
+            classified_tier,
+            "session_affinity_complexity_escalation",
+        )
 
-    def _session_pin_keys(self, cache_key: str) -> tuple[str, ...]:
+    def _session_pin_keys(self, cache_key: str) -> tuple[tuple[ComplexityTier, str], ...]:
         """Per-tier pin keys for one session, ordered least to most severe."""
-        return tuple(f"{cache_key}:{tier.value}" for tier in TIER_SEVERITY_ORDER if tier.value in self.config.tiers)
+        return tuple(
+            (tier, f"{cache_key}:{tier.value}") for tier in TIER_SEVERITY_ORDER if tier.value in self.config.tiers
+        )
 
-    async def _get_session_pin(self, cache_key: str) -> str | None:
-        """Read a session's pin as the most severe tier it has been routed to."""
-        keys = self._session_pin_keys(cache_key)
-        if not keys:
+    async def _get_session_pin(self, cache_key: str) -> tuple[str, ComplexityTier] | None:
+        """Read a session's pin: the model held under its most severe written tier."""
+        keyed_tiers = self._session_pin_keys(cache_key)
+        if not keyed_tiers:
             return None
-        cached = await self.litellm_router_instance.cache.async_batch_get_cache(keys=list(keys))
-        if not isinstance(cached, list):
+        cached = await self.litellm_router_instance.cache.async_batch_get_cache(keys=[key for _, key in keyed_tiers])
+        if not isinstance(cached, list) or len(cached) != len(keyed_tiers):
             return None
-        return next((model for model in reversed(cached) if isinstance(model, str)), None)
+        return next(
+            (
+                (model, tier)
+                for (tier, _), model in zip(reversed(keyed_tiers), reversed(cached))
+                if isinstance(model, str)
+            ),
+            None,
+        )
 
-    async def _persist_session_pin(self, cache_key: str, routed_model: str) -> None:
-        """Record the model this turn served under the key for its own tier.
+    async def _persist_session_pin(self, cache_key: str, routed_model: str, tier: ComplexityTier) -> None:
+        """Record the model this turn served under the key for the tier that selected it.
 
         Holding the pin in a single key forces a read-modify-write, and concurrent turns in
         one session can both read before either writes, so the weaker turn lands last and
@@ -776,11 +791,10 @@ class ComplexityRouter(CustomLogger):
         touches the tier it served, and the session resolves to the most severe tier written,
         which cannot fall while those keys live.
 
-        Skips models outside the configured tiers, which have no severity to resolve against.
+        The tier comes from the caller because a model may sit in several tier pools, and
+        recovering it from the model would promote the pin to that model's highest tier and
+        hold later turns above the tier the session actually needed.
         """
-        tier = self._tier_for_model(routed_model)
-        if tier is None:
-            return
         await self.litellm_router_instance.cache.async_set_cache(
             key=f"{cache_key}:{tier.value}",
             value=routed_model,
@@ -1033,17 +1047,20 @@ class ComplexityRouter(CustomLogger):
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
         if cache_key is not None:
-            pinned_model = await self._get_session_pin(cache_key)
-            if pinned_model is not None:
+            pinned = await self._get_session_pin(cache_key)
+            if pinned is not None:
+                pinned_model, pinned_tier = pinned
                 resolved_messages = self._resolve_messages(messages, request_kwargs)
                 user_message, system_prompt = (
                     self._extract_user_message_and_system_prompt(resolved_messages)
                     if resolved_messages
                     else (None, None)
                 )
-                routed_model, cause = self._resolve_pinned_model(pinned_model, user_message, system_prompt)
+                routed_model, routed_tier, cause = self._resolve_pinned_model(
+                    pinned_model, pinned_tier, user_message, system_prompt
+                )
                 if routed_model is not None:
-                    await self._persist_session_pin(cache_key, routed_model)
+                    await self._persist_session_pin(cache_key, routed_model, routed_tier)
                     if self.config.adaptive:
                         from litellm.router_strategy.adaptive_router.config import (
                             ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
@@ -1061,15 +1078,15 @@ class ComplexityRouter(CustomLogger):
                         messages=messages if has_original_messages else None,
                     )
 
-        response = await self._classify_and_route(
+        response, routed_tier = await self._classify_and_route(
             model=model,
             request_kwargs=request_kwargs,
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
         )
-        if cache_key is not None and response is not None:
-            await self._persist_session_pin(cache_key, response.model)
+        if cache_key is not None and response is not None and routed_tier is not None:
+            await self._persist_session_pin(cache_key, response.model, routed_tier)
         return response
 
     async def _classify_and_route(
@@ -1079,7 +1096,7 @@ class ComplexityRouter(CustomLogger):
         messages: list[dict[str, Any]] | None = None,
         input: Union[str, list] | None = None,
         specific_deployment: bool | None = False,
-    ) -> PreRoutingHookResponse | None:
+    ) -> tuple[PreRoutingHookResponse | None, ComplexityTier | None]:
         """
         Classifies the request by complexity and returns the appropriate model.
         Supports chat completions (messages), Responses API (input), and other
@@ -1093,7 +1110,10 @@ class ComplexityRouter(CustomLogger):
             specific_deployment: Whether a specific deployment was requested.
 
         Returns:
-            PreRoutingHookResponse with the routed model, or None if no routing needed.
+            The PreRoutingHookResponse with the routed model, or None if no routing needed,
+            paired with the tier that selected it so a session pin can be keyed by it. The
+            tier is None when routing bypassed classification entirely, which leaves a
+            session unpinned rather than pinning it at a guessed tier.
         """
         from litellm.types.router import PreRoutingHookResponse
 
@@ -1101,7 +1121,7 @@ class ComplexityRouter(CustomLogger):
 
         if not resolved_messages:
             verbose_router_logger.debug("ComplexityRouter: No messages could be resolved, skipping routing")
-            return None
+            return None, None
 
         # Determine whether the original request used messages directly
         has_original_messages = messages is not None and len(messages) > 0
@@ -1122,9 +1142,12 @@ class ComplexityRouter(CustomLogger):
                 routed_model = await self._pick_model_for_tier(
                     ComplexityTier.MEDIUM, messages, resolved_messages, request_kwargs
                 )
-            return PreRoutingHookResponse(
-                model=routed_model,
-                messages=messages if has_original_messages else None,
+            return (
+                PreRoutingHookResponse(
+                    model=routed_model,
+                    messages=messages if has_original_messages else None,
+                ),
+                None,
             )
 
         escalate = self._escalation_triggered(user_message)
@@ -1139,9 +1162,12 @@ class ComplexityRouter(CustomLogger):
                 f"ComplexityRouter: routing decision cause={cause}, "
                 f"tier={routed_tier.value}, routed_model={routed_model}"
             )
-            return PreRoutingHookResponse(
-                model=routed_model,
-                messages=messages if has_original_messages else None,
+            return (
+                PreRoutingHookResponse(
+                    model=routed_model,
+                    messages=messages if has_original_messages else None,
+                ),
+                routed_tier,
             )
 
         tier, score, signals = await self.aclassify(user_message, system_prompt, request_kwargs)
@@ -1168,7 +1194,10 @@ class ComplexityRouter(CustomLogger):
                 f"score={score:.3f}, signals={signals}, routed_model={routed_model}"
             )
 
-        return PreRoutingHookResponse(
-            model=routed_model,
-            messages=messages if has_original_messages else None,
+        return (
+            PreRoutingHookResponse(
+                model=routed_model,
+                messages=messages if has_original_messages else None,
+            ),
+            tier,
         )
