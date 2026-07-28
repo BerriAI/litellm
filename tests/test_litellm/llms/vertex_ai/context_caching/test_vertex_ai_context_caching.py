@@ -1881,9 +1881,7 @@ class TestVertexAIGlobalLocation:
                 "global-aiplatform" not in url
             ), "URL should not contain 'global-aiplatform' prefix"
 
-    def test_gemini_context_caching_with_custom_api_base_uses_collection_endpoint(
-        self,
-    ):
+    def test_gemini_custom_cache_uses_collection_endpoint_without_model(self):
         caching = ContextCachingEndpoints()
 
         auth_header, url = caching._get_token_and_url_context_caching(
@@ -1893,7 +1891,6 @@ class TestVertexAIGlobalLocation:
             vertex_project=None,
             vertex_location=None,
             vertex_auth_header=None,
-            model="gemini-1.5-pro",
         )
 
         assert auth_header == {"x-goog-api-key": "test-key"}
