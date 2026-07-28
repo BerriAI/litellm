@@ -2,6 +2,8 @@ import { Select } from "antd";
 import React from "react";
 
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { isProxyAdminRole } from "@/utils/roles";
 
 interface LoggingExportersSelectProps {
   value?: string[];
@@ -14,15 +16,17 @@ interface LoggingExportersSelectProps {
  * the identity's logging_exporters column; the proxy unions them across the identity
  * chain and fans out.
  *
- * The options are exactly what GET /credentials returns for the caller, which the backend
- * already scopes: a proxy admin receives every destination, while a team or org admin
- * receives only the destinations granted to a scope they administer. Visibility is
- * enforced server-side by the same predicate the assignment gate and the request-time
- * resolver use, so this component does no role-based filtering of its own; doing so would
- * risk disagreeing with the backend in either direction.
+ * Assigning logging exporters is proxy-admin only (GET /credentials and the assignment
+ * gate both reject non-proxy-admins), so this control renders only for a proxy admin.
  */
 const LoggingExportersSelect: React.FC<LoggingExportersSelectProps> = ({ value, onChange }) => {
-  const { data } = useCredentials();
+  const { userRole } = useAuthorized();
+  const isProxyAdmin = userRole ? isProxyAdminRole(userRole) : false;
+  const { data } = useCredentials(isProxyAdmin);
+
+  if (!isProxyAdmin) {
+    return null;
+  }
 
   const options = (data?.credentials ?? [])
     .filter((credential) => credential.credential_info?.credential_type === "logging")

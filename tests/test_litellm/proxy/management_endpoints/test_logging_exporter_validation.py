@@ -1,10 +1,10 @@
 """Validation for admin-owned logging-exporter assignment on key/team/org.
 
-The single ``validate_logging_exporter_assignment`` runs across all four
-endpoints (``/team/new``, ``/team/update``, ``/key/generate``, ``/key/update``,
-``/organization/*``); each call site computes the relevant
-``caller_is_team_admin`` / ``caller_is_org_admin`` flags from the loaded
-team or org and passes them in. Proxy admin always passes.
+The single ``validate_logging_exporter_assignment`` runs across every write path
+(``/team/new``, ``/team/update``, ``/key/generate``, ``/key/update``,
+``/organization/*``). Assigning ``logging_exporters`` is proxy-admin only: a
+non-proxy-admin write is rejected, and every named exporter must resolve to a
+registered logging credential.
 """
 
 import os
@@ -94,34 +94,6 @@ def test_proxy_admin_always_allowed(_registry):
     validate_logging_exporter_assignment(_ok(["langfuse-eu"]), _admin())
 
 
-def test_team_admin_flag_allows_non_admin(_registry):
-    """A non-admin caller flagged caller_is_team_admin=True passes."""
-    validate_logging_exporter_assignment(
-        _ok(["langfuse-eu"]),
-        _non_admin(),
-        caller_is_team_admin=True,
-    )
-
-
-def test_org_admin_flag_allows_non_admin(_registry):
-    """A non-admin caller flagged caller_is_org_admin=True passes."""
-    validate_logging_exporter_assignment(
-        _ok(["langfuse-eu"]),
-        _non_admin(),
-        caller_is_org_admin=True,
-    )
-
-
-def test_both_flags_set_allows_non_admin(_registry):
-    """Setting both flags is fine; they're independent OR-ed allows."""
-    validate_logging_exporter_assignment(
-        _ok(["langfuse-eu"]),
-        _non_admin(),
-        caller_is_team_admin=True,
-        caller_is_org_admin=True,
-    )
-
-
 def test_non_admin_with_no_flags_is_forbidden(_registry):
     """The headline deny: internal_user with no team/org admin context."""
     with pytest.raises(HTTPException) as exc:
@@ -129,93 +101,7 @@ def test_non_admin_with_no_flags_is_forbidden(_registry):
     assert exc.value.status_code == 403
 
 
-def test_proxy_admin_overrides_falsy_flags(_registry):
-    """proxy_admin role wins even when both flags are False."""
-    validate_logging_exporter_assignment(
-        _ok(["langfuse-eu"]),
-        _admin(),
-        caller_is_team_admin=False,
-        caller_is_org_admin=False,
-    )
-
-
 # --- Scope checks: a non-proxy-admin may only name destinations granted to them -
-
-
-def test_team_admin_can_assign_destination_granted_to_their_team(_registry):
-    """arize-ds is granted to ds-team; a team admin writing in ds-team's scope may
-    name it."""
-    validate_logging_exporter_assignment(
-        _ok(["arize-ds"]),
-        _non_admin(),
-        caller_is_team_admin=True,
-        scope_team_id="ds-team",
-    )
-
-
-def test_team_admin_cannot_assign_destination_not_granted_to_their_team(_registry):
-    """The headline leak: a team admin of another team names ds-team's destination.
-    Pre-fix this passed (only the name was checked); now it is a 403."""
-    with pytest.raises(HTTPException) as exc:
-        validate_logging_exporter_assignment(
-            _ok(["arize-ds"]),
-            _non_admin(),
-            caller_is_team_admin=True,
-            scope_team_id="platform-team",
-        )
-    assert exc.value.status_code == 403
-
-
-def test_org_admin_can_assign_destination_granted_to_their_org(_registry):
-    validate_logging_exporter_assignment(
-        _ok(["arize-ds"]),
-        _non_admin(),
-        caller_is_org_admin=True,
-        scope_org_id="ds-org",
-    )
-
-
-def test_org_admin_cannot_assign_destination_not_granted_to_their_org(_registry):
-    with pytest.raises(HTTPException) as exc:
-        validate_logging_exporter_assignment(
-            _ok(["arize-ds"]),
-            _non_admin(),
-            caller_is_org_admin=True,
-            scope_org_id="other-org",
-        )
-    assert exc.value.status_code == 403
-
-
-def test_proxy_admin_can_assign_any_destination(_registry):
-    """Proxy admin skips the scope check entirely; arize-ds is granted to no scope
-    the admin is in, yet the write is allowed."""
-    validate_logging_exporter_assignment(
-        _ok(["arize-ds"]),
-        _admin(),
-        scope_team_id="platform-team",
-    )
-
-
-def test_team_admin_can_assign_auto_enable_default(_registry):
-    """A proxy-wide auto default (access.global + auto_enable) is visible to every
-    scope, so a team admin in any team may name it."""
-    validate_logging_exporter_assignment(
-        _ok(["central-default"]),
-        _non_admin(),
-        caller_is_team_admin=True,
-        scope_team_id="platform-team",
-    )
-
-
-def test_team_admin_can_assign_global_destination(_registry):
-    """access.global makes a destination visible to every scope, so a team admin
-    in any team may name it."""
-    validate_logging_exporter_assignment(
-        _ok(["langfuse-eu"]),
-        _non_admin(),
-        caller_is_team_admin=True,
-        scope_team_id="platform-team",
-    )
 
 
 # --- Shape / registry checks (run regardless of who's calling) --------------
@@ -224,16 +110,6 @@ def test_team_admin_can_assign_global_destination(_registry):
 def test_unknown_credential_rejected_for_admin(_registry):
     with pytest.raises(HTTPException) as exc:
         validate_logging_exporter_assignment(_ok(["does-not-exist"]), _admin())
-    assert exc.value.status_code == 400
-
-
-def test_unknown_credential_rejected_for_team_admin(_registry):
-    with pytest.raises(HTTPException) as exc:
-        validate_logging_exporter_assignment(
-            _ok(["does-not-exist"]),
-            _non_admin(),
-            caller_is_team_admin=True,
-        )
     assert exc.value.status_code == 400
 
 
@@ -284,16 +160,6 @@ def test_removal_via_omission_allowed_for_proxy_admin(_registry):
     validate_logging_exporter_assignment(
         {"some_other_key": 1},
         _admin(),
-        existing_metadata={"logging_exporters": ["langfuse-eu"]},
-    )
-
-
-def test_removal_via_omission_allowed_for_team_admin(_registry):
-    """A team-admin of the owning team may drop the exporter."""
-    validate_logging_exporter_assignment(
-        {"some_other_key": 1},
-        _non_admin(),
-        caller_is_team_admin=True,
         existing_metadata={"logging_exporters": ["langfuse-eu"]},
     )
 
@@ -410,23 +276,15 @@ def test_field_none_is_noop_for_non_admin(_registry):
     validate_logging_exporter_field(None, _non_admin())
 
 
-def test_field_set_by_non_admin_without_flags_is_forbidden(_registry):
+def test_field_set_by_non_admin_is_forbidden(_registry):
     with pytest.raises(HTTPException) as exc:
         validate_logging_exporter_field(["langfuse-eu"], _non_admin())
     assert exc.value.status_code == 403
 
 
-def test_field_scoped_rejection_for_out_of_scope_team(_registry):
-    """arize-ds is granted to ds-team; a team admin writing in another team's scope
-    cannot name it, exactly as the metadata path gated it."""
-    with pytest.raises(HTTPException) as exc:
-        validate_logging_exporter_field(
-            ["arize-ds"],
-            _non_admin(),
-            caller_is_team_admin=True,
-            scope_team_id="platform-team",
-        )
-    assert exc.value.status_code == 403
+def test_field_proxy_admin_can_assign(_registry):
+    """Proxy admin may assign any registered logging destination."""
+    validate_logging_exporter_field(["arize-ds"], _admin())
 
 
 def test_field_empty_clear_over_existing_is_gated_for_non_admin(_registry):
@@ -450,6 +308,3 @@ def test_field_unchanged_value_is_noop(_registry):
     )
 
 
-def test_field_admin_can_assign_out_of_scope(_registry):
-    """Proxy admin skips the scope check (parity with the metadata path)."""
-    validate_logging_exporter_field(["arize-ds"], _admin(), scope_team_id="platform-team")

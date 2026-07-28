@@ -1557,10 +1557,6 @@ async def generate_key_fn(
     """
     try:
         from litellm.proxy._types import CommonProxyErrors
-        from litellm.proxy.management_endpoints.common_utils import (
-            _is_user_org_admin_for_team,
-            _is_user_team_admin,
-        )
         from litellm.proxy.management_endpoints.logging_exporter_validation import (
             validate_logging_exporter_field,
         )
@@ -1657,20 +1653,7 @@ async def generate_key_fn(
         # proxy-admin only. Skip the role lookup when the field isn't in the payload
         # to keep /key/generate cheap for the common case.
         if data.logging_exporters is not None:
-            validate_logging_exporter_field(
-                data.logging_exporters,
-                user_api_key_dict,
-                caller_is_team_admin=(
-                    team_table is not None
-                    and _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_table)
-                ),
-                caller_is_org_admin=(
-                    team_table is not None
-                    and await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_table)
-                ),
-                scope_team_id=getattr(team_table, "team_id", None),
-                scope_org_id=getattr(team_table, "organization_id", None),
-            )
+            validate_logging_exporter_field(data.logging_exporters, user_api_key_dict)
 
         if team_table is not None:
             await _check_team_key_limits(
@@ -1853,28 +1836,12 @@ async def generate_service_account_key_fn(
     # eligible for service-account creation could set metadata.logging_exporters
     # and route future traces to a destination they aren't allowed to assign
     # (Veria F3). Skip the lookup unless the field is being written.
-    from litellm.proxy.management_endpoints.common_utils import (
-        _is_user_org_admin_for_team,
-        _is_user_team_admin,
-    )
     from litellm.proxy.management_endpoints.logging_exporter_validation import (
         validate_logging_exporter_field,
     )
 
     if data.logging_exporters is not None:
-        validate_logging_exporter_field(
-            data.logging_exporters,
-            user_api_key_dict,
-            caller_is_team_admin=(
-                team_table is not None and _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_table)
-            ),
-            caller_is_org_admin=(
-                team_table is not None
-                and await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_table)
-            ),
-            scope_team_id=getattr(team_table, "team_id", None),
-            scope_org_id=getattr(team_table, "organization_id", None),
-        )
+        validate_logging_exporter_field(data.logging_exporters, user_api_key_dict)
 
     data.user_id = None  # do not allow user_id to be set for service account keys
 
@@ -2631,10 +2598,6 @@ async def update_key_fn(  # noqa: C901  # single endpoint handling many optional
     }'
     ```
     """
-    from litellm.proxy.management_endpoints.common_utils import (
-        _is_user_org_admin_for_team,
-        _is_user_team_admin,
-    )
     from litellm.proxy.management_endpoints.logging_exporter_validation import (
         validate_logging_exporter_field,
     )
@@ -2685,17 +2648,7 @@ async def update_key_fn(  # noqa: C901  # single endpoint handling many optional
             validate_logging_exporter_field(
                 data.logging_exporters,
                 user_api_key_dict,
-                caller_is_team_admin=(
-                    _key_team is not None
-                    and _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=_key_team)
-                ),
-                caller_is_org_admin=(
-                    _key_team is not None
-                    and await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=_key_team)
-                ),
                 existing_exporters=getattr(existing_key_row, "logging_exporters", None),
-                scope_team_id=getattr(_key_team, "team_id", None),
-                scope_org_id=getattr(_key_team, "organization_id", None),
             )
 
         await _validate_update_key_data(
@@ -4898,10 +4851,6 @@ async def regenerate_key_fn(  # noqa: C901  # single endpoint handling many opti
         # effective value doesn't change; pass the stored column value so a
         # non-admin cannot clear an admin-assigned one.
         if data is not None and data.logging_exporters is not None:
-            from litellm.proxy.management_endpoints.common_utils import (
-                _is_user_org_admin_for_team,
-                _is_user_team_admin,
-            )
             from litellm.proxy.management_endpoints.logging_exporter_validation import (
                 validate_logging_exporter_field,
             )
@@ -4909,23 +4858,7 @@ async def regenerate_key_fn(  # noqa: C901  # single endpoint handling many opti
             validate_logging_exporter_field(
                 data.logging_exporters,
                 user_api_key_dict,
-                caller_is_team_admin=(
-                    regenerate_team_table is not None
-                    and _is_user_team_admin(
-                        user_api_key_dict=user_api_key_dict,
-                        team_obj=regenerate_team_table,
-                    )
-                ),
-                caller_is_org_admin=(
-                    regenerate_team_table is not None
-                    and await _is_user_org_admin_for_team(
-                        user_api_key_dict=user_api_key_dict,
-                        team_obj=regenerate_team_table,
-                    )
-                ),
                 existing_exporters=getattr(_key_in_db, "logging_exporters", None),
-                scope_team_id=getattr(regenerate_team_table, "team_id", None),
-                scope_org_id=getattr(regenerate_team_table, "organization_id", None),
             )
 
         verbose_proxy_logger.info(

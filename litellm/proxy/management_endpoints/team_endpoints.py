@@ -1004,9 +1004,6 @@ async def new_team(
     ```
     """
     try:
-        from litellm.proxy.management_endpoints.common_utils import (
-            _is_user_org_admin_for_org_id,
-        )
         from litellm.proxy.management_endpoints.logging_exporter_validation import (
             validate_logging_exporter_field,
         )
@@ -1027,15 +1024,7 @@ async def new_team(
         # Skip the org-admin lookup entirely when the field isn't being
         # written, to avoid hitting the cache for unrelated /team/new calls.
         if data.logging_exporters is not None:
-            validate_logging_exporter_field(
-                data.logging_exporters,
-                user_api_key_dict,
-                caller_is_org_admin=await _is_user_org_admin_for_org_id(
-                    user_api_key_dict=user_api_key_dict,
-                    organization_id=data.organization_id,
-                ),
-                scope_org_id=data.organization_id,
-            )
+            validate_logging_exporter_field(data.logging_exporters, user_api_key_dict)
 
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -1688,9 +1677,6 @@ async def update_team(
     ```
     """
     try:
-        from litellm.proxy.management_endpoints.common_utils import (
-            _is_user_org_admin_for_team,
-        )
         from litellm.proxy.management_endpoints.logging_exporter_validation import (
             validate_logging_exporter_field,
         )
@@ -1748,23 +1734,14 @@ async def update_team(
             user_api_key_dict=user_api_key_dict,
         )
 
-        # logging_exporters on /team/update is proxy-admin or org-admin only:
-        # team-admins are blocked at the route gate (test_team_update_authz_
-        # matrix pins this) and the role matrix documents ❌ for team-admin on
-        # this path. Pass only the org-admin flag so the validator can't
-        # silently grant team-admins if the route gate is ever widened. The
-        # validator no-ops when the effective value doesn't change; pass the
-        # stored column value so a non-admin cannot clear an admin-assigned one.
+        # logging_exporters on /team/update is proxy-admin only. Pass the stored
+        # column value so the validator's no-op check sees a real change and a
+        # non-admin cannot clear an admin-assigned value.
         if data.logging_exporters is not None:
             validate_logging_exporter_field(
                 data.logging_exporters,
                 user_api_key_dict,
-                caller_is_org_admin=await _is_user_org_admin_for_team(
-                    user_api_key_dict=user_api_key_dict, team_obj=team_for_auth
-                ),
                 existing_exporters=getattr(existing_team_row, "logging_exporters", None),
-                scope_team_id=getattr(team_for_auth, "team_id", None),
-                scope_org_id=getattr(team_for_auth, "organization_id", None),
             )
 
         _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")

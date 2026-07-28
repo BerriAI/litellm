@@ -3094,36 +3094,20 @@ def test_internal_user_blocked_from_search_tool_writes(route):
 # --- Credential route gating (PR #30873: /credentials opened to self-managed) --- #
 
 
-def test_self_managed_routes_includes_credentials_entries():
-    """The PR adds exactly the credential list + single-name routes to the
-    self-managed set (handlers do their own authz). No wildcard is added, so the
-    by_name/by_model subpaths are NOT covered here."""
-    routes = LiteLLMRoutes.self_managed_routes.value
-    assert "/credentials" in routes
-    assert "/credentials/{credential_name}" in routes
-    assert "/credentials/by_name/{credential_name}" not in routes
-    assert "/credentials/*" not in routes
-
-
 @pytest.mark.parametrize(
-    "route,expected",
-    [
-        ("/credentials", True),
-        ("/credentials/my-dest", True),  # single segment -> {credential_name}
-        ("/credentials/by_name/my-dest", False),  # extra segment -> no match
-        ("/credentials/by_model/model-123", False),  # extra segment -> no match
-    ],
+    "route",
+    ["/credentials", "/credentials/{credential_name}", "/credentials/my-dest"],
 )
-def test_credentials_self_managed_pattern_matches_single_segment_only(route, expected):
-    """`/credentials/{credential_name}` compiles to ^/credentials/[^/]+$, so a caller
-    who only reaches self-managed routes (team-admin, org-admin, plain internal user)
-    can hit the list/single-name routes but NOT the two-segment by_name/by_model
-    endpoints."""
+def test_credentials_routes_are_not_self_managed(route):
+    """Credentials are proxy-admin only: no ``/credentials`` route is in the
+    self-managed set, so a non-admin never reaches the handler for any method
+    (GET/POST/PATCH/DELETE). Admin-owned logging destinations are managed
+    exclusively by the proxy admin."""
     assert (
         RouteChecks.check_route_access(
             route=route, allowed_routes=LiteLLMRoutes.self_managed_routes.value
         )
-        is expected
+        is False
     )
 
 

@@ -42,6 +42,7 @@ import {
 import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
 import { AlertingObject, CredentialAccess, ResolvedScope } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
+import { isProxyAdminRole } from "@/utils/roles";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import EditLoggingCredentialModal from "./logging_credentials/EditLoggingCredentialModal";
@@ -259,9 +260,15 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const [isAddingCallback, setIsAddingCallback] = useState(false);
   const [isDeletingCallback, setIsDeletingCallback] = useState(false);
 
-  // OTEL trace destinations are credentials tagged credential_type=logging; they share
-  // the one Active Logging Callbacks table as rows alongside config callbacks.
-  const { data: credentialData, refetch: refetchCredentials } = useCredentials();
+  // OTEL trace destinations are proxy-admin-managed credentials tagged
+  // credential_type=logging; they share the one Active Logging Callbacks table as
+  // rows alongside config callbacks. Only a proxy admin (or admin-viewer, read-only)
+  // may read them, so non-admins skip the fetch entirely.
+  const canReadCredentials =
+    (userRole ? isProxyAdminRole(userRole) : false) ||
+    userRole === "Admin Viewer" ||
+    userRole === "proxy_admin_viewer";
+  const { data: credentialData, refetch: refetchCredentials } = useCredentials(canReadCredentials);
   const { data: teamsData } = useTeams();
   const { data: orgsData } = useOrganizations();
   const [editAccessFor, setEditAccessFor] = useState<{ name: string; access?: CredentialAccess } | null>(null);

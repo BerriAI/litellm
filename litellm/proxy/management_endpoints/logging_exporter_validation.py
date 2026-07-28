@@ -1,25 +1,16 @@
 """Validation for admin-owned logging-exporter assignment on key/team/org.
 
 An identity's ``metadata.logging_exporters`` binds it to admin-owned trace
-destinations. Every name must be a registered logging credential, the caller must
-hold a role that authorizes the write (proxy admin always; team admin and org admin
-in specific contexts), AND a non-proxy-admin may only name destinations whose
-``credential_info.access`` makes them visible to the scope being written (the key's
-team, or the team/org being updated). Visibility and enablement are separate: a
-destination granted to a team is assignable by that team's admin, but assigning it is
-what enables it. The resolver (``litellm_pre_call_utils``) re-checks visibility at
-request time, so this gate and the resolver agree on what "visible" means.
+destinations. Only the proxy admin may write it, and every name must be a registered
+logging credential. Which identities a destination actually fires for is governed by
+the destination's own ``credential_info.access``; the resolver
+(``litellm_pre_call_utils``) evaluates that at request time.
 """
 
 from fastapi import HTTPException, status
 
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.management_endpoints.logging_exporter_access import (
-    identity_scope,
-    is_destination_visible,
-    parse_credential_info,
-)
 
 LOGGING_EXPORTERS_KEY = "logging_exporters"
 
@@ -82,42 +73,6 @@ def _logging_credential_names() -> set[str]:
     return set(_logging_credentials_by_name())
 
 
-def _reject_unassignable_destinations(
-    exporters: list[str],
-    *,
-    scope_team_id: str | None,
-    scope_org_id: str | None,
-) -> None:
-    """Reject names a non-proxy-admin cannot assign in this scope.
-
-    A destination is assignable when it is an explicit global/default
-    (``auto_enable``) or its ``access`` grants the scope being written (the key's
-    team, or the team/org being updated). Names are already known logging
-    credentials by the time this runs, so a missing entry means a benign race; we
-    fail closed on it.
-    """
-    by_name = _logging_credentials_by_name()
-    team_ids, org_ids = identity_scope(scope_team_id, scope_org_id)
-    unassignable = [
-        name
-        for name in exporters
-        if not (
-            (info := parse_credential_info(by_name.get(name))) is not None
-            and is_destination_visible(info, team_ids, org_ids)
-        )
-    ]
-    if unassignable:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "error": (
-                    "You can only assign logging destinations granted to your team "
-                    f"or organization. Not granted: {unassignable}"
-                )
-            },
-        )
-
-
 def _validate_exporters_shape_and_names(exporters: object) -> None:
     """Common shape + registry check shared by every entry point."""
     if not isinstance(exporters, list):
@@ -174,13 +129,9 @@ def validate_logging_exporter_field(
     requested_exporters: list | None,
     user_api_key_dict: UserAPIKeyAuth,
     *,
-    caller_is_team_admin: bool = False,
-    caller_is_org_admin: bool = False,
     existing_exporters: list | None = None,
-    scope_team_id: str | None = None,
-    scope_org_id: str | None = None,
 ) -> None:
-    """Authorize a typed ``logging_exporters`` write (the column-backed field).
+    """Authorize a typed ``logging_exporters`` write (proxy-admin only).
 
     Adapts the typed list to the metadata-shaped input the shared assignment
     validator expects, so the authorization logic lives in one place.
@@ -194,11 +145,7 @@ def validate_logging_exporter_field(
     validate_logging_exporter_assignment(
         requested_metadata,
         user_api_key_dict,
-        caller_is_team_admin=caller_is_team_admin,
-        caller_is_org_admin=caller_is_org_admin,
         existing_metadata=existing_metadata,
-        scope_team_id=scope_team_id,
-        scope_org_id=scope_org_id,
     )
 
 
@@ -206,53 +153,26 @@ def validate_logging_exporter_assignment(
     metadata: dict | None,
     user_api_key_dict: UserAPIKeyAuth,
     *,
-    caller_is_team_admin: bool = False,
-    caller_is_org_admin: bool = False,
     existing_metadata: dict | None = None,
-    scope_team_id: str | None = None,
-    scope_org_id: str | None = None,
 ) -> None:
     """Validate a ``metadata.logging_exporters`` write on key / team / org endpoints.
 
-    No-op when the update does not change the effective ``logging_exporters``
-    value. Proxy admins always pass. Caller-provided flags widen the allow-list
-    per endpoint:
+    Proxy-admin only. No-op when the update does not change the effective
+    ``logging_exporters`` value; otherwise a non-proxy-admin is rejected.
 
-    - ``/team/update``: pass ``caller_is_org_admin`` from the loaded team's org.
-    - ``/key/generate``/``/key/update``: pass both flags from the key's team.
-    - ``/team/new``/``/organization/*``: pass neither (proxy-admin only).
-
-    ``scope_team_id``/``scope_org_id`` are the team and org the write lands in (the
-    key's team, or the team/org being updated). A non-proxy-admin may only name
-    destinations visible to that scope: this is what stops a team admin from routing a
-    key's traces to a destination scoped to a different team. Proxy admins skip the
-    scope check; they can assign anything, but the resolver still only fires a named
-    destination for identities it is visible to.
-
-    Update paths replace stored metadata wholesale, so a caller can drop an
-    admin-assigned exporter by sending ``metadata`` without
-    ``logging_exporters``. Pass ``existing_metadata`` from the loaded row so
-    removal-via-omission is gated too (Veria F4). On create paths the existing
-    value is implicitly ``None`` and the validator behaves as before.
-
-    Every exporter name (when present) must resolve to a registered logging credential.
+    Update paths replace stored metadata wholesale, so a caller could drop an
+    admin-assigned exporter by sending ``metadata`` without ``logging_exporters``.
+    Pass ``existing_metadata`` from the loaded row so removal-via-omission is gated
+    too (Veria F4). Every exporter name (when present) must resolve to a registered
+    logging credential.
     """
     if not _exporter_value_changes(metadata, existing_metadata):
         return
-    is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-    if not (is_proxy_admin or caller_is_team_admin or caller_is_org_admin):
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "error": (
-                    "Only the proxy admin, a team admin of this team, or an "
-                    "org admin of this team's organization can assign logging "
-                    "exporters"
-                )
-            },
+            detail={"error": "Only the proxy admin can assign logging exporters"},
         )
     requested = metadata.get(LOGGING_EXPORTERS_KEY) if isinstance(metadata, dict) else None
     if requested is not None:
         _validate_exporters_shape_and_names(requested)
-        if not is_proxy_admin:
-            _reject_unassignable_destinations(requested, scope_team_id=scope_team_id, scope_org_id=scope_org_id)
