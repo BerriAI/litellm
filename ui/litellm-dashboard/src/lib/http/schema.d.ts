@@ -22664,6 +22664,11 @@ export interface components {
              */
             otel?: boolean | null;
             /**
+             * Override User Param
+             * @description When True, the proxy overwrites any client-supplied 'user' param with the authenticated user id. Use when LiteLLM is the authentication boundary and clients must not be able to spoof 'user'.
+             */
+            override_user_param?: boolean | null;
+            /**
              * Pass Through Endpoints
              * @description Set-up pass-through endpoints for provider-specific endpoints. Docs - https://docs.litellm.ai/docs/proxy/pass_through
              */

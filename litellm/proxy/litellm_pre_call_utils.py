@@ -1465,6 +1465,10 @@ async def add_litellm_data_to_request(
         if "user" not in data:
             data["user"] = user
 
+    if general_settings is not None and general_settings.get("override_user_param") is True:
+        if user_api_key_dict.user_id is not None:
+            data["user"] = user_api_key_dict.user_id
+
     if litellm.overwrite_user_with_key_hash is True:
         stampable_hash = _stampable_key_hash(user_api_key_dict)
         if stampable_hash is not None:

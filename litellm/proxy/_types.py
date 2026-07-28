@@ -2378,6 +2378,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="[DEPRECATED] Use 'user_header_mappings' instead. When set, the header value is treated as the end user id unless overridden by user_header_mappings.",
     )
     user_header_mappings: Optional[List[UserHeaderMapping]] = None
+    override_user_param: bool | None = Field(
+        None,
+        description="When True, the proxy overwrites any client-supplied 'user' param with the authenticated user id. Use when LiteLLM is the authentication boundary and clients must not be able to spoof 'user'.",
+    )
     supported_db_objects: Optional[List[SupportedDBObjectType]] = Field(
         None,
         description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).",

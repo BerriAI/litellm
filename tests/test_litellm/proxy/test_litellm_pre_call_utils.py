@@ -5421,3 +5421,54 @@ async def test_overwrite_user_with_key_hash_rejects_alias_without_marker(monkeyp
     )
 
     assert updated_data["user"] == "caller-chosen-id"
+
+
+@pytest.mark.asyncio
+async def test_override_user_param_clobbers_client_supplied_user():
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", user_id="alice")
+    data = {"model": "gpt-4o", "user": "bob"}
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={"override_user_param": True},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_override_user_param_disabled_keeps_client_supplied_user():
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", user_id="alice")
+    data = {"model": "gpt-4o", "user": "bob"}
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "bob"
+
+
+@pytest.mark.asyncio
+async def test_override_user_param_without_authenticated_user_id_keeps_client_value():
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key")
+    data = {"model": "gpt-4o", "user": "bob"}
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={"override_user_param": True},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "bob"
