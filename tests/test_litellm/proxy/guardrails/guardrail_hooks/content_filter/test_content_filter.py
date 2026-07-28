@@ -4,7 +4,7 @@ Tests for the Content Filter Guardrail
 
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -17,11 +17,15 @@ from fastapi import HTTPException
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
 )
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
+    initialize_guardrail,
+)
 from litellm.types.guardrails import (
     BlockedWord,
     ContentFilterAction,
     ContentFilterPattern,
     GuardrailEventHooks,
+    LitellmParams,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
@@ -75,6 +79,43 @@ class TestContentFilterGuardrail:
         assert len(guardrail.blocked_words) == 2
         assert "secret_project" in guardrail.blocked_words
         assert guardrail.blocked_words["secret_project"][0] == ContentFilterAction.BLOCK
+
+    @pytest.mark.asyncio
+    async def test_initializer_preserves_custom_redaction_formats(self):
+        litellm_params = LitellmParams(
+            guardrail="litellm_content_filter",
+            mode="pre_call",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="regex",
+                    pattern=r"1[3-9]\d{9}",
+                    name="phone_number",
+                    action=ContentFilterAction.MASK,
+                )
+            ],
+            blocked_words=[
+                BlockedWord(
+                    keyword="secret_project",
+                    action=ContentFilterAction.MASK,
+                )
+            ],
+            pattern_redaction_format="<<{pattern_name}>>",
+            keyword_redaction_tag="<<KEYWORD>>",
+        )
+
+        with patch("litellm.logging_callback_manager.add_litellm_callback"):
+            guardrail = initialize_guardrail(
+                litellm_params=litellm_params,
+                guardrail={"guardrail_name": "test-content-filter"},
+            )
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["Call 13912345678 about secret_project"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert result["texts"] == ["Call <<PHONE_NUMBER>> about <<KEYWORD>>"]
 
     def test_check_patterns_ssn(self):
         """
