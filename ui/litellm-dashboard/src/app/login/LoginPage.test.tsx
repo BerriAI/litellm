@@ -291,6 +291,31 @@ describe("LoginPage", () => {
     expect(ssoButton).toBeDisabled();
   });
 
+  it("renders a 'Forgot password?' link pointing to /ui/forgot-password", async () => {
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        auto_redirect_to_sso: false,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: false,
+      },
+      isLoading: false,
+    });
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LoginPage />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      const link = screen.getByRole("link", { name: /forgot password/i });
+      expect(link).toHaveAttribute("href", "/ui/forgot-password");
+    });
+  });
+
   describe("URL ?token= legacy path is rejected (security regression test)", () => {
     const originalLocation = window.location;
 

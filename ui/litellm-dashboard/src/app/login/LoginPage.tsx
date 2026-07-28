@@ -263,6 +263,10 @@ function LoginPageContent() {
               />
             </Form.Item>
 
+            <div className="text-right mb-4">
+              <a href="/ui/forgot-password">Forgot password?</a>
+            </div>
+
             <Form.Item>
               <Button
                 type="primary"
