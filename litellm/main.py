@@ -8458,6 +8458,38 @@ def stream_chunk_builder(
     end_time=None,
     logging_obj: Optional["Logging"] = None,
 ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
+    """
+    Reassemble a list of streaming response chunks into a single complete ModelResponse.
+
+    This is useful for logging, cost calculation, and post-processing when you have
+    collected all chunks from a streaming LLM call and need a unified response object.
+
+    Args:
+        chunks (list): List of streaming response chunk objects returned by a
+            litellm streaming call (e.g. from ``litellm.completion(..., stream=True)``).
+        messages (Optional[list]): The original input messages sent to the model.
+            Used to compute prompt token counts when they are not present in the chunks.
+        start_time (Optional[datetime]): Wall-clock time when the request was initiated.
+            Stored on the returned response for latency tracking.
+        end_time (Optional[datetime]): Wall-clock time when the last chunk was received.
+            Stored on the returned response for latency tracking.
+        logging_obj (Optional[Logging]): LiteLLM internal logging object. When provided,
+            token usage and cost are recorded via the standard callback system.
+
+    Returns:
+        Optional[Union[ModelResponse, TextCompletionResponse]]: A fully assembled
+        response object, or ``None`` if ``chunks`` is empty.
+
+    Raises:
+        litellm.APIError: If ``chunks`` is ``None``.
+
+    Example:
+        >>> import litellm
+        >>> response = litellm.completion(model="gpt-4o", messages=[{"role": "user", "content": "Hi"}], stream=True)
+        >>> chunks = list(response)
+        >>> full_response = litellm.stream_chunk_builder(chunks)
+        >>> print(full_response.choices[0].message.content)
+    """
     try:
         if chunks is None:
             raise litellm.APIError(
