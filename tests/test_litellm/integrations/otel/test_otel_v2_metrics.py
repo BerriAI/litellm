@@ -68,6 +68,9 @@ ALL_METRICS = frozenset(
 
 TOKEN_TYPE = "gen_ai.token.type"
 MODEL_KEY = "gen_ai.request.model"
+OPERATION_KEY = "gen_ai.operation.name"
+PROVIDER_NAME_KEY = "gen_ai.provider.name"
+SYSTEM_KEY = "gen_ai.system"
 
 # Keys inside the ceiling that an operator's filter must still be able to remove.
 # Every one is bounded, so it survives the ceiling and only the operator's own
@@ -83,18 +86,25 @@ COMPLETION_TOKENS = 89
 RESPONSE_COST = 0.0023
 
 
-def _build_call(stream: bool = True):
+def _build_call(
+    stream: bool = True,
+    provider: str | None = "openai",
+    call_type: str = "completion",
+):
     """A captured success-call (kwargs, response_obj, start, end) that exercises
     every one of the six metrics: usage for token.usage, response_cost for cost,
-    streaming + timing for the response-time histograms."""
+    streaming + timing for the response-time histograms.
+
+    ``provider=None`` omits ``custom_llm_provider`` entirely, reproducing a call
+    litellm could not attribute to a provider."""
     start = datetime(2026, 6, 12, 12, 0, 0)
     api_call_start = start + timedelta(seconds=0.1)
     completion_start = start + timedelta(seconds=0.5)
     end = start + timedelta(seconds=1.0)
     kwargs = {
         "model": "gpt-4o-mini",
-        "call_type": "completion",
-        "litellm_params": {"custom_llm_provider": "openai"},
+        "call_type": call_type,
+        "litellm_params": ({"custom_llm_provider": provider} if provider is not None else {}),
         "optional_params": {"stream": stream},
         "response_cost": RESPONSE_COST,
         "api_call_start_time": api_call_start,
@@ -142,7 +152,7 @@ def _metrics_by_name(reader):
     return out
 
 
-def _drive_success(reader, callback_settings_attributes=None):
+def _drive_success(reader, callback_settings_attributes=None, **call_overrides):
     """Construct a metrics-on logger, optionally populate callback_settings AFTER
     construction (mirroring the proxy ordering), run the real success hook."""
     logger = _logger(reader, enable_metrics=True)
@@ -152,7 +162,7 @@ def _drive_success(reader, callback_settings_attributes=None):
             "otel": {"attributes": callback_settings_attributes}
         }
     try:
-        kwargs, response_obj, start, end = _build_call()
+        kwargs, response_obj, start, end = _build_call(**call_overrides)
         asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
     finally:
         litellm.callback_settings = previous
@@ -376,6 +386,77 @@ def test_success_attributes_are_capped_at_the_ceiling():
         for dp in metrics[name]:
             leaked = set(dp.attributes) - set(BOUNDED_KEYS) - {TOKEN_TYPE}
             assert not leaked, f"{name} leaked {leaked}"
+def test_provider_is_labelled_with_semconv_provider_name():
+    """Every recorded point carries gen_ai.provider.name holding the semconv
+    provider value (bedrock -> aws.bedrock), the key the GenAI convention and the
+    dashboards built on it query. The deprecated gen_ai.system spelling alone is
+    unreadable to them."""
+    metrics = _drive_success(InMemoryMetricReader(), provider="bedrock")
+
+    for name in ALL_METRICS:
+        points = metrics[name]
+        assert points, f"{name} was not recorded"
+        for dp in points:
+            assert dp.attributes[PROVIDER_NAME_KEY] == "aws.bedrock"
+
+
+def test_deprecated_gen_ai_system_is_dual_emitted_verbatim():
+    """gen_ai.system keeps its raw litellm provider value alongside the new key
+    for one release, so a dashboard already filtering on it keeps matching. Its
+    value must not be swapped for the mapped one, which would break exactly the
+    queries the dual emission exists to protect."""
+    metrics = _drive_success(InMemoryMetricReader(), provider="bedrock")
+
+    for dp in metrics[OPERATION_DURATION]:
+        assert dp.attributes[SYSTEM_KEY] == "bedrock"
+        assert dp.attributes[PROVIDER_NAME_KEY] == "aws.bedrock"
+
+
+def test_no_provider_attribute_when_provider_is_absent():
+    """A call litellm could not attribute to a provider carries no provider label
+    at all. A placeholder value ("Unknown") would mint a permanent series that
+    aggregates every unattributable request and that no operator can act on."""
+    metrics = _drive_success(InMemoryMetricReader(), provider=None)
+
+    for name in ALL_METRICS:
+        points = metrics[name]
+        assert points, f"{name} was not recorded"
+        for dp in points:
+            keys = set(dp.attributes.keys())
+            assert PROVIDER_NAME_KEY not in keys
+            assert SYSTEM_KEY not in keys
+            assert "Unknown" not in set(dp.attributes.values())
+
+
+def test_vector_store_search_is_not_labelled_as_chat():
+    """A vector-store search records under gen_ai.operation.name=retrieval, so its
+    latency and cost stay out of the chat series."""
+    metrics = _drive_success(InMemoryMetricReader(), call_type="avector_store_search")
+
+    for name in (OPERATION_DURATION, TOKEN_COST):
+        for dp in metrics[name]:
+            assert dp.attributes[OPERATION_KEY] == "retrieval"
+
+
+def test_agent_message_is_not_labelled_as_chat():
+    """An A2A agent send records under gen_ai.operation.name=invoke_agent."""
+    metrics = _drive_success(InMemoryMetricReader(), call_type="asend_message")
+
+    for name in (OPERATION_DURATION, TOKEN_COST):
+        for dp in metrics[name]:
+            assert dp.attributes[OPERATION_KEY] == "invoke_agent"
+
+
+def test_provider_name_is_filterable():
+    """gen_ai.provider.name is a member of the metric-attribute allowlist, so an
+    operator can include or exclude it; an unlisted name raises instead."""
+    metrics = _drive_success(
+        InMemoryMetricReader(),
+        callback_settings_attributes={"include_list": [PROVIDER_NAME_KEY]},
+    )
+
+    for dp in metrics[OPERATION_DURATION]:
+        assert set(dp.attributes.keys()) == {PROVIDER_NAME_KEY}
 
 
 def test_metrics_reach_operator_configured_global_provider(monkeypatch):
@@ -481,6 +562,7 @@ UNBOUNDED_KEYS = (
 BOUNDED_KEYS = (
     "hidden_params",
     "gen_ai.operation.name",
+    "gen_ai.provider.name",
     "gen_ai.system",
     "gen_ai.request.model",
     "gen_ai.framework",

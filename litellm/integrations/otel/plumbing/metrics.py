@@ -23,9 +23,32 @@ from litellm.integrations.opentelemetry import (
     _resolve_metric_attribute_filter,
 )
 from litellm.integrations.otel.model.metadata import time_to_first_chunk_seconds
-from litellm.integrations.otel.model.semconv import Error, Metric, resolve_operation
+from litellm.integrations.otel.model.semconv import (
+    Error,
+    GenAI,
+    Metric,
+    resolve_operation,
+    resolve_provider,
+)
 from litellm.integrations.otel.model.utils import to_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+
+def _provider_attributes(custom_llm_provider: object) -> Mapping[str, str]:
+    """The provider labels for one call's metrics.
+
+    ``gen_ai.provider.name`` carries the semconv-mapped value; the deprecated
+    ``gen_ai.system`` spelling is dual-emitted with the raw litellm provider
+    string it has always carried, so a dashboard already querying it keeps
+    matching. A call with no provider gets neither label: a placeholder value
+    would mint a permanent series that no operator can act on.
+    """
+    if not isinstance(custom_llm_provider, str) or not custom_llm_provider:
+        return {}
+    return {
+        GenAI.PROVIDER_NAME: resolve_provider(custom_llm_provider),
+        GenAI.SYSTEM: custom_llm_provider,
+    }
 
 
 @dataclass(frozen=True)
@@ -98,6 +121,7 @@ ERROR_TYPE_FALLBACK: Final = "_OTHER"
 METRIC_ATTRIBUTE_CEILING: Final[frozenset[str]] = frozenset(
     (
         "gen_ai.operation.name",
+        "gen_ai.provider.name",
         "gen_ai.system",
         "gen_ai.request.model",
         "gen_ai.framework",
@@ -223,11 +247,10 @@ class GenAIMetricRecorder:
 
     def _common_attributes(self, kwargs: Mapping[str, Any]) -> dict:
         params = kwargs.get("litellm_params") or {}
-        provider = params.get("custom_llm_provider", "Unknown")
         common_attrs: dict = {
-            "gen_ai.operation.name": resolve_operation(kwargs.get("call_type")).value,
-            "gen_ai.system": provider,
-            "gen_ai.request.model": kwargs.get("model"),
+            GenAI.OPERATION_NAME: resolve_operation(kwargs.get("call_type")).value,
+            **_provider_attributes(params.get("custom_llm_provider")),
+            GenAI.REQUEST_MODEL: kwargs.get("model"),
             "gen_ai.framework": "litellm",
         }
 

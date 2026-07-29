@@ -6,6 +6,8 @@ without a semconv equivalent lives under the ``litellm.*`` vendor namespace.
 from enum import Enum
 from typing import Final
 
+from litellm._logging import verbose_logger
+
 
 class GenAIOperation(str, Enum):
     """Values for ``gen_ai.operation.name``."""
@@ -14,8 +16,9 @@ class GenAIOperation(str, Enum):
     TEXT_COMPLETION = "text_completion"
     EMBEDDINGS = "embeddings"
     GENERATE_CONTENT = "generate_content"
+    RETRIEVAL = "retrieval"  # vector-store search spans
     CREATE_AGENT = "create_agent"  # reserved for future agent spans
-    INVOKE_AGENT = "invoke_agent"  # reserved for future agent spans
+    INVOKE_AGENT = "invoke_agent"  # agent (A2A) message spans
     EXECUTE_TOOL = "execute_tool"  # MCP tool-call spans
 
 
@@ -49,11 +52,17 @@ class MCPMethod(str, Enum):
 
 
 class GenAI:
-    """Canonical OTel GenAI span-attribute keys."""
+    """Canonical OTel GenAI attribute keys.
+
+    ``SYSTEM`` is the one exception: the convention deprecated it in favor of
+    ``PROVIDER_NAME``, and it survives here only so already-shipped series keep
+    resolving for consumers that query it. Nothing new should use it.
+    """
 
     # request
     OPERATION_NAME: Final = "gen_ai.operation.name"
     PROVIDER_NAME: Final = "gen_ai.provider.name"
+    SYSTEM: Final = "gen_ai.system"
     REQUEST_MODEL: Final = "gen_ai.request.model"
     REQUEST_TEMPERATURE: Final = "gen_ai.request.temperature"
     REQUEST_TOP_P: Final = "gen_ai.request.top_p"
@@ -316,6 +325,10 @@ _OPERATION_BY_CALL_TYPE: dict[str, GenAIOperation] = {
     "responses": GenAIOperation.CHAT,
     "aresponses": GenAIOperation.CHAT,
     "call_mcp_tool": GenAIOperation.EXECUTE_TOOL,
+    "vector_store_search": GenAIOperation.RETRIEVAL,
+    "avector_store_search": GenAIOperation.RETRIEVAL,
+    "send_message": GenAIOperation.INVOKE_AGENT,
+    "asend_message": GenAIOperation.INVOKE_AGENT,
 }
 
 
@@ -332,7 +345,21 @@ def resolve_provider(custom_llm_provider: str | None) -> str:
 
 
 def resolve_operation(call_type: str | None) -> GenAIOperation:
-    """Map a litellm ``call_type`` to a ``gen_ai.operation.name`` value."""
+    """Map a litellm ``call_type`` to a ``gen_ai.operation.name`` value.
+
+    An unmapped call type still falls back to ``chat`` so every series keeps an
+    operation label, but it logs at debug rather than falling through silently:
+    a new call type mislabelled as ``chat`` mixes its latency and cost into
+    everyone's chat charts, which is invisible until someone reads the numbers.
+    """
     if not call_type:
         return GenAIOperation.CHAT
-    return _OPERATION_BY_CALL_TYPE.get(call_type.lower(), GenAIOperation.CHAT)
+    mapped = _OPERATION_BY_CALL_TYPE.get(call_type.lower())
+    if mapped is not None:
+        return mapped
+    verbose_logger.debug(
+        "otel: call_type %r has no gen_ai.operation.name mapping; labelling it %r. Add it to _OPERATION_BY_CALL_TYPE.",
+        call_type,
+        GenAIOperation.CHAT.value,
+    )
+    return GenAIOperation.CHAT

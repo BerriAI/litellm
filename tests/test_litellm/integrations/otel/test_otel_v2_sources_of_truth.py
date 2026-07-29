@@ -1,6 +1,8 @@
 """Tests for the OTel v2 sources of truth: span registry, semconv keys, config,
 and the typed StandardLoggingPayload adapter. These need no OTel SDK."""
 
+import logging
+
 import pytest
 
 from litellm.integrations.otel import (
@@ -206,6 +208,30 @@ def test_operation_resolution():
     assert resolve_operation(None) is GenAIOperation.CHAT
     # An MCP tool call is an ``execute_tool`` operation, not a chat completion.
     assert resolve_operation("call_mcp_tool") is GenAIOperation.EXECUTE_TOOL
+
+
+@pytest.mark.parametrize("call_type", ["vector_store_search", "avector_store_search"])
+def test_vector_store_search_is_a_retrieval_operation(call_type):
+    """A vector-store search is a retrieval, so its duration and cost must not
+    land in the chat series that dashboards read latency off."""
+    assert resolve_operation(call_type) is GenAIOperation.RETRIEVAL
+    assert resolve_operation(call_type).value == "retrieval"
+
+
+@pytest.mark.parametrize("call_type", ["send_message", "asend_message"])
+def test_agent_message_is_an_invoke_agent_operation(call_type):
+    """An agent (A2A) message send is an agent invocation, not a chat completion."""
+    assert resolve_operation(call_type) is GenAIOperation.INVOKE_AGENT
+    assert resolve_operation(call_type).value == "invoke_agent"
+
+
+def test_unmapped_call_type_falls_back_to_chat_loudly(caplog):
+    """The fallback still labels the series ``chat`` so it is never unlabelled,
+    but it says so at debug: a silent default is how retrieval and agent calls
+    ended up in the chat charts in the first place."""
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        assert resolve_operation("some_future_call_type") is GenAIOperation.CHAT
+    assert any("some_future_call_type" in record.getMessage() for record in caplog.records)
 
 
 # --- MCP tool-call (source of truth #1/#2/#3) ------------------------------- #
