@@ -31903,17 +31903,10 @@ export interface components {
          *     Enforcement stays with ``custom_team_metadata_validate``.
          */
         TeamMetadataFieldSchema: {
-            /** Description */
-            description?: string | null;
             /** Key */
             key: string;
             /** Label */
             label?: string | null;
-            /**
-             * Required
-             * @default false
-             */
-            required: boolean;
         };
         /**
          * TeamMetadataSchemaResponse

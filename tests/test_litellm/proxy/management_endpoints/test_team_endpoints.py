@@ -10549,12 +10549,7 @@ async def test_get_team_metadata_schema_returns_configured_fields():
     TEAM_METADATA_SCHEMA_REGISTRY.set(
         parse_team_metadata_schema(
             [
-                {
-                    "key": "cost_center",
-                    "label": "Cost Center",
-                    "required": True,
-                    "description": "Cost center code",
-                },
+                {"key": "cost_center", "label": "Cost Center"},
                 {"key": "app_name", "label": "Application Name"},
             ]
         )
@@ -10565,9 +10560,8 @@ async def test_get_team_metadata_schema_returns_configured_fields():
         TEAM_METADATA_SCHEMA_REGISTRY.set(())
 
     assert [field.key for field in result.fields] == ["cost_center", "app_name"]
-    assert result.fields[0].required is True
-    assert result.fields[0].description == "Cost center code"
-    assert result.fields[1].required is False
+    assert result.fields[0].label == "Cost Center"
+    assert result.fields[1].label == "Application Name"
 
 
 @pytest.mark.asyncio

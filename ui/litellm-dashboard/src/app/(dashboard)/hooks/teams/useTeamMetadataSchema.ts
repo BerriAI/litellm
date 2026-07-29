@@ -7,8 +7,6 @@ import { createApiClient } from "@/lib/http/client";
 export interface TeamMetadataField {
   key: string;
   label?: string | null;
-  required?: boolean;
-  description?: string | null;
 }
 
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;

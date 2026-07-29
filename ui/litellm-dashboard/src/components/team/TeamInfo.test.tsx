@@ -964,7 +964,7 @@ describe("TeamInfoView", () => {
     it("should prefill declared schema fields from team metadata and submit the edited value", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(useTeamMetadataSchema).mockReturnValue({
-        data: [{ key: "cost_center", label: "Cost Center", required: true }],
+        data: [{ key: "cost_center", label: "Cost Center" }],
         isLoading: false,
       } as any);
       vi.mocked(networking.teamInfoCall).mockResolvedValue(

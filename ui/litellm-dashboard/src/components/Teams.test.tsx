@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
+import NotificationsManager from "./molecules/notifications_manager";
 import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
 import { fetchMCPAccessGroups, getGuardrailsList, teamCreateCall } from "./networking";
 import Teams from "./Teams";
@@ -661,7 +662,7 @@ describe("Teams - schema-declared metadata fields in team create", () => {
     });
     mockUseOrganizations.mockReturnValue({ data: null });
     vi.mocked(useTeamMetadataSchema).mockReturnValue({
-      data: [{ key: "cost_center", label: "Cost Center", required: true, description: "Cost center code" }],
+      data: [{ key: "cost_center", label: "Cost Center" }],
       isLoading: false,
     } as any);
   });
@@ -698,19 +699,24 @@ describe("Teams - schema-declared metadata fields in team create", () => {
     expect(submittedValues.schema_metadata).toBeUndefined();
   });
 
-  it("should block create when a required declared field is blank", async () => {
+  it("should toast only the validator's own message when the backend rejects the create", async () => {
+    vi.mocked(teamCreateCall).mockRejectedValue(
+      new Error("{'error': 'Cost center CC-9999 is not recognized. Contact the FinOps team.'}"),
+    );
     await openCreateModal();
 
     fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Test Team" } });
     fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
+    fireEvent.change(screen.getByPlaceholderText("Cost Center"), { target: { value: "CC-9999" } });
 
     const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
     fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
 
     await waitFor(() => {
-      expect(screen.getByText("Cost Center is required")).toBeInTheDocument();
+      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
+        "Error creating the team: Cost center CC-9999 is not recognized. Contact the FinOps team.",
+      );
     });
-    expect(teamCreateCall).not.toHaveBeenCalled();
   });
 
   it("should show a skeleton in the metadata section while the schema is loading", async () => {

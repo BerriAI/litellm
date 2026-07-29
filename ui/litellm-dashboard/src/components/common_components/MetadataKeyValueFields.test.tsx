@@ -232,26 +232,18 @@ describe("MetadataKeyValueFields", () => {
 
 describe("MetadataKeyValueFields with a declared schema", () => {
   const schema: TeamMetadataField[] = [
-    { key: "cost_center", label: "Cost Center", required: true, description: "Cost center code" },
+    { key: "cost_center", label: "Cost Center" },
     { key: "app_name", label: "Application Name" },
   ];
 
-  it("should render a locked pair row per declared field with its description and no remove icon", () => {
+  it("should render a tagged pair row per declared field with no remove icon", () => {
     render(<Harness onFinish={vi.fn()} schemaFields={schema} initialMetadata={[{ key: "notes", value: "x" }]} />);
 
-    const costCenterKeyInput = screen.getByDisplayValue("cost_center");
-    expect(costCenterKeyInput).toBeDisabled();
-    expect(screen.getByDisplayValue("app_name")).toBeDisabled();
+    expect(screen.getByText("cost_center")).toBeInTheDocument();
+    expect(screen.getByText("app_name")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Cost Center")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Application Name")).toBeInTheDocument();
-    expect(screen.getByText("Cost center code")).toBeInTheDocument();
     expect(screen.getAllByLabelText("Remove key-value pair")).toHaveLength(1);
-  });
-
-  it("should mark only required declared fields with an asterisk", () => {
-    render(<Harness onFinish={vi.fn()} schemaFields={schema} />);
-
-    expect(screen.getAllByTitle("Required")).toHaveLength(1);
   });
 
   it("should submit declared field values under schema_metadata", async () => {
@@ -267,19 +259,6 @@ describe("MetadataKeyValueFields with a declared schema", () => {
         expect.objectContaining({ schema_metadata: expect.objectContaining({ cost_center: "CC-1001" }) }),
       );
     });
-  });
-
-  it("should block submission when a required declared field is blank", async () => {
-    const user = userEvent.setup();
-    const onFinish = vi.fn();
-    render(<Harness onFinish={onFinish} schemaFields={schema} />);
-
-    await user.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("Cost Center is required")).toBeInTheDocument();
-    });
-    expect(onFinish).not.toHaveBeenCalled();
   });
 
   it("should prefill declared fields from sourceMetadata and prune them from free-form rows", async () => {

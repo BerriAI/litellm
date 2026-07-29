@@ -609,12 +609,7 @@ def test_parse_schema_none_returns_empty():
 
 def test_parse_schema_round_trips_fields_in_order():
     raw = [
-        {
-            "key": "cost_center",
-            "label": "Cost Center",
-            "required": True,
-            "description": "Cost center code (e.g. CC-1001)",
-        },
+        {"key": "cost_center", "label": "Cost Center"},
         {"key": "app_name"},
     ]
 
@@ -622,11 +617,7 @@ def test_parse_schema_round_trips_fields_in_order():
 
     assert [field.key for field in fields] == ["cost_center", "app_name"]
     assert fields[0].label == "Cost Center"
-    assert fields[0].required is True
-    assert fields[0].description == "Cost center code (e.g. CC-1001)"
     assert fields[1].label is None
-    assert fields[1].required is False
-    assert fields[1].description is None
 
 
 @pytest.mark.parametrize(
@@ -636,8 +627,8 @@ def test_parse_schema_round_trips_fields_in_order():
         {"key": "cost_center"},
         [{"label": "missing key"}],
         [{"key": ""}],
-        [{"key": "cost_center", "requird": True}],
-        [{"key": "cost_center", "required": "sometimes"}],
+        [{"key": "cost_center", "required": True}],
+        [{"key": "cost_center", "description": "Cost center code"}],
         [{"key": "cost_center", "allowed_values": ["CC-1001"]}],
     ],
 )

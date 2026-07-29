@@ -136,8 +136,6 @@ class TeamMetadataFieldSchema(BaseModel):
 
     key: str = Field(min_length=1)
     label: Optional[str] = None
-    required: bool = False
-    description: Optional[str] = None
 
 
 class TeamMetadataSchemaResponse(BaseModel):

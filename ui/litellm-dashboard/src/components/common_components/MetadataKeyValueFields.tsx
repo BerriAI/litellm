@@ -1,5 +1,5 @@
 import { MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
-import { Button, Form, FormInstance, Input, Skeleton, Space } from "antd";
+import { Button, Form, FormInstance, Input, Skeleton, Space, Tag } from "antd";
 import React, { useEffect, useMemo } from "react";
 
 import { TeamMetadataField } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
@@ -103,22 +103,13 @@ const MetadataKeyValueFields: React.FC<MetadataKeyValueFieldsProps> = ({
           sourceMetadata != null && field.key in sourceMetadata ? sourceMetadata[field.key] : undefined;
         return (
           <Space key={field.key} style={{ display: "flex", marginBottom: 8 }} align="baseline">
-            <Form.Item>
-              <Input value={field.key} disabled aria-label={`${label} key`} />
-            </Form.Item>
+            <Tag>{field.key}</Tag>
             <Form.Item
               name={[schemaName, field.key]}
-              extra={field.description || undefined}
               initialValue={initialRaw !== undefined ? formatMetadataValue(initialRaw) : undefined}
-              rules={field.required ? [{ required: true, message: `${label} is required` }] : undefined}
             >
               <Input placeholder={label} />
             </Form.Item>
-            {field.required && (
-              <span title="Required" style={{ color: "#ef4444" }}>
-                *
-              </span>
-            )}
           </Space>
         );
       })}
