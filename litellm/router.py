@@ -19,6 +19,7 @@ import threading
 import time
 import traceback
 from collections import defaultdict
+from collections.abc import Mapping
 from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
@@ -268,6 +269,43 @@ def _cost_value_as_float(value: Union[str, int, float, None]) -> Optional[float]
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def model_info_is_active_for_environment(model_info: Mapping[str, object] | None) -> bool:
+    """Single owner of the environment-gating rule: a deployment whose model_info names
+    `supported_environments` loads only on pods whose LITELLM_ENVIRONMENT is in that list.
+    `Router.deployment_is_active_for_environment` delegates here, and the model-write
+    endpoints consult the same rule to tell a deliberately inactive model from one that
+    was dropped by a failed reload."""
+    if model_info is None:
+        return True
+    supported_environments = model_info.get("supported_environments")
+    if supported_environments is None:
+        return True
+    if not isinstance(supported_environments, (list, tuple)):
+        raise ValueError(
+            f"supported_environments must be a list of {VALID_LITELLM_ENVIRONMENTS}. "
+            f"but set as: {supported_environments} for model_info: {model_info}"
+        )
+    litellm_environment = get_secret_str(secret_name="LITELLM_ENVIRONMENT")
+    if litellm_environment is None:
+        raise ValueError("Set 'supported_environments' for model but not 'LITELLM_ENVIRONMENT' set in .env")
+
+    if litellm_environment not in VALID_LITELLM_ENVIRONMENTS:
+        raise ValueError(
+            f"LITELLM_ENVIRONMENT must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {litellm_environment}"
+        )
+
+    for _env in supported_environments:
+        if _env not in VALID_LITELLM_ENVIRONMENTS:
+            raise ValueError(
+                f"supported_environments must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {_env} "
+                f"for model_info: {model_info}"
+            )
+
+    if litellm_environment in supported_environments:
+        return True
+    return False
 
 
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
@@ -7982,30 +8020,7 @@ class Router:
         - ValueError: If LITELLM_ENVIRONMENT is not set in .env or not one of the valid values
         - ValueError: If supported_environments is not set in model_info or not one of the valid values
         """
-        if (
-            deployment.model_info is None
-            or "supported_environments" not in deployment.model_info
-            or deployment.model_info["supported_environments"] is None
-        ):
-            return True
-        litellm_environment = get_secret_str(secret_name="LITELLM_ENVIRONMENT")
-        if litellm_environment is None:
-            raise ValueError("Set 'supported_environments' for model but not 'LITELLM_ENVIRONMENT' set in .env")
-
-        if litellm_environment not in VALID_LITELLM_ENVIRONMENTS:
-            raise ValueError(
-                f"LITELLM_ENVIRONMENT must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {litellm_environment}"
-            )
-
-        for _env in deployment.model_info["supported_environments"]:
-            if _env not in VALID_LITELLM_ENVIRONMENTS:
-                raise ValueError(
-                    f"supported_environments must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {_env} for deployment: {deployment}"
-                )
-
-        if litellm_environment in deployment.model_info["supported_environments"]:
-            return True
-        return False
+        return model_info_is_active_for_environment(model_info=deployment.model_info)
 
     def set_model_list(self, model_list: list):
         original_model_list = copy.deepcopy(model_list)
