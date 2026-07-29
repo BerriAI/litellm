@@ -23,6 +23,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _resolve_credential_from_model_config,
     _resolve_provider_from_deployment,
     _update_model_if_key_alias_exists,
+    _update_model_if_team_alias_exists,
     add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
     check_if_token_is_service_account,
@@ -5457,3 +5458,73 @@ def test_get_sanitized_user_information_from_key_drops_callback_config():
     # UserAPIKeyAuth is the live auth object; the per-key callbacks are resolved
     # from it during pre-call, so it must not be mutated by building the log view
     assert "logging" in (user_api_key_dict.metadata or {})
+
+
+class TestUpdateModelIfTeamAliasExists:
+    """Regression tests for dangling team model aliases.
+
+    Team-scoped deployments used to write a hidden alias
+    {public_name: "model_name_{team_id}_{uuid}"} into LiteLLM_ModelTable. When the
+    team-scoped deployment was deleted the alias row survived, and the pre-call
+    rewrite sent every request for the public name to the deleted deployment,
+    returning 400 "no healthy deployments" even though a gateway-level deployment
+    still served the public name.
+    """
+
+    def _router(self, model_name: str) -> litellm.Router:
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": model_name,
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "fake-key"},
+                }
+            ]
+        )
+
+    def test_dangling_alias_keeps_requested_model(self):
+        data = {"model": "claude-fast"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test-key",
+            team_id="team-1",
+            team_model_aliases={"claude-fast": "model_name_team-1_dead-uuid"},
+        )
+
+        _update_model_if_team_alias_exists(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=self._router("claude-fast"),
+        )
+
+        assert data["model"] == "claude-fast"
+
+    def test_alias_to_live_model_group_is_rewritten(self):
+        data = {"model": "gpt-4o"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test-key",
+            team_id="team-1",
+            team_model_aliases={"gpt-4o": "gpt-4o-team-1"},
+        )
+
+        _update_model_if_team_alias_exists(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=self._router("gpt-4o-team-1"),
+        )
+
+        assert data["model"] == "gpt-4o-team-1"
+
+    def test_alias_is_rewritten_when_router_unavailable(self):
+        data = {"model": "gpt-4o"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test-key",
+            team_id="team-1",
+            team_model_aliases={"gpt-4o": "gpt-4o-team-1"},
+        )
+
+        _update_model_if_team_alias_exists(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=None,
+        )
+
+        assert data["model"] == "gpt-4o-team-1"

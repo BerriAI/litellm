@@ -87,7 +87,6 @@ def _sanitize_for_log(value: Any) -> str:
 
 
 from litellm.router import Router
-from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -102,8 +101,6 @@ service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 # Bounded dedup for stale-alias warnings (FIFO eviction when over cap).
 _MAX_STALE_ALIAS_WARNING_KEYS = 10_000
 _STALE_TEAM_ALIAS_WARNING_KEYS: OrderedDict[str, None] = OrderedDict()
-# Cache the stale alias bypass flag at module load to avoid hot-path secret lookups
-_ENABLE_TEAM_STALE_ALIAS_BYPASS: Optional[bool] = None
 
 
 if TYPE_CHECKING:
@@ -1785,6 +1782,7 @@ async def add_litellm_data_to_request(
     _update_model_if_team_alias_exists(
         data=data,
         user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
     )
 
     # Key Model Aliases
@@ -1832,6 +1830,7 @@ async def add_litellm_data_to_request(
 def _update_model_if_team_alias_exists(
     data: dict,
     user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router | None,
 ) -> None:
     """
     Update the model if the team alias exists
@@ -1845,52 +1844,53 @@ def _update_model_if_team_alias_exists(
         }
         - requested_model = "gpt-4o-team-1"
 
+    The rewrite is skipped when the alias target no longer resolves to any live
+    deployment in the router (e.g. a dangling `model_name_{team_id}_{uuid}` alias
+    left behind after its team-scoped deployment was deleted); the request keeps
+    the model name the caller sent so routing can resolve it normally.
+
     Note: model_aliases for team models are deprecated. This function only applies
     to legacy non-team-scoped aliases. Team-scoped deployments use team_public_model_name
     and are resolved via map_team_model in route_llm_request.
     """
     _model = data.get("model")
-    if _model and user_api_key_dict.team_model_aliases and _model in user_api_key_dict.team_model_aliases:
-        from litellm.proxy.proxy_server import llm_router
+    if not _model or not user_api_key_dict.team_model_aliases:
+        return
+    if _model not in user_api_key_dict.team_model_aliases:
+        return
 
-        # Skip alias rewrite if this model resolves to team-specific deployments
-        # (team models use team_public_model_name, not model_aliases)
-        aliased_target = user_api_key_dict.team_model_aliases[_model]
+    aliased_target = user_api_key_dict.team_model_aliases[_model]
+    if llm_router is not None and not llm_router.get_model_list(
+        model_name=aliased_target, team_id=user_api_key_dict.team_id
+    ):
+        _warn_once_dangling_team_alias(
+            requested_model=_model,
+            aliased_target=aliased_target,
+            team_id=user_api_key_dict.team_id,
+        )
+        return
 
-        # Optional bypass for stale aliases from pre-PR deployments:
-        # only enabled via feature flag to preserve backwards compatibility.
-        # Cached at module level to avoid hot-path secret lookups on every request.
-        global _ENABLE_TEAM_STALE_ALIAS_BYPASS
-        if _ENABLE_TEAM_STALE_ALIAS_BYPASS is None:
-            _ENABLE_TEAM_STALE_ALIAS_BYPASS = get_secret_bool("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", False)
-        enable_stale_alias_bypass = _ENABLE_TEAM_STALE_ALIAS_BYPASS
-        # Check if the alias points to a team-scoped UUID name
-        # (format: "model_name_{team_id}_{uuid}")
-        is_stale_team_alias = aliased_target.startswith(f"model_name_{user_api_key_dict.team_id}_")
-        if is_stale_team_alias and llm_router:
-            # This is a stale alias from pre-PR deployments.
-            # Check if current team deployments exist for the public name.
-            key = (user_api_key_dict.team_id, _model)
-            if key in llm_router.team_model_to_deployment_indices:
-                if enable_stale_alias_bypass:
-                    # Team deployments exist; skip stale alias
-                    return
-                warning_key = f"{user_api_key_dict.team_id}:{_model}:{aliased_target}"
-                if warning_key not in _STALE_TEAM_ALIAS_WARNING_KEYS:
-                    _STALE_TEAM_ALIAS_WARNING_KEYS[warning_key] = None
-                    while len(_STALE_TEAM_ALIAS_WARNING_KEYS) > _MAX_STALE_ALIAS_WARNING_KEYS:
-                        _STALE_TEAM_ALIAS_WARNING_KEYS.popitem(last=False)
-                    verbose_proxy_logger.warning(
-                        "Stale team model alias detected for model='%s', team_id='%s'. "
-                        "New sibling deployments may be unreachable. "
-                        "Set LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS=true to enable "
-                        "team-scoped sibling routing.",
-                        _sanitize_for_log(_model),
-                        user_api_key_dict.team_id,
-                    )
+    data["model"] = aliased_target
 
-        data["model"] = aliased_target
-    return
+
+def _warn_once_dangling_team_alias(
+    requested_model: str,
+    aliased_target: str,
+    team_id: str | None,
+) -> None:
+    warning_key = f"{team_id}:{requested_model}:{aliased_target}"
+    if warning_key in _STALE_TEAM_ALIAS_WARNING_KEYS:
+        return
+    _STALE_TEAM_ALIAS_WARNING_KEYS[warning_key] = None
+    while len(_STALE_TEAM_ALIAS_WARNING_KEYS) > _MAX_STALE_ALIAS_WARNING_KEYS:
+        _STALE_TEAM_ALIAS_WARNING_KEYS.popitem(last=False)
+    verbose_proxy_logger.warning(
+        "Team model alias '%s' -> '%s' for team_id='%s' has no live deployments; "
+        "ignoring the alias and routing the requested model name directly.",
+        _sanitize_for_log(requested_model),
+        _sanitize_for_log(aliased_target),
+        team_id,
+    )
 
 
 def _update_model_if_key_alias_exists(

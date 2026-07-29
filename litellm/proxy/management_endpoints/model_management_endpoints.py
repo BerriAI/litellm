@@ -800,14 +800,12 @@ async def _remove_unbacked_team_models(
     if team_id is None:
         return
 
-    # BYOK models carry an internal `model_name_{team_id}_{uuid}` name that can never
-    # be a team alias value, so skip the full litellm_modeltable scan for them.
-    removed_model_aliases: List[Tuple[str, str]] = []
-    if not model_params.model_name.startswith(f"model_name_{team_id}_"):
-        removed_model_aliases = await delete_team_model_alias(
-            public_model_name=model_params.model_name,
-            prisma_client=prisma_client,
-        )
+    removed_model_aliases = await delete_team_model_alias(
+        deleted_model_name=model_params.model_name,
+        prisma_client=prisma_client,
+        team_id=team_id,
+        team_public_model_name=model_params.model_info.team_public_model_name,
+    )
     names_to_remove = {alias for alias_team_id, alias in removed_model_aliases if alias_team_id == team_id}
     if model_params.model_info.team_public_model_name is not None:
         names_to_remove.add(model_params.model_info.team_public_model_name)
@@ -1162,35 +1160,61 @@ async def delete_model(
 
 
 async def delete_team_model_alias(
-    public_model_name: str,
+    deleted_model_name: str,
     prisma_client: PrismaClient,
+    team_id: str | None = None,
+    team_public_model_name: str | None = None,
 ) -> List[Tuple[str, str]]:
     """
-    Delete a team model alias
+    Remove team model alias entries that reference a deleted deployment.
 
-    Iterate through all team model aliases and delete the one that matches the model_id
+    Two alias row shapes exist in LiteLLM_ModelTable.model_aliases:
+    - legacy rows: {"alias": "public model name"}, matched when an entry's value
+      equals the deleted deployment's model_name
+    - team-scoped rows: {"public name": "model_name_{team_id}_{uuid}"}, matched when
+      the entry belongs to the deleted deployment's team, its key equals the
+      deployment's team_public_model_name, and its value has the team-internal shape
 
     Returns:
     - List of team id + model alias pairs that were removed
     """
     team_model_aliases = await ModelTableRepository(prisma_client).table.find_many(include={"team": True})
+    internal_name_prefix = f"model_name_{team_id}_" if team_id is not None else None
     tasks = []
-    removed_model_aliases = []
+    removed_model_aliases: List[Tuple[str, str]] = []
     for team_model_alias in team_model_aliases:
-        model_aliases = team_model_alias.model_aliases  # {"alias": "public model name"}
-        id = team_model_alias.id
-
-        if public_model_name in model_aliases.values():
-            key = list(model_aliases.keys())[list(model_aliases.values()).index(public_model_name)]
-            if team_model_alias.team is not None:
-                removed_model_aliases.append((team_model_alias.team.team_id, key))
-            del model_aliases[key]
-            tasks.append(
-                ModelTableRepository(prisma_client).table.update(
-                    where={"id": id},
-                    data={"model_aliases": json.dumps(model_aliases)},
-                )
+        raw_aliases = team_model_alias.model_aliases
+        model_aliases = json.loads(raw_aliases) if isinstance(raw_aliases, str) else raw_aliases
+        if not isinstance(model_aliases, dict):
+            continue
+        row_team_id = team_model_alias.team.team_id if team_model_alias.team is not None else None
+        keys_to_remove = frozenset(
+            alias_key
+            for alias_key, alias_target in model_aliases.items()
+            if alias_target == deleted_model_name
+            or (
+                internal_name_prefix is not None
+                and row_team_id == team_id
+                and alias_key == team_public_model_name
+                and alias_target.startswith(internal_name_prefix)
             )
+        )
+        if not keys_to_remove:
+            continue
+
+        if row_team_id is not None:
+            removed_model_aliases.extend((row_team_id, alias_key) for alias_key in keys_to_remove)
+        remaining_aliases = {
+            alias_key: alias_target
+            for alias_key, alias_target in model_aliases.items()
+            if alias_key not in keys_to_remove
+        }
+        tasks.append(
+            ModelTableRepository(prisma_client).table.update(
+                where={"id": team_model_alias.id},
+                data={"model_aliases": json.dumps(remaining_aliases)},
+            )
+        )
     await asyncio.gather(*tasks)
 
     return removed_model_aliases

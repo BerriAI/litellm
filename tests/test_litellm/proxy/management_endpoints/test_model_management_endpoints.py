@@ -329,7 +329,7 @@ class TestDeleteTeamModelAlias:
 
         # Call the function
         await delete_team_model_alias(
-            public_model_name="public_model_1", prisma_client=mock_prisma
+            deleted_model_name="public_model_1", prisma_client=mock_prisma
         )
 
         # Verify results
@@ -387,12 +387,123 @@ class TestDeleteTeamModelAlias:
 
         # Call the function with non-existent model
         await delete_team_model_alias(
-            public_model_name="non_existent_model", prisma_client=mock_prisma
+            deleted_model_name="non_existent_model", prisma_client=mock_prisma
         )
 
         # Verify no updates were made
         mock_db = mock_prisma.db.litellm_modeltable
         assert len(mock_db.update_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_delete_team_scoped_alias_matched_by_internal_value(self):
+        """Regression: team-scoped alias rows are {public_name: internal_name}. Deleting
+        the internal deployment must scrub the entry via the value direction."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_team_model_alias,
+        )
+
+        team = LiteLLM_TeamTable(team_id="team-1", team_alias="team-1-alias")
+        model_aliases_list = [
+            {
+                "id": 1,
+                "model_aliases": {
+                    "claude-fast": "model_name_team-1_uuid-1",
+                    "kept-alias": "some-public-model",
+                },
+                "updated_by": "test_user",
+                "created_by": "test_user",
+                "team": team,
+            },
+        ]
+        mock_prisma = MockPrismaClient(team_exists=True)
+        mock_prisma.db = MockPrismaWrapper(model_aliases_list)
+
+        removed = await delete_team_model_alias(
+            deleted_model_name="model_name_team-1_uuid-1",
+            prisma_client=mock_prisma,
+            team_id="team-1",
+            team_public_model_name="claude-fast",
+        )
+
+        assert removed == [("team-1", "claude-fast")]
+        update_calls = mock_prisma.db.litellm_modeltable.update_calls
+        assert len(update_calls) == 1
+        assert json.loads(update_calls[0]["data"]["model_aliases"]) == {
+            "kept-alias": "some-public-model"
+        }
+
+    @pytest.mark.asyncio
+    async def test_delete_team_scoped_alias_matched_by_public_key_when_value_drifted(self):
+        """Regression: the alias value may point at a stale uuid that matches no row at
+        all. The entry must still be scrubbed via the key direction (public name) when
+        the owning team's deployment for that public name is deleted."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_team_model_alias,
+        )
+
+        team = LiteLLM_TeamTable(team_id="team-1", team_alias="team-1-alias")
+        model_aliases_list = [
+            {
+                "id": 1,
+                "model_aliases": {"claude-fast": "model_name_team-1_other-uuid"},
+                "updated_by": "test_user",
+                "created_by": "test_user",
+                "team": team,
+            },
+        ]
+        mock_prisma = MockPrismaClient(team_exists=True)
+        mock_prisma.db = MockPrismaWrapper(model_aliases_list)
+
+        removed = await delete_team_model_alias(
+            deleted_model_name="model_name_team-1_uuid-1",
+            prisma_client=mock_prisma,
+            team_id="team-1",
+            team_public_model_name="claude-fast",
+        )
+
+        assert removed == [("team-1", "claude-fast")]
+        update_calls = mock_prisma.db.litellm_modeltable.update_calls
+        assert len(update_calls) == 1
+        assert json.loads(update_calls[0]["data"]["model_aliases"]) == {}
+
+    @pytest.mark.asyncio
+    async def test_delete_team_scoped_alias_keeps_legacy_alias_and_other_teams(self):
+        """A legacy alias {public: other-gateway-model} in the deleting team's row and
+        another team's alias rows must survive a team-scoped deployment delete."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_team_model_alias,
+        )
+
+        team_1 = LiteLLM_TeamTable(team_id="team-1", team_alias="team-1-alias")
+        team_2 = LiteLLM_TeamTable(team_id="team-2", team_alias="team-2-alias")
+        model_aliases_list = [
+            {
+                "id": 1,
+                "model_aliases": {"claude-fast": "azure-claude"},
+                "updated_by": "test_user",
+                "created_by": "test_user",
+                "team": team_1,
+            },
+            {
+                "id": 2,
+                "model_aliases": {"claude-fast": "model_name_team-2_uuid-2"},
+                "updated_by": "test_user",
+                "created_by": "test_user",
+                "team": team_2,
+            },
+        ]
+        mock_prisma = MockPrismaClient(team_exists=True)
+        mock_prisma.db = MockPrismaWrapper(model_aliases_list)
+
+        removed = await delete_team_model_alias(
+            deleted_model_name="model_name_team-1_uuid-1",
+            prisma_client=mock_prisma,
+            team_id="team-1",
+            team_public_model_name="claude-fast",
+        )
+
+        assert removed == []
+        assert mock_prisma.db.litellm_modeltable.update_calls == []
 
 
 class TestClearCache:
@@ -1997,9 +2108,20 @@ class TestDeleteTeamBYOKModelGhost:
         mock_prisma.db.litellm_teamtable.update = AsyncMock(
             return_value=updated_team_row
         )
-        # Team BYOK models have no alias row; delete_team_model_alias finds nothing.
+        # Legacy versions wrote a hidden alias row {public_name: internal_name};
+        # deleting the deployment must scrub it (regression for dangling aliases).
+        alias_row = LiteLLM_ModelTable(
+            id=7,
+            model_aliases={public_name: f"model_name_{team_id}_abc-uuid"},
+            created_by="admin",
+            updated_by="admin",
+            team=_team([public_name, kept_name]),
+        )
         mock_prisma.db.litellm_modeltable = AsyncMock()
-        mock_prisma.db.litellm_modeltable.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_modeltable.find_many = AsyncMock(
+            return_value=[alias_row]
+        )
+        mock_prisma.db.litellm_modeltable.update = AsyncMock(return_value=None)
 
         admin_user = UserAPIKeyAuth(
             user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
@@ -2031,8 +2153,12 @@ class TestDeleteTeamBYOKModelGhost:
 
         mock_refresh.assert_awaited_once()
         assert mock_refresh.await_args.kwargs["team_row"] is updated_team_row
-        # BYOK internal name can't be an alias value -> the alias-table scan is skipped.
-        mock_prisma.db.litellm_modeltable.find_many.assert_not_awaited()
+        # The dangling alias row {public_name: internal_name} is scrubbed on delete.
+        mock_prisma.db.litellm_modeltable.find_many.assert_awaited()
+        mock_prisma.db.litellm_modeltable.update.assert_awaited_once()
+        alias_update_kwargs = mock_prisma.db.litellm_modeltable.update.await_args.kwargs
+        assert alias_update_kwargs["where"] == {"id": 7}
+        assert json.loads(alias_update_kwargs["data"]["model_aliases"]) == {}
 
     @pytest.mark.asyncio
     async def test_delete_non_internal_team_model_still_scans_aliases(self):
