@@ -5111,3 +5111,59 @@ class TestStreamingClientDisconnectBilling:
         )
 
         proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+
+
+class TestInjectCostIntoUsageDict:
+    """Regression tests for streaming cost injection on the Anthropic Messages API.
+
+    Anthropic ``message_delta`` reports ``input_tokens`` excluding cache read and
+    cache creation tokens, whereas ``generic_cost_per_token`` expects
+    ``Usage.prompt_tokens`` to be the full input total. If the injected cost
+    seeds ``prompt_tokens`` from the bare ``input_tokens``, the cache read tokens
+    get subtracted again, the non-cached input is clamped to 0, and the streamed
+    ``usage.cost`` under-reports vs the logging callback.
+    Ref: LIT-4902.
+    """
+
+    def _reference_cost(self, model: str, prompt_tokens: int, output_tokens: int, cache_read: int) -> float:
+        from litellm.types.utils import ModelResponse, Usage
+
+        return litellm.completion_cost(
+            completion_response=ModelResponse(
+                usage=Usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=output_tokens,
+                    total_tokens=prompt_tokens + output_tokens,
+                    cache_read_input_tokens=cache_read,
+                )
+            ),
+            model=model,
+        )
+
+    def test_message_delta_cost_includes_cached_input_tokens(self):
+        model = "bedrock/us.anthropic.claude-sonnet-4-6"
+        input_tokens = 10058
+        cache_read = 10076
+        output_tokens = 1124
+
+        obj = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_read_input_tokens": cache_read,
+                "cache_creation_input_tokens": 0,
+            },
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(obj, model)
+        assert result is not None
+        injected = result["usage"]["cost"]
+
+        correct = self._reference_cost(model, input_tokens + cache_read, output_tokens, cache_read)
+        dropped_input = self._reference_cost(model, input_tokens, output_tokens, cache_read)
+
+        assert correct != pytest.approx(dropped_input)
+        assert injected == pytest.approx(correct)
+        assert injected > dropped_input

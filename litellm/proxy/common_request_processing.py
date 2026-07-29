@@ -2987,11 +2987,8 @@ class ProxyBaseLLMRequestProcessing:
         """
         if obj.get("type") == "message_delta" and isinstance(obj.get("usage"), dict):
             _usage = obj["usage"]
-            prompt_tokens = int(_usage.get("input_tokens", 0) or 0)
+            input_tokens = int(_usage.get("input_tokens", 0) or 0)
             completion_tokens = int(_usage.get("output_tokens", 0) or 0)
-            total_tokens = int(
-                _usage.get("total_tokens", prompt_tokens + completion_tokens) or (prompt_tokens + completion_tokens)
-            )
 
             # Extract additional usage fields
             cache_creation_input_tokens = _usage.get("cache_creation_input_tokens")
@@ -2999,6 +2996,11 @@ class ProxyBaseLLMRequestProcessing:
             web_search_requests = _usage.get("web_search_requests")
             completion_tokens_details = _usage.get("completion_tokens_details")
             prompt_tokens_details = _usage.get("prompt_tokens_details")
+
+            prompt_tokens = input_tokens + int(cache_creation_input_tokens or 0) + int(cache_read_input_tokens or 0)
+            total_tokens = int(
+                _usage.get("total_tokens", prompt_tokens + completion_tokens) or (prompt_tokens + completion_tokens)
+            )
 
             usage_kwargs: dict[str, Any] = {
                 "prompt_tokens": prompt_tokens,
