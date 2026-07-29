@@ -2744,6 +2744,13 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # key off. Server-only and stripped from validated input for the same reason as the marker
     # above: a forged entry would let a caller pick which team's rpm bucket it is charged against.
     mcp_source_team_rpm_limits: dict[str, dict[str, int]] | None = Field(default=None, exclude=True)
+    # The single MCP server_id a gateway session bearer was scoped to at authorize time (RFC 8707
+    # resource), or None for an aggregate-scope session. A RESTRICTION intersected against the live
+    # grant resolution, never a grant. Server-only, set exclusively by the MCP gateway admission
+    # path via post-construction assignment and stripped from validated input like the markers
+    # above; a forged value could at most narrow, but the stripping keeps the field's provenance
+    # single-owner so its meaning stays trustworthy.
+    mcp_session_resource_server_id: str | None = Field(default=None, exclude=True)
     via_virtual_key: bool = Field(
         default=False,
         exclude=True,
@@ -2780,6 +2787,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         # kwargs, model_validate, a JWT/key claim splat) so it can never be forged from caller data.
         values.pop("mcp_admitted_user_subject", None)
         values.pop("mcp_source_team_rpm_limits", None)
+        values.pop("mcp_session_resource_server_id", None)
         values.pop("via_virtual_key", None)
         if values.get("api_key") is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
