@@ -80,6 +80,12 @@ describe("Sidebar (leftnav)", () => {
     collapsed: false,
   };
 
+  it("should link the logo to the UI home route rather than the proxy origin", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.getByRole("link", { name: /litellm home/i })).toHaveAttribute("href", "/ui");
+  });
+
   it("renders all top-level (non-nested) tabs for admin", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 
@@ -236,6 +242,24 @@ describe("Sidebar (leftnav)", () => {
     expect(link).not.toBeNull();
     expect(link!.querySelector("svg")).not.toBeNull();
     expect(label).toHaveClass("group-data-[collapsed=true]/sidebar:hidden");
+  });
+
+  it("shows Cost Optimization with a Beta badge and no feature-flag gate", () => {
+    const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI={false} />);
+
+    const costOptimization = container.querySelector('a[href*="cost-optimization"]');
+    expect(costOptimization).not.toBeNull();
+    expect(costOptimization!.textContent).toContain("Cost Optimization");
+    expect(costOptimization!.textContent).toContain("Beta");
+
+    expect(container.querySelector('a[href*="projects"]')).toBeNull();
+  });
+
+  it("keeps a readable collapsed-rail tooltip for items whose label carries a badge", () => {
+    const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI collapsed />);
+
+    expect(container.querySelector('a[href*="cost-optimization"]')).toHaveAttribute("title", "Cost Optimization");
+    expect(container.querySelector('a[href*="projects"]')).toHaveAttribute("title", "Projects");
   });
 });
 

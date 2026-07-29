@@ -109,6 +109,7 @@ from litellm.proxy.common_utils.callback_utils import (
     is_sensitive_callback_key,
     normalize_callback_names,
     process_callback,
+    strip_callback_config,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.router_utils.add_retry_fallback_headers import (
@@ -11213,11 +11214,15 @@ async def get_all_team_models(
 
     if user_teams == "*":
         team_db_objects = await TeamRepository(prisma_client).table.find_many()
-        team_db_objects_typed = [LiteLLM_TeamTable(**team_db_object.model_dump()) for team_db_object in team_db_objects]
+        team_db_objects_typed = [
+            LiteLLM_TeamTable.model_validate(team_db_object.model_dump()) for team_db_object in team_db_objects
+        ]
     else:
         team_db_objects = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": user_teams}})
 
-        team_db_objects_typed = [LiteLLM_TeamTable(**team_db_object.model_dump()) for team_db_object in team_db_objects]
+        team_db_objects_typed = [
+            LiteLLM_TeamTable.model_validate(team_db_object.model_dump()) for team_db_object in team_db_objects
+        ]
 
     team_models = _add_team_models_to_all_models(
         team_db_objects_typed=team_db_objects_typed,
@@ -11291,7 +11296,7 @@ async def _populate_team_access_on_models(
             where={"user_id": user_api_key_dict.user_id}
         )
         if user_db_object is not None:
-            user_object = LiteLLM_UserTable(**user_db_object.model_dump())
+            user_object = LiteLLM_UserTable.model_validate(user_db_object.model_dump())
             user_teams = user_object.teams or []
             direct_access_models = get_direct_access_models(
                 user_db_object=user_object,
@@ -11826,7 +11831,7 @@ async def _load_team_object_for_model_filter(team_id: str, prisma_client: Prisma
         if team_db_object is None:
             verbose_proxy_logger.warning(f"Team {team_id} not found in database")
             return None
-        return LiteLLM_TeamTable(**team_db_object.model_dump())
+        return LiteLLM_TeamTable.model_validate(team_db_object.model_dump())
     except Exception as e:
         verbose_proxy_logger.exception(f"Error fetching team {team_id}: {str(e)}")
         return None
@@ -13408,7 +13413,7 @@ async def async_queue_request(
             # extra_body); see above for the same guard upstream.
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
+        data["metadata"]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
         _headers = _safe_get_request_headers(request).copy()
         _headers.pop("authorization", None)  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers

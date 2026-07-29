@@ -636,14 +636,33 @@ class TestDeleteModelClearsRouterRegistry:
     not just from model_list, or a stale (now unbacked) router entry lingers until restart.
     """
 
+    @staticmethod
+    def _complexity_router_deployment(model_id: str, tags: list | None = None) -> dict:
+        return {
+            "model_name": "smart-router",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"}},
+                "complexity_router_default_model": "gpt-4o",
+                **({"tags": tags} if tags else {}),
+            },
+            "model_info": {"id": model_id, "db_model": True},
+        }
+
     @pytest.mark.asyncio
-    async def test_delete_model_pops_router_registries(self):
+    async def test_delete_model_releases_only_the_deleted_routers_slot(self):
+        """Deleting one tagged router must release its own slot and leave a sibling
+        sharing the model_name registered. A blanket pop(model_name) here would take
+        both down, and nothing reloads on the delete path to restore the survivor.
+        """
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
-        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete
 
         model_id = "router-del-1"
+        surviving_id = "router-del-2"
         admin_user = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
         db_row = LiteLLM_ProxyModelTable(
             model_id=model_id,
@@ -660,16 +679,16 @@ class TestDeleteModelClearsRouterRegistry:
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=db_row)
         mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
 
-        mock_router = MagicMock()
-        mock_router.delete_deployment = MagicMock(
-            return_value={
-                "model_name": "smart-router",
-                "litellm_params": {"model": "auto_router/complexity_router"},
-                "model_info": {"id": model_id},
-            }
+        real_router = litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}},
+                self._complexity_router_deployment(model_id, tags=["team-a"]),
+                self._complexity_router_deployment(surviving_id, tags=["team-b"]),
+            ],
+            ignore_invalid_deployments=True,
         )
-        mock_router.auto_routers = {"smart-router": MagicMock()}
-        mock_router.complexity_routers = {"smart-router": MagicMock()}
+        assert len(real_router.complexity_routers["smart-router"]) == 2
 
         _PS = "litellm.proxy.proxy_server"
         with (
@@ -679,16 +698,17 @@ class TestDeleteModelClearsRouterRegistry:
             patch(f"{_PS}.proxy_logging_obj", MagicMock()),
             patch(f"{_PS}.general_settings", {}),
             patch(f"{_PS}.premium_user", True),
-            patch(f"{_PS}.llm_router", mock_router),
+            patch(f"{_PS}.llm_router", real_router),
         ):
             await delete_model_endpoint(
                 model_info=ModelInfoDelete(id=model_id),
                 user_api_key_dict=admin_user,
             )
 
-        mock_router.delete_deployment.assert_called_once_with(id=model_id)
-        assert "smart-router" not in mock_router.auto_routers
-        assert "smart-router" not in mock_router.complexity_routers
+        assert model_id not in [m["model_info"]["id"] for m in real_router.model_list]
+        surviving = real_router.complexity_routers["smart-router"]
+        assert len(surviving) == 1
+        assert surviving[0].tags == ("team-b",)
 
     @pytest.mark.asyncio
     async def test_delete_regular_model_preserves_config_router_sharing_name(self):
@@ -799,6 +819,7 @@ class TestUpdateModel:
         )
 
         mock_router = MagicMock()
+        mock_router.get_model_ids.return_value = [model_id]
         admin_user = UserAPIKeyAuth(
             user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
         )
@@ -818,7 +839,7 @@ class TestUpdateModel:
             ),
             patch(
                 "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
-                new=AsyncMock(return_value=None),
+                new=AsyncMock(return_value=True),
             ) as mock_clear_cache,
         ):
             await update_model(
@@ -1868,6 +1889,7 @@ class TestAddAndDeleteModelLifecycle:
 
         mock_router = MagicMock()
         mock_router.delete_deployment = MagicMock()
+        mock_router.get_model_ids.return_value = [model_id]
 
         _PS = "litellm.proxy.proxy_server"
         _ENCRYPT = "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper"
@@ -2011,8 +2033,7 @@ class TestDeleteTeamBYOKModelGhost:
 
         mock_refresh.assert_awaited_once()
         assert mock_refresh.await_args.kwargs["team_row"] is updated_team_row
-        # BYOK internal name can't be an alias value -> the alias-table scan is skipped.
-        mock_prisma.db.litellm_modeltable.find_many.assert_not_awaited()
+        mock_prisma.db.litellm_modeltable.find_many.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_delete_non_internal_team_model_still_scans_aliases(self):
@@ -2165,6 +2186,171 @@ class TestDeleteTeamBYOKModelGhost:
         # The public name is still backed by the sibling, so team.models is untouched.
         mock_prisma.db.litellm_teamtable.update.assert_not_awaited()
         mock_refresh.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_delete_legacy_team_model_scrubs_stale_alias_and_keeps_gateway_access(
+        self,
+    ):
+        """Regression: legacy team models store {public_name: internal model_name} in
+        the team's model_aliases. delete_model skipped the alias scan for
+        internal-shaped names, so the stale alias kept rewriting requests for the
+        public name to a deployment that no longer existed ("no healthy deployments
+        for model_name_{team_id}_..."). Deleting the deployment must scrub the
+        alias, and the public name must stay in team.models while a gateway-level
+        deployment still serves it."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
+            delete_model as delete_model_endpoint,
+        )
+
+        team_id = "team-legacy-alias"
+        model_id = "legacy-alias-model-1"
+        public_name = "gpt-4"
+        internal_name = f"model_name_{team_id}_abc-uuid"
+
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name=internal_name,
+            litellm_params={"model": "openai/gpt-4.1-nano"},
+            model_info={"id": model_id, "team_id": team_id},
+            created_by="admin",
+            updated_by="admin",
+        )
+        team_row = LiteLLM_TeamTable(
+            team_id=team_id,
+            team_alias="legacy-alias-team",
+            members_with_roles=[Member(user_id="admin", role="admin")],
+            models=[public_name],
+        )
+        alias_row = MagicMock(
+            id="alias-row-1", model_aliases={public_name: internal_name}
+        )
+        alias_row.team = MagicMock()
+        alias_row.team.team_id = team_id
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=db_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_teamtable = AsyncMock()
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=team_row)
+        mock_prisma.db.litellm_modeltable = AsyncMock()
+        mock_prisma.db.litellm_modeltable.find_many = AsyncMock(
+            return_value=[alias_row]
+        )
+        mock_prisma.db.litellm_modeltable.update = AsyncMock()
+
+        mock_router = MagicMock()
+        mock_router.model_name_to_deployment_indices = {public_name: [0]}
+
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        _PS = "litellm.proxy.proxy_server"
+        _MOD = "litellm.proxy.management_endpoints.model_management_endpoints"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", mock_router),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.user_api_key_cache", MagicMock()),
+            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()) as mock_refresh,
+        ):
+            result = await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+
+        assert "deleted successfully" in result["message"]
+
+        mock_prisma.db.litellm_modeltable.update.assert_awaited_once()
+        alias_update_kwargs = mock_prisma.db.litellm_modeltable.update.await_args.kwargs
+        assert alias_update_kwargs["where"] == {"id": "alias-row-1"}
+        assert json.loads(alias_update_kwargs["data"]["model_aliases"]) == {}
+
+        # A gateway-level deployment still serves the public name -> team access stays.
+        mock_prisma.db.litellm_teamtable.update.assert_not_awaited()
+        mock_refresh.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_delete_replica_keeps_alias_while_surviving_replica_serves_it(self):
+        """Deleting one replica of a load-balanced legacy team model (several
+        deployment rows sharing one internal model_name) must not scrub the team
+        alias: the surviving replicas still serve the aliased name, so removing
+        the alias would break routing that works."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
+            delete_model as delete_model_endpoint,
+        )
+
+        team_id = "team-lb-legacy"
+        model_id = "lb-replica-1"
+        internal_name = f"model_name_{team_id}_shared-uuid"
+
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name=internal_name,
+            litellm_params={"model": "openai/gpt-4.1-nano"},
+            model_info={"id": model_id, "team_id": team_id},
+            created_by="admin",
+            updated_by="admin",
+        )
+        team_row = LiteLLM_TeamTable(
+            team_id=team_id,
+            team_alias="lb-legacy-team",
+            members_with_roles=[Member(user_id="admin", role="admin")],
+            models=["gpt-4"],
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=db_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_teamtable = AsyncMock()
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=team_row)
+        mock_prisma.db.litellm_modeltable = AsyncMock()
+        mock_prisma.db.litellm_modeltable.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_modeltable.update = AsyncMock()
+
+        mock_router = MagicMock()
+        mock_router.model_name_to_deployment_indices = {internal_name: [0]}
+
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        _PS = "litellm.proxy.proxy_server"
+        _MOD = "litellm.proxy.management_endpoints.model_management_endpoints"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", mock_router),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.user_api_key_cache", MagicMock()),
+            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()),
+        ):
+            result = await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+
+        assert "deleted successfully" in result["message"]
+        mock_prisma.db.litellm_modeltable.find_many.assert_not_awaited()
+        mock_prisma.db.litellm_modeltable.update.assert_not_awaited()
+        mock_prisma.db.litellm_teamtable.update.assert_not_awaited()
 
 
 class TestDeleteModelTeamAuth:
@@ -2982,7 +3168,7 @@ class TestPatchModelBlockedAuthGate:
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock(**{"get_model_ids.return_value": ["m1"]})),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
             patch("litellm.proxy.proxy_server.premium_user", True),
             patch(
@@ -3028,7 +3214,7 @@ class TestPatchModelBlockedAuthGate:
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock(**{"get_model_ids.return_value": ["m1"]})),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
             patch("litellm.proxy.proxy_server.premium_user", True),
             patch(
@@ -3037,7 +3223,7 @@ class TestPatchModelBlockedAuthGate:
             ),
             patch(
                 "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
-                new=AsyncMock(return_value=None),
+                new=AsyncMock(return_value=True),
             ),
         ):
             result = await patch_model(
@@ -3047,3 +3233,313 @@ class TestPatchModelBlockedAuthGate:
             )
             assert result is updated_row
             mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
+
+
+class TestWriteSurfacesReloadDrop:
+    """A model-write endpoint may report success only if every row it wrote is, after the
+    reload it triggered, live in this pod's router or deliberately environment-inactive."""
+
+    def test_reload_serving_verdict_matrix(self, monkeypatch):
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            reload_serving_verdict,
+        )
+
+        live_router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": "m-live", "db_model": True},
+                }
+            ]
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", live_router)
+        monkeypatch.setenv("LITELLM_ENVIRONMENT", "development")
+
+        written = [
+            ("m-live", {"id": "m-live"}),
+            ("m-gone", {"id": "m-gone"}),
+            ("m-env", {"id": "m-env", "supported_environments": ["production"]}),
+            ("m-env-str", '{"id": "m-env-str", "supported_environments": ["production"]}'),
+            ("m-env-misconfigured", {"id": "m-env-misconfigured", "supported_environments": ["bogus"]}),
+            ("m-corrupt", "{not json"),
+        ]
+        missing, collateral = reload_serving_verdict(
+            before=frozenset({"m-live", "m-collateral"}), written_models=written, written_must_serve=True
+        )
+        assert missing == ("m-gone", "m-env-misconfigured", "m-corrupt")
+        assert collateral == ("m-collateral",)
+
+        missing, collateral = reload_serving_verdict(
+            before=frozenset({"m-live", "m-was-live"}),
+            written_models=[("m-live", None), ("m-was-live", None), ("m-never-lived", None)],
+            written_must_serve=False,
+        )
+        assert missing == ("m-was-live",)
+        assert collateral == ()
+
+    def test_raise_if_reload_degraded_serving_contract(self, monkeypatch):
+        import litellm
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            raise_if_reload_degraded_serving,
+        )
+
+        live_router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": "m-live", "db_model": True},
+                }
+            ]
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", live_router)
+
+        assert (
+            raise_if_reload_degraded_serving(
+                before=frozenset({"m-live"}), written_models=[("m-live", None)], action="update"
+            )
+            is None
+        )
+
+        with pytest.raises(ProxyException, match="m-gone"):
+            raise_if_reload_degraded_serving(
+                before=frozenset(), written_models=[("m-gone", None)], action="update"
+            )
+
+        with pytest.raises(ProxyException, match="m-collateral"):
+            raise_if_reload_degraded_serving(
+                before=frozenset({"m-live", "m-collateral"}), written_models=[("m-live", None)], action="update"
+            )
+
+
+class TestModelInfoAsMapping:
+    """The model_info column reaches consumers as a dict or as its JSON string; this is
+    the single owner of that parse, and None means no usable mapping."""
+
+    def test_contract(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            model_info_as_mapping,
+        )
+
+        assert model_info_as_mapping({"id": "m1"}) == {"id": "m1"}
+        assert model_info_as_mapping('{"id": "m1"}') == {"id": "m1"}
+        assert model_info_as_mapping(None) is None
+        assert model_info_as_mapping("{not json") is None
+        assert model_info_as_mapping('["a", "b"]') is None
+        assert model_info_as_mapping(42) is None
+
+
+class TestStrategyRouterWriteValidation:
+    """Management write paths must reject litellm_params.model values that would
+    corrupt a strategy router's pseudo-model (LIT-4663). The router loads these
+    deployments by the auto_router/ discriminator, so a mangled string makes it
+    drop the deployment silently under ignore_invalid_deployments; the mistake
+    has to fail loudly at the API boundary instead."""
+
+    def _stored_complexity_params(self) -> LiteLLM_Params:
+        return LiteLLM_Params(
+            model="auto_router/complexity_router",
+            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini"}},
+        )
+
+    def _db_complexity_router(self, model_id: str) -> Deployment:
+        return Deployment(
+            model_name="my-auto-router",
+            litellm_params=self._stored_complexity_params(),
+            model_info={"id": model_id},
+        )
+
+    def test_double_prefix_rejected_against_stored_params(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        violation = _strategy_router_write_violation(
+            incoming_params=updateLiteLLMParams(model="auto_router/auto_router/complexity_router"),
+            existing_params=self._stored_complexity_params(),
+        )
+        assert violation is not None
+        assert "repeats" in violation
+
+    def test_prefix_strip_rejected_against_stored_params(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        violation = _strategy_router_write_violation(
+            incoming_params=updateLiteLLMParams(model="complexity_router"),
+            existing_params=self._stored_complexity_params(),
+        )
+        assert violation is not None
+        assert "does not start with" in violation
+
+    def test_patch_without_model_is_not_judged(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        assert (
+            _strategy_router_write_violation(
+                incoming_params=updateLiteLLMParams(rpm=10),
+                existing_params=self._stored_complexity_params(),
+            )
+            is None
+        )
+        assert _strategy_router_write_violation(incoming_params=None, existing_params=None) is None
+
+    def test_restore_of_corrupted_row_is_allowed(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        corrupted = LiteLLM_Params(
+            model="auto_router/auto_router/complexity_router",
+            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini"}},
+        )
+        assert (
+            _strategy_router_write_violation(
+                incoming_params=updateLiteLLMParams(model="auto_router/complexity_router"),
+                existing_params=corrupted,
+            )
+            is None
+        )
+
+    def test_create_semantic_router_missing_embedding_rejected(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+
+        violation = _strategy_router_write_violation(
+            incoming_params=LiteLLM_Params(
+                model="auto_router/my-router",
+                auto_router_config="{}",
+                auto_router_default_model="gpt-4o-mini",
+            ),
+            existing_params=None,
+        )
+        assert violation is not None
+        assert "auto_router_embedding_model" in violation
+
+    @pytest.mark.asyncio
+    async def test_patch_model_rejects_double_prefix(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            patch_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        model_id = "strategy-router-patch-test"
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.get_db_model",
+                new=AsyncMock(return_value=self._db_complexity_router(model_id)),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints._update_team_model_in_db",
+                new=AsyncMock(),
+            ) as mock_update,
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await patch_model(
+                    model_id=model_id,
+                    patch_data=updateDeployment(
+                        litellm_params=updateLiteLLMParams(model="auto_router/auto_router/complexity_router")
+                    ),
+                    user_api_key_dict=admin,
+                )
+            assert "repeats" in str(exc_info.value.message)
+            mock_update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_rejects_prefixed_model_without_config(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        mock_prisma = MagicMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await add_new_model(
+                    model_params=Deployment(
+                        model_name="my-auto-router",
+                        litellm_params=LiteLLM_Params(model="auto_router/complexity_router"),
+                        model_info={"id": "strategy-router-create-test"},
+                    ),
+                    user_api_key_dict=admin,
+                )
+            assert "requires" in str(exc_info.value.message)
+            mock_prisma.db.litellm_proxymodeltable.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_model_rejects_prefix_strip(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_model,
+        )
+        from litellm.types.router import ModelInfo, updateLiteLLMParams
+
+        model_id = "strategy-router-update-test"
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        existing_row = MagicMock()
+        existing_row.model_dump.return_value = {
+            "model_name": "my-auto-router",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini"}},
+            },
+            "model_info": {"id": model_id},
+        }
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await update_model(
+                    model_params=updateDeployment(
+                        litellm_params=updateLiteLLMParams(model="complexity_router"),
+                        model_info=ModelInfo(id=model_id),
+                    ),
+                    user_api_key_dict=admin,
+                )
+            assert "does not start with" in str(exc_info.value.message)
+            mock_prisma.db.litellm_proxymodeltable.update.assert_not_awaited()

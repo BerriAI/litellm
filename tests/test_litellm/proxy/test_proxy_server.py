@@ -1571,14 +1571,14 @@ async def test_get_all_team_models():
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
         # Configure the mock class to return proper instances
-        def mock_team_table_constructor(**kwargs):
+        def mock_team_table_constructor(data):
             mock_instance = MagicMock()
-            mock_instance.team_id = kwargs["team_id"]
-            mock_instance.models = kwargs["models"]
-            mock_instance.access_group_ids = kwargs.get("access_group_ids")
+            mock_instance.team_id = data["team_id"]
+            mock_instance.models = data["models"]
+            mock_instance.access_group_ids = data.get("access_group_ids")
             return mock_instance
 
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams="*",
@@ -1607,7 +1607,7 @@ async def test_get_all_team_models():
     mock_litellm_teamtable.find_many.return_value = [mock_team1]
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -1658,7 +1658,7 @@ async def test_get_all_team_models():
     mock_router.get_model_list.side_effect = mock_get_model_list_with_none
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -2373,14 +2373,14 @@ async def test_get_all_team_models_with_access_groups():
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_tt_class:
 
-        def mock_team_table_constructor(**kwargs):
+        def mock_team_table_constructor(data):
             mock_instance = MagicMock()
-            mock_instance.team_id = kwargs["team_id"]
-            mock_instance.models = kwargs["models"]
-            mock_instance.access_group_ids = kwargs.get("access_group_ids")
+            mock_instance.team_id = data["team_id"]
+            mock_instance.models = data["models"]
+            mock_instance.access_group_ids = data.get("access_group_ids")
             return mock_instance
 
-        mock_tt_class.side_effect = mock_team_table_constructor
+        mock_tt_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],

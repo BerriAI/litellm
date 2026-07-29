@@ -1548,6 +1548,7 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
             assert page_size == 1
             assert skip == 1  # page=2, page_size=1
             assert 'ORDER BY "startTime" DESC' in sql_query
+            assert '"user" = $4' not in sql_query
             return [mock_spend_logs[0]]
 
     class MockPrismaClient:
@@ -1558,20 +1559,144 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
     mock_prisma_client = MockPrismaClient()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    response = client.get(
-        "/spend/logs/session/ui",
-        params={"session_id": "session-123", "page": 2, "page_size": 1},
-        headers={"Authorization": "Bearer sk-test"},
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
     )
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["total"] == 2
-    assert data["page"] == 2
-    assert data["page_size"] == 1
-    assert data["total_pages"] == 2
-    assert len(data["data"]) == 1
-    assert data["data"][0]["request_id"] == "req1"
+    try:
+        response = client.get(
+            "/spend/logs/session/ui",
+            params={"session_id": "session-123", "page": 2, "page_size": 1},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2
+        assert data["page"] == 2
+        assert data["page_size"] == 1
+        assert data["total_pages"] == 2
+        assert len(data["data"]) == 1
+        assert data["data"][0]["request_id"] == "req1"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_session_spend_logs_scopes_non_admin_to_own_logs(client, monkeypatch):
+    own_log = {
+        "id": "log1",
+        "request_id": "req1",
+        "session_id": "session-123",
+        "user": "user-1",
+        "startTime": "2024-01-01T00:00:00Z",
+    }
+
+    class MockDB:
+        async def count(self, *args, **kwargs):
+            assert kwargs.get("where") == {"session_id": "session-123", "user": "user-1"}
+            return 1
+
+        async def query_raw(self, sql_query, session_id, page_size, skip, scoped_user):
+            assert session_id == "session-123"
+            assert scoped_user == "user-1"
+            assert '"user" = $4' in sql_query
+            return [own_log]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+            self.db.litellm_spendlogs = self.db
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+
+    async def no_permitted_teams(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
+        no_permitted_teams,
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1"
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs/session/ui",
+            params={"session_id": "session-123", "page": 1, "page_size": 50},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert [row["request_id"] for row in data["data"]] == ["req1"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_session_spend_logs_includes_permitted_team_logs(client, monkeypatch):
+    class MockDB:
+        async def count(self, *args, **kwargs):
+            assert kwargs.get("where") == {
+                "session_id": "session-123",
+                "OR": [
+                    {"user": "user-1"},
+                    {"team_id": {"in": ["team-9"]}},
+                ],
+            }
+            return 1
+
+        async def query_raw(self, sql_query, session_id, page_size, skip, scoped_user, team_ids):
+            assert session_id == "session-123"
+            assert scoped_user == "user-1"
+            assert team_ids == ["team-9"]
+            assert '("user" = $4 OR team_id = ANY($5::text[]))' in sql_query
+            return [
+                {
+                    "id": "log2",
+                    "request_id": "req2",
+                    "session_id": "session-123",
+                    "team_id": "team-9",
+                    "startTime": "2024-01-02T00:00:00Z",
+                }
+            ]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+            self.db.litellm_spendlogs = self.db
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+
+    async def permitted_teams(*args, **kwargs):
+        return ["team-9"]
+
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
+        permitted_teams,
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1"
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs/session/ui",
+            params={"session_id": "session-123", "page": 1, "page_size": 50},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert [row["request_id"] for row in data["data"]] == ["req2"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio

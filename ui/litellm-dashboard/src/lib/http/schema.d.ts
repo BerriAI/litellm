@@ -4356,25 +4356,9 @@ export interface paths {
         };
         /**
          * Get Global Activity
-         * @description Get number of cache hits, vs misses
-         *
-         *     {
-         *         "daily_data": [
-         *                 const chartdata = [
-         *                 {
-         *                     date: 'Jan 22',
-         *                     cache_hits: 10,
-         *                     llm_api_calls: 2000
-         *                 },
-         *                 {
-         *                     date: 'Jan 23',
-         *                     cache_hits: 10,
-         *                     llm_api_calls: 12
-         *                 },
-         *         ],
-         *         "sum_cache_hits": 20,
-         *         "sum_llm_api_calls": 2012
-         *     }
+         * @description Cache activity for the Admin UI cache dashboard, aggregated per call_type:
+         *     cache hits vs successful LLM API requests vs failed requests, plus totals
+         *     for the stat cards and the available key-alias/model filter options.
          */
         get: operations["get_global_activity_global_activity_cache_hits_get"];
         put?: never;
@@ -6935,8 +6919,8 @@ export interface paths {
          * @description Update an existing API key's parameters.
          *
          *     Parameters:
-         *     - key: str - The key to update
-         *     - key_alias: Optional[str] - User-friendly key alias
+         *     - key: Optional[str] - The key to update. Either key or key_alias must be provided.
+         *     - key_alias: Optional[str] - User-friendly key alias. If key is omitted, also identifies the key to update (must match exactly one key, same as /key/delete's key_aliases)
          *     - user_id: Optional[str] - User ID associated with key
          *     - team_id: Optional[str] - Team ID associated with key
          *     - agent_id: Optional[str] - The agent id associated with the key.
@@ -18005,16 +17989,16 @@ export interface paths {
          * Get Tool Spend
          * @description Spend attributed to each tool over a date range, for the Cost Optimization dashboard.
          *
-         *     Joins ``LiteLLM_SpendLogToolIndex`` (which tool names ran on which request) to
-         *     ``LiteLLM_SpendLogs`` (what the request cost). A request that used multiple tools
-         *     counts its full spend toward each of those tools, so per-tool numbers are
-         *     attributions. ``total_spend`` is the deduplicated spend of every request that
-         *     called at least one tool in the window, so it never double counts.
+         *     Reads the ``LiteLLM_DailyToolSpend`` rollup, written at request time from invoked
+         *     tools only (MCP tool calls and response tool_calls; declaring a tool without
+         *     invoking it does not count). A request that invoked multiple tools counts its
+         *     full spend toward each of them, so per-tool numbers are attributions and do not
+         *     sum to a deduplicated total.
          *
-         *     ``start_date`` is clamped to at most 30 days before ``end_date`` (serving up to
-         *     31 calendar dates inclusive, the same width as the endpoint's default window):
-         *     a wider requested range is clamped, and the response's ``start_date`` reflects
-         *     the effective window actually served.
+         *     ``by_tool`` is the top ``TOOL_SPEND_TOP_TOOLS`` tools by spend, aggregated in
+         *     SQL, and ``daily`` covers only those tools, so the response is bounded by
+         *     days x TOOL_SPEND_TOP_TOOLS regardless of the requested range or how many
+         *     distinct tool names exist.
          */
         get: operations["get_tool_spend_v1_tool_spend_get"];
         put?: never;
@@ -18074,7 +18058,8 @@ export interface paths {
         };
         /**
          * Get Tool Usage Logs
-         * @description Return paginated spend logs for requests that used this tool (from SpendLogToolIndex).
+         * @description Return paginated spend logs for requests that invoked this tool (from SpendLogToolIndex).
+         *     Declaring a tool in a request body without the model invoking it does not create an entry.
          */
         get: operations["get_tool_usage_logs_v1_tool__tool_name__logs_get"];
         put?: never;
@@ -21740,6 +21725,48 @@ export interface components {
             successful_updates: number;
             /** Total Requested */
             total_requested: number;
+        };
+        /** CacheActivityFilterOptions */
+        CacheActivityFilterOptions: {
+            /** Key Aliases */
+            key_aliases: string[];
+            /** Models */
+            models: string[];
+        };
+        /** CacheActivityGroup */
+        CacheActivityGroup: {
+            /** Api Requests */
+            api_requests: number;
+            /** Cache Hits */
+            cache_hits: number;
+            /** Cached Completion Tokens */
+            cached_completion_tokens: number;
+            /** Call Type */
+            call_type: string;
+            /** Failed Requests */
+            failed_requests: number;
+            /** Generated Completion Tokens */
+            generated_completion_tokens: number;
+        };
+        /** CacheActivityResponse */
+        CacheActivityResponse: {
+            filter_options: components["schemas"]["CacheActivityFilterOptions"];
+            /** Groups */
+            groups: components["schemas"]["CacheActivityGroup"][];
+            totals: components["schemas"]["CacheActivityTotals"];
+        };
+        /** CacheActivityTotals */
+        CacheActivityTotals: {
+            /** Api Requests */
+            api_requests: number;
+            /** Cache Hit Ratio */
+            cache_hit_ratio: number;
+            /** Cache Hits */
+            cache_hits: number;
+            /** Cached Completion Tokens */
+            cached_completion_tokens: number;
+            /** Failed Requests */
+            failed_requests: number;
         };
         /** CachePingResponse */
         CachePingResponse: {
@@ -32211,12 +32238,6 @@ export interface components {
             end_date?: string | null;
             /** Start Date */
             start_date?: string | null;
-            /**
-             * Total Spend
-             * @description Deduplicated spend of every request that called at least one tool in the window; less than the sum of per-tool attributed spend whenever multi-tool requests exist
-             * @default 0
-             */
-            total_spend: number;
         };
         /**
          * ToolUsageLogEntry
@@ -32442,7 +32463,7 @@ export interface components {
             /** Guardrails */
             guardrails?: string[] | null;
             /** Key */
-            key: string;
+            key?: string | null;
             /** Key Alias */
             key_alias?: string | null;
             /** Max Budget */
@@ -40618,11 +40639,15 @@ export interface operations {
     };
     get_global_activity_global_activity_cache_hits_get: {
         parameters: {
-            query?: {
+            query: {
                 /** @description Time from which to start viewing spend */
-                start_date?: string | null;
+                start_date: string;
                 /** @description Time till which to view spend */
-                end_date?: string | null;
+                end_date: string;
+                /** @description Only include spend from these key aliases */
+                key_aliases?: string[] | null;
+                /** @description Only include spend for these models */
+                models?: string[] | null;
             };
             header?: never;
             path?: never;
@@ -40636,7 +40661,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                    "application/json": components["schemas"]["CacheActivityResponse"];
                 };
             };
             /** @description Validation Error */
