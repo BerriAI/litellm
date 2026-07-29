@@ -53,6 +53,7 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
+    StandardLoggingRoutingDecision,
     StandardLoggingVectorStoreRequest,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
@@ -3311,6 +3312,7 @@ class SpendLogsMetadata(TypedDict):
     applied_guardrails: Optional[List[str]]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
+    routing_decision: StandardLoggingRoutingDecision | None
     guardrail_information: Optional[List[StandardLoggingGuardrailInformation]]
     eval_information: Optional[Any]
     status: StandardLoggingPayloadStatus
