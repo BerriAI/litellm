@@ -10,7 +10,7 @@ const { Text } = Typography;
 
 interface GuardrailTestPanelProps {
   guardrailNames: string[];
-  onSubmit: (text: string) => void;
+  onSubmit: (text: string, metadata?: Record<string, unknown> | null) => void;
   isLoading: boolean;
   results: Array<{ guardrailName: string; response_text: string; latency: number }> | null;
   errors: Array<{ guardrailName: string; error: Error; latency: number }> | null;
@@ -26,6 +26,23 @@ export function GuardrailTestPanel({
   onClose,
 }: GuardrailTestPanelProps) {
   const [inputText, setInputText] = useState("");
+  const [metadataText, setMetadataText] = useState("");
+  const [metadataError, setMetadataError] = useState<string | null>(null);
+
+  const parseMetadata = (raw: string): { metadata: Record<string, unknown> | null; error: string | null } => {
+    if (!raw.trim()) {
+      return { metadata: null, error: null };
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { metadata: null, error: "Metadata must be a JSON object" };
+      }
+      return { metadata: parsed, error: null };
+    } catch {
+      return { metadata: null, error: "Invalid JSON" };
+    }
+  };
 
   const handleSubmit = () => {
     if (!inputText.trim()) {
@@ -33,7 +50,15 @@ export function GuardrailTestPanel({
       return;
     }
 
-    onSubmit(inputText);
+    const { metadata, error } = parseMetadata(metadataText);
+    if (error) {
+      setMetadataError(error);
+      NotificationsManager.fromBackend(`Metadata: ${error}`);
+      return;
+    }
+    setMetadataError(null);
+
+    onSubmit(inputText, metadata);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -140,6 +165,33 @@ export function GuardrailTestPanel({
               </Text>
               <Text className="text-xs text-gray-500">Characters: {inputText.length}</Text>
             </div>
+          </div>
+
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <label className="text-sm font-medium text-gray-700">Metadata (optional)</label>
+              <Tooltip title="JSON object forwarded to the guardrail as request_data['metadata']. Custom guardrails can read per-request configuration from it.">
+                <InfoCircleOutlined className="text-gray-400 cursor-help" />
+              </Tooltip>
+            </div>
+            <TextArea
+              value={metadataText}
+              onChange={(e) => {
+                setMetadataText(e.target.value);
+                if (metadataError) {
+                  setMetadataError(parseMetadata(e.target.value).error);
+                }
+              }}
+              placeholder='{"forbidden_topics": ["tax", "finance"]}'
+              rows={3}
+              className="font-mono text-sm"
+              status={metadataError ? "error" : undefined}
+            />
+            {metadataError && (
+              <Text type="danger" className="text-xs">
+                {metadataError}
+              </Text>
+            )}
           </div>
 
           <div className="pt-2">

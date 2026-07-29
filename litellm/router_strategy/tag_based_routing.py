@@ -160,8 +160,14 @@ async def get_deployments_for_tag(
     Returns a list of deployments that match the requested model and tags in the request.
 
     Executes tag based filtering based on the tags in request metadata and the tags on the deployments
+
+    Runs when the router-level `enable_tag_filtering` is True or the request carries
+    `enable_tag_filtering=True` (set from key/team router_settings by the proxy).
+    A request-level False never disables a router-level True, so per-request settings
+    cannot escape an operator's global tag-routing policy.
     """
-    if llm_router_instance.enable_tag_filtering is not True:
+    request_enable_tag_filtering = request_kwargs.get("enable_tag_filtering") if request_kwargs else None
+    if request_enable_tag_filtering is not True and llm_router_instance.enable_tag_filtering is not True:
         return healthy_deployments
 
     if request_kwargs is None:

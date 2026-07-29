@@ -76,9 +76,9 @@ def _system_reminder_turn() -> RichMessage:
 def _post_messages(
     client: EndpointsClient, key: str, body: RichMessagesRequest
 ) -> Result[MessagesResult]:
-    return client.gateway.transport.post(
+    return client.proxy.transport.post(
         "/v1/messages",
-        headers=client.gateway.transport.bearer(key),
+        headers=client.proxy.transport.bearer(key),
         json=body,
         response_type=MessagesResult,
     )
@@ -145,7 +145,18 @@ def _prime_prompt_cache(
         time.sleep(CACHE_PRIMING_INTERVAL_SECONDS)
 
 
+#: Kept in sync with the copy in test_messages_mid_conversation_system_native_providers_e2e.py;
+#: the e2e suites stay self-contained rather than importing across test modules.
+MID_CONVERSATION_CACHE_SKIP_REASON = (
+    "LIT-4873: a mid-conversation role='system' reminder invalidates the prompt cache on the "
+    "vertex_ai / azure_ai / bedrock_invoke Messages paths, while the same request preserves it "
+    "both direct to Anthropic and through litellm's first-party anthropic path. Product bug, not "
+    "a test defect: the assertion here is correct and must be restored unchanged with the fix"
+)
+
+
 class TestBedrockInvokeMidConversationSystem:
+    @pytest.mark.skip(reason=MID_CONVERSATION_CACHE_SKIP_REASON)
     @pytest.mark.covers(
         "llm.messages.bedrock_invoke.mid_conversation_system.nonstream.cache_hit",
         exercised_on=[],

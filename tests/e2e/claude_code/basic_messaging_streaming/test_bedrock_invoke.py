@@ -15,15 +15,17 @@ The (feature, provider) for this cell is inferred from the file path by
 
 from __future__ import annotations
 
+import pytest
 from claude_code._basic_messaging import run_basic_messaging_cell
 
 BEDROCK_INVOKE_MODELS = [
     "claude-haiku-4-5-bedrock-invoke",
-    "claude-sonnet-4-6-bedrock-invoke",
+    "claude-sonnet-4-5-bedrock-invoke",
     "claude-opus-4-7-bedrock-invoke",
 ]
 
 
+@pytest.mark.covers("llm.messages.bedrock_invoke.basic.stream.works")
 def test_basic_messaging_streaming_bedrock_invoke(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
     non-empty streamed reply (one row per Claude tier).

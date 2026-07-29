@@ -2,7 +2,7 @@ import { Drawer, Tag, Typography } from "antd";
 import { CloseOutlined, CopyOutlined, CheckOutlined } from "@ant-design/icons";
 import { useState, useCallback } from "react";
 import moment from "moment";
-import { AuditLogEntry } from "../columns";
+import { AuditLogEntry } from "../AuditLogsTableColumns";
 import DefaultProxyAdminTag from "../../common_components/DefaultProxyAdminTag";
 
 const { Text } = Typography;

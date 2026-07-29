@@ -54,9 +54,10 @@ def resolve_mcp_tool_search_top_k(
 
 def coerce_top_k(value: Any, default: int = DEFAULT_MCP_TOOL_SEARCH_TOP_K) -> int:
     try:
-        return int(value)
+        result = int(value)
     except (TypeError, ValueError):
         return default
+    return result if result > 0 else default
 
 
 def search_tools(query: str, tools: list[dict[str, Any]], top_k: int = DEFAULT_MCP_TOOL_SEARCH_TOP_K) -> list[dict[str, Any]]:
@@ -131,7 +132,7 @@ async def handle_mcp_tool_search(
 
     from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
 
-    mcp_tools = await _list_mcp_tools(
+    mcp_listing = await _list_mcp_tools(
         user_api_key_auth=user_api_key_dict,
         mcp_servers=mcp_servers,
         client_ip=client_ip,
@@ -140,6 +141,7 @@ async def handle_mcp_tool_search(
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
     )
+    mcp_tools = mcp_listing.tools
     tools = [
         {
             "name": t.name,

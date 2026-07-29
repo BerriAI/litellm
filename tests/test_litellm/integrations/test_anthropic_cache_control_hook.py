@@ -2,7 +2,9 @@ import copy
 import datetime
 import json
 import os
+import subprocess
 import sys
+import textwrap
 import unittest
 from typing import List, Optional, Tuple
 from unittest.mock import ANY, MagicMock, Mock, patch
@@ -1263,8 +1265,11 @@ def test_cache_control_hook_reserves_slot_for_tool_config_point():
     )
 
     assert _count_cache_control(processed) == 3
-    # The tool_config point is passed through for the provider transform.
-    assert non_default_params["cache_control_injection_points"] == [{"location": "tool_config"}]
+    # The tool_config point is passed through for the provider transform,
+    # stamped so re-entries never re-judge it against litellm's own marks.
+    assert non_default_params["cache_control_injection_points"] == [
+        {"location": "tool_config", "_litellm_judged": True}
+    ]
 
 
 @pytest.mark.asyncio
@@ -1533,3 +1538,374 @@ class TestApplyToAnthropicMessagesRequest:
         sys_blocks = sum(1 for b in (result_sys or []) if isinstance(b, dict) and b.get("cache_control") is not None)
         total_blocks = sys_blocks + sum(AnthropicCacheControlHook._count_cache_control_blocks(m) for m in result_msgs)
         assert total_blocks <= 4
+
+
+class TestEnableAnthropicPromptCaching:
+    """Auto-injected default breakpoints via litellm.enable_anthropic_prompt_caching."""
+
+    MESSAGES: List[AllMessageValues] = [
+        {"role": "system", "content": "a long system prompt"},
+        {"role": "user", "content": "first turn"},
+        {"role": "assistant", "content": "a reply"},
+        {"role": "user", "content": "latest turn"},
+    ]
+
+    def _points(self, model="claude-sonnet-4-5", provider="anthropic", messages=None, system=None, tools=None):
+        return AnthropicCacheControlHook.get_default_injection_points(
+            messages=copy.deepcopy(self.MESSAGES) if messages is None else messages,
+            system=system,
+            model=model,
+            custom_llm_provider=provider,
+            tools=tools,
+        )
+
+    def test_disabled_by_default(self):
+        assert litellm.enable_anthropic_prompt_caching is False
+        assert self._points() == []
+
+    def test_injects_system_and_trailing_turn(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert self._points() == [
+            {"location": "message", "role": "system", "index": None, "control": {"type": "ephemeral"}},
+            {"location": "message", "role": None, "index": -1, "control": {"type": "ephemeral"}},
+        ]
+
+    def test_bedrock_claude_is_injected(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        points = self._points(model="us.anthropic.claude-sonnet-4-5-20250929-v1:0", provider="bedrock")
+        assert [p["index"] for p in points] == [None, -1]
+
+    @pytest.mark.parametrize("model, provider", [("gpt-4o", "openai"), ("gemini-2.0-flash", "gemini")])
+    def test_non_anthropic_providers_never_injected(self, monkeypatch, model, provider):
+        """These report supports_prompt_caching=True but never consume cache_control markers."""
+        from litellm.utils import supports_prompt_caching
+
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert supports_prompt_caching(model=model, custom_llm_provider=provider) is True
+        assert self._points(model=model, provider=provider) == []
+
+    def test_model_without_caching_support_not_injected(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert self._points(model="anthropic.claude-3-5-sonnet-20240620-v1:0", provider="bedrock") == []
+
+    def test_stands_down_when_client_sent_cache_control(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        messages = [
+            {"role": "system", "content": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "user", "content": "latest turn"},
+        ]
+        assert self._points(messages=messages) == []
+
+    def test_stands_down_when_system_block_has_cache_control(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        system = [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}]
+        assert self._points(messages=[{"role": "user", "content": "hi"}], system=system) == []
+
+    @staticmethod
+    def _tools(count: int, cached: bool) -> List[dict]:
+        tool: dict = {"type": "function", "function": {"name": "t", "description": "d", "parameters": {}}}
+        if cached:
+            tool["cache_control"] = {"type": "ephemeral"}
+        return [{**tool, "function": {**tool["function"], "name": f"t{i}"}} for i in range(count)]
+
+    def test_stands_down_when_only_tools_carry_cache_control(self, monkeypatch):
+        """Caching just the tool definitions is a normal client pattern, and those
+        breakpoints count toward the provider's four-block limit. Three of them plus
+        our two would be five, which Anthropic rejects outright."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert self._points(tools=self._tools(3, cached=True)) == []
+
+    def test_injects_when_tools_carry_no_cache_control(self, monkeypatch):
+        """Tools alone must not suppress injection; only client-marked ones do."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert [p["index"] for p in self._points(tools=self._tools(3, cached=False))] == [None, -1]
+
+    @pytest.mark.parametrize("tools", [None, []])
+    def test_absent_tools_do_not_suppress_injection(self, monkeypatch, tools):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert [p["index"] for p in self._points(tools=tools)] == [None, -1]
+
+    def test_stands_down_when_tool_function_carries_cache_control(self, monkeypatch):
+        """OpenAI-shaped tools nest cache_control under ``function``; the Anthropic
+        chat transform honors that location, so the stand-down must see it too."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        tools = [{"type": "function", "function": {"name": "t", "parameters": {}, "cache_control": {"type": "ephemeral"}}}]
+        assert self._points(tools=tools) == []
+
+    def test_seed_stands_down_when_only_tools_carry_cache_control(self, monkeypatch):
+        """Same guard on the /chat/completions seeding path."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        params: dict = {}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            tools=self._tools(3, cached=True),
+        )
+        assert "cache_control_injection_points" not in params
+
+    def test_v1_messages_stands_down_when_only_tools_carry_cache_control(self, monkeypatch):
+        """Same guard on the /v1/messages path, where tools reach the hook directly."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        messages = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        result_msgs, result_sys = AnthropicCacheControlHook.maybe_inject_cache_control(
+            copy.deepcopy(messages),
+            "sys",
+            {},
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            tools=self._tools(3, cached=True),
+        )
+        assert result_sys == "sys"
+        assert result_msgs == messages
+
+    def test_default_ttl_is_anthropics_five_minute_cache(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert all(p["control"] == {"type": "ephemeral"} for p in self._points())
+
+    @pytest.mark.parametrize("ttl", ["5m", "1h"])
+    def test_ttl_override_applied(self, monkeypatch, ttl):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        monkeypatch.setattr(litellm, "anthropic_prompt_caching_ttl", ttl)
+        assert all(p["control"] == {"type": "ephemeral", "ttl": ttl} for p in self._points())
+
+    def test_seed_does_not_override_configured_points(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        configured = [{"location": "message", "role": "user", "index": 0}]
+        params = {"cache_control_injection_points": configured}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert params["cache_control_injection_points"] is configured
+
+    def test_seed_adds_defaults_when_enabled(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        params: dict = {}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert [p["index"] for p in params["cache_control_injection_points"]] == [None, -1]
+
+    def test_seed_is_noop_when_disabled(self):
+        params: dict = {}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert params == {}
+
+    def test_v1_messages_applies_defaults_end_to_end(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "first"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "reply"}]},
+            {"role": "user", "content": [{"type": "text", "text": "latest"}]},
+        ]
+        result_msgs, result_sys = AnthropicCacheControlHook.maybe_inject_cache_control(
+            messages,
+            "a system prompt",
+            {},
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+
+        assert result_sys == [{"type": "text", "text": "a system prompt", "cache_control": {"type": "ephemeral"}}]
+        assert result_msgs[-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+        assert "cache_control" not in result_msgs[0]["content"][-1]
+
+    def test_v1_messages_is_noop_when_disabled(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        result_msgs, result_sys = AnthropicCacheControlHook.maybe_inject_cache_control(
+            messages,
+            "sys",
+            {},
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+
+        assert result_sys == "sys"
+        assert result_msgs == messages
+
+
+class TestConfiguredInjectionPointsStandDown:
+    """Configured cache_control_injection_points must stand down entirely when the
+    client already set its own cache_control anywhere in the request (LIT-4582);
+    injecting alongside client breakpoints clashes with the client's caching
+    strategy and can push the request past Anthropic's four-block limit."""
+
+    CONFIGURED = [{"location": "message", "role": "system"}]
+
+    CLEAN_MESSAGES: List[AllMessageValues] = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    MARKED_MESSAGES: List[AllMessageValues] = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]},
+    ]
+
+    V1_MESSAGES = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+
+    def _seed(self, params, messages, tools=None):
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=messages,
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            tools=tools,
+        )
+
+    def _inject(self, messages, kwargs, system="sys", tools=None):
+        return AnthropicCacheControlHook.maybe_inject_cache_control(
+            messages,
+            system,
+            kwargs,
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            tools=tools,
+        )
+
+    def test_configured_points_dropped_when_messages_carry_cache_control(self):
+        params = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED)}
+        self._seed(params, copy.deepcopy(self.MARKED_MESSAGES))
+        assert "cache_control_injection_points" not in params
+
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"type": "function", "function": {"name": "t", "parameters": {}}, "cache_control": {"type": "ephemeral"}},
+            {"type": "function", "function": {"name": "t", "parameters": {}, "cache_control": {"type": "ephemeral"}}},
+        ],
+        ids=["top_level", "nested_in_function"],
+    )
+    def test_configured_points_dropped_when_tools_carry_cache_control(self, tool):
+        params = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED)}
+        self._seed(params, copy.deepcopy(self.CLEAN_MESSAGES), tools=[tool])
+        assert "cache_control_injection_points" not in params
+
+    def test_configured_points_kept_when_request_is_unmarked(self):
+        configured = copy.deepcopy(self.CONFIGURED)
+        params = {"cache_control_injection_points": configured}
+        self._seed(params, copy.deepcopy(self.CLEAN_MESSAGES))
+        assert params["cache_control_injection_points"] is configured
+
+    def test_judged_remainder_survives_reentry_despite_injected_marks(self):
+        """acompletion() re-enters completion() after injection ran, with only the
+        stamped non-message points written back; the re-entry must not misread
+        litellm's own marks as client ones and drop that remainder."""
+        remainder = [{"location": "tool_config", "_litellm_judged": True}]
+        params = {"cache_control_injection_points": remainder}
+        self._seed(params, copy.deepcopy(self.MARKED_MESSAGES))
+        assert params["cache_control_injection_points"] is remainder
+
+    def test_v1_messages_stand_down_when_content_block_marked(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}
+        ]
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED)}
+        result_msgs, result_sys = self._inject(copy.deepcopy(messages), kwargs)
+        assert result_msgs == messages
+        assert result_sys == "sys"
+        assert "cache_control_injection_points" not in kwargs
+
+    def test_v1_messages_stand_down_when_system_block_marked(self):
+        """A configured point targeting a message must not fire when the client
+        marked the system prompt; the old behavior injected into the message
+        because only the exact targeted position was guarded."""
+        system = [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "role": "user"}]}
+        result_msgs, result_sys = self._inject(copy.deepcopy(self.V1_MESSAGES), kwargs, system=system)
+        assert result_msgs == self.V1_MESSAGES
+        assert result_sys == system
+        assert "cache_control_injection_points" not in kwargs
+
+    def test_v1_messages_stand_down_when_tools_marked(self):
+        tools = [{"name": "t", "input_schema": {}, "cache_control": {"type": "ephemeral"}}]
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED)}
+        result_msgs, result_sys = self._inject(copy.deepcopy(self.V1_MESSAGES), kwargs, tools=tools)
+        assert result_msgs == self.V1_MESSAGES
+        assert result_sys == "sys"
+        assert "cache_control_injection_points" not in kwargs
+
+    def test_v1_messages_configured_points_apply_when_unmarked(self):
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED)}
+        _, result_sys = self._inject(copy.deepcopy(self.V1_MESSAGES), kwargs)
+        assert result_sys == [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]
+
+    def test_v1_messages_reentry_flow_preserves_tool_config_remainder(self):
+        """The advisor interceptor re-enters anthropic_messages() with the outer
+        request's kwargs and post-injection messages. The first pass applies the
+        message point and writes back a stamped tool_config remainder; the
+        re-entry must keep that remainder even though the messages and system
+        now carry litellm's own marks."""
+        points = [{"location": "message", "role": "system"}, {"location": "tool_config"}]
+        kwargs = {"cache_control_injection_points": copy.deepcopy(points)}
+        msgs1, sys1 = self._inject(copy.deepcopy(self.V1_MESSAGES), kwargs)
+        assert sys1[0]["cache_control"] == {"type": "ephemeral"}
+        expected_remainder = [{"location": "tool_config", "_litellm_judged": True}]
+        assert kwargs["cache_control_injection_points"] == expected_remainder
+
+        msgs2, sys2 = self._inject(msgs1, kwargs, system=sys1)
+        assert kwargs["cache_control_injection_points"] == expected_remainder
+        assert msgs2 == msgs1
+        assert sys2 == sys1
+
+
+class TestAnthropicPromptCachingEnvVars:
+    """Both settings are read from the environment at import, so an admin can enable
+    auto-caching without a config file. Each case re-imports litellm in a subprocess
+    so the env is read fresh without contaminating this process's module graph.
+    """
+
+    @staticmethod
+    def _import_litellm_with_env(env_override: dict) -> Tuple[bool, Optional[str]]:
+        env = os.environ.copy()
+        env.pop("LITELLM_ENABLE_ANTHROPIC_PROMPT_CACHING", None)
+        env.pop("LITELLM_ANTHROPIC_PROMPT_CACHING_TTL", None)
+        env.update(env_override)
+        script = textwrap.dedent(
+            """
+            import json, litellm
+            print(json.dumps([litellm.enable_anthropic_prompt_caching, litellm.anthropic_prompt_caching_ttl]))
+            """
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=300
+        )
+        assert result.returncode == 0, result.stderr
+        enabled, ttl = json.loads(result.stdout.strip().splitlines()[-1])
+        return enabled, ttl
+
+    def test_unset_env_leaves_auto_caching_off(self):
+        assert self._import_litellm_with_env({}) == (False, None)
+
+    @pytest.mark.parametrize("value", ["true", "True", "TRUE"])
+    def test_env_enables_auto_caching_case_insensitively(self, value):
+        enabled, _ = self._import_litellm_with_env({"LITELLM_ENABLE_ANTHROPIC_PROMPT_CACHING": value})
+        assert enabled is True
+
+    @pytest.mark.parametrize("value", ["false", "0", "yes", ""])
+    def test_env_only_enables_on_true(self, value):
+        enabled, _ = self._import_litellm_with_env({"LITELLM_ENABLE_ANTHROPIC_PROMPT_CACHING": value})
+        assert enabled is False
+
+    @pytest.mark.parametrize("value", ["5m", "1h"])
+    def test_ttl_env_is_applied(self, value):
+        _, ttl = self._import_litellm_with_env({"LITELLM_ANTHROPIC_PROMPT_CACHING_TTL": value})
+        assert ttl == value
+
+    @pytest.mark.parametrize("value", ["10m", "1H", "3600", "ephemeral"])
+    def test_unsupported_ttl_env_falls_back_to_provider_default(self, value):
+        """An unparseable TTL must fall back to Anthropic's 5m default, never reach the provider verbatim."""
+        _, ttl = self._import_litellm_with_env({"LITELLM_ANTHROPIC_PROMPT_CACHING_TTL": value})
+        assert ttl is None

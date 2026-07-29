@@ -6544,7 +6544,7 @@ export interface paths {
          *     Parameters:
          *     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - key_alias: Optional[str] - User defined key alias
-         *     - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
+         *     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
          *     - team_id: Optional[str] - The team id of the key
          *     - user_id: Optional[str] - The user id of the key
          *     - agent_id: Optional[str] - The agent id associated with the key.
@@ -6765,7 +6765,7 @@ export interface paths {
          *     - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
          *         - key: Optional[str] - The key to regenerate.
          *         - new_master_key: Optional[str] - The new master key to use, if key is the master key.
-         *         - new_key: Optional[str] - The new key to use, if key is not the master key. If both set, new_master_key will be used.
+         *         - new_key: Optional[str] - The new key to use, if key is not the master key. Must start with 'sk-' and be at least 16 characters long. If both set, new_master_key will be used.
          *         - key_alias: Optional[str] - User-friendly key alias
          *         - user_id: Optional[str] - User ID associated with key
          *         - team_id: Optional[str] - Team ID associated with key
@@ -6834,7 +6834,7 @@ export interface paths {
          *     Parameters:
          *     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - key_alias: Optional[str] - User defined key alias
-         *     - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
+         *     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
          *     - team_id: Optional[str] - The team id of the key
          *     - user_id: Optional[str] - [NON-FUNCTIONAL] THIS WILL BE IGNORED. The user id of the key
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
@@ -7024,7 +7024,7 @@ export interface paths {
          *     - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
          *         - key: Optional[str] - The key to regenerate.
          *         - new_master_key: Optional[str] - The new master key to use, if key is the master key.
-         *         - new_key: Optional[str] - The new key to use, if key is not the master key. If both set, new_master_key will be used.
+         *         - new_key: Optional[str] - The new key to use, if key is not the master key. Must start with 'sk-' and be at least 16 characters long. If both set, new_master_key will be used.
          *         - key_alias: Optional[str] - User-friendly key alias
          *         - user_id: Optional[str] - User ID associated with key
          *         - team_id: Optional[str] - Team ID associated with key
@@ -7179,6 +7179,40 @@ export interface paths {
         put?: never;
         /** Login */
         post: operations["login_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/spend_logs/end_users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Spend Log End Users
+         * @description The distinct end users appearing in spend logs over a time window, for the logs
+         *     page filter dropdown.
+         *
+         *     Scoped like `/spend/logs/ui`: a proxy admin sees every end user in the window,
+         *     anyone else sees only end users from their own requests or from teams they
+         *     administer (or hold the `/spend/logs` permission on).
+         *
+         *     The window is required and the inner scan is capped at SPEND_LOGS_FACET_SCAN_CAP
+         *     rows, so the query cannot degrade into a full-table scan the way
+         *     `/global/all_end_users` does.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/spend_logs/end_users?filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=2026-07-24T00:00:00Z&page_size=50&q=acme'         --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["list_spend_log_end_users_management_v1_spend_logs_end_users_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -12808,6 +12842,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sso/saml/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Saml Callback
+         * @description Assertion Consumer Service. Validates the IdP assertion and issues a UI session.
+         */
+        post: operations["saml_callback_sso_saml_callback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sso/saml/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Saml Login
+         * @description SP-initiated SAML login. Redirects the user to the configured IdP.
+         */
+        get: operations["saml_login_sso_saml_login_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sso/saml/metadata": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Saml Metadata
+         * @description Service Provider metadata XML, for registering this proxy at the IdP.
+         */
+        get: operations["saml_metadata_sso_saml_metadata_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tag/daily/activity": {
         parameters: {
             query?: never;
@@ -13860,11 +13954,12 @@ export interface paths {
          * Patch Team
          * @description Partially update a team using RFC 7386 JSON Merge Patch semantics.
          *
-         *     `team_id` is taken from the path. `metadata` is merged with the team's stored
-         *     metadata rather than replacing it: an omitted key is preserved, `key: null`
-         *     deletes it, and any other value overwrites (recursing into nested objects).
-         *     Every other field behaves exactly like `POST /team/update` (omitted preserves,
-         *     a value overwrites). Returns the full updated team.
+         *     `team_id` is taken from the path; a `team_id` in the body is accepted only when it
+         *     matches. `metadata` is merged with the team's stored metadata rather than replacing
+         *     it: an omitted key is preserved, `key: null` deletes it, and any other value
+         *     overwrites (recursing into nested objects). Every other field behaves exactly like
+         *     `POST /team/update` (omitted preserves, a value overwrites). Returns the full
+         *     updated team.
          *
          *     ```
          *     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
@@ -17899,6 +17994,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tool/spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tool Spend
+         * @description Spend attributed to each tool over a date range, for the Cost Optimization dashboard.
+         *
+         *     Reads the ``LiteLLM_DailyToolSpend`` rollup, written at request time from invoked
+         *     tools only (MCP tool calls and response tool_calls; declaring a tool without
+         *     invoking it does not count). A request that invoked multiple tools counts its
+         *     full spend toward each of them, so per-tool numbers are attributions and do not
+         *     sum to a deduplicated total.
+         *
+         *     ``by_tool`` is the top ``TOOL_SPEND_TOP_TOOLS`` tools by spend, aggregated in
+         *     SQL, and ``daily`` covers only those tools, so the response is bounded by
+         *     days x TOOL_SPEND_TOP_TOOLS regardless of the requested range or how many
+         *     distinct tool names exist.
+         */
+        get: operations["get_tool_spend_v1_tool_spend_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tool/{tool_name}": {
         parameters: {
             query?: never;
@@ -17948,7 +18074,8 @@ export interface paths {
         };
         /**
          * Get Tool Usage Logs
-         * @description Return paginated spend logs for requests that used this tool (from SpendLogToolIndex).
+         * @description Return paginated spend logs for requests that invoked this tool (from SpendLogToolIndex).
+         *     Declaring a tool in a request body without the model invoking it does not create an entry.
          */
         get: operations["get_tool_usage_logs_v1_tool__tool_name__logs_get"];
         put?: never;
@@ -18884,6 +19011,33 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v2/organization/{organization_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Organization V2
+         * @description Partial update of an organization (RESTful PATCH, RFC 7396 merge-patch semantics).
+         *
+         *     A sent field is written and an omitted one is left untouched (presence is read from
+         *     ``model_fields_set``). Clear tokens are per field: budget limits and ``metadata`` clear with
+         *     ``null``, ``models`` with ``[]``, and ``object_permission`` with ``null`` (it merges when sent,
+         *     so an empty ``{}`` is rejected). ``organization_alias`` is required and cannot be cleared.
+         *     Validation failures return 422; the object-permission upsert, budget-row write, and
+         *     org-row write are one transaction.
+         */
+        patch: operations["update_organization_v2_v2_organization__organization_id__patch"];
         trace?: never;
     };
     "/v2/rerank": {
@@ -20659,6 +20813,10 @@ export interface components {
             messages?: {
                 [key: string]: unknown;
             }[] | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
             /** Text */
             text: string;
         };
@@ -21686,7 +21844,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -21866,6 +22024,11 @@ export interface components {
         };
         /** ChatCompletionCachedContent */
         ChatCompletionCachedContent: {
+            /**
+             * Ttl
+             * @enum {string}
+             */
+            ttl?: "5m" | "1h";
             /**
              * Type
              * @constant
@@ -22501,6 +22664,11 @@ export interface components {
              */
             database_url?: string | null;
             /**
+             * Disable Auto Add Proxy Admin To Teams
+             * @description By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.
+             */
+            disable_auto_add_proxy_admin_to_teams?: boolean | null;
+            /**
              * Disable Budget Reservation
              * @description If True, disables the optimistic per-request budget reservation introduced in v1.84.0. WARNING: This weakens hard budget enforcement. Without the reservation, a burst of concurrent requests from a single key can each pass the read-time spend check before any of them is charged, allowing a configured budget to be exceeded under high concurrency. Budgets are still evaluated on every request at read time, so an already-exhausted budget is still rejected. Enable only if your deployment is experiencing phantom BudgetExceededError responses caused by leaked reservations (see GitHub issue #27639). A proxy-level WARNING is logged on every request while this flag is active as a reminder that hard enforcement is relaxed.
              */
@@ -22616,6 +22784,12 @@ export interface components {
              */
             provider_url_destination_allowed_hosts?: string[] | null;
             /**
+             * Proxy Config Reload Interval Seconds
+             * @description how often (in seconds) each pod reloads config-in-DB objects (models, credentials, guardrails, etc.) when store_model_in_db is enabled; lower values speed up multi-pod convergence at the cost of more DB load. Applied on proxy startup
+             * @default 30
+             */
+            proxy_config_reload_interval_seconds: number;
+            /**
              * Reject Clientside Metadata Tags
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
@@ -22697,6 +22871,10 @@ export interface components {
             field_description: string;
             /** Field Name */
             field_name: string;
+            /** Field Options */
+            field_options?: string[] | null;
+            /** Field Tab */
+            field_tab?: string | null;
             /** Field Type */
             field_type: string;
             /** Field Value */
@@ -23226,6 +23404,16 @@ export interface components {
              */
             total_completion_tokens: number;
             /**
+             * Total Compression Saved Tokens
+             * @default 0
+             */
+            total_compression_saved_tokens: number;
+            /**
+             * Total Compression Savings Spend
+             * @default 0
+             */
+            total_compression_savings_spend: number;
+            /**
              * Total Failed Requests
              * @default 0
              */
@@ -23235,6 +23423,11 @@ export interface components {
              * @default 1
              */
             total_pages: number;
+            /**
+             * Total Prompt Caching Savings Spend
+             * @default 0
+             */
+            total_prompt_caching_savings_spend: number;
             /**
              * Total Prompt Tokens
              * @default 0
@@ -23677,6 +23870,16 @@ export interface components {
             }[];
             /** Updated At */
             updated_at?: number | null;
+        };
+        /**
+         * FacetListResponse
+         * @description The distinct values one column takes over a filtered query. `data` holds bare values, not entity rows.
+         */
+        FacetListResponse: {
+            /** Data */
+            data: string[];
+            links: components["schemas"]["PageLinks"];
+            meta: components["schemas"]["PageMeta"];
         };
         /**
          * FailedKeyUpdate
@@ -24308,7 +24511,7 @@ export interface components {
          */
         HTTPAuthSecurityScheme: {
             /** Bearerformat */
-            bearerFormat: string | null;
+            bearerFormat?: string | null;
             /** Description */
             description?: string | null;
             /** Scheme */
@@ -27270,7 +27473,7 @@ export interface components {
             /** Alias */
             alias?: string | null;
             /** Auth Type */
-            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "true_passthrough" | "oauth_delegate") | null;
+            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "oauth2_id_jag" | "true_passthrough" | "oauth_delegate") | null;
             /** Mcp Info */
             mcp_info?: {
                 [key: string]: unknown;
@@ -28496,7 +28699,7 @@ export interface components {
             description?: string | null;
             flows: components["schemas"]["OAuthFlows"];
             /** Oauth2Metadataurl */
-            oauth2MetadataUrl: string | null;
+            oauth2MetadataUrl?: string | null;
             /**
              * Type
              * @constant
@@ -28601,6 +28804,65 @@ export interface components {
         OrganizationRequest: {
             /** Organizations */
             organizations: string[];
+        };
+        /**
+         * OrganizationUpdateRequestV2
+         * @description Typed PATCH body for ``/v2/organization/{organization_id}`` (RFC 7396 merge-patch).
+         *
+         *     Presence is read from ``model_fields_set``, so a sent field is written and an omitted one is
+         *     left untouched. ``extra="forbid"`` makes an unknown key a 422 rather than a silent no-op, since
+         *     the contract hinges on which keys are present. See the endpoint for the per-field clear tokens.
+         */
+        OrganizationUpdateRequestV2: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
+            /** Models */
+            models?: string[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organization Alias */
+            organization_alias?: string | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+        };
+        /**
+         * PageLinks
+         * @description Hypermedia for a paginated list. No `first`/`last`: without a total count the last page is unknown.
+         */
+        PageLinks: {
+            /** Next */
+            next?: string | null;
+            /** Prev */
+            prev?: string | null;
+            /** Self */
+            self: string;
+        };
+        /**
+         * PageMeta
+         * @description `has_more` rather than `total_count`, which would need a COUNT(*) over the whole match set per keystroke.
+         */
+        PageMeta: {
+            /** Has More */
+            has_more: boolean;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
         };
         /**
          * PaginatedAuditLogResponse
@@ -28767,6 +29029,102 @@ export interface components {
         PatchPromptRequest: {
             litellm_params?: components["schemas"]["PromptLiteLLMParams"] | null;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
+        };
+        /**
+         * PatchTeamRequest
+         * @description Body of PATCH /team/{team_id}.
+         *
+         *     Identical to UpdateTeamRequest except team_id is optional, because PATCH takes it
+         *     from the path. A team_id in the body is still accepted when it matches the path.
+         */
+        PatchTeamRequest: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
+            /** Allowed Passthrough Routes */
+            allowed_passthrough_routes?: unknown[] | null;
+            /** Allowed Vector Store Indexes */
+            allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
+            /** Blocked */
+            blocked?: boolean | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Default Team Member Models */
+            default_team_member_models?: string[] | null;
+            /** Disable Global Guardrails */
+            disable_global_guardrails?: boolean | null;
+            /** Enforced Batch Output Expires After */
+            enforced_batch_output_expires_after?: {
+                [key: string]: unknown;
+            } | null;
+            /** Enforced File Expires After */
+            enforced_file_expires_after?: {
+                [key: string]: unknown;
+            } | null;
+            /** Guardrails */
+            guardrails?: string[] | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Mcp Rpm Limit */
+            mcp_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Aliases */
+            model_aliases?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Models */
+            models?: unknown[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organization Id */
+            organization_id?: string | null;
+            /** Policies */
+            policies?: string[] | null;
+            /** Prompts */
+            prompts?: string[] | null;
+            /** Router Settings */
+            router_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Secret Manager Settings */
+            secret_manager_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tags */
+            tags?: unknown[] | null;
+            /** Team Alias */
+            team_alias?: string | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** Team Member Budget */
+            team_member_budget?: number | null;
+            /** Team Member Budget Duration */
+            team_member_budget_duration?: string | null;
+            /** Team Member Key Duration */
+            team_member_key_duration?: string | null;
+            /** Team Member Rpm Limit */
+            team_member_rpm_limit?: number | null;
+            /** Team Member Tpm Limit */
+            team_member_tpm_limit?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
         };
         /**
          * PerTestingCriteriaResult
@@ -30648,6 +31006,11 @@ export interface components {
              */
             generic_client_secret?: string | null;
             /**
+             * Generic Scope
+             * @description Space-separated OAuth scopes requested from the generic provider, e.g. 'openid email profile'
+             */
+            generic_scope?: string | null;
+            /**
              * Generic Token Endpoint
              * @description Token endpoint URL for generic OAuth provider
              */
@@ -30689,6 +31052,26 @@ export interface components {
             proxy_base_url?: string | null;
             /** @description Configuration for mapping SSO groups to LiteLLM roles based on group claims in the SSO token */
             role_mappings?: components["schemas"]["RoleMappings"] | null;
+            /**
+             * Saml Allow Unsolicited
+             * @description 'true' to accept IdP-initiated (unsolicited) SAML responses, which cannot be browser-bound against login CSRF
+             */
+            saml_allow_unsolicited?: string | null;
+            /**
+             * Saml Idp Metadata Url
+             * @description URL of the SAML IdP metadata to fetch and parse for SSO authentication
+             */
+            saml_idp_metadata_url?: string | null;
+            /**
+             * Saml Idp Metadata Xml
+             * @description Inline SAML IdP metadata XML, used when a metadata URL is not available
+             */
+            saml_idp_metadata_xml?: string | null;
+            /**
+             * Saml Sp Entity Id
+             * @description SAML Service Provider entityID; defaults to the proxy's /sso/saml/metadata URL
+             */
+            saml_sp_entity_id?: string | null;
             /** @description Configuration for mapping SSO JWT fields to team IDs. Takes precedence over config file settings. */
             team_mappings?: components["schemas"]["TeamMappings"] | null;
             /**
@@ -30710,6 +31093,10 @@ export interface components {
             /** Field Schema */
             field_schema: {
                 [key: string]: unknown;
+            };
+            /** Provenance */
+            provenance?: {
+                [key: string]: string;
             };
             /** Values */
             values: {
@@ -30851,10 +31238,25 @@ export interface components {
              */
             completion_tokens: number;
             /**
+             * Compression Saved Tokens
+             * @default 0
+             */
+            compression_saved_tokens: number;
+            /**
+             * Compression Savings Spend
+             * @default 0
+             */
+            compression_savings_spend: number;
+            /**
              * Failed Requests
              * @default 0
              */
             failed_requests: number;
+            /**
+             * Prompt Caching Savings Spend
+             * @default 0
+             */
+            prompt_caching_savings_spend: number;
             /**
              * Prompt Tokens
              * @default 0
@@ -31757,6 +32159,61 @@ export interface components {
             updated: boolean;
         };
         /**
+         * ToolSpendDailyEntry
+         * @description Spend attributed to one tool on one UTC day.
+         */
+        ToolSpendDailyEntry: {
+            /**
+             * Call Count
+             * @default 0
+             */
+            call_count: number;
+            /** Date */
+            date: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Tool Name */
+            tool_name: string;
+        };
+        /**
+         * ToolSpendEntry
+         * @description Total spend attributed to one tool over the requested window.
+         */
+        ToolSpendEntry: {
+            /**
+             * Call Count
+             * @default 0
+             */
+            call_count: number;
+            /**
+             * Spend
+             * @description Attributed spend: a request that used several tools counts its full spend toward each of them
+             * @default 0
+             */
+            spend: number;
+            /** Tool Name */
+            tool_name: string;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+        };
+        /** ToolSpendResponse */
+        ToolSpendResponse: {
+            /** By Tool */
+            by_tool?: components["schemas"]["ToolSpendEntry"][];
+            /** Daily */
+            daily?: components["schemas"]["ToolSpendDailyEntry"][];
+            /** End Date */
+            end_date?: string | null;
+            /** Start Date */
+            start_date?: string | null;
+        };
+        /**
          * ToolUsageLogEntry
          * @description One spend log row for a tool call (for UI "recent logs" table).
          */
@@ -32241,6 +32698,8 @@ export interface components {
             }[] | null;
             /** Cooldown Time */
             cooldown_time?: number | null;
+            /** Enable Tag Filtering */
+            enable_tag_filtering?: boolean | null;
             /** Fallbacks */
             fallbacks?: {
                 [key: string]: unknown;
@@ -42931,6 +43390,46 @@ export interface operations {
             };
         };
     };
+    list_spend_log_end_users_management_v1_spend_logs_end_users_get: {
+        parameters: {
+            query: {
+                /** @description Window start (UTC when no offset is given) */
+                "filter[startTime][gte]": string;
+                /** @description Window end (UTC when no offset is given) */
+                "filter[startTime][lte]": string;
+                /** @description Case-insensitive partial match on the end user id */
+                q?: string | null;
+                /** @description Page number */
+                page?: number;
+                /** @description Page size */
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     test_connection_mcp_rest_test_connection_post: {
         parameters: {
             query?: never;
@@ -49455,6 +49954,77 @@ export interface operations {
             };
         };
     };
+    saml_callback_sso_saml_callback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    saml_login_sso_saml_login_get: {
+        parameters: {
+            query?: {
+                return_to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    saml_metadata_sso_saml_metadata_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_tag_daily_activity_tag_daily_activity_get: {
         parameters: {
             query?: {
@@ -50548,7 +51118,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchTeamRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -55948,6 +56522,40 @@ export interface operations {
             };
         };
     };
+    get_tool_spend_v1_tool_spend_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD (defaults to 30 days ago) */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD (defaults to today) */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolSpendResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_tool_v1_tool__tool_name__get: {
         parameters: {
             query?: never;
@@ -57465,6 +58073,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_organization_v2_v2_organization__organization_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationUpdateRequestV2"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_OrganizationTableWithMembers"];
                 };
             };
             /** @description Validation Error */

@@ -12,24 +12,25 @@ from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_reque
 
 
 @pytest.mark.parametrize(
-    "route_type",
+    "route_type, required_body_params",
     [
-        "atext_completion",
-        "acompletion",
-        "aembedding",
-        "aimage_generation",
-        "aspeech",
-        "atranscription",
-        "amoderation",
-        "arerank",
+        ("atext_completion", {}),
+        ("acompletion", {"messages": [{"role": "user", "content": "Hello"}]}),
+        ("aembedding", {"input": "Hello"}),
+        ("aimage_generation", {}),
+        ("aspeech", {}),
+        ("atranscription", {}),
+        ("amoderation", {}),
+        ("arerank", {}),
     ],
 )
 @pytest.mark.asyncio
-async def test_route_request_dynamic_credentials(route_type):
+async def test_route_request_dynamic_credentials(route_type, required_body_params):
     data = {
         "model": "openai/gpt-4o-mini-2024-07-18",
         "api_key": "my-bad-key",
         "api_base": "https://api.openai.com/v1 ",
+        **required_body_params,
     }
     llm_router = MagicMock()
     # Ensure that the dynamic method exists on the llm_router mock.
@@ -382,8 +383,8 @@ async def test_route_request_with_router_settings_override():
             "num_retries": 5,
             "timeout": 30,
             "model_group_retry_policy": {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}},
-            # These settings should be ignored (not in per_request_settings list)
             "routing_strategy": "least-busy",
+            # This setting should be ignored (not in per_request_settings list)
             "model_group_alias": {"alias": "real_model"},
         },
     }
@@ -400,8 +401,8 @@ async def test_route_request_with_router_settings_override():
     assert call_kwargs["num_retries"] == 5
     assert call_kwargs["timeout"] == 30
     assert call_kwargs["model_group_retry_policy"] == {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}}
+    assert call_kwargs["routing_strategy"] == "least-busy"
     # Verify unsupported settings were NOT merged
-    assert "routing_strategy" not in call_kwargs
     assert "model_group_alias" not in call_kwargs
     # Verify router_settings_override was removed from data
     assert "router_settings_override" not in call_kwargs
@@ -819,3 +820,127 @@ async def test_route_request_realtime_transcription_session_resolves_credentials
         )
 
     assert mock_handler.call_args.kwargs["api_key"] == "transcription-key"
+
+
+@pytest.mark.asyncio
+async def test_route_request_merges_enable_tag_filtering_from_override():
+    """Key/team router_settings carry enable_tag_filtering; the override
+    whitelist must forward it to the router call or the team's tag-routing
+    toggle saved in the UI is silently ignored at request time."""
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "router_settings_override": {
+            "enable_tag_filtering": True,
+        },
+    }
+
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "success"
+
+    response = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "success"
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert call_kwargs["enable_tag_filtering"] is True
+
+
+@pytest.mark.asyncio
+async def test_route_request_strips_client_supplied_enable_tag_filtering():
+    """enable_tag_filtering influences deployment selection and is only
+    trusted when it comes from key/team router_settings via
+    router_settings_override. A caller putting it in the request body must
+    not reach the router with it."""
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "enable_tag_filtering": True,
+    }
+
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "ok"
+
+    await route_request(data, llm_router, None, "acompletion")
+
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert "enable_tag_filtering" not in call_kwargs
+    assert "enable_tag_filtering" not in data
+
+
+@pytest.mark.asyncio
+async def test_route_request_override_enable_tag_filtering_beats_body_value():
+    """A client-sent enable_tag_filtering must not shadow the key/team
+    setting: the body copy is stripped first, so the override value is the
+    one the router sees."""
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "enable_tag_filtering": False,
+        "router_settings_override": {
+            "enable_tag_filtering": True,
+        },
+    }
+
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "ok"
+
+    await route_request(data, llm_router, None, "acompletion")
+
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert call_kwargs["enable_tag_filtering"] is True
+
+
+@pytest.mark.parametrize(
+    "route_type, param, route",
+    [
+        ("acompletion", "messages", "/chat/completions"),
+        ("aembedding", "input", "/embeddings"),
+    ],
+)
+@pytest.mark.parametrize("data_extra", [{}, {"messages": None, "input": None}])
+def test_raise_if_required_body_param_missing_rejects_missing_param(route_type, param, route, data_extra):
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(route_type=route_type, data={"model": "gpt-4o", **data_extra})
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.param == param
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.detail == {"error": f"{route}: Missing required parameter: '{param}'."}
+
+
+@pytest.mark.parametrize(
+    "route_type, data",
+    [
+        ("acompletion", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}),
+        ("acompletion", {"model": "gpt-4o", "messages": []}),
+        ("atext_completion", {"model": "gpt-4o"}),
+        ("aembedding", {"model": "text-embedding-3-small", "input": "hi"}),
+        ("arerank", {"model": "rerank-model"}),
+        ("aimage_generation", {"model": "dall-e-3"}),
+    ],
+)
+def test_raise_if_required_body_param_missing_allows_valid_requests(route_type, data):
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    raise_if_required_body_param_missing(route_type=route_type, data=data)
+
+
+@pytest.mark.asyncio
+async def test_route_request_rejects_chat_completion_without_messages():
+    """A /chat/completions body without `messages` used to splat into
+    Router.acompletion() and surface the resulting TypeError as a 500."""
+    from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
+
+    llm_router = MagicMock()
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        await route_request({"model": "gpt-4o"}, llm_router, None, "acompletion")
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.param == "messages"
+    llm_router.acompletion.assert_not_called()

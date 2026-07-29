@@ -1,6 +1,9 @@
 #### CRUD ENDPOINTS for UI Settings #####
 import asyncio
 import json
+import os
+from collections import Counter
+from collections.abc import Mapping
 from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
 from urllib.parse import urlparse
 
@@ -13,11 +16,17 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.config_resolvers.sso import (
+    SSO_FIELD_ENV_VARS,
+    SSO_SECRET_FIELDS,
+    resolve_sso_config,
+)
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import (
     SSOConfigRepository,
     UISettingsRepository,
 )
+from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     SSOConfig,
@@ -25,15 +34,43 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 
 router = APIRouter()
 
-# SSO secret fields returned by /get/sso_settings. These are masked on read so
-# the UI can show "(set)" without ever transporting the plaintext OAuth secret
-# off the server, matching the write-once + masked-on-read contract used for
-# the HashiCorp Vault config override.
-_SSO_SENSITIVE_FIELDS: Set[str] = {
-    "google_client_secret",
-    "microsoft_client_secret",
-    "generic_client_secret",
+# Maps each UIThemeConfig field to the env var the UI branding path reads it
+# from. /update/ui_theme_settings writes both the stored ui_theme_config and
+# these env vars, so /get/ui_theme_settings resolves the same env vars to
+# reflect a deployment branded purely through process env.
+_UI_THEME_FIELD_ENV_VARS: dict[str, str] = {
+    "logo_url": "UI_LOGO_PATH",
+    "favicon_url": "LITELLM_FAVICON_URL",
 }
+
+
+def _is_public_http_url(value: str | None) -> bool:
+    """Whether a value is a plain http(s) URL with a host, safe to disclose publicly."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    parsed = urlparse(value.strip())
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
+def _resolve_ui_theme_field(stored_values: Mapping[str, Any], field_name: str) -> str | None:
+    """Resolve one UI theme field to the value the branding path actually uses.
+
+    The stored ui_theme_config wins; a field absent or blank there falls back to
+    the process environment. The branding path reads the env var, and stored
+    settings reach it by being pushed into the environment on save, so a value
+    supplied only as a process env var is live even though no stored entry exists.
+
+    This endpoint is unauthenticated, so the env fallback only surfaces a public
+    http(s) URL: an operator can point UI_LOGO_PATH at a local filesystem path
+    (the branding path serves it server-side), and that path must not be
+    disclosed to anonymous callers. A stored value is already validated as a
+    public URL on write, so it passes through.
+    """
+    stored = stored_values.get(field_name)
+    if isinstance(stored, str) and stored.strip():
+        return stored
+    env_value = os.environ.get(_UI_THEME_FIELD_ENV_VARS[field_name])
+    return env_value if _is_public_http_url(env_value) else None
 
 
 class IPAddress(BaseModel):
@@ -69,7 +106,8 @@ class SettingsResponse(BaseModel):
 class SSOSettingsResponse(SettingsResponse):
     """Response model for SSO settings"""
 
-    pass
+    provenance: Dict[str, str] = Field(default_factory=dict)
+    """Per-field source of each value: 'db', 'env', 'default', or 'unset'."""
 
 
 class InternalUserSettingsResponse(SettingsResponse):
@@ -562,6 +600,51 @@ async def get_default_team_settings():
     )
 
 
+def _default_team_ids(teams: list[str] | list[NewUserRequestTeam]) -> tuple[str, ...]:
+    return tuple(team if isinstance(team, str) else team.team_id for team in teams)
+
+
+async def _validate_default_teams_exist(teams: list[str] | list[NewUserRequestTeam]) -> None:
+    """Reject default teams that cannot be assigned.
+
+    New users are added to these teams long after the settings are saved, and that
+    consume path swallows the resulting 404, so an unknown team id would silently
+    drop every future user's team assignment unless it is caught here.
+    """
+    team_ids = _default_team_ids(teams)
+    if not team_ids:
+        return
+
+    duplicate_ids = tuple(team_id for team_id, count in Counter(team_ids).items() if count > 1)
+    if duplicate_ids:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Duplicate default team id(s): {', '.join(duplicate_ids)}. List each default team only once."
+            },
+        )
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    existing_teams = await TeamRepository(prisma_client).find_many(where={"team_id": {"in": list(team_ids)}})
+    existing_team_ids = {team.team_id for team in existing_teams}
+    missing_ids = tuple(team_id for team_id in team_ids if team_id not in existing_team_ids)
+    if missing_ids:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Team(s) not found: {', '.join(missing_ids)}. "
+                "A team must exist before it can be set as a default team for new users."
+            },
+        )
+
+
 async def update_default_team_member_budget(teams: List[NewUserRequestTeam], user_api_key_dict: UserAPIKeyAuth):
     """
     1. Update the max member budget for the team
@@ -670,6 +753,9 @@ async def update_internal_user_settings(
     Update the default internal user parameters for SSO users.
     These settings will be applied to new users who sign in via SSO.
     """
+    if settings.teams is not None:
+        await _validate_default_teams_exist(settings.teams)
+
     if settings.teams is not None and all(isinstance(team, NewUserRequestTeam) for team in settings.teams):
         await update_default_team_member_budget(
             settings.teams,
@@ -717,7 +803,7 @@ async def get_sso_settings():
     Returns a structured object with values and descriptions for UI display.
     """
 
-    from litellm.proxy.proxy_server import prisma_client, proxy_config
+    from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(
@@ -725,59 +811,12 @@ async def get_sso_settings():
             detail={"error": "Database not connected. Please connect a database."},
         )
 
-    # Get SSO config from dedicated table
+    # Resolve the effective SSO config: the stored row wins, else the process
+    # environment, else each field's default. Unlike the legacy read path this
+    # does not write os.environ; a GET has no business mutating the environment.
     sso_db_record = await SSOConfigRepository(prisma_client).table.find_unique(where={"id": "sso_config"})
-
-    # Initialize with defaults
-    sso_settings_dict = {}
-
-    if sso_db_record and sso_db_record.sso_settings:
-        # Load settings from database
-        sso_settings_dict = dict(sso_db_record.sso_settings)
-
-    role_mappings_data = sso_settings_dict.pop("role_mappings", None)
-    role_mappings = None
-    if role_mappings_data:
-        from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
-
-        if isinstance(role_mappings_data, dict):
-            role_mappings = RoleMappings(**role_mappings_data)
-        elif isinstance(role_mappings_data, RoleMappings):
-            role_mappings = role_mappings_data
-
-    team_mappings_data = sso_settings_dict.pop("team_mappings", None)
-    team_mappings = None
-    if team_mappings_data:
-        from litellm.types.proxy.management_endpoints.ui_sso import TeamMappings
-
-        if isinstance(team_mappings_data, dict):
-            team_mappings = TeamMappings(**team_mappings_data)
-        elif isinstance(team_mappings_data, TeamMappings):
-            team_mappings = team_mappings_data
-
-    decrypted_sso_settings_dict = proxy_config._decrypt_and_set_db_env_variables(
-        environment_variables=sso_settings_dict
-    )
-
-    # Build SSO config with database values or environment fallback
-
-    sso_config = SSOConfig(
-        google_client_id=decrypted_sso_settings_dict.get("google_client_id", None),
-        google_client_secret=decrypted_sso_settings_dict.get("google_client_secret", None),
-        microsoft_client_id=decrypted_sso_settings_dict.get("microsoft_client_id", None),
-        microsoft_client_secret=decrypted_sso_settings_dict.get("microsoft_client_secret", None),
-        microsoft_tenant=decrypted_sso_settings_dict.get("microsoft_tenant", None),
-        generic_client_id=decrypted_sso_settings_dict.get("generic_client_id", None),
-        generic_client_secret=decrypted_sso_settings_dict.get("generic_client_secret", None),
-        generic_authorization_endpoint=decrypted_sso_settings_dict.get("generic_authorization_endpoint", None),
-        generic_token_endpoint=decrypted_sso_settings_dict.get("generic_token_endpoint", None),
-        generic_userinfo_endpoint=decrypted_sso_settings_dict.get("generic_userinfo_endpoint", None),
-        proxy_base_url=decrypted_sso_settings_dict.get("proxy_base_url", None),
-        user_email=decrypted_sso_settings_dict.get("user_email"),
-        ui_access_mode=decrypted_sso_settings_dict.get("ui_access_mode"),
-        role_mappings=role_mappings,
-        team_mappings=team_mappings,
-    )
+    sso_db_settings = dict(sso_db_record.sso_settings) if sso_db_record and sso_db_record.sso_settings else None
+    resolved = resolve_sso_config(sso_db_settings, os.environ)
 
     # Get the schema for UI display
     from pydantic import TypeAdapter
@@ -786,11 +825,12 @@ async def get_sso_settings():
 
     # Convert to dict for response, masking OAuth client secrets so plaintext
     # is never sent to the UI.
-    sso_dict = mask_sensitive_keys(sso_config.model_dump(), _SSO_SENSITIVE_FIELDS)
+    sso_dict = mask_sensitive_keys(resolved.config.model_dump(), set(SSO_SECRET_FIELDS))
 
     # Add descriptions to the response
     result = {
         "values": sso_dict,
+        "provenance": resolved.provenance,
         "field_schema": {
             "description": schema.get("description", ""),
             "properties": {},
@@ -841,21 +881,6 @@ async def update_sso_settings(
             detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
-    # Update environment variables
-    env_var_mapping = {
-        "google_client_id": "GOOGLE_CLIENT_ID",
-        "google_client_secret": "GOOGLE_CLIENT_SECRET",
-        "microsoft_client_id": "MICROSOFT_CLIENT_ID",
-        "microsoft_client_secret": "MICROSOFT_CLIENT_SECRET",
-        "microsoft_tenant": "MICROSOFT_TENANT",
-        "generic_client_id": "GENERIC_CLIENT_ID",
-        "generic_client_secret": "GENERIC_CLIENT_SECRET",
-        "generic_authorization_endpoint": "GENERIC_AUTHORIZATION_ENDPOINT",
-        "generic_token_endpoint": "GENERIC_TOKEN_ENDPOINT",
-        "generic_userinfo_endpoint": "GENERIC_USERINFO_ENDPOINT",
-        "proxy_base_url": "PROXY_BASE_URL",
-    }
-
     # Read the existing SSO row first so the audit log captures a real
     # before/after diff. Stored values are encrypted; decrypt them so the
     # before-snapshot has the same shape as after_value, and rely on
@@ -884,8 +909,8 @@ async def update_sso_settings(
     # Update environment variables in config and in memory
     sso_data = sso_config.model_dump()
     for field_name, value in sso_data.items():
-        if field_name in env_var_mapping:
-            env_var_name = env_var_mapping[field_name]
+        if field_name in SSO_FIELD_ENV_VARS:
+            env_var_name = SSO_FIELD_ENV_VARS[field_name]
             if value:
                 os.environ[env_var_name] = value
             else:
@@ -935,7 +960,7 @@ async def update_sso_settings(
             else:
                 environment_variables = {}
 
-            env_vars_to_remove = set(env_var_mapping.values())
+            env_vars_to_remove = set(SSO_FIELD_ENV_VARS.values())
             filtered_env_vars = {
                 key: value for key, value in environment_variables.items() if key not in env_vars_to_remove
             }
@@ -977,11 +1002,18 @@ async def get_ui_theme_settings():
     # Load existing config
     config = await proxy_config.get_config()
 
-    return await _get_settings_with_schema(
+    result = await _get_settings_with_schema(
         settings_key="ui_theme_config",
         settings_class=UIThemeConfig,
         config=config,
     )
+
+    stored_values = result.get("values", {})
+    result["values"] = {
+        **stored_values,
+        **{field: _resolve_ui_theme_field(stored_values, field) for field in _UI_THEME_FIELD_ENV_VARS},
+    }
+    return result
 
 
 def _validate_public_image_url(value: Optional[str], field_name: str) -> None:
@@ -1041,13 +1073,6 @@ async def update_ui_theme_settings(
     config = await proxy_config.get_config()
     before_theme = config.get("litellm_settings", {}).get("ui_theme_config")
 
-    # Update config with UI theme settings
-    if "general_settings" not in config:
-        config["general_settings"] = {}
-
-    if "environment_variables" not in config:
-        config["environment_variables"] = {}
-
     # Convert theme config to dict
     theme_data = theme_config.model_dump(exclude_none=True)
 
@@ -1056,55 +1081,29 @@ async def update_ui_theme_settings(
         config["litellm_settings"] = {}
     config["litellm_settings"]["ui_theme_config"] = theme_data
 
-    # Update UI_LOGO_PATH environment variable if logo_url is provided
-    # If logo_url is empty string, None, or null, remove the environment variable to use default
-    logo_url = theme_data.get("logo_url")
-    verbose_proxy_logger.debug(f"Updating logo_url: {logo_url}")
+    # UI_LOGO_PATH and LITELLM_FAVICON_URL are the only environment variables
+    # this endpoint owns. A non-empty value sets the var; an empty or missing
+    # one clears it back to the default. Apply to the live process immediately,
+    # then persist only these two keys so an unrelated env var (a YAML/OS value
+    # merged in by get_config) is never snapshotted into the DB.
+    def _clean(url: str | None) -> str | None:
+        return url if url is not None and url.strip() else None
 
-    if (
-        logo_url and isinstance(logo_url, str) and logo_url.strip()
-    ):  # Check if logo_url exists and is not empty/whitespace
-        config["environment_variables"]["UI_LOGO_PATH"] = logo_url
-        os.environ["UI_LOGO_PATH"] = logo_url
-        verbose_proxy_logger.debug(f"Set UI_LOGO_PATH to: {logo_url}")
-    else:
-        # Remove the environment variable to restore default logo
-        if "UI_LOGO_PATH" in config.get("environment_variables", {}):
-            del config["environment_variables"]["UI_LOGO_PATH"]
-            verbose_proxy_logger.debug("Removed UI_LOGO_PATH from config")
-        if "UI_LOGO_PATH" in os.environ:
-            del os.environ["UI_LOGO_PATH"]
-            verbose_proxy_logger.debug("Removed UI_LOGO_PATH from environment")
+    env_updates: dict[str, str | None] = {
+        "UI_LOGO_PATH": _clean(theme_config.logo_url),
+        "LITELLM_FAVICON_URL": _clean(theme_config.favicon_url),
+    }
+    for env_key, env_value in env_updates.items():
+        if env_value is not None:
+            os.environ[env_key] = env_value
+        else:
+            os.environ.pop(env_key, None)
 
-    # Update LITELLM_FAVICON_URL environment variable if favicon_url is provided
-    favicon_url = theme_data.get("favicon_url")
-    verbose_proxy_logger.debug(f"Updating favicon_url: {favicon_url}")
-
-    if (
-        favicon_url and isinstance(favicon_url, str) and favicon_url.strip()
-    ):  # Check if favicon_url exists and is not empty/whitespace
-        config["environment_variables"]["LITELLM_FAVICON_URL"] = favicon_url
-        os.environ["LITELLM_FAVICON_URL"] = favicon_url
-        verbose_proxy_logger.debug(f"Set LITELLM_FAVICON_URL to: {favicon_url}")
-    else:
-        # Remove the environment variable to restore default favicon
-        if "LITELLM_FAVICON_URL" in config.get("environment_variables", {}):
-            del config["environment_variables"]["LITELLM_FAVICON_URL"]
-            verbose_proxy_logger.debug("Removed LITELLM_FAVICON_URL from config")
-        if "LITELLM_FAVICON_URL" in os.environ:
-            del os.environ["LITELLM_FAVICON_URL"]
-            verbose_proxy_logger.debug("Removed LITELLM_FAVICON_URL from environment")
-
-    # Handle environment variable encryption if needed
-    stored_config = config.copy()
-    if "environment_variables" in stored_config and len(stored_config["environment_variables"]) > 0:
-        # Only encrypt if there are environment variables to encrypt
-        stored_config["environment_variables"] = proxy_config._encrypt_env_variables(
-            environment_variables=stored_config["environment_variables"]
-        )
-
-    # Save the updated config
-    await proxy_config.save_config(new_config=stored_config)
+    # Persist the theme config (litellm_settings). save_config defaults to
+    # include_env_vars=False, so it does not snapshot environment_variables.
+    await proxy_config.save_config(new_config=config)
+    # Persist only the two owned env vars, merged against the existing DB row.
+    await proxy_config.save_environment_variables(env_updates)
 
     asyncio.create_task(
         create_config_audit_log(

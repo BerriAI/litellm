@@ -636,14 +636,33 @@ class TestDeleteModelClearsRouterRegistry:
     not just from model_list, or a stale (now unbacked) router entry lingers until restart.
     """
 
+    @staticmethod
+    def _complexity_router_deployment(model_id: str, tags: list | None = None) -> dict:
+        return {
+            "model_name": "smart-router",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"}},
+                "complexity_router_default_model": "gpt-4o",
+                **({"tags": tags} if tags else {}),
+            },
+            "model_info": {"id": model_id, "db_model": True},
+        }
+
     @pytest.mark.asyncio
-    async def test_delete_model_pops_router_registries(self):
+    async def test_delete_model_releases_only_the_deleted_routers_slot(self):
+        """Deleting one tagged router must release its own slot and leave a sibling
+        sharing the model_name registered. A blanket pop(model_name) here would take
+        both down, and nothing reloads on the delete path to restore the survivor.
+        """
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
-        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete
 
         model_id = "router-del-1"
+        surviving_id = "router-del-2"
         admin_user = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
         db_row = LiteLLM_ProxyModelTable(
             model_id=model_id,
@@ -660,16 +679,16 @@ class TestDeleteModelClearsRouterRegistry:
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=db_row)
         mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
 
-        mock_router = MagicMock()
-        mock_router.delete_deployment = MagicMock(
-            return_value={
-                "model_name": "smart-router",
-                "litellm_params": {"model": "auto_router/complexity_router"},
-                "model_info": {"id": model_id},
-            }
+        real_router = litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}},
+                self._complexity_router_deployment(model_id, tags=["team-a"]),
+                self._complexity_router_deployment(surviving_id, tags=["team-b"]),
+            ],
+            ignore_invalid_deployments=True,
         )
-        mock_router.auto_routers = {"smart-router": MagicMock()}
-        mock_router.complexity_routers = {"smart-router": MagicMock()}
+        assert len(real_router.complexity_routers["smart-router"]) == 2
 
         _PS = "litellm.proxy.proxy_server"
         with (
@@ -679,16 +698,17 @@ class TestDeleteModelClearsRouterRegistry:
             patch(f"{_PS}.proxy_logging_obj", MagicMock()),
             patch(f"{_PS}.general_settings", {}),
             patch(f"{_PS}.premium_user", True),
-            patch(f"{_PS}.llm_router", mock_router),
+            patch(f"{_PS}.llm_router", real_router),
         ):
             await delete_model_endpoint(
                 model_info=ModelInfoDelete(id=model_id),
                 user_api_key_dict=admin_user,
             )
 
-        mock_router.delete_deployment.assert_called_once_with(id=model_id)
-        assert "smart-router" not in mock_router.auto_routers
-        assert "smart-router" not in mock_router.complexity_routers
+        assert model_id not in [m["model_info"]["id"] for m in real_router.model_list]
+        surviving = real_router.complexity_routers["smart-router"]
+        assert len(surviving) == 1
+        assert surviving[0].tags == ("team-b",)
 
     @pytest.mark.asyncio
     async def test_delete_regular_model_preserves_config_router_sharing_name(self):
@@ -1702,8 +1722,8 @@ class TestModelInfoEndpoint:
     async def test_model_info_accessible_model_success(self):
         """Test model_info returns model data for accessible models"""
         from litellm.proxy.proxy_server import model_info
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
-        # Mock user with access to specific models
         user_api_key_dict = UserAPIKeyAuth(
             user_id="test_user",
             api_key="test_key",
@@ -1713,30 +1733,22 @@ class TestModelInfoEndpoint:
 
         with (
             patch("litellm.proxy.proxy_server.llm_router") as mock_router,
-            patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models,
-            patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models,
+            patch("litellm.proxy.proxy_server.general_settings", {}),
             patch(
-                "litellm.proxy.proxy_server.get_complete_model_list"
-            ) as mock_get_complete_models,
-            patch("litellm.get_llm_provider") as mock_get_provider,
+                "litellm.proxy.utils.get_available_models_for_user",
+                new=AsyncMock(return_value=["gpt-4", "claude-3", "gpt-3.5-turbo"]),
+            ),
+            patch("litellm.get_llm_provider", return_value=(None, "openai", None, None)),
         ):
-            # Setup mocks
-            mock_router.get_model_names.return_value = [
-                "gpt-4",
-                "claude-3",
-                "gpt-3.5-turbo",
-            ]
-            mock_router.get_model_access_groups.return_value = {}
-            mock_get_key_models.return_value = ["gpt-4", "claude-3"]
-            mock_get_team_models.return_value = ["gpt-3.5-turbo"]
-            mock_get_complete_models.return_value = [
-                "gpt-4",
-                "claude-3",
-                "gpt-3.5-turbo",
-            ]
-            mock_get_provider.return_value = (None, "openai", None, None)
+            mock_router.get_fully_blocked_model_names.return_value = set()
+            mock_router.get_model_list.return_value = []
+            mock_router.get_configured_token_limits.return_value = (None, None)
+            mock_router.get_deployment_by_model_group_name.return_value = Deployment(
+                model_name="gpt-4",
+                litellm_params=LiteLLM_Params(model="openai/gpt-4"),
+                model_info=ModelInfo(id="gpt-4"),
+            )
 
-            # Test accessible model
             result = await model_info(
                 model_id="gpt-4", user_api_key_dict=user_api_key_dict
             )
@@ -1763,18 +1775,14 @@ class TestModelInfoEndpoint:
 
         with (
             patch("litellm.proxy.proxy_server.llm_router") as mock_router,
-            patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models,
-            patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models,
+            patch("litellm.proxy.proxy_server.general_settings", {}),
             patch(
-                "litellm.proxy.proxy_server.get_complete_model_list"
-            ) as mock_get_complete_models,
+                "litellm.proxy.utils.get_available_models_for_user",
+                new=AsyncMock(return_value=["gpt-4"]),
+            ),
         ):
-            # Setup mocks - user only has access to gpt-4
-            mock_router.get_model_names.return_value = ["gpt-4", "claude-3"]
-            mock_router.get_model_access_groups.return_value = {}
-            mock_get_key_models.return_value = ["gpt-4"]
-            mock_get_team_models.return_value = []
-            mock_get_complete_models.return_value = ["gpt-4"]  # Only gpt-4 accessible
+            mock_router.get_fully_blocked_model_names.return_value = set()
+            mock_router.get_model_list.return_value = []
 
             # Test inaccessible model should raise 404
             with pytest.raises(HTTPException) as exc_info:
@@ -1790,8 +1798,8 @@ class TestModelInfoEndpoint:
     async def test_model_info_team_model_access(self):
         """Test model_info works with team model access"""
         from litellm.proxy.proxy_server import model_info
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
-        # Mock user with team access
         user_api_key_dict = UserAPIKeyAuth(
             user_id="test_user",
             api_key="test_key",
@@ -1802,22 +1810,22 @@ class TestModelInfoEndpoint:
 
         with (
             patch("litellm.proxy.proxy_server.llm_router") as mock_router,
-            patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models,
-            patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models,
+            patch("litellm.proxy.proxy_server.general_settings", {}),
             patch(
-                "litellm.proxy.proxy_server.get_complete_model_list"
-            ) as mock_get_complete_models,
-            patch("litellm.get_llm_provider") as mock_get_provider,
+                "litellm.proxy.utils.get_available_models_for_user",
+                new=AsyncMock(return_value=["team-model-1"]),
+            ),
+            patch("litellm.get_llm_provider", return_value=(None, "custom", None, None)),
         ):
-            # Setup mocks
-            mock_router.get_model_names.return_value = ["team-model-1"]
-            mock_router.get_model_access_groups.return_value = {}
-            mock_get_key_models.return_value = []
-            mock_get_team_models.return_value = ["team-model-1"]
-            mock_get_complete_models.return_value = ["team-model-1"]
-            mock_get_provider.return_value = (None, "custom", None, None)
+            mock_router.get_fully_blocked_model_names.return_value = set()
+            mock_router.get_model_list.return_value = []
+            mock_router.get_configured_token_limits.return_value = (None, None)
+            mock_router.get_deployment_by_model_group_name.return_value = Deployment(
+                model_name="team-model-1",
+                litellm_params=LiteLLM_Params(model="custom/team-model-1"),
+                model_info=ModelInfo(id="team-model-1"),
+            )
 
-            # Test team model access
             result = await model_info(
                 model_id="team-model-1", user_api_key_dict=user_api_key_dict
             )
@@ -2945,7 +2953,7 @@ class TestGetModelInfoWithIdBlocked:
     def test_get_model_info_with_id_propagates_blocked_true(self):
         from litellm.proxy.proxy_server import ProxyConfig
 
-        model = MagicMock()
+        model = MagicMock(spec=["model_id", "model_info", "blocked"])
         model.model_id = "dep-1"
         model.model_info = {}
         model.blocked = True

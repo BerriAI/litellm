@@ -16,7 +16,7 @@ const MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE = {
   value: "no-default-models",
 } as const;
 
-const MODEL_SELECT_SPECIAL_VALUES_ARRAY = [
+export const MODEL_SENTINEL_OPTIONS = [
   MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE,
   MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE,
 ] as const;
@@ -100,7 +100,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
   const { data: organization, isLoading: isLoadingOrganization } = useOrganization(organizationID);
   const { data: currentUser, isLoading: isCurrentUserLoading } = useCurrentUser();
 
-  const isSpecialOption = (value: string) => MODEL_SELECT_SPECIAL_VALUES_ARRAY.some((sv) => sv.value === value);
+  const isSpecialOption = (value: string) => MODEL_SENTINEL_OPTIONS.some((sv) => sv.value === value);
   const hasSpecialOptionSelected = value.some(isSpecialOption);
   const isLoading = isLoadingAllProxyModels || isLoadingTeam || isLoadingOrganization || isCurrentUserLoading;
   const organizationHasAllProxyModels =

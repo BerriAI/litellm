@@ -190,10 +190,28 @@ gateway:
     maxReplicas: 10
     targetCPUUtilizationPercentage: 70
     targetMemoryUtilizationPercentage: 80
+  # PodDisruptionBudget for the gateway pods. Set exactly one of
+  # `minAvailable` / `maxUnavailable` (minAvailable wins if both are set;
+  # enabling without either falls back to `maxUnavailable: 1`). Disabled by
+  # default: with the default hpa.minReplicas of 1, a `minAvailable: 1` PDB
+  # would block node drains entirely.
+  pdb:
+    enabled: false
+    minAvailable: ""
+    maxUnavailable: ""
   podAnnotations: {}
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # Standard k8s topologySpreadConstraints for the gateway pods, e.g. to
+  # spread replicas across zones:
+  #   - maxSkew: 1
+  #     topologyKey: topology.kubernetes.io/zone
+  #     whenUnsatisfiable: ScheduleAnyway
+  #     labelSelector:
+  #       matchLabels:
+  #         app.kubernetes.io/component: gateway
+  topologySpreadConstraints: []
 
 # ---------- backend (UI / management API) ----------
 backend:
@@ -233,10 +251,17 @@ backend:
     minReplicas: 1
     maxReplicas: 4
     targetCPUUtilizationPercentage: 70
+  # Same shape as gateway.pdb.
+  pdb:
+    enabled: false
+    minAvailable: ""
+    maxUnavailable: ""
   podAnnotations: {}
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # Same shape as gateway.topologySpreadConstraints.
+  topologySpreadConstraints: []
 
 # ---------- ui (Next.js static dashboard) ----------
 ui:
@@ -279,7 +304,14 @@ ui:
     minReplicas: 1
     maxReplicas: 3
     targetCPUUtilizationPercentage: 80
+  # Same shape as gateway.pdb.
+  pdb:
+    enabled: false
+    minAvailable: ""
+    maxUnavailable: ""
   podAnnotations: {}
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # Same shape as gateway.topologySpreadConstraints.
+  topologySpreadConstraints: []

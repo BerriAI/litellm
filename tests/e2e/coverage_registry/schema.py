@@ -34,6 +34,7 @@ LlmEndpoint = Literal[
     "files",
     "rerank",
     "images_generations",
+    "images_edits",
     "audio_speech",
     "audio_transcriptions",
     "moderations",
@@ -47,20 +48,30 @@ LlmRoute = Literal[
     "bedrock_converse",
     "bedrock_invoke",
     "cohere",
+    "gemini",
+    "hosted_vllm",
     "openai",
     "together_ai",
     "vertex",
 ]
 
 LlmCapability = Literal[
+    "assume_role",
     "basic",
+    "count_tokens",
+    "long_context_1m",
     "mid_conversation_system",
+    "pdf_input",
+    "prompt_cache_1h",
     "prompt_cache_5m",
     "service_tier",
     "structured_output",
     "thinking",
+    "thinking_with_tool_use",
+    "tool_search",
     "tool_use",
     "vision",
+    "web_search",
 ]
 
 

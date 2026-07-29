@@ -77,6 +77,20 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.queryByText("Classifier Model")).not.toBeInTheDocument();
   });
 
+  it("should toggle returning the raw model name", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+
+    await user.click(screen.getByText("Advanced: Response Format"));
+    await user.click(screen.getByRole("switch"));
+
+    expect(onChange).toHaveBeenCalledWith({
+      ...defaultValue,
+      return_raw_model_name: true,
+    });
+  });
+
   it("should reveal classifier model and timeout fields when llm is selected", () => {
     const onChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={onChange} />);
@@ -268,5 +282,23 @@ describe("ComplexityRouterConfig", () => {
       />,
     );
     expect(screen.getAllByText("This tier is required")).toHaveLength(1);
+  });
+
+  it("renders the escalation keywords section with current keywords when the handler is provided", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        escalationKeywords={["LITELLM ESCALATE"]}
+        onEscalationKeywordsChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Escalation Keywords"));
+    expect(screen.getByText("Escalation Keywords")).toBeInTheDocument();
+    expect(screen.getByText("LITELLM ESCALATE")).toBeInTheDocument();
+  });
+
+  it("hides the escalation keywords section when no handler is provided", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    expect(screen.queryByText("Advanced: Escalation Keywords")).not.toBeInTheDocument();
   });
 });
