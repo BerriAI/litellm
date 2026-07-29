@@ -1388,6 +1388,91 @@ async def test_handle_stream_message_frames_events_as_sse():
 
 
 @pytest.mark.asyncio
+async def test_handle_stream_message_sdk_unavailable_frames_error_as_sse():
+    """When the a2a package is unavailable the -32603 error must still be
+    emitted as a single SSE event so the a2a-sdk client can parse it."""
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    with patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", False):
+        response = await _handle_stream_message(
+            api_base="http://upstream.local",
+            request_id="req-1",
+            params={"message": {"role": "user", "parts": []}},
+        )
+
+    assert response.media_type == "text/event-stream"
+    chunks = [
+        chunk.decode() if isinstance(chunk, bytes) else chunk
+        async for chunk in response.body_iterator
+    ]
+    assert len(chunks) == 1
+    assert chunks[0].startswith("data: ")
+    assert chunks[0].endswith("\n\n")
+    payload = json.loads(chunks[0].removeprefix("data: ").strip())
+    assert payload["error"]["code"] == -32603
+    assert payload["id"] == "req-1"
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_proxy_hook_path_frames_events_as_sse():
+    """When proxy hooks are wired the events are routed through
+    async_streaming_data_generator; that path must also frame each JSON-RPC
+    object as ``data: <json>\\n\\n`` (regression for #35027)."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+    from litellm.proxy.utils import ProxyLogging
+
+    events = [
+        {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task", "id": "t-1"}},
+        {
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "result": {"kind": "message", "parts": [{"kind": "text", "text": "pong"}]},
+        },
+    ]
+
+    async def fake_stream(**kwargs):
+        for event in events:
+            yield event
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message_streaming", new=fake_stream)
+        )
+
+        response = await _handle_stream_message(
+            api_base="http://upstream.local",
+            request_id="req-1",
+            params={
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hi"}],
+                    "messageId": "msg-1",
+                }
+            },
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            request_data={"model": "a2a/test"},
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert response.media_type == "text/event-stream"
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert len(chunks) == len(events)
+    for chunk, event in zip(chunks, events):
+        assert chunk.startswith("data: ")
+        assert chunk.endswith("\n\n")
+        assert json.loads(chunk.removeprefix("data: ").strip()) == event
+
+
+@pytest.mark.asyncio
 async def test_send_message_pascal_case_routes_to_asend_message():
     from litellm.proxy._types import UserAPIKeyAuth
 
