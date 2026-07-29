@@ -401,6 +401,9 @@ class _CallbackCapabilities:
     resolved_callbacks: Tuple[Any, ...] = field(default_factory=tuple)
 
 
+_KNOWN_CALL_TYPES: frozenset[str] = frozenset(call_type.value for call_type in CallTypes)
+
+
 class ProxyLogging:
     """
     Logging/Custom Handlers for proxy.
@@ -2117,6 +2120,15 @@ class ProxyLogging:
             if _first_handoff is not None:
                 request_data["first_api_call_start_time"] = _first_handoff
 
+            # The spend log derives its call type from request_data, which carries the
+            # raw request body and never the route's call type. Lift it over before the
+            # logging object is popped so a failed /v1/responses call isn't recorded as
+            # a chat completion.
+            if not request_data.get("call_type"):
+                _call_type = _model_call_details.get("call_type") or getattr(_logging_obj, "call_type", None)
+                if _call_type in _KNOWN_CALL_TYPES:
+                    request_data["call_type"] = _call_type
+
             # A stream that broke mid-flight still billed the provider for the
             # chunks already delivered; the streaming handler stashes that
             # recovered usage and cost here. Lift them onto request_data so the
@@ -2252,20 +2264,26 @@ class ProxyLogging:
 
             input: Union[list, str, dict] = ""
             normalized_call_type: Optional[str] = None
+            # A logging object built from a route string (rather than a litellm
+            # function) has no real call type, so infer one from the payload shape.
+            # A call type that litellm already resolved is authoritative and must
+            # survive; /v1/responses passes its prompt in ``input``, which would
+            # otherwise be mistaken for an embedding request.
+            can_infer_call_type = litellm_logging_obj.call_type not in _KNOWN_CALL_TYPES
             if "messages" in request_data and isinstance(request_data["messages"], list):
                 input = request_data["messages"]
                 litellm_logging_obj.model_call_details["messages"] = input
-                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
+                if can_infer_call_type:
                     normalized_call_type = CallTypes.acompletion.value
             elif "prompt" in request_data and isinstance(request_data["prompt"], str):
                 input = request_data["prompt"]
                 litellm_logging_obj.model_call_details["prompt"] = input
-                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
+                if can_infer_call_type:
                     normalized_call_type = CallTypes.atext_completion.value
             elif "input" in request_data and isinstance(request_data["input"], list):
                 input = request_data["input"]
                 litellm_logging_obj.model_call_details["input"] = input
-                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
+                if can_infer_call_type:
                     normalized_call_type = CallTypes.aembedding.value
             if normalized_call_type is not None:
                 litellm_logging_obj.call_type = normalized_call_type

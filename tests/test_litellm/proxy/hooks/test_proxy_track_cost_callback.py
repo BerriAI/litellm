@@ -85,6 +85,63 @@ async def test_async_post_call_failure_hook():
 
 
 @pytest.mark.asyncio
+async def test_async_post_call_failure_hook_preserves_router_metadata_from_litellm_metadata():
+    """Routes that keep proxy state in ``litellm_metadata`` (e.g. /v1/responses) must
+    still get router attribution (model_group, deployment id, retries, tags) on the
+    failure spend log, and caller-supplied identity fields must be ignored."""
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    logger = _ProxyDBLogger()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        team_id="test_team_id",
+    )
+    request_data = {
+        "model": "test-model",
+        "litellm_metadata": {
+            "model_group": "test-model-group",
+            "model_info": {"id": "test-deployment-id"},
+            "attempted_retries": 2,
+            "max_retries": 2,
+            "user_api_key_user_id": "spoofed_user_id",
+        },
+        "litellm_params": {"metadata": {"tags": ["failure-test"]}},
+        "call_type": "aresponses",
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Test exception"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    kwargs = mock_update_database.call_args[1]["kwargs"]
+    metadata = kwargs["litellm_params"]["metadata"]
+    assert metadata["model_group"] == "test-model-group"
+    assert metadata["model_info"] == {"id": "test-deployment-id"}
+    assert metadata["attempted_retries"] == 2
+    assert metadata["max_retries"] == 2
+    assert metadata["tags"] == ["failure-test"]
+    assert metadata["user_api_key_user_id"] == "test_user_id"
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert payload["call_type"] == "aresponses"
+    assert payload["model_group"] == "test-model-group"
+    assert payload["model_id"] == "test-deployment-id"
+    assert payload["request_tags"] == '["failure-test"]'
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_non_llm_route():
     # Setup
     logger = _ProxyDBLogger()

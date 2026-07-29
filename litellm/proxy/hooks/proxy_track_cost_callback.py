@@ -1,6 +1,7 @@
 import asyncio
 import traceback
 from datetime import datetime
+from collections.abc import Mapping
 from typing import Any, List, Optional, Union, cast
 
 import litellm
@@ -9,6 +10,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
+    get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import UserAPIKeyAuth
@@ -106,23 +108,23 @@ class _ProxyDBLogger(CustomLogger):
             metadata=_metadata,
         )
 
-        existing_metadata: dict = request_data.get("metadata", None) or {}
-        existing_metadata.update(_metadata)
-
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}
 
         existing_litellm_params = request_data.get("litellm_params", {})
-        existing_litellm_metadata = existing_litellm_params.get("metadata", {}) or {}
-
-        # Preserve tags from existing metadata
-        if existing_litellm_metadata.get("tags"):
-            existing_metadata["tags"] = existing_litellm_metadata.get("tags")
+        metadata_key = get_metadata_variable_name_from_kwargs(request_data)
+        merged_metadata = _merge_failure_metadata_buckets(
+            request_metadata=request_data.get(metadata_key),
+            litellm_params=existing_litellm_params,
+            trusted_metadata=_metadata,
+        )
 
         request_data["litellm_params"]["proxy_server_request"] = (
             request_data.get("proxy_server_request") or existing_litellm_params.get("proxy_server_request") or {}
         )
-        request_data["litellm_params"]["metadata"] = existing_metadata
+        request_data["litellm_params"]["metadata"] = merged_metadata
+        if metadata_key != "metadata":
+            request_data["litellm_params"][metadata_key] = dict(merged_metadata)
 
         # Preserve model name and custom_llm_provider
         if "model" not in request_data:
@@ -416,6 +418,40 @@ def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
             for key, value in patch.items():
                 if bucket.get(key) is None:
                     bucket[key] = value
+
+
+def _as_metadata_mapping(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _merge_failure_metadata_buckets(
+    request_metadata: Mapping[str, object] | None,
+    litellm_params: Mapping[str, object],
+    trusted_metadata: Mapping[str, object],
+) -> Mapping[str, object]:
+    """
+    Build the metadata for a failure spend log out of every bucket the request may
+    have used.
+
+    Routes such as ``/v1/responses`` keep proxy-internal state (``model_group``,
+    ``model_info``, retry counts, tags) in ``litellm_metadata`` rather than
+    ``metadata``, so reading a single bucket drops router attribution. Key identity
+    fields always come from the authenticated key, never from the request body.
+    """
+    caller_metadata = {
+        key: value
+        for key, value in (request_metadata or {}).items()
+        if not key.startswith("user_api_key") and key != "status"
+    }
+    base = {
+        **_as_metadata_mapping(litellm_params.get("metadata")),
+        **_as_metadata_mapping(litellm_params.get("litellm_metadata")),
+        **caller_metadata,
+    }
+    return {
+        **base,
+        **{key: value for key, value in trusted_metadata.items() if value is not None or base.get(key) is None},
+    }
 
 
 def _should_track_cost_callback(
