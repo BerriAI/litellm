@@ -925,6 +925,10 @@ class AdaptiveRouterWeights(BaseModel):
 class AdaptiveRouterConfig(BaseModel):
     available_models: List[str]
     weights: AdaptiveRouterWeights = Field(default_factory=AdaptiveRouterWeights)
+    # Monte Carlo replicates used to estimate P(chosen | posteriors) for the
+    # spend log. 0 disables the estimate and costs nothing, which is the
+    # default so no existing deployment pays for a field it does not read.
+    propensity_samples: int = Field(default=0, ge=0, le=4096)
 
 
 class AdaptiveRouterPreferences(BaseModel):

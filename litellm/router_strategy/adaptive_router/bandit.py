@@ -12,7 +12,7 @@ Hot path: thompson_sample() — pure function, no I/O.
 
 import random
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from litellm.router_strategy.adaptive_router.config import (
     BASE_TIER_WEIGHT,
@@ -109,6 +109,27 @@ def score(
     return quality_weight * quality_sample + cost_weight * cost_score
 
 
+def _draw_once(
+    cells: Dict[str, BanditCell],
+    model_costs: Dict[str, float],
+    all_costs: List[float],
+    quality_weight: float,
+    cost_weight: float,
+    rng: Optional[random.Random],
+) -> str:
+    """One joint Thompson draw: sample every arm, score, return the argmax."""
+    best_model: Optional[str] = None
+    best_score = float("-inf")
+    for model, cell in cells.items():
+        q = thompson_sample(cell, rng=rng)
+        s = score(q, model_costs[model], all_costs, quality_weight, cost_weight)
+        if s > best_score:
+            best_score = s
+            best_model = model
+    assert best_model is not None
+    return best_model
+
+
 def pick_best(
     cells: Dict[str, BanditCell],
     model_costs: Dict[str, float],
@@ -125,13 +146,55 @@ def pick_best(
     if not cells:
         raise ValueError("pick_best called with no models")
     all_costs = list(model_costs.values())
-    best_model: Optional[str] = None
-    best_score = float("-inf")
-    for model, cell in cells.items():
-        q = thompson_sample(cell, rng=rng)
-        s = score(q, model_costs[model], all_costs, quality_weight, cost_weight)
-        if s > best_score:
-            best_score = s
-            best_model = model
-    assert best_model is not None
-    return best_model
+    return _draw_once(cells, model_costs, all_costs, quality_weight, cost_weight, rng)
+
+
+def estimate_propensity(
+    cells: Dict[str, BanditCell],
+    model_costs: Dict[str, float],
+    chosen: str,
+    quality_weight: float = DEFAULT_QUALITY_WEIGHT,
+    cost_weight: float = DEFAULT_COST_WEIGHT,
+    rng: Optional[random.Random] = None,
+    propensity_samples: int = 0,
+) -> Optional[float]:
+    """
+    Estimate P(`chosen` is picked) in the current posterior state.
+
+    Returns None when propensity_samples == 0, which is the default and costs
+    nothing.
+
+    Why estimate rather than compute: a model wins when its scored Beta draw
+    beats every other model's. For more than two models that has no closed
+    form, so P(chosen) has to be measured while the posteriors are in hand or
+    it cannot be recovered at all. A randomized routing decision logged without
+    it is data no off-policy estimator can use.
+
+    The already-made choice counts as one observation, which guarantees the
+    result is >= 1/(propensity_samples + 1). A zero would be self-contradictory
+    -- the model demonstrably was picked -- and would become an infinite
+    importance weight downstream. The cost is an upward bias of order
+    1/propensity_samples, far below the Monte Carlo noise it displaces.
+
+    Hot path: propensity_samples * len(cells) betavariate draws, all of it
+    skipped at the default.
+    """
+    if propensity_samples < 0:
+        raise ValueError(f"propensity_samples must be >= 0, got {propensity_samples}")
+    # Checked before anything else: at the default this function does no work
+    # and must not be able to fail, whatever state the caller is in.
+    if propensity_samples == 0:
+        return None
+    if not cells:
+        raise ValueError("estimate_propensity called with no models")
+    if len(cells) == 1:
+        # Nothing was chosen between, so the probability is exactly 1 and
+        # sampling would only add error.
+        return 1.0
+
+    all_costs = list(model_costs.values())
+    wins = 1  # the decision that was actually made
+    for _ in range(propensity_samples):
+        if _draw_once(cells, model_costs, all_costs, quality_weight, cost_weight, rng) == chosen:
+            wins += 1
+    return wins / (propensity_samples + 1)

@@ -17,14 +17,18 @@ import asyncio
 import time
 from collections import OrderedDict
 from dataclasses import asdict, dataclass
-from typing import Any, Union, cast
+from typing import Any, Optional, Union, cast
 
 from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_last_user_message,
 )
-from litellm.types.utils import StandardLoggingRoutingDecision
+from litellm.types.utils import (
+    StandardLoggingRoutingDecision,
+    StandardLoggingRoutingExploration,
+)
 from litellm.router_strategy.adaptive_router.bandit import (
+    estimate_propensity,
     BanditCell,
     apply_delta,
     initial_cell,
@@ -178,7 +182,9 @@ class AdaptiveRouter:
 
         request_type = classify_prompt(user_text)
         min_quality_tier = self._extract_min_quality_tier(request_kwargs)
-        chosen_model = await self.pick_model(request_type=request_type, min_quality_tier=min_quality_tier)
+        chosen_model, propensity, candidate_set = await self.pick_model_with_propensity(
+            request_type=request_type, min_quality_tier=min_quality_tier
+        )
         verbose_router_logger.debug(
             "AdaptiveRouter[%s]: classified=%s -> chose %s",
             self.router_name,
@@ -197,14 +203,38 @@ class AdaptiveRouter:
         return PreRoutingHookResponse(
             model=chosen_model,
             messages=messages,
-            routing_decision=StandardLoggingRoutingDecision(
-                router_model_name=self.router_name,
-                router_type="adaptive",
-                routed_model=chosen_model,
-                cause="bandit",
-                request_type=request_type.value,
+            routing_decision=self._routing_decision(
+                chosen_model=chosen_model,
+                request_type=request_type,
+                propensity=propensity,
+                candidate_set=candidate_set,
             ),
         )
+
+    def _routing_decision(
+        self,
+        *,
+        chosen_model: str,
+        request_type: RequestType,
+        propensity: Optional[float],
+        candidate_set: tuple[str, ...],
+    ) -> StandardLoggingRoutingDecision:
+        """Build the spend-log record for one bandit decision."""
+        decision = StandardLoggingRoutingDecision(
+            router_model_name=self.router_name,
+            router_type="adaptive",
+            routed_model=chosen_model,
+            cause="bandit",
+            request_type=request_type.value,
+            candidate_set=candidate_set,
+        )
+        if propensity is not None:
+            decision["propensity"] = propensity
+            decision["exploration"] = StandardLoggingRoutingExploration(
+                strategy="thompson",
+                n_samples=self.config.propensity_samples,
+            )
+        return decision
 
     # ---- Pick model ------------------------------------------------------
 
@@ -226,6 +256,33 @@ class AdaptiveRouter:
             quality_weight=self.config.weights.quality,
             cost_weight=self.config.weights.cost,
         )
+
+    async def pick_model_with_propensity(
+        self,
+        request_type: RequestType,
+        min_quality_tier: int | None = None,
+    ) -> tuple[str, Optional[float], tuple[str, ...]]:
+        """Pick a model and report how likely that pick was.
+
+        Returns (model, propensity, candidate_set). Selection still goes through
+        `pick_model`, unchanged; this only measures the choice it made. The
+        propensity is None unless `propensity_samples` is configured, while the
+        candidate set is always returned -- a logged decision is only
+        interpretable against the options that were actually available.
+        """
+        chosen = await self.pick_model(request_type=request_type, min_quality_tier=min_quality_tier)
+        eligible = self._eligible_models(min_quality_tier)
+        if not eligible:
+            return chosen, None, ()
+        propensity = estimate_propensity(
+            {m: self._cells[(request_type, m)] for m in eligible},
+            {m: self.model_to_cost.get(m, 0.0) for m in eligible},
+            chosen,
+            quality_weight=self.config.weights.quality,
+            cost_weight=self.config.weights.cost,
+            propensity_samples=self.config.propensity_samples,
+        )
+        return chosen, propensity, tuple(eligible)
 
     async def get_state_snapshot(self) -> dict[str, Any]:
         """In-memory snapshot for the introspection endpoint. Cheap; no DB hit."""

@@ -2703,6 +2703,19 @@ RoutingDecisionCause = Literal[
 ]
 
 
+class StandardLoggingRoutingExploration(TypedDict, total=False):
+    """How a randomized router drew this request, when it randomized at all.
+
+    ``strategy`` is "none" for deterministic routers, whose propensity is 1.0.
+    ``n_samples`` is present only for estimated propensities and reports their
+    precision, so a consumer can tell an exact probability from a Monte Carlo
+    one.
+    """
+
+    strategy: Literal["none", "thompson", "epsilon_greedy"]
+    n_samples: int
+
+
 class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
@@ -2719,6 +2732,9 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_model: str
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
+    candidate_set: tuple[str, ...]
+    propensity: float
+    exploration: StandardLoggingRoutingExploration
 
 
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
@@ -2738,6 +2754,9 @@ DERIVED_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset(
         "classifier_model",
         "escalated",
         "tier_boundaries",
+        "candidate_set",
+        "propensity",
+        "exploration",
     }
 )
 
