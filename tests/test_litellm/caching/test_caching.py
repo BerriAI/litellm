@@ -1,6 +1,8 @@
 import logging
 import re
 
+import pytest
+
 from litellm.caching.caching import Cache
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
@@ -146,3 +148,39 @@ def test_exact_cache_key_still_includes_prompt():
         model="gpt-4o-mini", messages=[{"role": "user", "content": "b"}]
     )
     assert key_a != key_b
+
+
+@pytest.mark.parametrize("max_age_key", ["s-maxage", "s-max-age"])
+def test_get_cache_honors_zero_s_maxage(max_age_key):
+    import time
+
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    kwargs = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    cache.add_cache({"content": "cached"}, **kwargs)
+    time.sleep(0.02)
+
+    assert cache.get_cache(cache={max_age_key: 0}, **kwargs) is None
+    assert cache.get_cache(cache={max_age_key: 60}, **kwargs) == {"content": "cached"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_age_key", ["s-maxage", "s-max-age"])
+async def test_async_get_cache_honors_zero_s_maxage(max_age_key):
+    import asyncio
+
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    kwargs = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    await cache.async_add_cache({"content": "cached"}, **kwargs)
+    await asyncio.sleep(0.02)
+
+    assert await cache.async_get_cache(cache={max_age_key: 0}, **kwargs) is None
+    assert (
+        await cache.async_get_cache(cache={max_age_key: 60}, **kwargs)
+        == {"content": "cached"}
+    )
