@@ -2,7 +2,7 @@
 Constants for Copilot integration
 """
 
-from typing import Any, Optional, Union
+from typing import Optional, Union
 from uuid import uuid4
 
 import httpx
@@ -17,7 +17,7 @@ API_VERSION = "2025-04-01"
 DEFAULT_GITHUB_COPILOT_API_BASE = "https://api.githubcopilot.com"
 
 
-def get_copilot_initiator(input_param: Any) -> str:
+def get_copilot_initiator(input_param: object) -> str:
     """Classify a Copilot request as user- or agent-initiated.
 
     Responses API history contains assistant/tool/function-call/reasoning items

@@ -130,10 +130,10 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: Union[str, ResponseInputParam],
-        response_api_optional_request_params: Dict,
+        response_api_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> Dict:
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """Set Copilot's initiator header from the actual Responses input."""
         headers["X-Initiator"] = get_copilot_initiator(input)
         return super().transform_responses_api_request(
