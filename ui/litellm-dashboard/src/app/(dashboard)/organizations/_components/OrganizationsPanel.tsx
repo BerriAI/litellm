@@ -1,4 +1,5 @@
 import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useDetailParam } from "@/app/(dashboard)/hooks/useDetailParam";
 import { useUserModels } from "@/app/(dashboard)/hooks/models/useModels";
 import OrganizationFilters, { FilterState } from "@/app/(dashboard)/organizations/OrganizationFilters";
 import { useQueryClient } from "@tanstack/react-query";
@@ -19,7 +20,7 @@ interface OrganizationsPanelProps {
 }
 
 const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, accessToken, premiumUser }) => {
-  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
+  const { id: selectedOrgId, open: openOrg, close: closeOrg } = useDetailParam("org");
   const [editOrg, setEditOrg] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [orgToDelete, setOrgToDelete] = useState<string | null>(null);
@@ -108,7 +109,7 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
         <OrganizationInfoView
           organizationId={selectedOrgId}
           onClose={() => {
-            setSelectedOrgId(null);
+            closeOrg();
             setEditOrg(false);
           }}
           accessToken={accessToken}
@@ -132,9 +133,9 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
             isLoading={isLoading}
             userRole={userRole}
             searchActive={searchActive}
-            onOrganizationClick={setSelectedOrgId}
+            onOrganizationClick={openOrg}
             onEditClick={(organizationId) => {
-              setSelectedOrgId(organizationId);
+              openOrg(organizationId);
               setEditOrg(true);
             }}
             onDeleteClick={handleDelete}
