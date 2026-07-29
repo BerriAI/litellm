@@ -28,9 +28,7 @@ def escape_ts_string(s: str) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Generate a TypeScript CompliancePrompt[] file from a CSV eval file."
-    )
+    parser = argparse.ArgumentParser(description="Generate a TypeScript CompliancePrompt[] file from a CSV eval file.")
     parser.add_argument(
         "--csv",
         required=True,
@@ -106,13 +104,9 @@ def main() -> None:
     # Header comment
     csv_basename = os.path.basename(args.csv)
     lines.append(f"// Auto-generated from {csv_basename} — do not edit manually.")
-    lines.append(
-        f"// Regenerate: python scripts/generate_compliance_prompts.py --csv ... --output ..."
-    )
+    lines.append(f"// Regenerate: python scripts/generate_compliance_prompts.py --csv ... --output ...")
     lines.append("")
-    lines.append(
-        'import type { CompliancePrompt, ComplianceFramework } from "./compliancePrompts";'
-    )
+    lines.append('import type { CompliancePrompt, ComplianceFramework } from "./compliancePrompts";')
     lines.append("")
     lines.append(f"export const {array_name}: CompliancePrompt[] = [")
 
@@ -127,9 +121,7 @@ def main() -> None:
         lines.append(f'    framework: "{escape_ts_string(args.framework)}",')
         lines.append(f'    category: "{escape_ts_string(args.category)}",')
         lines.append(f'    categoryIcon: "{escape_ts_string(args.category_icon)}",')
-        lines.append(
-            f'    categoryDescription: "{escape_ts_string(args.category_description)}",'
-        )
+        lines.append(f'    categoryDescription: "{escape_ts_string(args.category_description)}",')
         lines.append(f'    prompt: "{prompt_text}",')
         lines.append(f'    expectedResult: "{expected}",')
         lines.append("  },")

@@ -26,9 +26,7 @@ class TestA2AStreamingTransformation:
             "parts": [{"text": "Reply to ticket #4823"}],
             "metadata": {"skillId": "draft_reply"},
         }
-        openai_messages = (
-            A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
-        )
+        openai_messages = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
         # Metadata is forwarded on the run payload only, not duplicated on messages.
         assert "metadata" not in openai_messages[0]
 
@@ -174,10 +172,7 @@ class TestA2AStreamingTransformation:
         assert "artifactId" in event["result"]["artifact"]
         assert event["result"]["artifact"]["name"] == "response"
         assert event["result"]["artifact"]["parts"][0]["kind"] == "text"
-        assert (
-            event["result"]["artifact"]["parts"][0]["text"]
-            == "Hello, I am an AI assistant."
-        )
+        assert event["result"]["artifact"]["parts"][0]["text"] == "Hello, I am an AI assistant."
 
 
 @pytest.mark.asyncio

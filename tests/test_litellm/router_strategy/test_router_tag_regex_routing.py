@@ -201,9 +201,7 @@ async def test_empty_healthy_deployments_with_request_tags_returns_empty_list():
         llm_router_instance=router,
         model="gpt-5.2",
         healthy_deployments=[],
-        request_kwargs={
-            "metadata": {"tags": ["client_id:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]}
-        },
+        request_kwargs={"metadata": {"tags": ["client_id:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]}},
     )
     assert result == []
 

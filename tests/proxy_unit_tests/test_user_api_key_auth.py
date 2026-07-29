@@ -7,9 +7,7 @@ import sys
 import litellm.proxy
 import litellm.proxy.proxy_server
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from typing import Dict, List, Optional
 from unittest.mock import MagicMock, patch, AsyncMock
 
@@ -50,9 +48,7 @@ class Request:
         ),  # Request with no client IP should not be allowed
     ],
 )
-def test_check_valid_ip(
-    allowed_ips: Optional[List[str]], client_ip: Optional[str], expected_result: bool
-):
+def test_check_valid_ip(allowed_ips: Optional[List[str]], client_ip: Optional[str], expected_result: bool):
     from litellm.proxy.auth.auth_utils import _check_valid_ip
 
     request = Request(client_ip)
@@ -121,9 +117,7 @@ async def test_check_blocked_team():
         last_refreshed_at=time.time(),
     )
     await asyncio.sleep(1)
-    team_obj = LiteLLM_TeamTableCachedObj(
-        team_id=_team_id, blocked=False, last_refreshed_at=time.time()
-    )
+    team_obj = LiteLLM_TeamTableCachedObj(team_id=_team_id, blocked=False, last_refreshed_at=time.time())
     hashed_token = hash_token(user_key)
     print(f"STORING TOKEN UNDER KEY={hashed_token}")
     user_api_key_cache.set_cache(key=hashed_token, value=valid_token)
@@ -173,9 +167,7 @@ async def test_team_object_has_object_permission_id():
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
 
-    with patch(
-        "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
-    ) as mock_common_checks:
+    with patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock) as mock_common_checks:
         mock_common_checks.return_value = True
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
 
@@ -200,9 +192,7 @@ async def test_returned_user_api_key_auth(user_role, expected_role):
     from datetime import datetime
 
     new_obj = await _return_user_api_key_auth_obj(
-        user_obj=LiteLLM_UserTable(
-            user_role=user_role, user_id="", max_budget=None, user_email=""
-        ),
+        user_obj=LiteLLM_UserTable(user_role=user_role, user_id="", max_budget=None, user_email=""),
         api_key="hello-world",
         parent_otel_span=None,
         valid_token_dict={},
@@ -258,9 +248,7 @@ async def test_aaauser_personal_budgets(key_ownership):
             spend=20,
         )
 
-    user_obj = LiteLLM_UserTable(
-        user_id=_user_id, spend=11, max_budget=10, user_email=""
-    )
+    user_obj = LiteLLM_UserTable(user_id=_user_id, spend=11, max_budget=10, user_email="")
     user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
     user_api_key_cache.set_cache(key="{}".format(_user_id), value=user_obj)
 
@@ -273,10 +261,7 @@ async def test_aaauser_personal_budgets(key_ownership):
 
     test_user_cache = getattr(litellm.proxy.proxy_server, "user_api_key_cache")
 
-    assert (
-        test_user_cache.get_cache(key=hash_token(user_key), model_type=UserAPIKeyAuth)
-        == valid_token
-    )
+    assert test_user_cache.get_cache(key=hash_token(user_key), model_type=UserAPIKeyAuth) == valid_token
 
     with pytest.raises(ProxyException) as exc_info:
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
@@ -308,9 +293,7 @@ async def test_user_api_key_auth_fails_with_prohibited_params(prohibited_param):
 
     request.body = return_body
     try:
-        response = await user_api_key_auth(
-            request=request, api_key="Bearer " + user_key
-        )
+        response = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
     except Exception as e:
         print("error str=", str(e))
         error_message = str(e.message)
@@ -516,9 +499,7 @@ def _assert_api_key_from_custom_header(headers, custom_header_name, expected_api
     verbose_proxy_logger.setLevel(logging.DEBUG)
     request = MagicMock(spec=Request)
     request.headers = headers
-    api_key = get_api_key_from_custom_header(
-        request=request, custom_litellm_key_header_name=custom_header_name
-    )
+    api_key = get_api_key_from_custom_header(request=request, custom_litellm_key_header_name=custom_header_name)
     assert api_key == expected_api_key
 
 
@@ -578,9 +559,7 @@ from litellm.proxy._types import LitellmUserRoles
         (LitellmUserRoles.TEAM, "1234", "1234", True),
     ],
 )
-def test_allowed_route_inside_route(
-    user_role, auth_user_id, requested_user_id, expected_result
-):
+def test_allowed_route_inside_route(user_role, auth_user_id, requested_user_id, expected_result):
     from litellm.proxy.auth.auth_checks import allowed_route_check_inside_route
     from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
 
@@ -721,9 +700,7 @@ async def test_soft_budget_alert():
 
     try:
         # Call user_api_key_auth
-        response = await user_api_key_auth(
-            request=request, api_key="Bearer " + user_key
-        )
+        response = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
 
         # Assert the request was allowed (no exception raised)
         assert response is not None
@@ -889,9 +866,7 @@ async def test_user_api_key_auth_websocket():
     mock_websocket.url = URL(url="/ws")
 
     # Mock the return value of `user_api_key_auth` when it's called within the `user_api_key_auth_websocket` function
-    with patch(
-        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
-    ) as mock_user_api_key_auth:
+    with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True) as mock_user_api_key_auth:
         # Make the call to the WebSocket function
         await user_api_key_auth_websocket(mock_websocket)
 
@@ -902,17 +877,11 @@ async def test_user_api_key_auth_websocket():
         request_arg = mock_user_api_key_auth.call_args.kwargs["request"]
 
         # Verify that the request has headers set
-        assert hasattr(
-            request_arg, "headers"
-        ), "Request object should have headers attribute"
-        assert (
-            "authorization" in request_arg.headers
-        ), "Request headers should contain authorization"
+        assert hasattr(request_arg, "headers"), "Request object should have headers attribute"
+        assert "authorization" in request_arg.headers, "Request headers should contain authorization"
         assert request_arg.headers["authorization"] == "Bearer some_api_key"
 
-        assert (
-            mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
-        )
+        assert mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
 
 
 @pytest.mark.asyncio
@@ -935,9 +904,7 @@ async def test_user_api_key_auth_websocket_carries_asgi_path():
     }
     mock_websocket.url = URL(url="/v1/realtime")
 
-    with patch(
-        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
-    ) as mock_user_api_key_auth:
+    with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True) as mock_user_api_key_auth:
         await user_api_key_auth_websocket(mock_websocket)
 
         request_arg = mock_user_api_key_auth.call_args.kwargs["request"]
@@ -1133,9 +1100,7 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
     )
     request._url = URL(url="/team/new")
 
-    monkeypatch.setattr(
-        litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True}
-    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True})
 
     # Initialize jwt_handler with a default LiteLLM_JWTAuth so that the
     # virtual_key_claim_field check in user_api_key_auth doesn't fail with
@@ -1164,9 +1129,7 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
     ):
         try:
             await user_api_key_auth(request=request, api_key="Bearer fake.jwt.token")
-            pytest.fail(
-                "Expected this call to fail. Non-admin user should not access team routes."
-            )
+            pytest.fail("Expected this call to fail. Non-admin user should not access team routes.")
         except ProxyException as e:
             print("e", e)
             assert "Only proxy admin can be used to generate" in str(e.message)
@@ -1226,9 +1189,7 @@ async def test_user_api_key_from_query_param():
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     user_key = "sk-query-1234"
-    user_api_key_cache.set_cache(
-        key=hash_token(user_key), value=UserAPIKeyAuth(token=hash_token(user_key))
-    )
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=UserAPIKeyAuth(token=hash_token(user_key)))
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
@@ -1241,9 +1202,7 @@ async def test_user_api_key_from_query_param():
             "query_string": f"alt=sse&key={user_key}".encode(),
         }
     )
-    request._url = URL(
-        url=f"/v1beta/models/gemini:streamGenerateContent?alt=sse&key={user_key}"
-    )
+    request._url = URL(url=f"/v1beta/models/gemini:streamGenerateContent?alt=sse&key={user_key}")
 
     async def return_body():
         return b"{}"

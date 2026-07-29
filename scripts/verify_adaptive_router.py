@@ -62,9 +62,7 @@ PROMPTS: List[str] = [
 SATISFACTION_PROMPT: str = "thanks, that worked!"
 
 
-async def _post_chat(
-    client: httpx.AsyncClient, session_id: str, prompt: str
-) -> Optional[dict]:
+async def _post_chat(client: httpx.AsyncClient, session_id: str, prompt: str) -> Optional[dict]:
     """POST a chat completion with retry + timeout. Returns response JSON or None."""
     body = {
         "model": ROUTER_NAME,
@@ -135,18 +133,14 @@ async def main() -> None:
             sys.exit(1)
 
         # ---- Phase 1: training -------------------------------------------
-        print(
-            f"Phase 1: training ({TRAIN_SESSIONS} sessions of 3 turns + satisfaction)..."
-        )
+        print(f"Phase 1: training ({TRAIN_SESSIONS} sessions of 3 turns + satisfaction)...")
         for i in range(TRAIN_SESSIONS):
             sid = f"verify-train-{uuid.uuid4()}"
             await send_session(client, sid, PROMPTS, satisfy=True)
             if (i + 1) % 5 == 0:
                 print(f"  trained {i + 1}/{TRAIN_SESSIONS} sessions")
 
-        print(
-            f"\nWaiting {FLUSHER_DRAIN_WAIT_SECONDS:.0f}s for flusher to drain queue..."
-        )
+        print(f"\nWaiting {FLUSHER_DRAIN_WAIT_SECONDS:.0f}s for flusher to drain queue...")
         await asyncio.sleep(FLUSHER_DRAIN_WAIT_SECONDS)
 
         # ---- Phase 2: convergence ----------------------------------------
@@ -163,10 +157,7 @@ async def main() -> None:
             print("\nFAIL: no successful picks in convergence phase.", file=sys.stderr)
             sys.exit(1)
         winner_share = picks.count(EXPECTED_WINNER) / len(picks)
-        print(
-            f"\n{EXPECTED_WINNER} share: {winner_share:.0%} "
-            f"({picks.count(EXPECTED_WINNER)}/{len(picks)})"
-        )
+        print(f"\n{EXPECTED_WINNER} share: {winner_share:.0%} ({picks.count(EXPECTED_WINNER)}/{len(picks)})")
 
         # ---- Phase 3: sticky session -------------------------------------
         print("\nPhase 3: sticky session test...")
@@ -190,9 +181,7 @@ async def main() -> None:
         latencies: List[float] = []
         for _ in range(5):
             t0 = time.perf_counter()
-            await send_session(
-                client, f"verify-lat-{uuid.uuid4()}", [PROMPTS[0]], satisfy=False
-            )
+            await send_session(client, f"verify-lat-{uuid.uuid4()}", [PROMPTS[0]], satisfy=False)
             latencies.append(time.perf_counter() - t0)
         latencies.sort()
         p50 = latencies[len(latencies) // 2]
@@ -201,8 +190,7 @@ async def main() -> None:
         # ---- Verdict -----------------------------------------------------
         if winner_share >= WIN_THRESHOLD:
             print(
-                f"\nPASS: convergence ({winner_share:.0%} >= {WIN_THRESHOLD:.0%}) + "
-                f"sticky + latency checks all green."
+                f"\nPASS: convergence ({winner_share:.0%} >= {WIN_THRESHOLD:.0%}) + sticky + latency checks all green."
             )
             sys.exit(0)
         print(

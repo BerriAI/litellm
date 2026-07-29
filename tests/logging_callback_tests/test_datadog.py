@@ -53,9 +53,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
         startTime=1234567890.0,
         endTime=1234567891.0,
         completionStartTime=1234567890.5,
-        model_map_information=StandardLoggingModelInformation(
-            model_map_key="gpt-4.1-mini", model_map_value=None
-        ),
+        model_map_information=StandardLoggingModelInformation(model_map_key="gpt-4.1-mini", model_map_value=None),
         model="gpt-4.1-mini",
         model_id="model-123",
         model_group="openai-gpt",
@@ -153,9 +151,7 @@ async def test_datadog_failure_logging():
         end_time=datetime.now(),
     )
 
-    assert (
-        dd_payload["status"] == DataDogStatus.ERROR
-    )  # Verify failure maps to warning status
+    assert dd_payload["status"] == DataDogStatus.ERROR  # Verify failure maps to warning status
 
     # verify the message field == standard_payload
     dict_payload = json.loads(dd_payload["message"])
@@ -253,20 +249,16 @@ async def test_datadog_logging_http_request():
             assert isinstance(log, dict), "Each log should be a dictionary"
             for field, expected_type in required_fields.items():
                 assert field in log, f"Field '{field}' is missing from the log"
-                assert isinstance(
-                    log[field], expected_type
-                ), f"Field '{field}' has incorrect type. Expected {expected_type}, got {type(log[field])}"
+                assert isinstance(log[field], expected_type), (
+                    f"Field '{field}' has incorrect type. Expected {expected_type}, got {type(log[field])}"
+                )
 
             for optional_field in optional_fields:
                 if optional_field in log:
-                    assert isinstance(
-                        log[optional_field], str
-                    ), f"Optional field '{optional_field}' must be a string"
+                    assert isinstance(log[optional_field], str), f"Optional field '{optional_field}' must be a string"
 
             unexpected_fields = set(log.keys()) - set(expected_fields.keys())
-            assert (
-                not unexpected_fields
-            ), f"Log contains unexpected fields: {unexpected_fields}"
+            assert not unexpected_fields, f"Log contains unexpected fields: {unexpected_fields}"
 
         # Parse the 'message' field as JSON and check its structure
         message = json.loads(body[0]["message"])
@@ -389,9 +381,7 @@ async def test_datadog_log_redis_failures():
         from litellm.caching.caching import Cache
         from litellm.integrations.datadog.datadog import DataDogLogger
 
-        litellm.cache = Cache(
-            type="redis", host="badhost", port="6379", password="badpassword"
-        )
+        litellm.cache = Cache(type="redis", host="badhost", port="6379", password="badpassword")
 
         os.environ["DD_SITE"] = "https://fake.datadoghq.com"
         os.environ["DD_API_KEY"] = "anything"
@@ -450,12 +440,8 @@ async def test_datadog_log_redis_failures():
 
         for event in failure_events:
             message = json.loads(event["message"])
-            assert (
-                event["status"] == "warning"
-            ), f"Event status is not 'warning': {event['status']}"
-            assert (
-                message["service"] == "redis"
-            ), f"Service is not 'redis': {message['service']}"
+            assert event["status"] == "warning", f"Event status is not 'warning': {event['status']}"
+            assert message["service"] == "redis", f"Service is not 'redis': {message['service']}"
             assert "error" in message, "No 'error' field in the message"
             assert message["error"], "Error field is empty"
     except Exception as e:
@@ -510,17 +496,12 @@ async def test_datadog_payload_environment_variables():
             print("dd payload=", json.dumps(dd_payload, indent=2))
 
             # Verify payload structure and environment variables
-            assert (
-                dd_payload["ddsource"] == "test-source"
-            ), "Incorrect source in payload"
-            assert (
-                dd_payload["service"] == "test-service"
-            ), "Incorrect service in payload"
+            assert dd_payload["ddsource"] == "test-source", "Incorrect source in payload"
+            assert dd_payload["service"] == "test-service", "Incorrect service in payload"
 
-            assert (
-                "env:test-env,service:test-service,version:1.0.0,HOSTNAME:"
-                in dd_payload["ddtags"]
-            ), "Incorrect tags in payload"
+            assert "env:test-env,service:test-service,version:1.0.0,HOSTNAME:" in dd_payload["ddtags"], (
+                "Incorrect tags in payload"
+            )
 
     except Exception as e:
         pytest.fail(f"Test failed with exception: {str(e)}")
@@ -572,12 +553,8 @@ async def test_datadog_payload_content_truncation():
 
     # Verify truncation of fields
     assert len(message_dict["error_str"]) < 10_100, "error_str not truncated correctly"
-    assert (
-        len(str(message_dict["messages"])) < 10_100
-    ), "messages not truncated correctly"
-    assert (
-        len(str(message_dict["response"])) < 10_100
-    ), "response not truncated correctly"
+    assert len(str(message_dict["messages"])) < 10_100, "messages not truncated correctly"
+    assert len(str(message_dict["response"])) < 10_100, "response not truncated correctly"
 
 
 def test_datadog_static_methods():
@@ -591,9 +568,7 @@ def test_datadog_static_methods():
     assert get_datadog_pod_name() == "unknown"
 
     # Test tags format with default values
-    assert "env:unknown,service:litellm-server,version:unknown,HOSTNAME:" in ",".join(
-        get_datadog_tags()
-    )
+    assert "env:unknown,service:litellm-server,version:unknown,HOSTNAME:" in ",".join(get_datadog_tags())
 
     # Test with custom environment variables
     test_env = {
@@ -638,9 +613,7 @@ async def test_datadog_non_serializable_messages():
     standard_payload = create_standard_logging_payload()
     non_serializable_obj = datetime.now()  # datetime objects aren't JSON serializable
     standard_payload["messages"] = [{"role": "user", "content": non_serializable_obj}]
-    standard_payload["response"] = {
-        "choices": [{"message": {"content": non_serializable_obj}}]
-    }
+    standard_payload["response"] = {"choices": [{"message": {"content": non_serializable_obj}}]}
 
     kwargs = {"standard_logging_object": standard_payload}
 
@@ -726,12 +699,12 @@ async def test_datadog_message_redaction():
             dd_logger = DataDogLogger()
 
         # Verify that turn_off_message_logging was set correctly from litellm.datadog_params
-        assert hasattr(
-            dd_logger, "turn_off_message_logging"
-        ), "DataDogLogger should have turn_off_message_logging attribute"
-        assert (
-            dd_logger.turn_off_message_logging is True
-        ), f"Expected turn_off_message_logging=True, got {dd_logger.turn_off_message_logging}"
+        assert hasattr(dd_logger, "turn_off_message_logging"), (
+            "DataDogLogger should have turn_off_message_logging attribute"
+        )
+        assert dd_logger.turn_off_message_logging is True, (
+            f"Expected turn_off_message_logging=True, got {dd_logger.turn_off_message_logging}"
+        )
 
         # Test the redaction method inherited from CustomLogger
         model_call_details = {
@@ -743,36 +716,25 @@ async def test_datadog_message_redaction():
                     }
                 ],
                 "response": {
-                    "choices": [
-                        {
-                            "message": {
-                                "content": "This is a sensitive response that should be redacted"
-                            }
-                        }
-                    ]
+                    "choices": [{"message": {"content": "This is a sensitive response that should be redacted"}}]
                 },
             }
         }
 
         # Apply redaction using the inherited method
-        redacted_details = (
-            dd_logger.redact_standard_logging_payload_from_model_call_details(
-                model_call_details
-            )
-        )
+        redacted_details = dd_logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
         redacted_str = "redacted-by-litellm"
 
         # Verify that messages are redacted
         redacted_standard_obj = redacted_details["standard_logging_object"]
-        assert (
-            redacted_standard_obj["messages"][0]["content"] == redacted_str
-        ), f"Messages not redacted. Got: {redacted_standard_obj['messages'][0]['content']}"
+        assert redacted_standard_obj["messages"][0]["content"] == redacted_str, (
+            f"Messages not redacted. Got: {redacted_standard_obj['messages'][0]['content']}"
+        )
 
         # Verify that response is redacted
-        assert (
-            redacted_standard_obj["response"]["choices"][0]["message"]["content"]
-            == redacted_str
-        ), f"Response not redacted. Got: {redacted_standard_obj['response']['choices'][0]['message']['content']}"
+        assert redacted_standard_obj["response"]["choices"][0]["message"]["content"] == redacted_str, (
+            f"Response not redacted. Got: {redacted_standard_obj['response']['choices'][0]['message']['content']}"
+        )
 
         print("✅ DataDog message redaction test passed")
 
@@ -807,9 +769,9 @@ def test_datadog_agent_configuration():
             dd_logger = DataDogLogger()
 
         # Verify agent endpoint is configured correctly
-        assert (
-            dd_logger.intake_url == "http://localhost:10518/api/v2/logs"
-        ), f"Expected agent URL, got {dd_logger.intake_url}"
+        assert dd_logger.intake_url == "http://localhost:10518/api/v2/logs", (
+            f"Expected agent URL, got {dd_logger.intake_url}"
+        )
 
         # Verify DD_API_KEY is optional (can be None)
         assert dd_logger.DD_API_KEY is None or isinstance(dd_logger.DD_API_KEY, str)

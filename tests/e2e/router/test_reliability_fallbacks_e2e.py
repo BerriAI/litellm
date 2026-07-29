@@ -31,8 +31,7 @@ def _assert_served_by_fallback(resp: StreamingResponse) -> None:
     assert resp.status_code == 200, f"expected 200 after fallback, got {resp.status_code}: {resp.body[:300]}"
     content = content_of(resp)
     assert isinstance(content, str) and content, (
-        f"the gpt-5.5 fallback should have returned a real completion, got content {content!r} "
-        f"(body={resp.body[:300]})"
+        f"the gpt-5.5 fallback should have returned a real completion, got content {content!r} (body={resp.body[:300]})"
     )
     attempted = resp.headers.get("x-litellm-attempted-fallbacks")
     assert attempted is not None, "response is missing the x-litellm-attempted-fallbacks header"
@@ -49,7 +48,10 @@ class TestReliabilityFallbacks:
         resources.defer(lambda: client.proxy.delete_model(model_id))
 
         resp = chat_override(
-            client.proxy, scoped_key, primary, "say hi",
+            client.proxy,
+            scoped_key,
+            primary,
+            "say hi",
             override=RouterSettingsOverride(fallbacks=[{primary: ["gpt-5.5"]}]),
         )
         _assert_served_by_fallback(resp)
@@ -63,7 +65,10 @@ class TestReliabilityFallbacks:
         resources.defer(lambda: client.proxy.delete_model(model_id))
 
         resp = chat_override(
-            client.proxy, scoped_key, primary, "say hi",
+            client.proxy,
+            scoped_key,
+            primary,
+            "say hi",
             override=RouterSettingsOverride(fallbacks=[{primary: ["gpt-5.5"]}]),
         )
         _assert_served_by_fallback(resp)

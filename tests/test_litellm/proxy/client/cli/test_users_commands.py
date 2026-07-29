@@ -5,9 +5,7 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
 from litellm.proxy.client.cli import cli
@@ -32,9 +30,7 @@ def mock_env():
 
 @pytest.fixture
 def mock_users_client():
-    with patch(
-        "litellm.proxy.client.cli.commands.users.UsersManagementClient"
-    ) as MockClient:
+    with patch("litellm.proxy.client.cli.commands.users.UsersManagementClient") as MockClient:
         yield MockClient
 
 
@@ -79,9 +75,7 @@ def test_users_create(cli_runner, mock_users_client):
         "user_id": "u1",
         "user_email": "a@b.com",
     }
-    result = cli_runner.invoke(
-        cli, ["users", "create", "--email", "a@b.com", "--role", "internal_user"]
-    )
+    result = cli_runner.invoke(cli, ["users", "create", "--email", "a@b.com", "--role", "internal_user"])
     assert result.exit_code == 0
     assert '"user_id": "u1"' in result.output
     assert '"user_email": "a@b.com"' in result.output

@@ -75,9 +75,7 @@ class TestCallbackOAuthErrorResponses:
         # Sanity: must not leak the Pydantic validation error.
         assert "Field required" not in body
 
-    def test_idp_error_html_escapes_user_controlled_fields(
-        self, callback_test_client
-    ):
+    def test_idp_error_html_escapes_user_controlled_fields(self, callback_test_client):
         """A malicious IdP must not be able to inject HTML/JS via error params."""
         resp = callback_test_client.get(
             "/callback",
@@ -94,9 +92,7 @@ class TestCallbackOAuthErrorResponses:
         assert "<img src=x onerror=alert(2)>" not in body
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
 
-    def test_idp_error_with_trusted_state_propagates_to_client_redirect_uri(
-        self, callback_test_client
-    ):
+    def test_idp_error_with_trusted_state_propagates_to_client_redirect_uri(self, callback_test_client):
         """When state decodes to a trusted (loopback) redirect_uri, propagate
         the error back so the MCP client's OAuth library can surface it
         instead of timing out waiting on the loopback."""
@@ -130,9 +126,7 @@ class TestCallbackOAuthErrorResponses:
         # Wrapped/encrypted state must NOT leak to the client.
         assert state not in location
 
-    def test_idp_error_with_untrusted_redirect_uri_does_not_open_redirect(
-        self, callback_test_client
-    ):
+    def test_idp_error_with_untrusted_redirect_uri_does_not_open_redirect(self, callback_test_client):
         """If the state minted earlier carries a redirect_uri that the proxy
         no longer trusts, we must surface the error inline rather than
         302-ing to an attacker-controlled URL (open-redirect)."""
@@ -156,9 +150,7 @@ class TestCallbackOAuthErrorResponses:
         assert "attacker.example.com" not in resp.headers.get("location", "")
         assert "access_denied" in resp.text
 
-    def test_idp_error_with_undecryptable_state_falls_back_to_html(
-        self, callback_test_client
-    ):
+    def test_idp_error_with_undecryptable_state_falls_back_to_html(self, callback_test_client):
         resp = callback_test_client.get(
             "/callback",
             params={
@@ -172,9 +164,7 @@ class TestCallbackOAuthErrorResponses:
         assert "server_error" in resp.text
         assert "boom" in resp.text
 
-    def test_bare_callback_with_no_params_returns_400_not_422(
-        self, callback_test_client
-    ):
+    def test_bare_callback_with_no_params_returns_400_not_422(self, callback_test_client):
         """An SSO redirect chain that drops the original /authorize query
         params should land on a human-readable 400, not a Pydantic 422."""
         resp = callback_test_client.get("/callback", follow_redirects=False)
@@ -182,9 +172,7 @@ class TestCallbackOAuthErrorResponses:
         assert "invalid_request" in resp.text
         assert "Field required" not in resp.text
 
-    def test_success_path_still_redirects_with_code_and_state(
-        self, callback_test_client
-    ):
+    def test_success_path_still_redirects_with_code_and_state(self, callback_test_client):
         """Regression: the successful (``code``+``state``) flow must still
         redirect back to the trusted client redirect_uri with the original
         state preserved."""

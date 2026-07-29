@@ -175,9 +175,7 @@ class RealtimeClient:
 
         try:
             while self.is_active:
-                audio_data = self.input_stream.read(
-                    CHUNK_SIZE, exception_on_overflow=False
-                )
+                audio_data = self.input_stream.read(CHUNK_SIZE, exception_on_overflow=False)
                 await self.send_audio_chunk(audio_data)
                 await asyncio.sleep(0.01)  # Small delay to prevent overwhelming
         except Exception as e:
@@ -202,9 +200,7 @@ class RealtimeClient:
         try:
             while self.is_active:
                 try:
-                    audio_data = await asyncio.wait_for(
-                        self.audio_queue.get(), timeout=0.1
-                    )
+                    audio_data = await asyncio.wait_for(self.audio_queue.get(), timeout=0.1)
                     if audio_data:
                         self.output_stream.write(audio_data)
                 except asyncio.TimeoutError:

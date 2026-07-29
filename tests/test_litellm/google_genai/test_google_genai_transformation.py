@@ -2,12 +2,11 @@
 """
 Test to verify the Google GenAI transformation logic for generateContent parameters
 """
+
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import pytest
 
@@ -36,10 +35,7 @@ def test_map_generate_content_optional_params_response_json_schema_camelcase():
 
     # responseJsonSchema should be in the result (camelCase format for Google GenAI API)
     assert "responseJsonSchema" in result
-    assert (
-        result["responseJsonSchema"]
-        == generate_content_config_dict["responseJsonSchema"]
-    )
+    assert result["responseJsonSchema"] == generate_content_config_dict["responseJsonSchema"]
     assert "temperature" in result
     assert result["temperature"] == 1.0
 
@@ -63,10 +59,7 @@ def test_map_generate_content_optional_params_response_schema_snakecase():
 
     # response_schema should be converted to responseJsonSchema (camelCase)
     assert "responseJsonSchema" in result
-    assert (
-        result["responseJsonSchema"]
-        == generate_content_config_dict["response_json_schema"]
-    )
+    assert result["responseJsonSchema"] == generate_content_config_dict["response_json_schema"]
     assert "temperature" in result
 
 
@@ -259,9 +252,7 @@ def test_transform_generate_content_request_with_system_instruction():
 
     # Verify that systemInstruction is in the request
     assert "systemInstruction" in result, "systemInstruction should be in request body"
-    assert (
-        result["systemInstruction"] == system_instruction
-    ), "systemInstruction should match input"
+    assert result["systemInstruction"] == system_instruction, "systemInstruction should match input"
     assert result["model"] == "gemini-3-flash-preview"
     assert result["contents"] == contents
 
@@ -284,9 +275,7 @@ def test_transform_generate_content_request_without_system_instruction():
     )
 
     # Verify that systemInstruction is NOT in the request when not provided
-    assert (
-        "systemInstruction" not in result
-    ), "systemInstruction should not be in request when None"
+    assert "systemInstruction" not in result, "systemInstruction should not be in request when None"
     assert result["model"] == "gemini-3-flash-preview"
     assert result["contents"] == contents
 
@@ -295,9 +284,7 @@ def test_transform_generate_content_request_system_instruction_with_tools():
     """Test that systemInstruction works correctly alongside tools"""
     config = GoogleGenAIConfig()
 
-    system_instruction = {
-        "parts": [{"text": "You are a helpful assistant that uses tools"}]
-    }
+    system_instruction = {"parts": [{"text": "You are a helpful assistant that uses tools"}]}
 
     contents = [{"role": "user", "parts": [{"text": "What's the weather?"}]}]
 
@@ -379,9 +366,7 @@ def test_transform_generate_content_request_normalizes_response_schema_2_5():
     assert "responseJsonSchema" in gen_config
     normalized = gen_config["responseJsonSchema"]
     assert "$defs" in normalized
-    assert normalized["properties"]["highlights"]["items"] == {
-        "$ref": "#/$defs/Highlight"
-    }
+    assert normalized["properties"]["highlights"]["items"] == {"$ref": "#/$defs/Highlight"}
 
 
 def test_transform_generate_content_request_flattens_response_schema_1_5():
@@ -586,12 +571,8 @@ def test_validate_environment_with_dict_api_key():
 
     # The dict should be merged into headers, not set as a value
     assert "x-goog-api-key" in result, "x-goog-api-key should be in headers"
-    assert (
-        result["x-goog-api-key"] == "sk-test-key-123"
-    ), "API key should be the string value, not a dict"
-    assert isinstance(
-        result["x-goog-api-key"], str
-    ), "Header value should be a string, not a dict"
+    assert result["x-goog-api-key"] == "sk-test-key-123", "API key should be the string value, not a dict"
+    assert isinstance(result["x-goog-api-key"], str), "Header value should be a string, not a dict"
     assert "Content-Type" in result, "Content-Type should be in headers"
     assert result["Content-Type"] == "application/json"
 
@@ -637,9 +618,7 @@ def test_validate_environment_with_extra_headers():
 
     # Both the auth dict and extra headers should be merged
     assert "x-goog-api-key" in result, "x-goog-api-key should be in headers"
-    assert (
-        result["x-goog-api-key"] == "sk-test-key-789"
-    ), "API key should be correctly set"
+    assert result["x-goog-api-key"] == "sk-test-key-789", "API key should be correctly set"
     assert isinstance(result["x-goog-api-key"], str), "Header value should be a string"
     assert "X-Custom-Header" in result, "Extra headers should be merged"
     assert result["X-Custom-Header"] == "custom-value"

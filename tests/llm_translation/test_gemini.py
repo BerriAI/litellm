@@ -3,9 +3,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system paths
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system paths
 
 from base_llm_unit_tests import BaseLLMChatTest
 from litellm.llms.vertex_ai.context_caching.transformation import (
@@ -119,9 +117,9 @@ class TestGoogleAIStudioGemini(BaseLLMChatTest):
         )
 
         assert response is not None
-        assert (
-            response.model_extra["vertex_ai_url_context_metadata"] is not None
-        ), "URL context metadata should be present"
+        assert response.model_extra["vertex_ai_url_context_metadata"] is not None, (
+            "URL context metadata should be present"
+        )
         print(f"response={response}")
 
 
@@ -343,11 +341,7 @@ def test_gemini_image_generation():
     assert len(response.choices[0].message.images) > 0
     assert response.choices[0].message.images[0]["image_url"] is not None
     assert response.choices[0].message.images[0]["image_url"]["url"] is not None
-    assert (
-        response.choices[0]
-        .message.images[0]["image_url"]["url"]
-        .startswith("data:image/png;base64,")
-    )
+    assert response.choices[0].message.images[0]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
 @pytest.mark.parametrize(
@@ -370,19 +364,11 @@ def test_gemini_flash_image_preview_models(model_name: str):
     mock_response = ImageResponse()
     mock_response.data = [ImageObject(b64_json="test_base64_data", url=None)]
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post") as mock_post:
         # Mock successful HTTP response
         mock_http_response = MagicMock()
         mock_http_response.json.return_value = {
-            "candidates": [
-                {
-                    "content": {
-                        "parts": [{"inlineData": {"data": "test_base64_image_data"}}]
-                    }
-                }
-            ]
+            "candidates": [{"content": {"parts": [{"inlineData": {"data": "test_base64_image_data"}}]}}]
         }
         mock_http_response.status_code = 200
         mock_post.return_value = mock_http_response
@@ -403,9 +389,7 @@ def test_gemini_flash_image_preview_models(model_name: str):
         # Validate the correct endpoint was called
         mock_post.assert_called_once()
         call_args = mock_post.call_args
-        called_url = (
-            call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
-        )
+        called_url = call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
 
         # Verify it uses generateContent endpoint for Gemini Flash image preview models (not predict)
         assert ":generateContent" in called_url
@@ -440,23 +424,13 @@ def test_gemini_flash_image_preview_models(model_name: str):
         ),
     ],
 )
-def test_gemini_image_generation_forwards_image_config(
-    model: str, kwargs: dict, expected_image_config: dict
-):
+def test_gemini_image_generation_forwards_image_config(model: str, kwargs: dict, expected_image_config: dict):
     from unittest.mock import patch, MagicMock
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post") as mock_post:
         mock_http_response = MagicMock()
         mock_http_response.json.return_value = {
-            "candidates": [
-                {
-                    "content": {
-                        "parts": [{"inlineData": {"data": "test_base64_image_data"}}]
-                    }
-                }
-            ]
+            "candidates": [{"content": {"parts": [{"inlineData": {"data": "test_base64_image_data"}}]}}]
         }
         mock_http_response.status_code = 200
         mock_post.return_value = mock_http_response
@@ -517,9 +491,7 @@ def test_gemini_image_generation_openai_size_maps_to_google_table(
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(
-        size, "gemini-3-pro-image-preview"
-    ) == {
+    assert map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview") == {
         "aspectRatio": expected_aspect_ratio,
         "imageSize": expected_image_size,
     }
@@ -543,9 +515,7 @@ def test_gemini_image_generation_openai_size_snaps_to_nearest_option(
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(
-        size, "gemini-3-pro-image-preview"
-    ) == {
+    assert map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview") == {
         "aspectRatio": expected_aspect_ratio,
         "imageSize": expected_image_size,
     }
@@ -557,9 +527,7 @@ def test_gemini_image_generation_openai_size_auto_uses_google_defaults(size: str
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(
-        size, "gemini-3-pro-image-preview"
-    ) is None
+    assert map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview") is None
 
 
 def test_gemini_imagen_models_use_predict_endpoint():
@@ -569,14 +537,10 @@ def test_gemini_imagen_models_use_predict_endpoint():
     from unittest.mock import patch, MagicMock
     from litellm.types.utils import ImageResponse, ImageObject
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post") as mock_post:
         # Mock successful HTTP response for Imagen
         mock_http_response = MagicMock()
-        mock_http_response.json.return_value = {
-            "predictions": [{"bytesBase64Encoded": "test_base64_image_data"}]
-        }
+        mock_http_response.json.return_value = {"predictions": [{"bytesBase64Encoded": "test_base64_image_data"}]}
         mock_http_response.status_code = 200
         mock_post.return_value = mock_http_response
 
@@ -595,9 +559,7 @@ def test_gemini_imagen_models_use_predict_endpoint():
         # Validate the correct endpoint was called for Imagen models
         mock_post.assert_called_once()
         call_args = mock_post.call_args
-        called_url = (
-            call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
-        )
+        called_url = call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
 
         # Verify Imagen models use predict endpoint (not generateContent)
         assert ":predict" in called_url
@@ -909,11 +871,7 @@ async def test_claude_tool_use_with_gemini():
                 if "data: " in chunk_str:
                     try:
                         # Extract JSON from data line
-                        data_line = [
-                            line
-                            for line in chunk_str.split("\n")
-                            if line.startswith("data: ")
-                        ][0]
+                        data_line = [line for line in chunk_str.split("\n") if line.startswith("data: ")][0]
                         json_str = data_line[6:]  # Remove 'data: ' prefix
                         chunk_data = json.loads(json_str)
 
@@ -928,25 +886,16 @@ async def test_claude_tool_use_with_gemini():
                         # Check for usage in message_delta with stop_reason
                         if (
                             chunk_data.get("type") == "message_delta"
-                            and chunk_data.get("delta", {}).get("stop_reason")
-                            is not None
+                            and chunk_data.get("delta", {}).get("stop_reason") is not None
                             and "usage" in chunk_data
                         ):
                             has_usage_in_message_delta = True
                             # Verify usage has the expected structure
                             usage = chunk_data["usage"]
-                            assert (
-                                "input_tokens" in usage
-                            ), "input_tokens should be present in usage"
-                            assert (
-                                "output_tokens" in usage
-                            ), "output_tokens should be present in usage"
-                            assert isinstance(
-                                usage["input_tokens"], int
-                            ), "input_tokens should be an integer"
-                            assert isinstance(
-                                usage["output_tokens"], int
-                            ), "output_tokens should be an integer"
+                            assert "input_tokens" in usage, "input_tokens should be present in usage"
+                            assert "output_tokens" in usage, "output_tokens should be present in usage"
+                            assert isinstance(usage["input_tokens"], int), "input_tokens should be an integer"
+                            assert isinstance(usage["output_tokens"], int), "output_tokens should be an integer"
                             print(f"Found usage in message_delta: {usage}")
 
                     except (json.JSONDecodeError, IndexError) as e:
@@ -963,9 +912,7 @@ async def test_claude_tool_use_with_gemini():
 
     assert is_content_block_tool_use, "content_block_tool_use should be present"
     assert is_partial_json, "partial_json should be present"
-    assert (
-        has_usage_in_message_delta
-    ), "Usage should be present in message_delta with stop_reason"
+    assert has_usage_in_message_delta, "Usage should be present in message_delta with stop_reason"
     assert is_content_block_stop, "is_content_block_stop should be present"
 
 
@@ -1034,13 +981,9 @@ async def test_gemini_image_generation_async():
     CONTENT = response.choices[0].message.content
 
     # Check if images list exists and has items before accessing
-    assert hasattr(
-        response.choices[0].message, "images"
-    ), "Response message should have images attribute"
+    assert hasattr(response.choices[0].message, "images"), "Response message should have images attribute"
     assert response.choices[0].message.images is not None, "Images should not be None"
-    assert (
-        len(response.choices[0].message.images) > 0
-    ), "Images list should not be empty"
+    assert len(response.choices[0].message.images) > 0, "Images list should not be empty"
 
     IMAGE_URL = response.choices[0].message.images[0]["image_url"]
     print("IMAGE_URL: ", IMAGE_URL)
@@ -1111,9 +1054,7 @@ def get_current_weather(location, unit="fahrenheit"):
     if "tokyo" in location.lower():
         return json.dumps({"location": "Tokyo", "temperature": "10", "unit": "celsius"})
     elif "san francisco" in location.lower():
-        return json.dumps(
-            {"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}
-        )
+        return json.dumps({"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"})
     elif "paris" in location.lower():
         return json.dumps({"location": "Paris", "temperature": "22", "unit": "celsius"})
     else:
@@ -1240,29 +1181,23 @@ def test_gemini_reasoning_effort_minimal():
 
         # Verify that the thinking config is set correctly
         request_body = raw_request["raw_request_body"]
-        assert (
-            "generationConfig" in request_body
-        ), f"Model {model} should have generationConfig"
+        assert "generationConfig" in request_body, f"Model {model} should have generationConfig"
 
         generation_config = request_body["generationConfig"]
-        assert (
-            "thinkingConfig" in generation_config
-        ), f"Model {model} should have thinkingConfig"
+        assert "thinkingConfig" in generation_config, f"Model {model} should have thinkingConfig"
 
         thinking_config = generation_config["thinkingConfig"]
-        assert (
-            "thinkingBudget" in thinking_config
-        ), f"Model {model} should have thinkingBudget"
+        assert "thinkingBudget" in thinking_config, f"Model {model} should have thinkingBudget"
 
         actual_budget = thinking_config["thinkingBudget"]
-        assert (
-            actual_budget == expected_min_budget
-        ), f"Model {model} should map 'minimal' to {expected_min_budget} tokens, got {actual_budget}"
+        assert actual_budget == expected_min_budget, (
+            f"Model {model} should map 'minimal' to {expected_min_budget} tokens, got {actual_budget}"
+        )
 
         # Verify that includeThoughts is True for minimal reasoning effort
-        assert thinking_config.get(
-            "includeThoughts", True
-        ), f"Model {model} should have includeThoughts=True for minimal reasoning effort"
+        assert thinking_config.get("includeThoughts", True), (
+            f"Model {model} should have includeThoughts=True for minimal reasoning effort"
+        )
 
     # Test with unknown model (should use generic fallback)
     try:
@@ -1279,9 +1214,7 @@ def test_gemini_reasoning_effort_minimal():
         generation_config = request_body["generationConfig"]
         thinking_config = generation_config["thinkingConfig"]
         # Should use generic fallback (128 tokens)
-        assert (
-            thinking_config["thinkingBudget"] == 128
-        ), "Unknown model should use generic fallback of 128 tokens"
+        assert thinking_config["thinkingBudget"] == 128, "Unknown model should use generic fallback of 128 tokens"
     except Exception as e:
         # If return_raw_request doesn't work for unknown models, that's okay
         # The important part is that our known models work correctly
@@ -1308,9 +1241,7 @@ def test_gemini_exception_message_format():
     mock_response.headers = {}
 
     # Create a mock exception that simulates a Gemini API error
-    mock_exception = httpx.HTTPStatusError(
-        message="Bad Request", request=Mock(), response=mock_response
-    )
+    mock_exception = httpx.HTTPStatusError(message="Bad Request", request=Mock(), response=mock_response)
     mock_exception.response = mock_response
     mock_exception.status_code = 400
 
@@ -1336,9 +1267,9 @@ def test_gemini_exception_message_format():
             f"Expected 'GeminiException' in error message, got: {error_message}. "
             f"This test should fail before the fix is implemented."
         )
-        assert (
-            "VertexAIException" not in error_message
-        ), f"Should not contain 'VertexAIException' in error message, got: {error_message}"
+        assert "VertexAIException" not in error_message, (
+            f"Should not contain 'VertexAIException' in error message, got: {error_message}"
+        )
 
 
 @pytest.mark.parametrize(
@@ -1384,9 +1315,7 @@ def l(status_code, expected_exception):
     mock_response.headers = {}
 
     # Create a mock exception
-    mock_exception = httpx.HTTPStatusError(
-        message=f"HTTP {status_code}", request=Mock(), response=mock_response
-    )
+    mock_exception = httpx.HTTPStatusError(message=f"HTTP {status_code}", request=Mock(), response=mock_response)
     mock_exception.response = mock_response
     mock_exception.status_code = status_code
     # Set message attribute for compatibility with exception mapping
@@ -1401,9 +1330,7 @@ def l(status_code, expected_exception):
             completion_kwargs={},
             extra_kwargs={},
         )
-        assert (
-            False
-        ), f"Expected {expected_exception} to be raised for status {status_code}"
+        assert False, f"Expected {expected_exception} to be raised for status {status_code}"
     except Exception as e:
         # Verify the correct exception type is raised
         exception_classes = {
@@ -1418,18 +1345,16 @@ def l(status_code, expected_exception):
             "ServiceUnavailableError": ServiceUnavailableError,
         }
         expected_class = exception_classes[expected_exception]
-        assert isinstance(
-            e, expected_class
-        ), f"Expected {expected_exception}, got {type(e).__name__}"
+        assert isinstance(e, expected_class), f"Expected {expected_exception}, got {type(e).__name__}"
 
         # Verify the error message contains GeminiException
         error_message = str(e)
-        assert (
-            "GeminiException" in error_message
-        ), f"Expected 'GeminiException' in error message for status {status_code}, got: {error_message}"
-        assert (
-            "VertexAIException" not in error_message
-        ), f"Should not contain 'VertexAIException' for status {status_code}, got: {error_message}"
+        assert "GeminiException" in error_message, (
+            f"Expected 'GeminiException' in error message for status {status_code}, got: {error_message}"
+        )
+        assert "VertexAIException" not in error_message, (
+            f"Should not contain 'VertexAIException' for status {status_code}, got: {error_message}"
+        )
 
 
 def test_gemini_embedding():
@@ -1496,18 +1421,12 @@ def test_gemini_function_args_preserve_unicode():
 
     # Verify characters are preserved
     assert parsed_args["message"] == "やあ", "Japanese characters should be preserved"
-    assert (
-        parsed_args["recipient"] == "たけし"
-    ), "Japanese characters should be preserved"
+    assert parsed_args["recipient"] == "たけし", "Japanese characters should be preserved"
 
     # Verify no Unicode escape sequences in raw string
     assert "\\u" not in arguments_str, "Should not contain Unicode escape sequences"
-    assert (
-        "やあ" in arguments_str
-    ), "Original Japanese characters should be in the string"
-    assert (
-        "たけし" in arguments_str
-    ), "Original Japanese characters should be in the string"
+    assert "やあ" in arguments_str, "Original Japanese characters should be in the string"
+    assert "たけし" in arguments_str, "Original Japanese characters should be in the string"
 
     # Test Spanish characters
     parts_spanish = [
@@ -1563,12 +1482,8 @@ def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
         )
 
         # For Gemini 3, should not force thinkingLevel by default
-        assert (
-            "thinkingLevel" not in result
-        ), "Should not force thinkingLevel for Gemini 3"
-        assert (
-            "thinkingBudget" not in result
-        ), "Should NOT have thinkingBudget for Gemini 3"
+        assert "thinkingLevel" not in result, "Should not force thinkingLevel for Gemini 3"
+        assert "thinkingBudget" not in result, "Should NOT have thinkingBudget for Gemini 3"
         assert result["includeThoughts"] is True
 
         # Test 2: Anthropic thinking disabled for Gemini 3
@@ -1583,10 +1498,7 @@ def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
         )
 
         assert result_disabled.get("includeThoughts") is False
-        assert (
-            "thinkingLevel" not in result_disabled
-            or result_disabled.get("thinkingLevel") is None
-        )
+        assert "thinkingLevel" not in result_disabled or result_disabled.get("thinkingLevel") is None
 
         # Test 3: Budget tokens = 0 for Gemini 3
         thinking_param_zero: AnthropicThinkingParam = {
@@ -1600,10 +1512,7 @@ def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
         )
 
         assert result_zero["includeThoughts"] is False
-        assert (
-            "thinkingLevel" not in result_zero
-            or result_zero.get("thinkingLevel") is None
-        )
+        assert "thinkingLevel" not in result_zero or result_zero.get("thinkingLevel") is None
 
         # Test 4: Gemini 3 flash-preview should also follow provider defaults by default
         result_gemini3flashpreview = VertexGeminiConfig._map_thinking_param(
@@ -1693,9 +1602,7 @@ def test_anthropic_thinking_param_to_gemini_2_thinkingBudget():
     )
 
     assert "thinkingBudget" in result_gemini2, "Should have thinkingBudget for Gemini 2"
-    assert (
-        "thinkingLevel" not in result_gemini2
-    ), "Should NOT have thinkingLevel for Gemini 2"
+    assert "thinkingLevel" not in result_gemini2, "Should NOT have thinkingLevel for Gemini 2"
     assert result_gemini2["includeThoughts"] is True
     assert result_gemini2["thinkingBudget"] == 10000
 
@@ -1733,12 +1640,8 @@ def test_anthropic_thinking_param_via_map_openai_params():
     # Check that thinkingConfig was created without forced thinkingLevel
     assert "thinkingConfig" in result, "Should have thinkingConfig in optional_params"
     thinking_config = result["thinkingConfig"]
-    assert (
-        "thinkingLevel" not in thinking_config
-    ), "Should not force thinkingLevel for Gemini 3 by default"
-    assert (
-        "thinkingBudget" not in thinking_config
-    ), "Should NOT have thinkingBudget for Gemini 3"
+    assert "thinkingLevel" not in thinking_config, "Should not force thinkingLevel for Gemini 3 by default"
+    assert "thinkingBudget" not in thinking_config, "Should NOT have thinkingBudget for Gemini 3"
     assert thinking_config["includeThoughts"] is True
 
     # Test with Gemini 2 model
@@ -1753,12 +1656,8 @@ def test_anthropic_thinking_param_via_map_openai_params():
     # Check that thinkingConfig was created with thinkingBudget
     assert "thinkingConfig" in result_2, "Should have thinkingConfig in optional_params"
     thinking_config_2 = result_2["thinkingConfig"]
-    assert (
-        "thinkingBudget" in thinking_config_2
-    ), "Should have thinkingBudget for Gemini 2"
-    assert (
-        "thinkingLevel" not in thinking_config_2
-    ), "Should NOT have thinkingLevel for Gemini 2"
+    assert "thinkingBudget" in thinking_config_2, "Should have thinkingBudget for Gemini 2"
+    assert "thinkingLevel" not in thinking_config_2, "Should NOT have thinkingLevel for Gemini 2"
     assert thinking_config_2["includeThoughts"] is True
     assert thinking_config_2["thinkingBudget"] == 10000
 
@@ -1779,9 +1678,9 @@ def test_gemini_31_flash_lite_reasoning_effort_minimal():
         reasoning_effort="minimal",
         model="gemini-3.1-flash-lite-preview",
     )
-    assert (
-        result["thinkingLevel"] == "minimal"
-    ), f"Expected thinkingLevel='minimal' for gemini-3.1-flash-lite-preview, got '{result['thinkingLevel']}'"
+    assert result["thinkingLevel"] == "minimal", (
+        f"Expected thinkingLevel='minimal' for gemini-3.1-flash-lite-preview, got '{result['thinkingLevel']}'"
+    )
     assert result["includeThoughts"] is True
 
     # Also verify via the full map_openai_params flow
@@ -1798,12 +1697,12 @@ def test_gemini_31_flash_lite_reasoning_effort_minimal():
     )
     generation_config = raw_request["raw_request_body"]["generationConfig"]
     thinking_config = generation_config["thinkingConfig"]
-    assert (
-        thinking_config.get("thinkingLevel") == "minimal"
-    ), f"Expected thinkingLevel='minimal' via full flow, got {thinking_config}"
-    assert (
-        "thinkingBudget" not in thinking_config
-    ), "gemini-3.1-flash-lite-preview should use thinkingLevel, not thinkingBudget"
+    assert thinking_config.get("thinkingLevel") == "minimal", (
+        f"Expected thinkingLevel='minimal' via full flow, got {thinking_config}"
+    )
+    assert "thinkingBudget" not in thinking_config, (
+        "gemini-3.1-flash-lite-preview should use thinkingLevel, not thinkingBudget"
+    )
 
 
 def test_gemini_image_size_limit_exceeded(monkeypatch):

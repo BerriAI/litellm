@@ -59,9 +59,7 @@ async def test_key_update_authz_matrix(
     seeder = world.keys[Actor.PROXY_ADMIN].cleartext
 
     if target_shape == "self":
-        target_cleartext = await create_scratch_key(
-            proxy_client, seeder, scratch.prefix, user_id=caller.user_id
-        )
+        target_cleartext = await create_scratch_key(proxy_client, seeder, scratch.prefix, user_id=caller.user_id)
     elif target_shape == "owner":
         target_cleartext = await create_scratch_key(
             proxy_client,
@@ -88,13 +86,9 @@ async def test_key_update_authz_matrix(
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"key": target_cleartext, "models": [MARKER_MODEL]},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value} {target_shape}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value} {target_shape}: {resp.status_code} {resp.text}"
 
-    row = await prisma.db.litellm_verificationtoken.find_unique(
-        where={"token": target_hashed}
-    )
+    row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": target_hashed})
     assert row is not None
     if expected_status == 200:
         assert row.models == [MARKER_MODEL]
@@ -104,9 +98,7 @@ async def test_key_update_authz_matrix(
 
 async def _seed_shape(proxy_client, seeder, prefix, world, shape, caller) -> str:
     if shape == "self":
-        return await create_scratch_key(
-            proxy_client, seeder, prefix, user_id=caller.user_id
-        )
+        return await create_scratch_key(proxy_client, seeder, prefix, user_id=caller.user_id)
     if shape == "owner":
         return await create_scratch_key(
             proxy_client,
@@ -161,9 +153,7 @@ async def test_key_update_denied_does_not_touch_budget_counters(
 ):
     caller = world.keys[actor]
     seeder = world.keys[Actor.PROXY_ADMIN].cleartext
-    target = await _seed_shape(
-        proxy_client, seeder, scratch.prefix, world, target_shape, caller
-    )
+    target = await _seed_shape(proxy_client, seeder, scratch.prefix, world, target_shape, caller)
     target_hashed = hash_token(target)
 
     resp = await proxy_client.post(
@@ -171,13 +161,9 @@ async def test_key_update_denied_does_not_touch_budget_counters(
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"key": target, "max_budget": 999.0, "tpm_limit": 888, "rpm_limit": 777},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value} {target_shape}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value} {target_shape}: {resp.status_code} {resp.text}"
 
-    row = await prisma.db.litellm_verificationtoken.find_unique(
-        where={"token": target_hashed}
-    )
+    row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": target_hashed})
     assert row is not None
     assert row.max_budget is None, "denied but max_budget applied"
     assert row.tpm_limit is None, "denied but tpm_limit applied"

@@ -48,9 +48,7 @@ ANTHROPIC_MODELS = [
 # raw SSE records as `stream_event` entries in the stream-json output,
 # which is the wire-level signal for whether the proxy preserved
 # incremental `input_json_delta` events for the tool_use block.
-TOOL_USE_PROMPT = (
-    "Use the Bash tool to run the command `echo pong` and report what it printed."
-)
+TOOL_USE_PROMPT = "Use the Bash tool to run the command `echo pong` and report what it printed."
 # Bash is restricted to the exact command `echo pong` + `dontAsk`
 # permission mode; see `tool_use/test_anthropic.py` for the security
 # rationale.
@@ -84,9 +82,7 @@ def _count_input_json_deltas(events: Sequence[Mapping[str, Any]]) -> int:
     entries. Zero means the proxy collapsed the streamed tool input
     into a single complete block instead of forwarding the incremental
     deltas the upstream emitted."""
-    inner_events = (
-        event.get("event") for event in events if event.get("type") == "stream_event"
-    )
+    inner_events = (event.get("event") for event in events if event.get("type") == "stream_event")
     return sum(
         1
         for inner in inner_events
@@ -127,9 +123,7 @@ def test_tool_use_streaming_anthropic(compat_result):
             continue
 
         if not _has_tool_use_event(outcome.events):
-            error = (
-                f"[{model}] no tool_use content block observed in stream-json events"
-            )
+            error = f"[{model}] no tool_use content block observed in stream-json events"
             compat_result.add({"status": "fail", "error": error})
             failures.append(error)
             continue

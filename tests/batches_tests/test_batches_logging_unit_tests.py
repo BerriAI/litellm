@@ -7,9 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from dotenv import load_dotenv
 
 load_dotenv()
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 import logging
 import time
 
@@ -139,9 +137,7 @@ def test_get_file_content_as_dictionary(sample_file_content):
 
 
 def test_get_batch_job_total_usage_from_file_content(sample_file_content_dict):
-    usage = _get_batch_job_total_usage_from_file_content(
-        sample_file_content_dict, custom_llm_provider="openai"
-    )
+    usage = _get_batch_job_total_usage_from_file_content(sample_file_content_dict, custom_llm_provider="openai")
     assert usage.total_tokens == 62  # 30 + 32
     assert usage.prompt_tokens == 42  # 20 + 22
     assert usage.completion_tokens == 20  # 10 + 10
@@ -282,22 +278,14 @@ async def test_handle_completed_batch_computes_real_cost_from_output_file(
         "litellm.batches.batch_utils._get_batch_output_file_content_as_dictionary",
         new=AsyncMock(return_value=sample_file_content_dict),
     ):
-        cost, usage, models = await _handle_completed_batch(
-            batch=batch, custom_llm_provider="openai"
-        )
+        cost, usage, models = await _handle_completed_batch(batch=batch, custom_llm_provider="openai")
 
     pricing = litellm.model_cost["gpt-4o-mini-2024-07-18"]
-    expected_cost = (
-        42 * pricing["input_cost_per_token_batches"]
-        + 20 * pricing["output_cost_per_token_batches"]
-    )
+    expected_cost = 42 * pricing["input_cost_per_token_batches"] + 20 * pricing["output_cost_per_token_batches"]
 
     assert cost == pytest.approx(expected_cost)
     assert cost > 0
-    assert (
-        cost
-        < 42 * pricing["input_cost_per_token"] + 20 * pricing["output_cost_per_token"]
-    )
+    assert cost < 42 * pricing["input_cost_per_token"] + 20 * pricing["output_cost_per_token"]
     assert usage.prompt_tokens == 42
     assert usage.completion_tokens == 20
     assert usage.total_tokens == 62
@@ -407,9 +395,7 @@ async def test_batch_retrieve_cost_tracking_with_unified_file_id_incomplete_batc
 
     # Create a proper unified file ID by encoding the correct prefix
     unified_id_str = f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}:test_file_789;unified_id:batch-789"
-    encoded_unified_id = (
-        base64.urlsafe_b64encode(unified_id_str.encode()).decode().rstrip("=")
-    )
+    encoded_unified_id = base64.urlsafe_b64encode(unified_id_str.encode()).decode().rstrip("=")
 
     # Mock batch result with in_progress status and unified file ID
     mock_batch = LiteLLMBatch(

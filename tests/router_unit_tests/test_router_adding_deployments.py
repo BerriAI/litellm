@@ -1,9 +1,7 @@
 import sys, os
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params
 from unittest.mock import patch
@@ -68,14 +66,10 @@ def test_initialize_deployment_for_pass_through_success(reusable_credentials):
         passthrough_endpoint_router,
     )
 
-    vertex_creds = passthrough_endpoint_router.get_vertex_credentials(
-        project_id="test-project", location="us-central1"
-    )
+    vertex_creds = passthrough_endpoint_router.get_vertex_credentials(project_id="test-project", location="us-central1")
     assert vertex_creds.vertex_project == "test-project"
     assert vertex_creds.vertex_location == "us-central1"
-    assert vertex_creds.vertex_credentials == json.dumps(
-        {"type": "service_account", "project_id": "test"}
-    )
+    assert vertex_creds.vertex_credentials == json.dumps({"type": "service_account", "project_id": "test"})
 
 
 def test_initialize_deployment_for_pass_through_missing_params():
@@ -140,9 +134,7 @@ def test_add_vertex_pass_through_deployment():
             model="vertex_ai/test-model",
             vertex_project="test-project",
             vertex_location="us-central1",
-            vertex_credentials=json.dumps(
-                {"type": "service_account", "project_id": "test"}
-            ),
+            vertex_credentials=json.dumps({"type": "service_account", "project_id": "test"}),
             use_in_pass_through=True,
         ),
     )
@@ -165,13 +157,9 @@ def test_add_vertex_pass_through_deployment():
         )
     )
 
-    vertex_creds = passthrough_endpoint_router.get_vertex_credentials(
-        project_id="test-project", location="us-central1"
-    )
+    vertex_creds = passthrough_endpoint_router.get_vertex_credentials(project_id="test-project", location="us-central1")
 
     # Verify the credentials were properly set
     assert vertex_creds.vertex_project == "test-project"
     assert vertex_creds.vertex_location == "us-central1"
-    assert vertex_creds.vertex_credentials == json.dumps(
-        {"type": "service_account", "project_id": "test"}
-    )
+    assert vertex_creds.vertex_credentials == json.dumps({"type": "service_account", "project_id": "test"})

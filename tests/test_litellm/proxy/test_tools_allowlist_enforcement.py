@@ -58,9 +58,7 @@ class TestExtractRequestToolNames:
                 {"type": "function", "name": "get_current_weather", "description": "x"},
             ]
         }
-        assert extract_request_tool_names("/v1/responses", data) == [
-            "get_current_weather"
-        ]
+        assert extract_request_tool_names("/v1/responses", data) == ["get_current_weather"]
 
     def test_openai_responses_mcp_tools(self):
         data = {
@@ -103,9 +101,7 @@ class TestExtractRequestToolNames:
                 },
             ]
         }
-        assert extract_request_tool_names("/generate_content", data) == [
-            "schedule_meeting"
-        ]
+        assert extract_request_tool_names("/generate_content", data) == ["schedule_meeting"]
 
     def test_mcp_call_tool_name(self):
         data = {"name": "my_tool", "arguments": {}}

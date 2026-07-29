@@ -49,6 +49,5 @@ def test_final_user_directive_is_numeric():
     )
 
     assert int(final_user) != 0, (
-        f"Dockerfile.non_root final USER is {final_user} (root); the non_root image "
-        "must run as a non-zero UID."
+        f"Dockerfile.non_root final USER is {final_user} (root); the non_root image must run as a non-zero UID."
     )

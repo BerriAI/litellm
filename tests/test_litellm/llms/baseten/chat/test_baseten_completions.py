@@ -18,10 +18,7 @@ class TestBasetenRouting:
         )
 
         # Model API (non-8-character)
-        assert (
-            config.get_api_base_for_model("openai/gpt-oss-120b")
-            == "https://inference.baseten.co/v1"
-        )
+        assert config.get_api_base_for_model("openai/gpt-oss-120b") == "https://inference.baseten.co/v1"
 
 
 class TestBasetenModelAPI:
@@ -47,9 +44,7 @@ class TestBasetenModelAPI:
         assert result["top_p"] == 0.9
 
         # Test provider info
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            None, "test-key"
-        )
+        api_base, api_key = config._get_openai_compatible_provider_info(None, "test-key")
         assert api_base == "https://inference.baseten.co/v1"
         assert api_key == "test-key"
 

@@ -6,9 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os, copy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 import pytest
 from litellm import Router
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -181,15 +179,11 @@ async def test_get_llm_provider_for_deployment():
 
     """
     cleanup_redis()
-    provider_budget = RouterBudgetLimiting(
-        dual_cache=DualCache(), provider_budget_config={}
-    )
+    provider_budget = RouterBudgetLimiting(dual_cache=DualCache(), provider_budget_config={})
 
     # Test OpenAI deployment
     openai_deployment = {"litellm_params": {"model": "openai/gpt-4"}}
-    assert (
-        provider_budget._get_llm_provider_for_deployment(openai_deployment) == "openai"
-    )
+    assert provider_budget._get_llm_provider_for_deployment(openai_deployment) == "openai"
 
     # Test Azure deployment
     azure_deployment = {
@@ -218,9 +212,7 @@ async def test_get_budget_config_for_provider():
         "anthropic": BudgetConfig(budget_duration="7d", max_budget=500),
     }
 
-    provider_budget = RouterBudgetLimiting(
-        dual_cache=DualCache(), provider_budget_config=config
-    )
+    provider_budget = RouterBudgetLimiting(dual_cache=DualCache(), provider_budget_config=config)
 
     # Test existing providers
     openai_config = provider_budget._get_budget_config_for_provider("openai")
@@ -245,9 +237,7 @@ async def test_handle_new_budget_window():
     Current
     """
     cleanup_redis()
-    provider_budget = RouterBudgetLimiting(
-        dual_cache=DualCache(), provider_budget_config={}
-    )
+    provider_budget = RouterBudgetLimiting(dual_cache=DualCache(), provider_budget_config={})
 
     spend_key = "provider_spend:openai:7d"
     start_time_key = "provider_budget_start_time:openai"
@@ -286,9 +276,7 @@ async def test_get_or_set_budget_start_time():
     scenario 2: existing start time in cache, should return existing start time
     """
     cleanup_redis()
-    provider_budget = RouterBudgetLimiting(
-        dual_cache=DualCache(), provider_budget_config={}
-    )
+    provider_budget = RouterBudgetLimiting(dual_cache=DualCache(), provider_budget_config={})
 
     start_time_key = "test_start_time"
     current_time = 1000.0
@@ -327,9 +315,7 @@ async def test_increment_spend_in_current_window():
     - Queue the increment operation to Redis
     """
     cleanup_redis()
-    provider_budget = RouterBudgetLimiting(
-        dual_cache=DualCache(), provider_budget_config={}
-    )
+    provider_budget = RouterBudgetLimiting(dual_cache=DualCache(), provider_budget_config={})
 
     spend_key = "provider_spend:openai:1d"
     response_cost = 0.5
@@ -395,23 +381,15 @@ async def test_sync_in_memory_spend_with_redis():
     spend_key_openai = "provider_spend:openai:1d"
     spend_key_anthropic = "provider_spend:anthropic:1d"
 
-    await provider_budget.dual_cache.redis_cache.async_set_cache(
-        key=spend_key_openai, value=50.0
-    )
-    await provider_budget.dual_cache.redis_cache.async_set_cache(
-        key=spend_key_anthropic, value=75.0
-    )
+    await provider_budget.dual_cache.redis_cache.async_set_cache(key=spend_key_openai, value=50.0)
+    await provider_budget.dual_cache.redis_cache.async_set_cache(key=spend_key_anthropic, value=75.0)
 
     # Test syncing with Redis
     await provider_budget._sync_in_memory_spend_with_redis()
 
     # Verify in-memory cache was updated
-    openai_spend = await provider_budget.dual_cache.in_memory_cache.async_get_cache(
-        spend_key_openai
-    )
-    anthropic_spend = await provider_budget.dual_cache.in_memory_cache.async_get_cache(
-        spend_key_anthropic
-    )
+    openai_spend = await provider_budget.dual_cache.in_memory_cache.async_get_cache(spend_key_openai)
+    anthropic_spend = await provider_budget.dual_cache.in_memory_cache.async_get_cache(spend_key_anthropic)
 
     assert float(openai_spend) == 50.0
     assert float(anthropic_spend) == 75.0

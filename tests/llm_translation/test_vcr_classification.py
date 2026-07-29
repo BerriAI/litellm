@@ -156,14 +156,10 @@ def test_should_distinguish_different_aws_access_keys():
     """Two different access keys must produce different fingerprints so
     cassettes recorded under one identity never serve another."""
     req_a = SimpleNamespace(
-        headers={
-            "authorization": "AWS4-HMAC-SHA256 Credential=AKIAONE/x/y/z/aws4_request, Signature=A"
-        }
+        headers={"authorization": "AWS4-HMAC-SHA256 Credential=AKIAONE/x/y/z/aws4_request, Signature=A"}
     )
     req_b = SimpleNamespace(
-        headers={
-            "authorization": "AWS4-HMAC-SHA256 Credential=AKIATWO/x/y/z/aws4_request, Signature=A"
-        }
+        headers={"authorization": "AWS4-HMAC-SHA256 Credential=AKIATWO/x/y/z/aws4_request, Signature=A"}
     )
     assert _compute_key_fingerprint(req_a) != _compute_key_fingerprint(req_b)
 
@@ -216,30 +212,19 @@ def _cassette(played: int, dirty: bool, total: int):
 
 
 def test_should_classify_pure_replay_as_hit():
-    assert (
-        _classify_marked_test(_cassette(played=3, dirty=False, total=3)) == VERDICT_HIT
-    )
+    assert _classify_marked_test(_cassette(played=3, dirty=False, total=3)) == VERDICT_HIT
 
 
 def test_should_classify_no_traffic_as_noop():
-    assert (
-        _classify_marked_test(_cassette(played=0, dirty=False, total=0))
-        == VERDICT_NOOP_NO_TRAFFIC
-    )
+    assert _classify_marked_test(_cassette(played=0, dirty=False, total=0)) == VERDICT_NOOP_NO_TRAFFIC
 
 
 def test_should_classify_pure_record_as_miss_recorded():
-    assert (
-        _classify_marked_test(_cassette(played=0, dirty=True, total=1))
-        == VERDICT_MISS_RECORDED
-    )
+    assert _classify_marked_test(_cassette(played=0, dirty=True, total=1)) == VERDICT_MISS_RECORDED
 
 
 def test_should_classify_mixed_replay_and_record_as_partial():
-    assert (
-        _classify_marked_test(_cassette(played=2, dirty=True, total=4))
-        == VERDICT_PARTIAL
-    )
+    assert _classify_marked_test(_cassette(played=2, dirty=True, total=4)) == VERDICT_PARTIAL
 
 
 def test_should_classify_overflow_only_when_dirty_episodes_were_recorded():
@@ -249,28 +234,16 @@ def test_should_classify_overflow_only_when_dirty_episodes_were_recorded():
     already-large cassette with no new traffic is healthy: the persister
     never tries to save, so the cache state is stable and the next run
     will replay too."""
-    assert (
-        _classify_marked_test(_cassette(played=0, dirty=True, total=51))
-        == VERDICT_MISS_OVERFLOW
-    )
-    assert (
-        _classify_marked_test(_cassette(played=10, dirty=True, total=52))
-        == VERDICT_MISS_OVERFLOW
-    )
+    assert _classify_marked_test(_cassette(played=0, dirty=True, total=51)) == VERDICT_MISS_OVERFLOW
+    assert _classify_marked_test(_cassette(played=10, dirty=True, total=52)) == VERDICT_MISS_OVERFLOW
 
 
 def test_should_classify_large_cassette_with_no_new_episodes_as_hit():
     """``total > 50`` + ``dirty=False`` means everything was replayed
     from cache; no save attempt happens, so this is a healthy HIT, not
     OVERFLOW."""
-    assert (
-        _classify_marked_test(_cassette(played=51, dirty=False, total=51))
-        == VERDICT_HIT
-    )
-    assert (
-        _classify_marked_test(_cassette(played=60, dirty=False, total=60))
-        == VERDICT_HIT
-    )
+    assert _classify_marked_test(_cassette(played=51, dirty=False, total=51)) == VERDICT_HIT
+    assert _classify_marked_test(_cassette(played=60, dirty=False, total=60)) == VERDICT_HIT
 
 
 # ---------------------------------------------------------------------------
@@ -302,9 +275,7 @@ def test_should_skip_per_item_when_respx_marker_present(vcr_enabled, tmp_path):
 
 def test_should_skip_per_item_when_respx_mock_fixture_present(vcr_enabled, tmp_path):
     mod, p = _make_module_with_source(tmp_path, "def test_x(): pass\n", "respx_fixture")
-    item = _StubItem(
-        "respx_fixture.py::test_x", p, fixturenames=["respx_mock"], module=mod
-    )
+    item = _StubItem("respx_fixture.py::test_x", p, fixturenames=["respx_mock"], module=mod)
     apply_vcr_auto_marker_to_items([item])
     assert item.get_closest_marker("vcr") is None
     assert getattr(item, VCR_SKIP_REASON_USER_ATTR) == SKIP_REASON_RESPX
@@ -317,9 +288,7 @@ def test_should_tag_pre_marked_items_so_summary_can_show_them(vcr_enabled, tmp_p
     assert getattr(item, VCR_SKIP_REASON_USER_ATTR) == SKIP_REASON_PRE_MARKED
 
 
-def test_should_tag_skip_files_with_respx_module_when_module_actually_uses_respx(
-    vcr_enabled, tmp_path
-):
+def test_should_tag_skip_files_with_respx_module_when_module_actually_uses_respx(vcr_enabled, tmp_path):
     """A file in ``skip_files`` whose module *does* call respx should be
     labeled as a real conflict (respx_conflict_module), not a dead opt-out."""
     mod, p = _make_module_with_source(
@@ -332,9 +301,7 @@ def test_should_tag_skip_files_with_respx_module_when_module_actually_uses_respx
     assert getattr(item, VCR_SKIP_REASON_USER_ATTR) == SKIP_REASON_RESPX_MODULE
 
 
-def test_should_tag_skip_files_with_file_opt_out_when_module_does_not_use_respx(
-    vcr_enabled, tmp_path
-):
+def test_should_tag_skip_files_with_file_opt_out_when_module_does_not_use_respx(vcr_enabled, tmp_path):
     """A file in ``skip_files`` whose module never wires up respx is a
     dead skip-list entry — surface it so we can prune."""
     mod, p = _make_module_with_source(
@@ -367,7 +334,7 @@ def test_should_not_flag_respx_mentioned_in_comment_or_docstring(vcr_enabled, tm
 
 
 def test_should_flag_real_respx_mark_decorator_via_ast(vcr_enabled, tmp_path):
-    src = "import pytest\n" "@pytest.mark.respx\n" "def test_x(respx_mock): pass\n"
+    src = "import pytest\n@pytest.mark.respx\ndef test_x(respx_mock): pass\n"
     mod, p = _make_module_with_source(tmp_path, src, "real_respx_mark")
     item = _StubItem("real_respx_mark.py::test_x", p, module=mod)
     apply_vcr_auto_marker_to_items([item], skip_files={"real_respx_mark.py"})
@@ -375,7 +342,7 @@ def test_should_flag_real_respx_mark_decorator_via_ast(vcr_enabled, tmp_path):
 
 
 def test_should_flag_real_respx_with_block_via_ast(vcr_enabled, tmp_path):
-    src = "import respx\n" "def test_x():\n" "    with respx.mock():\n" "        pass\n"
+    src = "import respx\ndef test_x():\n    with respx.mock():\n        pass\n"
     mod, p = _make_module_with_source(tmp_path, src, "real_respx_with")
     item = _StubItem("real_respx_with.py::test_x", p, module=mod)
     apply_vcr_auto_marker_to_items([item], skip_files={"real_respx_with.py"})
@@ -393,9 +360,7 @@ def test_should_flag_respx_mock_call_at_module_scope_via_ast(vcr_enabled, tmp_pa
 def test_should_tag_nodeid_suffix_skips_as_incompatible(vcr_enabled, tmp_path):
     mod, p = _make_module_with_source(tmp_path, "def test_x(): pass\n", "incompat")
     item = _StubItem("incompat.py::test_prompt_caching", p, module=mod)
-    apply_vcr_auto_marker_to_items(
-        [item], skip_nodeid_suffixes=("::test_prompt_caching",)
-    )
+    apply_vcr_auto_marker_to_items([item], skip_nodeid_suffixes=("::test_prompt_caching",))
     assert getattr(item, VCR_SKIP_REASON_USER_ATTR) == SKIP_REASON_INCOMPATIBLE
 
 
@@ -600,9 +565,7 @@ def test_controller_records_live_call_hosts_from_worker_report(vcr_enabled):
 
     snap = session_stats_snapshot()
     assert snap["verdict_counts"][VERDICT_UNMARKED_LIVE_CALL] == 1
-    assert snap["unmarked_live_call_tests"] == [
-        ("t::prompt_caching", ["api.anthropic.com", "api.x.ai"])
-    ]
+    assert snap["unmarked_live_call_tests"] == [("t::prompt_caching", ["api.anthropic.com", "api.x.ai"])]
     assert snap["skip_reason_counts"][SKIP_REASON_INCOMPATIBLE] == 1
     assert "t::prompt_caching" in snap["skip_reason_examples"][SKIP_REASON_INCOMPATIBLE]
 
@@ -719,9 +682,7 @@ def test_record_vcr_outcome_emits_structured_payload_for_marked_tests(
 
     outcomes = [v for k, v in request.node.user_properties if k == "vcr_outcome"]
     recorded_by = [v for k, v in request.node.user_properties if k == "vcr_recorded_by"]
-    assert outcomes == [
-        {"verdict": VERDICT_HIT, "skip_reason": None, "live_call_hosts": []}
-    ]
+    assert outcomes == [{"verdict": VERDICT_HIT, "skip_reason": None, "live_call_hosts": []}]
     # No PYTEST_XDIST_WORKER set in the vcr_enabled fixture, so the
     # recording-process tag is the empty string (single-process mode).
     assert recorded_by == [""]
@@ -776,9 +737,7 @@ def test_live_call_probe_records_known_llm_hosts(vcr_enabled, monkeypatch):
     class _Node:
         pass
 
-    request = SimpleNamespace(
-        node=_Node(), addfinalizer=lambda fn: finalizers.append(fn)
-    )
+    request = SimpleNamespace(node=_Node(), addfinalizer=lambda fn: finalizers.append(fn))
     probe = install_live_call_probe(request, None)
     assert probe is not None
 

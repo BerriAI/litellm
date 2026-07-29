@@ -5,9 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from mcp.types import (
     CallToolRequestParams,
@@ -81,12 +79,8 @@ def test_transform_mcp_tool_to_openai_tool(mock_mcp_tool):
 
 
 def testtransform_openai_tool_call_request_to_mcp_tool_call_request(mock_mcp_tool):
-    openai_tool = {
-        "function": {"name": "test_tool", "arguments": json.dumps({"test": "value"})}
-    }
-    mcp_tool_call_request = transform_openai_tool_call_request_to_mcp_tool_call_request(
-        openai_tool
-    )
+    openai_tool = {"function": {"name": "test_tool", "arguments": json.dumps({"test": "value"})}}
+    mcp_tool_call_request = transform_openai_tool_call_request_to_mcp_tool_call_request(openai_tool)
     assert mcp_tool_call_request.name == "test_tool"
     assert mcp_tool_call_request.arguments == {"test": "value"}
 
@@ -136,29 +130,21 @@ def test_get_function_arguments():
 @pytest.mark.asyncio()
 async def test_call_openai_tool(mock_session, mock_mcp_tool_call_result):
     mock_session.call_tool.return_value = mock_mcp_tool_call_result
-    openai_tool = {
-        "function": {"name": "test_tool", "arguments": json.dumps({"test": "value"})}
-    }
+    openai_tool = {"function": {"name": "test_tool", "arguments": json.dumps({"test": "value"})}}
     result = await call_openai_tool(mock_session, openai_tool)
     print("result of call_openai_tool", result)
     assert result.content[0].text == "test_output"
-    mock_session.call_tool.assert_called_once_with(
-        name="test_tool", arguments={"test": "value"}
-    )
+    mock_session.call_tool.assert_called_once_with(name="test_tool", arguments={"test": "value"})
 
 
 @pytest.mark.asyncio()
 async def test_call_mcp_tool(mock_session, mock_mcp_tool_call_result):
     mock_session.call_tool.return_value = mock_mcp_tool_call_result
-    request_params = CallToolRequestParams(
-        name="test_tool", arguments={"test": "value"}
-    )
+    request_params = CallToolRequestParams(name="test_tool", arguments={"test": "value"})
     result = await call_mcp_tool(mock_session, request_params)
     print("call_mcp_tool result", result)
     assert result.content[0].text == "test_output"
-    mock_session.call_tool.assert_called_once_with(
-        name="test_tool", arguments={"test": "value"}
-    )
+    mock_session.call_tool.assert_called_once_with(name="test_tool", arguments={"test": "value"})
 
 
 def test_normalize_mcp_input_schema():
@@ -291,9 +277,7 @@ def test_transform_mcp_tool_to_anthropic_tool():
 
 def test_transform_mcp_tool_to_anthropic_tool_normalizes_empty_schema():
     """A tool with no declared arguments must still present a valid object schema."""
-    anthropic_tool = transform_mcp_tool_to_anthropic_tool(
-        MCPTool(name="noargs", description=None, inputSchema={})
-    )
+    anthropic_tool = transform_mcp_tool_to_anthropic_tool(MCPTool(name="noargs", description=None, inputSchema={}))
 
     assert anthropic_tool["name"] == "noargs"
     assert anthropic_tool["description"] == ""

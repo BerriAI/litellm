@@ -103,9 +103,7 @@ def test_validate_environment_oauth_key_uses_bearer(config):
 
 def test_validate_environment_missing_key_raises(config):
     # No api_key passed and no env credentials -> get_auth_header returns None.
-    with patch.object(
-        config.anthropic_model_info, "get_auth_header", return_value=None
-    ):
+    with patch.object(config.anthropic_model_info, "get_auth_header", return_value=None):
         with pytest.raises(ValueError, match="Missing Anthropic API Key"):
             config.validate_environment(
                 headers={},
@@ -244,12 +242,7 @@ def test_get_retrieve_batch_url_uses_default_api_base(config):
 
 
 def test_transform_retrieve_batch_request_returns_empty_dict(config):
-    assert (
-        config.transform_retrieve_batch_request(
-            batch_id="msgbatch_123", optional_params={}, litellm_params={}
-        )
-        == {}
-    )
+    assert config.transform_retrieve_batch_request(batch_id="msgbatch_123", optional_params={}, litellm_params={}) == {}
 
 
 # =========================================================================== #
@@ -458,9 +451,7 @@ def test_transform_retrieve_response_unparseable_json_raises(config):
 
 
 def test_get_error_class_with_dict_headers(config):
-    err = config.get_error_class(
-        error_message="rate limited", status_code=429, headers={"x-ratelimit": "0"}
-    )
+    err = config.get_error_class(error_message="rate limited", status_code=429, headers={"x-ratelimit": "0"})
     from litellm.llms.anthropic.common_utils import AnthropicError
 
     assert isinstance(err, AnthropicError)
@@ -470,9 +461,7 @@ def test_get_error_class_with_dict_headers(config):
 
 def test_get_error_class_with_httpx_headers(config):
     hdrs = httpx.Headers({"retry-after": "5"})
-    err = config.get_error_class(
-        error_message="server error", status_code=500, headers=hdrs
-    )
+    err = config.get_error_class(error_message="server error", status_code=500, headers=hdrs)
     assert err.status_code == 500
     assert err.message == "server error"
 
@@ -546,9 +535,7 @@ def test_transform_response_skips_malformed_lines(config):
 
     def fake_transform_parsed(*, completion_response, raw_response, model_response):
         mr = ModelResponse()
-        setattr(
-            mr, "usage", Usage(prompt_tokens=7, completion_tokens=3, total_tokens=10)
-        )
+        setattr(mr, "usage", Usage(prompt_tokens=7, completion_tokens=3, total_tokens=10))
         return mr
 
     with patch.object(
@@ -591,13 +578,16 @@ def test_transform_response_reraises_unexpected_error(config):
 
     # A non-JSONDecodeError raised during usage aggregation must propagate
     # (the outer `except Exception: raise e`), not be swallowed.
-    with patch.object(
-        config.anthropic_chat_config,
-        "transform_parsed_response",
-        side_effect=fake_transform_parsed,
-    ), patch(
-        "litellm.cost_calculator.BaseTokenUsageProcessor.combine_usage_objects",
-        side_effect=RuntimeError("boom"),
+    with (
+        patch.object(
+            config.anthropic_chat_config,
+            "transform_parsed_response",
+            side_effect=fake_transform_parsed,
+        ),
+        patch(
+            "litellm.cost_calculator.BaseTokenUsageProcessor.combine_usage_objects",
+            side_effect=RuntimeError("boom"),
+        ),
     ):
         with pytest.raises(RuntimeError, match="boom"):
             config.transform_response(

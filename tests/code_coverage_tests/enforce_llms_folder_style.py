@@ -66,10 +66,7 @@ def run_lint_check(unique_names):
     _all_litellm_providers = [str(provider.value) for provider in litellm.LlmProviders]
     violations = []
     for name in unique_names:
-        if (
-            name.lower() not in _all_litellm_providers
-            and name not in ALLOWED_FILES_IN_LLMS_FOLDER
-        ):
+        if name.lower() not in _all_litellm_providers and name not in ALLOWED_FILES_IN_LLMS_FOLDER:
             violations.append(name)
 
     if len(violations) > 0:

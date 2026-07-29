@@ -17,25 +17,13 @@ class MockCompletionStream:
     def __init__(self):
         self.responses = [
             ModelResponseStream(
-                choices=[
-                    StreamingChoices(
-                        delta=Delta(content="Hello"), index=0, finish_reason=None
-                    )
-                ],
+                choices=[StreamingChoices(delta=Delta(content="Hello"), index=0, finish_reason=None)],
             ),
             ModelResponseStream(
-                choices=[
-                    StreamingChoices(
-                        delta=Delta(content=" World"), index=0, finish_reason=None
-                    )
-                ],
+                choices=[StreamingChoices(delta=Delta(content=" World"), index=0, finish_reason=None)],
             ),
             ModelResponseStream(
-                choices=[
-                    StreamingChoices(
-                        delta=Delta(content=""), index=0, finish_reason="stop"
-                    )
-                ],
+                choices=[StreamingChoices(delta=Delta(content=""), index=0, finish_reason="stop")],
             ),
         ]
         self.index = 0
@@ -53,9 +41,7 @@ class MockCompletionStream:
 
 def test_anthropic_sse_wrapper_format():
     """Test that the SSE wrapper produces proper event and data formatting"""
-    wrapper = AnthropicStreamWrapper(
-        completion_stream=MockCompletionStream(), model="claude-3"
-    )
+    wrapper = AnthropicStreamWrapper(completion_stream=MockCompletionStream(), model="claude-3")
 
     # Get the first chunk from the SSE wrapper
     first_chunk = next(wrapper.anthropic_sse_wrapper())
@@ -76,9 +62,7 @@ def test_anthropic_sse_wrapper_format():
 
 def test_anthropic_sse_wrapper_event_types():
     """Test that different chunk types produce correct event types"""
-    wrapper = AnthropicStreamWrapper(
-        completion_stream=MockCompletionStream(), model="claude-3"
-    )
+    wrapper = AnthropicStreamWrapper(completion_stream=MockCompletionStream(), model="claude-3")
 
     chunks = []
     for chunk in wrapper.anthropic_sse_wrapper():
@@ -107,18 +91,10 @@ async def test_async_anthropic_sse_wrapper():
         def __init__(self):
             self.responses = [
                 ModelResponseStream(
-                    choices=[
-                        StreamingChoices(
-                            delta=Delta(content="Hello"), index=0, finish_reason=None
-                        )
-                    ],
+                    choices=[StreamingChoices(delta=Delta(content="Hello"), index=0, finish_reason=None)],
                 ),
                 ModelResponseStream(
-                    choices=[
-                        StreamingChoices(
-                            delta=Delta(content=" World"), index=0, finish_reason=None
-                        )
-                    ],
+                    choices=[StreamingChoices(delta=Delta(content=" World"), index=0, finish_reason=None)],
                 ),
             ]
             self.index = 0
@@ -133,9 +109,7 @@ async def test_async_anthropic_sse_wrapper():
             self.index += 1
             return response
 
-    wrapper = AnthropicStreamWrapper(
-        completion_stream=AsyncMockCompletionStream(), model="claude-3"
-    )
+    wrapper = AnthropicStreamWrapper(completion_stream=AsyncMockCompletionStream(), model="claude-3")
 
     # Get the first chunk from the async SSE wrapper
     first_chunk = None

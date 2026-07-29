@@ -56,9 +56,7 @@ def construct_text_chunk(text: str) -> ModelResponseStream:
     )
 
 
-def construct_split_tool_call(
-    id: str, function_name: str, function_arg_parts: List[str]
-) -> List[ModelResponseStream]:
+def construct_split_tool_call(id: str, function_name: str, function_arg_parts: List[str]) -> List[ModelResponseStream]:
     return [
         # https://platform.openai.com/docs/guides/function-calling#streaming
         ModelResponseStream(
@@ -147,10 +145,7 @@ def test_anthropic_stream_wrapper_single_tool_call():
     get_weather_calls = 0
 
     for chunk in chunks:
-        if (
-            chunk.get("type") == "content_block_start"
-            and chunk["content_block"]["type"] == "tool_use"
-        ):
+        if chunk.get("type") == "content_block_start" and chunk["content_block"]["type"] == "tool_use":
             if chunk["content_block"]["name"] == "get_weather":
                 get_weather_calls += 1
 
@@ -206,10 +201,7 @@ def test_anthropic_stream_wrapper_back_to_back_tool_calls():
     get_weather_calls = 0
 
     for chunk in chunks:
-        if (
-            chunk.get("type") == "content_block_start"
-            and chunk["content_block"]["type"] == "tool_use"
-        ):
+        if chunk.get("type") == "content_block_start" and chunk["content_block"]["type"] == "tool_use":
             if chunk["content_block"]["name"] == "get_weather":
                 get_weather_calls += 1
 
@@ -221,9 +213,7 @@ def test_anthropic_stream_wrapper_interleaved_tool_calls_and_text():
         *construct_split_tool_call("tooluse_foo", "get_weather", ['{"city":', '"NY"}']),
         construct_text_chunk("The weather is nice today."),
         *construct_split_tool_call("tooluse_bar", "get_weather", ['{"city":', '"SF"}']),
-        *construct_split_tool_call(
-            "tooluse_bar", "get_weather", ['{"city":', '"CHI"}']
-        ),
+        *construct_split_tool_call("tooluse_bar", "get_weather", ['{"city":', '"CHI"}']),
         construct_text_chunk("The weather is not so nice today."),
         ModelResponseStream(
             choices=[
@@ -283,8 +273,7 @@ def test_anthropic_stream_wrapper_interleaved_tool_calls_and_text():
     text_deltas = [
         chunk["delta"]["text"]
         for chunk in chunks
-        if chunk.get("type") == "content_block_delta"
-        and chunk["delta"].get("type") == "text_delta"
+        if chunk.get("type") == "content_block_delta" and chunk["delta"].get("type") == "text_delta"
     ]
     assert text_deltas == [
         "The weather is nice today.",
@@ -294,10 +283,7 @@ def test_anthropic_stream_wrapper_interleaved_tool_calls_and_text():
     get_weather_calls = 0
 
     for chunk in chunks:
-        if (
-            chunk.get("type") == "content_block_start"
-            and chunk["content_block"]["type"] == "tool_use"
-        ):
+        if chunk.get("type") == "content_block_start" and chunk["content_block"]["type"] == "tool_use":
             if chunk["content_block"]["name"] == "get_weather":
                 get_weather_calls += 1
 

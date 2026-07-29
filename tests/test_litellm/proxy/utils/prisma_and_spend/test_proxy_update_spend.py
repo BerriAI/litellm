@@ -239,9 +239,7 @@ async def test_update_spend_logs_failure_raises_after_retries(
 
     monkeypatch.setattr(utils_mod.asyncio, "sleep", _fake_sleep)
 
-    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(
-        side_effect=httpx.ReadError("network blip")
-    )
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=httpx.ReadError("network blip"))
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
     with pytest.raises(httpx.ReadError):
@@ -276,9 +274,7 @@ async def test_update_spend_logs_isolates_poison_row_and_persists_good_rows(
     async def _create_many(*, data: Any, skip_duplicates: bool) -> None:
         ids = [row["request_id"] for row in data]
         if poison_id in ids:
-            raise _data_error(
-                "Inconsistent column data: 22P05 invalid byte sequence for encoding UTF8: 0x00"
-            )
+            raise _data_error("Inconsistent column data: 22P05 invalid byte sequence for encoding UTF8: 0x00")
         written.extend(ids)
 
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_create_many)
@@ -368,15 +364,11 @@ def test_disable_spend_updates_reflects_general_settings(
     """
     import litellm.proxy.proxy_server as proxy_server_mod
 
-    monkeypatch.setattr(
-        proxy_server_mod, "general_settings", {"disable_spend_updates": True}
-    )
+    monkeypatch.setattr(proxy_server_mod, "general_settings", {"disable_spend_updates": True})
     pinned = {
         "with_flag_true": ProxyUpdateSpend.disable_spend_updates(),
         "type_is_bool": isinstance(ProxyUpdateSpend.disable_spend_updates(), bool),
-        "method_is_static": isinstance(
-            ProxyUpdateSpend.__dict__["disable_spend_updates"], staticmethod
-        ),
+        "method_is_static": isinstance(ProxyUpdateSpend.__dict__["disable_spend_updates"], staticmethod),
     }
     assert pinned == {
         "with_flag_true": True,

@@ -84,8 +84,7 @@ def test_get_complete_url_default_base():
 
 def test_get_complete_url_appends_search():
     assert (
-        _config().get_complete_url("https://self-hosted.local/api/v1", {})
-        == "https://self-hosted.local/api/v1/search"
+        _config().get_complete_url("https://self-hosted.local/api/v1", {}) == "https://self-hosted.local/api/v1/search"
     )
 
 
@@ -97,9 +96,7 @@ def test_get_complete_url_does_not_double_append():
 
 
 def test_get_complete_url_reads_env_base():
-    with patch.dict(
-        os.environ, {"CRW_API_BASE": "https://env-base.local/v1"}, clear=True
-    ):
+    with patch.dict(os.environ, {"CRW_API_BASE": "https://env-base.local/v1"}, clear=True):
         assert _config().get_complete_url(None, {}) == "https://env-base.local/v1/search"
 
 
@@ -158,9 +155,7 @@ def test_transform_search_response_falls_back_to_description():
         _resp(
             {
                 "success": True,
-                "data": [
-                    {"title": "T", "url": "https://e.com", "description": "only-desc"}
-                ],
+                "data": [{"title": "T", "url": "https://e.com", "description": "only-desc"}],
             }
         ),
         logging_obj=Mock(),
@@ -169,9 +164,7 @@ def test_transform_search_response_falls_back_to_description():
 
 
 def test_transform_search_response_empty_data():
-    resp = _config().transform_search_response(
-        _resp({"success": True, "data": []}), logging_obj=Mock()
-    )
+    resp = _config().transform_search_response(_resp({"success": True, "data": []}), logging_obj=Mock())
     assert resp.results == []
 
 

@@ -249,10 +249,7 @@ def test_huggingface_rerank_config():
     config = HuggingFaceRerankConfig()
 
     # Test complete URL generation
-    assert (
-        config.get_complete_url(None, "test")
-        == "https://api-inference.huggingface.co/rerank"
-    )
+    assert config.get_complete_url(None, "test") == "https://api-inference.huggingface.co/rerank"
 
     # Test custom API base
     custom_url = config.get_complete_url("https://custom.huggingface.co", "test")
@@ -292,13 +289,9 @@ def test_request_transformation():
 
     config = HuggingFaceRerankConfig()
 
-    optional_params = OptionalRerankParams(
-        query="hello", texts=["hello", "world"], top_n=2, return_text=True
-    )
+    optional_params = OptionalRerankParams(query="hello", texts=["hello", "world"], top_n=2, return_text=True)
 
-    request_body = config.transform_rerank_request(
-        model="test", optional_rerank_params=optional_params, headers={}
-    )
+    request_body = config.transform_rerank_request(model="test", optional_rerank_params=optional_params, headers={})
 
     assert request_body["query"] == "hello"
     assert request_body["texts"] == ["hello", "world"]
@@ -368,9 +361,7 @@ def test_validate_environment():
 
     # Test headers override
     custom_headers = {"custom": "header"}
-    headers = config.validate_environment(
-        headers=custom_headers, model="test", api_key="test_key"
-    )
+    headers = config.validate_environment(headers=custom_headers, model="test", api_key="test_key")
 
     assert "custom" in headers
     assert headers["custom"] == "header"

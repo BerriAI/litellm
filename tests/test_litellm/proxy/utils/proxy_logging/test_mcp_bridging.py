@@ -112,7 +112,7 @@ def test_convert_llm_result_to_mcp_response_blocked_content(proxy_logging, make_
 
 def test_convert_llm_result_to_mcp_response_modified_content_redacted(proxy_logging, make_mcp_request_obj):
     req = make_mcp_request_obj(tool_name="search", arguments={"q": "ssn 123"})
-    llm_result = {"messages": [{"content": "Tool: search\nArguments: {\"q\": \"[REDACTED]\"}"}]}
+    llm_result = {"messages": [{"content": 'Tool: search\nArguments: {"q": "[REDACTED]"}'}]}
     result = proxy_logging._convert_llm_result_to_mcp_response(llm_result=llm_result, request_obj=req)
     assert isinstance(result, MCPPreCallResponseObject)
     snapshot = {
@@ -158,7 +158,7 @@ def test_convert_llm_result_to_mcp_response_no_request_obj_raises(proxy_logging)
 def test_extract_modified_arguments_from_content_parses_json(proxy_logging, make_mcp_request_obj):
     req = make_mcp_request_obj()
     out = proxy_logging._extract_modified_arguments_from_content(
-        masked_content="Tool: x\nArguments: {\"a\": 1, \"b\": 2, \"c\": 3}",
+        masked_content='Tool: x\nArguments: {"a": 1, "b": 2, "c": 3}',
         request_obj=req,
     )
     assert out == {"a": 1, "b": 2, "c": 3}
@@ -259,7 +259,7 @@ def test_convert_llm_result_to_mcp_during_response_blocked_content(proxy_logging
 def test_convert_llm_result_to_mcp_during_response_modified_stops(proxy_logging, make_mcp_request_obj):
     req = make_mcp_request_obj(tool_name="t", arguments={"a": 1})
     result = proxy_logging._convert_llm_result_to_mcp_during_response(
-        llm_result={"messages": [{"content": "Tool: t\nArguments: {\"a\": \"[REDACTED]\"}"}]},
+        llm_result={"messages": [{"content": 'Tool: t\nArguments: {"a": "[REDACTED]"}'}]},
         request_obj=req,
     )
     assert isinstance(result, MCPDuringCallResponseObject)
@@ -269,9 +269,7 @@ def test_convert_llm_result_to_mcp_during_response_modified_stops(proxy_logging,
 
 def test_convert_llm_result_to_mcp_during_response_string_blocks(proxy_logging, make_mcp_request_obj):
     req = make_mcp_request_obj()
-    result = proxy_logging._convert_llm_result_to_mcp_during_response(
-        llm_result="kill switch", request_obj=req
-    )
+    result = proxy_logging._convert_llm_result_to_mcp_during_response(llm_result="kill switch", request_obj=req)
     assert isinstance(result, MCPDuringCallResponseObject)
     snapshot = {"should_continue": result.should_continue, "error_message": result.error_message}
     assert snapshot == {"should_continue": False, "error_message": "kill switch"}
@@ -325,18 +323,14 @@ def test_parse_pre_mcp_call_hook_response_with_modified_args(proxy_logging, make
 
 def test_parse_pre_mcp_call_hook_response_no_modifications_uses_original(proxy_logging, make_mcp_request_obj):
     req = make_mcp_request_obj(arguments={"original": True})
-    resp = MCPPreCallResponseObject(
-        should_proceed=True, modified_arguments=None, error_message=None
-    )
+    resp = MCPPreCallResponseObject(should_proceed=True, modified_arguments=None, error_message=None)
     out = proxy_logging._parse_pre_mcp_call_hook_response(response=resp, original_request=req)
     assert out["modified_arguments"] == {"original": True}
 
 
 def test_parse_pre_mcp_call_hook_response_invalid_response_raises(proxy_logging, make_mcp_request_obj):
     with pytest.raises(AttributeError):
-        proxy_logging._parse_pre_mcp_call_hook_response(
-            response=None, original_request=make_mcp_request_obj()
-        )
+        proxy_logging._parse_pre_mcp_call_hook_response(response=None, original_request=make_mcp_request_obj())
 
 
 # ---------------------------------------------------------------------------
@@ -422,5 +416,6 @@ def test_convert_mcp_hook_response_to_kwargs_no_response_data_returns_original(p
 def test_convert_mcp_hook_response_to_kwargs_invalid_original_raises(proxy_logging):
     with pytest.raises(AttributeError):
         proxy_logging._convert_mcp_hook_response_to_kwargs(
-            response_data={"modified_arguments": {"a": 1}}, original_kwargs=None  # type: ignore[arg-type]
+            response_data={"modified_arguments": {"a": 1}},
+            original_kwargs=None,  # type: ignore[arg-type]
         )

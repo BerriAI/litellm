@@ -9,11 +9,7 @@ import json
 
 
 def get_all_supported_anthropic_beta_headers(provider: str):
-    config_path = (
-        Path(__file__).resolve().parents[2]
-        / "litellm"
-        / "anthropic_beta_headers_config.json"
-    )
+    config_path = Path(__file__).resolve().parents[2] / "litellm" / "anthropic_beta_headers_config.json"
 
     with open(config_path, "r") as f:
         config = json.load(f)
@@ -21,11 +17,7 @@ def get_all_supported_anthropic_beta_headers(provider: str):
     anthropic_mapping = config.get(provider, {})
 
     # Only include headers that have a non-null mapping value
-    return [
-        header_name
-        for header_name, provider_value in anthropic_mapping.items()
-        if provider_value is not None
-    ]
+    return [header_name for header_name, provider_value in anthropic_mapping.items() if provider_value is not None]
 
 
 @pytest.mark.asyncio
@@ -49,9 +41,7 @@ async def test_anthropic_messages_with_all_beta_headers(model_name, provider_nam
         "Authorization": "Bearer sk-1234",
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
-        "anthropic-beta": ",".join(
-            get_all_supported_anthropic_beta_headers(provider_name)
-        ),
+        "anthropic-beta": ",".join(get_all_supported_anthropic_beta_headers(provider_name)),
     }
 
     payload = {
@@ -62,17 +52,13 @@ async def test_anthropic_messages_with_all_beta_headers(model_name, provider_nam
     }
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(
-            "http://0.0.0.0:4000/v1/messages", json=payload, headers=headers
-        ) as response:
+        async with session.post("http://0.0.0.0:4000/v1/messages", json=payload, headers=headers) as response:
             response_text = await response.text()
             print(f"Response status: {response.status}")
             print(f"Response text: {response_text}")
 
             # The request should succeed without errors
-            assert (
-                response.status == 200
-            ), f"Request should succeed, got status {response.status}: {response_text}"
+            assert response.status == 200, f"Request should succeed, got status {response.status}: {response_text}"
 
             response_json = await response.json()
             print(f"Response JSON: {json.dumps(response_json, indent=4, default=str)}")
@@ -133,14 +119,11 @@ async def test_bedrock_invoke_messages_with_all_beta_headers(model_name, provide
             json=payload,
             headers=headers,
         ) as response:
-
             response_text = await response.text()
             print(f"Response status: {response.status}")
             print(f"Response text: {response_text}")
 
-            assert (
-                response.status == 200
-            ), f"{provider_name} request failed: {response.status}: {response_text}"
+            assert response.status == 200, f"{provider_name} request failed: {response.status}: {response_text}"
 
             response_json = await response.json()
 

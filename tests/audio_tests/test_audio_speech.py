@@ -14,9 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -315,12 +313,8 @@ def test_audio_speech_cost_calc():
 
         mock_cost_calc.assert_called_once()
 
-        print(
-            f"mock_cost_calc.call_args: {mock_cost_calc.call_args.kwargs['kwargs'].keys()}"
-        )
-        standard_logging_payload = mock_cost_calc.call_args.kwargs["kwargs"][
-            "standard_logging_object"
-        ]
+        print(f"mock_cost_calc.call_args: {mock_cost_calc.call_args.kwargs['kwargs'].keys()}")
+        standard_logging_payload = mock_cost_calc.call_args.kwargs["kwargs"]["standard_logging_object"]
         print(f"standard_logging_payload: {standard_logging_payload}")
         assert standard_logging_payload["response_cost"] > 0
 
@@ -369,11 +363,7 @@ async def test_azure_ava_tts_async():
 
         # MP3 files start with these magic bytes
         # ID3 tag or MPEG sync word
-        assert (
-            binary_content[:3] == b"ID3"
-            or binary_content[:2] == b"\xff\xfb"
-            or binary_content[:2] == b"\xff\xf3"
-        )
+        assert binary_content[:3] == b"ID3" or binary_content[:2] == b"\xff\xfb" or binary_content[:2] == b"\xff\xf3"
 
         # Write to file
         response.stream_to_file(speech_file_path)
@@ -423,11 +413,7 @@ async def test_runwayml_tts_async():
 
         # MP3 files start with these magic bytes
         # ID3 tag or MPEG sync word
-        assert (
-            binary_content[:3] == b"ID3"
-            or binary_content[:2] == b"\xff\xfb"
-            or binary_content[:2] == b"\xff\xf3"
-        )
+        assert binary_content[:3] == b"ID3" or binary_content[:2] == b"\xff\xfb" or binary_content[:2] == b"\xff\xf3"
 
         # Write to file
         response.stream_to_file(speech_file_path)
@@ -462,9 +448,7 @@ async def test_azure_ava_tts_with_custom_voice():
     mock_httpx_response.status_code = 200
     mock_httpx_response.headers = {"content-type": "audio/mpeg"}
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
         mock_post.return_value = mock_httpx_response
 
         response = await litellm.aspeech(
@@ -507,9 +491,7 @@ async def test_azure_ava_tts_fable_voice_mapping():
     mock_httpx_response.status_code = 200
     mock_httpx_response.headers = {"content-type": "audio/mpeg"}
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
         mock_post.return_value = mock_httpx_response
 
         response = await litellm.aspeech(
@@ -554,9 +536,7 @@ async def test_aws_polly_tts_with_native_voice():
     mock_httpx_response.status_code = 200
     mock_httpx_response.headers = {"content-type": "audio/mpeg"}
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
         mock_post.return_value = mock_httpx_response
 
         response = await litellm.aspeech(
@@ -601,9 +581,7 @@ async def test_aws_polly_tts_with_openai_voice_mapping():
     mock_httpx_response.status_code = 200
     mock_httpx_response.headers = {"content-type": "audio/mpeg"}
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
         mock_post.return_value = mock_httpx_response
 
         response = await litellm.aspeech(
@@ -645,9 +623,7 @@ async def test_aws_polly_tts_with_ssml():
 
     ssml_input = '<speak>Hello, <break time="500ms"/> this is SSML.</speak>'
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
         mock_post.return_value = mock_httpx_response
 
         response = await litellm.aspeech(
@@ -695,11 +671,7 @@ async def test_aws_polly_tts_real_api():
     assert len(binary_content) > 0
 
     # MP3 files start with ID3 tag or MPEG sync word
-    assert (
-        binary_content[:3] == b"ID3"
-        or binary_content[:2] == b"\xff\xfb"
-        or binary_content[:2] == b"\xff\xf3"
-    )
+    assert binary_content[:3] == b"ID3" or binary_content[:2] == b"\xff\xfb" or binary_content[:2] == b"\xff\xf3"
 
     response.stream_to_file(speech_file_path)
 

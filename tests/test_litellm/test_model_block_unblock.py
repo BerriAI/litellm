@@ -69,8 +69,8 @@ async def test_model_block_endpoint_sets_blocked_true(monkeypatch):
         block_model,
     )
 
-    model_id, model_table, updated_row, mock_clear_cache, mock_audit_log = (
-        _setup_model_block_mocks(monkeypatch, updated_blocked=True)
+    model_id, model_table, updated_row, mock_clear_cache, mock_audit_log = _setup_model_block_mocks(
+        monkeypatch, updated_blocked=True
     )
 
     result = await block_model(
@@ -89,9 +89,7 @@ async def test_model_block_endpoint_sets_blocked_true(monkeypatch):
     assert "updated_at" in update_kwargs["data"]
     mock_clear_cache.assert_awaited_once_with()
     assert mock_audit_log.call_args.kwargs["action"] == "blocked"
-    assert (
-        mock_audit_log.call_args.kwargs["litellm_changed_by"] == "operator@example.com"
-    )
+    assert mock_audit_log.call_args.kwargs["litellm_changed_by"] == "operator@example.com"
 
 
 @pytest.mark.asyncio
@@ -100,8 +98,8 @@ async def test_model_unblock_endpoint_sets_blocked_false(monkeypatch):
         unblock_model,
     )
 
-    model_id, model_table, updated_row, mock_clear_cache, mock_audit_log = (
-        _setup_model_block_mocks(monkeypatch, updated_blocked=False)
+    model_id, model_table, updated_row, mock_clear_cache, mock_audit_log = _setup_model_block_mocks(
+        monkeypatch, updated_blocked=False
     )
 
     result = await unblock_model(
@@ -124,9 +122,7 @@ async def test_model_block_endpoint_requires_proxy_admin(monkeypatch):
         block_model,
     )
 
-    model_id, model_table, _, _, _ = _setup_model_block_mocks(
-        monkeypatch, updated_blocked=True
-    )
+    model_id, model_table, _, _, _ = _setup_model_block_mocks(monkeypatch, updated_blocked=True)
     non_admin = UserAPIKeyAuth(
         user_id="internal-user",
         user_role=LitellmUserRoles.INTERNAL_USER,

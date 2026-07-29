@@ -59,12 +59,8 @@ class TestExtractMCPServerNames:
 
 class TestMCPSecurityGuardrailPreCall:
     @pytest.mark.asyncio
-    @patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-    )
-    async def test_blocks_unregistered_server_chat_completions(
-        self, mock_manager, guardrail
-    ):
+    @patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager")
+    async def test_blocks_unregistered_server_chat_completions(self, mock_manager, guardrail):
         """Simulates /chat/completions with an unregistered MCP server."""
         mock_manager.get_registry.return_value = {"zapier": MagicMock()}
 
@@ -89,12 +85,8 @@ class TestMCPSecurityGuardrailPreCall:
         assert "evil_server" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
-    @patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-    )
-    async def test_blocks_unregistered_server_responses_api(
-        self, mock_manager, guardrail
-    ):
+    @patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager")
+    async def test_blocks_unregistered_server_responses_api(self, mock_manager, guardrail):
         """Simulates /responses with an unregistered MCP server."""
         mock_manager.get_registry.return_value = {"github": MagicMock()}
 
@@ -118,9 +110,7 @@ class TestMCPSecurityGuardrailPreCall:
         assert "unknown_server" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
-    @patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-    )
+    @patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager")
     async def test_allows_registered_servers(self, mock_manager, guardrail):
         """All MCP servers are registered - request passes through."""
         mock_manager.get_registry.return_value = {

@@ -12,15 +12,11 @@ from litellm.types.utils import StreamingChoices, ChatCompletionAudioResponse
 def check_non_streaming_response(completion):
     assert completion.choices[0].message.audio is not None, "Audio response is missing"
     print("audio", completion.choices[0].message.audio)
-    assert isinstance(
-        completion.choices[0].message.audio, ChatCompletionAudioResponse
-    ), "Invalid audio response type"
+    assert isinstance(completion.choices[0].message.audio, ChatCompletionAudioResponse), "Invalid audio response type"
     assert len(completion.choices[0].message.audio.data) > 0, "Audio data is empty"
 
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import os
 
 import dotenv
@@ -125,10 +121,7 @@ def test_stream_chunk_builder_litellm_tool_call():
         print(f"complete response usage: {response.usage}")
         assert response.usage.completion_tokens > 0
         assert response.usage.prompt_tokens > 0
-        assert (
-            response.usage.total_tokens
-            == response.usage.completion_tokens + response.usage.prompt_tokens
-        )
+        assert response.usage.total_tokens == response.usage.completion_tokens + response.usage.prompt_tokens
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
 
@@ -152,10 +145,7 @@ def test_stream_chunk_builder_litellm_tool_call_regular_message():
         print(f"complete response usage: {response.usage}")
         assert response.usage.completion_tokens > 0
         assert response.usage.prompt_tokens > 0
-        assert (
-            response.usage.total_tokens
-            == response.usage.completion_tokens + response.usage.prompt_tokens
-        )
+        assert response.usage.total_tokens == response.usage.completion_tokens + response.usage.prompt_tokens
 
         # check provider is in hidden params
         print("hidden params", response._hidden_params)
@@ -588,9 +578,9 @@ def test_stream_chunk_builder_multiple_tool_calls():
     expected_response = litellm.ModelResponse(**completed_response)
 
     print(f"\n\nexpected_response:\n{expected_response}\n\n")
-    assert (
-        expected_response.choices == response.choices
-    ), "\nGot={}\n, Expected={}\n".format(response.choices, expected_response.choices)
+    assert expected_response.choices == response.choices, "\nGot={}\n, Expected={}\n".format(
+        response.choices, expected_response.choices
+    )
 
 
 def test_stream_chunk_builder_openai_prompt_caching():
@@ -658,11 +648,7 @@ def test_stream_chunk_builder_openai_audio_output_usage():
         )
     except Exception as e:
         err = str(e).lower()
-        if (
-            "model_not_found" in err
-            or "does not exist" in err
-            or "openai-internal" in err
-        ):
+        if "model_not_found" in err or "does not exist" in err or "openai-internal" in err:
             pytest.skip(f"Skipping - upstream gpt-audio-1.5 unavailable: {e}")
         raise
 
@@ -691,9 +677,7 @@ def test_stream_chunk_builder_openai_audio_output_usage():
     response_usage_dict = response.usage.model_dump(exclude_none=True)
 
     # Simple dictionary comparison
-    assert (
-        usage_dict == response_usage_dict
-    ), f"\nExpected: {usage_dict}\nGot: {response_usage_dict}"
+    assert usage_dict == response_usage_dict, f"\nExpected: {usage_dict}\nGot: {response_usage_dict}"
 
 
 def test_stream_chunk_builder_empty_initial_chunk():
@@ -838,9 +822,7 @@ def get_current_weather(location, unit="fahrenheit"):
     if "tokyo" in location.lower():
         return json.dumps({"location": "Tokyo", "temperature": "10", "unit": "celsius"})
     elif "san francisco" in location.lower():
-        return json.dumps(
-            {"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}
-        )
+        return json.dumps({"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"})
     elif "paris" in location.lower():
         return json.dumps({"location": "Paris", "temperature": "22", "unit": "celsius"})
     else:
@@ -889,14 +871,10 @@ def execute_completion(opts: dict):
     print(f"partial_streaming_chunks: {partial_streaming_chunks}")
     print("\n\n")
     assembly = litellm.stream_chunk_builder(partial_streaming_chunks)
-    print(
-        f"assembly.choices[0].message.tool_calls: {assembly.choices[0].message.tool_calls}"
-    )
+    print(f"assembly.choices[0].message.tool_calls: {assembly.choices[0].message.tool_calls}")
     print(assembly.choices[0].message.tool_calls)
     for tool_call in assembly.choices[0].message.tool_calls:
-        json.loads(
-            tool_call.function.arguments
-        )  # assert valid json - https://github.com/BerriAI/litellm/issues/10034
+        json.loads(tool_call.function.arguments)  # assert valid json - https://github.com/BerriAI/litellm/issues/10034
 
 
 def test_grok_bug(load_env):

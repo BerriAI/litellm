@@ -43,9 +43,7 @@ async def new_user(
         print()
 
         if status != 200:
-            raise Exception(
-                f"Request {i} did not return a 200 status code: {status}, response: {response_text}"
-            )
+            raise Exception(f"Request {i} did not return a 200 status code: {status}, response: {response_text}")
 
         return await response.json()
 
@@ -73,9 +71,7 @@ async def new_organization(session, i, organization_alias, max_budget=None):
         return await response.json()
 
 
-async def add_member_to_org(
-    session, i, organization_id, user_id, user_role="internal_user"
-):
+async def add_member_to_org(session, i, organization_id, user_id, user_role="internal_user"):
     url = "http://0.0.0.0:4000/organization/member_add"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -100,9 +96,7 @@ async def add_member_to_org(
         return await response.json()
 
 
-async def update_member_role(
-    session, i, organization_id, user_id, user_role="internal_user"
-):
+async def update_member_role(session, i, organization_id, user_id, user_role="internal_user"):
     url = "http://0.0.0.0:4000/organization/member_update"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -182,9 +176,7 @@ async def list_organization(session, i):
 
         # Assert that budget info is returned for each organization
         for org in response_json:
-            assert (
-                "litellm_budget_table" in org
-            ), "Missing budget info in organization response"
+            assert "litellm_budget_table" in org, "Missing budget info in organization response"
             # Optionally also check that it's not null
             assert org["litellm_budget_table"] is not None, "Budget info is None"
 
@@ -199,12 +191,7 @@ async def test_organization_new():
     """
     organization_alias = f"Organization: {uuid.uuid4()}"
     async with aiohttp.ClientSession() as session:
-        tasks = [
-            new_organization(
-                session=session, i=0, organization_alias=organization_alias
-            )
-            for i in range(1, 20)
-        ]
+        tasks = [new_organization(session=session, i=0, organization_alias=organization_alias) for i in range(1, 20)]
         await asyncio.gather(*tasks)
 
 
@@ -216,12 +203,7 @@ async def test_organization_list():
     """
     organization_alias = f"Organization: {uuid.uuid4()}"
     async with aiohttp.ClientSession() as session:
-        tasks = [
-            new_organization(
-                session=session, i=0, organization_alias=organization_alias
-            )
-            for i in range(1, 2)
-        ]
+        tasks = [new_organization(session=session, i=0, organization_alias=organization_alias) for i in range(1, 2)]
         await asyncio.gather(*tasks)
 
         response_json = await list_organization(session, i=0)
@@ -240,11 +222,7 @@ async def test_organization_delete():
     """
     organization_alias = f"Organization: {uuid.uuid4()}"
     async with aiohttp.ClientSession() as session:
-        tasks = [
-            new_organization(
-                session=session, i=0, organization_alias=organization_alias
-            )
-        ]
+        tasks = [new_organization(session=session, i=0, organization_alias=organization_alias)]
         await asyncio.gather(*tasks)
 
         response_json = await list_organization(session, i=0)
@@ -269,9 +247,7 @@ async def test_organization_member_flow():
     """
     organization_alias = f"Organization: {uuid.uuid4()}"
     async with aiohttp.ClientSession() as session:
-        response_json = await new_organization(
-            session=session, i=0, organization_alias=organization_alias
-        )
+        response_json = await new_organization(session=session, i=0, organization_alias=organization_alias)
         organization_id = response_json["organization_id"]
 
         response_json = await list_organization(session, i=0)
@@ -282,19 +258,14 @@ async def test_organization_member_flow():
         )
         user_id = new_user_response_json["user_id"]
 
-        await add_member_to_org(
-            session, i=0, organization_id=organization_id, user_id=user_id
-        )
+        await add_member_to_org(session, i=0, organization_id=organization_id, user_id=user_id)
 
         response_json = await list_organization(session, i=0)
         print(len(response_json))
 
         for orgs in response_json:
             tmp_organization_id = orgs["organization_id"]
-            if (
-                tmp_organization_id is not None
-                and tmp_organization_id == organization_id
-            ):
+            if tmp_organization_id is not None and tmp_organization_id == organization_id:
                 user_id = orgs["members"][0]["user_id"]
 
         response_json = await list_organization(session, i=0)
@@ -311,9 +282,7 @@ async def test_organization_member_flow():
         response_json = await list_organization(session, i=0)
         print(len(response_json))
 
-        await delete_member_from_org(
-            session, i=0, organization_id=organization_id, user_id=user_id
-        )
+        await delete_member_from_org(session, i=0, organization_id=organization_id, user_id=user_id)
 
         response_json = await list_organization(session, i=0)
         print(len(response_json))

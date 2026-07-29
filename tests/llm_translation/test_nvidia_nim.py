@@ -4,9 +4,7 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 
 import httpx
@@ -29,9 +27,7 @@ def test_completion_nvidia_nim():
         api_key="fake-api-key",
     )
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
         try:
             completion(
                 model=model_name,
@@ -144,9 +140,7 @@ def test_chat_completion_nvidia_nim_with_tools():
         },
     ]
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
         try:
             completion(
                 model=model_name,

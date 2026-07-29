@@ -5,9 +5,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, patch
 from typing import Optional
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 
 import httpx
@@ -102,9 +100,7 @@ async def test_openai_prediction_param_mock():
 
     client = AsyncOpenAI(api_key="fake-api-key")
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
         try:
             await litellm.acompletion(
                 model="gpt-4o-mini",
@@ -229,9 +225,7 @@ async def test_vision_with_custom_model():
     encoded_file = base64.b64encode(file_data).decode("utf-8")
     base64_image = f"data:image/png;base64,{encoded_file}"
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
         try:
             response = await litellm.acompletion(
                 model="openai/my-custom-model",
@@ -459,10 +453,7 @@ def test_openai_web_search_streaming():
     )
     for chunk in response:
         print("litellm response chunk: ", chunk)
-        if (
-            hasattr(chunk.choices[0].delta, "annotations")
-            and chunk.choices[0].delta.annotations is not None
-        ):
+        if hasattr(chunk.choices[0].delta, "annotations") and chunk.choices[0].delta.annotations is not None:
             test_openai_web_search = chunk.choices[0].delta.annotations
 
     # Assert this request has at-least one web search annotation
@@ -507,9 +498,7 @@ async def test_openai_pdf_url(model):
     )
     print("request: ", request)
 
-    assert (
-        "file_data" in request["raw_request_body"]["messages"][0]["content"][1]["file"]
-    )
+    assert "file_data" in request["raw_request_body"]["messages"][0]["content"][1]["file"]
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -648,9 +637,7 @@ def test_openai_tool_calling():
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": "What is TSLA stock price at today?"}
-                ],
+                "content": [{"type": "text", "text": "What is TSLA stock price at today?"}],
             }
         ],
         "stream": False,
@@ -700,9 +687,7 @@ async def test_openai_safety_identifier_parameter():
     litellm.set_verbose = True
     client = AsyncOpenAI(api_key="fake-api-key")
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
         try:
             await litellm.acompletion(
                 model="openai/gpt-4o",
@@ -729,9 +714,7 @@ def test_openai_safety_identifier_parameter_sync():
     litellm.set_verbose = True
     client = OpenAI(api_key="fake-api-key")
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
         try:
             litellm.completion(
                 model="openai/gpt-4o",
@@ -759,9 +742,7 @@ async def test_openai_service_tier_parameter():
     litellm.set_verbose = True
     client = AsyncOpenAI(api_key="fake-api-key")
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
         try:
             await litellm.acompletion(
                 model="openai/gpt-4o",
@@ -778,9 +759,7 @@ async def test_openai_service_tier_parameter():
         # Verify the request contains the service_tier parameter
         assert "service_tier" in request_body, "service_tier should be in request body"
         # Verify service_tier is correctly sent to the API
-        assert (
-            request_body["service_tier"] == "priority"
-        ), "service_tier should be 'priority'"
+        assert request_body["service_tier"] == "priority", "service_tier should be 'priority'"
 
 
 def test_openai_service_tier_parameter_sync():
@@ -790,9 +769,7 @@ def test_openai_service_tier_parameter_sync():
     litellm.set_verbose = True
     client = OpenAI(api_key="fake-api-key")
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
         try:
             litellm.completion(
                 model="openai/gpt-4o",
@@ -809,9 +786,7 @@ def test_openai_service_tier_parameter_sync():
         # Verify the request contains the service_tier parameter
         assert "service_tier" in request_body, "service_tier should be in request body"
         # Verify service_tier is correctly sent to the API
-        assert (
-            request_body["service_tier"] == "priority"
-        ), "service_tier should be 'priority'"
+        assert request_body["service_tier"] == "priority", "service_tier should be 'priority'"
 
 
 def test_gpt_5_reasoning_streaming():
@@ -1371,12 +1346,8 @@ async def test_streaming_tool_calls_with_n_greater_than_1(model):
     # Collect all chunks and their indices
     indices_seen = []
     for chunk in response:
-        assert (
-            len(chunk.choices) == 1
-        ), "Each streaming chunk should have exactly 1 choice"
-        assert hasattr(
-            chunk.choices[0], "index"
-        ), "Choice should have an index attribute"
+        assert len(chunk.choices) == 1, "Each streaming chunk should have exactly 1 choice"
+        assert hasattr(chunk.choices[0], "index"), "Choice should have an index attribute"
         index = chunk.choices[0].index
         indices_seen.append(index)
 
@@ -1388,9 +1359,7 @@ async def test_streaming_tool_calls_with_n_greater_than_1(model):
         2,
     }, f"Should have indices 0, 1, 2 for n=3, got {unique_indices}"
 
-    print(
-        f"✓ Test passed: streaming with n=3 and tool calls correctly populates index field"
-    )
+    print(f"✓ Test passed: streaming with n=3 and tool calls correctly populates index field")
     print(f"  Indices seen: {indices_seen}")
     print(f"  Unique indices: {unique_indices}")
 
@@ -1418,12 +1387,8 @@ async def test_streaming_content_with_n_greater_than_1(model):
     # Collect all chunks and their indices
     indices_seen = []
     for chunk in response:
-        assert (
-            len(chunk.choices) == 1
-        ), "Each streaming chunk should have exactly 1 choice"
-        assert hasattr(
-            chunk.choices[0], "index"
-        ), "Choice should have an index attribute"
+        assert len(chunk.choices) == 1, "Each streaming chunk should have exactly 1 choice"
+        assert hasattr(chunk.choices[0], "index"), "Choice should have an index attribute"
         index = chunk.choices[0].index
         indices_seen.append(index)
 
@@ -1434,9 +1399,7 @@ async def test_streaming_content_with_n_greater_than_1(model):
         1,
     }, f"Should have indices 0, 1 for n=2, got {unique_indices}"
 
-    print(
-        f"✓ Test passed: streaming with n=2 and regular content correctly populates index field"
-    )
+    print(f"✓ Test passed: streaming with n=2 and regular content correctly populates index field")
     print(f"  Indices seen: {indices_seen}")
     print(f"  Unique indices: {unique_indices}")
 

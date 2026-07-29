@@ -44,6 +44,7 @@ Notes
   - `converse-stream` is still JSON-only placeholder (different inner event shapes).
   - Use real (or any non-empty) AWS creds in the environment of the **proxy**; signing still runs.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -66,9 +67,7 @@ def _converse_response_body() -> Dict[str, Any]:
         "output": {
             "message": {
                 "role": "assistant",
-                "content": [
-                    {"text": "mock: ok from mock_bedrock_passthrough_target.py"}
-                ],
+                "content": [{"text": "mock: ok from mock_bedrock_passthrough_target.py"}],
             }
         },
         "stopReason": "end_turn",
@@ -122,9 +121,7 @@ def _bedrock_payload_part(inner_event: Dict[str, Any]) -> bytes:
     return json.dumps(outer, separators=(",", ":")).encode("utf-8")
 
 
-def _anthropic_invoke_stream_events(
-    model_id: str, assistant_text: str
-) -> List[Dict[str, Any]]:
+def _anthropic_invoke_stream_events(model_id: str, assistant_text: str) -> List[Dict[str, Any]]:
     """
     Minimal Anthropic Messages stream events as returned inside Bedrock stream chunks.
     Mirrors the sequence Amazon emits for Claude on ``invoke-with-response-stream``.
@@ -202,10 +199,7 @@ def _anthropic_invoke_stream_events(
 
 
 def _iter_invoke_with_response_stream(model_id: str) -> Iterator[bytes]:
-    text = (
-        "mock streaming: ok from scripts/mock_bedrock_passthrough_target.py "
-        "(invoke-with-response-stream)."
-    )
+    text = "mock streaming: ok from scripts/mock_bedrock_passthrough_target.py (invoke-with-response-stream)."
     headers = {
         ":event-type": "chunk",
         ":content-type": "application/json",
@@ -247,9 +241,7 @@ async def invoke(model_path: str, request: Request) -> JSONResponse:
 
 
 @app.post("/model/{model_path:path}/invoke-with-response-stream")
-async def invoke_with_response_stream(
-    model_path: str, request: Request
-) -> StreamingResponse:
+async def invoke_with_response_stream(model_path: str, request: Request) -> StreamingResponse:
     """
     Binary ``application/vnd.amazon.eventstream`` body compatible with boto3/botocore
     ``InvokeModelWithResponseStream`` / LiteLLM's Bedrock invoke streaming path.

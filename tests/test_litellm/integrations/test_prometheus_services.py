@@ -13,9 +13,7 @@ from litellm.integrations.prometheus_services import (
     ServiceTypes,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
 def test_is_metric_registered_does_not_use_registry_collect():
@@ -70,9 +68,7 @@ def test_is_metric_registered_does_not_use_registry_collect():
         f"is available. Latency: {elapsed_ms:.2f} ms, {per_call_us:.1f} µs/call, {n_calls} calls, "
         f"collect() called {n_collect} times."
     )
-    assert (
-        elapsed_s < 0.05
-    ), f"is_metric_registered() took {elapsed_ms:.2f} ms for {n_calls} calls; expected <50 ms."
+    assert elapsed_s < 0.05, f"is_metric_registered() took {elapsed_ms:.2f} ms for {n_calls} calls; expected <50 ms."
 
 
 def test_create_gauge_new():

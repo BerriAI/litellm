@@ -22,9 +22,7 @@ def _fim_response_bytes():
             "object": "text_completion",
             "created": 1,
             "model": "mercury-edit-2",
-            "choices": [
-                {"text": "a + b", "index": 0, "finish_reason": "stop", "logprobs": None}
-            ],
+            "choices": [{"text": "a + b", "index": 0, "finish_reason": "stop", "logprobs": None}],
             "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
         }
     ).encode()
@@ -47,9 +45,7 @@ def test_inception_fim_supports_suffix_param():
 
 def test_inception_fim_supported_params_match_schema():
     """FIM exposes the OpenAI subset of Inception's FIMCompletionRequest only"""
-    params = InceptionTextCompletionConfig().get_supported_openai_params(
-        "mercury-edit-2"
-    )
+    params = InceptionTextCompletionConfig().get_supported_openai_params("mercury-edit-2")
     for p in ("suffix", "top_p", "frequency_penalty", "presence_penalty", "stop"):
         assert p in params
     # Chat-only sampling controls are not part of Inception's FIM schema
@@ -75,11 +71,7 @@ def test_inception_get_supported_openai_params_dispatch():
 
 @pytest.mark.parametrize("provider", ["inception", "text-completion-inception"])
 def test_inception_validate_environment(provider):
-    model = (
-        "inception/mercury-2"
-        if provider == "inception"
-        else "text-completion-inception/mercury-edit-2"
-    )
+    model = "inception/mercury-2" if provider == "inception" else "text-completion-inception/mercury-edit-2"
 
     with mock.patch.dict(os.environ, {}, clear=True):
         result = litellm.validate_environment(model)
@@ -151,10 +143,7 @@ def test_inception_fim_model_configuration():
     litellm.text_completion_inception_models = set()
     litellm.add_known_models()
 
-    assert (
-        "text-completion-inception/mercury-edit-2"
-        in litellm.text_completion_inception_models
-    )
+    assert "text-completion-inception/mercury-edit-2" in litellm.text_completion_inception_models
     info = get_model_info("text-completion-inception/mercury-edit-2")
     assert info.get("litellm_provider") == "text-completion-inception"
     assert info.get("mode") == "completion"
@@ -235,9 +224,7 @@ def test_inception_fim_does_not_leak_global_api_key():
             content=_fim_response_bytes(),
         )
 
-    with mock.patch.dict(
-        os.environ, {"INCEPTION_API_KEY": "sk-inception-correct"}, clear=True
-    ):
+    with mock.patch.dict(os.environ, {"INCEPTION_API_KEY": "sk-inception-correct"}, clear=True):
         with mock.patch.object(litellm, "inception_key", None):
             with mock.patch.object(litellm, "api_key", "sk-global-should-not-leak"):
                 with mock.patch("httpx.Client.send", new=fake_send):

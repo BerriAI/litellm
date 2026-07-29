@@ -26,9 +26,7 @@ class TestGetAttachedPolicies:
         )
 
         # Should match any context
-        context = PolicyMatchContext(
-            team_alias="any-team", key_alias="any-key", model="any-model"
-        )
+        context = PolicyMatchContext(team_alias="any-team", key_alias="any-key", model="any-model")
         attached = registry.get_attached_policies(context)
         assert "global-baseline" in attached
 
@@ -42,15 +40,11 @@ class TestGetAttachedPolicies:
         )
 
         # Match
-        context = PolicyMatchContext(
-            team_alias="healthcare-team", key_alias="key", model="gpt-4"
-        )
+        context = PolicyMatchContext(team_alias="healthcare-team", key_alias="key", model="gpt-4")
         assert "healthcare-policy" in registry.get_attached_policies(context)
 
         # No match - different team
-        context_other = PolicyMatchContext(
-            team_alias="finance-team", key_alias="key", model="gpt-4"
-        )
+        context_other = PolicyMatchContext(team_alias="finance-team", key_alias="key", model="gpt-4")
         assert "healthcare-policy" not in registry.get_attached_policies(context_other)
 
     def test_key_wildcard_pattern_attachment(self):
@@ -63,15 +57,11 @@ class TestGetAttachedPolicies:
         )
 
         # Match - key starts with dev-key-
-        context = PolicyMatchContext(
-            team_alias="team", key_alias="dev-key-123", model="gpt-4"
-        )
+        context = PolicyMatchContext(team_alias="team", key_alias="dev-key-123", model="gpt-4")
         assert "dev-policy" in registry.get_attached_policies(context)
 
         # No match - different prefix
-        context_prod = PolicyMatchContext(
-            team_alias="team", key_alias="prod-key-123", model="gpt-4"
-        )
+        context_prod = PolicyMatchContext(team_alias="team", key_alias="prod-key-123", model="gpt-4")
         assert "dev-policy" not in registry.get_attached_policies(context_prod)
 
     def test_model_specific_attachment(self):
@@ -88,9 +78,7 @@ class TestGetAttachedPolicies:
         assert "gpt4-policy" in registry.get_attached_policies(context)
 
         # No match
-        context_other = PolicyMatchContext(
-            team_alias="team", key_alias="key", model="gpt-3.5"
-        )
+        context_other = PolicyMatchContext(team_alias="team", key_alias="key", model="gpt-3.5")
         assert "gpt4-policy" not in registry.get_attached_policies(context_other)
 
     def test_model_wildcard_pattern(self):
@@ -103,15 +91,11 @@ class TestGetAttachedPolicies:
         )
 
         # Match
-        context = PolicyMatchContext(
-            team_alias="team", key_alias="key", model="bedrock/claude-3"
-        )
+        context = PolicyMatchContext(team_alias="team", key_alias="key", model="bedrock/claude-3")
         assert "bedrock-policy" in registry.get_attached_policies(context)
 
         # No match
-        context_other = PolicyMatchContext(
-            team_alias="team", key_alias="key", model="openai/gpt-4"
-        )
+        context_other = PolicyMatchContext(team_alias="team", key_alias="key", model="openai/gpt-4")
         assert "bedrock-policy" not in registry.get_attached_policies(context_other)
 
     def test_multiple_attachments_match_same_context(self):
@@ -125,9 +109,7 @@ class TestGetAttachedPolicies:
             ]
         )
 
-        context = PolicyMatchContext(
-            team_alias="healthcare-team", key_alias="key", model="gpt-4"
-        )
+        context = PolicyMatchContext(team_alias="healthcare-team", key_alias="key", model="gpt-4")
         attached = registry.get_attached_policies(context)
 
         # All three should match
@@ -146,9 +128,7 @@ class TestGetAttachedPolicies:
             ]
         )
 
-        context = PolicyMatchContext(
-            team_alias="healthcare-team", key_alias="key", model="gpt-4"
-        )
+        context = PolicyMatchContext(team_alias="healthcare-team", key_alias="key", model="gpt-4")
         attached = registry.get_attached_policies(context)
 
         # Should only appear once
@@ -172,9 +152,7 @@ class TestGetAttachedPolicies:
             ]
         )
 
-        context = PolicyMatchContext(
-            team_alias="finance-team", key_alias="key", model="gpt-4"
-        )
+        context = PolicyMatchContext(team_alias="finance-team", key_alias="key", model="gpt-4")
         attached = registry.get_attached_policies(context)
         assert attached == []
 
@@ -192,23 +170,15 @@ class TestGetAttachedPolicies:
         )
 
         # Match - both team and model match
-        context = PolicyMatchContext(
-            team_alias="healthcare-team", key_alias="key", model="gpt-4"
-        )
+        context = PolicyMatchContext(team_alias="healthcare-team", key_alias="key", model="gpt-4")
         assert "strict-policy" in registry.get_attached_policies(context)
 
         # No match - team matches but model doesn't
-        context_wrong_model = PolicyMatchContext(
-            team_alias="healthcare-team", key_alias="key", model="gpt-3.5"
-        )
-        assert "strict-policy" not in registry.get_attached_policies(
-            context_wrong_model
-        )
+        context_wrong_model = PolicyMatchContext(team_alias="healthcare-team", key_alias="key", model="gpt-3.5")
+        assert "strict-policy" not in registry.get_attached_policies(context_wrong_model)
 
         # No match - model matches but team doesn't
-        context_wrong_team = PolicyMatchContext(
-            team_alias="finance-team", key_alias="key", model="gpt-4"
-        )
+        context_wrong_team = PolicyMatchContext(team_alias="finance-team", key_alias="key", model="gpt-4")
         assert "strict-policy" not in registry.get_attached_policies(context_wrong_team)
 
 

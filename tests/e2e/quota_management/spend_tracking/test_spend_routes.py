@@ -95,9 +95,7 @@ def test_schema_listed_spend_routes_are_responsive(client: SpendClient) -> None:
     discovered = [
         path
         for path, spec in schema.paths.items()
-        if "get" in spec.methods
-        and "{" not in path
-        and any(path.startswith(prefix) for prefix in _SPEND_PREFIXES)
+        if "get" in spec.methods and "{" not in path and any(path.startswith(prefix) for prefix in _SPEND_PREFIXES)
     ]
     extras = [path for path in discovered if path not in SPEND_ROUTES]
 
@@ -106,8 +104,6 @@ def test_schema_listed_spend_routes_are_responsive(client: SpendClient) -> None:
     for path, result in results:
         print(f"{path} -> {result.status_code}")
     offenders = [
-        f"{path} -> {result.status_code}\n{result.body[:600]}"
-        for path, result in results
-        if not result.healthy
+        f"{path} -> {result.status_code}\n{result.body[:600]}" for path, result in results if not result.healthy
     ]
     assert not offenders, "non-responsive schema spend routes:\n" + "\n".join(offenders)

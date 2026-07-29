@@ -41,10 +41,7 @@ def test_get_complete_url_encodes_vector_store_id(
         litellm_params={},
     )
 
-    assert (
-        url
-        == "https://api.example.com/v1/vector_stores/..%2Fvs_123%3Fx%3D1%23frag/files"
-    )
+    assert url == "https://api.example.com/v1/vector_stores/..%2Fvs_123%3Fx%3D1%23frag/files"
 
 
 def test_transform_create_request(config: OpenAIVectorStoreFilesConfig):
@@ -84,10 +81,7 @@ def test_transform_file_request_encodes_file_id(config: OpenAIVectorStoreFilesCo
         api_base=api_base,
     )
 
-    assert (
-        url
-        == "https://api.example.com/v1/vector_stores/vs_123/files/..%2F..%2Ffiles%3Fx%3D1%23frag/content"
-    )
+    assert url == "https://api.example.com/v1/vector_stores/vs_123/files/..%2F..%2Ffiles%3Fx%3D1%23frag/content"
     assert params == {}
 
 

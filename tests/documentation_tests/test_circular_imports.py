@@ -48,9 +48,7 @@ def find_litellm_type_hints(directory: str) -> List[Tuple[str, int, str]]:
                         return is_litellm_type_hint(node.slice)
 
                 # Recursive check for subscripted types
-                return is_litellm_type_hint(node.value) or is_litellm_type_hint(
-                    node.slice
-                )
+                return is_litellm_type_hint(node.value) or is_litellm_type_hint(node.slice)
 
             # Recursive check for attribute types
             if isinstance(node, ast.Attribute):
@@ -81,23 +79,17 @@ def find_litellm_type_hints(directory: str) -> List[Tuple[str, int, str]]:
                 # Check type annotations in variable annotations
                 if isinstance(node, ast.AnnAssign) and node.annotation:
                     if is_litellm_type_hint(node.annotation):
-                        litellm_type_hints.append(
-                            (file_path, node.lineno, ast.unparse(node.annotation))
-                        )
+                        litellm_type_hints.append((file_path, node.lineno, ast.unparse(node.annotation)))
 
                 # Check type hints in function arguments
                 elif isinstance(node, ast.FunctionDef):
                     for arg in node.args.args:
                         if arg.annotation and is_litellm_type_hint(arg.annotation):
-                            litellm_type_hints.append(
-                                (file_path, arg.lineno, ast.unparse(arg.annotation))
-                            )
+                            litellm_type_hints.append((file_path, arg.lineno, ast.unparse(arg.annotation)))
 
                     # Check return type annotation
                     if node.returns and is_litellm_type_hint(node.returns):
-                        litellm_type_hints.append(
-                            (file_path, node.lineno, ast.unparse(node.returns))
-                        )
+                        litellm_type_hints.append((file_path, node.lineno, ast.unparse(node.returns)))
         except SyntaxError as e:
             print(f"Syntax error in {file_path}: {e}", file=sys.stderr)
         except Exception as e:

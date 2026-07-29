@@ -6,9 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -112,9 +110,7 @@ class TestOpenAIResponsesAPIConfig:
         # Check expected fields have correct values
         for field, value in expected_fields.items():
             assert field in params, f"Missing expected field: {field}"
-            assert (
-                params[field] == value
-            ), f"Field {field} has value {params[field]}, expected {value}"
+            assert params[field] == value, f"Field {field} has value {params[field]}, expected {value}"
 
     def test_transform_responses_api_request(self):
         """Test request transformation"""
@@ -274,9 +270,7 @@ class TestOpenAIResponsesAPIConfig:
         }
 
         # Mock the get_event_model_class to avoid validation issues in tests
-        with patch.object(
-            OpenAIResponsesAPIConfig, "get_event_model_class"
-        ) as mock_get_class:
+        with patch.object(OpenAIResponsesAPIConfig, "get_event_model_class") as mock_get_class:
             mock_get_class.return_value = ResponseCompletedEvent
 
             result = self.config.transform_streaming_response(
@@ -295,9 +289,7 @@ class TestOpenAIResponsesAPIConfig:
         headers = {}
         api_key = "test_api_key"
         litellm_params = GenericLiteLLMParams(api_key=api_key)
-        result = self.config.validate_environment(
-            headers=headers, model=self.model, litellm_params=litellm_params
-        )
+        result = self.config.validate_environment(headers=headers, model=self.model, litellm_params=litellm_params)
 
         assert "Authorization" in result
         assert result["Authorization"] == f"Bearer {api_key}"
@@ -308,9 +300,7 @@ class TestOpenAIResponsesAPIConfig:
 
         with patch("litellm.api_key", "litellm_api_key"):
             litellm_params = GenericLiteLLMParams()
-            result = self.config.validate_environment(
-                headers=headers, model=self.model, litellm_params=litellm_params
-            )
+            result = self.config.validate_environment(headers=headers, model=self.model, litellm_params=litellm_params)
 
             assert "Authorization" in result
             assert result["Authorization"] == "Bearer litellm_api_key"
@@ -416,10 +406,7 @@ class TestOpenAIResponsesAPIConfig:
             headers={},
         )
 
-        assert (
-            url
-            == "https://custom-openai.example.com/v1/responses/..%2F..%2Ffiles%3Fx%3D1%23frag/input_items"
-        )
+        assert url == "https://custom-openai.example.com/v1/responses/..%2F..%2Ffiles%3Fx%3D1%23frag/input_items"
         assert data["limit"] == 20
 
     def test_get_event_model_class_generic_event(self):
@@ -494,9 +481,7 @@ class TestOpenAIResponsesAPIConfig:
             )
 
             assert isinstance(result, ImageGenerationPartialImageEvent)
-            assert (
-                result.type == ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE
-            )
+            assert result.type == ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE
             assert result.partial_image_index == idx
             assert result.b64_json == chunk["b64_json"]
 
@@ -711,9 +696,7 @@ class TestOpenAIResponsesAPIConfig:
                 "namespace": "drop",
             },
         ]
-        out = BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(
-            inp
-        )
+        out = BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(inp)
         assert out[0]["namespace"] == "keep"
         assert "namespace" not in out[1]
 
@@ -772,30 +755,21 @@ class TestAzureResponsesAPIConfig:
             api_base=base_url,
             litellm_params={"api_version": "preview"},
         )
-        assert (
-            result_preview
-            == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=preview"
-        )
+        assert result_preview == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=preview"
 
         # Test with latest version - should use openai/v1/responses
         result_latest = self.config.get_complete_url(
             api_base=base_url,
             litellm_params={"api_version": "latest"},
         )
-        assert (
-            result_latest
-            == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=latest"
-        )
+        assert result_latest == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=latest"
 
         # Test with date-based version - should use openai/responses
         result_date = self.config.get_complete_url(
             api_base=base_url,
             litellm_params={"api_version": "2025-01-01"},
         )
-        assert (
-            result_date
-            == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-01-01"
-        )
+        assert result_date == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-01-01"
 
     def test_azure_transform_then_normalize_strips_custom_tool_call_namespace(self):
         """Same as OpenAI path: ``normalize_responses_api_request_dict`` strips custom_tool_call only."""
@@ -962,10 +936,7 @@ class TestTransformListInputItemsRequest:
         )
 
         # Assert
-        assert (
-            url
-            == "https://test.openai.azure.com/openai/responses/compact?api-version=2024-05-01-preview"
-        )
+        assert url == "https://test.openai.azure.com/openai/responses/compact?api-version=2024-05-01-preview"
         assert data["model"] == "gpt-5.2-codex"
         assert data["input"] == "hello"
 
@@ -1052,9 +1023,7 @@ class TestTransformListInputItemsRequest:
         assert params == expected_params
 
     @patch("litellm.router.Router")
-    def test_mock_litellm_router_with_transform_list_input_items_request(
-        self, mock_router
-    ):
+    def test_mock_litellm_router_with_transform_list_input_items_request(self, mock_router):
         """Mock test using litellm.router for transform_list_input_items_request"""
         # Setup mock router
         mock_router_instance = Mock()
@@ -1068,9 +1037,7 @@ class TestTransformListInputItemsRequest:
         )
 
         # Setup router mock
-        mock_router_instance.get_provider_responses_api_config.return_value = (
-            mock_provider_config
-        )
+        mock_router_instance.get_provider_responses_api_config.return_value = mock_provider_config
 
         # Test parameters
         response_id = "resp_test123"
@@ -1386,9 +1353,7 @@ class TestPhaseParameter:
                 phase = getattr(output_item, "phase", None)
 
             expected = "commentary" if idx == 0 else "final_answer"
-            assert (
-                phase == expected
-            ), f"output[{idx}] phase={phase!r}, expected {expected!r}"
+            assert phase == expected, f"output[{idx}] phase={phase!r}, expected {expected!r}"
 
     def test_streaming_output_item_done_preserves_phase(self):
         """OutputItemDoneEvent must preserve phase on its item."""
@@ -1522,9 +1487,7 @@ class TestPhaseParameter:
             if isinstance(item, dict):
                 input_items.append(item)
             else:
-                input_items.append(
-                    item.model_dump() if hasattr(item, "model_dump") else dict(item)
-                )
+                input_items.append(item.model_dump() if hasattr(item, "model_dump") else dict(item))
 
         input_items.append(
             {

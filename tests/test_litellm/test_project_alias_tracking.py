@@ -75,9 +75,7 @@ class TestProjectAliasThroughMetadataPipeline:
             team_alias="my-team",
         )
 
-        result = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
-            user_api_key_dict=user_api_key_dict
-        )
+        result = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
 
         assert result["user_api_key_project_id"] == "proj-123"
         assert result["user_api_key_project_alias"] == "My Cool Project"
@@ -85,9 +83,7 @@ class TestProjectAliasThroughMetadataPipeline:
     def test_get_sanitized_user_information_project_alias_none_when_no_project(self):
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-hashed")
 
-        result = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
-            user_api_key_dict=user_api_key_dict
-        )
+        result = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
 
         assert result["user_api_key_project_id"] is None
         assert result["user_api_key_project_alias"] is None
@@ -119,14 +115,10 @@ class TestProjectAliasThroughMetadataPipeline:
         )
 
         # Step 1: Auth → sanitized metadata
-        sanitized = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
-            user_api_key_dict=auth
-        )
+        sanitized = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=auth)
 
         # Step 2: Sanitized metadata → standard logging metadata
-        logging_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
-            dict(sanitized)
-        )
+        logging_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(dict(sanitized))
 
         assert logging_metadata["user_api_key_project_id"] == "proj-abc"
         assert logging_metadata["user_api_key_project_alias"] == "analytics-pipeline"

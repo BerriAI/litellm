@@ -14,9 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 from litellm.types.utils import StandardLoggingPayload
 import pytest
@@ -83,9 +81,7 @@ def test_tpm_rpm_updated():
     rpm_count_api_key = f"{deployment_id}:{deployment}:rpm:{current_minute}"
 
     print(f"tpm_count_api_key={tpm_count_api_key}")
-    assert response_obj["usage"]["total_tokens"] == test_cache.get_cache(
-        key=tpm_count_api_key
-    )
+    assert response_obj["usage"]["total_tokens"] == test_cache.get_cache(key=tpm_count_api_key)
     assert 1 == test_cache.get_cache(key=rpm_count_api_key)
 
 
@@ -243,9 +239,7 @@ def test_router_get_available_deployments():
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = "azure-model"
     standard_logging_payload["model_id"] = str(deployment_id)
-    standard_logging_payload["hidden_params"][
-        "litellm_model_name"
-    ] = "azure/gpt-35-turbo"
+    standard_logging_payload["hidden_params"]["litellm_model_name"] = "azure/gpt-35-turbo"
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -267,9 +261,7 @@ def test_router_get_available_deployments():
 
     ## CHECK WHAT'S SELECTED ##
     # print(router.lowesttpm_logger_v2.get_available_deployments(model_group="azure-model"))
-    assert (
-        router.get_available_deployment(model="azure-model")["model_info"]["id"] == "2"
-    )
+    assert router.get_available_deployment(model="azure-model")["model_info"]["id"] == "2"
 
 
 # test_get_available_deployments()
@@ -434,9 +426,7 @@ def test_single_deployment_tpm_zero():
 
 @pytest.mark.asyncio
 async def test_router_completion_streaming():
-    messages = [
-        {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
-    ]
+    messages = [{"role": "user", "content": "Hello, can you generate a 500 words poem?"}]
     model = "azure-model"
     model_list = [
         {
@@ -498,10 +488,7 @@ async def test_router_completion_streaming():
         rpm_dict = router.cache.get_cache(key=rpm_key)
         print(f"rpm_dict: {rpm_dict}")
         print(f"model id: {final_response._hidden_params['model_id']}")
-        assert (
-            final_response._hidden_params["model_id"]
-            == picked_deployment["model_info"]["id"]
-        )
+        assert final_response._hidden_params["model_id"] == picked_deployment["model_info"]["id"]
 
 
 # asyncio.run(test_router_completion_streaming())
@@ -519,9 +506,7 @@ async def test_router_caching_ttl():
 
     Relevant issue: https://github.com/BerriAI/litellm/issues/5609
     """
-    messages = [
-        {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
-    ]
+    messages = [{"role": "user", "content": "Hello, can you generate a 500 words poem?"}]
     model = "azure-model"
     model_list = [
         {
@@ -604,9 +589,7 @@ def test_router_caching_ttl_sync():
 
     Relevant issue: https://github.com/BerriAI/litellm/issues/5609
     """
-    messages = [
-        {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
-    ]
+    messages = [{"role": "user", "content": "Hello, can you generate a 500 words poem?"}]
     model = "azure-model"
     model_list = [
         {
@@ -747,33 +730,21 @@ async def test_tpm_rpm_routing_model_name_checks():
             "async_pre_call_check",
             side_effect=side_effect_pre_call_check,
         ) as mock_object,
-        patch.object(
-            router.lowesttpm_logger_v2, "async_log_success_event"
-        ) as mock_logging_event,
+        patch.object(router.lowesttpm_logger_v2, "async_log_success_event") as mock_logging_event,
     ):
-        response = await router.acompletion(
-            model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey!"}]
-        )
+        response = await router.acompletion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey!"}])
 
         mock_object.assert_called()
         print(f"mock_object.call_args: {mock_object.call_args[0][0]}")
-        assert (
-            mock_object.call_args[0][0]["litellm_params"]["model"]
-            == deployment["litellm_params"]["model"]
-        )
+        assert mock_object.call_args[0][0]["litellm_params"]["model"] == deployment["litellm_params"]["model"]
 
         await asyncio.sleep(1)
 
         mock_logging_event.assert_called()
 
         print(f"mock_logging_event: {mock_logging_event.call_args.kwargs}")
-        standard_logging_payload: StandardLoggingPayload = (
-            mock_logging_event.call_args.kwargs.get("kwargs", {}).get(
-                "standard_logging_object"
-            )
+        standard_logging_payload: StandardLoggingPayload = mock_logging_event.call_args.kwargs.get("kwargs", {}).get(
+            "standard_logging_object"
         )
 
-        assert (
-            standard_logging_payload["hidden_params"]["litellm_model_name"]
-            == "azure/gpt-4.1-mini"
-        )
+        assert standard_logging_payload["hidden_params"]["litellm_model_name"] == "azure/gpt-4.1-mini"

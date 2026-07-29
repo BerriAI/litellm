@@ -7,9 +7,7 @@ from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -39,23 +37,16 @@ def assert_response_shape(response, custom_llm_provider):
     assert isinstance(response.results, expected_response_shape["results"])
     for result in response.results:
         assert isinstance(result["index"], expected_results_shape["index"])
-        assert isinstance(
-            result["relevance_score"], expected_results_shape["relevance_score"]
-        )
+        assert isinstance(result["relevance_score"], expected_results_shape["relevance_score"])
     assert isinstance(response.meta, expected_response_shape["meta"])
 
     if custom_llm_provider == "cohere":
-
-        assert isinstance(
-            response.meta["api_version"], expected_meta_shape["api_version"]
-        )
+        assert isinstance(response.meta["api_version"], expected_meta_shape["api_version"])
         assert isinstance(
             response.meta["api_version"]["version"],
             expected_api_version_shape["version"],
         )
-    assert isinstance(
-        response.meta["billed_units"], expected_meta_shape["billed_units"]
-    )
+    assert isinstance(response.meta["billed_units"], expected_meta_shape["billed_units"])
     if "total_tokens" in response.meta["billed_units"]:
         assert isinstance(
             response.meta["billed_units"]["total_tokens"],
@@ -126,9 +117,7 @@ class BaseLLMRerankTest(ABC):
                 # Default behavior: cost should be greater than 0
                 assert response._hidden_params["response_cost"] > 0
 
-            assert_response_shape(
-                response=response, custom_llm_provider=custom_llm_provider.value
-            )
+            assert_response_shape(response=response, custom_llm_provider=custom_llm_provider.value)
         else:
             response = await litellm.arerank(
                 **rerank_call_args,
@@ -142,6 +131,4 @@ class BaseLLMRerankTest(ABC):
             assert response.id is not None
             assert response.results is not None
 
-            assert_response_shape(
-                response=response, custom_llm_provider=custom_llm_provider.value
-            )
+            assert_response_shape(response=response, custom_llm_provider=custom_llm_provider.value)

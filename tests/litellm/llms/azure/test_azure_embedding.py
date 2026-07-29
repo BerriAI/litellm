@@ -4,9 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 from litellm.llms.azure.azure import AzureChatCompletion
 from litellm.types.utils import EmbeddingResponse, Usage

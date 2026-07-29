@@ -68,9 +68,7 @@ class TestCallbackDurationMs:
     def test_update_response_metadata_includes_callback_duration(self):
         """End-to-end: update_response_metadata should propagate callback_duration_ms."""
         result = ModelResponse()
-        logging_obj = self._make_logging_obj(
-            callback_duration_ms=5.5, llm_api_duration_ms=800.0
-        )
+        logging_obj = self._make_logging_obj(callback_duration_ms=5.5, llm_api_duration_ms=800.0)
         logging_obj._response_cost_calculator = MagicMock(return_value=0.001)
         logging_obj.litellm_call_id = "test-call-id"
 
@@ -190,9 +188,7 @@ class TestDetailedTiming:
 
     def test_detailed_timing_headers_in_custom_headers(self, monkeypatch):
         """When LITELLM_DETAILED_TIMING is true, headers flow to get_custom_headers."""
-        monkeypatch.setattr(
-            common_request_processing_mod, "LITELLM_DETAILED_TIMING", True
-        )
+        monkeypatch.setattr(common_request_processing_mod, "LITELLM_DETAILED_TIMING", True)
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         hidden_params = {
@@ -215,9 +211,7 @@ class TestDetailedTiming:
 
     def test_detailed_timing_headers_absent_when_disabled(self, monkeypatch):
         """When LITELLM_DETAILED_TIMING is false, no timing headers emitted."""
-        monkeypatch.setattr(
-            common_request_processing_mod, "LITELLM_DETAILED_TIMING", False
-        )
+        monkeypatch.setattr(common_request_processing_mod, "LITELLM_DETAILED_TIMING", False)
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         hidden_params = {

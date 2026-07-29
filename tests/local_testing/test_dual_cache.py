@@ -9,9 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import hashlib
 import random
@@ -78,7 +76,6 @@ async def test_dual_cache_local_only(is_async):
         patch.object(redis_cache, redis_set_method) as mock_redis_set,
         patch.object(redis_cache, redis_get_method) as mock_redis_get,
     ):
-
         # Set value with local_only=True
         if is_async:
             await dual_cache.async_set_cache(test_key, test_value, local_only=True)
@@ -120,9 +117,7 @@ async def test_dual_cache_value_not_in_memory(is_async):
     assert result == test_value
 
     # Second request - should now use in-memory cache
-    with patch.object(
-        redis_cache, "async_get_cache" if is_async else "get_cache"
-    ) as mock_redis_get:
+    with patch.object(redis_cache, "async_get_cache" if is_async else "get_cache") as mock_redis_get:
         if is_async:
             result = await dual_cache.async_get_cache(test_key)
         else:
@@ -152,9 +147,7 @@ async def test_dual_cache_batch_operations(is_async):
             dual_cache.set_cache(key, value)
 
     # Verify in-memory cache is used for subsequent reads
-    with patch.object(
-        redis_cache, "async_batch_get_cache" if is_async else "batch_get_cache"
-    ) as mock_redis_get:
+    with patch.object(redis_cache, "async_batch_get_cache" if is_async else "batch_get_cache") as mock_redis_get:
         if is_async:
             results = await dual_cache.async_batch_get_cache(test_keys)
         else:
@@ -176,9 +169,7 @@ async def test_dual_cache_increment(is_async):
     increment_value = 1
 
     # increment should use in-memory cache
-    with patch.object(
-        redis_cache, "async_increment" if is_async else "increment_cache"
-    ) as mock_redis_increment:
+    with patch.object(redis_cache, "async_increment" if is_async else "increment_cache") as mock_redis_increment:
         if is_async:
             result = await dual_cache.async_increment_cache(
                 test_key,
@@ -187,9 +178,7 @@ async def test_dual_cache_increment(is_async):
                 parent_otel_span=None,
             )
         else:
-            result = dual_cache.increment_cache(
-                test_key, increment_value, local_only=True
-            )
+            result = dual_cache.increment_cache(test_key, increment_value, local_only=True)
 
         assert result == increment_value
         mock_redis_increment.assert_not_called()

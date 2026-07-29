@@ -9,9 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
 def _build_test_client():
@@ -92,9 +90,7 @@ def test_google_stream_generate_content_endpoint():
         assert init_kwargs["data"]["_litellm_raw_sse_stream"] is True
         assert init_kwargs["data"]["_litellm_skip_openai_stream_done"] is True
         assert init_kwargs["data"]["model"] == "test-model"
-        assert init_kwargs["data"]["contents"] == [
-            {"role": "user", "parts": [{"text": "Hello"}]}
-        ]
+        assert init_kwargs["data"]["contents"] == [{"role": "user", "parts": [{"text": "Hello"}]}]
 
 
 def test_google_generate_content_data_flows_through_processor():
@@ -127,9 +123,7 @@ def test_google_generate_content_data_flows_through_processor():
         data = mock_init.call_args.kwargs["data"]
         assert data["model"] == "test-model"
         assert data["contents"] == [{"role": "user", "parts": [{"text": "Hello"}]}]
-        assert data["systemInstruction"] == {
-            "parts": [{"text": "Your name is Doodle."}]
-        }
+        assert data["systemInstruction"] == {"parts": [{"text": "Your name is Doodle."}]}
         # generationConfig arrives intact here; the rename to `config` is
         # done downstream in route_request (see test_route_llm_request).
         assert data["generationConfig"]["responseModalities"] == ["TEXT", "IMAGE"]

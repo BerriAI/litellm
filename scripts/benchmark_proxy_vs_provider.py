@@ -11,7 +11,7 @@ USAGE EXAMPLES:
    export PROVIDER_URL='https://api.openai.com/v1/chat/completions'
    export LITELLM_PROXY_API_KEY='sk-1234'
    export PROVIDER_API_KEY='sk-openai-key'
-   
+
    # Run from scripts directory
    cd scripts
    python benchmark_proxy_vs_provider.py
@@ -114,9 +114,7 @@ class BenchmarkResults:
             "success_rate": (self.successful_requests / self.total_requests) * 100,
             "error_rate": (self.failed_requests / self.total_requests) * 100,
             "total_time": self.total_time,
-            "requests_per_second": (
-                self.total_requests / self.total_time if self.total_time > 0 else 0
-            ),
+            "requests_per_second": (self.total_requests / self.total_time if self.total_time > 0 else 0),
             "latency_stats": {
                 "mean": mean(self.latencies),
                 "median": median(self.latencies),
@@ -152,9 +150,7 @@ async def make_request(
     # Use time.perf_counter() for higher precision timing
     start_time = time.perf_counter()
     try:
-        async with session.post(
-            url, json=payload, headers=headers, timeout=timeout
-        ) as response:
+        async with session.post(url, json=payload, headers=headers, timeout=timeout) as response:
             # Read response body to ensure complete transfer
             response_body = await response.read()
             latency = time.perf_counter() - start_time
@@ -220,10 +216,7 @@ async def warmup_endpoint(
     )
 
     async with aiohttp.ClientSession(connector=connector) as session:
-        tasks = [
-            make_request(session, url, headers, payload, timeout)
-            for _ in range(num_warmup)
-        ]
+        tasks = [make_request(session, url, headers, payload, timeout) for _ in range(num_warmup)]
         await asyncio.gather(*tasks, return_exceptions=True)
 
     # Brief pause after warmup to let connections stabilize
@@ -267,18 +260,12 @@ async def benchmark_endpoint(
 
     if warmup:
         print(f"   Warming up with 5 requests...")
-        await warmup_endpoint(
-            url, headers, payload, num_warmup=5, timeout_seconds=timeout_seconds
-        )
+        await warmup_endpoint(url, headers, payload, num_warmup=5, timeout_seconds=timeout_seconds)
 
     if max_concurrent:
-        print(
-            f"   Making {num_requests} requests with max {max_concurrent} concurrent..."
-        )
+        print(f"   Making {num_requests} requests with max {max_concurrent} concurrent...")
     else:
-        print(
-            f"   Making {num_requests} requests in parallel (unlimited concurrency)..."
-        )
+        print(f"   Making {num_requests} requests in parallel (unlimited concurrency)...")
 
     results = BenchmarkResults(total_requests=num_requests)
     timeout = aiohttp.ClientTimeout(total=timeout_seconds)
@@ -308,17 +295,12 @@ async def benchmark_endpoint(
             # Use semaphore to limit concurrency
             semaphore = asyncio.Semaphore(max_concurrent)
             tasks = [
-                make_request_with_semaphore(
-                    session, semaphore, url, headers, payload, timeout
-                )
+                make_request_with_semaphore(session, semaphore, url, headers, payload, timeout)
                 for _ in range(num_requests)
             ]
         else:
             # Create all tasks at once for maximum parallelism
-            tasks = [
-                make_request(session, url, headers, payload, timeout)
-                for _ in range(num_requests)
-            ]
+            tasks = [make_request(session, url, headers, payload, timeout) for _ in range(num_requests)]
 
         # Execute all requests (with concurrency limit if specified)
         request_stats = await asyncio.gather(*tasks)
@@ -335,9 +317,7 @@ async def benchmark_endpoint(
             results.errors.append(stats.error)
 
         if stats.status_code > 0:
-            results.status_codes[stats.status_code] = (
-                results.status_codes.get(stats.status_code, 0) + 1
-            )
+            results.status_codes[stats.status_code] = results.status_codes.get(stats.status_code, 0) + 1
 
     return results
 
@@ -346,9 +326,9 @@ def print_results(name: str, results: BenchmarkResults):
     """Print formatted benchmark results"""
     stats = results.calculate_stats()
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Results for {name}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"Total Requests:        {stats['total_requests']}")
     print(f"Successful Requests:   {stats['successful_requests']}")
     print(f"Failed Requests:       {stats['failed_requests']}")
@@ -424,9 +404,9 @@ def print_run_variance(name: str, results_list: List[BenchmarkResults]):
     if len(results_list) <= 1:
         return
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Run-to-Run Variance: {name}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Collect mean latencies from each run
     mean_latencies = []
@@ -445,9 +425,7 @@ def print_run_variance(name: str, results_list: List[BenchmarkResults]):
         print(f"   Min:            {min(mean_latencies):.4f}s")
         print(f"   Max:            {max(mean_latencies):.4f}s")
         print(
-            f"   Std Dev:        {stdev(mean_latencies):.4f}s"
-            if len(mean_latencies) > 1
-            else "   Std Dev:        N/A"
+            f"   Std Dev:        {stdev(mean_latencies):.4f}s" if len(mean_latencies) > 1 else "   Std Dev:        N/A"
         )
         print(
             f"   Coefficient of Variation: {(stdev(mean_latencies) / mean(mean_latencies) * 100):.2f}%"
@@ -461,22 +439,18 @@ def print_run_variance(name: str, results_list: List[BenchmarkResults]):
         print(f"   Min:            {min(throughputs):.2f} req/s")
         print(f"   Max:            {max(throughputs):.2f} req/s")
         print(
-            f"   Std Dev:        {stdev(throughputs):.2f} req/s"
-            if len(throughputs) > 1
-            else "   Std Dev:        N/A"
+            f"   Std Dev:        {stdev(throughputs):.2f} req/s" if len(throughputs) > 1 else "   Std Dev:        N/A"
         )
 
 
-def compare_results(
-    proxy_results: BenchmarkResults, provider_results: BenchmarkResults
-):
+def compare_results(proxy_results: BenchmarkResults, provider_results: BenchmarkResults):
     """Compare and print differences between proxy and provider results"""
     proxy_stats = proxy_results.calculate_stats()
     provider_stats = provider_results.calculate_stats()
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Comparison: LiteLLM Proxy vs Direct Provider")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Success Rate Comparison
     print(f"\nSuccess Rate:")
@@ -513,11 +487,7 @@ def compare_results(
     print(f"   Proxy:   {proxy_stats['total_time']:.2f}s")
     print(f"   Provider: {provider_stats['total_time']:.2f}s")
     diff = proxy_stats["total_time"] - provider_stats["total_time"]
-    diff_pct = (
-        (diff / provider_stats["total_time"] * 100)
-        if provider_stats["total_time"] > 0
-        else 0
-    )
+    diff_pct = (diff / provider_stats["total_time"] * 100) if provider_stats["total_time"] > 0 else 0
     print(f"   Difference: {diff:+.2f}s ({diff_pct:+.2f}%)")
 
 
@@ -610,16 +580,12 @@ Examples:
     # Validate required environment variables
     if not LITELLM_PROXY_URL:
         print("Error: LITELLM_PROXY_URL environment variable is required")
-        print(
-            "   Example: export LITELLM_PROXY_URL='https://your-proxy.com/chat/completions'"
-        )
+        print("   Example: export LITELLM_PROXY_URL='https://your-proxy.com/chat/completions'")
         sys.exit(1)
 
     if not PROVIDER_URL:
         print("Error: PROVIDER_URL environment variable is required")
-        print(
-            "   Example: export PROVIDER_URL='https://your-provider.com/v1/chat/completions'"
-        )
+        print("   Example: export PROVIDER_URL='https://your-provider.com/v1/chat/completions'")
         sys.exit(1)
 
     # Headers for LiteLLM proxy
@@ -629,9 +595,7 @@ Examples:
     if LITELLM_PROXY_API_KEY:
         proxy_headers["Authorization"] = f"Bearer {LITELLM_PROXY_API_KEY}"
     else:
-        print(
-            "Warning: LITELLM_PROXY_API_KEY not set, requests may fail if authentication is required"
-        )
+        print("Warning: LITELLM_PROXY_API_KEY not set, requests may fail if authentication is required")
 
     # Headers for direct provider
     provider_headers = {
@@ -640,9 +604,7 @@ Examples:
     if PROVIDER_API_KEY:
         provider_headers["Authorization"] = f"Bearer {PROVIDER_API_KEY}"
     else:
-        print(
-            "Warning: PROVIDER_API_KEY not set, requests may fail if authentication is required"
-        )
+        print("Warning: PROVIDER_API_KEY not set, requests may fail if authentication is required")
 
     # Payload (same for both)
     payload = {
@@ -665,24 +627,14 @@ Examples:
     print(f"Configuration (from environment variables):")
     print(f"  Proxy URL:    {LITELLM_PROXY_URL}")
     print(f"  Provider URL: {PROVIDER_URL}")
-    print(
-        f"  Proxy API Key: {'Set' if LITELLM_PROXY_API_KEY else 'Not set (may cause auth errors)'}"
-    )
-    print(
-        f"  Provider API Key: {'Set' if PROVIDER_API_KEY else 'Not set (may cause auth errors)'}"
-    )
+    print(f"  Proxy API Key: {'Set' if LITELLM_PROXY_API_KEY else 'Not set (may cause auth errors)'}")
+    print(f"  Provider API Key: {'Set' if PROVIDER_API_KEY else 'Not set (may cause auth errors)'}")
     print(f"  Requests:     {num_requests}")
     print(f"  Runs:         {args.runs}")
-    print(
-        f"  Max Concurrent: {args.max_concurrent if args.max_concurrent else 'Unlimited (all at once)'}"
-    )
+    print(f"  Max Concurrent: {args.max_concurrent if args.max_concurrent else 'Unlimited (all at once)'}")
     print(f"  Timeout:      {timeout_seconds}s")
-    print(
-        f"  Warmup:       {'Enabled' if not args.no_warmup else 'Disabled (not recommended)'}"
-    )
-    print(
-        f"  Mode:         {'Parallel (may affect results)' if args.parallel else 'Sequential (recommended)'}"
-    )
+    print(f"  Warmup:       {'Enabled' if not args.no_warmup else 'Disabled (not recommended)'}")
+    print(f"  Mode:         {'Parallel (may affect results)' if args.parallel else 'Sequential (recommended)'}")
 
     if not args.max_concurrent:
         print(f"\nTip: Use --max-concurrent 100 for more realistic load testing")
@@ -713,9 +665,9 @@ Examples:
 
     for run_num in range(1, args.runs + 1):
         if args.runs > 1:
-            print(f"\n{'='*60}")
+            print(f"\n{'=' * 60}")
             print(f"Run {run_num}/{args.runs}")
-            print(f"{'='*60}")
+            print(f"{'=' * 60}")
 
         if args.parallel:
             print(f"\nRunning both benchmarks in parallel...")
@@ -804,9 +756,9 @@ Examples:
         print_run_variance("LiteLLM Proxy", all_proxy_results)
         print_run_variance("Direct Provider", all_provider_results)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("Benchmark complete!")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 if __name__ == "__main__":

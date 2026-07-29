@@ -13,9 +13,7 @@ import os
 import time
 import json
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.router import Router
 import asyncio
@@ -41,9 +39,7 @@ class TestCustomLogger(CustomLogger):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "model", [None, "omni-moderation-latest", "router-internal-moderation-model"]
-)
+@pytest.mark.parametrize("model", [None, "omni-moderation-latest", "router-internal-moderation-model"])
 async def test_moderations_api_logging(model):
     """
     When moderations API is called, it should log the event on standard_logging_payload
@@ -82,18 +78,10 @@ async def test_moderations_api_logging(model):
     assert custom_logger.standard_logging_payload is not None
 
     # validate the standard_logging_payload
-    standard_logging_payload: StandardLoggingPayload = (
-        custom_logger.standard_logging_payload
-    )
-    assert (
-        standard_logging_payload["call_type"]
-        == litellm.utils.CallTypes.amoderation.value
-    )
+    standard_logging_payload: StandardLoggingPayload = custom_logger.standard_logging_payload
+    assert standard_logging_payload["call_type"] == litellm.utils.CallTypes.amoderation.value
     assert standard_logging_payload["status"] == "success"
-    assert (
-        standard_logging_payload["custom_llm_provider"]
-        == litellm.LlmProviders.OPENAI.value
-    )
+    assert standard_logging_payload["custom_llm_provider"] == litellm.LlmProviders.OPENAI.value
 
     # assert the logged input == input
     assert standard_logging_payload["messages"][0]["content"] == input_content

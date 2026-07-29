@@ -154,9 +154,9 @@ async def test_overhead_latency_metric_emitted(clean_env):
     metrics = {s["metric"]: s for s in logger.log_queue}
 
     # Overhead metric must be present
-    assert (
-        "litellm.overhead.latency" in metrics
-    ), f"Expected 'litellm.overhead.latency' in emitted metrics, got: {list(metrics.keys())}"
+    assert "litellm.overhead.latency" in metrics, (
+        f"Expected 'litellm.overhead.latency' in emitted metrics, got: {list(metrics.keys())}"
+    )
     overhead = metrics["litellm.overhead.latency"]
     assert overhead["type"] == 3  # gauge
     # 250 ms → 0.25 s
@@ -299,9 +299,7 @@ async def test_async_send_batch(clean_env):
     logger = DatadogMetricsLogger(start_periodic_flush=False)
     logger.async_client = AsyncMock()
     mock_request = Request("POST", "https://api.test.datadoghq.com/api/v2/series")
-    logger.async_client.post.return_value = Response(
-        202, json={"status": "ok"}, request=mock_request
-    )
+    logger.async_client.post.return_value = Response(202, json={"status": "ok"}, request=mock_request)
 
     # Manually add a metric series to the queue
     logger.log_queue = [

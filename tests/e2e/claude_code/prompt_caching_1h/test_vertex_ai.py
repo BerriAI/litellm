@@ -75,10 +75,7 @@ def test_prompt_caching_1h_vertex_ai(compat_result):
             continue
 
         if _cache_tokens(outcome.usage) <= 0:
-            error = (
-                f"[{model}] usage block reported zero cache tokens with "
-                "ENABLE_PROMPT_CACHING_1H=1"
-            )
+            error = f"[{model}] usage block reported zero cache tokens with ENABLE_PROMPT_CACHING_1H=1"
             compat_result.add({"status": "fail", "error": error})
             failures.append(error)
             continue

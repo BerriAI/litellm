@@ -58,9 +58,7 @@ async def test_aiohttp_transport_response_uses_stream_not_content():
             return Resp()
 
     transport = LiteLLMAiohttpTransport(client=lambda: FakeSession())  # type: ignore
-    response = await transport.handle_async_request(
-        httpx.Request("GET", "http://example.com")
-    )
+    response = await transport.handle_async_request(httpx.Request("GET", "http://example.com"))
 
     assert isinstance(response.stream, AiohttpResponseStream)
 
@@ -230,9 +228,7 @@ async def test_stream_with_fallbacks_closes_stream_on_generator_close():
         break
     await result.aclose()
 
-    assert (
-        stream_closed
-    ), "model_response stream was not closed by stream_with_fallbacks finally block"
+    assert stream_closed, "model_response stream was not closed by stream_with_fallbacks finally block"
 
 
 @pytest.mark.asyncio

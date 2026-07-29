@@ -121,9 +121,7 @@ async def test_set_user_keys_unblocked_skips_admin_blocked_keys():
     """Reactivation must leave keys an admin blocked (no scim_blocked marker) alone."""
     keys = [
         # SCIM-blocked: should be unblocked.
-        _build_token_row(
-            "hash-scim", "user-x", blocked=True, metadata={"scim_blocked": True}
-        ),
+        _build_token_row("hash-scim", "user-x", blocked=True, metadata={"scim_blocked": True}),
         # Admin-blocked for unrelated reasons: must remain blocked.
         _build_token_row("hash-admin", "user-x", blocked=True, metadata={}),
     ]
@@ -184,9 +182,7 @@ async def test_scim_delete_user_blocks_keys_before_deleting_user():
     assert update_kwargs["where"] == {"token": "hash-a"}
     assert update_kwargs["data"]["blocked"] is True
     assert '"scim_blocked": true' in update_kwargs["data"]["metadata"]
-    mock_db.litellm_usertable.delete.assert_awaited_once_with(
-        where={"user_id": user_id}
-    )
+    mock_db.litellm_usertable.delete.assert_awaited_once_with(where={"user_id": user_id})
 
 
 @pytest.mark.asyncio
@@ -211,9 +207,7 @@ async def test_scim_delete_user_clears_fk_referenced_rows_before_user_delete():
     mock_db.litellm_teammembership.delete_many = AsyncMock(
         side_effect=lambda **kw: call_order.append(("teammembership", kw)) or None
     )
-    mock_db.litellm_usertable.delete = AsyncMock(
-        side_effect=lambda **kw: call_order.append(("user", kw)) or None
-    )
+    mock_db.litellm_usertable.delete = AsyncMock(side_effect=lambda **kw: call_order.append(("user", kw)) or None)
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_client),
@@ -239,12 +233,8 @@ async def test_scim_delete_user_clears_fk_referenced_rows_before_user_delete():
             ]
         }
     }
-    mock_db.litellm_organizationmembership.delete_many.assert_awaited_once_with(
-        where={"user_id": user_id}
-    )
-    mock_db.litellm_teammembership.delete_many.assert_awaited_once_with(
-        where={"user_id": user_id}
-    )
+    mock_db.litellm_organizationmembership.delete_many.assert_awaited_once_with(where={"user_id": user_id})
+    mock_db.litellm_teammembership.delete_many.assert_awaited_once_with(where={"user_id": user_id})
 
     stages = [stage for stage, _ in call_order]
     assert stages.index("user") > stages.index("invitation")
@@ -269,13 +259,9 @@ async def test_scim_patch_user_active_false_blocks_keys():
         metadata={"scim_active": False, "scim_metadata": {}},
     )
     keys = [_build_token_row("hash-z", user_id, blocked=False)]
-    mock_client, mock_db = _build_prisma_with_keys(
-        keys, mock_user=mock_user, updated_user=updated_user
-    )
+    mock_client, mock_db = _build_prisma_with_keys(keys, mock_user=mock_user, updated_user=updated_user)
 
-    patch_ops = SCIMPatchOp(
-        Operations=[SCIMPatchOperation(op="replace", path="active", value="False")]
-    )
+    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="replace", path="active", value="False")])
     mock_scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
         id=user_id,
@@ -324,18 +310,10 @@ async def test_scim_patch_user_active_true_unblocks_keys():
         teams=[],
         metadata={"scim_active": True, "scim_metadata": {}},
     )
-    keys = [
-        _build_token_row(
-            "hash-r", user_id, blocked=True, metadata={"scim_blocked": True}
-        )
-    ]
-    mock_client, mock_db = _build_prisma_with_keys(
-        keys, mock_user=mock_user, updated_user=updated_user
-    )
+    keys = [_build_token_row("hash-r", user_id, blocked=True, metadata={"scim_blocked": True})]
+    mock_client, mock_db = _build_prisma_with_keys(keys, mock_user=mock_user, updated_user=updated_user)
 
-    patch_ops = SCIMPatchOp(
-        Operations=[SCIMPatchOperation(op="replace", path="active", value="True")]
-    )
+    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="replace", path="active", value="True")])
     mock_scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
         id=user_id,
@@ -386,13 +364,9 @@ async def test_scim_patch_user_no_active_change_does_not_touch_keys():
         teams=[],
         metadata={"scim_active": True, "scim_metadata": {}},
     )
-    mock_client, mock_db = _build_prisma_with_keys(
-        user_keys=[], mock_user=mock_user, updated_user=updated_user
-    )
+    mock_client, mock_db = _build_prisma_with_keys(user_keys=[], mock_user=mock_user, updated_user=updated_user)
 
-    patch_ops = SCIMPatchOp(
-        Operations=[SCIMPatchOperation(op="replace", path="displayName", value="New")]
-    )
+    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="replace", path="displayName", value="New")])
     mock_scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
         id=user_id,
@@ -445,14 +419,8 @@ async def test_scim_put_user_omitting_active_preserves_deactivated_state():
         teams=[],
         metadata={"scim_active": False},
     )
-    keys = [
-        _build_token_row(
-            "hash-keep-blocked", user_id, blocked=True, metadata={"scim_blocked": True}
-        )
-    ]
-    mock_client, mock_db = _build_prisma_with_keys(
-        keys, mock_user=deactivated, updated_user=deactivated
-    )
+    keys = [_build_token_row("hash-keep-blocked", user_id, blocked=True, metadata={"scim_blocked": True})]
+    mock_client, mock_db = _build_prisma_with_keys(keys, mock_user=deactivated, updated_user=deactivated)
 
     put_user = SCIMUser.model_validate(_build_put_user_payload(user_id))
 
@@ -506,9 +474,7 @@ async def test_scim_put_user_explicit_active_false_blocks_keys():
         metadata={"scim_active": False, "scim_metadata": {}},
     )
     keys = [_build_token_row("hash-block-me", user_id, blocked=False)]
-    mock_client, mock_db = _build_prisma_with_keys(
-        keys, mock_user=active, updated_user=deactivated
-    )
+    mock_client, mock_db = _build_prisma_with_keys(keys, mock_user=active, updated_user=deactivated)
 
     put_user = SCIMUser.model_validate(_build_put_user_payload(user_id, active=False))
 

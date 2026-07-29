@@ -145,9 +145,7 @@ async def test_execute_guardrail_hook_unknown_hook_type_raises(proxy_logging, ma
 
 
 @pytest.mark.asyncio
-async def test_execute_guardrail_with_load_balancing_routes_through_router(
-    proxy_logging, make_user_api_key_auth
-):
+async def test_execute_guardrail_with_load_balancing_routes_through_router(proxy_logging, make_user_api_key_auth):
     cb = _make_guardrail()
     router = MagicMock()
     router.get_available_guardrail = MagicMock(return_value={"callback": cb})
@@ -163,9 +161,7 @@ async def test_execute_guardrail_with_load_balancing_routes_through_router(
 
 
 @pytest.mark.asyncio
-async def test_execute_guardrail_with_load_balancing_router_none_raises(
-    proxy_logging, make_user_api_key_auth
-):
+async def test_execute_guardrail_with_load_balancing_router_none_raises(proxy_logging, make_user_api_key_auth):
     with patch("litellm.proxy.proxy_server.llm_router", None):
         with pytest.raises(ValueError, match="Router not initialized"):
             await proxy_logging._execute_guardrail_with_load_balancing(
@@ -178,9 +174,7 @@ async def test_execute_guardrail_with_load_balancing_router_none_raises(
 
 
 @pytest.mark.asyncio
-async def test_execute_guardrail_with_load_balancing_no_callback_raises(
-    proxy_logging, make_user_api_key_auth
-):
+async def test_execute_guardrail_with_load_balancing_no_callback_raises(proxy_logging, make_user_api_key_auth):
     router = MagicMock()
     router.get_available_guardrail = MagicMock(return_value={"callback": None})
     with patch("litellm.proxy.proxy_server.llm_router", router):
@@ -200,9 +194,7 @@ async def test_execute_guardrail_with_load_balancing_no_callback_raises(
 
 
 @pytest.mark.asyncio
-async def test_process_guardrail_callback_skipped_when_should_run_false(
-    proxy_logging, make_user_api_key_auth
-):
+async def test_process_guardrail_callback_skipped_when_should_run_false(proxy_logging, make_user_api_key_auth):
     cb = _make_guardrail()
     cb.should_run_guardrail = MagicMock(return_value=False)
     out = await proxy_logging._process_guardrail_callback(
@@ -216,9 +208,7 @@ async def test_process_guardrail_callback_skipped_when_should_run_false(
 
 
 @pytest.mark.asyncio
-async def test_process_guardrail_callback_returns_data_on_success(
-    proxy_logging, make_user_api_key_auth, monkeypatch
-):
+async def test_process_guardrail_callback_returns_data_on_success(proxy_logging, make_user_api_key_auth, monkeypatch):
     cb = _make_guardrail()
     cb.should_run_guardrail = MagicMock(return_value=True)
     proxy_logging._should_use_guardrail_load_balancing = MagicMock(return_value=False)
@@ -332,14 +322,14 @@ async def test_maybe_execute_pipelines_no_pipelines_returns_data(proxy_logging, 
 
 
 @pytest.mark.asyncio
-async def test_maybe_execute_pipelines_skips_pipelines_with_other_mode(proxy_logging, make_user_api_key_auth, monkeypatch):
+async def test_maybe_execute_pipelines_skips_pipelines_with_other_mode(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
     pipeline = MagicMock()
     pipeline.mode = "post_call"  # not pre_call
     data = {"metadata": {"_guardrail_pipelines": [("p1", pipeline)]}, "model": "m", "messages": []}
     executed = MagicMock()
-    monkeypatch.setattr(
-        "litellm.proxy.policy_engine.pipeline_executor.PipelineExecutor.execute_steps", executed
-    )
+    monkeypatch.setattr("litellm.proxy.policy_engine.pipeline_executor.PipelineExecutor.execute_steps", executed)
     out = await proxy_logging._maybe_execute_pipelines(
         data=data,
         user_api_key_dict=make_user_api_key_auth(),
@@ -487,9 +477,7 @@ def test_handle_pipeline_result_block_enriches_with_guardrail_name_and_mode():
     litellm.callbacks = [cb]
     try:
         with pytest.raises(HTTPException) as info:
-            ProxyLogging._handle_pipeline_result(
-                result=result, data={"model": "m"}, policy_name="p"
-            )
+            ProxyLogging._handle_pipeline_result(result=result, data={"model": "m"}, policy_name="p")
     finally:
         litellm.callbacks = saved
 
@@ -601,9 +589,7 @@ async def test_run_guardrail_with_metrics_records_error_and_enriches(monkeypatch
     monkeypatch.setattr(litellm, "callbacks", [prom])
 
     with pytest.raises(HTTPException):
-        await ProxyLogging._run_guardrail_with_metrics(
-            callback=cb, coro=task(), hook_type="post_call"
-        )
+        await ProxyLogging._run_guardrail_with_metrics(callback=cb, coro=task(), hook_type="post_call")
 
     assert detail["guardrail_name"] == "presidio"
     recorded = prom._record_guardrail_metrics.call_args.kwargs
@@ -631,9 +617,7 @@ def _moderation_guardrail() -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_during_call_hook_records_latency_metric(
-    proxy_logging, make_user_api_key_auth, monkeypatch
-):
+async def test_during_call_hook_records_latency_metric(proxy_logging, make_user_api_key_auth, monkeypatch):
     cb = _moderation_guardrail()
     prom = _prometheus_callback()
     monkeypatch.setattr(litellm, "callbacks", [prom, cb])
@@ -652,9 +636,7 @@ async def test_during_call_hook_records_latency_metric(
 
 
 @pytest.mark.asyncio
-async def test_post_call_success_hook_records_latency_metric(
-    proxy_logging, make_user_api_key_auth, monkeypatch
-):
+async def test_post_call_success_hook_records_latency_metric(proxy_logging, make_user_api_key_auth, monkeypatch):
     cb = _moderation_guardrail()
     prom = _prometheus_callback()
     monkeypatch.setattr(litellm, "callbacks", [prom, cb])
@@ -682,12 +664,8 @@ async def test_post_call_success_hook_records_latency_metric(
 async def test_process_prompt_template_no_op_when_no_prompt_spec(proxy_logging, monkeypatch):
     from litellm.proxy.prompts import prompt_registry
 
-    monkeypatch.setattr(
-        prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "get_prompt_callback_by_id", lambda *a, **kw: None
-    )
-    monkeypatch.setattr(
-        prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "get_prompt_by_id", lambda *a, **kw: None
-    )
+    monkeypatch.setattr(prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "get_prompt_callback_by_id", lambda *a, **kw: None)
+    monkeypatch.setattr(prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "get_prompt_by_id", lambda *a, **kw: None)
     data: Dict[str, Any] = {"messages": [{"role": "user"}], "model": "m", "temperature": 0.1}
     await proxy_logging._process_prompt_template(
         data=data,
@@ -712,9 +690,7 @@ async def test_process_prompt_template_applies_when_spec_resolves(proxy_logging,
         "get_prompt_callback_by_id",
         lambda *a, **kw: custom_logger,
     )
-    monkeypatch.setattr(
-        prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "get_prompt_by_id", lambda *a, **kw: prompt_spec
-    )
+    monkeypatch.setattr(prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "get_prompt_by_id", lambda *a, **kw: prompt_spec)
 
     logging_obj = MagicMock()
     logging_obj.async_get_chat_completion_prompt = AsyncMock(
@@ -762,9 +738,7 @@ async def test_process_prompt_template_async_get_prompt_error_raises(proxy_loggi
         "get_prompt_callback_by_id",
         lambda *a, **kw: custom_logger,
     )
-    monkeypatch.setattr(
-        prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "get_prompt_by_id", lambda *a, **kw: prompt_spec
-    )
+    monkeypatch.setattr(prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "get_prompt_by_id", lambda *a, **kw: prompt_spec)
     logging_obj = MagicMock()
     logging_obj.async_get_chat_completion_prompt = AsyncMock(side_effect=RuntimeError("bad prompt"))
     with pytest.raises(RuntimeError):

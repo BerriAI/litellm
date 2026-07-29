@@ -22,9 +22,7 @@ from litellm.types.utils import (
 
 
 def _make_text_completion_response(text: str) -> TextCompletionResponse:
-    return TextCompletionResponse(
-        choices=[{"text": text, "index": 0, "finish_reason": "stop"}]
-    )
+    return TextCompletionResponse(choices=[{"text": text, "index": 0, "finish_reason": "stop"}])
 
 
 def _make_model_response_with_content(content: str) -> ModelResponse:
@@ -68,9 +66,7 @@ def _patch_inspection_post(g: CiscoAIDefenseGuardrail, post_mock: Any):
         yield post_mock
 
 
-def _mock_inspect_response(
-    json_body: dict, *, status: int = 200, url: str = CHAT_URL
-) -> Response:
+def _mock_inspect_response(json_body: dict, *, status: int = 200, url: str = CHAT_URL) -> Response:
     return Response(
         status_code=status,
         json=json_body,
@@ -292,9 +288,7 @@ async def _streaming_setup(
     post_mock=None,
 ):
     if post_mock is None:
-        post_mock = (
-            AsyncMock(return_value=cisco_response) if cisco_response else AsyncMock()
-        )
+        post_mock = AsyncMock(return_value=cisco_response) if cisco_response else AsyncMock()
     stream_source = upstream if upstream is not None else _aiter(chunks)
     if request_data is None:
         request_data = {"messages": [{"role": "user", "content": "hi"}]}

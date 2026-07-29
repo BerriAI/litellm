@@ -104,9 +104,7 @@ async def test_project_perm_check_proxy_admin_always_allowed():
 def _make_prisma_with_user_orgs(user_id: str, org_ids: list):
     prisma = MagicMock()
     user_row = MagicMock()
-    user_row.organization_memberships = [
-        MagicMock(organization_id=org_id) for org_id in org_ids
-    ]
+    user_row.organization_memberships = [MagicMock(organization_id=org_id) for org_id in org_ids]
     prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
     return prisma
 

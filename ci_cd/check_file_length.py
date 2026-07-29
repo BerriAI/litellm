@@ -17,9 +17,7 @@ if __name__ == "__main__":
 
     bad_files = check_file_length(max_lines, filenames)
     if bad_files:
-        bad_files.sort(
-            key=lambda x: x[1], reverse=True
-        )  # Sort files by length in descending order
+        bad_files.sort(key=lambda x: x[1], reverse=True)  # Sort files by length in descending order
         for filename, length in bad_files:
             print(f"{filename}: {length} lines")
 

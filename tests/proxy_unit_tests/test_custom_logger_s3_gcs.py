@@ -36,9 +36,7 @@ test_logger_instance = TestCustomLogger()
         with tempfile.TemporaryDirectory() as temp_dir:
             yield temp_dir
 
-    def test_local_file_loading_still_works(
-        self, temp_config_dir, sample_custom_logger_content
-    ):
+    def test_local_file_loading_still_works(self, temp_config_dir, sample_custom_logger_content):
         """Test that local file loading continues to work (no URL prefix)"""
         # Create a local custom logger file
         custom_logger_path = os.path.join(temp_config_dir, "test_custom_logger.py")
@@ -51,9 +49,7 @@ test_logger_instance = TestCustomLogger()
             f.write("model_list: []")
 
         # Test loading the custom logger (traditional way)
-        instance = get_instance_fn(
-            "test_custom_logger.test_logger_instance", config_path
-        )
+        instance = get_instance_fn("test_custom_logger.test_logger_instance", config_path)
 
         assert instance is not None
         assert hasattr(instance, "initialized")
@@ -64,12 +60,8 @@ test_logger_instance = TestCustomLogger()
         test_url = "s3://my-bucket/loggers/custom_callbacks.proxy_handler_instance"
 
         # Mock the download function to avoid actual S3 calls
-        with patch(
-            "litellm.proxy.common_utils.load_config_utils.download_python_file_from_s3"
-        ) as mock_download:
-            mock_download.return_value = (
-                False  # Will cause failure, but we just want to test parsing
-            )
+        with patch("litellm.proxy.common_utils.load_config_utils.download_python_file_from_s3") as mock_download:
+            mock_download.return_value = False  # Will cause failure, but we just want to test parsing
 
             with pytest.raises(ImportError, match="Failed to download"):
                 _load_instance_from_remote_storage(test_url)
@@ -85,9 +77,7 @@ test_logger_instance = TestCustomLogger()
         test_url = "gcs://my-bucket/custom_logger.my_instance"
 
         # Mock the download function
-        with patch(
-            "litellm.proxy.types_utils.utils._download_gcs_file_wrapper"
-        ) as mock_download:
+        with patch("litellm.proxy.types_utils.utils._download_gcs_file_wrapper") as mock_download:
             mock_download.return_value = False  # Will cause failure
 
             with pytest.raises(ImportError, match="Failed to download"):
@@ -96,9 +86,7 @@ test_logger_instance = TestCustomLogger()
             # Verify the download was called with correct parameters
             mock_download.assert_called_once()
             call_args = mock_download.call_args
-            assert (
-                call_args[0][0] == "my-bucket"
-            )  # bucket_name (positional for _download_gcs_file_wrapper)
+            assert call_args[0][0] == "my-bucket"  # bucket_name (positional for _download_gcs_file_wrapper)
             assert call_args[0][1] == "custom_logger.py"  # object_key
 
     @patch("litellm.proxy.common_utils.load_config_utils.download_python_file_from_s3")
@@ -130,9 +118,7 @@ test_logger_instance = TestCustomLogger()
         assert call_args.kwargs["object_key"] == "test_custom_logger.py"
 
     @patch("litellm.proxy.types_utils.utils._download_gcs_file_wrapper")
-    def test_gcs_download_success(
-        self, mock_gcs_download, sample_custom_logger_content
-    ):
+    def test_gcs_download_success(self, mock_gcs_download, sample_custom_logger_content):
         """Test successful GCS download and loading"""
 
         # Configure GCS download to succeed and create the file
@@ -155,9 +141,7 @@ test_logger_instance = TestCustomLogger()
         """Test parsing of nested paths in URLs"""
         test_url = "s3://my-bucket/loggers/production/advanced_logger.handler_instance"
 
-        with patch(
-            "litellm.proxy.common_utils.load_config_utils.download_python_file_from_s3"
-        ) as mock_download:
+        with patch("litellm.proxy.common_utils.load_config_utils.download_python_file_from_s3") as mock_download:
             mock_download.return_value = False
 
             with pytest.raises(ImportError):
@@ -165,10 +149,7 @@ test_logger_instance = TestCustomLogger()
 
             # Verify correct object key was generated
             call_args = mock_download.call_args
-            assert (
-                call_args.kwargs["object_key"]
-                == "loggers/production/advanced_logger.py"
-            )
+            assert call_args.kwargs["object_key"] == "loggers/production/advanced_logger.py"
 
     def test_invalid_url_schemes(self):
         """Test error handling for invalid URL schemes"""
@@ -199,9 +180,7 @@ test_logger_instance = TestCustomLogger()
             ImportError,
             match="Don't include '\\.py' extension and you must specify the instance name",
         ):
-            get_instance_fn(
-                "s3://bucket/custom_guardrail.py", config_file_path="/any/path"
-            )
+            get_instance_fn("s3://bucket/custom_guardrail.py", config_file_path="/any/path")
 
     @patch("litellm.proxy.common_utils.load_config_utils.download_python_file_from_s3")
     def test_download_failure_handling(self, mock_s3_download):
@@ -234,9 +213,7 @@ test_logger_instance = TestCustomLogger()
         # Verify file was created and then cleaned up
         assert len(created_files) == 1
         temp_file = created_files[0]
-        assert not os.path.exists(
-            temp_file
-        ), f"Temporary file {temp_file} was not cleaned up"
+        assert not os.path.exists(temp_file), f"Temporary file {temp_file} was not cleaned up"
 
     def test_no_url_prefix_fallback(self, temp_config_dir):
         """Test fallback when no URL prefix is used and local file doesn't exist"""
@@ -245,7 +222,5 @@ test_logger_instance = TestCustomLogger()
             f.write("model_list: []")
 
         # Test that it tries local loading when no URL prefix is used
-        with pytest.raises(
-            ImportError, match="Could not import instance from nonexistent_logger"
-        ):
+        with pytest.raises(ImportError, match="Could not import instance from nonexistent_logger"):
             get_instance_fn("nonexistent_logger.instance", config_path)

@@ -44,9 +44,7 @@ async def generate_key(
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
 
-        response_header_check(
-            response
-        )  # calling the function to check response headers
+        response_header_check(response)  # calling the function to check response headers
 
         return await response.json()
 
@@ -69,9 +67,7 @@ async def new_user(session):
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
 
-        response_header_check(
-            response
-        )  # calling the function to check response headers
+        response_header_check(response)  # calling the function to check response headers
         return await response.json()
 
 
@@ -118,20 +114,14 @@ async def chat_completion(session, key, model: Union[str, List] = "gpt-4"):
         print()
 
         if status != 200:
-            raise Exception(
-                f"Request did not return a 200 status code: {status}, response text={response_text}"
-            )
+            raise Exception(f"Request did not return a 200 status code: {status}, response text={response_text}")
 
-        response_header_check(
-            response
-        )  # calling the function to check response headers
+        response_header_check(response)  # calling the function to check response headers
 
         return await response.json()
 
 
-async def queue_chat_completion(
-    session, key, priority: int, model: Union[str, List] = "gpt-4"
-):
+async def queue_chat_completion(session, key, priority: int, model: Union[str, List] = "gpt-4"):
     url = "http://0.0.0.0:4000/queue/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -183,18 +173,12 @@ async def chat_completion_with_headers(session, key, model="gpt-4"):
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
 
-        response_header_check(
-            response
-        )  # calling the function to check response headers
+        response_header_check(response)  # calling the function to check response headers
 
         raw_headers = response.raw_headers
         raw_headers_json = {}
 
-        for (
-            item
-        ) in (
-            response.raw_headers
-        ):  # ((b'date', b'Fri, 19 Apr 2024 21:17:29 GMT'), (), )
+        for item in response.raw_headers:  # ((b'date', b'Fri, 19 Apr 2024 21:17:29 GMT'), (), )
             raw_headers_json[item[0].decode("utf-8")] = item[1].decode("utf-8")
 
         return raw_headers_json
@@ -222,9 +206,7 @@ async def completion(session, key):
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
 
-        response_header_check(
-            response
-        )  # calling the function to check response headers
+        response_header_check(response)  # calling the function to check response headers
 
         response = await response.json()
 
@@ -251,9 +233,7 @@ async def embeddings(session, key, model="text-embedding-ada-002"):
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
 
-        response_header_check(
-            response
-        )  # calling the function to check response headers
+        response_header_check(response)  # calling the function to check response headers
 
 
 async def image_generation(session, key):
@@ -275,15 +255,11 @@ async def image_generation(session, key):
         print()
 
         if status != 200:
-            if (
-                "Connection error" in response_text
-            ):  # OpenAI endpoint returns a connection error
+            if "Connection error" in response_text:  # OpenAI endpoint returns a connection error
                 return
             raise Exception(f"Request did not return a 200 status code: {status}")
 
-        response_header_check(
-            response
-        )  # calling the function to check response headers
+        response_header_check(response)  # calling the function to check response headers
 
 
 @pytest.mark.asyncio
@@ -323,12 +299,8 @@ async def test_chat_completion_ratelimit():
         # key_gen = await generate_key(session=session)
         key = "sk-1234"
         tasks = []
-        tasks.append(
-            chat_completion(session=session, key=key, model="fake-openai-endpoint-2")
-        )
-        tasks.append(
-            chat_completion(session=session, key=key, model="fake-openai-endpoint-2")
-        )
+        tasks.append(chat_completion(session=session, key=key, model="fake-openai-endpoint-2"))
+        tasks.append(chat_completion(session=session, key=key, model="fake-openai-endpoint-2"))
         try:
             await asyncio.gather(*tasks)
             pytest.fail("Expected at least 1 call to fail")
@@ -352,11 +324,7 @@ async def test_chat_completion_different_deployments():
         key = "sk-1234"
         results = []
         for _ in range(20):
-            results.append(
-                await chat_completion_with_headers(
-                    session=session, key=key, model="fake-openai-endpoint-3"
-                )
-            )
+            results.append(await chat_completion_with_headers(session=session, key=key, model="fake-openai-endpoint-3"))
         try:
             print(f"results: {results}")
             init_model_id = results[0]["x-litellm-model-id"]
@@ -417,9 +385,7 @@ async def test_completion_streaming_usage_metrics():
     assert last_chunk is not None, "No chunks were received"
     assert last_chunk.usage is not None, "Usage information was not received"
     assert last_chunk.usage.prompt_tokens > 0, "Prompt tokens should be greater than 0"
-    assert (
-        last_chunk.usage.completion_tokens > 0
-    ), "Completion tokens should be greater than 0"
+    assert last_chunk.usage.completion_tokens > 0, "Completion tokens should be greater than 0"
     assert last_chunk.usage.total_tokens > 0, "Total tokens should be greater than 0"
 
 
@@ -438,9 +404,7 @@ async def test_chat_completion_anthropic_structured_output():
     class EventsList(BaseModel):
         events: list[CalendarEvent]
 
-    messages = [
-        {"role": "user", "content": "List 5 important events in the XIX century"}
-    ]
+    messages = [{"role": "user", "content": "List 5 important events in the XIX century"}]
 
     client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
 
@@ -549,9 +513,7 @@ async def test_proxy_all_models():
     """
     async with aiohttp.ClientSession() as session:
         # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
-        await chat_completion(
-            session=session, key=LITELLM_MASTER_KEY, model="groq/llama-3.1-8b-instant"
-        )
+        await chat_completion(session=session, key=LITELLM_MASTER_KEY, model="groq/llama-3.1-8b-instant")
 
         await chat_completion(
             session=session,
@@ -567,7 +529,6 @@ async def test_batch_chat_completions():
 
     """
     async with aiohttp.ClientSession() as session:
-
         # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
         response = await chat_completion(
             session=session,
@@ -588,7 +549,6 @@ async def test_moderations_endpoint():
 
     """
     async with aiohttp.ClientSession() as session:
-
         # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
         response = await moderation(
             session=session,

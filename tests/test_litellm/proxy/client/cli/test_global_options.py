@@ -7,9 +7,7 @@ from unittest.mock import Mock, patch
 import pytest
 from click.testing import CliRunner
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
 import litellm.proxy.client.cli
@@ -71,13 +69,9 @@ def test_base_url_trailing_slash_normalized(cli_runner):
         ) as mock_post,
         patch("requests.get", side_effect=ValueError("stop after start request")),
     ):
-        cli_runner.invoke(
-            cli, ["--base-url", "https://gateway.litellm-sandbox.ai/", "login"]
-        )
+        cli_runner.invoke(cli, ["--base-url", "https://gateway.litellm-sandbox.ai/", "login"])
 
-    mock_post.assert_called_once_with(
-        "https://gateway.litellm-sandbox.ai/sso/cli/start", timeout=10
-    )
+    mock_post.assert_called_once_with("https://gateway.litellm-sandbox.ai/sso/cli/start", timeout=10)
 
 
 def test_cli_version_command(cli_runner):

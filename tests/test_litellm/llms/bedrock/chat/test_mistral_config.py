@@ -10,9 +10,7 @@ def test_mistral_get_outputText():
     model_response.choices[0].finish_reason = "None"
 
     # Models like pixtral will return a completion with the openai format.
-    mock_json_with_choices = {
-        "choices": [{"message": {"content": "Hello!"}, "finish_reason": "stop"}]
-    }
+    mock_json_with_choices = {"choices": [{"message": {"content": "Hello!"}, "finish_reason": "stop"}]}
 
     outputText = AmazonMistralConfig.get_outputText(
         completion_response=mock_json_with_choices, model_response=model_response

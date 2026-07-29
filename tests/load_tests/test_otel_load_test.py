@@ -15,9 +15,7 @@ import pytest
 def test_otel_logging_async():
     try:
         os.environ["OTEL_EXPORTER"] = "otlp_http"
-        os.environ["OTEL_ENDPOINT"] = (
-            "https://exampleopenaiendpoint-production.up.railway.app/traces"
-        )
+        os.environ["OTEL_ENDPOINT"] = "https://exampleopenaiendpoint-production.up.railway.app/traces"
         os.environ["OTEL_HEADERS"] = "Authorization=K0BSwd"
 
         def single_run():
@@ -29,9 +27,7 @@ def test_otel_logging_async():
             start_time_otel = asyncio.run(make_async_calls())
             print(f"Time with otel callback: {start_time_otel}")
 
-            percent_diff = (
-                abs(start_time_otel - start_time_empty) / start_time_empty * 100
-            )
+            percent_diff = abs(start_time_otel - start_time_empty) / start_time_empty * 100
             print(f"Run performance difference: {percent_diff:.2f}%")
             return percent_diff
 
@@ -41,9 +37,7 @@ def test_otel_logging_async():
         print(f"Percentage differences: {percent_diffs}")
         print(f"Average performance difference: {avg_percent_diff:.2f}%")
 
-        assert (
-            avg_percent_diff < 30
-        ), f"Average performance difference of {avg_percent_diff:.2f}% exceeds 30% threshold"
+        assert avg_percent_diff < 30, f"Average performance difference of {avg_percent_diff:.2f}% exceeds 30% threshold"
 
     except litellm.Timeout as e:
         pass

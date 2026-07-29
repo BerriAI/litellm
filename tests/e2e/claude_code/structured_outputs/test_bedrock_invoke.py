@@ -110,9 +110,7 @@ def _extract_structured_output(
     return None
 
 
-def _validate_against_schema(
-    payload: Mapping[str, Any], schema: Mapping[str, Any]
-) -> Optional[str]:
+def _validate_against_schema(payload: Mapping[str, Any], schema: Mapping[str, Any]) -> Optional[str]:
     """Tiny shape validator covering the subset we actually need.
 
     We deliberately do not pull in `jsonschema` as a test dep: the
@@ -139,10 +137,7 @@ def _validate_against_schema(
         expected = (properties.get(key) or {}).get("type")
         if expected and expected in type_map:
             if not isinstance(payload[key], type_map[expected]):
-                return (
-                    f"key {key!r} has wrong type: "
-                    f"expected {expected}, got {type(payload[key]).__name__}"
-                )
+                return f"key {key!r} has wrong type: expected {expected}, got {type(payload[key]).__name__}"
         # bool is a subclass of int in Python; reject `True`/`False`
         # when the schema asked for an integer/number.
         if expected in ("integer", "number") and isinstance(payload[key], bool):

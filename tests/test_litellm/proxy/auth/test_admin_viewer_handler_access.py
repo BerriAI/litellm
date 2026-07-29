@@ -94,9 +94,7 @@ def _assert_not_role_blocked(response) -> None:
             "admin-only endpoint",
         )
         for signal in role_block_signals:
-            assert (
-                signal not in err_lower
-            ), f"endpoint blocked PROXY_ADMIN_VIEW_ONLY at handler level: {err}"
+            assert signal not in err_lower, f"endpoint blocked PROXY_ADMIN_VIEW_ONLY at handler level: {err}"
 
 
 def test_budget_list_allows_admin_viewer(admin_viewer_client):
@@ -124,17 +122,13 @@ def test_alerting_settings_allows_admin_viewer(admin_viewer_client):
 
 def test_get_config_field_info_allows_admin_viewer(admin_viewer_client):
     """`/config/field/info` describes a single general-settings field; read-only."""
-    resp = admin_viewer_client.get(
-        "/config/field/info", params={"field_name": "alerting"}
-    )
+    resp = admin_viewer_client.get("/config/field/info", params={"field_name": "alerting"})
     _assert_not_role_blocked(resp)
 
 
 def test_get_config_list_allows_admin_viewer(admin_viewer_client):
     """`/config/list` lists configurable params for a config_type; read-only."""
-    resp = admin_viewer_client.get(
-        "/config/list", params={"config_type": "general_settings"}
-    )
+    resp = admin_viewer_client.get("/config/list", params={"config_type": "general_settings"})
     _assert_not_role_blocked(resp)
 
 
@@ -150,9 +144,7 @@ def test_invitation_info_allows_admin_viewer(admin_viewer_client):
     The invitation lookup will return 400 because no invitation exists in our
     mock DB — that's fine. We only assert it doesn't hit the role-block path.
     """
-    resp = admin_viewer_client.get(
-        "/invitation/info", params={"invitation_id": "nonexistent"}
-    )
+    resp = admin_viewer_client.get("/invitation/info", params={"invitation_id": "nonexistent"})
     _assert_not_role_blocked(resp)
 
 

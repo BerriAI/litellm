@@ -9,9 +9,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import json
 import os
@@ -34,9 +32,7 @@ async def test_agenerate_content_stream():
         base_llm_http_handler,
     )
 
-    with patch.object(
-        base_llm_http_handler, "generate_content_handler", new=AsyncMock()
-    ) as mock_post:
+    with patch.object(base_llm_http_handler, "generate_content_handler", new=AsyncMock()) as mock_post:
         result = await agenerate_content_stream(
             model="gemini/gemini-2.0-flash-001",
             contents="Hello, world!",
@@ -90,9 +86,7 @@ def test_native_top_level_field_forwarded_to_request_body(field_name, field_valu
     from litellm.google_genai.main import generate_content
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    with patch.object(
-        HTTPHandler, "post", return_value=_mock_gemini_post_response()
-    ) as mock_post:
+    with patch.object(HTTPHandler, "post", return_value=_mock_gemini_post_response()) as mock_post:
         generate_content(
             model="gemini/gemini-2.0-flash",
             contents=[{"role": "user", "parts": [{"text": "Say hi"}]}],
@@ -103,12 +97,9 @@ def test_native_top_level_field_forwarded_to_request_body(field_name, field_valu
 
     assert mock_post.called, "expected the request to reach the HTTP client"
     body = mock_post.call_args.kwargs["json"]
-    assert (
-        body[field_name] == field_value
-    ), f"{field_name} should be forwarded to Google at the top level"
+    assert body[field_name] == field_value, f"{field_name} should be forwarded to Google at the top level"
     assert field_name not in body.get("generationConfig", {}), (
-        f"{field_name} must be a top-level sibling of generationConfig, "
-        "not nested inside it"
+        f"{field_name} must be a top-level sibling of generationConfig, not nested inside it"
     )
 
 
@@ -121,9 +112,7 @@ async def test_native_safety_settings_forwarded_async():
     from litellm.google_genai.main import agenerate_content
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-    safety_settings = [
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}
-    ]
+    safety_settings = [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}]
 
     with patch.object(
         AsyncHTTPHandler,
@@ -153,13 +142,9 @@ def test_native_fields_coexist_with_generation_config():
     from litellm.google_genai.main import generate_content
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    safety_settings = [
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}
-    ]
+    safety_settings = [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}]
 
-    with patch.object(
-        HTTPHandler, "post", return_value=_mock_gemini_post_response()
-    ) as mock_post:
+    with patch.object(HTTPHandler, "post", return_value=_mock_gemini_post_response()) as mock_post:
         generate_content(
             model="gemini/gemini-2.0-flash",
             contents=[{"role": "user", "parts": [{"text": "Say hi"}]}],
@@ -184,13 +169,9 @@ def test_explicit_extra_body_overrides_native_top_level_field():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     native = [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}]
-    override = [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"}
-    ]
+    override = [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"}]
 
-    with patch.object(
-        HTTPHandler, "post", return_value=_mock_gemini_post_response()
-    ) as mock_post:
+    with patch.object(HTTPHandler, "post", return_value=_mock_gemini_post_response()) as mock_post:
         generate_content(
             model="gemini/gemini-2.0-flash",
             contents=[{"role": "user", "parts": [{"text": "Say hi"}]}],
@@ -213,14 +194,10 @@ def test_native_fields_and_system_instruction_forwarded_on_sync_stream():
     from litellm.google_genai.main import generate_content_stream
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    safety_settings = [
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}
-    ]
+    safety_settings = [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}]
     system_instruction = {"parts": [{"text": "Be terse"}]}
 
-    with patch.object(
-        HTTPHandler, "post", return_value=_mock_gemini_post_response()
-    ) as mock_post:
+    with patch.object(HTTPHandler, "post", return_value=_mock_gemini_post_response()) as mock_post:
         generate_content_stream(
             model="gemini/gemini-2.0-flash",
             contents=[{"role": "user", "parts": [{"text": "Say hi"}]}],
@@ -246,9 +223,7 @@ async def test_native_fields_forwarded_on_async_stream():
     from litellm.google_genai.main import agenerate_content_stream
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-    safety_settings = [
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}
-    ]
+    safety_settings = [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}]
 
     with patch.object(
         AsyncHTTPHandler,

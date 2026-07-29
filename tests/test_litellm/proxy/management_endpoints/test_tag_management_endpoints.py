@@ -7,9 +7,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from unittest.mock import patch
 
@@ -41,9 +39,7 @@ async def test_create_and_get_tag():
         with (
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
             patch("litellm.proxy.proxy_server.llm_router") as mock_router,
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
             patch(
                 "litellm.proxy.management_endpoints.tag_management_endpoints.get_deployments_by_model"
             ) as mock_get_deployments,
@@ -136,9 +132,7 @@ async def test_update_tag():
     try:
         with (
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
         ):
             # Setup prisma mocks
             mock_db = Mock()
@@ -322,9 +316,7 @@ async def test_list_tags_with_dynamic_tags():
             assert "dynamic-tag-2" in tag_names
 
             # Verify dynamic tags include created_at/updated_at
-            dynamic_tags = {
-                t["name"]: t for t in result if t["name"].startswith("dynamic-")
-            }
+            dynamic_tags = {t["name"]: t for t in result if t["name"].startswith("dynamic-")}
             assert dynamic_tags["dynamic-tag-1"]["created_at"] is not None
             assert dynamic_tags["dynamic-tag-1"]["updated_at"] is not None
 
@@ -404,9 +396,7 @@ async def test_internal_user_list_tags_only_returns_tags_used_by_their_keys():
 
             owned_key_record = Mock()
             owned_key_record.token = "owned-key"
-            mock_db.litellm_verificationtoken.find_many = AsyncMock(
-                return_value=[owned_key_record]
-            )
+            mock_db.litellm_verificationtoken.find_many = AsyncMock(return_value=[owned_key_record])
 
             mock_db.litellm_dailytagspend.group_by = AsyncMock(
                 return_value=[
@@ -537,9 +527,7 @@ async def test_internal_user_tag_daily_activity_is_scoped_to_their_keys():
 
         owned_key_record = Mock()
         owned_key_record.token = "owned-key"
-        mock_db.litellm_verificationtoken.find_many = AsyncMock(
-            return_value=[owned_key_record]
-        )
+        mock_db.litellm_verificationtoken.find_many = AsyncMock(return_value=[owned_key_record])
         mock_get_daily_activity.return_value = "daily-activity-response"
 
         result = await get_tag_daily_activity(
@@ -583,9 +571,7 @@ async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter()
 
         owned_key_record = Mock()
         owned_key_record.token = "owned-key"
-        mock_db.litellm_verificationtoken.find_many = AsyncMock(
-            return_value=[owned_key_record]
-        )
+        mock_db.litellm_verificationtoken.find_many = AsyncMock(return_value=[owned_key_record])
         result = await get_tag_daily_activity(
             start_date="2025-01-01",
             end_date="2025-01-31",
@@ -638,9 +624,7 @@ async def test_internal_user_tag_daily_activity_scopes_to_current_key_without_us
         assert result == "daily-activity-response"
         mock_db.litellm_verificationtoken.find_many.assert_not_awaited()
         mock_get_daily_activity.assert_awaited_once()
-        assert mock_get_daily_activity.await_args.kwargs["api_key"] == [
-            "current-owned-key"
-        ]
+        assert mock_get_daily_activity.await_args.kwargs["api_key"] == ["current-owned-key"]
 
 
 @pytest.mark.asyncio
@@ -916,9 +900,7 @@ async def test_add_tag_to_deployment_preserves_encrypted_fields():
         await _add_tag_to_deployment(deployment, "test-tag")
 
         # Verify find_unique was called
-        mock_db.litellm_proxymodeltable.find_unique.assert_called_once_with(
-            where={"model_id": "model-123"}
-        )
+        mock_db.litellm_proxymodeltable.find_unique.assert_called_once_with(where={"model_id": "model-123"})
 
         # Verify update was called with preserved encrypted fields
         update_call = mock_db.litellm_proxymodeltable.update.call_args

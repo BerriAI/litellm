@@ -57,9 +57,7 @@ def get_all_functions_called_in_tests(base_dir):
 
                     for node in ast.walk(tree):
                         if isinstance(node, ast.Call):
-                            if isinstance(node.func, ast.Attribute) and isinstance(
-                                node.func.value, ast.Name
-                            ):
+                            if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
                                 if node.func.value.id in pass_through_classes:
                                     # If it's called via the class, add both the original and non-underscore versions
                                     method_name = node.func.attr
@@ -99,10 +97,7 @@ def main():
     for fn in router_functions:
         # Check if the function is called either with or without leading underscore
         clean_name = fn.lstrip("_")
-        if (
-            fn not in called_functions_in_tests
-            and clean_name not in called_functions_in_tests
-        ):
+        if fn not in called_functions_in_tests and clean_name not in called_functions_in_tests:
             untested_functions.append(fn)
 
     if untested_functions:

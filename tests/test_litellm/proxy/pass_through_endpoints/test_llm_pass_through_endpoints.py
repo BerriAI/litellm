@@ -10,9 +10,7 @@ import pytest
 from fastapi import Request, Response
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
@@ -70,36 +68,28 @@ class TestBaseOpenAIPassThroughHandler:
         # Test joining base URL with no path and a path
         base_url = httpx.URL("https://api.example.com")
         path = "/v1/chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(
-            base_url, path, litellm.LlmProviders.OPENAI.value
-        )
+        result = BaseOpenAIPassThroughHandler._join_url_paths(base_url, path, litellm.LlmProviders.OPENAI.value)
         print(f"Base URL with no path: '{base_url}' + '{path}' → '{result}'")
         assert str(result) == "https://api.example.com/v1/chat/completions"
 
         # Test joining base URL with path and another path
         base_url = httpx.URL("https://api.example.com/v1")
         path = "/chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(
-            base_url, path, litellm.LlmProviders.OPENAI.value
-        )
+        result = BaseOpenAIPassThroughHandler._join_url_paths(base_url, path, litellm.LlmProviders.OPENAI.value)
         print(f"Base URL with path: '{base_url}' + '{path}' → '{result}'")
         assert str(result) == "https://api.example.com/v1/chat/completions"
 
         # Test with path not starting with slash
         base_url = httpx.URL("https://api.example.com/v1")
         path = "chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(
-            base_url, path, litellm.LlmProviders.OPENAI.value
-        )
+        result = BaseOpenAIPassThroughHandler._join_url_paths(base_url, path, litellm.LlmProviders.OPENAI.value)
         print(f"Path without leading slash: '{base_url}' + '{path}' → '{result}'")
         assert str(result) == "https://api.example.com/v1/chat/completions"
 
         # Test with base URL having trailing slash
         base_url = httpx.URL("https://api.example.com/v1/")
         path = "/chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(
-            base_url, path, litellm.LlmProviders.OPENAI.value
-        )
+        result = BaseOpenAIPassThroughHandler._join_url_paths(base_url, path, litellm.LlmProviders.OPENAI.value)
         print(f"Base URL with trailing slash: '{base_url}' + '{path}' → '{result}'")
         assert str(result) == "https://api.example.com/v1/chat/completions"
 
@@ -118,17 +108,13 @@ class TestBaseOpenAIPassThroughHandler:
         headers = {"authorization": "Bearer test_key"}
 
         # Test with assistants API request
-        result = BaseOpenAIPassThroughHandler._append_openai_beta_header(
-            headers, assistants_request
-        )
+        result = BaseOpenAIPassThroughHandler._append_openai_beta_header(headers, assistants_request)
         print(f"Assistants API request: Added header: {result}")
         assert result["OpenAI-Beta"] == "assistants=v2"
 
         # Test with non-assistants API request
         headers = {"authorization": "Bearer test_key"}
-        result = BaseOpenAIPassThroughHandler._append_openai_beta_header(
-            headers, non_assistants_request
-        )
+        result = BaseOpenAIPassThroughHandler._append_openai_beta_header(headers, non_assistants_request)
         print(f"Non-assistants API request: Headers: {result}")
         assert "OpenAI-Beta" not in result
 
@@ -138,9 +124,7 @@ class TestBaseOpenAIPassThroughHandler:
         assistant_request.url.path = "/v1/assistants/asst_123456"
 
         headers = {"authorization": "Bearer test_key"}
-        result = BaseOpenAIPassThroughHandler._append_openai_beta_header(
-            headers, assistant_request
-        )
+        result = BaseOpenAIPassThroughHandler._append_openai_beta_header(headers, assistant_request)
         print(f"Assistant API request: Added header: {result}")
         assert result["OpenAI-Beta"] == "assistants=v2"
 
@@ -161,17 +145,13 @@ class TestBaseOpenAIPassThroughHandler:
                 "test-header": "value",
             },
         ):
-            result = BaseOpenAIPassThroughHandler._assemble_headers(
-                api_key, mock_request
-            )
+            result = BaseOpenAIPassThroughHandler._assemble_headers(api_key, mock_request)
             print(f"Assembled headers: {result}")
             assert result["authorization"] == "Bearer test_api_key"
             assert result["api-key"] == "test_api_key"
             assert result["test-header"] == "value"
 
-    @patch(
-        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
-    )
+    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route")
     async def test_base_openai_pass_through_handler(self, mock_create_pass_through):
         print("\nTesting _base_openai_pass_through_handler method...")
 
@@ -203,9 +183,7 @@ class TestBaseOpenAIPassThroughHandler:
 
         # Verify create_pass_through_route was called with correct parameters
         call_args = mock_create_pass_through.call_args[1]
-        print(
-            f"create_pass_through_route called with endpoint: {call_args['endpoint']}"
-        )
+        print(f"create_pass_through_route called with endpoint: {call_args['endpoint']}")
         print(f"create_pass_through_route called with target: {call_args['target']}")
         assert call_args["endpoint"] == "/chat/completions"
         assert call_args["target"] == "https://api.openai.com/v1/chat/completions"
@@ -257,9 +235,7 @@ class TestVertexAIPassThroughHandler:
 
         # Mock request
         mock_request = Mock()
-        mock_request.state = (
-            None  # Prevent Mock from returning a truthy _cached_headers
-        )
+        mock_request.state = None  # Prevent Mock from returning a truthy _cached_headers
         mock_request.method = "POST"
         mock_request.headers = {
             "Authorization": "Bearer test-creds",
@@ -277,9 +253,7 @@ class TestVertexAIPassThroughHandler:
         test_token = vertex_credentials
 
         with (
-            mock.patch(
-                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth"
-            ) as mock_load_auth,
+            mock.patch("litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth") as mock_load_auth,
             mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
@@ -365,9 +339,7 @@ class TestVertexAIPassThroughHandler:
 
         # Mock request
         mock_request = Mock()
-        mock_request.state = (
-            None  # Prevent Mock from returning a truthy _cached_headers
-        )
+        mock_request.state = None  # Prevent Mock from returning a truthy _cached_headers
         mock_request.method = "POST"
         mock_request.headers = {
             "Authorization": "Bearer test-creds",
@@ -385,9 +357,7 @@ class TestVertexAIPassThroughHandler:
         test_token = vertex_credentials
 
         with (
-            mock.patch(
-                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth"
-            ) as mock_load_auth,
+            mock.patch("litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth") as mock_load_auth,
             mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
@@ -412,9 +382,7 @@ class TestVertexAIPassThroughHandler:
 
             # Mock the vertex handler for global location
             mock_handler = Mock()
-            mock_handler.get_default_base_target_url.return_value = (
-                "https://aiplatform.googleapis.com/"
-            )
+            mock_handler.get_default_base_target_url.return_value = "https://aiplatform.googleapis.com/"
             mock_handler.update_base_target_url_with_credential_location = Mock(
                 return_value="https://aiplatform.googleapis.com/"
             )
@@ -451,9 +419,7 @@ class TestVertexAIPassThroughHandler:
         ],
     )
     @pytest.mark.asyncio
-    async def test_vertex_passthrough_with_default_credentials(
-        self, monkeypatch, initial_endpoint
-    ):
+    async def test_vertex_passthrough_with_default_credentials(self, monkeypatch, initial_endpoint):
         """
         Test that when no passthrough credentials are set, default credentials are used in the request
         """
@@ -492,9 +458,7 @@ class TestVertexAIPassThroughHandler:
         mock_response = Response()
 
         with (
-            mock.patch(
-                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth"
-            ) as mock_load_auth,
+            mock.patch("litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth") as mock_load_auth,
             mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
@@ -646,17 +610,13 @@ class TestVertexAIPassThroughHandler:
         mock_request.method = "POST"
         mock_response = Mock()
 
-        with patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
-        ) as mock_auth:
+        with patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth") as mock_auth:
             mock_auth.return_value = {"api_key": "test-key-123"}
 
             with patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_pass_through:
-                mock_pass_through.return_value = AsyncMock(
-                    return_value={"status": "success"}
-                )
+                mock_pass_through.return_value = AsyncMock(return_value={"status": "success"})
 
                 # Call the function
                 result = await vertex_proxy_route(
@@ -714,7 +674,9 @@ class TestVertexAIPassThroughHandler:
         mock_logging_obj.model_call_details = {}
 
         # Test URL with multimodal embedding model
-        url_route = "/v1/projects/test-project/locations/us-central1/publishers/google/models/multimodalembedding@001:predict"
+        url_route = (
+            "/v1/projects/test-project/locations/us-central1/publishers/google/models/multimodalembedding@001:predict"
+        )
 
         start_time = datetime.datetime.now()
         end_time = datetime.datetime.now()
@@ -732,19 +694,13 @@ class TestVertexAIPassThroughHandler:
             mock_embedding_response = EmbeddingResponse(
                 object="list",
                 data=[
-                    Embedding(
-                        embedding=[0.1, 0.2, 0.3, 0.4, 0.5], index=0, object="embedding"
-                    ),
-                    Embedding(
-                        embedding=[0.6, 0.7, 0.8, 0.9, 1.0], index=1, object="embedding"
-                    ),
+                    Embedding(embedding=[0.1, 0.2, 0.3, 0.4, 0.5], index=0, object="embedding"),
+                    Embedding(embedding=[0.6, 0.7, 0.8, 0.9, 1.0], index=1, object="embedding"),
                 ],
                 model="multimodalembedding@001",
                 usage=Usage(prompt_tokens=0, total_tokens=0, completion_tokens=0),
             )
-            mock_config_instance.transform_embedding_response.return_value = (
-                mock_embedding_response
-            )
+            mock_config_instance.transform_embedding_response.return_value = mock_embedding_response
 
             # Call the handler
             result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
@@ -780,26 +736,12 @@ class TestVertexAIPassThroughHandler:
         )
 
         # Test case 1: Response with textEmbedding should be detected as multimodal
-        response_with_text_embedding = {
-            "predictions": [{"textEmbedding": [0.1, 0.2, 0.3]}]
-        }
-        assert (
-            VertexPassthroughLoggingHandler._is_multimodal_embedding_response(
-                response_with_text_embedding
-            )
-            is True
-        )
+        response_with_text_embedding = {"predictions": [{"textEmbedding": [0.1, 0.2, 0.3]}]}
+        assert VertexPassthroughLoggingHandler._is_multimodal_embedding_response(response_with_text_embedding) is True
 
         # Test case 2: Response with imageEmbedding should be detected as multimodal
-        response_with_image_embedding = {
-            "predictions": [{"imageEmbedding": [0.4, 0.5, 0.6]}]
-        }
-        assert (
-            VertexPassthroughLoggingHandler._is_multimodal_embedding_response(
-                response_with_image_embedding
-            )
-            is True
-        )
+        response_with_image_embedding = {"predictions": [{"imageEmbedding": [0.4, 0.5, 0.6]}]}
+        assert VertexPassthroughLoggingHandler._is_multimodal_embedding_response(response_with_image_embedding) is True
 
         # Test case 3: Response with videoEmbeddings should be detected as multimodal
         response_with_video_embeddings = {
@@ -815,43 +757,19 @@ class TestVertexAIPassThroughHandler:
                 }
             ]
         }
-        assert (
-            VertexPassthroughLoggingHandler._is_multimodal_embedding_response(
-                response_with_video_embeddings
-            )
-            is True
-        )
+        assert VertexPassthroughLoggingHandler._is_multimodal_embedding_response(response_with_video_embeddings) is True
 
         # Test case 4: Regular text embedding response should NOT be detected as multimodal
-        regular_embedding_response = {
-            "predictions": [{"embeddings": {"values": [0.1, 0.2, 0.3]}}]
-        }
-        assert (
-            VertexPassthroughLoggingHandler._is_multimodal_embedding_response(
-                regular_embedding_response
-            )
-            is False
-        )
+        regular_embedding_response = {"predictions": [{"embeddings": {"values": [0.1, 0.2, 0.3]}}]}
+        assert VertexPassthroughLoggingHandler._is_multimodal_embedding_response(regular_embedding_response) is False
 
         # Test case 5: Non-embedding response should NOT be detected as multimodal
-        non_embedding_response = {
-            "candidates": [{"content": {"parts": [{"text": "Hello world"}]}}]
-        }
-        assert (
-            VertexPassthroughLoggingHandler._is_multimodal_embedding_response(
-                non_embedding_response
-            )
-            is False
-        )
+        non_embedding_response = {"candidates": [{"content": {"parts": [{"text": "Hello world"}]}}]}
+        assert VertexPassthroughLoggingHandler._is_multimodal_embedding_response(non_embedding_response) is False
 
         # Test case 6: Empty response should NOT be detected as multimodal
         empty_response = {}
-        assert (
-            VertexPassthroughLoggingHandler._is_multimodal_embedding_response(
-                empty_response
-            )
-            is False
-        )
+        assert VertexPassthroughLoggingHandler._is_multimodal_embedding_response(empty_response) is False
 
     def test_vertex_passthrough_handler_predict_cost_tracking(self):
         """
@@ -890,7 +808,9 @@ class TestVertexAIPassThroughHandler:
         mock_logging_obj.model_call_details = {}
 
         # Test URL with /predict endpoint
-        url_route = "/v1/projects/test-project/locations/us-central1/publishers/google/models/textembedding-gecko@001:predict"
+        url_route = (
+            "/v1/projects/test-project/locations/us-central1/publishers/google/models/textembedding-gecko@001:predict"
+        )
 
         start_time = datetime.datetime.now()
         end_time = datetime.datetime.now()
@@ -959,7 +879,9 @@ class TestVertexAIPassThroughHandler:
         mock_logging_obj.litellm_call_id = "test-call-id-embed"
         mock_logging_obj.model_call_details = {}
 
-        url_route = "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-embedding-001:embedContent"
+        url_route = (
+            "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-embedding-001:embedContent"
+        )
 
         start_time = datetime.datetime.now()
         end_time = datetime.datetime.now()
@@ -978,9 +900,7 @@ class TestVertexAIPassThroughHandler:
             )
 
         assert result is not None
-        assert (
-            result["result"] is not None
-        ), "result must not be None — logging callbacks need a non-null response"
+        assert result["result"] is not None, "result must not be None — logging callbacks need a non-null response"
         assert "kwargs" in result
         assert result["kwargs"].get("response_cost") == 0.0002
         assert result["kwargs"].get("model") == "gemini-embedding-001"
@@ -1036,9 +956,7 @@ class TestVertexAIPassThroughHandler:
             )
 
         assert result is not None
-        assert (
-            result["result"] is not None
-        ), "result must not be None for batchEmbedContents"
+        assert result["result"] is not None, "result must not be None for batchEmbedContents"
         assert result["kwargs"].get("response_cost") == 0.0003
         assert result["kwargs"].get("model") == "gemini-embedding-001"
         assert result["kwargs"].get("custom_llm_provider") == "vertex_ai"
@@ -1094,9 +1012,9 @@ class TestVertexAIPassThroughHandler:
 
         assert result is not None
         assert result["result"] is not None
-        assert (
-            result["kwargs"].get("custom_llm_provider") == "gemini"
-        ), "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
+        assert result["kwargs"].get("custom_llm_provider") == "gemini", (
+            "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
+        )
         assert result["kwargs"].get("model") == "gemini-embedding-2-preview"
         mock_completion_cost.assert_called_once()
 
@@ -1132,13 +1050,13 @@ class TestVertexAIDiscoveryPassThroughHandler:
             pass_through_router,
         )
 
-        endpoint = f"v1/projects/{vertex_project}/locations/{vertex_location}/dataStores/default/servingConfigs/default:search"
+        endpoint = (
+            f"v1/projects/{vertex_project}/locations/{vertex_location}/dataStores/default/servingConfigs/default:search"
+        )
 
         # Mock request
         mock_request = Mock()
-        mock_request.state = (
-            None  # Prevent Mock from returning a truthy _cached_headers
-        )
+        mock_request.state = None  # Prevent Mock from returning a truthy _cached_headers
         mock_request.method = "POST"
         mock_request.headers = {
             "Authorization": "Bearer test-key",
@@ -1156,9 +1074,7 @@ class TestVertexAIDiscoveryPassThroughHandler:
         test_token = "test-auth-token"
 
         with (
-            mock.patch(
-                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth"
-            ) as mock_load_auth,
+            mock.patch("litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth") as mock_load_auth,
             mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
@@ -1183,9 +1099,7 @@ class TestVertexAIDiscoveryPassThroughHandler:
 
             # Mock the discovery handler
             mock_handler = Mock()
-            mock_handler.get_default_base_target_url.return_value = (
-                "https://discoveryengine.googleapis.com"
-            )
+            mock_handler.get_default_base_target_url.return_value = "https://discoveryengine.googleapis.com"
             mock_handler.update_base_target_url_with_credential_location = Mock(
                 return_value="https://discoveryengine.googleapis.com"
             )
@@ -1209,10 +1123,7 @@ class TestVertexAIDiscoveryPassThroughHandler:
             assert test_project in call_args[1]["target"]
             assert test_location in call_args[1]["target"]
             assert "Authorization" in call_args[1]["custom_headers"]
-            assert (
-                call_args[1]["custom_headers"]["Authorization"]
-                == f"Bearer {test_token}"
-            )
+            assert call_args[1]["custom_headers"]["Authorization"] == f"Bearer {test_token}"
 
     @pytest.mark.asyncio
     async def test_vertex_discovery_proxy_route_api_key_auth(self):
@@ -1225,17 +1136,13 @@ class TestVertexAIDiscoveryPassThroughHandler:
         mock_request.method = "POST"
         mock_response = Mock()
 
-        with patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
-        ) as mock_auth:
+        with patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth") as mock_auth:
             mock_auth.return_value = {"api_key": "test-key-123"}
 
             with patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_pass_through:
-                mock_pass_through.return_value = AsyncMock(
-                    return_value={"status": "success"}
-                )
+                mock_pass_through.return_value = AsyncMock(return_value={"status": "success"})
 
                 # Call the function
                 result = await vertex_discovery_proxy_route(
@@ -1330,9 +1237,7 @@ async def test_mistral_passthrough_accepts_multipart_without_json_parsing():
 
     assert response == {"ok": True}
     assert captured_kwargs["is_streaming_request"] is False
-    assert captured_kwargs["custom_headers"] == {
-        "Authorization": "Bearer mistral-test-key"
-    }
+    assert captured_kwargs["custom_headers"] == {"Authorization": "Bearer mistral-test-key"}
 
 
 class TestBedrockLLMProxyRoute:
@@ -1344,9 +1249,7 @@ class TestBedrockLLMProxyRoute:
         mock_user_api_key_dict = Mock()
         mock_request_body = {"messages": [{"role": "user", "content": "test"}]}
         mock_processor = Mock()
-        mock_processor.base_passthrough_process_llm_request = AsyncMock(
-            return_value="success"
-        )
+        mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
 
         with (
             patch(
@@ -1358,9 +1261,10 @@ class TestBedrockLLMProxyRoute:
                 return_value=mock_processor,
             ),
         ):
-
             # Test application-inference-profile endpoint
-            endpoint = "model/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/r742sbn2zckd/converse"
+            endpoint = (
+                "model/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/r742sbn2zckd/converse"
+            )
 
             result = await bedrock_llm_proxy_route(
                 endpoint=endpoint,
@@ -1370,9 +1274,7 @@ class TestBedrockLLMProxyRoute:
             )
 
             mock_processor.base_passthrough_process_llm_request.assert_called_once()
-            call_kwargs = (
-                mock_processor.base_passthrough_process_llm_request.call_args.kwargs
-            )
+            call_kwargs = mock_processor.base_passthrough_process_llm_request.call_args.kwargs
 
             # For application-inference-profile, model should be "arn:aws:bedrock:us-east-1:026090525607:application-inference-profile/r742sbn2zckd"
             assert (
@@ -1389,9 +1291,7 @@ class TestBedrockLLMProxyRoute:
         mock_user_api_key_dict = Mock()
         mock_request_body = {"messages": [{"role": "user", "content": "test"}]}
         mock_processor = Mock()
-        mock_processor.base_passthrough_process_llm_request = AsyncMock(
-            return_value="success"
-        )
+        mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
 
         with (
             patch(
@@ -1403,7 +1303,6 @@ class TestBedrockLLMProxyRoute:
                 return_value=mock_processor,
             ),
         ):
-
             # Test regular model endpoint
             endpoint = "model/anthropic.claude-3-sonnet-20240229-v1:0/converse"
 
@@ -1414,9 +1313,7 @@ class TestBedrockLLMProxyRoute:
                 user_api_key_dict=mock_user_api_key_dict,
             )
             mock_processor.base_passthrough_process_llm_request.assert_called_once()
-            call_kwargs = (
-                mock_processor.base_passthrough_process_llm_request.call_args.kwargs
-            )
+            call_kwargs = mock_processor.base_passthrough_process_llm_request.call_args.kwargs
 
             # For regular models, model should be just the model ID
             assert call_kwargs["model"] == "anthropic.claude-3-sonnet-20240229-v1:0"
@@ -1439,9 +1336,7 @@ class TestBedrockLLMProxyRoute:
         # Create a mock httpx.Response for the error
         mock_error_response = Mock(spec=httpx.Response)
         mock_error_response.status_code = 400
-        mock_error_response.aread = AsyncMock(
-            return_value=bedrock_error_message.encode("utf-8")
-        )
+        mock_error_response.aread = AsyncMock(return_value=bedrock_error_message.encode("utf-8"))
 
         # Create the HTTPStatusError
         mock_http_error = httpx.HTTPStatusError(
@@ -1458,9 +1353,7 @@ class TestBedrockLLMProxyRoute:
         mock_request.url = MagicMock()
         mock_request.url.path = "/bedrock/model/test-model/converse"
 
-        mock_request_body = {
-            "messages": [{"role": "user", "content": [{"textaaa": "Hello"}]}]
-        }
+        mock_request_body = {"messages": [{"role": "user", "content": [{"textaaa": "Hello"}]}]}
 
         mock_llm_router = Mock()
 
@@ -1501,9 +1394,8 @@ class TestBedrockLLMProxyRoute:
                 )
 
             assert exc_info.value.status_code == 400
-            assert (
-                "ContentBlock object at messages.0.content.0 must set one of the following keys"
-                in str(exc_info.value.detail)
+            assert "ContentBlock object at messages.0.content.0 must set one of the following keys" in str(
+                exc_info.value.detail
             )
 
     @pytest.mark.asyncio
@@ -1581,24 +1473,14 @@ class TestBedrockLLMProxyRoute:
             deployment_litellm_params = deployment.get("litellm_params", {})
 
             # Verify model-specific credentials are in the deployment
-            assert (
-                deployment_litellm_params.get("aws_access_key_id") == model_access_key
-            )
-            assert (
-                deployment_litellm_params.get("aws_secret_access_key")
-                == model_secret_key
-            )
+            assert deployment_litellm_params.get("aws_access_key_id") == model_access_key
+            assert deployment_litellm_params.get("aws_secret_access_key") == model_secret_key
             assert deployment_litellm_params.get("aws_region_name") == model_region
-            assert (
-                deployment_litellm_params.get("aws_session_token")
-                == model_session_token
-            )
+            assert deployment_litellm_params.get("aws_session_token") == model_session_token
 
             # Verify environment variables are NOT in the deployment
             assert deployment_litellm_params.get("aws_access_key_id") != env_access_key
-            assert (
-                deployment_litellm_params.get("aws_secret_access_key") != env_secret_key
-            )
+            assert deployment_litellm_params.get("aws_secret_access_key") != env_secret_key
             assert deployment_litellm_params.get("aws_region_name") != env_region
 
             # Test 3: Verify credentials are passed through the passthrough route
@@ -1609,9 +1491,7 @@ class TestBedrockLLMProxyRoute:
                 captured_kwargs.update(kwargs)
                 mock_response = MagicMock()
                 mock_response.status_code = 200
-                mock_response.aread = AsyncMock(
-                    return_value=b'{"content": [{"text": "Hello"}]}'
-                )
+                mock_response.aread = AsyncMock(return_value=b'{"content": [{"text": "Hello"}]}')
                 return mock_response
 
             mock_request = MagicMock(spec=Request)
@@ -1621,9 +1501,7 @@ class TestBedrockLLMProxyRoute:
             mock_request.url = MagicMock()
             mock_request.url.path = "/bedrock/model/claude-opus-4-1/converse"
 
-            mock_request_body = {
-                "messages": [{"role": "user", "content": [{"text": "Hello"}]}]
-            }
+            mock_request_body = {"messages": [{"role": "user", "content": [{"text": "Hello"}]}]}
 
             mock_user_api_key_dict = Mock()
             mock_user_api_key_dict.api_key = "test-key"
@@ -1644,9 +1522,7 @@ class TestBedrockLLMProxyRoute:
                 # Setup mock response
                 mock_response = MagicMock()
                 mock_response.status_code = 200
-                mock_response.aread = AsyncMock(
-                    return_value=b'{"content": [{"text": "Hello"}]}'
-                )
+                mock_response.aread = AsyncMock(return_value=b'{"content": [{"text": "Hello"}]}')
                 mock_process.return_value = mock_response
 
                 # Call the handler
@@ -1737,9 +1613,7 @@ class TestLLMPassthroughFactoryProxyRoute:
         mock_user_api_key_dict = MagicMock()
 
         with (
-            patch(
-                "litellm.utils.ProviderConfigManager.get_provider_model_info"
-            ) as mock_get_provider,
+            patch("litellm.utils.ProviderConfigManager.get_provider_model_info") as mock_get_provider,
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials"
             ) as mock_get_creds,
@@ -1749,9 +1623,7 @@ class TestLLMPassthroughFactoryProxyRoute:
         ):
             mock_provider_config = MagicMock()
             mock_provider_config.get_api_base.return_value = "https://example.com/v1"
-            mock_provider_config.validate_environment.return_value = {
-                "x-api-key": "dummy"
-            }
+            mock_provider_config.validate_environment.return_value = {"x-api-key": "dummy"}
             mock_get_provider.return_value = mock_provider_config
             mock_get_creds.return_value = "dummy"
 
@@ -1767,12 +1639,8 @@ class TestLLMPassthroughFactoryProxyRoute:
             )
 
             assert result == "success"
-            mock_get_provider.assert_called_once_with(
-                provider=litellm.LlmProviders(LlmProviders.VLLM), model=None
-            )
-            mock_get_creds.assert_called_once_with(
-                custom_llm_provider=LlmProviders.VLLM, region_name=None
-            )
+            mock_get_provider.assert_called_once_with(provider=litellm.LlmProviders(LlmProviders.VLLM), model=None)
+            mock_get_creds.assert_called_once_with(custom_llm_provider=LlmProviders.VLLM, region_name=None)
             mock_create_route.assert_called_once_with(
                 endpoint="/chat/completions",
                 target="https://example.com/v1/chat/completions",
@@ -1793,9 +1661,7 @@ class TestVLLMProxyRoute:
         return_value=True,
     )
     @patch("litellm.proxy.proxy_server.llm_router")
-    async def test_vllm_proxy_route_with_router_model(
-        self, mock_llm_router, mock_is_router, mock_get_body
-    ):
+    async def test_vllm_proxy_route_with_router_model(self, mock_llm_router, mock_is_router, mock_get_body):
         mock_request = MagicMock(spec=Request)
         mock_request.method = "POST"
         mock_request.headers = {"content-type": "application/json"}
@@ -1825,12 +1691,8 @@ class TestVLLMProxyRoute:
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
         return_value=False,
     )
-    @patch(
-        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.llm_passthrough_factory_proxy_route"
-    )
-    async def test_vllm_proxy_route_fallback_to_factory(
-        self, mock_factory_route, mock_is_router, mock_get_body
-    ):
+    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.llm_passthrough_factory_proxy_route")
+    async def test_vllm_proxy_route_fallback_to_factory(self, mock_factory_route, mock_is_router, mock_get_body):
         mock_request = MagicMock(spec=Request)
         mock_fastapi_response = MagicMock(spec=Response)
         mock_user_api_key_dict = MagicMock()
@@ -1864,9 +1726,7 @@ class TestForwardHeaders:
 
         # Create a mock request with custom headers
         mock_request = MagicMock(spec=Request)
-        mock_request.state = (
-            None  # Prevent MagicMock from returning a truthy _cached_headers
-        )
+        mock_request.state = None  # Prevent MagicMock from returning a truthy _cached_headers
         mock_request.method = "POST"
         mock_request.url = MagicMock()
         mock_request.url.path = "/test/endpoint"
@@ -1901,9 +1761,7 @@ class TestForwardHeaders:
         mock_httpx_response = MagicMock()
         mock_httpx_response.status_code = 200
         mock_httpx_response.headers = {"content-type": "application/json"}
-        mock_httpx_response.aiter_bytes = AsyncMock(
-            return_value=[b'{"result": "success"}']
-        )
+        mock_httpx_response.aiter_bytes = AsyncMock(return_value=[b'{"result": "success"}'])
         mock_httpx_response.aread = AsyncMock(return_value=b'{"result": "success"}')
 
         with (
@@ -1928,9 +1786,7 @@ class TestForwardHeaders:
             mock_logging_obj.pre_call_hook = AsyncMock(return_value=mock_request_body)
             mock_logging_obj.post_call_success_hook = AsyncMock()
             mock_logging_obj.post_call_failure_hook = AsyncMock()
-            mock_logging_obj.post_call_response_headers_hook = AsyncMock(
-                return_value={}
-            )
+            mock_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
 
             # Call pass_through_request with forward_headers=True
             result = await pass_through_request(
@@ -2003,9 +1859,7 @@ class TestForwardHeaders:
         mock_httpx_response = MagicMock()
         mock_httpx_response.status_code = 200
         mock_httpx_response.headers = {"content-type": "application/json"}
-        mock_httpx_response.aiter_bytes = AsyncMock(
-            return_value=[b'{"result": "success"}']
-        )
+        mock_httpx_response.aiter_bytes = AsyncMock(return_value=[b'{"result": "success"}'])
         mock_httpx_response.aread = AsyncMock(return_value=b'{"result": "success"}')
 
         with (
@@ -2030,9 +1884,7 @@ class TestForwardHeaders:
             mock_logging_obj.pre_call_hook = AsyncMock(return_value=mock_request_body)
             mock_logging_obj.post_call_success_hook = AsyncMock()
             mock_logging_obj.post_call_failure_hook = AsyncMock()
-            mock_logging_obj.post_call_response_headers_hook = AsyncMock(
-                return_value={}
-            )
+            mock_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
 
             # Call pass_through_request with forward_headers=False (default)
             result = await pass_through_request(
@@ -2090,15 +1942,11 @@ class TestForwardHeaders:
         mock_httpx_response = MagicMock()
         mock_httpx_response.status_code = 200
         mock_httpx_response.headers = {"content-type": "application/json"}
-        mock_httpx_response.aiter_bytes = AsyncMock(
-            return_value=[b'{"result": "success"}']
-        )
+        mock_httpx_response.aiter_bytes = AsyncMock(return_value=[b'{"result": "success"}'])
         mock_httpx_response.aread = AsyncMock(return_value=b'{"result": "success"}')
 
         with (
-            patch(
-                "litellm.utils.ProviderConfigManager.get_provider_model_info"
-            ) as mock_get_provider,
+            patch("litellm.utils.ProviderConfigManager.get_provider_model_info") as mock_get_provider,
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials"
             ) as mock_get_creds,
@@ -2114,9 +1962,7 @@ class TestForwardHeaders:
             # Setup provider config
             mock_provider_config = MagicMock()
             mock_provider_config.get_api_base.return_value = "https://api.openai.com/v1"
-            mock_provider_config.validate_environment.return_value = {
-                "authorization": "Bearer sk-test"
-            }
+            mock_provider_config.validate_environment.return_value = {"authorization": "Bearer sk-test"}
             mock_get_provider.return_value = mock_provider_config
             mock_get_creds.return_value = "sk-test"
 
@@ -2128,9 +1974,7 @@ class TestForwardHeaders:
             mock_get_client.return_value = mock_client_obj
 
             # Setup mock logging object
-            mock_logging_obj.pre_call_hook = AsyncMock(
-                return_value={"messages": [{"role": "user", "content": "test"}]}
-            )
+            mock_logging_obj.pre_call_hook = AsyncMock(return_value={"messages": [{"role": "user", "content": "test"}]})
             mock_logging_obj.post_call_success_hook = AsyncMock()
 
             # This is the key part - when create_pass_through_route is called with _forward_headers=True
@@ -2224,24 +2068,16 @@ class TestMilvusProxyRoute:
         ):
             # Setup mocks
             mock_provider_config = MagicMock()
-            mock_provider_config.get_auth_credentials.return_value = {
-                "headers": {"Authorization": "Bearer test-token"}
-            }
+            mock_provider_config.get_auth_credentials.return_value = {"headers": {"Authorization": "Bearer test-token"}}
             mock_provider_config.get_complete_url.return_value = api_base
             mock_get_config.return_value = mock_provider_config
 
             mock_index_registry.is_vector_store_index.return_value = True
-            mock_index_registry.get_vector_store_index_by_name.return_value = (
-                mock_index_object
-            )
+            mock_index_registry.get_vector_store_index_by_name.return_value = mock_index_object
 
-            mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.return_value = (
-                mock_vector_store
-            )
+            mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.return_value = mock_vector_store
 
-            mock_endpoint_func = AsyncMock(
-                return_value={"results": [{"id": 1, "distance": 0.5}]}
-            )
+            mock_endpoint_func = AsyncMock(return_value={"results": [{"id": 1, "distance": 0.5}]})
             mock_create_route.return_value = mock_endpoint_func
 
             # Call the route
@@ -2254,9 +2090,7 @@ class TestMilvusProxyRoute:
 
             # Verify calls
             mock_get_body.assert_called_once()
-            mock_index_registry.is_vector_store_index.assert_called_once_with(
-                vector_store_index_name=collection_name
-            )
+            mock_index_registry.is_vector_store_index.assert_called_once_with(vector_store_index_name=collection_name)
             mock_is_allowed.assert_called_once()
             mock_safe_set.assert_called_once()
 
@@ -2268,9 +2102,7 @@ class TestMilvusProxyRoute:
             mock_create_route.assert_called_once()
             create_route_args = mock_create_route.call_args[1]
             assert "vectors/search" in create_route_args["target"]
-            assert create_route_args["custom_headers"] == {
-                "Authorization": "Bearer test-token"
-            }
+            assert create_route_args["custom_headers"] == {"Authorization": "Bearer test-token"}
 
             # Verify endpoint function was called
             mock_endpoint_func.assert_awaited_once()
@@ -2341,9 +2173,7 @@ class TestMilvusProxyRoute:
                 )
 
             assert exc_info.value.status_code == 500
-            assert "Unable to find Milvus vector store config" in str(
-                exc_info.value.detail
-            )
+            assert "Unable to find Milvus vector store config" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_milvus_proxy_route_no_index_registry(self):
@@ -2383,9 +2213,7 @@ class TestMilvusProxyRoute:
                 )
 
             assert exc_info.value.status_code == 500
-            assert "Unable to find Milvus vector store index registry" in str(
-                exc_info.value.detail
-            )
+            assert "Unable to find Milvus vector store index registry" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_milvus_proxy_route_not_managed_index(self):
@@ -2427,9 +2255,8 @@ class TestMilvusProxyRoute:
                 )
 
             assert exc_info.value.status_code == 400
-            assert (
-                f"Collection {collection_name} is not a litellm managed vector store index"
-                in str(exc_info.value.detail)
+            assert f"Collection {collection_name} is not a litellm managed vector store index" in str(
+                exc_info.value.detail
             )
 
     @pytest.mark.asyncio
@@ -2464,20 +2291,14 @@ class TestMilvusProxyRoute:
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint"
             ),
-            patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._safe_set_request_parsed_body"
-            ),
+            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._safe_set_request_parsed_body"),
             patch.object(litellm, "vector_store_index_registry") as mock_index_registry,
             patch.object(litellm, "vector_store_registry") as mock_vector_registry,
         ):
             mock_get_config.return_value = MagicMock()
             mock_index_registry.is_vector_store_index.return_value = True
-            mock_index_registry.get_vector_store_index_by_name.return_value = (
-                mock_index_object
-            )
-            mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.return_value = (
-                None
-            )
+            mock_index_registry.get_vector_store_index_by_name.return_value = mock_index_object
+            mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.return_value = None
 
             with pytest.raises(Exception) as exc_info:
                 await milvus_proxy_route(
@@ -2487,9 +2308,7 @@ class TestMilvusProxyRoute:
                     user_api_key_dict=mock_user_api_key_dict,
                 )
 
-            assert f"Vector store not found for {vector_store_name}" in str(
-                exc_info.value
-            )
+            assert f"Vector store not found for {vector_store_name}" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_milvus_proxy_route_no_api_base(self):
@@ -2525,9 +2344,7 @@ class TestMilvusProxyRoute:
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint"
             ),
-            patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._safe_set_request_parsed_body"
-            ),
+            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._safe_set_request_parsed_body"),
             patch.object(litellm, "vector_store_index_registry") as mock_index_registry,
             patch.object(litellm, "vector_store_registry") as mock_vector_registry,
         ):
@@ -2537,12 +2354,8 @@ class TestMilvusProxyRoute:
             mock_get_config.return_value = mock_provider_config
 
             mock_index_registry.is_vector_store_index.return_value = True
-            mock_index_registry.get_vector_store_index_by_name.return_value = (
-                mock_index_object
-            )
-            mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.return_value = (
-                mock_vector_store
-            )
+            mock_index_registry.get_vector_store_index_by_name.return_value = mock_index_object
+            mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.return_value = mock_vector_store
 
             with pytest.raises(Exception) as exc_info:
                 await milvus_proxy_route(
@@ -2552,10 +2365,7 @@ class TestMilvusProxyRoute:
                     user_api_key_dict=mock_user_api_key_dict,
                 )
 
-            assert (
-                f"api_base not found in vector store configuration for {vector_store_name}"
-                in str(exc_info.value)
-            )
+            assert f"api_base not found in vector store configuration for {vector_store_name}" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_milvus_proxy_route_endpoint_without_leading_slash(self):
@@ -2592,9 +2402,7 @@ class TestMilvusProxyRoute:
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint"
             ),
-            patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._safe_set_request_parsed_body"
-            ),
+            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._safe_set_request_parsed_body"),
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
@@ -2607,12 +2415,8 @@ class TestMilvusProxyRoute:
             mock_get_config.return_value = mock_provider_config
 
             mock_index_registry.is_vector_store_index.return_value = True
-            mock_index_registry.get_vector_store_index_by_name.return_value = (
-                mock_index_object
-            )
-            mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.return_value = (
-                mock_vector_store
-            )
+            mock_index_registry.get_vector_store_index_by_name.return_value = mock_index_object
+            mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.return_value = mock_vector_store
 
             mock_endpoint_func = AsyncMock(return_value={"status": "success"})
             mock_create_route.return_value = mock_endpoint_func
@@ -2663,9 +2467,7 @@ class TestOpenAIPassthroughRoute:
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
         ):
-            mock_endpoint_func = AsyncMock(
-                return_value={"id": "resp_123", "status": "completed"}
-            )
+            mock_endpoint_func = AsyncMock(return_value={"id": "resp_123", "status": "completed"})
             mock_create_route.return_value = mock_endpoint_func
 
             # Call the route with /v1/responses endpoint
@@ -2716,9 +2518,7 @@ class TestOpenAIPassthroughRoute:
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
         ):
-            mock_endpoint_func = AsyncMock(
-                return_value={"id": "chatcmpl-123", "choices": []}
-            )
+            mock_endpoint_func = AsyncMock(return_value={"id": "chatcmpl-123", "choices": []})
             mock_create_route.return_value = mock_endpoint_func
 
             result = await openai_proxy_route(
@@ -2790,9 +2590,7 @@ class TestOpenAIPassthroughRoute:
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
         ):
-            mock_endpoint_func = AsyncMock(
-                return_value={"id": "asst_123", "object": "assistant"}
-            )
+            mock_endpoint_func = AsyncMock(return_value={"id": "asst_123", "object": "assistant"})
             mock_create_route.return_value = mock_endpoint_func
 
             result = await openai_proxy_route(
@@ -2840,9 +2638,7 @@ class TestCursorProxyRoute:
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
         ):
-            mock_endpoint_func = AsyncMock(
-                return_value={"agents": [], "nextCursor": None}
-            )
+            mock_endpoint_func = AsyncMock(return_value={"agents": [], "nextCursor": None})
             mock_create_route.return_value = mock_endpoint_func
 
             result = await cursor_proxy_route(
@@ -2856,12 +2652,8 @@ class TestCursorProxyRoute:
             call_args = mock_create_route.call_args[1]
             assert call_args["target"] == "https://api.cursor.com/v0/agents"
 
-            expected_auth = base64.b64encode(f"{test_api_key}:".encode("utf-8")).decode(
-                "ascii"
-            )
-            assert (
-                call_args["custom_headers"]["Authorization"] == f"Basic {expected_auth}"
-            )
+            expected_auth = base64.b64encode(f"{test_api_key}:".encode("utf-8")).decode("ascii")
+            assert call_args["custom_headers"]["Authorization"] == f"Basic {expected_auth}"
 
             assert result == {"agents": [], "nextCursor": None}
 
@@ -2944,9 +2736,7 @@ class TestCursorProxyRoute:
             import base64
 
             expected_auth = base64.b64encode(b"crsr_ui_test_key:").decode("ascii")
-            assert (
-                call_args["custom_headers"]["Authorization"] == f"Basic {expected_auth}"
-            )
+            assert call_args["custom_headers"]["Authorization"] == f"Basic {expected_auth}"
 
     @pytest.mark.asyncio
     async def test_cursor_proxy_route_custom_api_base(self):
@@ -2959,9 +2749,7 @@ class TestCursorProxyRoute:
         mock_user_api_key_dict = MagicMock()
 
         with (
-            patch.dict(
-                os.environ, {"CURSOR_API_BASE": "https://custom-cursor.example.com"}
-            ),
+            patch.dict(os.environ, {"CURSOR_API_BASE": "https://custom-cursor.example.com"}),
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
                 return_value="test-key",

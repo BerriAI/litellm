@@ -73,9 +73,7 @@ async def test_simple_jwt_mcp_permissions_enforced():
         allowed = await MCPRequestHandler.get_allowed_mcp_servers(user_auth)
 
         # 5. Verify only team's MCP servers are returned
-        assert sorted(allowed) == sorted(
-            team_mcp_servers
-        ), f"Expected {team_mcp_servers}, got {allowed}"
+        assert sorted(allowed) == sorted(team_mcp_servers), f"Expected {team_mcp_servers}, got {allowed}"
 
         # Verify team was looked up
         mock_get_team.assert_called()
@@ -148,9 +146,7 @@ async def test_simple_jwt_team_id_required_for_mcp_permissions():
             return_value=[],
         ),
     ):
-        result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
-            user_with_team
-        )
+        result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(user_with_team)
 
         assert sorted(result) == sorted(team_mcp_servers)
         mock_get_team.assert_called()  # Team WAS looked up
@@ -162,9 +158,7 @@ async def test_simple_jwt_team_id_required_for_mcp_permissions():
         team_id=None,
     )
 
-    result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
-        user_without_team
-    )
+    result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(user_without_team)
     assert result == []  # No permissions returned
 
 
@@ -205,9 +199,7 @@ async def test_jwt_auth_sets_team_id_for_mcp_route():
     with patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth:
         mock_auth.return_value = jwt_payload
 
-        with patch(
-            "litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock
-        ) as mock_get_team:
+        with patch("litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock) as mock_get_team:
             mock_get_team.return_value = team
 
             # Simulate calling MCP route
@@ -278,9 +270,7 @@ async def test_mcp_route_without_model_still_returns_team_id():
     with patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth:
         mock_auth.return_value = jwt_payload
 
-        with patch(
-            "litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock
-        ) as mock_get_team:
+        with patch("litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock) as mock_get_team:
             mock_get_team.return_value = team
 
             # Call MCP route with NO MODEL in request_data

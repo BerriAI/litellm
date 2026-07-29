@@ -40,10 +40,7 @@ def client_is_generated() -> bool:
     spec = importlib.util.find_spec("prisma")
     if spec is None or not spec.submodule_search_locations:
         return False
-    return any(
-        (Path(location) / "client.py").exists()
-        for location in spec.submodule_search_locations
-    )
+    return any((Path(location) / "client.py").exists() for location in spec.submodule_search_locations)
 
 
 def main() -> int:

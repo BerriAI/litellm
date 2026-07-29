@@ -92,9 +92,7 @@ def _make_a2a_types_module():
     mock_a2a_types = MagicMock()
     mock_a2a_types.MessageSendParams = _make_cls("MessageSendParams")
     mock_a2a_types.SendMessageRequest = _make_cls("SendMessageRequest")
-    mock_a2a_types.SendStreamingMessageRequest = _make_cls(
-        "SendStreamingMessageRequest"
-    )
+    mock_a2a_types.SendStreamingMessageRequest = _make_cls("SendStreamingMessageRequest")
     return mock_a2a_types
 
 
@@ -209,9 +207,7 @@ async def test_static_overrides_dynamic():
         extra_headers=["Authorization"],
     )
     # Client sends a different value for Authorization
-    mock_request = _make_mock_request(
-        extra_headers={"Authorization": "Bearer dynamic-token"}
-    )
+    mock_request = _make_mock_request(extra_headers={"Authorization": "Bearer dynamic-token"})
 
     mock_asend = await _invoke(mock_agent, mock_request, None)
 
@@ -244,9 +240,7 @@ async def test_convention_header_by_agent_name():
     """x-a2a-{agent_name}-{header} is forwarded using the agent name alias."""
     mock_agent = _make_mock_agent()
     mock_agent.agent_name = "my-agent"
-    mock_request = _make_mock_request(
-        extra_headers={"x-a2a-my-agent-authorization": "Bearer conv-token"}
-    )
+    mock_request = _make_mock_request(extra_headers={"x-a2a-my-agent-authorization": "Bearer conv-token"})
 
     mock_asend = await _invoke(mock_agent, mock_request, None)
 
@@ -261,9 +255,7 @@ async def test_convention_header_by_agent_id():
     mock_agent = _make_mock_agent()
     mock_agent.agent_id = "abc-123"
     mock_agent.agent_name = "other-name"
-    mock_request = _make_mock_request(
-        extra_headers={"x-a2a-abc-123-x-api-key": "id-secret"}
-    )
+    mock_request = _make_mock_request(extra_headers={"x-a2a-abc-123-x-api-key": "id-secret"})
 
     mock_asend = await _invoke(mock_agent, mock_request, None)
 
@@ -275,13 +267,9 @@ async def test_convention_header_by_agent_id():
 @pytest.mark.asyncio
 async def test_convention_header_static_still_wins():
     """Static headers still override convention-based dynamic headers."""
-    mock_agent = _make_mock_agent(
-        static_headers={"authorization": "Bearer static-wins"}
-    )
+    mock_agent = _make_mock_agent(static_headers={"authorization": "Bearer static-wins"})
     mock_agent.agent_name = "my-agent"
-    mock_request = _make_mock_request(
-        extra_headers={"x-a2a-my-agent-authorization": "Bearer conv-value"}
-    )
+    mock_request = _make_mock_request(extra_headers={"x-a2a-my-agent-authorization": "Bearer conv-value"})
 
     mock_asend = await _invoke(mock_agent, mock_request, None)
 
@@ -296,9 +284,7 @@ async def test_convention_unrelated_prefix_not_forwarded():
     mock_agent = _make_mock_agent()
     mock_agent.agent_id = "agent-abc"
     mock_agent.agent_name = "my-agent"
-    mock_request = _make_mock_request(
-        extra_headers={"x-a2a-other-agent-authorization": "Bearer wrong"}
-    )
+    mock_request = _make_mock_request(extra_headers={"x-a2a-other-agent-authorization": "Bearer wrong"})
 
     mock_asend = await _invoke(mock_agent, mock_request, None)
 
@@ -314,9 +300,7 @@ async def test_convention_unrelated_prefix_not_forwarded():
 def _mock_databricks_token_client(access_token="dbx-oauth-token"):
     response = MagicMock()
     response.raise_for_status = MagicMock()
-    response.json = MagicMock(
-        return_value={"access_token": access_token, "expires_in": 3600}
-    )
+    response.json = MagicMock(return_value={"access_token": access_token, "expires_in": 3600})
     client = MagicMock()
     client.post = AsyncMock(return_value=response)
     return client
@@ -465,13 +449,9 @@ def test_merge_agent_headers_util_case_insensitive_no_dynamic_leak():
 @pytest.mark.asyncio
 async def test_convention_header_blocked_by_case_variant_static():
     """Static ``Authorization`` blocks caller-rewritten lowercase ``authorization``."""
-    mock_agent = _make_mock_agent(
-        static_headers={"Authorization": "Bearer admin-token"}
-    )
+    mock_agent = _make_mock_agent(static_headers={"Authorization": "Bearer admin-token"})
     mock_agent.agent_name = "my-agent"
-    mock_request = _make_mock_request(
-        extra_headers={"x-a2a-my-agent-authorization": "Bearer caller-token"}
-    )
+    mock_request = _make_mock_request(extra_headers={"x-a2a-my-agent-authorization": "Bearer caller-token"})
 
     mock_asend = await _invoke(mock_agent, mock_request, None)
 

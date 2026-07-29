@@ -55,9 +55,7 @@ class TestNovaSonicRealtime:
 
             session.send(
                 SessionUpdate(
-                    session=SessionConfig(
-                        instructions="You are a terse assistant. Reply in one short sentence."
-                    )
+                    session=SessionConfig(instructions="You are a terse assistant. Reply in one short sentence.")
                 )
             )
             session.collect_until("session.updated", timeout=30)
@@ -67,13 +65,9 @@ class TestNovaSonicRealtime:
             events = session.collect_until("response.done", timeout=90)
 
             types = {e.type for e in events}
-            assert "response.created" in types, (
-                f"Nova Sonic never emitted response.created; types={sorted(types)}"
-            )
+            assert "response.created" in types, f"Nova Sonic never emitted response.created; types={sorted(types)}"
             assert transcript(events).strip() != "" or "response.done" in types, (
                 "Nova Sonic response.create produced no transcript (LIT-2239 hang)"
             )
             done = parse_last(events, "response.done", ResponseDone)
-            assert done is not None, (
-                f"Nova Sonic never completed response.done within timeout; types={sorted(types)}"
-            )
+            assert done is not None, f"Nova Sonic never completed response.done within timeout; types={sorted(types)}"

@@ -67,10 +67,7 @@ class TestPolicyValidator:
         result = await validator.validate_policies(policies=policies, validate_db=False)
 
         assert result.valid is False
-        assert any(
-            e.error_type == PolicyValidationErrorType.INVALID_INHERITANCE
-            for e in result.errors
-        )
+        assert any(e.error_type == PolicyValidationErrorType.INVALID_INHERITANCE for e in result.errors)
 
     @pytest.mark.asyncio
     async def test_validate_invalid_guardrail(self):
@@ -87,14 +84,11 @@ class TestPolicyValidator:
             "get_available_guardrails",
             return_value={"pii_blocker", "toxicity_filter"},
         ):
-            result = await validator.validate_policies(
-                policies=policies, validate_db=False
-            )
+            result = await validator.validate_policies(policies=policies, validate_db=False)
 
         assert result.valid is False
         assert any(
-            e.error_type == PolicyValidationErrorType.INVALID_GUARDRAIL
-            and e.value == "nonexistent_guardrail"
+            e.error_type == PolicyValidationErrorType.INVALID_GUARDRAIL and e.value == "nonexistent_guardrail"
             for e in result.errors
         )
 
@@ -117,9 +111,7 @@ class TestPolicyValidator:
             "get_available_guardrails",
             return_value={"pii_blocker", "toxicity_filter"},
         ):
-            result = await validator.validate_policies(
-                policies=policies, validate_db=False
-            )
+            result = await validator.validate_policies(policies=policies, validate_db=False)
 
         assert result.valid is True
         assert len(result.errors) == 0
@@ -131,9 +123,7 @@ class TestAttachmentScopeValidation:
     @pytest.mark.asyncio
     async def test_nonexistent_team_is_flagged(self):
         validator = PolicyValidator(prisma_client=_FakePrisma(teams={"real-team"}))
-        errors = await validator.find_invalid_scope_entries(
-            policy_name="p", teams=["real-team", "ghost-team"]
-        )
+        errors = await validator.find_invalid_scope_entries(policy_name="p", teams=["real-team", "ghost-team"])
         assert [(e.field, e.value) for e in errors] == [("teams", "ghost-team")]
         assert errors[0].error_type == PolicyValidationErrorType.INVALID_TEAM
 
@@ -146,9 +136,7 @@ class TestAttachmentScopeValidation:
     @pytest.mark.asyncio
     async def test_trailing_star_wildcard_is_allowed_even_when_it_matches_nothing(self):
         validator = PolicyValidator(prisma_client=_FakePrisma(teams=set()))
-        errors = await validator.find_invalid_scope_entries(
-            policy_name="p", teams=["healthcare-*", "brand-new-*"]
-        )
+        errors = await validator.find_invalid_scope_entries(policy_name="p", teams=["healthcare-*", "brand-new-*"])
         assert errors == []
 
     @pytest.mark.asyncio
@@ -157,9 +145,7 @@ class TestAttachmentScopeValidation:
         # non-trailing "*" are compared literally, so they are validated as concrete
         # aliases (and here resolve to nothing -> flagged).
         validator = PolicyValidator(prisma_client=_FakePrisma(teams=set()))
-        errors = await validator.find_invalid_scope_entries(
-            policy_name="p", teams=["ops-?", "heal*care"]
-        )
+        errors = await validator.find_invalid_scope_entries(policy_name="p", teams=["ops-?", "heal*care"])
         assert {e.value for e in errors} == {"ops-?", "heal*care"}
 
     @pytest.mark.asyncio

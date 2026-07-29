@@ -5705,7 +5705,9 @@ def _edit_endpoint_patches(old_record, update_mock):
         ),
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-            AsyncMock(side_effect=old_record) if isinstance(old_record, Exception) else AsyncMock(return_value=old_record),
+            AsyncMock(side_effect=old_record)
+            if isinstance(old_record, Exception)
+            else AsyncMock(return_value=old_record),
         ),
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
@@ -6114,7 +6116,13 @@ def test_bundled_openapi_registry_parses_and_entries_are_well_formed():
 
     registry_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "..", "..", "..", "..", "litellm", "proxy", "openapi_registry.json",
+        "..",
+        "..",
+        "..",
+        "..",
+        "litellm",
+        "proxy",
+        "openapi_registry.json",
     )
     with open(registry_path) as f:
         registry = json.load(f)

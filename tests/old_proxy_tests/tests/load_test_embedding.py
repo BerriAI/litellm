@@ -10,9 +10,7 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 
 import litellm
@@ -38,9 +36,7 @@ def make_openai_completion(question):
         time.time()
         import openai
 
-        client = openai.OpenAI(
-            api_key=os.environ["OPENAI_API_KEY"]
-        )  # base_url="http://0.0.0.0:8000",
+        client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])  # base_url="http://0.0.0.0:8000",
         response = client.embeddings.create(
             model="text-embedding-ada-002",
             input=[question],

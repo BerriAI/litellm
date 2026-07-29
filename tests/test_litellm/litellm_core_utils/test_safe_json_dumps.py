@@ -4,9 +4,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 
@@ -210,9 +208,7 @@ def test_pydantic_base_model():
         inner: InnerModel
         tags: list
 
-    outer = OuterModel(
-        name="test", inner=InnerModel(value=42, label="hello"), tags=["a", "b"]
-    )
+    outer = OuterModel(name="test", inner=InnerModel(value=42, label="hello"), tags=["a", "b"])
 
     # Test a pydantic model at the top level
     result = json.loads(safe_dumps(outer))

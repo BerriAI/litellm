@@ -61,10 +61,7 @@ def test_is_prompt_management_model_optimization():
         )
 
         # Critical: Must still detect prompt management models correctly
-        assert (
-            router_with_prompt._is_prompt_management_model("my-langfuse-prompt/test_id")
-            is True
-        )
+        assert router_with_prompt._is_prompt_management_model("my-langfuse-prompt/test_id") is True
 
     finally:
         litellm._known_custom_logger_compatible_callbacks = original_callbacks

@@ -120,9 +120,7 @@ class MockOpenAIProvider:
         }
         return web.json_response(payload)
 
-    async def _streaming_response(
-        self, request: web.Request, body: dict[str, Any]
-    ) -> web.StreamResponse:
+    async def _streaming_response(self, request: web.Request, body: dict[str, Any]) -> web.StreamResponse:
         response = web.StreamResponse(
             status=200,
             headers={
@@ -171,9 +169,7 @@ def percentile(values: list[float], pct: float) -> float:
 def summarize(samples: list[RequestSample], wall_time_s: float) -> SummaryStats:
     latencies = [sample.latency_ms for sample in samples if sample.success]
     overhead_headers = [
-        sample.overhead_header_ms
-        for sample in samples
-        if sample.success and sample.overhead_header_ms is not None
+        sample.overhead_header_ms for sample in samples if sample.success and sample.overhead_header_ms is not None
     ]
     failures = len(samples) - len(latencies)
     return SummaryStats(
@@ -184,15 +180,9 @@ def summarize(samples: list[RequestSample], wall_time_s: float) -> SummaryStats:
         p50_ms=percentile(latencies, 50),
         p95_ms=percentile(latencies, 95),
         p99_ms=percentile(latencies, 99),
-        overhead_header_mean_ms=(
-            statistics.mean(overhead_headers) if overhead_headers else None
-        ),
-        overhead_header_p50_ms=(
-            percentile(overhead_headers, 50) if overhead_headers else None
-        ),
-        overhead_header_p95_ms=(
-            percentile(overhead_headers, 95) if overhead_headers else None
-        ),
+        overhead_header_mean_ms=(statistics.mean(overhead_headers) if overhead_headers else None),
+        overhead_header_p50_ms=(percentile(overhead_headers, 50) if overhead_headers else None),
+        overhead_header_p95_ms=(percentile(overhead_headers, 95) if overhead_headers else None),
     )
 
 
@@ -356,17 +346,11 @@ async def run_non_streaming_benchmark(
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         if warmup > 0:
             await asyncio.gather(
-                *[
-                    post_non_streaming(session, url, headers, payload, semaphore)
-                    for _ in range(warmup)
-                ]
+                *[post_non_streaming(session, url, headers, payload, semaphore) for _ in range(warmup)]
             )
         wall_start = time.perf_counter()
         samples = await asyncio.gather(
-            *[
-                post_non_streaming(session, url, headers, payload, semaphore)
-                for _ in range(requests)
-            ]
+            *[post_non_streaming(session, url, headers, payload, semaphore) for _ in range(requests)]
         )
         wall_time_s = time.perf_counter() - wall_start
     return summarize(samples, wall_time_s)
@@ -408,9 +392,7 @@ async def measure_stream_ttft(
                             success=True,
                             latency_ms=(time.perf_counter() - start) * 1000,
                             status_code=response.status,
-                            overhead_header_ms=extract_overhead_header(
-                                response.headers
-                            ),
+                            overhead_header_ms=extract_overhead_header(response.headers),
                         )
                 return RequestSample(
                     success=False,
@@ -446,17 +428,11 @@ async def run_streaming_ttft_benchmark(
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         if warmup > 0:
             await asyncio.gather(
-                *[
-                    measure_stream_ttft(session, url, headers, payload, semaphore)
-                    for _ in range(warmup)
-                ]
+                *[measure_stream_ttft(session, url, headers, payload, semaphore) for _ in range(warmup)]
             )
         wall_start = time.perf_counter()
         samples = await asyncio.gather(
-            *[
-                measure_stream_ttft(session, url, headers, payload, semaphore)
-                for _ in range(requests)
-            ]
+            *[measure_stream_ttft(session, url, headers, payload, semaphore) for _ in range(requests)]
         )
         wall_time_s = time.perf_counter() - wall_start
     return summarize(samples, wall_time_s)
@@ -493,9 +469,7 @@ async def measure_stream_full_response(
                             success=saw_content,
                             latency_ms=(time.perf_counter() - start) * 1000,
                             status_code=response.status,
-                            overhead_header_ms=extract_overhead_header(
-                                response.headers
-                            ),
+                            overhead_header_ms=extract_overhead_header(response.headers),
                             error="" if saw_content else "stream ended without content",
                         )
                     if b'"content"' in event_payload or b'"text"' in event_payload:
@@ -535,19 +509,11 @@ async def run_streaming_full_benchmark(
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         if warmup > 0:
             await asyncio.gather(
-                *[
-                    measure_stream_full_response(
-                        session, url, headers, payload, semaphore
-                    )
-                    for _ in range(warmup)
-                ]
+                *[measure_stream_full_response(session, url, headers, payload, semaphore) for _ in range(warmup)]
             )
         wall_start = time.perf_counter()
         samples = await asyncio.gather(
-            *[
-                measure_stream_full_response(session, url, headers, payload, semaphore)
-                for _ in range(requests)
-            ]
+            *[measure_stream_full_response(session, url, headers, payload, semaphore) for _ in range(requests)]
         )
         wall_time_s = time.perf_counter() - wall_start
     return summarize(samples, wall_time_s)
@@ -598,10 +564,7 @@ def print_summary(
     print(f"Proxy non-stream RPS: {proxy.rps:.2f}")
     print(f"Client-observed overhead p50: {client_overhead_p50:.2f} ms")
     print(f"Client-observed overhead p95: {client_overhead_p95:.2f} ms")
-    print(
-        "x-litellm-overhead-duration-ms p50: "
-        f"{format_optional_ms(proxy.overhead_header_p50_ms)} ms"
-    )
+    print(f"x-litellm-overhead-duration-ms p50: {format_optional_ms(proxy.overhead_header_p50_ms)} ms")
     print(f"Streaming TTFT p50: {stream.p50_ms:.2f} ms")
     print(f"Streaming TTFT p95: {stream.p95_ms:.2f} ms")
     print(f"Streaming TTFT RPS: {stream.rps:.2f}")
@@ -802,8 +765,7 @@ async def async_main() -> None:
                     print(
                         f"  run {run_idx + 1}: non-stream p50={_proxy.p50_ms:.2f}ms "
                         f"rps={_proxy.rps:.2f} | TTFT p50={_stream.p50_ms:.2f}ms "
-                        f"full RPS="
-                        + (f"{_stream_full.rps:.2f}" if _stream_full else "n/a")
+                        f"full RPS=" + (f"{_stream_full.rps:.2f}" if _stream_full else "n/a")
                     )
 
             direct, proxy, stream, stream_full = _median_run(runs)
@@ -822,16 +784,12 @@ async def async_main() -> None:
                 "direct_non_streaming": stats_to_dict(direct),
                 "proxy_non_streaming": stats_to_dict(proxy),
                 "proxy_streaming_ttft": stats_to_dict(stream),
-                "proxy_streaming_full": (
-                    stats_to_dict(stream_full) if stream_full is not None else None
-                ),
+                "proxy_streaming_full": (stats_to_dict(stream_full) if stream_full is not None else None),
                 "client_observed_overhead_p50_ms": proxy.p50_ms - direct.p50_ms,
                 "client_observed_overhead_p95_ms": proxy.p95_ms - direct.p95_ms,
                 "proxy_log_path": str(proxy_log_path),
             }
-            Path(args.output_json).write_text(
-                json.dumps(output, indent=2, sort_keys=True), encoding="utf-8"
-            )
+            Path(args.output_json).write_text(json.dumps(output, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def main() -> None:

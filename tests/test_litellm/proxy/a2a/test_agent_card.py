@@ -28,9 +28,7 @@ def _full_upstream_card() -> dict:
             "stateTransitionHistory": True,
             "extensions": [{"uri": "x"}],
         },
-        "skills": [
-            {"id": "s1", "name": "skill one", "description": "d", "tags": ["t"]}
-        ],
+        "skills": [{"id": "s1", "name": "skill one", "description": "d", "tags": ["t"]}],
         "defaultInputModes": ["text", "audio"],
         "defaultOutputModes": ["text"],
         "securitySchemes": {"upstreamKey": {"type": "apiKey"}},
@@ -47,18 +45,14 @@ def test_preserves_top_level_url_for_runtime_invocation():
     # know where to proxy requests, so the merge must keep the upstream URL
     # on the stored card. The public well-known endpoint rewrites this field
     # to the proxy URL before exposing it to clients.
-    merged = merge_agent_card(
-        _full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE
-    )
+    merged = merge_agent_card(_full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
     assert merged["url"] == "http://internal:9999/"
 
 
 def test_unsupported_protocol_version_defaults_to_1_0():
     # The fixture card pins "0.9", which LiteLLM does not serve; it falls back to
     # the default rather than advertising a version the proxy can't honor.
-    merged = merge_agent_card(
-        _full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE
-    )
+    merged = merge_agent_card(_full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
     assert merged["protocolVersion"] == LITELLM_A2A_PROTOCOL_VERSION
 
 
@@ -91,17 +85,13 @@ def test_overrides_name_and_description_when_provided():
 
 
 def test_keeps_upstream_name_and_description_when_not_overridden():
-    merged = merge_agent_card(
-        _full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE
-    )
+    merged = merge_agent_card(_full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
     assert merged["name"] == "Upstream Name"
     assert merged["description"] == "Upstream description"
 
 
 def test_filters_capabilities_to_allowlist():
-    merged = merge_agent_card(
-        _full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE
-    )
+    merged = merge_agent_card(_full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
     # Only ``streaming`` is allowlisted today.
     assert merged["capabilities"] == {"streaming": True}
 
@@ -114,18 +104,14 @@ def test_drops_streaming_when_upstream_disables_it():
 
 
 def test_replaces_security_schemes_and_requirements():
-    merged = merge_agent_card(
-        _full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE
-    )
+    merged = merge_agent_card(_full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
     assert merged["securitySchemes"] == LITELLM_SECURITY_SCHEMES
     assert merged["security"] == LITELLM_SECURITY_REQUIREMENTS
     assert "securityRequirements" not in merged
 
 
 def test_emits_supported_interfaces_pointing_at_proxy():
-    merged = merge_agent_card(
-        _full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE
-    )
+    merged = merge_agent_card(_full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
     assert merged["supportedInterfaces"] == [
         {
             "url": PROXY_URL,
@@ -136,9 +122,7 @@ def test_emits_supported_interfaces_pointing_at_proxy():
 
 
 def test_passes_through_skills_modes_provider_icon_docs():
-    merged = merge_agent_card(
-        _full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE
-    )
+    merged = merge_agent_card(_full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
     assert merged["skills"] == _full_upstream_card()["skills"]
     assert merged["defaultInputModes"] == ["text", "audio"]
     assert merged["defaultOutputModes"] == ["text"]
@@ -151,9 +135,7 @@ def test_passes_through_skills_modes_provider_icon_docs():
 
 
 def test_strips_fields_not_in_v1_schema():
-    merged = merge_agent_card(
-        _full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE
-    )
+    merged = merge_agent_card(_full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
     assert "somethingNotInSchema" not in merged
 
 
@@ -172,9 +154,7 @@ def test_defaults_version_when_upstream_omits_it():
 
 
 def test_preserves_upstream_version_when_present():
-    merged = merge_agent_card(
-        _full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE
-    )
+    merged = merge_agent_card(_full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
     assert merged["version"] == "1.2.3"
 
 
@@ -247,10 +227,7 @@ def test_resolve_served_protocol_version_canonicalizes_semver_pins():
 
 
 def test_resolve_served_protocol_version_falls_back_for_unsupported():
-    assert (
-        resolve_served_protocol_version({"protocolVersion": "0.2.6"})
-        == LITELLM_A2A_PROTOCOL_VERSION
-    )
+    assert resolve_served_protocol_version({"protocolVersion": "0.2.6"}) == LITELLM_A2A_PROTOCOL_VERSION
     assert resolve_served_protocol_version(None) == LITELLM_A2A_PROTOCOL_VERSION
 
 

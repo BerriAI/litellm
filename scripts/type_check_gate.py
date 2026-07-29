@@ -131,44 +131,30 @@ def base_counts(ref: str) -> dict[str, int]:
     exe = shutil.which("basedpyright") or "basedpyright"
     with _temp_worktree(ref) as worktree:
         shutil.copy(PYRIGHT_CONFIG, worktree / "pyrightconfig.json")
-        proc = subprocess.run(
-            [exe, "--outputjson"], cwd=worktree, capture_output=True, text=True
-        )
+        proc = subprocess.run([exe, "--outputjson"], cwd=worktree, capture_output=True, text=True)
         return count_basedpyright(proc.stdout, root=worktree)
 
 
-def over_ceiling(
-    head: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]
-) -> frozenset[str]:
+def over_ceiling(head: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]) -> frozenset[str]:
     """Rules whose head count already exceeds their limit.
 
     A rule can only breach when it is over its limit, so when none are the base
     comparison cannot change the verdict and the base worktree pass can be skipped.
     """
     return frozenset(
-        code
-        for code, total in head.items()
-        if total > (budget[code]["limit"] if code in budget else DEFAULT_LIMIT)
+        code for code, total in head.items() if total > (budget[code]["limit"] if code in budget else DEFAULT_LIMIT)
     )
 
 
 def environment_fingerprints() -> tuple[str, ...]:
-    return tuple(
-        hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in (PYRIGHT_CONFIG, UV_LOCK)
-        if path.exists()
-    )
+    return tuple(hashlib.sha256(path.read_bytes()).hexdigest() for path in (PYRIGHT_CONFIG, UV_LOCK) if path.exists())
 
 
 def cache_key(base_point: str, fingerprints: tuple[str, ...]) -> str:
-    return hashlib.sha256("|".join((base_point, *fingerprints)).encode()).hexdigest()[
-        :16
-    ]
+    return hashlib.sha256("|".join((base_point, *fingerprints)).encode()).hexdigest()[:16]
 
 
-def cache_path(
-    directory: Path, base_point: str, fingerprints: tuple[str, ...]
-) -> Path:
+def cache_path(directory: Path, base_point: str, fingerprints: tuple[str, ...]) -> Path:
     return directory / f"{CACHE_FILE_PREFIX}{cache_key(base_point, fingerprints)}.json"
 
 
@@ -202,9 +188,7 @@ def scratch_path(path: Path) -> Path:
     return path.with_name(f".{path.name}.{os.getpid()}.tmp")
 
 
-def store_counts(
-    directory: Path, path: Path, base_point: str, counts: Mapping[str, int]
-) -> None:
+def store_counts(directory: Path, path: Path, base_point: str, counts: Mapping[str, int]) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     for stale in directory.glob(f"{CACHE_FILE_PREFIX}*.json"):
         if stale != path:
@@ -255,9 +239,7 @@ def evaluate(
     return sorted(breaches)
 
 
-def is_vacuous_run(
-    counts: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]
-) -> bool:
+def is_vacuous_run(counts: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]) -> bool:
     """True when nothing was parsed but the budget expects errors -- the
     signature of a type checker that crashed or produced no output. The CI pipe
     swallows the tool's exit code (`tool || true`), so without this guard an
@@ -279,9 +261,7 @@ def ratcheted_budget(
     not on update.
     """
     return {
-        code: {
-            "limit": max(0, spec["limit"] - max(0, base.get(code, 0) - current.get(code, 0)))
-        }
+        code: {"limit": max(0, spec["limit"] - max(0, base.get(code, 0) - current.get(code, 0)))}
         for code, spec in sorted(budget.items())
     }
 
@@ -299,10 +279,7 @@ def cmd_update(current: Mapping[str, int], base_ref: str = DEFAULT_BASE) -> None
     updated = ratcheted_budget(budget, current, base_counts_cached(base_point))
     BUDGET_PATH.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n")
     cleared = sum(budget[code]["limit"] - updated[code]["limit"] for code in updated)
-    print(
-        f"Ratcheted basedpyright limits down by {cleared} errors this branch fixed "
-        f"across {len(updated)} rules"
-    )
+    print(f"Ratcheted basedpyright limits down by {cleared} errors this branch fixed across {len(updated)} rules")
 
 
 def cmd_check(base_ref: str) -> None:
@@ -317,9 +294,7 @@ def cmd_check(base_ref: str) -> None:
         )
         raise SystemExit(1)
     if not over_ceiling(head, budget):
-        print(
-            f"OK: every rule is within its basedpyright limit ({sum(head.values())} errors total)"
-        )
+        print(f"OK: every rule is within its basedpyright limit ({sum(head.values())} errors total)")
         return
     base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
     base = base_counts_cached(base_point)
@@ -338,9 +313,7 @@ def cmd_check(base_ref: str) -> None:
         return
     print("FAIL: basedpyright errors exceed the per-rule limit:")
     for breach in breaches:
-        print(
-            f"  {breach.code}: total {breach.total} over limit {breach.cap} (this change added {breach.added})"
-        )
+        print(f"  {breach.code}: total {breach.total} over limit {breach.cap} (this change added {breach.added})")
     print(
         "Reduce the new errors or remove an equal number elsewhere; the ceiling is "
         "the limit in basedpyright-code-budget.json."

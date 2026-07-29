@@ -89,9 +89,7 @@ class MockContentGuardrail(CustomGuardrail):
         self.call_count += 1
 
         if self.should_block:
-            raise GuardrailRaisedException(
-                guardrail_name=self.guardrail_name, message="Content violates policy"
-            )
+            raise GuardrailRaisedException(guardrail_name=self.guardrail_name, message="Content violates policy")
         return None
 
 
@@ -119,9 +117,7 @@ class MockHttpGuardrail(CustomGuardrail):
         self.call_count += 1
 
         if self.should_block:
-            raise HTTPException(
-                status_code=400, detail={"error": "Violated guardrail policy"}
-            )
+            raise HTTPException(status_code=400, detail={"error": "Violated guardrail policy"})
         return None
 
 
@@ -170,9 +166,7 @@ class MockProxyLogging:
 
     def _convert_mcp_to_llm_format(self, request_obj, kwargs: dict) -> dict:
         """Convert MCP tool call to LLM message format"""
-        tool_call_content = (
-            f"Tool: {request_obj.tool_name}\nArguments: {request_obj.arguments}"
-        )
+        tool_call_content = f"Tool: {request_obj.tool_name}\nArguments: {request_obj.arguments}"
 
         return {
             "messages": [{"role": "user", "content": tool_call_content}],
@@ -203,14 +197,10 @@ class MockProxyLogging:
         for guardrail in self.guardrails:
             if isinstance(guardrail, CustomGuardrail):
                 try:
-                    synthetic_data = self._convert_mcp_to_llm_format(
-                        request_obj, kwargs
-                    )
+                    synthetic_data = self._convert_mcp_to_llm_format(request_obj, kwargs)
 
                     # Check if guardrail should run
-                    if not guardrail.should_run_guardrail(
-                        synthetic_data, GuardrailEventHooks.pre_mcp_call
-                    ):
+                    if not guardrail.should_run_guardrail(synthetic_data, GuardrailEventHooks.pre_mcp_call):
                         continue
 
                     result = await guardrail.async_pre_call_hook(
@@ -220,9 +210,7 @@ class MockProxyLogging:
                         call_type="mcp_call",
                     )
                     if result is not None:
-                        return self._parse_pre_mcp_call_hook_response(
-                            result, request_obj
-                        )
+                        return self._parse_pre_mcp_call_hook_response(result, request_obj)
                 except (
                     BlockedPiiEntityError,
                     GuardrailRaisedException,
@@ -232,9 +220,7 @@ class MockProxyLogging:
                     raise e
                 except Exception as e:
                     # Log non-guardrail exceptions as non-blocking
-                    print(
-                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {str(e)}"
-                    )
+                    print(f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {str(e)}")
 
         return None
 
@@ -252,9 +238,7 @@ class MockProxyLogging:
         for guardrail in self.guardrails:
             if isinstance(guardrail, CustomGuardrail):
                 try:
-                    synthetic_data = self._convert_mcp_to_llm_format(
-                        request_obj, kwargs
-                    )
+                    synthetic_data = self._convert_mcp_to_llm_format(request_obj, kwargs)
                     result = await guardrail.async_moderation_hook(
                         data=synthetic_data,
                         user_api_key_dict=kwargs.get("user_api_key_auth"),
@@ -271,9 +255,7 @@ class MockProxyLogging:
                     raise e
                 except Exception as e:
                     # Log non-guardrail exceptions as non-blocking
-                    print(
-                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {str(e)}"
-                    )
+                    print(f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {str(e)}")
 
         return None
 
@@ -330,9 +312,7 @@ class TestMCPGuardrailsPreCall:
     """Test MCP guardrails for pre-call hooks"""
 
     @pytest.mark.asyncio
-    async def test_pii_guardrail_blocks_pre_call(
-        self, mock_pii_guardrail, mock_user_api_key, mock_cache
-    ):
+    async def test_pii_guardrail_blocks_pre_call(self, mock_pii_guardrail, mock_user_api_key, mock_cache):
         """Test that PII guardrail properly blocks pre-call"""
         proxy_logging = MockProxyLogging([mock_pii_guardrail])
 
@@ -367,9 +347,7 @@ class TestMCPGuardrailsPreCall:
         assert mock_pii_guardrail.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_pii_guardrail_allows_pre_call(
-        self, mock_pii_guardrail_allow, mock_user_api_key, mock_cache
-    ):
+    async def test_pii_guardrail_allows_pre_call(self, mock_pii_guardrail_allow, mock_user_api_key, mock_cache):
         """Test that PII guardrail allows pre-call when configured to allow"""
         proxy_logging = MockProxyLogging([mock_pii_guardrail_allow])
 
@@ -400,9 +378,7 @@ class TestMCPGuardrailsPreCall:
         assert mock_pii_guardrail_allow.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_content_guardrail_blocks_pre_call(
-        self, mock_content_guardrail, mock_user_api_key, mock_cache
-    ):
+    async def test_content_guardrail_blocks_pre_call(self, mock_content_guardrail, mock_user_api_key, mock_cache):
         """Test that content guardrail properly blocks pre-call"""
         proxy_logging = MockProxyLogging([mock_content_guardrail])
 
@@ -436,9 +412,7 @@ class TestMCPGuardrailsPreCall:
         assert mock_content_guardrail.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_http_guardrail_blocks_pre_call(
-        self, mock_http_guardrail, mock_user_api_key, mock_cache
-    ):
+    async def test_http_guardrail_blocks_pre_call(self, mock_http_guardrail, mock_user_api_key, mock_cache):
         """Test that HTTP guardrail properly blocks pre-call"""
         proxy_logging = MockProxyLogging([mock_http_guardrail])
 
@@ -511,9 +485,7 @@ class TestMCPGuardrailsDuringCall:
     """Test MCP guardrails for during-call hooks"""
 
     @pytest.mark.asyncio
-    async def test_during_call_guardrail_blocks(
-        self, mock_during_guardrail, mock_user_api_key, mock_cache
-    ):
+    async def test_during_call_guardrail_blocks(self, mock_during_guardrail, mock_user_api_key, mock_cache):
         """Test that during-call guardrail properly blocks execution"""
         proxy_logging = MockProxyLogging([mock_during_guardrail])
 
@@ -572,15 +544,11 @@ class TestMCPGuardrailsIntegration:
         """Test that guardrail exceptions properly propagate through the system"""
         # Test BlockedPiiEntityError
         with pytest.raises(BlockedPiiEntityError):
-            raise BlockedPiiEntityError(
-                entity_type="EMAIL_ADDRESS", guardrail_name="test-guardrail"
-            )
+            raise BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="test-guardrail")
 
         # Test GuardrailRaisedException
         with pytest.raises(GuardrailRaisedException):
-            raise GuardrailRaisedException(
-                guardrail_name="test-guardrail", message="Test message"
-            )
+            raise GuardrailRaisedException(guardrail_name="test-guardrail", message="Test message")
 
         # Test HTTPException
         with pytest.raises(HTTPException):
@@ -595,9 +563,7 @@ class TestMCPGuardrailsErrorHandling:
         """Test that non-guardrail exceptions are logged as non-blocking"""
 
         class MockFailingGuardrail(CustomGuardrail):
-            def should_run_guardrail(
-                self, data: dict, event_type: GuardrailEventHooks
-            ) -> bool:
+            def should_run_guardrail(self, data: dict, event_type: GuardrailEventHooks) -> bool:
                 return True
 
             async def async_pre_call_hook(
@@ -642,9 +608,7 @@ class TestMCPGuardrailsErrorHandling:
         """Test that guardrails don't run when should_run_guardrail returns False"""
 
         class MockConditionalGuardrail(CustomGuardrail):
-            def should_run_guardrail(
-                self, data: dict, event_type: GuardrailEventHooks
-            ) -> bool:
+            def should_run_guardrail(self, data: dict, event_type: GuardrailEventHooks) -> bool:
                 return False  # Don't run
 
             async def async_pre_call_hook(
@@ -723,9 +687,7 @@ class TestMCPGuardrailsEdgeCases:
         """Test guardrail behavior with invalid data"""
 
         class MockInvalidDataGuardrail(CustomGuardrail):
-            def should_run_guardrail(
-                self, data: dict, event_type: GuardrailEventHooks
-            ) -> bool:
+            def should_run_guardrail(self, data: dict, event_type: GuardrailEventHooks) -> bool:
                 return True
 
             async def async_pre_call_hook(

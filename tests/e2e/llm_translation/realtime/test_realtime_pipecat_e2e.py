@@ -63,9 +63,7 @@ from pipecat_service import LiteLLMRealtimeLLMService  # noqa: E402
 # Vertex native-audio live is flaky through pipecat tool calling (upstream
 # pipecat-ai/pipecat#2544); raw-ws tool_call_round_trip[vertex_ai] is the
 # source of truth for that provider. Keep openai/azure/gemini here.
-PROVIDER_PARAMS = [
-    pytest.param(p, id=p.id) for p in PROVIDERS if p.id != "vertex_ai"
-]
+PROVIDER_PARAMS = [pytest.param(p, id=p.id) for p in PROVIDERS if p.id != "vertex_ai"]
 
 WEATHER_TOOL = ToolsSchema(
     standard_tools=[
@@ -98,23 +96,17 @@ async def _run_pipeline(key: str, model: str) -> tuple[bool, bool]:
         tool_called.set()
         await params.result_callback({"city": "Paris", "temperature_f": 72})
 
-    llm = LiteLLMRealtimeLLMService(
-        api_key=key, base_url=f"{ws_base_url()}/v1/realtime", model=model
-    )
+    llm = LiteLLMRealtimeLLMService(api_key=key, base_url=f"{ws_base_url()}/v1/realtime", model=model)
     llm.register_function("get_weather", get_weather)
 
     context = LLMContext(tools=WEATHER_TOOL)
     aggregator = LLMContextAggregatorPair(context)
     capture = _CaptureText()
-    task = PipelineTask(
-        Pipeline([aggregator.user(), llm, capture, aggregator.assistant()])
-    )
+    task = PipelineTask(Pipeline([aggregator.user(), llm, capture, aggregator.assistant()]))
 
     await task.queue_frames(
         [
-            TranscriptionFrame(
-                "What's the weather in Paris?", user_id="e2e", timestamp=""
-            ),
+            TranscriptionFrame("What's the weather in Paris?", user_id="e2e", timestamp=""),
             LLMRunFrame(),
         ]
     )

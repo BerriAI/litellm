@@ -29,9 +29,7 @@ def generate_key_sync():
         print()
 
         if response.status_code != 200:
-            raise Exception(
-                f"Request did not return a 200 status code: {response.status_code}"
-            )
+            raise Exception(f"Request did not return a 200 status code: {response.status_code}")
 
         response_data = response.json()
         return response_data["key"]
@@ -42,9 +40,7 @@ def test_chat_completion_bad_model():
     client = OpenAI(api_key=key, base_url="http://0.0.0.0:4000")
 
     with pytest.raises(BadRequestError) as excinfo:
-        client.chat.completions.create(
-            model="non-existent-model", messages=[{"role": "user", "content": "Hello!"}]
-        )
+        client.chat.completions.create(model="non-existent-model", messages=[{"role": "user", "content": "Hello!"}])
     print(f"Chat completion error: {excinfo.value}")
 
 
@@ -71,9 +67,7 @@ def test_images_bad_model():
     client = OpenAI(api_key=key, base_url="http://0.0.0.0:4000")
 
     with pytest.raises(BadRequestError) as excinfo:
-        client.images.generate(
-            model="non-existent-model", prompt="A cute baby sea otter"
-        )
+        client.images.generate(model="non-existent-model", prompt="A cute baby sea otter")
     print(f"Images error: {excinfo.value}")
 
 
@@ -150,9 +144,7 @@ async def test_chat_completion_bad_model_with_spend_logs():
         except json.JSONDecodeError:
             print(f"Could not parse response body as JSON: {response.text}")
 
-    assert (
-        litellm_call_id is not None
-    ), "Failed to get LiteLLM Call ID from response headers"
+    assert litellm_call_id is not None, "Failed to get LiteLLM Call ID from response headers"
     print("waiting for flushing error log to db....")
     await asyncio.sleep(15)
 
@@ -166,9 +158,7 @@ async def test_chat_completion_bad_model_with_spend_logs():
             headers=headers,
         )
 
-        assert (
-            response.status_code == 200
-        ), f"Failed to get spend logs: {response.status_code}"
+        assert response.status_code == 200, f"Failed to get spend logs: {response.status_code}"
 
         spend_logs = response.json()
 

@@ -60,22 +60,16 @@ class BaseOCRTest(ABC):
                     **base_ocr_call_args,
                 )
 
-            print(f"\n{'='*80}")
+            print(f"\n{'=' * 80}")
             print(f"Sync Mode: {sync_mode}")
             print(f"Response type: {type(response)}")
-            print(
-                f"Response object: {response.object if hasattr(response, 'object') else 'N/A'}"
-            )
+            print(f"Response object: {response.object if hasattr(response, 'object') else 'N/A'}")
 
             # Check if response has expected OCR format
             assert hasattr(response, "pages"), "Response should have 'pages' attribute"
             assert hasattr(response, "model"), "Response should have 'model' attribute"
-            assert hasattr(
-                response, "object"
-            ), "Response should have 'object' attribute"
-            assert (
-                response.object == "ocr"
-            ), f"Expected object='ocr', got '{response.object}'"
+            assert hasattr(response, "object"), "Response should have 'object' attribute"
+            assert response.object == "ocr", f"Expected object='ocr', got '{response.object}'"
 
             # Validate pages structure
             assert isinstance(response.pages, list), "pages should be a list"
@@ -84,21 +78,17 @@ class BaseOCRTest(ABC):
             # Check first page structure
             first_page = response.pages[0]
             assert hasattr(first_page, "index"), "Page should have 'index' attribute"
-            assert hasattr(
-                first_page, "markdown"
-            ), "Page should have 'markdown' attribute"
+            assert hasattr(first_page, "markdown"), "Page should have 'markdown' attribute"
 
             # Extract text from all pages for validation
-            total_text = "\n\n".join(
-                page.markdown for page in response.pages if page.markdown
-            )
+            total_text = "\n\n".join(page.markdown for page in response.pages if page.markdown)
             print(f"Total pages: {len(response.pages)}")
             print(f"Total extracted text length: {len(total_text)} characters")
             print(f"First 200 chars: {total_text[:200]}")
             print(f"Model: {response.model}")
             if response.usage_info:
                 print(f"Pages processed: {response.usage_info.pages_processed}")
-            print(f"{'='*80}\n")
+            print(f"{'=' * 80}\n")
 
             assert len(total_text) > 0, "Should extract some text from the document"
 
@@ -106,16 +96,12 @@ class BaseOCRTest(ABC):
             # validate we get a response cost in hidden parameters
             #########################################################
             hidden_params = response._hidden_params
-            assert isinstance(
-                hidden_params, dict
-            ), "Hidden parameters should be a dictionary"
+            assert isinstance(hidden_params, dict), "Hidden parameters should be a dictionary"
 
             print("response usage_info:", response.usage_info)
 
             response_cost = hidden_params.get("response_cost")
-            assert (
-                response_cost is not None
-            ), "Response cost should be in hidden parameters"
+            assert response_cost is not None, "Response cost should be in hidden parameters"
             assert response_cost > 0, "Response cost should be greater than 0"
             print("response_cost=", response_cost)
 
@@ -129,10 +115,7 @@ class BaseOCRTest(ABC):
             pytest.skip("Model is overloaded")
         except litellm.BadRequestError as e:
             error_msg = str(e)
-            if (
-                "URL_REJECTED" in error_msg
-                or "Cannot fetch content from the provided URL" in error_msg
-            ):
+            if "URL_REJECTED" in error_msg or "Cannot fetch content from the provided URL" in error_msg:
                 pytest.skip(f"URL rejected by provider - {error_msg}")
             else:
                 pytest.fail(f"OCR call failed: {str(e)}")
@@ -155,12 +138,8 @@ class BaseOCRTest(ABC):
             # Validate response structure
             assert hasattr(response, "pages"), "Response should have 'pages' attribute"
             assert hasattr(response, "model"), "Response should have 'model' attribute"
-            assert hasattr(
-                response, "object"
-            ), "Response should have 'object' attribute"
-            assert hasattr(
-                response, "usage_info"
-            ), "Response should have 'usage_info' attribute"
+            assert hasattr(response, "object"), "Response should have 'object' attribute"
+            assert hasattr(response, "usage_info"), "Response should have 'usage_info' attribute"
 
             assert isinstance(response.pages, list), "pages should be a list"
             assert len(response.pages) > 0, "Should have at least one page"
@@ -169,9 +148,7 @@ class BaseOCRTest(ABC):
             # Validate first page structure
             first_page = response.pages[0]
             assert hasattr(first_page, "index"), "Page should have 'index' attribute"
-            assert hasattr(
-                first_page, "markdown"
-            ), "Page should have 'markdown' attribute"
+            assert hasattr(first_page, "markdown"), "Page should have 'markdown' attribute"
             assert isinstance(first_page.markdown, str), "markdown should be a string"
 
             print(f"\nResponse structure validated:")
@@ -192,10 +169,7 @@ class BaseOCRTest(ABC):
             pytest.skip("Model is overloaded")
         except litellm.BadRequestError as e:
             error_msg = str(e)
-            if (
-                "URL_REJECTED" in error_msg
-                or "Cannot fetch content from the provided URL" in error_msg
-            ):
+            if "URL_REJECTED" in error_msg or "Cannot fetch content from the provided URL" in error_msg:
                 pytest.skip(f"URL rejected by provider - {error_msg}")
             else:
                 pytest.fail(f"OCR response structure test failed: {str(e)}")

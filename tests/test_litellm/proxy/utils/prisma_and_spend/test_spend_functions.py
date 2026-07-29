@@ -103,15 +103,11 @@ async def test_update_daily_tag_spend_redis_path_when_buffered(
     writer = MagicMock()
     proxy_logging.db_spend_update_writer = writer
     writer.redis_update_buffer = MagicMock()
-    writer.redis_update_buffer._should_commit_spend_updates_to_redis = MagicMock(
-        return_value=True
-    )
+    writer.redis_update_buffer._should_commit_spend_updates_to_redis = MagicMock(return_value=True)
     writer._commit_daily_tag_spend_to_db_with_redis = AsyncMock()
     writer._commit_daily_tag_spend_to_db = AsyncMock()
 
-    await update_daily_tag_spend(
-        prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging
-    )
+    await update_daily_tag_spend(prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging)
     redis_kwargs = writer._commit_daily_tag_spend_to_db_with_redis.await_args.kwargs
     pinned = {
         "redis_calls": writer._commit_daily_tag_spend_to_db_with_redis.await_count,
@@ -122,9 +118,7 @@ async def test_update_daily_tag_spend_redis_path_when_buffered(
     assert pinned == {
         "redis_calls": 1,
         "direct_calls": 0,
-        "redis_kwargs_keys": sorted(
-            ["prisma_client", "n_retry_times", "proxy_logging_obj"]
-        ),
+        "redis_kwargs_keys": sorted(["prisma_client", "n_retry_times", "proxy_logging_obj"]),
         "redis_n_retries": 3,
     }
 
@@ -137,15 +131,11 @@ async def test_update_daily_tag_spend_direct_path_when_no_redis(
     writer = MagicMock()
     proxy_logging.db_spend_update_writer = writer
     writer.redis_update_buffer = MagicMock()
-    writer.redis_update_buffer._should_commit_spend_updates_to_redis = MagicMock(
-        return_value=False
-    )
+    writer.redis_update_buffer._should_commit_spend_updates_to_redis = MagicMock(return_value=False)
     writer._commit_daily_tag_spend_to_db_with_redis = AsyncMock()
     writer._commit_daily_tag_spend_to_db = AsyncMock()
 
-    await update_daily_tag_spend(
-        prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging
-    )
+    await update_daily_tag_spend(prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging)
     assert writer._commit_daily_tag_spend_to_db.await_count == 1
     assert writer._commit_daily_tag_spend_to_db_with_redis.await_count == 0
 
@@ -167,9 +157,7 @@ async def test_update_daily_tag_spend_logs_and_swallows_errors(
     proxy_logging.db_spend_update_writer._commit_daily_tag_spend_to_db = AsyncMock(
         side_effect=RuntimeError("commit boom")
     )
-    await update_daily_tag_spend(
-        prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging
-    )
+    await update_daily_tag_spend(prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging)
 
 
 @pytest.mark.asyncio
@@ -233,12 +221,8 @@ async def test_update_spend_logs_job_processes_and_clears_queue(
     import litellm.proxy.guardrails.usage_tracking as guard_mod
     import litellm.proxy.db.spend_log_tool_index as tool_mod
 
-    monkeypatch.setattr(
-        guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False
-    )
-    monkeypatch.setattr(
-        tool_mod, "flush_tool_usage_transactions", AsyncMock(), raising=False
-    )
+    monkeypatch.setattr(guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False)
+    monkeypatch.setattr(tool_mod, "flush_tool_usage_transactions", AsyncMock(), raising=False)
 
     await update_spend_logs_job(
         prisma_client=mock_prisma_client,
@@ -248,12 +232,10 @@ async def test_update_spend_logs_job_processes_and_clears_queue(
     pinned = {
         "create_many_calls": mock_prisma_client.db.litellm_spendlogs.create_many.await_count,
         "queue_after": mock_prisma_client.spend_log_transactions,
-        "first_data_request_id": mock_prisma_client.db.litellm_spendlogs.create_many.await_args.kwargs[
-            "data"
-        ][0]["request_id"],
-        "skip_duplicates_set": mock_prisma_client.db.litellm_spendlogs.create_many.await_args.kwargs[
-            "skip_duplicates"
+        "first_data_request_id": mock_prisma_client.db.litellm_spendlogs.create_many.await_args.kwargs["data"][0][
+            "request_id"
         ],
+        "skip_duplicates_set": mock_prisma_client.db.litellm_spendlogs.create_many.await_args.kwargs["skip_duplicates"],
     }
     assert pinned == {
         "create_many_calls": 1,
@@ -357,8 +339,7 @@ def test_raise_failed_update_spend_exception_emits_failure_handler() -> None:
             else None
         ),
         "non_blocking_in_traceback": (
-            "Non-Blocking"
-            in proxy_logging.failure_handler.call_args.kwargs["traceback_str"]
+            "Non-Blocking" in proxy_logging.failure_handler.call_args.kwargs["traceback_str"]
             if proxy_logging.failure_handler.call_args
             else False
         ),

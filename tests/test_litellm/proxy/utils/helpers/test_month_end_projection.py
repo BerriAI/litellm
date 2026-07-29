@@ -59,9 +59,7 @@ def test_get_month_end_date_raises_on_non_date_input():
 def test_is_projected_spend_over_limit_happy_path_under_budget(monkeypatch):
     _freeze_today(monkeypatch, date(2024, 1, 11))
     summary = {
-        "result": _is_projected_spend_over_limit(
-            current_spend=10.0, soft_budget_limit=1_000_000.0
-        ),
+        "result": _is_projected_spend_over_limit(current_spend=10.0, soft_budget_limit=1_000_000.0),
         "current_spend": 10.0,
         "soft_budget_limit": 1_000_000.0,
     }
@@ -75,9 +73,7 @@ def test_is_projected_spend_over_limit_happy_path_under_budget(monkeypatch):
 def test_is_projected_spend_over_limit_happy_path_over_budget(monkeypatch):
     _freeze_today(monkeypatch, date(2024, 1, 11))
     summary = {
-        "result": _is_projected_spend_over_limit(
-            current_spend=100.0, soft_budget_limit=50.0
-        ),
+        "result": _is_projected_spend_over_limit(current_spend=100.0, soft_budget_limit=50.0),
         "current_spend": 100.0,
         "soft_budget_limit": 50.0,
     }
@@ -91,9 +87,7 @@ def test_is_projected_spend_over_limit_happy_path_over_budget(monkeypatch):
 def test_is_projected_spend_over_limit_first_of_month_no_division_by_zero(monkeypatch):
     _freeze_today(monkeypatch, date(2024, 1, 1))
     summary = {
-        "result": _is_projected_spend_over_limit(
-            current_spend=5.0, soft_budget_limit=10.0
-        ),
+        "result": _is_projected_spend_over_limit(current_spend=5.0, soft_budget_limit=10.0),
         "current_spend": 5.0,
         "soft_budget_limit": 10.0,
     }
@@ -105,10 +99,7 @@ def test_is_projected_spend_over_limit_first_of_month_no_division_by_zero(monkey
 
 
 def test_is_projected_spend_over_limit_none_limit_returns_false():
-    assert (
-        _is_projected_spend_over_limit(current_spend=10_000.0, soft_budget_limit=None)
-        is False
-    )
+    assert _is_projected_spend_over_limit(current_spend=10_000.0, soft_budget_limit=None) is False
 
 
 def test_is_projected_spend_over_limit_raises_when_today_missing(monkeypatch):
@@ -124,9 +115,7 @@ def test_is_projected_spend_over_limit_raises_when_today_missing(monkeypatch):
 
 def test_get_projected_spend_over_limit_happy_path_over_budget(monkeypatch):
     _freeze_today(monkeypatch, date(2024, 1, 11))
-    result = _get_projected_spend_over_limit(
-        current_spend=100.0, soft_budget_limit=50.0
-    )
+    result = _get_projected_spend_over_limit(current_spend=100.0, soft_budget_limit=50.0)
     assert result is not None
     projected, exceed_date = result
     summary = {
@@ -184,12 +173,7 @@ def test_get_projected_spend_over_limit_zero_daily_spend_exceed_today(monkeypatc
 
 def test_get_projected_spend_over_limit_under_budget_returns_none(monkeypatch):
     _freeze_today(monkeypatch, date(2024, 1, 11))
-    assert (
-        _get_projected_spend_over_limit(
-            current_spend=1.0, soft_budget_limit=1_000_000.0
-        )
-        is None
-    )
+    assert _get_projected_spend_over_limit(current_spend=1.0, soft_budget_limit=1_000_000.0) is None
 
 
 def test_get_projected_spend_over_limit_exceed_date_uses_remaining_budget(monkeypatch):
@@ -215,10 +199,7 @@ def test_get_projected_spend_over_limit_exceed_date_uses_remaining_budget(monkey
 
 
 def test_get_projected_spend_over_limit_none_limit_returns_none():
-    assert (
-        _get_projected_spend_over_limit(current_spend=1.0, soft_budget_limit=None)
-        is None
-    )
+    assert _get_projected_spend_over_limit(current_spend=1.0, soft_budget_limit=None) is None
 
 
 def test_get_projected_spend_over_limit_raises_when_today_missing(monkeypatch):

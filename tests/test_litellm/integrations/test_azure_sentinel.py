@@ -250,17 +250,13 @@ async def test_azure_sentinel_flushes_standard_and_audit_logs_separately():
     await logger.flush_queue()
 
     ingestion_calls = [
-        call
-        for call in logger.async_httpx_client.post.call_args_list
-        if "dataCollectionRules" in call.kwargs["url"]
+        call for call in logger.async_httpx_client.post.call_args_list if "dataCollectionRules" in call.kwargs["url"]
     ]
     assert len(ingestion_calls) == 2
 
     standard_call, audit_call = ingestion_calls
     assert "Custom-LiteLLM-Standard" in standard_call.kwargs["url"]
-    assert json.loads(standard_call.kwargs["data"].decode("utf-8")) == [
-        standard_payload
-    ]
+    assert json.loads(standard_call.kwargs["data"].decode("utf-8")) == [standard_payload]
     assert "Custom-LiteLLM-Audit" in audit_call.kwargs["url"]
     assert json.loads(audit_call.kwargs["data"].decode("utf-8")) == [audit_log]
 

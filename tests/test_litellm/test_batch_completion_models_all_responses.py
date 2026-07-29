@@ -20,9 +20,7 @@ def test_batch_completion_models_all_responses_submits_before_waiting(monkeypatc
 
         def result(self):
             if self._executor.submit_count != self._expected_submissions:
-                raise AssertionError(
-                    "Not all model calls were submitted before waiting"
-                )
+                raise AssertionError("Not all model calls were submitted before waiting")
             return self._result
 
     class _RecordingThreadPoolExecutor:
@@ -50,9 +48,7 @@ def test_batch_completion_models_all_responses_submits_before_waiting(monkeypatc
         return {"model": model}
 
     monkeypatch.setattr(litellm, "completion", _mock_completion)
-    monkeypatch.setattr(
-        concurrent.futures, "ThreadPoolExecutor", _RecordingThreadPoolExecutor
-    )
+    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", _RecordingThreadPoolExecutor)
 
     responses = batch_completion_models_all_responses(
         models=models,

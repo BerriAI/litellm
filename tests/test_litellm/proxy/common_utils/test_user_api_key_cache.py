@@ -204,9 +204,7 @@ class TestUserApiKeyCache:
 
         # Bypass UserApiKeyCache.serialize: CacheCodec rejects non-dict cached values
         # for dict-based models (deserialize returns None).
-        await cache.in_memory_cache.async_set_cache(
-            key="k", value="invalid-payload-not-a-dict"
-        )
+        await cache.in_memory_cache.async_set_cache(key="k", value="invalid-payload-not-a-dict")
 
         value = await cache.async_get_cache("k", model_type=UserAPIKeyAuth)
         assert value is None
@@ -238,19 +236,13 @@ class TestManagementObjectTTL:
     def test_falls_back_to_constant_when_no_default_configured(self):
         cache = UserApiKeyCache()
         assert cache.default_in_memory_ttl is None
-        assert (
-            get_management_object_ttl(cache)
-            == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
-        )
+        assert get_management_object_ttl(cache) == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 
     def test_resolves_on_a_plain_dual_cache(self):
         # Many call sites are typed UserApiKeyCache but exercised in tests with a
         # bare DualCache; the resolver must work on the base type, not just the subclass.
         assert get_management_object_ttl(DualCache(default_in_memory_ttl=300)) == 300
-        assert (
-            get_management_object_ttl(DualCache())
-            == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
-        )
+        assert get_management_object_ttl(DualCache()) == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 
     @pytest.mark.asyncio
     async def test_management_write_uses_configured_ttl_over_constant(self):
@@ -260,9 +252,7 @@ class TestManagementObjectTTL:
             redis_cache=FakeRedisCache(),
             default_in_memory_ttl=300,
         )
-        assert get_management_object_ttl(cache) != (
-            DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
-        )
+        assert get_management_object_ttl(cache) != (DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL)
 
         await cache.async_set_cache(
             "team_id:abc",

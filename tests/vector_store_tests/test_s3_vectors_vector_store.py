@@ -10,9 +10,7 @@ class TestS3VectorsVectorStore(BaseVectorStoreTest):
         required_vars = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
         missing_vars = [var for var in required_vars if not os.getenv(var)]
         if missing_vars:
-            pytest.skip(
-                f"Missing required environment variables: {', '.join(missing_vars)}"
-            )
+            pytest.skip(f"Missing required environment variables: {', '.join(missing_vars)}")
 
     def get_base_request_args(self) -> dict:
         """
@@ -21,9 +19,7 @@ class TestS3VectorsVectorStore(BaseVectorStoreTest):
         """
         return {
             "custom_llm_provider": "s3_vectors",
-            "vector_store_id": os.getenv(
-                "S3_VECTORS_VECTOR_STORE_ID", "test-litellm-vectors:test-index"
-            ),
+            "vector_store_id": os.getenv("S3_VECTORS_VECTOR_STORE_ID", "test-litellm-vectors:test-index"),
             "query": "What is machine learning?",
             "aws_region_name": os.getenv("AWS_REGION_NAME", "us-west-2"),
             "aws_access_key_id": os.getenv("AWS_ACCESS_KEY_ID"),

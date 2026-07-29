@@ -29,8 +29,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
 POLICY_DIR = os.path.abspath(
     os.path.join(
         os.path.dirname(__file__),
-        "../../litellm/proxy/guardrails/guardrail_hooks/"
-        "litellm_content_filter/policy_templates",
+        "../../litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates",
     )
 )
 
@@ -62,9 +61,9 @@ async def _expect_block(guardrail: ContentFilterGuardrail, sentence: str, reason
             input_type="request",
         )
     err = str(exc_info.value).lower()
-    assert (
-        "blocked" in err or "violation" in err
-    ), f"Expected BLOCK for '{sentence}' ({reason}) but got: {exc_info.value}"
+    assert "blocked" in err or "violation" in err, (
+        f"Expected BLOCK for '{sentence}' ({reason}) but got: {exc_info.value}"
+    )
 
 
 async def _expect_allow(guardrail: ContentFilterGuardrail, sentence: str, reason: str):
@@ -74,9 +73,9 @@ async def _expect_allow(guardrail: ContentFilterGuardrail, sentence: str, reason
         request_data=request_data,
         input_type="request",
     )
-    assert (
-        result is None or result["texts"][0] == sentence
-    ), f"Expected ALLOW for '{sentence}' ({reason}) but it was blocked/modified"
+    assert result is None or result["texts"][0] == sentence, (
+        f"Expected ALLOW for '{sentence}' ({reason}) but it was blocked/modified"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -157,7 +156,7 @@ class TestMASFairnessBias:
     @pytest.mark.parametrize(
         "sentence,expected,reason",
         FAIRNESS_BIAS_CASES,
-        ids=[f"fb_{i+1}" for i in range(len(FAIRNESS_BIAS_CASES))],
+        ids=[f"fb_{i + 1}" for i in range(len(FAIRNESS_BIAS_CASES))],
     )
     @pytest.mark.asyncio
     async def test_sentence(self, fairness_guardrail, sentence, expected, reason):
@@ -234,16 +233,14 @@ TRANSPARENCY_CASES = [
 
 @pytest.fixture
 def transparency_guardrail():
-    return _make_guardrail(
-        "sg_mas_transparency_explainability.yaml", "sg_mas_transparency_explainability"
-    )
+    return _make_guardrail("sg_mas_transparency_explainability.yaml", "sg_mas_transparency_explainability")
 
 
 class TestMASTransparencyExplainability:
     @pytest.mark.parametrize(
         "sentence,expected,reason",
         TRANSPARENCY_CASES,
-        ids=[f"te_{i+1}" for i in range(len(TRANSPARENCY_CASES))],
+        ids=[f"te_{i + 1}" for i in range(len(TRANSPARENCY_CASES))],
     )
     @pytest.mark.asyncio
     async def test_sentence(self, transparency_guardrail, sentence, expected, reason):
@@ -324,7 +321,7 @@ class TestMASHumanOversight:
     @pytest.mark.parametrize(
         "sentence,expected,reason",
         HUMAN_OVERSIGHT_CASES,
-        ids=[f"ho_{i+1}" for i in range(len(HUMAN_OVERSIGHT_CASES))],
+        ids=[f"ho_{i + 1}" for i in range(len(HUMAN_OVERSIGHT_CASES))],
     )
     @pytest.mark.asyncio
     async def test_sentence(self, oversight_guardrail, sentence, expected, reason):
@@ -409,12 +406,10 @@ class TestMASDataGovernance:
     @pytest.mark.parametrize(
         "sentence,expected,reason",
         DATA_GOVERNANCE_CASES,
-        ids=[f"dg_{i+1}" for i in range(len(DATA_GOVERNANCE_CASES))],
+        ids=[f"dg_{i + 1}" for i in range(len(DATA_GOVERNANCE_CASES))],
     )
     @pytest.mark.asyncio
-    async def test_sentence(
-        self, data_governance_guardrail, sentence, expected, reason
-    ):
+    async def test_sentence(self, data_governance_guardrail, sentence, expected, reason):
         if expected == "BLOCK":
             await _expect_block(data_governance_guardrail, sentence, reason)
         else:
@@ -493,7 +488,7 @@ class TestMASModelSecurity:
     @pytest.mark.parametrize(
         "sentence,expected,reason",
         MODEL_SECURITY_CASES,
-        ids=[f"ms_{i+1}" for i in range(len(MODEL_SECURITY_CASES))],
+        ids=[f"ms_{i + 1}" for i in range(len(MODEL_SECURITY_CASES))],
     )
     @pytest.mark.asyncio
     async def test_sentence(self, model_security_guardrail, sentence, expected, reason):
@@ -516,16 +511,12 @@ class TestMASEdgeCases:
             "Credit Score By Ethnicity",
         ]
         for sentence in sentences:
-            await _expect_block(
-                fairness_guardrail, sentence, "case-insensitive always_block"
-            )
+            await _expect_block(fairness_guardrail, sentence, "case-insensitive always_block")
 
     @pytest.mark.asyncio
     async def test_exception_overrides_violation(self, fairness_guardrail):
         sentence = "research on racial bias in credit score denial patterns"
-        await _expect_allow(
-            fairness_guardrail, sentence, "exception overrides violation"
-        )
+        await _expect_allow(fairness_guardrail, sentence, "exception overrides violation")
 
     @pytest.mark.asyncio
     async def test_zero_cost_no_api_calls(self, oversight_guardrail):
@@ -553,26 +544,21 @@ class TestMASPerformance:
             "model_security": MODEL_SECURITY_CASES,
         }
         total = sum(len(c) for c in all_cases.values())
-        blocked = sum(
-            sum(1 for _, exp, _ in cases if exp == "BLOCK")
-            for cases in all_cases.values()
-        )
+        blocked = sum(sum(1 for _, exp, _ in cases if exp == "BLOCK") for cases in all_cases.values())
         allowed = total - blocked
 
-        print(f"\n{'='*60}")
-        print(
-            "Guidelines on Artificial Intelligence Risk Management (MAS) Guardrail Test Summary"
-        )
-        print(f"{'='*60}")
+        print(f"\n{'=' * 60}")
+        print("Guidelines on Artificial Intelligence Risk Management (MAS) Guardrail Test Summary")
+        print(f"{'=' * 60}")
         print(f"Total test cases : {total}")
-        print(f"Expected BLOCK   : {blocked} ({blocked/total*100:.1f}%)")
-        print(f"Expected ALLOW   : {allowed} ({allowed/total*100:.1f}%)")
-        print(f"{'='*60}")
+        print(f"Expected BLOCK   : {blocked} ({blocked / total * 100:.1f}%)")
+        print(f"Expected ALLOW   : {allowed} ({allowed / total * 100:.1f}%)")
+        print(f"{'=' * 60}")
         for name, cases in all_cases.items():
             b = sum(1 for _, e, _ in cases if e == "BLOCK")
             a = len(cases) - b
             print(f"  {name:35s}  BLOCK={b:2d}  ALLOW={a:2d}")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
 
 if __name__ == "__main__":

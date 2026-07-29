@@ -10,9 +10,7 @@ import traceback
 import openai
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -53,9 +51,7 @@ async def test_batch_completion_multiple_models(mode):
     if mode == "all_responses":
         response = await router.abatch_completion(
             models=["gpt-3.5-turbo", "groq-llama"],
-            messages=[
-                {"role": "user", "content": "is litellm becoming a better product ?"}
-            ],
+            messages=[{"role": "user", "content": "is litellm becoming a better product ?"}],
             max_tokens=15,
         )
 
@@ -76,9 +72,7 @@ async def test_batch_completion_multiple_models(mode):
 
         response = await router.abatch_completion_fastest_response(
             model="gpt-3.5-turbo, groq-llama",
-            messages=[
-                {"role": "user", "content": "is litellm becoming a better product ?"}
-            ],
+            messages=[{"role": "user", "content": "is litellm becoming a better product ?"}],
             max_tokens=15,
         )
 
@@ -116,9 +110,7 @@ async def test_batch_completion_fastest_response_unit_test():
 
     response = await router.abatch_completion_fastest_response(
         model="gpt-4, gpt-3.5-turbo",
-        messages=[
-            {"role": "user", "content": "is litellm becoming a better product ?"}
-        ],
+        messages=[{"role": "user", "content": "is litellm becoming a better product ?"}],
         max_tokens=500,
     )
 
@@ -153,9 +145,7 @@ async def test_batch_completion_fastest_response_streaming():
 
     response = await router.abatch_completion_fastest_response(
         model="gpt-3.5-turbo, groq-llama",
-        messages=[
-            {"role": "user", "content": "is litellm becoming a better product ?"}
-        ],
+        messages=[{"role": "user", "content": "is litellm becoming a better product ?"}],
         max_tokens=15,
         stream=True,
     )

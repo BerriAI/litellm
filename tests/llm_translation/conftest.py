@@ -12,9 +12,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm  # noqa: E402
 
@@ -45,9 +43,7 @@ def fake_openai_endpoint():
 # below are the persister's and the WebSocket VCR's own unit-test files, which
 # exercise ``save_cassette`` / ``load_cassette`` against fakeredis and must not
 # themselves run under a live cassette context.
-_VCR_AUTO_MARKER_SKIP_FILES = frozenset(
-    {"test_vcr_redis_persister.py", "test_ws_vcr.py"}
-)
+_VCR_AUTO_MARKER_SKIP_FILES = frozenset({"test_vcr_redis_persister.py", "test_ws_vcr.py"})
 
 _VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
 
@@ -177,9 +173,7 @@ def pytest_collection_modifyitems(config, items):
         skip_nodeid_suffixes=_VCR_INCOMPATIBLE_NODEID_SUFFIXES,
     )
 
-    custom_logger_tests = [
-        item for item in items if "custom_logger" in item.parent.name
-    ]
+    custom_logger_tests = [item for item in items if "custom_logger" in item.parent.name]
     other_tests = [item for item in items if "custom_logger" not in item.parent.name]
 
     custom_logger_tests.sort(key=lambda x: x.name)

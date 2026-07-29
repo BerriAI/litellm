@@ -21,9 +21,7 @@ verbose = True
 
 # litellm.caching_with_models = True # CACHING: caching_with_models Keys in the cache are messages + model. - to learn more: https://docs.litellm.ai/docs/caching/
 ######### PROMPT LOGGING ##########
-os.environ["PROMPTLAYER_API_KEY"] = (
-    ""  # set your promptlayer key here - https://promptlayer.com/
-)
+os.environ["PROMPTLAYER_API_KEY"] = ""  # set your promptlayer key here - https://promptlayer.com/
 
 # set callbacks
 litellm.success_callback = ["promptlayer"]
@@ -72,9 +70,7 @@ def api_completion():
         response = completion(**data)
         ## LOG SUCCESS
         end_time = time.time()
-        if (
-            "stream" in data and data["stream"] == True
-        ):  # use generate_responses to stream responses
+        if "stream" in data and data["stream"] == True:  # use generate_responses to stream responses
             return Response(data_generator(response), mimetype="text/event-stream")
     except Exception:
         # call handle_error function

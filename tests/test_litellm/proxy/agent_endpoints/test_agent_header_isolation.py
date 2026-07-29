@@ -164,9 +164,7 @@ async def test_static_headers_do_not_leak_between_agents():
     Agent B has no headers.
     After invoking A then B, B must NOT receive X-Agent-A-Token.
     """
-    agent_a = _make_agent(
-        "id-a", "agent-a", static_headers={"X-Agent-A-Token": "secret-a"}
-    )
+    agent_a = _make_agent("id-a", "agent-a", static_headers={"X-Agent-A-Token": "secret-a"})
     agent_b = _make_agent("id-b", "agent-b")
 
     headers_a = await _invoke_agent(agent_a, _make_request())
@@ -290,9 +288,7 @@ async def test_create_a2a_client_uses_fresh_httpx_client():
             extra_headers={"Authorization": "Bearer b"},
         )
 
-    assert (
-        len(captured_calls) == 2
-    ), "create_a2a_client should call get_async_httpx_client once per invocation"
+    assert len(captured_calls) == 2, "create_a2a_client should call get_async_httpx_client once per invocation"
 
     # Direct proof: the two A2A clients must carry distinct httpx client objects.
     # If they share one, mutating agent-B's Authorization header would bleed into A.

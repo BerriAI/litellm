@@ -6,9 +6,7 @@ import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 from litellm import Router
 
@@ -17,9 +15,7 @@ router_json_path = os.path.join(current_path, "auto_router", "router.json")
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="Beta test - works locally but failing on CI/CD due to dependency resolution issues"
-)
+@pytest.mark.skip(reason="Beta test - works locally but failing on CI/CD due to dependency resolution issues")
 async def test_router_auto_router():
     """
     Simple e2e test to validate we get an llm response from the auto router

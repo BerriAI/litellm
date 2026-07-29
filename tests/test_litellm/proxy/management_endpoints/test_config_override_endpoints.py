@@ -42,13 +42,9 @@ def _make_mock_proxy_config():
     cfg = MagicMock()
     cfg.initialize_secret_manager = MagicMock()
     cfg._last_hashicorp_vault_config = None
-    cfg._encrypt_env_variables = MagicMock(
-        side_effect=lambda d: {k: f"enc_{v}" for k, v in d.items()}
-    )
+    cfg._encrypt_env_variables = MagicMock(side_effect=lambda d: {k: f"enc_{v}" for k, v in d.items()})
     cfg._decrypt_db_variables = MagicMock(
-        side_effect=lambda d: {
-            k: v.replace("enc_", "") if isinstance(v, str) else v for k, v in d.items()
-        }
+        side_effect=lambda d: {k: v.replace("enc_", "") if isinstance(v, str) else v for k, v in d.items()}
     )
     return cfg
 
@@ -102,9 +98,7 @@ async def test_hashicorp_vault_crud_lifecycle(client, monkeypatch):
         assert os.environ["HCP_VAULT_ADDR"] == "https://vault.example.com"
         data = _upserted_data(mock_db)
         assert data["vault_token"] == "enc_my-secret-vault-token"
-        mock_cfg.initialize_secret_manager.assert_called_with(
-            key_management_system="hashicorp_vault"
-        )
+        mock_cfg.initialize_secret_manager.assert_called_with(key_management_system="hashicorp_vault")
         assert mock_cfg._last_hashicorp_vault_config is not None
 
         # 2. GET: sensitive fields masked
@@ -143,9 +137,7 @@ async def test_hashicorp_vault_crud_lifecycle(client, monkeypatch):
             os.environ.pop(v, None)
         mock_db.find_unique = AsyncMock(return_value=None)
         mock_db.upsert = AsyncMock(return_value=None)
-        r = client.post(
-            VAULT_URL, json={"vault_addr": "https://v.com", "vault_token": "tok"}
-        )
+        r = client.post(VAULT_URL, json={"vault_addr": "https://v.com", "vault_token": "tok"})
         assert r.status_code == 200
         assert _upserted_data(mock_db) == {
             "vault_addr": "enc_https://v.com",
@@ -162,9 +154,7 @@ async def test_hashicorp_vault_crud_lifecycle(client, monkeypatch):
 
         # 7. DELETE idempotent
         mock_db.delete = AsyncMock(
-            side_effect=RecordNotFoundError(
-                data={"clientVersion": "0.0.0"}, message="Not found"
-            )
+            side_effect=RecordNotFoundError(data={"clientVersion": "0.0.0"}, message="Not found")
         )
         assert client.delete(VAULT_URL).status_code == 200
 
@@ -215,9 +205,7 @@ async def test_hashicorp_vault_crud_lifecycle(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_hashicorp_vault_validation_errors_and_access_control(
-    client, monkeypatch
-):
+async def test_hashicorp_vault_validation_errors_and_access_control(client, monkeypatch):
     """Validation (missing fields, init failure rollback), DELETE preserves
     non-Vault secret managers, non-admin 403 on all endpoints."""
     mock_prisma, mock_db = _make_mock_db()
@@ -243,9 +231,7 @@ async def test_hashicorp_vault_validation_errors_and_access_control(
         mock_cfg.initialize_secret_manager = MagicMock(side_effect=Exception("fail"))
         monkeypatch.setenv("HCP_VAULT_ADDR", "https://vault.old.com")
         monkeypatch.setenv("HCP_VAULT_TOKEN", "old-token")
-        r = client.post(
-            VAULT_URL, json={"vault_addr": "https://bad.com", "vault_token": "bad"}
-        )
+        r = client.post(VAULT_URL, json={"vault_addr": "https://bad.com", "vault_token": "bad"})
         assert r.status_code == 500
         assert os.environ["HCP_VAULT_ADDR"] == "https://vault.old.com"
         mock_db.upsert.assert_not_awaited()
@@ -263,10 +249,7 @@ async def test_hashicorp_vault_validation_errors_and_access_control(
             user_role=LitellmUserRoles.INTERNAL_USER, user_id="user"
         )
         assert client.get(VAULT_URL).status_code == 403
-        assert (
-            client.post(VAULT_URL, json={"vault_addr": "https://v.com"}).status_code
-            == 403
-        )
+        assert client.post(VAULT_URL, json={"vault_addr": "https://v.com"}).status_code == 403
         assert client.delete(VAULT_URL).status_code == 403
 
     finally:
@@ -329,9 +312,7 @@ class TestHashicorpVaultAuditLog:
             _cleanup()
 
     @pytest.mark.asyncio
-    async def test_post_action_is_updated_when_row_exists_with_null_config_value(
-        self, client, monkeypatch
-    ):
+    async def test_post_action_is_updated_when_row_exists_with_null_config_value(self, client, monkeypatch):
         """A row can exist in ``litellm_configoverrides`` with a NULL
         ``config_value`` (e.g. an earlier failed write left a stub).
         Re-POSTing must label the audit row as ``updated`` — the row
@@ -375,9 +356,7 @@ class TestHashicorpVaultAuditLog:
             _cleanup()
 
     @pytest.mark.asyncio
-    async def test_delete_emits_audit_log_only_when_row_existed(
-        self, client, monkeypatch
-    ):
+    async def test_delete_emits_audit_log_only_when_row_existed(self, client, monkeypatch):
         monkeypatch.setattr(litellm, "store_audit_logs", True)
         mock_prisma, mock_db = _make_mock_db()
         mock_cfg = _make_mock_proxy_config()

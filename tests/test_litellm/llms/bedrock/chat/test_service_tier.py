@@ -8,9 +8,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.types.llms.bedrock import ServiceTierBlock
@@ -155,9 +153,7 @@ def test_service_tier_with_other_config_blocks():
 def test_service_tier_in_supported_openai_params():
     """Test that service_tier is in the list of supported OpenAI params."""
     config = AmazonConverseConfig()
-    supported_params = config.get_supported_openai_params(
-        model="anthropic.claude-3-sonnet-20240229-v1:0"
-    )
+    supported_params = config.get_supported_openai_params(model="anthropic.claude-3-sonnet-20240229-v1:0")
     assert "service_tier" in supported_params
 
 

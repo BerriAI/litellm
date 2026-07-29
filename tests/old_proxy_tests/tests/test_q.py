@@ -68,9 +68,7 @@ print("\nCreated Job, Polling Url", polling_url)
 while True:
     try:
         print("\nPolling URL", polling_url)
-        polling_response = requests.get(
-            url=polling_url, headers={"Authorization": f"Bearer {generated_key}"}
-        )
+        polling_response = requests.get(url=polling_url, headers={"Authorization": f"Bearer {generated_key}"})
         print("\nResponse from polling url", polling_response.text)
         polling_response = polling_response.json()
         status = polling_response.get("status", None)  # type: ignore

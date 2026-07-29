@@ -57,9 +57,7 @@ async def test_direct_increment_runs_when_reservation_reconcile_hits_redis_failu
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
     monkeypatch.setattr(proxy_server.spend_counter_cache, "redis_cache", flaky_redis)
-    proxy_server.spend_counter_cache.in_memory_cache.set_cache(
-        key=counter_key, value=reserved_cost
-    )
+    proxy_server.spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=reserved_cost)
 
     budget_reservation = {
         "reserved_cost": reserved_cost,

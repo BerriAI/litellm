@@ -5,9 +5,7 @@ import sys
 import pytest
 from pydantic import BaseModel
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.types.llms.openai import (
@@ -168,28 +166,18 @@ class TestTextFormatConversion:
             )
 
             # Verify the captured request
-            print(
-                "Captured request:", json.dumps(captured_request, indent=4, default=str)
-            )
+            print("Captured request:", json.dumps(captured_request, indent=4, default=str))
 
             # Validate that text_format was converted to text parameter
-            assert (
-                "text" in captured_request["params"]
-            ), "text parameter should be present in request params"
-            assert (
-                "text_format" not in captured_request["params"]
-            ), "text_format should not be in request params"
+            assert "text" in captured_request["params"], "text parameter should be present in request params"
+            assert "text_format" not in captured_request["params"], "text_format should not be in request params"
 
             # Validate the text parameter structure
             text_param = captured_request["params"]["text"]
             assert "format" in text_param, "text parameter should have format field"
-            assert (
-                text_param["format"]["type"] == "json_schema"
-            ), "format type should be json_schema"
+            assert text_param["format"]["type"] == "json_schema", "format type should be json_schema"
             assert "name" in text_param["format"], "format should have name field"
-            assert (
-                text_param["format"]["name"] == "TestResponse"
-            ), "format name should match Pydantic model name"
+            assert text_param["format"]["name"] == "TestResponse", "format name should match Pydantic model name"
             assert "schema" in text_param["format"], "format should have schema field"
             assert "strict" in text_param["format"], "format should have strict field"
 
@@ -197,12 +185,8 @@ class TestTextFormatConversion:
             schema = text_param["format"]["schema"]
             assert schema["type"] == "object", "schema type should be object"
             assert "properties" in schema, "schema should have properties"
-            assert (
-                "answer" in schema["properties"]
-            ), "schema should have answer property"
-            assert (
-                "confidence" in schema["properties"]
-            ), "schema should have confidence property"
+            assert "answer" in schema["properties"], "schema should have answer property"
+            assert "confidence" in schema["properties"], "schema should have confidence property"
 
             # Validate other request parameters
             assert captured_request["input"] == "What is the capital of France?"

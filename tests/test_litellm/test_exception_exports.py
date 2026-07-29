@@ -26,6 +26,4 @@ def test_all_http_error_exceptions_exported():
         "ServiceUnavailableError",  # 503
     ]
     for exc_name in expected_exceptions:
-        assert hasattr(
-            litellm, exc_name
-        ), f"litellm.{exc_name} is not exported from litellm.__init__"
+        assert hasattr(litellm, exc_name), f"litellm.{exc_name} is not exported from litellm.__init__"

@@ -7,9 +7,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
@@ -226,11 +224,10 @@ async def test_e2e_cold_storage_successful_retrieval():
         patch.object(session_handler, "COLD_STORAGE_HANDLER") as mock_cold_storage,
         patch("litellm.cold_storage_custom_logger", return_value="s3"),
     ):
-
         # Setup mocks
         mock_get_spend_logs.return_value = mock_spend_logs
-        mock_cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = (
-            AsyncMock(return_value=full_proxy_request)
+        mock_cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = AsyncMock(
+            return_value=full_proxy_request
         )
 
         # Call the main function
@@ -284,7 +281,6 @@ async def test_e2e_cold_storage_fallback_to_truncated_payload():
         ) as mock_get_spend_logs,
         patch.object(session_handler, "COLD_STORAGE_HANDLER") as mock_cold_storage,
     ):
-
         # Setup mocks
         mock_get_spend_logs.return_value = mock_spend_logs
 
@@ -351,41 +347,25 @@ async def test_should_check_cold_storage_for_full_payload():
 
     with patch("litellm.cold_storage_custom_logger", return_value="s3"):
         # Test case 1: Should return True for truncated content
-        result1 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
-            proxy_request_with_truncated_pdf
-        )
-        assert (
-            result1 == True
-        ), "Should return True for proxy request with truncated PDF content"
+        result1 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
+        assert result1 == True, "Should return True for proxy request with truncated PDF content"
 
         # Test case 2: Should return False for regular content
-        result2 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
-            proxy_request_regular
-        )
-        assert (
-            result2 == False
-        ), "Should return False for regular proxy request without truncation"
+        result2 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_regular)
+        assert result2 == False, "Should return False for regular proxy request without truncation"
 
         # Test case 3: Should return True for empty request
-        result3 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
-            proxy_request_empty
-        )
+        result3 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_empty)
         assert result3 == True, "Should return True for empty proxy request"
 
         # Test case 4: Should return True for None request
-        result4 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
-            proxy_request_none
-        )
+        result4 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_none)
         assert result4 == True, "Should return True for None proxy request"
 
     # Test case 5: Should return False when cold storage is not configured
     with patch.object(litellm, "cold_storage_custom_logger", None):
-        result5 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
-            proxy_request_with_truncated_pdf
-        )
-        assert (
-            result5 == False
-        ), "Should return False when cold storage is not configured, even with truncated content"
+        result5 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
+        assert result5 == False, "Should return False when cold storage is not configured, even with truncated content"
 
 
 @pytest.mark.asyncio
@@ -415,9 +395,7 @@ async def test_get_chat_completion_message_history_empty_response_dict():
         }
     ]
 
-    with patch.object(
-        ResponsesSessionHandler, "get_all_spend_logs_for_previous_response_id"
-    ) as mock_get_spend_logs:
+    with patch.object(ResponsesSessionHandler, "get_all_spend_logs_for_previous_response_id") as mock_get_spend_logs:
         mock_get_spend_logs.return_value = mock_spend_logs
 
         # Call the function

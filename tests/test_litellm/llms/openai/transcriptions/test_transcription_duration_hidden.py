@@ -55,10 +55,7 @@ class TestDiarizedJsonUsageParsing:
         assert result.usage.seconds == 295.8
 
     def test_usage_duration_object_accepts_float_seconds(self):
-        assert (
-            TranscriptionUsageDurationObject(type="duration", seconds=295.8).seconds
-            == 295.8
-        )
+        assert TranscriptionUsageDurationObject(type="duration", seconds=295.8).seconds == 295.8
 
 
 class TestTranscriptionDurationNotInResponseBody:

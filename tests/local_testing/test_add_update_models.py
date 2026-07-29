@@ -11,9 +11,7 @@ import os, io, time
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest, logging, asyncio
 import litellm
 import litellm.proxy
@@ -52,14 +50,10 @@ def prisma_client():
     os.environ["STORE_MODEL_IN_DB"] = "true"
 
     # Assuming PrismaClient is a class that needs to be instantiated
-    prisma_client = PrismaClient(
-        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-    )
+    prisma_client = PrismaClient(database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj)
 
     # Reset litellm.proxy.proxy_server.prisma_client to None
-    litellm.proxy.proxy_server.litellm_proxy_budget_name = (
-        f"litellm-proxy-budget-{time.time()}"
-    )
+    litellm.proxy.proxy_server.litellm_proxy_budget_name = f"litellm-proxy-budget-{time.time()}"
     litellm.proxy.proxy_server.user_custom_key_generate = None
 
     return prisma_client
@@ -211,9 +205,7 @@ async def _create_new_team(prisma_client):
             api_key="sk-1234",
             user_id="1234",
         ),
-        http_request=Request(
-            scope={"type": "http", "method": "POST", "path": "/new_team"}
-        ),
+        http_request=Request(scope={"type": "http", "method": "POST", "path": "/new_team"}),
     )
     return LiteLLM_TeamTable(**_new_team)
 

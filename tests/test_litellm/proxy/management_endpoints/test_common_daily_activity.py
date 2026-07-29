@@ -5,9 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy.management_endpoints.common_daily_activity import (
     _adjust_dates_for_timezone,
@@ -103,8 +101,7 @@ async def test_get_daily_activity_order_has_id_tiebreaker():
     mock_table.find_many.assert_called_once()
     order = mock_table.find_many.call_args[1]["order"]
     assert order == [{"date": "desc"}, {"id": "asc"}], (
-        f"order must include the id tiebreaker after date for stable offset "
-        f"pagination (see #30164); got {order!r}"
+        f"order must include the id tiebreaker after date for stable offset pagination (see #30164); got {order!r}"
     )
 
 
@@ -295,9 +292,7 @@ async def test_get_api_key_metadata_returns_active_key_metadata():
     mock_active_key.key_alias = "my-active-key"
     mock_active_key.team_id = "team-abc"
 
-    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
-        return_value=[mock_active_key]
-    )
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[mock_active_key])
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -323,9 +318,7 @@ async def test_get_api_key_metadata_falls_back_to_deleted_keys():
     mock_deleted_key.key_alias = "toto-test-2"
     mock_deleted_key.team_id = "team-xyz"
 
-    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
-        return_value=[mock_deleted_key]
-    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[mock_deleted_key])
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -354,9 +347,7 @@ async def test_get_api_key_metadata_mixed_active_and_deleted_keys():
     mock_active_key.key_alias = "active-alias"
     mock_active_key.team_id = "team-active"
 
-    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
-        return_value=[mock_active_key]
-    )
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[mock_active_key])
 
     # One deleted key found
     mock_deleted_key = MagicMock()
@@ -364,9 +355,7 @@ async def test_get_api_key_metadata_mixed_active_and_deleted_keys():
     mock_deleted_key.key_alias = "deleted-alias"
     mock_deleted_key.team_id = "team-deleted"
 
-    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
-        return_value=[mock_deleted_key]
-    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[mock_deleted_key])
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -391,13 +380,9 @@ async def test_get_api_key_metadata_deleted_table_not_queried_when_all_keys_foun
     mock_active_key.key_alias = "alias-1"
     mock_active_key.team_id = "team-1"
 
-    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
-        return_value=[mock_active_key]
-    )
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[mock_active_key])
     mock_prisma.db.litellm_deletedverificationtoken = MagicMock()
-    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
-        return_value=[]
-    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -419,9 +404,7 @@ async def test_get_api_key_metadata_deleted_table_error_handled_gracefully():
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
 
     # Deleted table raises an error (e.g., table doesn't exist in older schema)
-    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
-        side_effect=Exception("Table not found")
-    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(side_effect=Exception("Table not found"))
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -452,9 +435,7 @@ async def test_get_api_key_metadata_regenerated_key_uses_most_recent_deleted_rec
     mock_deleted_2.team_id = "older-team"
 
     # Ordered by deleted_at desc, so first record is the most recent
-    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
-        return_value=[mock_deleted_1, mock_deleted_2]
-    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[mock_deleted_1, mock_deleted_2])
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -624,9 +605,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     mock_deleted_key.team_id = "69cd4b77-b095-4489-8c46-4f2f31d840a2"
 
     mock_prisma.db.litellm_deletedverificationtoken = MagicMock()
-    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
-        return_value=[mock_deleted_key]
-    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[mock_deleted_key])
 
     result = await get_daily_activity_aggregated(
         prisma_client=mock_prisma,
@@ -761,9 +740,7 @@ class TestAdjustDatesForTimezone:
         ],
     )
     def test_returns_input_dates_unchanged_for_any_offset(self, offset_minutes):
-        start, end = _adjust_dates_for_timezone(
-            "2026-05-29", "2026-05-29", offset_minutes
-        )
+        start, end = _adjust_dates_for_timezone("2026-05-29", "2026-05-29", offset_minutes)
         assert start == "2026-05-29"
         assert end == "2026-05-29"
 
@@ -791,9 +768,7 @@ class TestAdjustDatesForTimezone:
         exceeded the multi-day total by ~50% over a 5-day IST window.
         """
         days = ["2026-05-29", "2026-05-30", "2026-05-31", "2026-06-01", "2026-06-02"]
-        single_day_ranges = [
-            _adjust_dates_for_timezone(d, d, offset_minutes) for d in days
-        ]
+        single_day_ranges = [_adjust_dates_for_timezone(d, d, offset_minutes) for d in days]
         multi_day_range = _adjust_dates_for_timezone(days[0], days[-1], offset_minutes)
 
         per_day_starts = [r[0] for r in single_day_ranges]

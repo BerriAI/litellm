@@ -14,9 +14,7 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 
 import httpx
@@ -141,9 +139,7 @@ def test_assemble_complete_response_from_streaming_chunks_2(is_async):
 
     from litellm.utils import TextCompletionStreamWrapper
 
-    _text_completion_stream_wrapper = TextCompletionStreamWrapper(
-        completion_stream=None, model="test_model"
-    )
+    _text_completion_stream_wrapper = TextCompletionStreamWrapper(completion_stream=None, model="test_model")
 
     request_kwargs = {
         "model": "test_model",

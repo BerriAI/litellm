@@ -25,9 +25,7 @@ def _make_text_chunk(
         StreamingChoices(
             finish_reason=finish_reason,
             index=0,
-            delta=Delta(
-                content=text, role="assistant" if text else None, tool_calls=None
-            ),
+            delta=Delta(content=text, role="assistant" if text else None, tool_calls=None),
             logprobs=None,
         )
     ]
@@ -76,34 +74,23 @@ async def test_stream_emits_compaction_block_before_text():
     compaction_start = next(
         e
         for e in events
-        if e.get("type") == "content_block_start"
-        and e.get("content_block", {}).get("type") == "compaction"
+        if e.get("type") == "content_block_start" and e.get("content_block", {}).get("type") == "compaction"
     )
     assert compaction_start["index"] == 0
 
     compaction_delta = next(
         e
         for e in events
-        if e.get("type") == "content_block_delta"
-        and e.get("delta", {}).get("type") == "compaction_delta"
+        if e.get("type") == "content_block_delta" and e.get("delta", {}).get("type") == "compaction_delta"
     )
     assert compaction_delta["index"] == 0
-    assert (
-        compaction_delta["delta"]["content"] == "Summary of prior conversation turns."
-    )
+    assert compaction_delta["delta"]["content"] == "Summary of prior conversation turns."
 
-    compaction_stop = next(
-        e
-        for e in events
-        if e.get("type") == "content_block_stop" and e.get("index") == 0
-    )
+    compaction_stop = next(e for e in events if e.get("type") == "content_block_stop" and e.get("index") == 0)
     assert compaction_stop is not None
 
     text_start = next(
-        e
-        for e in events
-        if e.get("type") == "content_block_start"
-        and e.get("content_block", {}).get("type") == "text"
+        e for e in events if e.get("type") == "content_block_start" and e.get("content_block", {}).get("type") == "text"
     )
     assert text_start["index"] == 1
 
@@ -180,14 +167,9 @@ async def test_stream_without_compaction_block_unchanged():
     events = await _collect_events_async(wrapper)
 
     assert not any(
-        e.get("content_block", {}).get("type") == "compaction"
-        for e in events
-        if e.get("type") == "content_block_start"
+        e.get("content_block", {}).get("type") == "compaction" for e in events if e.get("type") == "content_block_start"
     )
     text_start = next(
-        e
-        for e in events
-        if e.get("type") == "content_block_start"
-        and e.get("content_block", {}).get("type") == "text"
+        e for e in events if e.get("type") == "content_block_start" and e.get("content_block", {}).get("type") == "text"
     )
     assert text_start["index"] == 0

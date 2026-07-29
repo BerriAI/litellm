@@ -4,9 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 from litellm import Router
 import litellm
@@ -116,9 +114,7 @@ def make_openai_completion(question):
                         )
 
                     break
-                print(
-                    f"POLLING JOB{polling_url}\nSTATUS: {status}, \n Response {polling_response}"
-                )
+                print(f"POLLING JOB{polling_url}\nSTATUS: {status}, \n Response {polling_response}")
                 time.sleep(0.5)
             except Exception as e:
                 print("got exception in polling", e)

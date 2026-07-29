@@ -7,9 +7,7 @@ load_dotenv()
 import os
 import httpx
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from unittest.mock import patch, MagicMock
 import logging
 from litellm._logging import verbose_logger
@@ -29,22 +27,13 @@ from litellm.secret_managers.hashicorp_secret_manager import HashicorpSecretMana
 def hashicorp_secret_manager():
     """Provide a fresh HashicorpSecretManager per test to avoid shared state."""
     has_token = bool(os.getenv("HCP_VAULT_TOKEN"))
-    has_approle = bool(
-        os.getenv("HCP_VAULT_APPROLE_ROLE_ID")
-        and os.getenv("HCP_VAULT_APPROLE_SECRET_ID")
-    )
-    has_tls_cert = bool(
-        os.getenv("HCP_VAULT_CLIENT_CERT") and os.getenv("HCP_VAULT_CLIENT_KEY")
-    )
+    has_approle = bool(os.getenv("HCP_VAULT_APPROLE_ROLE_ID") and os.getenv("HCP_VAULT_APPROLE_SECRET_ID"))
+    has_tls_cert = bool(os.getenv("HCP_VAULT_CLIENT_CERT") and os.getenv("HCP_VAULT_CLIENT_KEY"))
     if not (has_token or has_approle or has_tls_cert):
-        pytest.skip(
-            "Skipping Hashicorp tests: set HCP_VAULT_TOKEN, AppRole vars, or TLS cert vars."
-        )
+        pytest.skip("Skipping Hashicorp tests: set HCP_VAULT_TOKEN, AppRole vars, or TLS cert vars.")
 
     manager = HashicorpSecretManager()
-    manager.vault_addr = (
-        "https://test-cluster-public-vault-0f98180c.e98296b2.z1.hashicorp.cloud:8200"
-    )
+    manager.vault_addr = "https://test-cluster-public-vault-0f98180c.e98296b2.z1.hashicorp.cloud:8200"
     manager.vault_namespace = "admin"
     manager.vault_mount_name = "secret"
     manager.vault_path_prefix = None
@@ -118,14 +107,10 @@ def test_hashicorp_secret_manager_get_secret(hashicorp_secret_manager):
 
 @pytest.mark.asyncio
 async def test_hashicorp_secret_manager_write_secret(hashicorp_secret_manager):
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
         # Configure the mock response
         mock_response = MagicMock()
-        mock_response.json.return_value = (
-            mock_write_response  # Use the write-specific response
-        )
+        mock_response.json.return_value = mock_write_response  # Use the write-specific response
         mock_response.raise_for_status.return_value = None
         mock_post.return_value = mock_response
 
@@ -138,9 +123,7 @@ async def test_hashicorp_secret_manager_write_secret(hashicorp_secret_manager):
         )
 
         # Verify the response and that the request was made correctly
-        assert (
-            response == mock_write_response
-        )  # Compare against write-specific response
+        assert response == mock_write_response  # Compare against write-specific response
         mock_post.assert_called_once()
         print("CALL ARGS=", mock_post.call_args)
         print("call args[1]=", mock_post.call_args[1])
@@ -148,10 +131,7 @@ async def test_hashicorp_secret_manager_write_secret(hashicorp_secret_manager):
         # Verify URL
         called_url = mock_post.call_args[1]["url"]
         assert secret_name in called_url
-        assert (
-            called_url
-            == f"{hashicorp_secret_manager.vault_addr}/v1/admin/secret/data/{secret_name}"
-        )
+        assert called_url == f"{hashicorp_secret_manager.vault_addr}/v1/admin/secret/data/{secret_name}"
 
         # Verify request body
         json_data = mock_post.call_args[1]["json"]
@@ -164,9 +144,7 @@ async def test_hashicorp_secret_manager_write_secret(hashicorp_secret_manager):
 async def test_hashicorp_secret_manager_write_secret_with_team_overrides(
     hashicorp_secret_manager,
 ):
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
         mock_response = MagicMock()
         mock_response.json.return_value = mock_write_response
         mock_response.raise_for_status.return_value = None
@@ -190,10 +168,7 @@ async def test_hashicorp_secret_manager_write_secret_with_team_overrides(
         mock_post.assert_called_once()
 
         called_url = mock_post.call_args[1]["url"]
-        expected_url = (
-            f"{hashicorp_secret_manager.vault_addr}/v1/"
-            "team-namespace/kv-team/data/teams/custom/team-secret"
-        )
+        expected_url = f"{hashicorp_secret_manager.vault_addr}/v1/team-namespace/kv-team/data/teams/custom/team-secret"
         assert called_url == expected_url
 
         json_data = mock_post.call_args[1]["json"]
@@ -202,9 +177,7 @@ async def test_hashicorp_secret_manager_write_secret_with_team_overrides(
 
 @pytest.mark.asyncio
 async def test_hashicorp_secret_manager_delete_secret(hashicorp_secret_manager):
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete"
-    ) as mock_delete:
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete") as mock_delete:
         # Configure the mock response
         mock_response = MagicMock()
         mock_response.raise_for_status.return_value = None
@@ -212,9 +185,7 @@ async def test_hashicorp_secret_manager_delete_secret(hashicorp_secret_manager):
 
         # Test the secret manager
         secret_name = f"sample-secret-test-{uuid.uuid4()}"
-        response = await hashicorp_secret_manager.async_delete_secret(
-            secret_name=secret_name
-        )
+        response = await hashicorp_secret_manager.async_delete_secret(secret_name=secret_name)
 
         # Verify the response
         assert response == {
@@ -228,19 +199,14 @@ async def test_hashicorp_secret_manager_delete_secret(hashicorp_secret_manager):
         # Verify URL
         called_url = mock_delete.call_args[1]["url"]
         assert secret_name in called_url
-        assert (
-            called_url
-            == f"{hashicorp_secret_manager.vault_addr}/v1/admin/secret/data/{secret_name}"
-        )
+        assert called_url == f"{hashicorp_secret_manager.vault_addr}/v1/admin/secret/data/{secret_name}"
 
 
 @pytest.mark.asyncio
 async def test_hashicorp_secret_manager_delete_secret_with_team_overrides(
     hashicorp_secret_manager,
 ):
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete"
-    ) as mock_delete:
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete") as mock_delete:
         mock_response = MagicMock()
         mock_response.raise_for_status.return_value = None
         mock_delete.return_value = mock_response
@@ -262,10 +228,7 @@ async def test_hashicorp_secret_manager_delete_secret_with_team_overrides(
 
         mock_delete.assert_called_once()
         called_url = mock_delete.call_args[1]["url"]
-        expected_url = (
-            f"{hashicorp_secret_manager.vault_addr}/v1/"
-            "team-namespace/kv-team/data/teams/custom/team-secret"
-        )
+        expected_url = f"{hashicorp_secret_manager.vault_addr}/v1/team-namespace/kv-team/data/teams/custom/team-secret"
         assert called_url == expected_url
 
 
@@ -314,9 +277,7 @@ def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch):
         )
 
         # Verify the token was cached
-        assert (
-            test_manager.cache.get_cache("hcp_vault_token") == "test-client-token-12345"
-        )
+        assert test_manager.cache.get_cache("hcp_vault_token") == "test-client-token-12345"
 
 
 def test_hashicorp_secret_manager_approle_auth(monkeypatch):
@@ -359,10 +320,7 @@ def test_hashicorp_secret_manager_approle_auth(monkeypatch):
             },
         )
 
-        assert (
-            test_manager.cache.get_cache("hcp_vault_approle_token")
-            == "hvs.approle-token-67890"
-        )
+        assert test_manager.cache.get_cache("hcp_vault_approle_token") == "hvs.approle-token-67890"
 
 
 def test_hashicorp_custom_mount_and_prefix(hashicorp_secret_manager):
@@ -389,19 +347,13 @@ def test_hashicorp_custom_mount_and_prefix(hashicorp_secret_manager):
         hashicorp_secret_manager.vault_mount_name = "secret"
         hashicorp_secret_manager.vault_path_prefix = "myapp"
         url = hashicorp_secret_manager.get_url("my-secret")
-        assert (
-            url
-            == f"{hashicorp_secret_manager.vault_addr}/v1/secret/data/myapp/my-secret"
-        )
+        assert url == f"{hashicorp_secret_manager.vault_addr}/v1/secret/data/myapp/my-secret"
 
         # Test both custom mount and prefix
         hashicorp_secret_manager.vault_mount_name = "kv"
         hashicorp_secret_manager.vault_path_prefix = "production"
         url = hashicorp_secret_manager.get_url("my-secret")
-        assert (
-            url
-            == f"{hashicorp_secret_manager.vault_addr}/v1/kv/data/production/my-secret"
-        )
+        assert url == f"{hashicorp_secret_manager.vault_addr}/v1/kv/data/production/my-secret"
     finally:
         # Restore original values
         hashicorp_secret_manager.vault_mount_name = original_mount
@@ -485,15 +437,9 @@ async def test_hashicorp_secret_manager_rotate_secret_different_names(
 ):
     """Test rotating a secret with different names (create new, delete old)."""
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
-        ) as mock_get,
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-        ) as mock_post,
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete"
-        ) as mock_delete,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get") as mock_get,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete") as mock_delete,
     ):
         # Mock GET for current secret check
         mock_get_response_current = MagicMock()
@@ -556,15 +502,9 @@ async def test_hashicorp_secret_manager_rotate_secret_same_name(
 ):
     """Test rotating a secret with the same name (update value only, no delete)."""
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
-        ) as mock_get,
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-        ) as mock_post,
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete"
-        ) as mock_delete,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get") as mock_get,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete") as mock_delete,
     ):
         # Mock GET for current secret check
         mock_get_response_current = MagicMock()
@@ -632,9 +572,7 @@ async def test_hashicorp_secret_manager_rotate_secret_current_not_found(
     hashicorp_secret_manager,
 ):
     """Test rotating a secret when current secret doesn't exist."""
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
-    ) as mock_get:
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get") as mock_get:
         # Mock GET to return 404
         mock_404_response = MagicMock()
         mock_404_response.status_code = 404
@@ -668,12 +606,8 @@ async def test_hashicorp_secret_manager_rotate_secret_write_fails(
 ):
     """Test rotating a secret when write fails."""
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
-        ) as mock_get,
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-        ) as mock_post,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get") as mock_get,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post,
     ):
         # Mock GET for current secret check
         mock_get_response_current = MagicMock()
@@ -709,15 +643,9 @@ async def test_hashicorp_secret_manager_rotate_secret_with_team_overrides(
 ):
     """Test rotating a secret with optional_params (team settings)."""
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
-        ) as mock_get,
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-        ) as mock_post,
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete"
-        ) as mock_delete,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get") as mock_get,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete") as mock_delete,
     ):
         # Mock GET for current secret check
         mock_get_response_current = MagicMock()
@@ -803,12 +731,8 @@ async def test_hashicorp_secret_manager_rotate_secret_value_mismatch(
 ):
     """Test rotating a secret when verification shows value mismatch."""
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
-        ) as mock_get,
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-        ) as mock_post,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get") as mock_get,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post,
     ):
         # Mock GET for current secret check
         mock_get_response_current = MagicMock()

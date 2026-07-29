@@ -15,9 +15,7 @@ import time
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import logging
 
@@ -182,7 +180,6 @@ async def test_create_audit_log_for_update_premium_user():
         patch("litellm.store_audit_logs", True),
         patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
     ):
-
         mock_prisma.db.litellm_auditlog.create = AsyncMock()
 
         request_data = LiteLLM_AuditLogs(
@@ -223,9 +220,7 @@ def prisma_client():
     os.environ["DATABASE_URL"] = modified_url
 
     # Assuming PrismaClient is a class that needs to be instantiated
-    prisma_client = PrismaClient(
-        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-    )
+    prisma_client = PrismaClient(database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj)
 
     return prisma_client
 
@@ -260,9 +255,7 @@ async def test_create_audit_log_in_db(prisma_client):
     await asyncio.sleep(1)
 
     # now read the last log from the db
-    last_log = await prisma_client.db.litellm_auditlog.find_first(
-        where={"id": audit_log_id}
-    )
+    last_log = await prisma_client.db.litellm_auditlog.find_first(where={"id": audit_log_id})
 
     assert last_log.id == audit_log_id
 

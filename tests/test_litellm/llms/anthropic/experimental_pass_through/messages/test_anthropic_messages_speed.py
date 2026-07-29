@@ -91,13 +91,11 @@ def test_messages_drops_speed_for_vertex_opus_with_drop_params(monkeypatch):
     """Regression: a vertex_ai Opus passthrough must drop ``speed`` even though the
     prefix-stripped model id maps to a fast-mode-capable direct-Anthropic entry."""
     monkeypatch.setattr(litellm, "drop_params", True)
-    optional_params = (
-        AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
-            params={"max_tokens": 1024, "speed": "fast"},
-            model="claude-opus-4-8",
-            drop_params=False,
-            custom_llm_provider="vertex_ai",
-        )
+    optional_params = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+        params={"max_tokens": 1024, "speed": "fast"},
+        model="claude-opus-4-8",
+        drop_params=False,
+        custom_llm_provider="vertex_ai",
     )
 
     assert "speed" not in optional_params

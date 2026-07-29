@@ -123,9 +123,7 @@ class LiteLLMHealthCheckClient:
 
             return models
         except Exception as e:
-            print(
-                f"Error loading models from YAML file {yaml_path}: {e}", file=sys.stderr
-            )
+            print(f"Error loading models from YAML file {yaml_path}: {e}", file=sys.stderr)
             return []
 
     async def fetch_models(self, client: httpx.AsyncClient) -> List[Dict]:
@@ -183,9 +181,7 @@ class LiteLLMHealthCheckClient:
                 print(f"Error fetching models from /model/info: {e2}", file=sys.stderr)
                 return []
 
-    async def check_model_health(
-        self, client: httpx.AsyncClient, model: Dict
-    ) -> Tuple[str, Dict]:
+    async def check_model_health(self, client: httpx.AsyncClient, model: Dict) -> Tuple[str, Dict]:
         """
         Check health of a single model by sending a test request.
 
@@ -212,8 +208,7 @@ class LiteLLMHealthCheckClient:
             # Determine if this is an embedding model
             # Check mode first (from config), then fall back to name-based detection
             is_embedding = mode == "embedding" or any(
-                keyword in model_id.lower()
-                for keyword in ["embedding", "embed", "text-embedding"]
+                keyword in model_id.lower() for keyword in ["embedding", "embed", "text-embedding"]
             )
 
             if is_embedding:
@@ -253,9 +248,7 @@ class LiteLLMHealthCheckClient:
                     headers=self.headers,
                     json={
                         "model": model_id,
-                        "messages": [
-                            {"role": "user", "content": self.completion_prompt}
-                        ],
+                        "messages": [{"role": "user", "content": self.completion_prompt}],
                         "max_tokens": 10,  # Minimal tokens for health check
                     },
                     timeout=self.timeout,
@@ -264,11 +257,7 @@ class LiteLLMHealthCheckClient:
                 completion_data = completion_response.json()
                 response_text = ""
                 if "choices" in completion_data and len(completion_data["choices"]) > 0:
-                    response_text = (
-                        completion_data["choices"][0]
-                        .get("message", {})
-                        .get("content", "")
-                    )
+                    response_text = completion_data["choices"][0].get("message", {}).get("content", "")
 
                 result["healthy"] = True
                 result["mode"] = "chat"
@@ -359,7 +348,7 @@ class LiteLLMHealthCheckClient:
         unhealthy_count = len(results) - healthy_count
 
         # Print detailed results for each model (matching Go output format)
-        print(f"\n{'='*60}", file=sys.stderr)
+        print(f"\n{'=' * 60}", file=sys.stderr)
         print(f"Starting health check queries\n", file=sys.stderr)
 
         for model_id, result in results.items():
@@ -374,21 +363,20 @@ class LiteLLMHealthCheckClient:
                 else:
                     response_text = result.get("response_text", "")
                     print(
-                        f"---- {model_id} ----\n✅ Success. "
-                        f"Response:\n{response_text}\n\n",
+                        f"---- {model_id} ----\n✅ Success. Response:\n{response_text}\n\n",
                         file=sys.stderr,
                     )
             else:
                 error = result.get("error", "Unknown error")
                 print(f"---- {model_id} ----\n❌ ERROR: {error}\n\n", file=sys.stderr)
 
-        print(f"{'='*60}", file=sys.stderr)
+        print(f"{'=' * 60}", file=sys.stderr)
         print(f"Health Check Summary", file=sys.stderr)
-        print(f"{'='*60}", file=sys.stderr)
+        print(f"{'=' * 60}", file=sys.stderr)
         print(f"Total models: {len(results)}", file=sys.stderr)
         print(f"Healthy: {healthy_count}", file=sys.stderr)
         print(f"Unhealthy: {unhealthy_count}", file=sys.stderr)
-        print(f"{'='*60}\n", file=sys.stderr)
+        print(f"{'=' * 60}\n", file=sys.stderr)
 
         # Exit with non-zero code if any models are unhealthy
         if unhealthy_count > 0:
@@ -402,9 +390,7 @@ async def main():
     base_url = os.environ.get("LITELLM_BASE_URL", "http://localhost:4000")
     api_key = os.environ.get("LITELLM_API_KEY", "sk-1234")
     yaml_path = os.environ.get("LITELLM_MODELS_YAML")
-    custom_auth_header = os.environ.get(
-        "LITELLM_CUSTOM_AUTH_HEADER"
-    )  # e.g., "x-requester-service"
+    custom_auth_header = os.environ.get("LITELLM_CUSTOM_AUTH_HEADER")  # e.g., "x-requester-service"
 
     # Debug: Print custom auth header value if set
     if custom_auth_header:
@@ -419,9 +405,7 @@ async def main():
         sys.exit(1)
 
     timeout = int(os.environ.get("LITELLM_TIMEOUT", "120"))  # Match Go's 120s default
-    completion_prompt = os.environ.get(
-        "LITELLM_COMPLETION_PROMPT", _DEFAULT_COMPLETION_PROMPT
-    )
+    completion_prompt = os.environ.get("LITELLM_COMPLETION_PROMPT", _DEFAULT_COMPLETION_PROMPT)
     embedding_text = os.environ.get("LITELLM_EMBEDDING_TEXT", _DEFAULT_EMBEDDING_TEXT)
     json_output = os.environ.get("LITELLM_JSON_OUTPUT", "").lower() == "true"
     # Optional: only health-check these model IDs (comma-separated). E.g.:

@@ -37,9 +37,7 @@ HAPPY_RESPONSE = {
 def patched_chat(monkeypatch):
     """Stub chat-completions pipeline at ProxyBaseLLMRequestProcessing."""
     monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
-    monkeypatch.setattr(
-        proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock())
-    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock()))
 
     async def _fake_process(self, *args, **kwargs):
         return dict(HAPPY_RESPONSE)
@@ -56,9 +54,7 @@ def patched_chat(monkeypatch):
 def patched_chat_error(monkeypatch):
     """Variant that makes the pipeline raise -> 400 via _handle_llm_api_exception."""
     monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
-    monkeypatch.setattr(
-        proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock())
-    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock()))
 
     from litellm.proxy._types import ProxyException
 
@@ -66,9 +62,7 @@ def patched_chat_error(monkeypatch):
         raise ValueError("boom")
 
     async def _handler(self, *, e, user_api_key_dict, proxy_logging_obj):
-        return ProxyException(
-            message="boom", type="bad_request_error", param="model", code=400
-        )
+        return ProxyException(message="boom", type="bad_request_error", param="model", code=400)
 
     monkeypatch.setattr(
         common_request_processing.ProxyBaseLLMRequestProcessing,

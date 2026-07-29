@@ -20,9 +20,7 @@ SELF = pathlib.Path(__file__).resolve()
 
 # Captures the route literal from `@router.<method>("<literal>"` — `\s*` spans
 # newlines so multi-line decorators are matched too.
-_ROUTE_DECORATOR = re.compile(
-    r"@router\.(?:get|post|put|delete|patch)\(\s*[\"']([^\"']+)[\"']"
-)
+_ROUTE_DECORATOR = re.compile(r"@router\.(?:get|post|put|delete|patch)\(\s*[\"']([^\"']+)[\"']")
 
 
 def _source_routes() -> set:
@@ -81,11 +79,5 @@ def test_every_management_route_has_a_behavior_scenario():
     assert routes, "no @router routes parsed — the decorator regex is stale"
 
     urls = _test_urls()
-    uncovered = sorted(
-        route
-        for route in routes
-        if not any(_route_to_regex(route).match(url) for url in urls)
-    )
-    assert (
-        not uncovered
-    ), "management routes with no behavior-suite scenario:\n  " + "\n  ".join(uncovered)
+    uncovered = sorted(route for route in routes if not any(_route_to_regex(route).match(url) for url in urls))
+    assert not uncovered, "management routes with no behavior-suite scenario:\n  " + "\n  ".join(uncovered)

@@ -110,7 +110,7 @@ def test_long_window_blocks_after_short_window_resets(client: BudgetClient, reso
     blocked_long_reset_at = window_reset_at(client.key_budget_windows(key), LONG_WINDOW)
     assert blocked_long_reset_at is not None, "long window missing from /key/info budget_limits"
 
-    # 3. poll every 5s for the SHORT_WINDOW reset time until it is past it, fails if it doesnt reset 
+    # 3. poll every 5s for the SHORT_WINDOW reset time until it is past it, fails if it doesnt reset
     deadline = time.monotonic() + RESET_DEADLINE_SECONDS
     while time.monotonic() < deadline:
         time.sleep(5)

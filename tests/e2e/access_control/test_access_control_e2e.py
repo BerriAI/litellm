@@ -43,15 +43,10 @@ def _is_json(body: str) -> bool:
         return False
 
 
-
 class TestAccessControl:
-    def test_disallowed_model_is_denied_403(
-        self, client: AccessControlClient, resources: ResourceManager
-    ) -> None:
+    def test_disallowed_model_is_denied_403(self, client: AccessControlClient, resources: ResourceManager) -> None:
         key = resources.key(models=[ALLOWED_MODEL])
-        result = client.chat_status(
-            key, DISALLOWED_MODEL, f"capital of France? {unique_marker()}"
-        )
+        result = client.chat_status(key, DISALLOWED_MODEL, f"capital of France? {unique_marker()}")
         assert result.status_code == 403, (
             f"key limited to {ALLOWED_MODEL!r} calling {DISALLOWED_MODEL!r} must be "
             f"denied 403, got {result.status_code}: {result.body[:300]}"
@@ -67,23 +62,17 @@ class TestAccessControl:
         resources.defer(lambda: client.delete_key(key))
         result = client.create_model_status(key, f"e2e-forbidden-{unique_marker()}")
         assert result.status_code == 403, (
-            f"llm-only key calling a management route must be denied 403, got "
-            f"{result.status_code}: {result.body[:300]}"
+            f"llm-only key calling a management route must be denied 403, got {result.status_code}: {result.body[:300]}"
         )
         assert ROUTE_NOT_ALLOWED_MARKER in result.body, (
             f"403 body must be a route-permission denial, got: {result.body[:300]}"
         )
 
-    def test_unknown_model_returns_400(
-        self, client: AccessControlClient, resources: ResourceManager
-    ) -> None:
+    def test_unknown_model_returns_400(self, client: AccessControlClient, resources: ResourceManager) -> None:
         key = resources.key()
-        result = client.chat_status(
-            key, f"nonexistent-model-{unique_marker()}", "hi this is a test"
-        )
+        result = client.chat_status(key, f"nonexistent-model-{unique_marker()}", "hi this is a test")
         assert result.status_code == 400, (
-            f"unknown model must be rejected 400 before forwarding, got "
-            f"{result.status_code}: {result.body[:300]}"
+            f"unknown model must be rejected 400 before forwarding, got {result.status_code}: {result.body[:300]}"
         )
         assert _is_json(result.body), f"400 body must be valid JSON: {result.body[:300]}"
 
@@ -97,9 +86,7 @@ class TestVirtualKeyAuth:
         "mgmt.virtual_key.invalid_denied",
         exercised_on=[],
     )
-    def test_valid_key_allows_and_invalid_key_denied(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
+    def test_valid_key_allows_and_invalid_key_denied(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model = f"e2e-auth-chat-{unique_marker()}"
         model_id = proxy.create_model(
             model,

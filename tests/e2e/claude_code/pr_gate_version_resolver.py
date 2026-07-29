@@ -119,8 +119,7 @@ def resolve_pr_gate_version(
 
     if not eligible:
         raise NoEligibleVersionError(
-            f"no version of {package_name} is at least {min_age} old "
-            f"as of {as_of.isoformat()}"
+            f"no version of {package_name} is at least {min_age} old as of {as_of.isoformat()}"
         )
 
     eligible.sort(key=lambda pair: pair[0], reverse=True)

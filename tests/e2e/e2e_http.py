@@ -94,12 +94,7 @@ class UnknownApiError(BaseModel):
 
 
 type Result[R: BaseModel] = (
-    Success[R]
-    | NetworkError
-    | UnauthorizedError
-    | RateLimitedError
-    | ValidationError
-    | UnknownApiError
+    Success[R] | NetworkError | UnauthorizedError | RateLimitedError | ValidationError | UnknownApiError
 )
 
 
@@ -212,9 +207,7 @@ def require_successful_call(result: StreamingResponse) -> None:
     if the proxy can't make a call it's expected to, the test must fail."""
     if result.ok:
         return
-    pytest.fail(
-        f"upstream call failed (status {result.status_code}); body={result.body[:300]}"
-    )
+    pytest.fail(f"upstream call failed (status {result.status_code}); body={result.body[:300]}")
 
 
 def _headers(headers: BaseModel) -> dict[str, str]:
@@ -229,9 +222,7 @@ def _params(params: BaseModel | None) -> dict[str, str]:
     return {key: str(value) for key, value in dumped.items()}
 
 
-def _classify[R: BaseModel](
-    resp: requests.Response, response_type: type[R]
-) -> Result[R]:
+def _classify[R: BaseModel](resp: requests.Response, response_type: type[R]) -> Result[R]:
     if resp.status_code == 401:
         return UnauthorizedError()
     if resp.status_code == 429:
@@ -366,9 +357,7 @@ def put[R: BaseModel](
     return _classify(resp, response_type)
 
 
-def probe(
-    url: URL, *, headers: BaseModel, params: BaseModel, timeout: float = 30.0
-) -> ProbeResult:
+def probe(url: URL, *, headers: BaseModel, params: BaseModel, timeout: float = 30.0) -> ProbeResult:
     try:
         resp = requests.get(
             str(url),
@@ -469,9 +458,7 @@ def send(
     return _streaming_outcome(resp, stream)
 
 
-def stream(
-    url: URL, *, headers: BaseModel, json: BaseModel, timeout: float = 60.0
-) -> StreamingResponse:
+def stream(url: URL, *, headers: BaseModel, json: BaseModel, timeout: float = 60.0) -> StreamingResponse:
     """Streaming (SSE) call: consumes the stream counting events, and captures the
     x-litellm-call-id + content-type headers. Body is elided."""
     return send(url, headers=headers, json=json, stream=True, timeout=timeout)
@@ -558,9 +545,7 @@ def stream_binary(
         )
 
 
-def download(
-    url: URL, *, headers: BaseModel, timeout: float = 60.0
-) -> StreamingResponse:
+def download(url: URL, *, headers: BaseModel, timeout: float = 60.0) -> StreamingResponse:
     """Raw GET for file content (/v1/files/{id}/content): provider-native bytes, no
     schema. Returns the decoded body and the x-litellm-call-id header."""
     try:

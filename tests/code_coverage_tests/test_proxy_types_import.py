@@ -31,9 +31,7 @@ def test_proxy_types_not_imported():
             for alias in node.names:
                 if "proxy._types" in alias.name or "proxy/_types" in alias.name:
                     line_num = node.lineno
-                    line_content = (
-                        lines[line_num - 1] if line_num <= len(lines) else "Unknown"
-                    )
+                    line_content = lines[line_num - 1] if line_num <= len(lines) else "Unknown"
                     import_statement = f"import {alias.name}"
                     found_imports.append(
                         {
@@ -46,17 +44,11 @@ def test_proxy_types_not_imported():
                     )
 
         elif isinstance(node, ast.ImportFrom):
-            if node.module and (
-                "proxy._types" in node.module or "proxy/_types" in node.module
-            ):
+            if node.module and ("proxy._types" in node.module or "proxy/_types" in node.module):
                 line_num = node.lineno
-                line_content = (
-                    lines[line_num - 1] if line_num <= len(lines) else "Unknown"
-                )
+                line_content = lines[line_num - 1] if line_num <= len(lines) else "Unknown"
                 import_names = [alias.name for alias in node.names]
-                import_statement = (
-                    f"from {node.module} import {', '.join(import_names)}"
-                )
+                import_statement = f"from {node.module} import {', '.join(import_names)}"
                 found_imports.append(
                     {
                         "type": "from_import",
@@ -80,9 +72,7 @@ def test_proxy_types_not_imported():
             print("-" * 80)
         print("To fix this, please conditionally import this TYPE using TYPE_CHECKING")
 
-        raise Exception(
-            f"Found {len(found_imports)} direct import(s) of proxy._types in litellm/__init__.py"
-        )
+        raise Exception(f"Found {len(found_imports)} direct import(s) of proxy._types in litellm/__init__.py")
 
     print("✓ No direct imports of proxy._types found in litellm/__init__.py")
     return True
@@ -94,17 +84,13 @@ def main():
     """
     print("=" * 60)
     print("Testing litellm import performance")
-    print(
-        "Checking that proxy._types is not directly imported from litellm/__init__.py"
-    )
+    print("Checking that proxy._types is not directly imported from litellm/__init__.py")
     print("=" * 60)
 
     try:
         test_proxy_types_not_imported()
         print("\n" + "=" * 60)
-        print(
-            "✓ Test passed! proxy._types is not directly imported from litellm/__init__.py"
-        )
+        print("✓ Test passed! proxy._types is not directly imported from litellm/__init__.py")
         print("=" * 60)
     except Exception as e:
         print(f"\n❌ Test failed: {e}")

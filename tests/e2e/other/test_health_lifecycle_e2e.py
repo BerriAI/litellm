@@ -26,12 +26,9 @@ class TestHealthLifecycle:
     def test_liveness_reports_alive_without_auth(self, client: OtherClient) -> None:
         probe = client.liveness()
         assert probe.status_code == 200, (
-            f"liveness must answer 200 for an unauthenticated probe, got "
-            f"{probe.status_code}: {probe.body[:200]}"
+            f"liveness must answer 200 for an unauthenticated probe, got {probe.status_code}: {probe.body[:200]}"
         )
-        assert "alive" in probe.body.lower(), (
-            f"liveness body must confirm the worker is alive, got {probe.body[:200]}"
-        )
+        assert "alive" in probe.body.lower(), f"liveness body must confirm the worker is alive, got {probe.body[:200]}"
 
     @pytest.mark.covers("other.lifecycle.readiness.public_probe")
     def test_readiness_is_reachable_without_credentials(self, client: OtherClient) -> None:
@@ -57,9 +54,7 @@ class TestHealthLifecycle:
 
         details = unwrap(client.readiness_details(MASTER_KEY))
         assert details.status == "healthy", f"authenticated readiness status must be healthy, got {details.status!r}"
-        assert details.litellm_version is not None, (
-            "authenticated diagnostics must expose the litellm version"
-        )
+        assert details.litellm_version is not None, "authenticated diagnostics must expose the litellm version"
         assert details.db == "connected", (
             f"authenticated diagnostics must report the DB as connected, got {details.db!r}"
         )

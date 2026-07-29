@@ -33,19 +33,12 @@ def update_model_prices(file_path):
             model = data[model_name]
             if "input_cost_per_token" in model:
                 # Format new values to match original style
-                model["input_cost_per_token_batches"] = float(
-                    "{:.12f}".format(model["input_cost_per_token"] / 2)
-                )
+                model["input_cost_per_token_batches"] = float("{:.12f}".format(model["input_cost_per_token"] / 2))
             if "output_cost_per_token" in model:
-                model["output_cost_per_token_batches"] = float(
-                    "{:.12f}".format(model["output_cost_per_token"] / 2)
-                )
+                model["output_cost_per_token_batches"] = float("{:.12f}".format(model["output_cost_per_token"] / 2))
         print("new pricing for model=")
         # Convert all float values to full decimal format before printing
-        formatted_model = {
-            k: "{:.9f}".format(v) if isinstance(v, float) else v
-            for k, v in data[model_name].items()
-        }
+        formatted_model = {k: "{:.9f}".format(v) if isinstance(v, float) else v for k, v in data[model_name].items()}
         print(json.dumps(formatted_model, indent=4))
 
 

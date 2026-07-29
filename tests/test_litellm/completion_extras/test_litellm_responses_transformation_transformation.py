@@ -80,9 +80,7 @@ def test_transform_request_with_response_format():
     """Test that transform_request correctly handles response_format parameter"""
     handler = LiteLLMResponsesTransformationHandler()
 
-    messages = [
-        {"role": "user", "content": "Extract person info: John Doe, 30 years old"}
-    ]
+    messages = [{"role": "user", "content": "Extract person info: John Doe, 30 years old"}]
 
     optional_params = {
         "response_format": {
@@ -251,9 +249,7 @@ def test_translate_responses_chunk_passthrough_chat_completion_chunk():
         ],
     }
 
-    result = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
-        chat_chunk
-    )
+    result = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(chat_chunk)
 
     assert result.choices[0].delta.content == "Hi! How can I help?"
     assert result.choices[0].finish_reason is None

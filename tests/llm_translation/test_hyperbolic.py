@@ -5,9 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm import get_llm_provider
@@ -57,9 +55,7 @@ def test_hyperbolic_get_openai_compatible_provider_info():
 
     # Test custom API base
     custom_base = "https://custom.hyperbolic.com/v1"
-    api_base, api_key = config._get_openai_compatible_provider_info(
-        custom_base, "test-key"
-    )
+    api_base, api_key = config._get_openai_compatible_provider_info(custom_base, "test-key")
     assert api_base == custom_base
     assert api_key == "test-key"
 
@@ -83,9 +79,7 @@ def test_hyperbolic_models_configuration():
     import os
 
     # Load model configuration directly from the JSON file
-    json_path = os.path.join(
-        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
-    )
+    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
     with open(json_path, "r") as f:
         model_data = json.load(f)
 

@@ -45,15 +45,11 @@ async def run_benchmark(url, n_requests, max_concurrent):
     )
     async with aiohttp.ClientSession(connector=connector) as session:
         # warmup
-        await asyncio.gather(
-            *[send_request(session, url, semaphore) for _ in range(min(50, n_requests))]
-        )
+        await asyncio.gather(*[send_request(session, url, semaphore) for _ in range(min(50, n_requests))])
 
         # timed run
         wall_start = time.perf_counter()
-        results = await asyncio.gather(
-            *[send_request(session, url, semaphore) for _ in range(n_requests)]
-        )
+        results = await asyncio.gather(*[send_request(session, url, semaphore) for _ in range(n_requests)])
         wall_elapsed = time.perf_counter() - wall_start
 
     latencies = [r for r in results if r is not None]
@@ -97,9 +93,9 @@ async def run_benchmark(url, n_requests, max_concurrent):
 
 def print_run_results(run_num, total_runs, result):
     label = f"  Run {run_num}/{total_runs}" if total_runs > 1 else "  Results"
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(label)
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  Requests:    {result['n_requests']}  (failures: {result['failures']})")
     print(f"  Concurrency: {result['max_concurrent']}")
     print(f"  Wall time:   {result['wall_time']:.2f}s")
@@ -121,9 +117,7 @@ def print_aggregate(results):
     n = len(all_latencies)
 
     if not all_latencies:
-        print(
-            f"\n  Aggregate: all {total_requests} requests failed across {len(results)} runs"
-        )
+        print(f"\n  Aggregate: all {total_requests} requests failed across {len(results)} runs")
         return
 
     mean = statistics.mean(all_latencies) * 1000
@@ -132,9 +126,9 @@ def print_aggregate(results):
     p99 = all_latencies[int(n * 0.99)] * 1000
     avg_throughput = statistics.mean(r["throughput"] for r in results)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  Aggregate ({len(results)} runs, {total_requests} total requests)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  Failures:    {total_failures}")
     print(f"  Throughput:  {avg_throughput:.0f} req/s (avg across runs)")
     print(f"  Mean:        {mean:.2f} ms")
@@ -147,9 +141,7 @@ def print_aggregate(results):
     run_throughputs = [r["throughput"] for r in results]
     if len(run_means) > 1:
         cov_latency = statistics.stdev(run_means) / statistics.mean(run_means) * 100
-        cov_throughput = (
-            statistics.stdev(run_throughputs) / statistics.mean(run_throughputs) * 100
-        )
+        cov_throughput = statistics.stdev(run_throughputs) / statistics.mean(run_throughputs) * 100
         print(f"\n  Run-to-run variance:")
         print(f"    Latency CoV:    {cov_latency:.1f}%")
         print(f"    Throughput CoV: {cov_throughput:.1f}%")
@@ -164,9 +156,7 @@ async def main():
     args = parser.parse_args()
 
     print(f"Benchmarking {args.url}")
-    print(
-        f"  {args.requests} requests, {args.max_concurrent} concurrency, {args.runs} run(s)"
-    )
+    print(f"  {args.requests} requests, {args.max_concurrent} concurrency, {args.runs} run(s)")
 
     results = []
     for run_num in range(1, args.runs + 1):

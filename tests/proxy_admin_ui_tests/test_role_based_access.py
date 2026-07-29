@@ -19,9 +19,7 @@ import time
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import logging
 from unittest.mock import MagicMock
@@ -96,14 +94,10 @@ def prisma_client():
     os.environ["DATABASE_URL"] = modified_url
 
     # Assuming PrismaClient is a class that needs to be instantiated
-    prisma_client = PrismaClient(
-        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-    )
+    prisma_client = PrismaClient(database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj)
 
     # Reset litellm.proxy.proxy_server.prisma_client to None
-    litellm.proxy.proxy_server.litellm_proxy_budget_name = (
-        f"litellm-proxy-budget-{time.time()}"
-    )
+    litellm.proxy.proxy_server.litellm_proxy_budget_name = f"litellm-proxy-budget-{time.time()}"
     litellm.proxy.proxy_server.user_custom_key_generate = None
 
     return prisma_client
@@ -329,9 +323,7 @@ async def test_org_admin_create_user_permissions(prisma_client):
     response = await organization_member_add(
         data=OrganizationMemberAddRequest(
             organization_id=org_id,
-            member=OrgMember(
-                role=LitellmUserRoles.INTERNAL_USER, user_id=new_internal_user_for_org
-            ),
+            member=OrgMember(role=LitellmUserRoles.INTERNAL_USER, user_id=new_internal_user_for_org),
         ),
         http_request=request,
     )
@@ -414,16 +406,11 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
 
     try:
         response = await user_api_key_auth(request=request, api_key="Bearer " + new_key)
-        pytest.fail(
-            f"This should have failed!. creating a user in an org without admins"
-        )
+        pytest.fail(f"This should have failed!. creating a user in an org without admins")
     except Exception as e:
         print("got exception", e)
         print("exception.message", e.message)
-        assert (
-            "You do not have a role within the selected organization. Passed organization_id"
-            in e.message
-        )
+        assert "You do not have a role within the selected organization. Passed organization_id" in e.message
 
     # Create /team/new request in organization=org_without_admins -> expect fail
     request = Request(scope={"type": "http"})
@@ -437,16 +424,11 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
 
     try:
         response = await user_api_key_auth(request=request, api_key="Bearer " + new_key)
-        pytest.fail(
-            f"This should have failed!. Org Admin creating a team in an org where they are not an admin"
-        )
+        pytest.fail(f"This should have failed!. Org Admin creating a team in an org where they are not an admin")
     except Exception as e:
         print("got exception", e)
         print("exception.message", e.message)
-        assert (
-            "You do not have the required role to call" in e.message
-            and org2_id in e.message
-        )
+        assert "You do not have the required role to call" in e.message and org2_id in e.message
 
 
 @pytest.mark.asyncio

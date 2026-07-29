@@ -19,6 +19,4 @@ class TestPerplexityWebSearch:
         config = PerplexityChatConfig()
         supported_params = config.get_supported_openai_params(model=model)
 
-        assert (
-            "web_search_options" in supported_params
-        ), f"web_search_options should be supported for {model}"
+        assert "web_search_options" in supported_params, f"web_search_options should be supported for {model}"

@@ -9,9 +9,7 @@ import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
@@ -65,9 +63,9 @@ def test_weighted_selection_router():
         total_requests = sum(selection_counts.values())
 
         # Assert that 'azure/gpt-4.1-mini' has about 90% of the total requests
-        assert (
-            selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89
-        ), f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+        assert selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89, (
+            f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+        )
 
         router.reset()
     except Exception as e:
@@ -121,9 +119,9 @@ def test_weighted_selection_router_tpm():
         total_requests = sum(selection_counts.values())
 
         # Assert that 'azure/gpt-4.1-mini' has about 90% of the total requests
-        assert (
-            selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89
-        ), f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+        assert selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89, (
+            f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+        )
 
         router.reset()
     except Exception as e:
@@ -177,9 +175,9 @@ def test_weighted_selection_router_tpm_as_router_param():
         total_requests = sum(selection_counts.values())
 
         # Assert that 'azure/gpt-4.1-mini' has about 90% of the total requests
-        assert (
-            selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89
-        ), f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+        assert selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89, (
+            f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+        )
 
         router.reset()
     except Exception as e:
@@ -235,9 +233,9 @@ def test_weighted_selection_router_rpm_as_router_param():
         total_requests = sum(selection_counts.values())
 
         # Assert that 'azure/gpt-4.1-mini' has about 90% of the total requests
-        assert (
-            selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89
-        ), f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+        assert selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89, (
+            f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+        )
 
         router.reset()
     except Exception as e:
@@ -297,9 +295,9 @@ def test_weighted_selection_router_no_rpm_set():
         total_requests = sum(selection_counts.values())
 
         # Assert that 'azure/gpt-4.1-mini' has about 90% of the total requests
-        assert (
-            selection_counts["bedrock/claude1.2"] / total_requests == 1
-        ), f"Assertion failed: Selection counts {selection_counts}"
+        assert selection_counts["bedrock/claude1.2"] / total_requests == 1, (
+            f"Assertion failed: Selection counts {selection_counts}"
+        )
 
         router.reset()
     except Exception as e:
@@ -342,9 +340,7 @@ def test_model_group_aliases():
         ]
         router = Router(
             model_list=model_list,
-            model_group_alias={
-                "gpt-4": "gpt-3.5-turbo"
-            },  # gpt-4 requests sent to gpt-3.5-turbo
+            model_group_alias={"gpt-4": "gpt-3.5-turbo"},  # gpt-4 requests sent to gpt-3.5-turbo
         )
 
         # test that gpt-4 requests are sent to gpt-3.5-turbo
@@ -353,9 +349,7 @@ def test_model_group_aliases():
             print("\n selected model", selected_model)
             selected_model_name = selected_model.get("model_name")
             if selected_model_name != "gpt-3.5-turbo":
-                pytest.fail(
-                    f"Selected model {selected_model_name} is not gpt-3.5-turbo"
-                )
+                pytest.fail(f"Selected model {selected_model_name} is not gpt-3.5-turbo")
 
         # test that
         # call get_available_deployment 1k times, it should pick azure/gpt-4.1-mini about 90% of the time
@@ -370,9 +364,9 @@ def test_model_group_aliases():
         total_requests = sum(selection_counts.values())
 
         # Assert that 'azure/gpt-4.1-mini' has about 90% of the total requests
-        assert (
-            selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89
-        ), f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+        assert selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89, (
+            f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+        )
 
         router.reset()
     except Exception as e:
@@ -445,14 +439,14 @@ def test_usage_based_routing():
         total_requests = sum(selection_counts.values())
 
         # Assert that 'chatgpt-low-tpm' has more than 2 requests
-        assert (
-            selection_counts["chatgpt-low-tpm"] > 2
-        ), f"Assertion failed: 'chatgpt-low-tpm' does not have more than 2 request in the weighted load balancer. Selection counts {selection_counts}"
+        assert selection_counts["chatgpt-low-tpm"] > 2, (
+            f"Assertion failed: 'chatgpt-low-tpm' does not have more than 2 request in the weighted load balancer. Selection counts {selection_counts}"
+        )
 
         # Assert that 'chatgpt-high-tpm' has about 70% of the total requests [DO NOT MAKE THIS LOWER THAN 70%]
-        assert (
-            selection_counts["chatgpt-high-tpm"] / total_requests > 0.70
-        ), f"Assertion failed: 'chatgpt-high-tpm' does not have about 80% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+        assert selection_counts["chatgpt-high-tpm"] / total_requests > 0.70, (
+            f"Assertion failed: 'chatgpt-high-tpm' does not have about 80% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+        )
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -569,9 +563,7 @@ async def test_weighted_selection_router_async(rpm_list, tpm_list):
 
         # call get_available_deployment 1k times, it should pick azure/gpt-4.1-mini about 90% of the time
         for _ in range(1000):
-            selected_model = await router.async_get_available_deployment(
-                "gpt-3.5-turbo", request_kwargs={}
-            )
+            selected_model = await router.async_get_available_deployment("gpt-3.5-turbo", request_kwargs={})
             selected_model_id = selected_model["litellm_params"]["model"]
             selected_model_name = selected_model_id
             selection_counts[selected_model_name] += 1
@@ -581,9 +573,9 @@ async def test_weighted_selection_router_async(rpm_list, tpm_list):
 
         if rpm_list[0] is not None or tpm_list[0] is not None:
             # Assert that 'azure/gpt-4.1-mini' has about 90% of the total requests
-            assert (
-                selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89
-            ), f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+            assert selection_counts["azure/gpt-4.1-mini"] / total_requests > 0.89, (
+                f"Assertion failed: 'azure/gpt-4.1-mini' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+            )
         else:
             # Assert both are used
             assert selection_counts["azure/gpt-4.1-mini"] > 0
@@ -627,9 +619,7 @@ def test_get_available_deployment_for_pass_through():
         )
 
         # Test that only pass-through deployment is returned
-        selected_model = router.get_available_deployment_for_pass_through(
-            "gpt-3.5-turbo"
-        )
+        selected_model = router.get_available_deployment_for_pass_through("gpt-3.5-turbo")
         assert selected_model["litellm_params"]["model"] == "gpt-3.5-turbo"
         assert selected_model["litellm_params"]["use_in_pass_through"] is True
 
@@ -673,9 +663,7 @@ def test_get_available_deployment_for_pass_through_no_deployments():
         # Test that BadRequestError is raised when no pass-through deployments exist
         try:
             router.get_available_deployment_for_pass_through("gpt-3.5-turbo")
-            pytest.fail(
-                "Expected BadRequestError when no pass-through deployments exist"
-            )
+            pytest.fail("Expected BadRequestError when no pass-through deployments exist")
         except litellm.BadRequestError as e:
             assert "use_in_pass_through=True" in str(e)
 
@@ -779,9 +767,7 @@ def test_filter_pass_through_deployments():
         healthy_deployments = router.get_model_list()
 
         # Filter pass-through deployments
-        pass_through_deployments = router._filter_pass_through_deployments(
-            healthy_deployments
-        )
+        pass_through_deployments = router._filter_pass_through_deployments(healthy_deployments)
 
         # Should only have 2 deployments with use_in_pass_through=True
         assert len(pass_through_deployments) == 2

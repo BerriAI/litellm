@@ -16,9 +16,7 @@ def test_langsmith_logging_async():
     try:
         os.environ["LANGSMITH_API_KEY"] = "lsv2_anything"
         os.environ["LANGSMITH_PROJECT"] = "pr-b"
-        os.environ["LANGSMITH_BASE_URL"] = (
-            "https://exampleopenaiendpoint-production.up.railway.app"
-        )
+        os.environ["LANGSMITH_BASE_URL"] = "https://exampleopenaiendpoint-production.up.railway.app"
 
         percentage_diffs = []
 
@@ -44,11 +42,7 @@ def test_langsmith_logging_async():
             print(f"Time with success_callback='langsmith': {start_time_langsmith}")
             print(f"Time with empty success_callback: {start_time_empty_callback}")
 
-            percentage_diff = (
-                abs(start_time_langsmith - start_time_empty_callback)
-                / start_time_empty_callback
-                * 100
-            )
+            percentage_diff = abs(start_time_langsmith - start_time_empty_callback) / start_time_empty_callback * 100
             percentage_diffs.append(percentage_diff)
             print(f"Performance difference: {percentage_diff:.2f}%")
         print("percentage_diffs", percentage_diffs)
@@ -57,9 +51,9 @@ def test_langsmith_logging_async():
         print(f"\nAverage performance difference: {avg_percentage_diff:.2f}%")
 
         # Assert that the average difference is not more than 10%
-        assert (
-            avg_percentage_diff < 10
-        ), f"Average performance difference of {avg_percentage_diff:.2f}% exceeds 10% threshold"
+        assert avg_percentage_diff < 10, (
+            f"Average performance difference of {avg_percentage_diff:.2f}% exceeds 10% threshold"
+        )
 
     except litellm.Timeout as e:
         pass

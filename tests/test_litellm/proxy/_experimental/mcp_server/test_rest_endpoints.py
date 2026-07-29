@@ -2757,9 +2757,7 @@ class TestRestListToolsetFiltering:
 
         mock_manager = MagicMock()
         mock_manager.expand_tool_permissions = MagicMock(side_effect=lambda perms: perms or {})
-        mock_manager.resolve_toolset_tool_permissions = AsyncMock(
-            return_value={"server-a": ["lookup_status"]}
-        )
+        mock_manager.resolve_toolset_tool_permissions = AsyncMock(return_value={"server-a": ["lookup_status"]})
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,

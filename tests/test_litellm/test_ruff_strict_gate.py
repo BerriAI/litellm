@@ -47,9 +47,7 @@ def test_change_that_reduces_an_over_ceiling_rule_is_not_blamed():
 
 def test_rules_are_independent():
     budget = {**rule("ANN001", 150), **rule("C901", 10)}
-    breaches = gate.evaluate(
-        {"ANN001": 130, "C901": 11}, {"ANN001": 100, "C901": 10}, budget
-    )
+    breaches = gate.evaluate({"ANN001": 130, "C901": 11}, {"ANN001": 100, "C901": 10}, budget)
     assert [b.rule for b in breaches] == ["C901"]  # ANN001 130 <= 150, C901 11 > 10
 
 
@@ -70,12 +68,7 @@ def test_update_ratchets_limit_down_by_what_the_branch_fixed_never_up():
 
 
 def test_parse_changed_lines_maps_added_lines_per_file():
-    diff = (
-        "+++ b/litellm/a.py\n"
-        "@@ -10 +10,3 @@\n+x\n+y\n+z\n"
-        "+++ b/litellm/b.py\n"
-        "@@ -5,2 +7 @@\n+q\n"
-    )
+    diff = "+++ b/litellm/a.py\n@@ -10 +10,3 @@\n+x\n+y\n+z\n+++ b/litellm/b.py\n@@ -5,2 +7 @@\n+q\n"
     changed = gate.parse_changed_lines(diff)
     assert changed["litellm/a.py"] == {10, 11, 12}
     assert changed["litellm/b.py"] == {7}
@@ -86,9 +79,7 @@ def test_introduced_keeps_only_violations_on_changed_lines():
         Violation("litellm/a.py", 10, "ANN001"),
         Violation("litellm/a.py", 99, "C901"),
     ]
-    assert gate.introduced(violations, {"litellm/a.py": {10}}) == [
-        Violation("litellm/a.py", 10, "ANN001")
-    ]
+    assert gate.introduced(violations, {"litellm/a.py": {10}}) == [Violation("litellm/a.py", 10, "ANN001")]
 
 
 @pytest.mark.parametrize("hunk", ["@@ -1 +1 @@", "@@ -1,0 +1,2 @@"])

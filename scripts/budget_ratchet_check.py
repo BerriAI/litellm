@@ -66,12 +66,7 @@ def _load_head(rel: str) -> dict | None:
 
 
 def _ref_is_commit(ref: str) -> bool:
-    return (
-        _run(
-            ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"]
-        ).returncode
-        == 0
-    )
+    return _run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"]).returncode == 0
 
 
 def _load_base(rel: str, ref: str) -> dict | None:
@@ -99,11 +94,7 @@ def _ceiling(spec: dict) -> int:
 
 def _limits(budget: dict) -> dict[str, int]:
     """Map each rule to its ceiling; skip malformed specs."""
-    return {
-        rule: _ceiling(spec)
-        for rule, spec in budget.items()
-        if isinstance(spec, dict)
-    }
+    return {rule: _ceiling(spec) for rule, spec in budget.items() if isinstance(spec, dict)}
 
 
 def _regression_detail(
@@ -167,9 +158,7 @@ def main() -> int:
         regressions.extend(regressions_for(rel, base, head))
 
     if regressions:
-        print(
-            f"FAIL: budget limit(s) loosened vs base {args.base} (merge-base {ref[:12]}):"
-        )
+        print(f"FAIL: budget limit(s) loosened vs base {args.base} (merge-base {ref[:12]}):")
         for reg in regressions:
             print(f"  {reg.budget}  {reg.rule}: {reg.detail}")
         print(

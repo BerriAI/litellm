@@ -91,9 +91,7 @@ async def test_batch_limiter_concurrent_bypasses_tpm_via_toctou():
 
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=internal_usage_cache
-    )
+    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache)
     batch_limiter = rate_limiter._get_batch_rate_limiter()
     assert batch_limiter is not None
 
@@ -144,9 +142,7 @@ async def test_batch_limiter_uses_atomic_check_and_increment():
     """
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=internal_usage_cache
-    )
+    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache)
     batch_limiter = rate_limiter._get_batch_rate_limiter()
     assert batch_limiter is not None
 
@@ -178,13 +174,11 @@ async def test_batch_limiter_uses_atomic_check_and_increment():
     )
 
     assert "atomic_check_and_increment_by_n" in call_log, (
-        f"Batch limiter must route through atomic_check_and_increment_by_n. "
-        f"Calls observed: {call_log}"
+        f"Batch limiter must route through atomic_check_and_increment_by_n. Calls observed: {call_log}"
     )
     legacy_calls = [c for c in call_log if c.startswith("should_rate_limit(")]
     assert not legacy_calls, (
-        f"Batch limiter must not call should_rate_limit directly (legacy "
-        f"two-phase pattern). Observed: {legacy_calls}"
+        f"Batch limiter must not call should_rate_limit directly (legacy two-phase pattern). Observed: {legacy_calls}"
     )
 
 
@@ -341,8 +335,7 @@ async def test_dynamic_rate_limiter_v3_uses_atomic_check_and_increment():
         "separate-increment pattern)."
     )
     assert "model_saturation_check" in atomic_descriptors_observed[0], (
-        f"Expected model_saturation_check in atomic descriptor set. "
-        f"Got: {atomic_descriptors_observed}"
+        f"Expected model_saturation_check in atomic descriptor set. Got: {atomic_descriptors_observed}"
     )
 
 
@@ -360,9 +353,7 @@ async def test_batch_zero_token_consumes_rpm_only():
     """
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=internal_usage_cache
-    )
+    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache)
     batch_limiter = rate_limiter._get_batch_rate_limiter()
     assert batch_limiter is not None
 
@@ -383,18 +374,10 @@ async def test_batch_zero_token_consumes_rpm_only():
         )
 
     # Inspect counters: RPM key incremented to 3, TPM key absent (or 0).
-    rpm_key = rate_limiter.create_rate_limit_keys(
-        "api_key", user_api_key_dict.api_key or "", "requests"
-    )
-    tpm_key = rate_limiter.create_rate_limit_keys(
-        "api_key", user_api_key_dict.api_key or "", "tokens"
-    )
-    rpm_val = await internal_usage_cache.async_get_cache(
-        key=rpm_key, litellm_parent_otel_span=None, local_only=True
-    )
-    tpm_val = await internal_usage_cache.async_get_cache(
-        key=tpm_key, litellm_parent_otel_span=None, local_only=True
-    )
+    rpm_key = rate_limiter.create_rate_limit_keys("api_key", user_api_key_dict.api_key or "", "requests")
+    tpm_key = rate_limiter.create_rate_limit_keys("api_key", user_api_key_dict.api_key or "", "tokens")
+    rpm_val = await internal_usage_cache.async_get_cache(key=rpm_key, litellm_parent_otel_span=None, local_only=True)
+    tpm_val = await internal_usage_cache.async_get_cache(key=tpm_key, litellm_parent_otel_span=None, local_only=True)
     assert int(rpm_val or 0) == 3, f"RPM counter must reach 3, got {rpm_val}"
     assert tpm_val in (
         None,
@@ -484,6 +467,4 @@ async def test_dynamic_rate_limiter_v3_fails_closed_on_unknown_descriptor():
             saturation=0.0,
             data={},
         )
-    assert (
-        exc.value.status_code == 429
-    ), f"Expected 429 fail-closed on unknown descriptor; got {exc.value.status_code}"
+    assert exc.value.status_code == 429, f"Expected 429 fail-closed on unknown descriptor; got {exc.value.status_code}"

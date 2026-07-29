@@ -26,9 +26,7 @@ def _make_cache(sync_client=None, async_client=None, similarity_threshold=0.8):
 
 
 def _search_result(distance, response='{"content": "Paris"}'):
-    return SimpleNamespace(
-        docs=[SimpleNamespace(response=response, vector_distance=str(distance))]
-    )
+    return SimpleNamespace(docs=[SimpleNamespace(response=response, vector_distance=str(distance))])
 
 
 def test_build_valkey_url_prefers_valkey_env(monkeypatch):
@@ -39,10 +37,7 @@ def test_build_valkey_url_prefers_valkey_env(monkeypatch):
     monkeypatch.setenv("VALKEY_PORT", "6380")
     monkeypatch.setenv("VALKEY_PASSWORD", "vpass")
 
-    assert (
-        ValkeySemanticCache._build_valkey_url(None, None, None)
-        == "redis://:vpass@valkey-host:6380"
-    )
+    assert ValkeySemanticCache._build_valkey_url(None, None, None) == "redis://:vpass@valkey-host:6380"
 
 
 def test_build_valkey_url_supports_passwordless(monkeypatch):
@@ -51,10 +46,7 @@ def test_build_valkey_url_supports_passwordless(monkeypatch):
     monkeypatch.setenv("VALKEY_HOST", "valkey-host")
     monkeypatch.setenv("VALKEY_PORT", "6380")
 
-    assert (
-        ValkeySemanticCache._build_valkey_url(None, None, None)
-        == "redis://valkey-host:6380"
-    )
+    assert ValkeySemanticCache._build_valkey_url(None, None, None) == "redis://valkey-host:6380"
 
 
 def test_build_valkey_url_falls_back_to_redis_env(monkeypatch):
@@ -65,10 +57,7 @@ def test_build_valkey_url_falls_back_to_redis_env(monkeypatch):
     monkeypatch.setenv("REDIS_PORT", "6379")
     monkeypatch.setenv("REDIS_PASSWORD", "rpass")
 
-    assert (
-        ValkeySemanticCache._build_valkey_url(None, None, None)
-        == "redis://:rpass@redis-host:6379"
-    )
+    assert ValkeySemanticCache._build_valkey_url(None, None, None) == "redis://:rpass@redis-host:6379"
 
 
 def test_build_valkey_url_requires_host_and_port(monkeypatch):
@@ -91,13 +80,8 @@ def test_build_valkey_url_uses_rediss_scheme_when_ssl(monkeypatch):
     monkeypatch.setenv("VALKEY_PORT", "6379")
     monkeypatch.setenv("VALKEY_PASSWORD", "vpass")
 
-    assert (
-        ValkeySemanticCache._build_valkey_url(None, None, None, ssl=True)
-        == "rediss://:vpass@valkey-host:6379"
-    )
-    assert ValkeySemanticCache._build_valkey_url(
-        "h", "6379", None, ssl=False
-    ).startswith("redis://")
+    assert ValkeySemanticCache._build_valkey_url(None, None, None, ssl=True) == "rediss://:vpass@valkey-host:6379"
+    assert ValkeySemanticCache._build_valkey_url("h", "6379", None, ssl=False).startswith("redis://")
 
 
 def test_init_requires_similarity_threshold():
@@ -135,9 +119,7 @@ def test_scope_tag_is_deterministic_hex():
 
 
 def test_embedding_to_bytes_is_little_endian_float32():
-    assert ValkeySemanticCache._embedding_to_bytes([1.0, 0.0]) == struct.pack(
-        "<2f", 1.0, 0.0
-    )
+    assert ValkeySemanticCache._embedding_to_bytes([1.0, 0.0]) == struct.pack("<2f", 1.0, 0.0)
 
 
 def test_set_cache_stores_scoped_doc_with_embedding(monkeypatch):
@@ -372,9 +354,7 @@ async def test_async_get_cache_misses_below_threshold():
 
 def test_ensure_index_swallows_already_exists():
     sync_client = MagicMock()
-    sync_client.ft.return_value.create_index.side_effect = Exception(
-        "Index test_index already exists."
-    )
+    sync_client.ft.return_value.create_index.side_effect = Exception("Index test_index already exists.")
     cache = _make_cache(sync_client=sync_client)
 
     cache._ensure_index_sync(3)
@@ -383,9 +363,7 @@ def test_ensure_index_swallows_already_exists():
 
 def test_ensure_index_reraises_unexpected_error():
     sync_client = MagicMock()
-    sync_client.ft.return_value.create_index.side_effect = Exception(
-        "connection refused"
-    )
+    sync_client.ft.return_value.create_index.side_effect = Exception("connection refused")
     cache = _make_cache(sync_client=sync_client)
 
     with pytest.raises(Exception, match="connection refused"):
@@ -413,29 +391,19 @@ def test_extract_index_dim_parses_nested_ft_info():
 
 def test_ensure_index_raises_on_dimension_mismatch():
     sync_client = MagicMock()
-    sync_client.ft.return_value.create_index.side_effect = Exception(
-        "Index test_index already exists."
-    )
-    sync_client.ft.return_value.info.return_value = {
-        "attributes": _FT_INFO_ATTRS_DIM_1536
-    }
+    sync_client.ft.return_value.create_index.side_effect = Exception("Index test_index already exists.")
+    sync_client.ft.return_value.info.return_value = {"attributes": _FT_INFO_ATTRS_DIM_1536}
     cache = _make_cache(sync_client=sync_client)
 
-    with pytest.raises(
-        ValueError, match="already exists with embedding dimension 1536"
-    ):
+    with pytest.raises(ValueError, match="already exists with embedding dimension 1536"):
         cache._ensure_index_sync(768)
     assert cache._index_dim is None
 
 
 def test_ensure_index_accepts_matching_existing_dimension():
     sync_client = MagicMock()
-    sync_client.ft.return_value.create_index.side_effect = Exception(
-        "Index test_index already exists."
-    )
-    sync_client.ft.return_value.info.return_value = {
-        "attributes": _FT_INFO_ATTRS_DIM_1536
-    }
+    sync_client.ft.return_value.create_index.side_effect = Exception("Index test_index already exists.")
+    sync_client.ft.return_value.info.return_value = {"attributes": _FT_INFO_ATTRS_DIM_1536}
     cache = _make_cache(sync_client=sync_client)
 
     cache._ensure_index_sync(1536)

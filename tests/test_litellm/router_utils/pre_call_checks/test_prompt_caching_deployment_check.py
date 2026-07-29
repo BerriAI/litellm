@@ -96,7 +96,9 @@ def test_write_gate_is_what_prevents_a_pin_below_the_model_minimum():
     """
     messages = _messages(word_count=1400)
 
-    token_count = token_counter(messages=messages, model="anthropic/claude-opus-4-5", use_default_image_token_count=True)
+    token_count = token_counter(
+        messages=messages, model="anthropic/claude-opus-4-5", use_default_image_token_count=True
+    )
     assert 1024 < token_count < 4096
 
     assert is_prompt_caching_valid_prompt(model="anthropic/claude-opus-4-5", messages=messages) is False
@@ -122,7 +124,9 @@ async def test_async_filter_deployments_does_not_narrow_prompt_below_model_minim
     deployments = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
     messages = _messages(word_count=1400)
 
-    token_count = token_counter(messages=messages, model="anthropic/claude-opus-4-6", use_default_image_token_count=True)
+    token_count = token_counter(
+        messages=messages, model="anthropic/claude-opus-4-6", use_default_image_token_count=True
+    )
     assert DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT < token_count < OPUS_4_6_MIN_TOKENS
 
     await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=messages, tools=None)
@@ -148,7 +152,9 @@ async def test_async_filter_deployments_narrows_prompt_above_model_minimum():
     deployments = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
     messages = _messages(word_count=5000)
 
-    token_count = token_counter(messages=messages, model="anthropic/claude-opus-4-6", use_default_image_token_count=True)
+    token_count = token_counter(
+        messages=messages, model="anthropic/claude-opus-4-6", use_default_image_token_count=True
+    )
     assert token_count > OPUS_4_6_MIN_TOKENS
 
     await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=messages, tools=None)

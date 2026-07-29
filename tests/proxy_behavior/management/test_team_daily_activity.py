@@ -45,9 +45,7 @@ _DATES = "start_date=2024-01-01&end_date=2024-12-31"
     [(a, t, s) for (_id, a, t, s) in _CASES],
     ids=[c[0] for c in _CASES],
 )
-async def test_team_daily_activity_matrix(
-    actor: Actor, team: str, expected_status: int, proxy_client, world
-):
+async def test_team_daily_activity_matrix(actor: Actor, team: str, expected_status: int, proxy_client, world):
     query = _DATES
     if team == "alpha":
         query += f"&team_ids={world.team_alpha_id}"
@@ -58,6 +56,4 @@ async def test_team_daily_activity_matrix(
         f"/team/daily/activity?{query}",
         headers={"Authorization": f"Bearer {world.keys[actor].cleartext}"},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value} -> {team}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value} -> {team}: {resp.status_code} {resp.text}"

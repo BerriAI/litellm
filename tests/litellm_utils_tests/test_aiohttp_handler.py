@@ -12,9 +12,7 @@ from litellm.types.utils import StandardCallbackDynamicParams
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 import pytest
 
 import litellm
@@ -127,8 +125,6 @@ if __name__ == "__main__":
     result3 = asyncio.run(test_httpx_request_simulation())
 
     if result1 and result2 and result3:
-        print(
-            "🎉 All tests passed! The helper function approach should fix the CI/CD event loop issues."
-        )
+        print("🎉 All tests passed! The helper function approach should fix the CI/CD event loop issues.")
     else:
         print("💥 Some tests failed")

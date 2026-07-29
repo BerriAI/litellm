@@ -4,9 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.bedrock.chat.invoke_handler import (
@@ -206,9 +204,7 @@ def test_bedrock_converse_streaming_consistent_id():
     expected_id = f"chatcmpl-{native_conversation_id}"
 
     for response in parsed_responses:
-        assert (
-            response.id == expected_id
-        ), "All chunk IDs must match the one captured from the messageStart event"
+        assert response.id == expected_id, "All chunk IDs must match the one captured from the messageStart event"
 
 
 @pytest.mark.asyncio

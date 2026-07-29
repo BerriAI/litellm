@@ -21,9 +21,7 @@ from litellm.types.utils import CallTypes
 class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing"""
 
-    async def apply_guardrail(
-        self, inputs: dict, request_data: dict, input_type: str, **kwargs
-    ) -> dict:
+    async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
         texts = inputs.get("texts", [])
         return {"texts": [f"{text} [GUARDRAILED]" for text in texts]}
 
@@ -71,10 +69,7 @@ class TestInputProcessing:
 
         result = await handler.process_input_messages(data, guardrail)
 
-        assert (
-            result["input"]
-            == "The quick brown fox jumped over the lazy dog. [GUARDRAILED]"
-        )
+        assert result["input"] == "The quick brown fox jumped over the lazy dog. [GUARDRAILED]"
         assert result["model"] == "tts-1"
         assert result["voice"] == "alloy"
 
@@ -172,9 +167,7 @@ class TestPIIMaskingScenario:
         class PIIMaskingGuardrail(CustomGuardrail):
             """Mock PII masking guardrail"""
 
-            async def apply_guardrail(
-                self, inputs: dict, request_data: dict, input_type: str, **kwargs
-            ) -> dict:
+            async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
                 # Simple mock: replace email-like patterns
                 import re
 
@@ -218,24 +211,18 @@ class TestPIIMaskingScenario:
         class PIIMaskingGuardrail(CustomGuardrail):
             """Mock PII masking guardrail"""
 
-            async def apply_guardrail(
-                self, inputs: dict, request_data: dict, input_type: str, **kwargs
-            ) -> dict:
+            async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
                 import re
 
                 texts = inputs.get("texts", [])
                 masked_texts = []
                 for text in texts:
                     # Mask account numbers
-                    masked = re.sub(
-                        r"account number \d{8,12}", "account number [REDACTED]", text
-                    )
+                    masked = re.sub(r"account number \d{8,12}", "account number [REDACTED]", text)
                     # Mask SSNs
                     masked = re.sub(r"\d{3}-\d{2}-\d{4}", "[SSN_REDACTED]", masked)
                     # Mask credit cards
-                    masked = re.sub(
-                        r"\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}", "[CC_REDACTED]", masked
-                    )
+                    masked = re.sub(r"\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}", "[CC_REDACTED]", masked)
                     masked_texts.append(masked)
                 return {"texts": masked_texts}
 
@@ -271,9 +258,7 @@ class TestContentModerationScenario:
         class ContentFilterGuardrail(CustomGuardrail):
             """Mock content filter guardrail"""
 
-            async def apply_guardrail(
-                self, inputs: dict, request_data: dict, input_type: str, **kwargs
-            ) -> dict:
+            async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
                 # Simple mock: filter inappropriate words
                 bad_words = ["badword", "inappropriate", "offensive"]
                 texts = inputs.get("texts", [])

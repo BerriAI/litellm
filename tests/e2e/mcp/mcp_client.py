@@ -73,9 +73,7 @@ class McpToolsListResponse(BaseModel):
 
     def tool_names_for_server(self, server_id: str) -> frozenset[str]:
         return frozenset(
-            tool.name
-            for tool in self.tools
-            if tool.mcp_info is not None and tool.mcp_info.server_id == server_id
+            tool.name for tool in self.tools if tool.mcp_info is not None and tool.mcp_info.server_id == server_id
         )
 
     def tool_name_containing(self, server_id: str, needle: str) -> str | None:
@@ -365,9 +363,7 @@ class McpClient:
         return self.proxy.transport.post(
             "/mcp-rest/tools/call",
             headers=ApiKeyHeaders(x_litellm_api_key=key),
-            json=McpCallToolBody(
-                name=name, arguments=dict(arguments), server_id=server_id
-            ),
+            json=McpCallToolBody(name=name, arguments=dict(arguments), server_id=server_id),
             response_type=McpCallToolResponse,
         )
 

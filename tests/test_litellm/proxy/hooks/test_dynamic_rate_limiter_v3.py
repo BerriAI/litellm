@@ -94,9 +94,9 @@ async def test_priority_weight_allocation():
     expected_high_tpm = int(total_tpm * 0.9)  # 900
     actual_high_tpm = high_descriptor["rate_limit"]["tokens_per_unit"]
 
-    assert (
-        actual_high_tpm == expected_high_tpm
-    ), f"High priority should get {expected_high_tpm} TPM (90%), got {actual_high_tpm}"
+    assert actual_high_tpm == expected_high_tpm, (
+        f"High priority should get {expected_high_tpm} TPM (90%), got {actual_high_tpm}"
+    )
     assert high_descriptor["value"] == f"{model}:high"
 
     # Test low priority allocation
@@ -114,17 +114,15 @@ async def test_priority_weight_allocation():
     expected_low_tpm = int(total_tpm * 0.1)  # 100
     actual_low_tpm = low_descriptor["rate_limit"]["tokens_per_unit"]
 
-    assert (
-        actual_low_tpm == expected_low_tpm
-    ), f"Low priority should get {expected_low_tpm} TPM (10%), got {actual_low_tpm}"
+    assert actual_low_tpm == expected_low_tpm, (
+        f"Low priority should get {expected_low_tpm} TPM (10%), got {actual_low_tpm}"
+    )
     assert low_descriptor["value"] == f"{model}:low"
 
     # Verify the ratio is 9:1, not 1:1 (equal splitting)
     ratio = actual_high_tpm / actual_low_tpm
     expected_ratio = 9.0
-    assert (
-        abs(ratio - expected_ratio) < 0.1
-    ), f"High:Low ratio should be {expected_ratio}:1, got {ratio}:1"
+    assert abs(ratio - expected_ratio) < 0.1, f"High:Low ratio should be {expected_ratio}:1, got {ratio}:1"
 
 
 @pytest.mark.asyncio
@@ -190,8 +188,7 @@ async def test_concurrent_priority_requests():
         descriptor = descriptors[0]
         # Each high priority user should get 900 TPM, not divided by 3
         assert descriptor["rate_limit"]["tokens_per_unit"] == 900, (
-            f"High priority user {user.user_id} should get 900 TPM, "
-            f"got {descriptor['rate_limit']['tokens_per_unit']}"
+            f"High priority user {user.user_id} should get 900 TPM, got {descriptor['rate_limit']['tokens_per_unit']}"
         )
         assert descriptor["value"] == f"{model}:high"
 
@@ -207,8 +204,7 @@ async def test_concurrent_priority_requests():
         descriptor = descriptors[0]
         # Each low priority user should get 100 TPM, not divided by 2
         assert descriptor["rate_limit"]["tokens_per_unit"] == 100, (
-            f"Low priority user {user.user_id} should get 100 TPM, "
-            f"got {descriptor['rate_limit']['tokens_per_unit']}"
+            f"Low priority user {user.user_id} should get 100 TPM, got {descriptor['rate_limit']['tokens_per_unit']}"
         )
         assert descriptor["value"] == f"{model}:low"
 
@@ -230,9 +226,7 @@ async def test_100_concurrent_priority_requests(time_controller):
     litellm.priority_reservation = {"high": 0.9, "low": 0.1}
 
     dual_cache = DualCache()
-    handler = DynamicRateLimitHandler(
-        internal_usage_cache=dual_cache, time_provider=time_controller.now
-    )
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache, time_provider=time_controller.now)
 
     model = "stress-test-model"
     total_tpm = 1000
@@ -280,22 +274,20 @@ async def test_100_concurrent_priority_requests(time_controller):
             priority=priority,
         )
 
-        assert (
-            len(descriptors) == 1
-        ), f"User {user.user_id} should have exactly 1 descriptor"
+        assert len(descriptors) == 1, f"User {user.user_id} should have exactly 1 descriptor"
         descriptor = descriptors[0]
 
         # Validate TPM allocation
         actual_tpm = descriptor["rate_limit"]["tokens_per_unit"]
-        assert (
-            actual_tpm == expected_tpm
-        ), f"User {user.user_id} ({priority}) should get {expected_tpm} TPM, got {actual_tpm}"
+        assert actual_tpm == expected_tpm, (
+            f"User {user.user_id} ({priority}) should get {expected_tpm} TPM, got {actual_tpm}"
+        )
 
         # Validate RPM allocation
         actual_rpm = descriptor["rate_limit"]["requests_per_unit"]
-        assert (
-            actual_rpm == expected_rpm
-        ), f"User {user.user_id} ({priority}) should get {expected_rpm} RPM, got {actual_rpm}"
+        assert actual_rpm == expected_rpm, (
+            f"User {user.user_id} ({priority}) should get {expected_rpm} RPM, got {actual_rpm}"
+        )
 
         # Validate descriptor key
         assert descriptor["value"] == f"{model}:{priority}"
@@ -314,9 +306,7 @@ async def test_100_concurrent_priority_requests(time_controller):
 
     # Split into batches to simulate requests over 10 seconds
     batch_size = 10  # 10 requests per batch
-    batches = [
-        all_users[i : i + batch_size] for i in range(0, len(all_users), batch_size)
-    ]
+    batches = [all_users[i : i + batch_size] for i in range(0, len(all_users), batch_size)]
 
     all_results = []
 
@@ -335,47 +325,29 @@ async def test_100_concurrent_priority_requests(time_controller):
     total_duration = end_time - start_time
 
     # Validate that the test ran over approximately 10 seconds
-    assert (
-        total_duration >= 9.0
-    ), f"Test should take ~10 seconds, took {total_duration:.2f}s"
+    assert total_duration >= 9.0, f"Test should take ~10 seconds, took {total_duration:.2f}s"
     assert total_duration <= 15.0, f"Test took too long: {total_duration:.2f}s"
 
     # Validate all requests were successful
-    successful_results = [
-        r for r in all_results if isinstance(r, dict) and r.get("success")
-    ]
-    assert (
-        len(successful_results) == 100
-    ), f"Expected 100 successful results, got {len(successful_results)}"
+    successful_results = [r for r in all_results if isinstance(r, dict) and r.get("success")]
+    assert len(successful_results) == 100, f"Expected 100 successful results, got {len(successful_results)}"
 
     # Validate priority distribution
     high_priority_results = [r for r in successful_results if r["priority"] == "high"]
     low_priority_results = [r for r in successful_results if r["priority"] == "low"]
 
-    assert (
-        len(high_priority_results) == 70
-    ), f"Expected 70 high priority results, got {len(high_priority_results)}"
-    assert (
-        len(low_priority_results) == 30
-    ), f"Expected 30 low priority results, got {len(low_priority_results)}"
+    assert len(high_priority_results) == 70, f"Expected 70 high priority results, got {len(high_priority_results)}"
+    assert len(low_priority_results) == 30, f"Expected 30 low priority results, got {len(low_priority_results)}"
 
     # Validate all high priority users got correct allocation
     for result in high_priority_results:
-        assert (
-            result["tpm"] == 900
-        ), f"High priority user {result['user_id']} got {result['tpm']} TPM, expected 900"
-        assert (
-            result["rpm"] == 450
-        ), f"High priority user {result['user_id']} got {result['rpm']} RPM, expected 450"
+        assert result["tpm"] == 900, f"High priority user {result['user_id']} got {result['tpm']} TPM, expected 900"
+        assert result["rpm"] == 450, f"High priority user {result['user_id']} got {result['rpm']} RPM, expected 450"
 
     # Validate all low priority users got correct allocation
     for result in low_priority_results:
-        assert (
-            result["tpm"] == 100
-        ), f"Low priority user {result['user_id']} got {result['tpm']} TPM, expected 100"
-        assert (
-            result["rpm"] == 50
-        ), f"Low priority user {result['user_id']} got {result['rpm']} RPM, expected 50"
+        assert result["tpm"] == 100, f"Low priority user {result['user_id']} got {result['tpm']} TPM, expected 100"
+        assert result["rpm"] == 50, f"Low priority user {result['user_id']} got {result['rpm']} RPM, expected 50"
 
     print(f"✅ Successfully processed 100 concurrent requests in {total_duration:.2f}s")
     print(f"   - 70 high priority users: 900 TPM, 450 RPM each")
@@ -431,9 +403,7 @@ async def test_concurrent_pre_call_hooks_stress():
             return 1800  # 1800/2000 = 90% saturation
         return None
 
-    async def mock_should_rate_limit(
-        descriptors, parent_otel_span=None, read_only=False
-    ):
+    async def mock_should_rate_limit(descriptors, parent_otel_span=None, read_only=False):
         """Mock rate limiter that handles saturation-aware descriptors."""
         descriptor = descriptors[0]
         descriptor_key = descriptor["key"]
@@ -542,9 +512,7 @@ async def test_concurrent_pre_call_hooks_stress():
             )
 
             # If no exception, request was allowed
-            successful_requests.append(
-                {"user_id": user.user_id, "priority": priority, "result": "allowed"}
-            )
+            successful_requests.append({"user_id": user.user_id, "priority": priority, "result": "allowed"})
             return {
                 "status": "success",
                 "user_id": user.user_id,
@@ -553,9 +521,7 @@ async def test_concurrent_pre_call_hooks_stress():
 
         except Exception as e:
             # Request was rate limited
-            rate_limited_requests.append(
-                {"user_id": user.user_id, "priority": priority, "error": str(e)}
-            )
+            rate_limited_requests.append({"user_id": user.user_id, "priority": priority, "error": str(e)})
             return {
                 "status": "rate_limited",
                 "user_id": user.user_id,
@@ -565,68 +531,44 @@ async def test_concurrent_pre_call_hooks_stress():
     # Run all 50 requests concurrently with patches applied to the entire batch
     start_time = time.time()
     with (
-        patch.object(
-            handler.v3_limiter, "should_rate_limit", side_effect=mock_should_rate_limit
-        ),
-        patch.object(
-            handler.internal_usage_cache, "async_get_cache", side_effect=mock_get_cache
-        ),
+        patch.object(handler.v3_limiter, "should_rate_limit", side_effect=mock_should_rate_limit),
+        patch.object(handler.internal_usage_cache, "async_get_cache", side_effect=mock_get_cache),
     ):
         tasks = [make_request(user_data) for user_data in users]
         results = await asyncio.gather(*tasks, return_exceptions=True)
     end_time = time.time()
 
     # Analyze results
-    successful_count = len(
-        [r for r in results if isinstance(r, dict) and r["status"] == "success"]
-    )
-    rate_limited_count = len(
-        [r for r in results if isinstance(r, dict) and r["status"] == "rate_limited"]
-    )
+    successful_count = len([r for r in results if isinstance(r, dict) and r["status"] == "success"])
+    rate_limited_count = len([r for r in results if isinstance(r, dict) and r["status"] == "rate_limited"])
 
     # Validate that premium users were mostly successful (priority worked)
-    premium_results = [
-        r for r in results if isinstance(r, dict) and r["priority"] == "premium"
-    ]
+    premium_results = [r for r in results if isinstance(r, dict) and r["priority"] == "premium"]
     premium_success = len([r for r in premium_results if r["status"] == "success"])
 
-    standard_results = [
-        r for r in results if isinstance(r, dict) and r["priority"] == "standard"
-    ]
+    standard_results = [r for r in results if isinstance(r, dict) and r["priority"] == "standard"]
     standard_success = len([r for r in standard_results if r["status"] == "success"])
 
     # Premium users should have higher success rate due to priority
-    premium_success_rate = (
-        premium_success / len(premium_results) if premium_results else 0
-    )
-    standard_success_rate = (
-        standard_success / len(standard_results) if standard_results else 0
-    )
+    premium_success_rate = premium_success / len(premium_results) if premium_results else 0
+    standard_success_rate = standard_success / len(standard_results) if standard_results else 0
 
-    assert (
-        premium_success_rate >= 0.9
-    ), f"Premium success rate should be >= 90%, got {premium_success_rate:.2%}"
-    assert (
-        standard_success_rate >= 0.5
-    ), f"Standard success rate should be >= 50% (with 30% random limiting, allows for variance), got {standard_success_rate:.2%}"
+    assert premium_success_rate >= 0.9, f"Premium success rate should be >= 90%, got {premium_success_rate:.2%}"
+    assert standard_success_rate >= 0.5, (
+        f"Standard success rate should be >= 50% (with 30% random limiting, allows for variance), got {standard_success_rate:.2%}"
+    )
 
     # Allow for the case where both are 100% due to timing/mocking issues
     # The test is inherently flaky due to random behavior
     if premium_success_rate < 1.0 or standard_success_rate < 1.0:
-        assert (
-            premium_success_rate >= standard_success_rate
-        ), "Premium should have >= success rate than standard"
+        assert premium_success_rate >= standard_success_rate, "Premium should have >= success rate than standard"
 
     total_duration = end_time - start_time
 
     print(f"✅ Processed 50 concurrent pre-call hooks in {total_duration:.2f}s")
-    print(
-        f"   - Premium users: {premium_success}/{len(premium_results)} success ({premium_success_rate:.1%})"
-    )
-    print(
-        f"   - Standard users: {standard_success}/{len(standard_results)} success ({standard_success_rate:.1%})"
-    )
-    print(f"   - Total successful: {successful_count}/50 ({successful_count/50:.1%})")
+    print(f"   - Premium users: {premium_success}/{len(premium_results)} success ({premium_success_rate:.1%})")
+    print(f"   - Standard users: {standard_success}/{len(standard_results)} success ({standard_success_rate:.1%})")
+    print(f"   - Total successful: {successful_count}/50 ({successful_count / 50:.1%})")
     print(f"   - Priority system working: Premium > Standard success rates")
 
 
@@ -734,28 +676,24 @@ async def test_fake_calls_case_1_no_rate_limiting_at_capacity():
     print(f"Test Case 1 - Saturation-Aware Rate Limiting:")
     print(f"   - Duration: {end_time - start_time:.2f}s")
     print(f"   - Key A: {successful_requests['key_a']}/1 successful (reserved 75 RPM)")
-    print(
-        f"   - Key B: {successful_requests['key_b']}/100 successful (reserved 25 RPM)"
-    )
+    print(f"   - Key B: {successful_requests['key_b']}/100 successful (reserved 25 RPM)")
     print(f"   - Total successful: {total_successful}/101")
     print(f"   - Total rate limited: {total_rate_limited}/101")
 
     # Key A should get its 1 request
-    assert (
-        successful_requests["key_a"] == 1
-    ), f"Key A should get 1 request, got {successful_requests['key_a']}"
+    assert successful_requests["key_a"] == 1, f"Key A should get 1 request, got {successful_requests['key_a']}"
 
     # Key B can send until saturation hits 50% (which is ~50 total requests)
     # After that, strict mode enforces its 25 RPM reservation
     # Due to race conditions in concurrent execution, allow 45-52 successful requests
-    assert (
-        45 <= successful_requests["key_b"] <= 52
-    ), f"Key B should get ~49 requests (45-52), got {successful_requests['key_b']}"
+    assert 45 <= successful_requests["key_b"] <= 52, (
+        f"Key B should get ~49 requests (45-52), got {successful_requests['key_b']}"
+    )
 
     # Verify approximately half of key_b requests were rate limited
-    assert (
-        rate_limited_requests["key_b"] >= 45
-    ), f"Key B should have ≥45 rate limited requests, got {rate_limited_requests['key_b']}"
+    assert rate_limited_requests["key_b"] >= 45, (
+        f"Key B should have ≥45 rate limited requests, got {rate_limited_requests['key_b']}"
+    )
 
 
 @pytest.mark.asyncio
@@ -857,32 +795,24 @@ async def test_fake_calls_case_2_priority_queue_during_saturation():
 
     print(f"Test Case 2 - Priority Queue Behavior During Saturation:")
     print(f"   - Duration: {end_time - start_time:.2f}s")
-    print(
-        f"   - Key A: {successful_requests['key_a']}/200 successful ({key_a_success_rate:.1%})"
-    )
-    print(
-        f"   - Key B: {successful_requests['key_b']}/200 successful ({key_b_success_rate:.1%})"
-    )
+    print(f"   - Key A: {successful_requests['key_a']}/200 successful ({key_a_success_rate:.1%})")
+    print(f"   - Key B: {successful_requests['key_b']}/200 successful ({key_b_success_rate:.1%})")
     print(f"   - Total successful: {total_successful}/400")
 
     # Key A should get significantly more requests than Key B (75:25 ratio)
-    assert (
-        key_a_success_rate > key_b_success_rate
-    ), f"Key A should have higher success rate: {key_a_success_rate:.1%} vs {key_b_success_rate:.1%}"
+    assert key_a_success_rate > key_b_success_rate, (
+        f"Key A should have higher success rate: {key_a_success_rate:.1%} vs {key_b_success_rate:.1%}"
+    )
 
     # Check ratio is approximately 3:1 (75:25)
     if total_successful > 0:
         key_a_share = successful_requests["key_a"] / total_successful
         expected_key_a_share = 0.75
 
-        print(
-            f"   - Key A got {key_a_share:.1%} of successful requests (expected ~75%)"
-        )
+        print(f"   - Key A got {key_a_share:.1%} of successful requests (expected ~75%)")
 
         # Allow tolerance for timing effects
-        assert (
-            abs(key_a_share - expected_key_a_share) < 0.2
-        ), f"Key A share should be ~75%, got {key_a_share:.1%}"
+        assert abs(key_a_share - expected_key_a_share) < 0.2, f"Key A share should be ~75%, got {key_a_share:.1%}"
 
 
 @pytest.mark.asyncio
@@ -1005,22 +935,12 @@ async def test_fake_calls_case_3_spillover_capacity_default_keys():
     print(f"   - Total successful: {total_successful}/600")
 
     # Key A should get the most requests (75% of capacity)
-    assert (
-        successful_requests["key_a"] > successful_requests["key_b"]
-    ), "Key A should get more than Key B"
-    assert (
-        successful_requests["key_a"] > successful_requests["key_c"]
-    ), "Key A should get more than Key C"
-    assert (
-        successful_requests["key_a"] > successful_requests["key_d"]
-    ), "Key A should get more than Key D"
+    assert successful_requests["key_a"] > successful_requests["key_b"], "Key A should get more than Key B"
+    assert successful_requests["key_a"] > successful_requests["key_c"], "Key A should get more than Key C"
+    assert successful_requests["key_a"] > successful_requests["key_d"], "Key A should get more than Key D"
 
     # Default keys should get similar amounts (spillover capacity)
-    avg_default = (
-        successful_requests["key_b"]
-        + successful_requests["key_c"]
-        + successful_requests["key_d"]
-    ) / 3
+    avg_default = (successful_requests["key_b"] + successful_requests["key_c"] + successful_requests["key_d"]) / 3
     print(f"   - Average default key success: {avg_default:.1f}")
 
 
@@ -1126,32 +1046,27 @@ async def test_fake_calls_case_4_over_allocated_with_normalization():
 
     print(f"Test Case 4 - Over-Allocated Priority Reservations with Normalization:")
     print(f"   - Duration: {end_time - start_time:.2f}s")
-    print(
-        f"   - Key A (0.60): {successful_requests['key_a']}/200 successful ({key_a_success_rate:.1%})"
-    )
-    print(
-        f"   - Key B (0.80): {successful_requests['key_b']}/200 successful ({key_b_success_rate:.1%})"
-    )
+    print(f"   - Key A (0.60): {successful_requests['key_a']}/200 successful ({key_a_success_rate:.1%})")
+    print(f"   - Key B (0.80): {successful_requests['key_b']}/200 successful ({key_b_success_rate:.1%})")
     print(f"   - Total successful: {total_successful}/400")
 
     # With saturation-aware behavior:
     # 1. Verify total capacity is reasonably bounded (not all 400 requests succeed)
-    assert (
-        total_successful < 300
-    ), f"Total requests should be bounded by saturation detection, got {total_successful}/400"
+    assert total_successful < 300, (
+        f"Total requests should be bounded by saturation detection, got {total_successful}/400"
+    )
 
     # 2. Verify significant rate limiting occurred (at least 50% blocked)
-    assert (
-        total_successful < 200
-    ), f"At least 50% of requests should be rate limited, got {total_successful}/400 successful"
+    assert total_successful < 200, (
+        f"At least 50% of requests should be rate limited, got {total_successful}/400 successful"
+    )
 
     # 3. Verify both keys got some requests through (normalization is working)
     assert successful_requests["key_a"] > 0, "Key A should get some requests"
     assert successful_requests["key_b"] > 0, "Key B should get some requests"
 
     print(
-        f"   - Normalization test PASSED: Both priorities got requests, "
-        f"total bounded to {total_successful} (under 200)"
+        f"   - Normalization test PASSED: Both priorities got requests, total bounded to {total_successful} (under 200)"
     )
 
 
@@ -1275,24 +1190,16 @@ async def test_fake_calls_case_5_default_value_priority_reservation():
     print(f"   - Total successful: {total_successful}/600")
 
     # Verify priority ordering: A > B > C ≈ D
-    assert (
-        successful_requests["key_a"] > successful_requests["key_b"]
-    ), "Key A should get more than Key B"
-    assert (
-        successful_requests["key_b"] > successful_requests["key_c"]
-    ), "Key B should get more than Key C"
+    assert successful_requests["key_a"] > successful_requests["key_b"], "Key A should get more than Key B"
+    assert successful_requests["key_b"] > successful_requests["key_c"], "Key B should get more than Key C"
 
     # Key C and Key D should get similar amounts (both have 0.05 priority)
-    key_c_vs_d_ratio = successful_requests["key_c"] / max(
-        successful_requests["key_d"], 1
-    )
+    key_c_vs_d_ratio = successful_requests["key_c"] / max(successful_requests["key_d"], 1)
     print(f"   - Key C vs Key D ratio: {key_c_vs_d_ratio:.2f} (expected ~1.0)")
 
     if total_successful > 0:
         key_a_share = successful_requests["key_a"] / total_successful
-        print(
-            f"   - Key A got {key_a_share:.1%} of successful requests (expected ~55-62%)"
-        )
+        print(f"   - Key A got {key_a_share:.1%} of successful requests (expected ~55-62%)")
 
 
 @pytest.mark.asyncio
@@ -1344,15 +1251,9 @@ async def test_default_priority_shared_pool():
     user_c.user_id = "user_c"
 
     # Get descriptors for each
-    desc_a = handler._create_priority_based_descriptors(
-        model=model, user_api_key_dict=user_a, priority=None
-    )
-    desc_b = handler._create_priority_based_descriptors(
-        model=model, user_api_key_dict=user_b, priority=None
-    )
-    desc_c = handler._create_priority_based_descriptors(
-        model=model, user_api_key_dict=user_c, priority=None
-    )
+    desc_a = handler._create_priority_based_descriptors(model=model, user_api_key_dict=user_a, priority=None)
+    desc_b = handler._create_priority_based_descriptors(model=model, user_api_key_dict=user_b, priority=None)
+    desc_c = handler._create_priority_based_descriptors(model=model, user_api_key_dict=user_c, priority=None)
 
     # All should use the SAME shared pool key
     assert desc_a[0]["value"] == f"{model}:default_pool"
@@ -1367,9 +1268,7 @@ async def test_default_priority_shared_pool():
     # Verify explicit priority uses different pool
     user_prod = UserAPIKeyAuth()
     user_prod.metadata = {"priority": "prod"}
-    desc_prod = handler._create_priority_based_descriptors(
-        model=model, user_api_key_dict=user_prod, priority="prod"
-    )
+    desc_prod = handler._create_priority_based_descriptors(model=model, user_api_key_dict=user_prod, priority="prod")
 
     assert desc_prod[0]["value"] == f"{model}:prod"
     assert desc_prod[0]["rate_limit"]["requests_per_unit"] == 75
@@ -1462,24 +1361,20 @@ async def test_async_log_success_event_increments_by_actual_tokens():
         )
 
     # Verify increments happened with actual token count (60 total tokens)
-    assert (
-        len(increment_calls) == 2
-    ), f"Expected 2 increment calls, got {len(increment_calls)}"
+    assert len(increment_calls) == 2, f"Expected 2 increment calls, got {len(increment_calls)}"
 
     # Both should increment by 50 (total_tokens, since rate_limit_type defaults to 'total')
     for call in increment_calls:
-        assert (
-            call["increment_value"] == 60
-        ), f"Expected increment of 60 tokens, got {call['increment_value']} for key {call['key']}"
+        assert call["increment_value"] == 60, (
+            f"Expected increment of 60 tokens, got {call['increment_value']} for key {call['key']}"
+        )
 
     # Verify correct keys were used
     keys = [call["key"] for call in increment_calls]
-    assert any(
-        "model_saturation_check" in k for k in keys
-    ), "Should increment model_saturation_check"
-    assert any(
-        "priority_model" in k and "dev" in k for k in keys
-    ), "Should increment priority_model with 'dev' priority"
+    assert any("model_saturation_check" in k for k in keys), "Should increment model_saturation_check"
+    assert any("priority_model" in k and "dev" in k for k in keys), (
+        "Should increment priority_model with 'dev' priority"
+    )
 
 
 @pytest.mark.asyncio
@@ -1520,17 +1415,15 @@ async def test_saturation_check_cache_ttl_configuration():
         handler.update_variables(llm_router=llm_router)
 
         # Verify the TTL getter returns configured value
-        assert (
-            handler._get_saturation_check_cache_ttl() == 5
-        ), "TTL should be configurable via priority_reservation_settings"
+        assert handler._get_saturation_check_cache_ttl() == 5, (
+            "TTL should be configurable via priority_reservation_settings"
+        )
 
         # Track async_get_cache calls to verify TTL is passed
         get_cache_calls = []
         original_get_cache = handler.internal_usage_cache.async_get_cache
 
-        async def mock_get_cache(
-            key, litellm_parent_otel_span=None, local_only=False, **kwargs
-        ):
+        async def mock_get_cache(key, litellm_parent_otel_span=None, local_only=False, **kwargs):
             get_cache_calls.append(
                 {
                     "key": key,
@@ -1553,12 +1446,10 @@ async def test_saturation_check_cache_ttl_configuration():
 
         # Verify async_get_cache was called with the configured TTL
         assert len(get_cache_calls) == 1, "Expected 1 cache call"
-        assert (
-            get_cache_calls[0]["ttl"] == 5
-        ), f"Expected TTL of 5 seconds, got {get_cache_calls[0]['ttl']}"
-        assert (
-            get_cache_calls[0]["local_only"] is False
-        ), "Should check Redis (local_only=False) for multi-node consistency"
+        assert get_cache_calls[0]["ttl"] == 5, f"Expected TTL of 5 seconds, got {get_cache_calls[0]['ttl']}"
+        assert get_cache_calls[0]["local_only"] is False, (
+            "Should check Redis (local_only=False) for multi-node consistency"
+        )
 
         # Test with different TTL value
         get_cache_calls.clear()
@@ -1566,20 +1457,12 @@ async def test_saturation_check_cache_ttl_configuration():
 
         await handler._get_saturation_value_from_cache(counter_key=counter_key)
 
-        assert (
-            get_cache_calls[0]["ttl"] == 30
-        ), f"TTL should update to 30 seconds, got {get_cache_calls[0]['ttl']}"
+        assert get_cache_calls[0]["ttl"] == 30, f"TTL should update to 30 seconds, got {get_cache_calls[0]['ttl']}"
 
         print("Saturation check cache TTL test passed:")
-        print(
-            "   - TTL is configurable via priority_reservation_settings.saturation_check_cache_ttl"
-        )
-        print(
-            "   - TTL is passed to async_get_cache for local cache expiration control"
-        )
-        print(
-            "   - local_only=False ensures Redis is checked for multi-node consistency"
-        )
+        print("   - TTL is configurable via priority_reservation_settings.saturation_check_cache_ttl")
+        print("   - TTL is passed to async_get_cache for local cache expiration control")
+        print("   - local_only=False ensures Redis is checked for multi-node consistency")
 
     finally:
         # Restore original TTL
@@ -1665,18 +1548,15 @@ async def test_async_log_success_event_uses_team_priority_from_auth_metadata():
 
     # Verify the priority_model key uses 'team_priority' (not 'default_pool')
     priority_keys = [k for k in incremented_keys if "priority_model" in k]
-    assert (
-        len(priority_keys) == 1
-    ), f"Expected 1 priority_model key, got {len(priority_keys)}"
+    assert len(priority_keys) == 1, f"Expected 1 priority_model key, got {len(priority_keys)}"
 
     # The key should contain 'team_priority', not 'default_pool'
     assert "team_priority" in priority_keys[0], (
-        f"Expected priority key to use 'team_priority' from user_api_key_auth_metadata, "
-        f"got key: {priority_keys[0]}"
+        f"Expected priority key to use 'team_priority' from user_api_key_auth_metadata, got key: {priority_keys[0]}"
     )
-    assert (
-        "default_pool" not in priority_keys[0]
-    ), f"Priority key should NOT use 'default_pool', should use team's priority. Got: {priority_keys[0]}"
+    assert "default_pool" not in priority_keys[0], (
+        f"Priority key should NOT use 'default_pool', should use team's priority. Got: {priority_keys[0]}"
+    )
 
 
 @pytest.mark.asyncio

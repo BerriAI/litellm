@@ -7,9 +7,7 @@ import os, io, asyncio
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest, time
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
@@ -57,9 +55,7 @@ def test_embedding(client):
         litellm.set_verbose = False
         from litellm.proxy.types_utils.utils import get_instance_fn
 
-        my_custom_logger = get_instance_fn(
-            value="custom_callbacks.my_custom_logger", config_file_path=python_file_path
-        )
+        my_custom_logger = get_instance_fn(value="custom_callbacks.my_custom_logger", config_file_path=python_file_path)
         print("id of initialized custom logger", id(my_custom_logger))
         litellm.callbacks = [my_custom_logger]
         # Your test data
@@ -99,18 +95,14 @@ def test_embedding(client):
         # Test 2: Verify proxy_server_request contains the original request details
         proxy_server_request = litellm_params.get("proxy_server_request")
         assert proxy_server_request is not None, "proxy_server_request should exist"
-        assert (
-            proxy_server_request.get("url") == "http://testserver/embeddings"
-        ), "url should match"
+        assert proxy_server_request.get("url") == "http://testserver/embeddings", "url should match"
         assert proxy_server_request.get("method") == "POST", "method should be POST"
         assert "headers" in proxy_server_request, "headers should be present"
         assert "body" in proxy_server_request, "body should be present"
 
         # Test 3: Verify request body contains the original input data
         body = proxy_server_request["body"]
-        assert (
-            body.get("model") == "azure-embedding-model"
-        ), "model should match original request"
+        assert body.get("model") == "azure-embedding-model", "model should match original request"
         assert body.get("input") == ["hello"], "input should match original request"
 
         # Test 4: Verify model_info is populated
@@ -118,9 +110,7 @@ def test_embedding(client):
         assert model_info is not None, "model_info should exist"
         assert model_info.get("mode") == "embedding", "mode should be embedding"
         assert model_info.get("id") == "hello", "id should match"
-        assert (
-            model_info.get("input_cost_per_token") == 0.002
-        ), "input cost should match"
+        assert model_info.get("input_cost_per_token") == 0.002, "input cost should match"
         result = response.json()
         print(f"Received response: {result}")
         print("Passed Embedding custom logger on proxy!")
@@ -138,9 +128,7 @@ def test_chat_completion(client):
         litellm.set_verbose = False
         from litellm.proxy.types_utils.utils import get_instance_fn
 
-        my_custom_logger = get_instance_fn(
-            value="custom_callbacks.my_custom_logger", config_file_path=python_file_path
-        )
+        my_custom_logger = get_instance_fn(value="custom_callbacks.my_custom_logger", config_file_path=python_file_path)
 
         print("id of initialized custom logger", id(my_custom_logger))
 
@@ -191,9 +179,7 @@ def test_chat_completion(client):
         print("\n\n Metadata in custom logger kwargs", litellm_params.get("metadata"))
         assert metadata is not None, "metadata should be present"
         assert "user_api_key" in metadata, "user_api_key should be in metadata"
-        assert (
-            "user_api_key_metadata" in metadata
-        ), "user_api_key_metadata should be in metadata"
+        assert "user_api_key_metadata" in metadata, "user_api_key_metadata should be in metadata"
         assert "headers" in metadata, "headers should be in metadata"
 
         # Test 2: Verify model_info is populated
@@ -201,36 +187,21 @@ def test_chat_completion(client):
         assert config_model_info is not None, "model_info should exist"
         assert config_model_info.get("id") == "gm", "model id should match"
         assert config_model_info.get("mode") == "chat", "mode should be chat"
-        assert (
-            config_model_info.get("input_cost_per_token") == 0.0002
-        ), "input cost should match"
+        assert config_model_info.get("input_cost_per_token") == 0.0002, "input cost should match"
 
         # Test 3: Verify proxy_server_request contains request details
         proxy_server_request_object = litellm_params.get("proxy_server_request")
-        assert (
-            proxy_server_request_object is not None
-        ), "proxy_server_request should exist"
-        assert (
-            proxy_server_request_object.get("url")
-            == "http://testserver/chat/completions"
-        ), "url should match"
-        assert (
-            proxy_server_request_object.get("method") == "POST"
-        ), "method should be POST"
+        assert proxy_server_request_object is not None, "proxy_server_request should exist"
+        assert proxy_server_request_object.get("url") == "http://testserver/chat/completions", "url should match"
+        assert proxy_server_request_object.get("method") == "POST", "method should be POST"
 
         # Test 4: Verify authorization is not leaked in logged headers
-        assert (
-            "authorization" not in proxy_server_request_object["headers"]
-        ), "authorization should not be in headers"
+        assert "authorization" not in proxy_server_request_object["headers"], "authorization should not be in headers"
 
         # Test 5: Verify request body contains original input data
         body = proxy_server_request_object.get("body", {})
-        assert (
-            body.get("model") == "Azure OpenAI GPT-4 Canada"
-        ), "model should match original request"
-        assert body.get("messages") == [
-            {"role": "user", "content": "write a litellm poem"}
-        ], "messages should match"
+        assert body.get("model") == "Azure OpenAI GPT-4 Canada", "model should match original request"
+        assert body.get("messages") == [{"role": "user", "content": "write a litellm poem"}], "messages should match"
         assert body.get("max_tokens") == 10, "max_tokens should match"
         result = response.json()
         print(f"Received response: {result}")
@@ -249,9 +220,7 @@ def test_chat_completion_stream(client):
         litellm.set_verbose = False
         from litellm.proxy.types_utils.utils import get_instance_fn
 
-        my_custom_logger = get_instance_fn(
-            value="custom_callbacks.my_custom_logger", config_file_path=python_file_path
-        )
+        my_custom_logger = get_instance_fn(value="custom_callbacks.my_custom_logger", config_file_path=python_file_path)
 
         print("id of initialized custom logger", id(my_custom_logger))
 
@@ -265,9 +234,7 @@ def test_chat_completion_stream(client):
         print("LiteLLM Callbacks", litellm.callbacks)
         print("my_custom_logger", my_custom_logger)
 
-        assert (
-            my_custom_logger.streaming_response_obj == None
-        )  # no streaming response obj is set pre call
+        assert my_custom_logger.streaming_response_obj == None  # no streaming response obj is set pre call
 
         test_data = {
             "model": "Azure OpenAI GPT-4 Canada",
@@ -314,9 +281,7 @@ def test_chat_completion_stream(client):
         time.sleep(0.5)
 
         streamed_response = my_custom_logger.streaming_response_obj
-        assert (
-            complete_response == streamed_response["choices"][0]["message"]["content"]
-        )
+        assert complete_response == streamed_response["choices"][0]["message"]["content"]
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")

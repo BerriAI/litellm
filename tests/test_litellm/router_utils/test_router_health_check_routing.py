@@ -19,14 +19,10 @@ def _make_deployment(model_id: str, model_name: str = "gpt-4") -> dict:
     }
 
 
-def _make_health_cache(
-    unhealthy_ids: set = None, staleness_threshold: float = 60.0
-) -> DeploymentHealthCache:
+def _make_health_cache(unhealthy_ids: set = None, staleness_threshold: float = 60.0) -> DeploymentHealthCache:
     """Create a health cache pre-populated with unhealthy deployment IDs."""
     cache = DualCache()
-    health_cache = DeploymentHealthCache(
-        cache=cache, staleness_threshold=staleness_threshold
-    )
+    health_cache = DeploymentHealthCache(cache=cache, staleness_threshold=staleness_threshold)
     if unhealthy_ids:
         now = time.time()
         states = {}
@@ -57,8 +53,8 @@ class TestFilterHealthCheckUnhealthyDeployments:
 
         fake = FakeRouter()
         # Use the unbound method
-        fake._filter_health_check_unhealthy_deployments = (
-            Router._filter_health_check_unhealthy_deployments.__get__(fake, FakeRouter)
+        fake._filter_health_check_unhealthy_deployments = Router._filter_health_check_unhealthy_deployments.__get__(
+            fake, FakeRouter
         )
         return fake
 
@@ -90,9 +86,7 @@ class TestFilterHealthCheckUnhealthyDeployments:
 
     def test_filter_returns_all_when_all_unhealthy(self):
         """Safety net: if ALL deployments are unhealthy, return all (don't cause outage)."""
-        health_cache = _make_health_cache(
-            unhealthy_ids={"deploy-1", "deploy-2", "deploy-3"}
-        )
+        health_cache = _make_health_cache(unhealthy_ids={"deploy-1", "deploy-2", "deploy-3"})
         router = self._make_router_like(enable=True, health_cache=health_cache)
 
         deployments = [
@@ -130,9 +124,7 @@ class TestAsyncFilterHealthCheckUnhealthyDeployments:
 
         fake = FakeRouter()
         fake._async_filter_health_check_unhealthy_deployments = (
-            Router._async_filter_health_check_unhealthy_deployments.__get__(
-                fake, FakeRouter
-            )
+            Router._async_filter_health_check_unhealthy_deployments.__get__(fake, FakeRouter)
         )
         return fake
 
@@ -147,9 +139,7 @@ class TestAsyncFilterHealthCheckUnhealthyDeployments:
             _make_deployment("deploy-2"),
             _make_deployment("deploy-3"),
         ]
-        result = await router._async_filter_health_check_unhealthy_deployments(
-            healthy_deployments=deployments
-        )
+        result = await router._async_filter_health_check_unhealthy_deployments(healthy_deployments=deployments)
         assert len(result) == 2
         assert all(d["model_info"]["id"] != "deploy-2" for d in result)
 
@@ -163,9 +153,7 @@ class TestAsyncFilterHealthCheckUnhealthyDeployments:
             _make_deployment("deploy-1"),
             _make_deployment("deploy-2"),
         ]
-        result = await router._async_filter_health_check_unhealthy_deployments(
-            healthy_deployments=deployments
-        )
+        result = await router._async_filter_health_check_unhealthy_deployments(healthy_deployments=deployments)
         assert len(result) == 2  # safety net
 
 

@@ -53,9 +53,7 @@ class TestGetProviderAgentsApiConfig:
         assert isinstance(cfg, GeminiAgentsConfig)
         assert isinstance(cfg, BaseAgentsAPIConfig)
 
-    @pytest.mark.parametrize(
-        "provider", ["openai", "anthropic", "bedrock", "vertex_ai", "unknown"]
-    )
+    @pytest.mark.parametrize("provider", ["openai", "anthropic", "bedrock", "vertex_ai", "unknown"])
     def test_returns_none_for_non_gemini(self, provider):
         assert get_provider_agents_api_config(provider) is None
 

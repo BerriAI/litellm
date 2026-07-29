@@ -30,9 +30,7 @@ class TestGetBaseModelFromLitellmCallMetadata:
         assert _get_base_model_from_litellm_call_metadata({"model_info": {}}) is None
 
     def test_returns_base_model(self):
-        result = _get_base_model_from_litellm_call_metadata(
-            {"model_info": {"base_model": "gpt-4"}}
-        )
+        result = _get_base_model_from_litellm_call_metadata({"model_info": {"base_model": "gpt-4"}})
         assert result == "gpt-4"
 
 
@@ -85,9 +83,7 @@ class TestGetLitellmParamsBaseModel:
         assert result["base_model"] == "explicit"
 
     def test_falls_back_to_metadata(self):
-        result = get_litellm_params(
-            metadata={"model_info": {"base_model": "from-metadata"}}
-        )
+        result = get_litellm_params(metadata={"model_info": {"base_model": "from-metadata"}})
         assert result["base_model"] == "from-metadata"
 
     def test_none_when_no_source(self):

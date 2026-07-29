@@ -11,9 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm_enterprise.enterprise_callbacks.llm_guard import _ENTERPRISE_LLMGuard
@@ -38,9 +36,7 @@ async def test_llm_guard_valid_response():
         "is_valid": True,
         "scanners": {"Regex": 0.0},
     }
-    llm_guard = _ENTERPRISE_LLMGuard(
-        mock_testing=True, mock_redacted_text=input_a_anonymizer_results
-    )
+    llm_guard = _ENTERPRISE_LLMGuard(mock_testing=True, mock_redacted_text=input_a_anonymizer_results)
 
     _api_key = "sk-12345"
     _api_key = hash_token("sk-12345")
@@ -119,9 +115,7 @@ async def test_llm_guard_error_raising():
         "is_valid": False,
         "scanners": {"Regex": 0.0},
     }
-    llm_guard = _ENTERPRISE_LLMGuard(
-        mock_testing=True, mock_redacted_text=input_b_anonymizer_results
-    )
+    llm_guard = _ENTERPRISE_LLMGuard(mock_testing=True, mock_redacted_text=input_b_anonymizer_results)
 
     _api_key = "sk-12345"
     _api_key = hash_token("sk-12345")
@@ -161,22 +155,16 @@ def test_llm_guard_key_specific_mode():
     )
 
     request_data = {}
-    should_proceed = llm_guard.should_proceed(
-        user_api_key_dict=user_api_key_dict, data=request_data
-    )
+    should_proceed = llm_guard.should_proceed(user_api_key_dict=user_api_key_dict, data=request_data)
 
     assert should_proceed == False
 
     # ENABLED
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key=_api_key, permissions={"enable_llm_guard_check": True}
-    )
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, permissions={"enable_llm_guard_check": True})
 
     request_data = {}
 
-    should_proceed = llm_guard.should_proceed(
-        user_api_key_dict=user_api_key_dict, data=request_data
-    )
+    should_proceed = llm_guard.should_proceed(user_api_key_dict=user_api_key_dict, data=request_data)
 
     assert should_proceed == True
 
@@ -197,21 +185,15 @@ def test_llm_guard_request_specific_mode():
 
     request_data = {}
 
-    should_proceed = llm_guard.should_proceed(
-        user_api_key_dict=user_api_key_dict, data=request_data
-    )
+    should_proceed = llm_guard.should_proceed(user_api_key_dict=user_api_key_dict, data=request_data)
 
     assert should_proceed == False
 
     # ENABLED
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key=_api_key, permissions={"enable_llm_guard_check": True}
-    )
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, permissions={"enable_llm_guard_check": True})
 
     request_data = {"metadata": {"permissions": {"enable_llm_guard_check": True}}}
 
-    should_proceed = llm_guard.should_proceed(
-        user_api_key_dict=user_api_key_dict, data=request_data
-    )
+    should_proceed = llm_guard.should_proceed(user_api_key_dict=user_api_key_dict, data=request_data)
 
     assert should_proceed == True

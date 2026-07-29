@@ -8,9 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
@@ -146,9 +144,7 @@ def test_token_counter_legacy_function_call_counts_arguments():
     MESSAGES_TEXT,
 )
 def test_token_counter_textonly(message_count_pair):
-    counted_tokens = token_counter(
-        model="gpt-35-turbo", messages=[message_count_pair["message"]]
-    )
+    counted_tokens = token_counter(model="gpt-35-turbo", messages=[message_count_pair["message"]])
     assert counted_tokens == message_count_pair["count"]
 
 
@@ -172,9 +168,7 @@ def test_token_counter_count_response_tokens(message_count_pair):
     MESSAGES_WITH_IMAGES,
 )
 def test_token_counter_with_images(message_count_pair):
-    counted_tokens = token_counter(
-        model="gpt-4o", messages=[message_count_pair["message"]]
-    )
+    counted_tokens = token_counter(model="gpt-4o", messages=[message_count_pair["message"]])
     assert counted_tokens == message_count_pair["count"]
 
 
@@ -197,18 +191,16 @@ def test_token_counter_with_tools(message_count_pair):
             pass  # expected
         else:
             tolerated_diff = message_count_pair["count-tolerate"] - expected_tokens
-            assert (
-                actual_diff <= tolerated_diff
-            ), f"Expected {expected_tokens} tokens, got {counted_tokens}. Counted tokens is only allowed to be off by {tolerated_diff} in the over-counting direction."
+            assert actual_diff <= tolerated_diff, (
+                f"Expected {expected_tokens} tokens, got {counted_tokens}. Counted tokens is only allowed to be off by {tolerated_diff} in the over-counting direction."
+            )
             if actual_diff != tolerated_diff:
                 raise NeedsToleranceUpdateError(
                     f"SOMETHING BROKEN GOT FIXED! THIS is good! Adjust 'count-tolerate' from {message_count_pair['count-tolerate']} to {counted_tokens}"
                 )
 
     else:
-        assert (
-            expected_tokens == counted_tokens
-        ), f"Expected {expected_tokens} tokens, got {counted_tokens}."
+        assert expected_tokens == counted_tokens, f"Expected {expected_tokens} tokens, got {counted_tokens}."
 
 
 class NeedsToleranceUpdateError(Exception):
@@ -227,32 +219,22 @@ def test_tokenizers():
         openai_tokens = token_counter(model="gpt-3.5-turbo", text=sample_text)
 
         # claude tokenizer
-        claude_tokens = token_counter(
-            model="claude-3-5-haiku-20241022", text=sample_text
-        )
+        claude_tokens = token_counter(model="claude-3-5-haiku-20241022", text=sample_text)
 
         # cohere tokenizer
         cohere_tokens = token_counter(model="command-nightly", text=sample_text)
 
         # llama2 tokenizer
-        llama2_tokens = token_counter(
-            model="meta-llama/Llama-2-7b-chat", text=sample_text
-        )
+        llama2_tokens = token_counter(model="meta-llama/Llama-2-7b-chat", text=sample_text)
 
         # llama3 tokenizer (also testing custom tokenizer)
-        llama3_tokens_1 = token_counter(
-            model="meta-llama/llama-3-70b-instruct", text=sample_text
-        )
+        llama3_tokens_1 = token_counter(model="meta-llama/llama-3-70b-instruct", text=sample_text)
 
         try:
             llama3_tokenizer = create_pretrained_tokenizer("Xenova/llama-3-tokenizer")
         except Exception as e:
-            pytest.skip(
-                f"custom tokenizer download failed (HF hub unreachable): {e}"
-            )
-        llama3_tokens_2 = token_counter(
-            custom_tokenizer=llama3_tokenizer, text=sample_text
-        )
+            pytest.skip(f"custom tokenizer download failed (HF hub unreachable): {e}")
+        llama3_tokens_2 = token_counter(custom_tokenizer=llama3_tokenizer, text=sample_text)
 
         print(
             f"openai tokens: {openai_tokens}; claude tokens: {claude_tokens}; cohere tokens: {cohere_tokens}; llama2 tokens: {llama2_tokens}; llama3 tokens: {llama3_tokens_1}"
@@ -263,14 +245,12 @@ def test_tokenizers():
         # model hub is unreachable (e.g. in CI).  In that case the count will
         # equal the openai count and the differentiation assertion is skipped.
         if openai_tokens == llama2_tokens:
-            pytest.skip(
-                "llama2 fell back to tiktoken (HF hub unreachable); skipping differentiation assertion"
-            )
+            pytest.skip("llama2 fell back to tiktoken (HF hub unreachable); skipping differentiation assertion")
         assert llama2_tokens != llama3_tokens_1, "Token values are not different."
 
-        assert (
-            llama3_tokens_1 == llama3_tokens_2
-        ), "Custom tokenizer is not being used! It has been configured to use the same tokenizer as the built in llama3 tokenizer and the results should be the same."
+        assert llama3_tokens_1 == llama3_tokens_2, (
+            "Custom tokenizer is not being used! It has been configured to use the same tokenizer as the built in llama3 tokenizer and the results should be the same."
+        )
 
         print("test tokenizer: It worked!")
     except Exception as e:
@@ -417,9 +397,7 @@ def test_openai_token_with_image_and_text():
         ("gpt-3.5-turbo", "gpt-3.5-turbo", 4000, 5000, 4096),  # model max output = 4096
     ],
 )
-def test_get_modified_max_tokens(
-    model, base_model, input_tokens, user_max_tokens, expected_value
-):
+def test_get_modified_max_tokens(model, base_model, input_tokens, user_max_tokens, expected_value):
     """
     - Test when max_output is not known => expect user_max_tokens
     - Test when max_output == max_input,
@@ -452,9 +430,7 @@ def test_get_modified_max_tokens(
     if expected_value is None:
         assert calculated_value is None
     else:
-        assert (
-            calculated_value == expected_value
-        ), "Got={}, Expected={}, Params={}".format(
+        assert calculated_value == expected_value, "Got={}, Expected={}, Params={}".format(
             calculated_value, expected_value, args
         )
 
@@ -473,12 +449,8 @@ def test_empty_tools():
     reason="Skipping this test temporarily because it relies on a function being called that I am removing."
 )
 def test_gpt_4o_token_counter():
-    with patch.object(
-        litellm.utils, "openai_token_counter", new=MagicMock()
-    ) as mock_client:
-        token_counter(
-            model="gpt-4o-2024-05-13", messages=[{"role": "user", "content": "Hey!"}]
-        )
+    with patch.object(litellm.utils, "openai_token_counter", new=MagicMock()) as mock_client:
+        token_counter(model="gpt-4o-2024-05-13", messages=[{"role": "user", "content": "Hey!"}])
 
         mock_client.assert_called()
 
@@ -608,9 +580,7 @@ class TestTokenizerSelection(unittest.TestCase):
         result = _select_tokenizer_helper("command-r-v1")
 
         # Verify the attempt to load Cohere tokenizer
-        mock_from_pretrained.assert_called_once_with(
-            "Xenova/c4ai-command-r-v01-tokenizer"
-        )
+        mock_from_pretrained.assert_called_once_with("Xenova/c4ai-command-r-v01-tokenizer")
 
         # Verify fallback to OpenAI tokenizer
         self.assertEqual(result["type"], "openai_tokenizer")
@@ -643,9 +613,7 @@ class TestTokenizerSelection(unittest.TestCase):
         result = _select_tokenizer_helper("llama-2-7b")
 
         # Verify the attempt to load Llama-2 tokenizer
-        mock_from_pretrained.assert_called_once_with(
-            "hf-internal-testing/llama-tokenizer"
-        )
+        mock_from_pretrained.assert_called_once_with("hf-internal-testing/llama-tokenizer")
 
         # Verify fallback to OpenAI tokenizer
         self.assertEqual(result["type"], "openai_tokenizer")
@@ -754,9 +722,7 @@ def test_token_counter_with_anthropic_tool_use():
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count: user message + "I'll check" text + "get_weather" name + input dict
-    assert (
-        tokens > 15
-    ), f"Expected reasonable token count for message with tool_use, got {tokens}"
+    assert tokens > 15, f"Expected reasonable token count for message with tool_use, got {tokens}"
 
 
 def test_token_counter_with_anthropic_tool_result():
@@ -795,9 +761,7 @@ def test_token_counter_with_anthropic_tool_result():
 
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
-    assert (
-        tokens > 25
-    ), f"Expected reasonable token count for conversation with tool_result, got {tokens}"
+    assert tokens > 25, f"Expected reasonable token count for conversation with tool_result, got {tokens}"
 
 
 def test_token_counter_with_nested_tool_result():
@@ -831,9 +795,7 @@ def test_token_counter_with_nested_tool_result():
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count both nested text blocks
-    assert (
-        tokens > 15
-    ), f"Expected reasonable token count for nested tool_result, got {tokens}"
+    assert tokens > 15, f"Expected reasonable token count for nested tool_result, got {tokens}"
 
 
 def test_token_counter_tool_use_and_result_combined():
@@ -896,9 +858,7 @@ def test_token_counter_tool_use_and_result_combined():
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count all text, tool names, inputs, and results
-    assert (
-        tokens > 60
-    ), f"Expected substantial token count for full tool conversation, got {tokens}"
+    assert tokens > 60, f"Expected substantial token count for full tool conversation, got {tokens}"
 
 
 def test_token_counter_with_image_url():
@@ -949,12 +909,8 @@ def test_token_counter_with_image_url():
         }
     ]
 
-    tokens_str = token_counter(
-        model="gpt-3.5-turbo", messages=messages_str, use_default_image_token_count=True
-    )
-    assert (
-        tokens_str > 0
-    ), f"Expected positive token count for string image_url, got {tokens_str}"
+    tokens_str = token_counter(model="gpt-3.5-turbo", messages=messages_str, use_default_image_token_count=True)
+    assert tokens_str > 0, f"Expected positive token count for string image_url, got {tokens_str}"
 
     # Test invalid detail value raises error
     messages_invalid = [
@@ -976,9 +932,7 @@ def test_token_counter_with_image_url():
         token_counter(model="gpt-3.5-turbo", messages=messages_invalid)
         assert False, "Expected ValueError for invalid detail value"
     except ValueError as e:
-        assert "Invalid detail value" in str(
-            e
-        ), f"Expected detail validation error, got: {e}"
+        assert "Invalid detail value" in str(e), f"Expected detail validation error, got: {e}"
 
 
 def test_token_counter_with_thinking_content():
@@ -1018,15 +972,11 @@ def test_token_counter_with_thinking_content():
         {"role": "user", "content": [{"type": "text", "text": "Thanks"}]},
     ]
 
-    tokens = token_counter(
-        model="anthropic/claude-sonnet-4-5-20250929", messages=messages
-    )
+    tokens = token_counter(model="anthropic/claude-sonnet-4-5-20250929", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count: user message + thinking text + response text + "Thanks"
     # The thinking text alone is ~30 tokens, plus other content should be > 50 total
-    assert (
-        tokens > 50
-    ), f"Expected substantial token count for message with thinking, got {tokens}"
+    assert tokens > 50, f"Expected substantial token count for message with thinking, got {tokens}"
 
     # Test that thinking block without 'thinking' field doesn't crash (edge case)
     messages_no_thinking = [
@@ -1043,16 +993,10 @@ def test_token_counter_with_thinking_content():
         }
     ]
 
-    tokens_no_thinking = token_counter(
-        model="anthropic/claude-sonnet-4-5-20250929", messages=messages_no_thinking
-    )
-    assert (
-        tokens_no_thinking > 0
-    ), f"Expected positive token count even with empty thinking, got {tokens_no_thinking}"
+    tokens_no_thinking = token_counter(model="anthropic/claude-sonnet-4-5-20250929", messages=messages_no_thinking)
+    assert tokens_no_thinking > 0, f"Expected positive token count even with empty thinking, got {tokens_no_thinking}"
     # Should only count "Response" and message overhead
-    assert (
-        tokens_no_thinking < 15
-    ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
+    assert tokens_no_thinking < 15, f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
 
 
 def test_token_counter_with_tool_reference_block():
@@ -1077,9 +1021,7 @@ def test_token_counter_with_tool_reference_block():
     ]
 
     # Must not raise, and must produce a positive token count.
-    tokens = token_counter_new(
-        model="anthropic/claude-sonnet-4-5-20250929", messages=messages
-    )
+    tokens = token_counter_new(model="anthropic/claude-sonnet-4-5-20250929", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
 
     # A tool_reference with no/empty tool_name must also be handled gracefully.
@@ -1089,9 +1031,7 @@ def test_token_counter_with_tool_reference_block():
             "content": [{"type": "tool_reference", "tool_name": ""}],
         }
     ]
-    tokens_empty = token_counter_new(
-        model="anthropic/claude-sonnet-4-5-20250929", messages=messages_empty
-    )
+    tokens_empty = token_counter_new(model="anthropic/claude-sonnet-4-5-20250929", messages=messages_empty)
     assert tokens_empty >= 0
 
 

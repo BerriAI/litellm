@@ -21,9 +21,7 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
@@ -79,9 +77,7 @@ async def test_azure_ai_with_image_url():
                             },
                             {
                                 "type": "image_url",
-                                "image_url": {
-                                    "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
-                                },
+                                "image_url": {"url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"},
                             },
                         ],
                     },
@@ -107,9 +103,7 @@ async def test_azure_ai_with_image_url():
                     {"type": "text", "text": "What is in this image?"},
                     {
                         "type": "image_url",
-                        "image_url": {
-                            "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
-                        },
+                        "image_url": {"url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"},
                     },
                 ],
             }
@@ -382,9 +376,9 @@ async def test_azure_ai_model_router():
         print(f"Total tracked cost: ${tracked_cost:.9f}")
 
         # Total cost should be at least the flat cost
-        assert (
-            tracked_cost >= expected_flat_cost
-        ), f"Cost ${tracked_cost:.9f} should be >= flat cost ${expected_flat_cost:.9f}"
+        assert tracked_cost >= expected_flat_cost, (
+            f"Cost ${tracked_cost:.9f} should be >= flat cost ${expected_flat_cost:.9f}"
+        )
 
         # Verify the flat cost is non-zero
         assert expected_flat_cost > 0, "Flat cost should be greater than 0"
@@ -420,16 +414,12 @@ async def test_azure_ai_model_router_streaming_model_in_chunk():
     # The model should NOT be azure-model-router (the request model)
     # It should be the actual model from the response (e.g., gpt-4.1-nano, gpt-5-nano, etc.)
     for model in chunks_with_model:
-        assert (
-            model != "azure-model-router"
-        ), f"Chunk model should be actual model, not request model. Got: {model}"
+        assert model != "azure-model-router", f"Chunk model should be actual model, not request model. Got: {model}"
         # The actual model should be a real model name like gpt-4.1-nano, gpt-5-nano, etc.
         print(f"Verified chunk has actual model: {model}")
 
 
-class AzureModelRouterStreamingCallback(
-    litellm.integrations.custom_logger.CustomLogger
-):
+class AzureModelRouterStreamingCallback(litellm.integrations.custom_logger.CustomLogger):
     """
     Custom callback to capture streaming cost tracking for Azure Model Router.
     """
@@ -449,18 +439,12 @@ class AzureModelRouterStreamingCallback(
 
         if self.standard_logging_payload:
             self.response_cost = self.standard_logging_payload.get("response_cost")
-            print(
-                f"standard_logging_payload model: {self.standard_logging_payload.get('model')}"
-            )
+            print(f"standard_logging_payload model: {self.standard_logging_payload.get('model')}")
             print(f"standard_logging_payload response_cost: {self.response_cost}")
 
         if self.complete_streaming_response:
-            print(
-                f"complete_streaming_response model: {self.complete_streaming_response.model}"
-            )
-            print(
-                f"complete_streaming_response usage: {self.complete_streaming_response.usage}"
-            )
+            print(f"complete_streaming_response model: {self.complete_streaming_response.model}")
+            print(f"complete_streaming_response usage: {self.complete_streaming_response.usage}")
 
 
 @pytest.mark.asyncio
@@ -488,16 +472,10 @@ async def test_azure_ai_model_router_streaming_cost_with_stream_options():
         full_response = ""
         chunks_with_model = []
         async for chunk in response:
-            print(
-                f"Chunk: model={chunk.model}, choices={len(chunk.choices) if chunk.choices else 0}"
-            )
+            print(f"Chunk: model={chunk.model}, choices={len(chunk.choices) if chunk.choices else 0}")
             if chunk.model:
                 chunks_with_model.append(chunk.model)
-            if (
-                chunk.choices
-                and chunk.choices[0].delta
-                and chunk.choices[0].delta.content
-            ):
+            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
                 full_response += chunk.choices[0].delta.content
 
         print(f"Full streamed response: {full_response}")
@@ -509,12 +487,8 @@ async def test_azure_ai_model_router_streaming_cost_with_stream_options():
         await asyncio.sleep(1)
 
         # Verify callback was called
-        assert (
-            test_callback.async_success_called is True
-        ), "async_log_success_event was not called"
-        assert (
-            test_callback.standard_logging_payload is not None
-        ), "standard_logging_payload is None"
+        assert test_callback.async_success_called is True, "async_log_success_event was not called"
+        assert test_callback.standard_logging_payload is not None, "standard_logging_payload is None"
 
         # Check response cost
         print(f"Final response_cost: {test_callback.response_cost}")
@@ -522,24 +496,14 @@ async def test_azure_ai_model_router_streaming_cost_with_stream_options():
         # The first chunk may have the request model (azure-model-router) because it's created
         # before the API response is received. Subsequent chunks should have the actual model.
         # At least some chunks should have the actual model (not azure-model-router)
-        actual_model_chunks = [
-            m for m in chunks_with_model if m != "azure-model-router"
-        ]
-        assert (
-            len(actual_model_chunks) > 0
-        ), "No chunks had the actual model from the API response"
+        actual_model_chunks = [m for m in chunks_with_model if m != "azure-model-router"]
+        assert len(actual_model_chunks) > 0, "No chunks had the actual model from the API response"
         print(f"Chunks with actual model: {actual_model_chunks}")
 
         # Verify response cost is tracked - this is the main goal of this test
-        assert (
-            test_callback.response_cost is not None
-        ), "response_cost is None with stream_options"
-        assert (
-            test_callback.response_cost > 0
-        ), f"response_cost should be > 0, got {test_callback.response_cost}"
-        print(
-            f"Streaming cost tracking with stream_options passed. Cost: {test_callback.response_cost}"
-        )
+        assert test_callback.response_cost is not None, "response_cost is None with stream_options"
+        assert test_callback.response_cost > 0, f"response_cost should be > 0, got {test_callback.response_cost}"
+        print(f"Streaming cost tracking with stream_options passed. Cost: {test_callback.response_cost}")
 
     finally:
         litellm.logging_callback_manager._reset_all_callbacks()

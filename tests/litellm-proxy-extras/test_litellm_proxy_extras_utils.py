@@ -7,9 +7,7 @@ import pytest
 
 sys.path.insert(
     0,
-    os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../../litellm-proxy-extras")
-    ),
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "../../litellm-proxy-extras")),
 )
 
 from litellm_proxy_extras.utils import ProxyExtrasDBManager
@@ -154,9 +152,7 @@ class TestErrorClassificationPriority:
 
 def _get_all_migrations():
     """Return (migration_name, sql_content) pairs for all migrations."""
-    migration_files = sorted(
-        glob.glob(os.path.join(_MIGRATIONS_DIR, "*/migration.sql"))
-    )
+    migration_files = sorted(glob.glob(os.path.join(_MIGRATIONS_DIR, "*/migration.sql")))
     results = []
     for path in migration_files:
         migration_name = os.path.basename(os.path.dirname(path))
@@ -176,10 +172,7 @@ class TestMigrationSQLIdempotency:
     @pytest.fixture(scope="class")
     def all_migrations(self):
         migrations = _get_all_migrations()
-        assert len(migrations) > 0, (
-            f"No migrations found. "
-            f"Check that _MIGRATIONS_DIR ({_MIGRATIONS_DIR}) is correct."
-        )
+        assert len(migrations) > 0, f"No migrations found. Check that _MIGRATIONS_DIR ({_MIGRATIONS_DIR}) is correct."
         return migrations
 
     def test_create_table_uses_if_not_exists(self, all_migrations):
@@ -187,17 +180,11 @@ class TestMigrationSQLIdempotency:
         violations = []
         for migration_name, sql in all_migrations:
             for line_num, line in enumerate(sql.splitlines(), 1):
-                if re.search(
-                    r"CREATE\s+TABLE\s+", line, re.IGNORECASE
-                ) and not re.search(
+                if re.search(r"CREATE\s+TABLE\s+", line, re.IGNORECASE) and not re.search(
                     r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS", line, re.IGNORECASE
                 ):
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert (
-            not violations
-        ), "CREATE TABLE without IF NOT EXISTS found in migrations:\n" + "\n".join(
-            violations
-        )
+        assert not violations, "CREATE TABLE without IF NOT EXISTS found in migrations:\n" + "\n".join(violations)
 
     def test_add_column_uses_if_not_exists(self, all_migrations):
         """ADD COLUMN statements must use IF NOT EXISTS"""
@@ -208,27 +195,18 @@ class TestMigrationSQLIdempotency:
                     r"ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS", line, re.IGNORECASE
                 ):
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert not violations, (
-            "ADD COLUMN without IF NOT EXISTS found in recent migrations:\n"
-            + "\n".join(violations)
-        )
+        assert not violations, "ADD COLUMN without IF NOT EXISTS found in recent migrations:\n" + "\n".join(violations)
 
     def test_drop_column_uses_if_exists(self, all_migrations):
         """DROP COLUMN statements must use IF EXISTS"""
         violations = []
         for migration_name, sql in all_migrations:
             for line_num, line in enumerate(sql.splitlines(), 1):
-                if re.search(
-                    r"DROP\s+COLUMN\s+", line, re.IGNORECASE
-                ) and not re.search(
+                if re.search(r"DROP\s+COLUMN\s+", line, re.IGNORECASE) and not re.search(
                     r"DROP\s+COLUMN\s+IF\s+EXISTS", line, re.IGNORECASE
                 ):
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert (
-            not violations
-        ), "DROP COLUMN without IF EXISTS found in recent migrations:\n" + "\n".join(
-            violations
-        )
+        assert not violations, "DROP COLUMN without IF EXISTS found in recent migrations:\n" + "\n".join(violations)
 
     _DROP_COLUMN_ALLOWLIST = {
         "20250918083359_drop_spec_version_column_from_mcp_table",
@@ -246,11 +224,7 @@ class TestMigrationSQLIdempotency:
             for line_num, line in enumerate(sql.splitlines(), 1):
                 if re.search(r"DROP\s+COLUMN", line, re.IGNORECASE):
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert (
-            not violations
-        ), "DROP COLUMN found in migrations (destructive, not allowed):\n" + "\n".join(
-            violations
-        )
+        assert not violations, "DROP COLUMN found in migrations (destructive, not allowed):\n" + "\n".join(violations)
 
     def test_drop_index_uses_if_exists(self, all_migrations):
         """DROP INDEX statements must use IF EXISTS"""
@@ -261,28 +235,21 @@ class TestMigrationSQLIdempotency:
                     r"DROP\s+INDEX\s+IF\s+EXISTS", line, re.IGNORECASE
                 ):
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert (
-            not violations
-        ), "DROP INDEX without IF EXISTS found in recent migrations:\n" + "\n".join(
-            violations
-        )
+        assert not violations, "DROP INDEX without IF EXISTS found in recent migrations:\n" + "\n".join(violations)
 
     def test_create_index_uses_if_not_exists(self, all_migrations):
         """CREATE INDEX statements must use IF NOT EXISTS"""
         violations = []
         for migration_name, sql in all_migrations:
             for line_num, line in enumerate(sql.splitlines(), 1):
-                if re.search(
-                    r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+", line, re.IGNORECASE
-                ) and not re.search(
+                if re.search(r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+", line, re.IGNORECASE) and not re.search(
                     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?IF\s+NOT\s+EXISTS",
                     line,
                     re.IGNORECASE,
                 ):
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert not violations, (
-            "CREATE INDEX without IF NOT EXISTS found in recent migrations:\n"
-            + "\n".join(violations)
+        assert not violations, "CREATE INDEX without IF NOT EXISTS found in recent migrations:\n" + "\n".join(
+            violations
         )
 
     def test_rename_column_is_guarded(self, all_migrations):
@@ -296,14 +263,10 @@ class TestMigrationSQLIdempotency:
                     in_do_block = True
                 if re.search(r"END\s+\$\$", line, re.IGNORECASE):
                     in_do_block = False
-                if (
-                    re.search(r"RENAME\s+COLUMN\s+", line, re.IGNORECASE)
-                    and not in_do_block
-                ):
+                if re.search(r"RENAME\s+COLUMN\s+", line, re.IGNORECASE) and not in_do_block:
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert not violations, (
-            "RENAME COLUMN without DO $$ IF EXISTS guard found in migrations:\n"
-            + "\n".join(violations)
+        assert not violations, "RENAME COLUMN without DO $$ IF EXISTS guard found in migrations:\n" + "\n".join(
+            violations
         )
 
     def test_add_constraint_is_guarded(self, all_migrations):
@@ -317,14 +280,10 @@ class TestMigrationSQLIdempotency:
                     in_do_block = True
                 if re.search(r"END\s+\$\$", line, re.IGNORECASE):
                     in_do_block = False
-                if (
-                    re.search(r"ADD\s+CONSTRAINT\s+", line, re.IGNORECASE)
-                    and not in_do_block
-                ):
+                if re.search(r"ADD\s+CONSTRAINT\s+", line, re.IGNORECASE) and not in_do_block:
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert not violations, (
-            "ADD CONSTRAINT without DO $$ IF NOT EXISTS guard found in migrations:\n"
-            + "\n".join(violations)
+        assert not violations, "ADD CONSTRAINT without DO $$ IF NOT EXISTS guard found in migrations:\n" + "\n".join(
+            violations
         )
 
     def test_drop_constraint_is_guarded(self, all_migrations):
@@ -338,12 +297,8 @@ class TestMigrationSQLIdempotency:
                     in_do_block = True
                 if re.search(r"END\s+\$\$", line, re.IGNORECASE):
                     in_do_block = False
-                if (
-                    re.search(r"DROP\s+CONSTRAINT\s+", line, re.IGNORECASE)
-                    and not in_do_block
-                ):
+                if re.search(r"DROP\s+CONSTRAINT\s+", line, re.IGNORECASE) and not in_do_block:
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert not violations, (
-            "DROP CONSTRAINT without DO $$ IF EXISTS guard found in migrations:\n"
-            + "\n".join(violations)
+        assert not violations, "DROP CONSTRAINT without DO $$ IF EXISTS guard found in migrations:\n" + "\n".join(
+            violations
         )

@@ -142,9 +142,7 @@ async def test_polyfill_round_trip_non_streaming():
                     if CLEARED_TOOL_RESULT_PLACEHOLDER in content:
                         found_cleared += 1
                 elif isinstance(content, list):
-                    text = "".join(
-                        b.get("text", "") for b in content if isinstance(b, dict)
-                    )
+                    text = "".join(b.get("text", "") for b in content if isinstance(b, dict))
                     if CLEARED_TOOL_RESULT_PLACEHOLDER in text:
                         found_cleared += 1
             elif msg.get("tool_call_id") in kept_ids:
@@ -245,11 +243,7 @@ async def test_polyfill_streaming_attaches_to_message_delta():
         if "message_delta" not in block:
             continue
         data_line = next(
-            (
-                line[len("data:") :].strip()
-                for line in block.splitlines()
-                if line.startswith("data:")
-            ),
+            (line[len("data:") :].strip() for line in block.splitlines() if line.startswith("data:")),
             None,
         )
         if data_line is None:
@@ -267,6 +261,5 @@ async def test_polyfill_streaming_attaches_to_message_delta():
         found_delta_with_cm = True
         break
     assert found_delta_with_cm, (
-        "Expected `context_management` on the message_delta SSE event. "
-        f"SSE text was: {sse_text!r}"
+        f"Expected `context_management` on the message_delta SSE event. SSE text was: {sse_text!r}"
     )

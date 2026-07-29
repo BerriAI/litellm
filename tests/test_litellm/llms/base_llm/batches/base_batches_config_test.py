@@ -90,9 +90,7 @@ class BatchesConfigContractTests:
         assert self.make_config().custom_llm_provider == self.expected_provider
 
     def test_contract__get_error_class_is_exception_with_status(self):
-        err = self.make_config().get_error_class(
-            error_message="boom", status_code=429, headers={}
-        )
+        err = self.make_config().get_error_class(error_message="boom", status_code=429, headers={})
         assert isinstance(err, Exception)
         assert getattr(err, "status_code", None) == 429
 

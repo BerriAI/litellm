@@ -94,9 +94,7 @@ class TestCooldownCacheExceptionMasking:
         assert "magical kingdom" not in masked_exception
 
         # Should preserve the error type information at the beginning (first 50 chars)
-        assert masked_exception.startswith(
-            "litellm.proxy.proxy_server._handle_llm_api_excepti"
-        )
+        assert masked_exception.startswith("litellm.proxy.proxy_server._handle_llm_api_excepti")
 
     def test_exception_with_api_keys_masked(self, cooldown_cache):
         """Test that API keys in exceptions are properly masked"""
@@ -119,9 +117,7 @@ class TestCooldownCacheExceptionMasking:
         masked_exception = cooldown_data["exception_received"]
 
         # Should mask the sensitive content while preserving structure
-        assert masked_exception.startswith(
-            "Authentication failed with api_key=sk-12345678"
-        )
+        assert masked_exception.startswith("Authentication failed with api_key=sk-12345678")
         assert "*" in masked_exception
         assert len(masked_exception) == len(exception_with_key)
 
@@ -179,9 +175,7 @@ class TestCooldownCacheExceptionMasking:
 
             # Should successfully convert exception to string
             assert isinstance(cooldown_data["exception_received"], str)
-            assert (
-                str(exc) == cooldown_data["exception_received"]
-            )  # Short exceptions not masked
+            assert str(exc) == cooldown_data["exception_received"]  # Short exceptions not masked
 
     def test_masking_preserves_error_debugging_info(self, cooldown_cache):
         """Test that masking preserves essential debugging information"""
@@ -208,9 +202,7 @@ class TestCooldownCacheExceptionMasking:
         masked_exception = cooldown_data["exception_received"]
 
         # Should preserve error type and initial debugging info (first 50 chars)
-        assert masked_exception.startswith(
-            "RateLimitError: Rate limit exceeded for model gpt-"
-        )
+        assert masked_exception.startswith("RateLimitError: Rate limit exceeded for model gpt-")
 
         # Should mask the prompt content
         assert "Write a comprehensive analysis" not in masked_exception

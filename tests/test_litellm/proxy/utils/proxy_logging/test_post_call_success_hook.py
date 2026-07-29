@@ -33,7 +33,9 @@ def _make_guardrail(name="g", should_run=True, override=None):
 
 
 @pytest.mark.asyncio
-async def test_post_call_success_hook_returns_response_when_no_callbacks(proxy_logging, make_user_api_key_auth, mock_callbacks_disabled):
+async def test_post_call_success_hook_returns_response_when_no_callbacks(
+    proxy_logging, make_user_api_key_auth, mock_callbacks_disabled
+):
     response = {"original": True, "model": "m", "choices": []}
     out = await proxy_logging.post_call_success_hook(
         data={}, response=response, user_api_key_dict=make_user_api_key_auth()
@@ -73,9 +75,7 @@ async def test_post_call_success_hook_guardrail_should_not_run_skipped(
 
 
 @pytest.mark.asyncio
-async def test_post_call_success_hook_guardrail_error_raises(
-    proxy_logging, make_user_api_key_auth, monkeypatch
-):
+async def test_post_call_success_hook_guardrail_error_raises(proxy_logging, make_user_api_key_auth, monkeypatch):
     g = _make_guardrail()
     g.async_post_call_success_hook = AsyncMock(side_effect=RuntimeError("blocked"))
     monkeypatch.setattr(litellm, "callbacks", [g])

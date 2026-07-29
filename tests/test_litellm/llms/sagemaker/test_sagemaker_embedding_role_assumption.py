@@ -41,11 +41,7 @@ class TestSagemakerEmbeddingRoleAssumption:
         # Mock the SageMaker client response
         mock_sagemaker_client = MagicMock()
         mock_sagemaker_client.invoke_endpoint.return_value = {
-            "Body": MagicMock(
-                read=MagicMock(
-                    return_value=json.dumps({"embedding": [[0.1, 0.2, 0.3]]}).encode()
-                )
-            )
+            "Body": MagicMock(read=MagicMock(return_value=json.dumps({"embedding": [[0.1, 0.2, 0.3]]}).encode()))
         }
 
         # Mock boto3.Session to return our mock client
@@ -60,7 +56,6 @@ class TestSagemakerEmbeddingRoleAssumption:
             ) as mock_load_creds,
             patch("boto3.Session", return_value=mock_session),
         ):
-
             # Create mock logging object
             mock_logging = MagicMock()
 
@@ -115,11 +110,7 @@ class TestSagemakerEmbeddingRoleAssumption:
         # Mock the SageMaker client response
         mock_sagemaker_client = MagicMock()
         mock_sagemaker_client.invoke_endpoint.return_value = {
-            "Body": MagicMock(
-                read=MagicMock(
-                    return_value=json.dumps({"embedding": [[0.1, 0.2, 0.3]]}).encode()
-                )
-            )
+            "Body": MagicMock(read=MagicMock(return_value=json.dumps({"embedding": [[0.1, 0.2, 0.3]]}).encode()))
         }
 
         # Mock boto3.Session for SageMaker client creation
@@ -135,7 +126,6 @@ class TestSagemakerEmbeddingRoleAssumption:
             patch("boto3.client", side_effect=mock_boto3_client),
             patch("boto3.Session", return_value=mock_session),
         ):
-
             mock_logging = MagicMock()
 
             optional_params = {
@@ -157,10 +147,7 @@ class TestSagemakerEmbeddingRoleAssumption:
             # Verify STS assume_role was called with correct parameters
             mock_sts_client.assume_role.assert_called_once()
             call_args = mock_sts_client.assume_role.call_args
-            assert (
-                call_args[1]["RoleArn"]
-                == "arn:aws:iam::123456789012:role/CrossAccountRole"
-            )
+            assert call_args[1]["RoleArn"] == "arn:aws:iam::123456789012:role/CrossAccountRole"
             assert call_args[1]["RoleSessionName"] == "litellm-embedding-session"
 
     def test_embedding_without_role_assumption(self):
@@ -171,11 +158,7 @@ class TestSagemakerEmbeddingRoleAssumption:
         # Mock the SageMaker client response
         mock_sagemaker_client = MagicMock()
         mock_sagemaker_client.invoke_endpoint.return_value = {
-            "Body": MagicMock(
-                read=MagicMock(
-                    return_value=json.dumps({"embedding": [[0.1, 0.2, 0.3]]}).encode()
-                )
-            )
+            "Body": MagicMock(read=MagicMock(return_value=json.dumps({"embedding": [[0.1, 0.2, 0.3]]}).encode()))
         }
 
         mock_session = MagicMock()
@@ -196,7 +179,6 @@ class TestSagemakerEmbeddingRoleAssumption:
             ),
             patch("boto3.Session", return_value=mock_session),
         ):
-
             mock_logging = MagicMock()
 
             # No aws_role_name provided
@@ -230,11 +212,7 @@ class TestSagemakerEmbeddingRoleAssumption:
 
         mock_sagemaker_client = MagicMock()
         mock_sagemaker_client.invoke_endpoint.return_value = {
-            "Body": MagicMock(
-                read=MagicMock(
-                    return_value=json.dumps({"embedding": [[0.1, 0.2, 0.3]]}).encode()
-                )
-            )
+            "Body": MagicMock(read=MagicMock(return_value=json.dumps({"embedding": [[0.1, 0.2, 0.3]]}).encode()))
         }
 
         with (
@@ -245,7 +223,6 @@ class TestSagemakerEmbeddingRoleAssumption:
             ),
             patch("boto3.Session") as mock_session_class,
         ):
-
             mock_session = MagicMock()
             mock_session.client.return_value = mock_sagemaker_client
             mock_session_class.return_value = mock_session

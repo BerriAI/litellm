@@ -7,9 +7,7 @@ from litellm.proxy.utils import _get_redoc_url, _get_docs_url
 import pytest
 from fastapi import Request
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from unittest.mock import MagicMock, patch, AsyncMock
 
@@ -49,9 +47,7 @@ def create_mock_proxy_logging():
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.failure_handler = AsyncMock()
     proxy_logging_obj.db_spend_update_writer = AsyncMock()
-    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = (
-        AsyncMock()
-    )
+    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
     print("returning proxy logging obj")
     return proxy_logging_obj
 
@@ -73,9 +69,7 @@ async def test_update_spend_logs_connection_errors(error_type):
 
     # Create AsyncMock for db_spend_update_writer
     proxy_logging_obj.db_spend_update_writer = AsyncMock()
-    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = (
-        AsyncMock()
-    )
+    proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
 
     # Add test spend logs
     prisma_client.spend_log_transactions = [
@@ -99,9 +93,7 @@ async def test_update_spend_logs_connection_errors(error_type):
 
     # Verify
     assert create_many_mock.call_count == 4  # Should have tried 3 times
-    assert (
-        len(prisma_client.spend_log_transactions) == 0
-    )  # Should have cleared after success
+    assert len(prisma_client.spend_log_transactions) == 0  # Should have cleared after success
 
 
 @pytest.mark.asyncio
@@ -209,12 +201,8 @@ async def test_update_spend_logs_exponential_backoff():
 
     # Verify exponential backoff
     assert len(sleep_times) == 2  # Should have slept twice
-    assert (
-        sleep_times[0] >= 1 and sleep_times[0] <= 2
-    )  # First retry after 2^0~2^1 seconds
-    assert (
-        sleep_times[1] >= 2 and sleep_times[1] <= 4
-    )  # Second retry after 2^1~2^2 seconds
+    assert sleep_times[0] >= 1 and sleep_times[0] <= 2  # First retry after 2^0~2^1 seconds
+    assert sleep_times[1] >= 2 and sleep_times[1] <= 4  # Second retry after 2^1~2^2 seconds
 
 
 @pytest.mark.asyncio
@@ -229,9 +217,7 @@ async def test_update_spend_logs_multiple_batches_success():
     proxy_logging_obj = create_mock_proxy_logging()
 
     # Create 1500 test spend logs (1.5x BATCH_SIZE)
-    prisma_client.spend_log_transactions = [
-        {"id": str(i), "spend": 10} for i in range(1500)
-    ]
+    prisma_client.spend_log_transactions = [{"id": str(i), "spend": 10} for i in range(1500)]
 
     create_many_mock = AsyncMock(return_value=None)
     prisma_client.db.litellm_spendlogs.create_many = create_many_mock
@@ -275,9 +261,7 @@ async def test_update_spend_logs_multiple_batches_with_failure():
     proxy_logging_obj = create_mock_proxy_logging()
 
     # Create 4000 test spend logs (4x BATCH_SIZE)
-    prisma_client.spend_log_transactions = [
-        {"id": str(i), "spend": 10} for i in range(4000)
-    ]
+    prisma_client.spend_log_transactions = [{"id": str(i), "spend": 10} for i in range(4000)]
 
     # Mock to fail on second batch first attempt, then succeed
     call_count = 0

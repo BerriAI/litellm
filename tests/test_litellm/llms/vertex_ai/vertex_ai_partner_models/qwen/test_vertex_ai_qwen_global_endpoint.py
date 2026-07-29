@@ -13,9 +13,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -55,11 +53,7 @@ class TestVertexBaseGetVertexRegion:
 
         with patch.dict(
             litellm.model_cost,
-            {
-                "vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {
-                    "supported_regions": ["global"]
-                }
-            },
+            {"vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {"supported_regions": ["global"]}},
             clear=False,
         ):
             result = vertex_base.get_vertex_region(
@@ -74,11 +68,7 @@ class TestVertexBaseGetVertexRegion:
 
         with patch.dict(
             litellm.model_cost,
-            {
-                "vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {
-                    "supported_regions": ["global"]
-                }
-            },
+            {"vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {"supported_regions": ["global"]}},
             clear=False,
         ):
             result = vertex_base.get_vertex_region(
@@ -174,9 +164,7 @@ async def test_vertex_ai_qwen_global_endpoint_url():
     mock_vertexai.preview = MagicMock()
 
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
-        ) as mock_http_handler,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler,
         patch(
             "litellm.llms.vertex_ai.vertex_ai_partner_models.main.VertexAIPartnerModels._ensure_access_token",
             return_value=("fake-token", "test-project"),
@@ -187,11 +175,7 @@ async def test_vertex_ai_qwen_global_endpoint_url():
         ),
         patch.dict(
             litellm.model_cost,
-            {
-                "vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {
-                    "supported_regions": ["global"]
-                }
-            },
+            {"vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {"supported_regions": ["global"]}},
             clear=False,
         ),
     ):

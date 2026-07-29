@@ -151,10 +151,7 @@ def make_redis_persister(
                 data = redis_client.get(key)
             except RedisError as exc:
                 _record_cache_failure("load", exc)
-                msg = (
-                    f"VCR redis load failed for {cassette_path}; treating "
-                    f"as cache miss: {type(exc).__name__}: {exc}"
-                )
+                msg = f"VCR redis load failed for {cassette_path}; treating as cache miss: {type(exc).__name__}: {exc}"
                 _log.warning(msg)
                 warnings.warn(msg, VCRCassetteCacheWarning, stacklevel=2)
                 raise CassetteNotFoundError() from exc
@@ -202,8 +199,7 @@ def make_redis_persister(
                 return
             if not passed:
                 _log.info(
-                    "VCR redis save skipped for %s; test did not pass — "
-                    "leaving any prior cassette intact",
+                    "VCR redis save skipped for %s; test did not pass — leaving any prior cassette intact",
                     cassette_path,
                 )
                 return
@@ -220,10 +216,7 @@ def make_redis_persister(
                 # failure shows up in pytest's warnings summary at the
                 # end of the session and feeds the session-end banner.
                 _record_cache_failure("save", exc)
-                msg = (
-                    f"VCR redis save failed for {cassette_path}; cassette "
-                    f"not persisted: {type(exc).__name__}: {exc}"
-                )
+                msg = f"VCR redis save failed for {cassette_path}; cassette not persisted: {type(exc).__name__}: {exc}"
                 _log.warning(msg)
                 warnings.warn(msg, VCRCassetteCacheWarning, stacklevel=2)
 
@@ -280,6 +273,4 @@ def format_vcr_verdict(cassette: Any) -> str:
         return f"[VCR HIT] {played} replayed, 0 new ({total} cassette entries)"
     if played == 0 and dirty:
         return f"[VCR MISS] 0 replayed, recorded new ({total} cassette entries)"
-    return (
-        f"[VCR PARTIAL] {played} replayed + new recordings ({total} cassette entries)"
-    )
+    return f"[VCR PARTIAL] {played} replayed + new recordings ({total} cassette entries)"

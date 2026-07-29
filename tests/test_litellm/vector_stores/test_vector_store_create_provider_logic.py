@@ -4,9 +4,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
@@ -45,19 +43,17 @@ def test_vector_store_create_with_simple_provider_name():
     assert custom_llm_provider == "openai", "custom_llm_provider should remain 'openai'"
 
     # Verify ProviderConfigManager returns correct config
-    vector_store_provider_config = (
-        ProviderConfigManager.get_provider_vector_stores_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
-            api_type=api_type,
-        )
+    vector_store_provider_config = ProviderConfigManager.get_provider_vector_stores_config(
+        provider=litellm.LlmProviders(custom_llm_provider),
+        api_type=api_type,
     )
 
     assert vector_store_provider_config is not None, "Should return a config for OpenAI"
     # Use type name check instead of isinstance to avoid module identity issues
     # caused by sys.path manipulation in test setup
-    assert (
-        type(vector_store_provider_config).__name__ == "OpenAIVectorStoreConfig"
-    ), f"Should return OpenAIVectorStoreConfig for OpenAI provider, got {type(vector_store_provider_config).__name__}"
+    assert type(vector_store_provider_config).__name__ == "OpenAIVectorStoreConfig", (
+        f"Should return OpenAIVectorStoreConfig for OpenAI provider, got {type(vector_store_provider_config).__name__}"
+    )
 
     print("✅ Test passed: Simple provider name 'openai' handled correctly")
 
@@ -92,29 +88,21 @@ def test_vector_store_create_with_provider_api_type():
     assert api_type == "rag_api", f"api_type should be 'rag_api', got '{api_type}'"
 
     # Verify custom_llm_provider is extracted correctly
-    assert (
-        custom_llm_provider == "vertex_ai"
-    ), f"custom_llm_provider should be 'vertex_ai', got '{custom_llm_provider}'"
+    assert custom_llm_provider == "vertex_ai", f"custom_llm_provider should be 'vertex_ai', got '{custom_llm_provider}'"
 
     # Verify ProviderConfigManager returns correct config
-    vector_store_provider_config = (
-        ProviderConfigManager.get_provider_vector_stores_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
-            api_type=api_type,
-        )
+    vector_store_provider_config = ProviderConfigManager.get_provider_vector_stores_config(
+        provider=litellm.LlmProviders(custom_llm_provider),
+        api_type=api_type,
     )
 
-    assert (
-        vector_store_provider_config is not None
-    ), "Should return a config for Vertex AI"
+    assert vector_store_provider_config is not None, "Should return a config for Vertex AI"
     # Use type name check instead of isinstance to avoid module identity issues
-    assert (
-        type(vector_store_provider_config).__name__ == "VertexVectorStoreConfig"
-    ), f"Should return VertexVectorStoreConfig for vertex_ai provider with rag_api, got {type(vector_store_provider_config).__name__}"
-
-    print(
-        "✅ Test passed: Provider with api_type 'vertex_ai/rag_api' handled correctly"
+    assert type(vector_store_provider_config).__name__ == "VertexVectorStoreConfig", (
+        f"Should return VertexVectorStoreConfig for vertex_ai provider with rag_api, got {type(vector_store_provider_config).__name__}"
     )
+
+    print("✅ Test passed: Provider with api_type 'vertex_ai/rag_api' handled correctly")
 
 
 def test_vector_store_create_with_ragflow_provider():
@@ -138,24 +126,18 @@ def test_vector_store_create_with_ragflow_provider():
     assert api_type is None, "api_type should be None for RAGFlow provider"
 
     # Verify custom_llm_provider is unchanged
-    assert (
-        custom_llm_provider == "ragflow"
-    ), "custom_llm_provider should remain 'ragflow'"
+    assert custom_llm_provider == "ragflow", "custom_llm_provider should remain 'ragflow'"
 
     # Verify ProviderConfigManager returns correct config
-    vector_store_provider_config = (
-        ProviderConfigManager.get_provider_vector_stores_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
-            api_type=api_type,
-        )
+    vector_store_provider_config = ProviderConfigManager.get_provider_vector_stores_config(
+        provider=litellm.LlmProviders(custom_llm_provider),
+        api_type=api_type,
     )
 
-    assert (
-        vector_store_provider_config is not None
-    ), "Should return a config for RAGFlow"
+    assert vector_store_provider_config is not None, "Should return a config for RAGFlow"
     # Use type name check instead of isinstance to avoid module identity issues
-    assert (
-        type(vector_store_provider_config).__name__ == "RAGFlowVectorStoreConfig"
-    ), f"Should return RAGFlowVectorStoreConfig for RAGFlow provider, got {type(vector_store_provider_config).__name__}"
+    assert type(vector_store_provider_config).__name__ == "RAGFlowVectorStoreConfig", (
+        f"Should return RAGFlowVectorStoreConfig for RAGFlow provider, got {type(vector_store_provider_config).__name__}"
+    )
 
     print("✅ Test passed: RAGFlow provider handled correctly")

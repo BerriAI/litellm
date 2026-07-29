@@ -21,9 +21,7 @@ from litellm.types.utils import CallTypes, ImageObject, ImageResponse
 class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing"""
 
-    async def apply_guardrail(
-        self, inputs: dict, request_data: dict, input_type: str, **kwargs
-    ) -> dict:
+    async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
         texts = inputs.get("texts", [])
         return {"texts": [f"{text} [GUARDRAILED]" for text in texts]}
 
@@ -144,9 +142,7 @@ class TestPIIMaskingScenario:
         class PIIMaskingGuardrail(CustomGuardrail):
             """Mock PII masking guardrail"""
 
-            async def apply_guardrail(
-                self, inputs: dict, request_data: dict, input_type: str, **kwargs
-            ) -> dict:
+            async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
                 # Simple mock: replace email-like patterns
                 import re
 

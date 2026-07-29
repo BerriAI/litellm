@@ -111,13 +111,11 @@ async def test_run_direct_health_check_with_instrumentation_returns_results(
         lambda _gs: {},
     )
 
-    healthy, unhealthy, exceptions = (
-        await _run_direct_health_check_with_instrumentation(
-            model_list=[{"model_name": "gpt-4"}],
-            details=False,
-            max_concurrency=1,
-            instrumentation_context={"source": "test"},
-        )
+    healthy, unhealthy, exceptions = await _run_direct_health_check_with_instrumentation(
+        model_list=[{"model_name": "gpt-4"}],
+        details=False,
+        max_concurrency=1,
+        instrumentation_context={"source": "test"},
     )
 
     assert normalize(
@@ -319,13 +317,9 @@ def test_write_health_state_to_router_cache_sets_states(monkeypatch):
 
     _write_health_state_to_router_cache(healthy, unhealthy, exceptions)
 
-    fake_router.health_state_cache.set_deployment_health_states.assert_called_once_with(
-        fake_states
-    )
+    fake_router.health_state_cache.set_deployment_health_states.assert_called_once_with(fake_states)
 
-    call_args = fake_router.health_state_cache.set_deployment_health_states.call_args[
-        0
-    ][0]
+    call_args = fake_router.health_state_cache.set_deployment_health_states.call_args[0][0]
     assert normalize(
         {
             "states_keys": sorted(call_args.keys()),
@@ -349,9 +343,7 @@ def test_write_health_state_to_router_cache_swallows_internal_failures(monkeypat
     fake_router = MagicMock()
     fake_router.enable_health_check_routing = True
     fake_router.health_check_ignore_transient_errors = False
-    fake_router.health_state_cache.set_deployment_health_states.side_effect = (
-        RuntimeError("cache exploded")
-    )
+    fake_router.health_state_cache.set_deployment_health_states.side_effect = RuntimeError("cache exploded")
 
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 
@@ -381,9 +373,7 @@ async def test_adaptive_router_flusher_loop_flushes_each_router(monkeypatch):
     from litellm.types.router import TaggedPreRoutingStrategy
 
     fake_router = MagicMock()
-    fake_router.adaptive_routers = {
-        "alpha": [TaggedPreRoutingStrategy(tags=(), strategy=fake_ar)]
-    }
+    fake_router.adaptive_routers = {"alpha": [TaggedPreRoutingStrategy(tags=(), strategy=fake_ar)]}
 
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
@@ -481,12 +471,8 @@ async def test_run_background_health_check_runs_one_cycle_then_cancels(monkeypat
         "_run_direct_health_check_with_instrumentation",
         _fake_direct,
     )
-    monkeypatch.setattr(
-        proxy_server, "_schedule_background_health_check_db_save", lambda *a, **kw: None
-    )
-    monkeypatch.setattr(
-        proxy_server, "_write_health_state_to_router_cache", lambda *a, **kw: None
-    )
+    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", lambda *a, **kw: None)
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", lambda *a, **kw: None)
     monkeypatch.setattr(
         proxy_server,
         "health_check_filter_kwargs_from_general_settings",

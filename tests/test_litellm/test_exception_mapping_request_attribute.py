@@ -54,9 +54,7 @@ def test_exception_mapping_request_attribute_fix():
     """
 
     # Test case 1: Exception without request attribute should not cause AttributeError
-    mock_exception = MockExceptionWithoutRequest(
-        status_code=500, message="Test error without request attribute"
-    )
+    mock_exception = MockExceptionWithoutRequest(status_code=500, message="Test error without request attribute")
 
     # The test is that this should NOT raise an AttributeError about missing 'request'
     try:
@@ -70,9 +68,7 @@ def test_exception_mapping_request_attribute_fix():
         # We expect some exception to be raised (the mapped exception), but not AttributeError
     except AttributeError as e:
         if "'request'" in str(e):
-            pytest.fail(
-                f"The fix failed: Should not raise AttributeError about missing 'request' attribute: {e}"
-            )
+            pytest.fail(f"The fix failed: Should not raise AttributeError about missing 'request' attribute: {e}")
         else:
             # If it's a different AttributeError, re-raise it
             raise
@@ -123,9 +119,7 @@ def test_providers_affected_by_fix():
     providers_to_test = ["cohere", "ai21", "together_ai", "vllm"]
 
     for provider in providers_to_test:
-        mock_exception = MockExceptionWithoutRequest(
-            status_code=500, message=f"Test error for {provider}"
-        )
+        mock_exception = MockExceptionWithoutRequest(status_code=500, message=f"Test error for {provider}")
 
         # The key test: this should not raise AttributeError about missing 'request'
         try:
@@ -150,9 +144,7 @@ def test_huggingface_specific_case():
     """
     Test HuggingFace specific case which has its own handling logic.
     """
-    mock_exception = MockExceptionWithoutRequest(
-        status_code=400, message="length limit exceeded"
-    )
+    mock_exception = MockExceptionWithoutRequest(status_code=400, message="length limit exceeded")
 
     try:
         exception_type(
@@ -179,9 +171,7 @@ def test_nlp_cloud_specific_case():
     """
     Test NLP Cloud specific case which had multiple lines changed in the PR.
     """
-    mock_exception = MockExceptionWithoutRequest(
-        status_code=504, message="Gateway timeout"
-    )
+    mock_exception = MockExceptionWithoutRequest(status_code=504, message="Gateway timeout")
 
     try:
         exception_type(
@@ -206,9 +196,7 @@ def test_generic_fallback_case():
     Test the generic fallback case at the end of exception_type function.
     This tests the changes in lines 2209 and 2244 of the PR.
     """
-    mock_exception = MockExceptionWithoutRequest(
-        status_code=500, message="Generic error"
-    )
+    mock_exception = MockExceptionWithoutRequest(status_code=500, message="Generic error")
 
     try:
         exception_type(
@@ -235,9 +223,7 @@ def test_openrouter_specific_case():
     """
     Test OpenRouter which also uses the request attribute in exception mapping.
     """
-    mock_exception = MockExceptionWithoutRequest(
-        status_code=500, message="OpenRouter error"
-    )
+    mock_exception = MockExceptionWithoutRequest(status_code=500, message="OpenRouter error")
 
     try:
         exception_type(

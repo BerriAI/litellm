@@ -18,9 +18,7 @@ async def test_update_daily_tag_spend_delegates_to_tag_commit_writer():
     proxy_logging_obj.db_spend_update_writer = MagicMock()
     proxy_logging_obj.db_spend_update_writer.redis_update_buffer = redis_update_buffer
     proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db = AsyncMock()
-    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis = (
-        AsyncMock()
-    )
+    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis = AsyncMock()
 
     await update_daily_tag_spend(
         prisma_client,
@@ -43,12 +41,8 @@ async def test_update_daily_tag_spend_logs_error_and_does_not_raise():
     redis_update_buffer._should_commit_spend_updates_to_redis.return_value = False
     proxy_logging_obj.db_spend_update_writer = MagicMock()
     proxy_logging_obj.db_spend_update_writer.redis_update_buffer = redis_update_buffer
-    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db = AsyncMock(
-        side_effect=ValueError("boom")
-    )
-    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis = (
-        AsyncMock()
-    )
+    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db = AsyncMock(side_effect=ValueError("boom"))
+    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis = AsyncMock()
 
     with patch("litellm.proxy.utils.verbose_proxy_logger.error") as error_logger:
         await update_daily_tag_spend(
@@ -69,9 +63,7 @@ async def test_update_daily_tag_spend_uses_redis_writer_when_enabled():
     proxy_logging_obj.db_spend_update_writer = MagicMock()
     proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db = AsyncMock()
     proxy_logging_obj.db_spend_update_writer.redis_update_buffer = redis_update_buffer
-    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis = (
-        AsyncMock()
-    )
+    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis = AsyncMock()
 
     await update_daily_tag_spend(
         prisma_client,

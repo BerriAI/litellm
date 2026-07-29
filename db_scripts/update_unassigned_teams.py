@@ -6,9 +6,7 @@ async def apply_db_fixes(db: Prisma):
     """
     Do Not Run this in production, only use it as a one-time fix
     """
-    verbose_logger.warning(
-        "DO NOT run this in Production....Running update_unassigned_teams"
-    )
+    verbose_logger.warning("DO NOT run this in Production....Running update_unassigned_teams")
     try:
         sql_query = """
             UPDATE "LiteLLM_SpendLogs"

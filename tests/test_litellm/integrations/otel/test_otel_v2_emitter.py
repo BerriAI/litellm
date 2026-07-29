@@ -121,9 +121,7 @@ def test_llm_call_span_golden():
 
 def test_legacy_dual_emit_on():
     engine, exporter = _engine(legacy_compat=True)
-    engine.emit(
-        SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(_payload())
-    )
+    engine.emit(SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(_payload()))
     (span,) = exporter.get_finished_spans()
     # canonical AND legacy keys are both present
     assert span.attributes[GenAI.USAGE_OUTPUT_TOKENS] == 5
@@ -133,9 +131,7 @@ def test_legacy_dual_emit_on():
 
 def test_legacy_dual_emit_off():
     engine, exporter = _engine(legacy_compat=False)
-    engine.emit(
-        SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(_payload())
-    )
+    engine.emit(SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(_payload()))
     (span,) = exporter.get_finished_spans()
     # canonical present, legacy absent
     assert span.attributes[GenAI.USAGE_OUTPUT_TOKENS] == 5
@@ -149,9 +145,7 @@ def test_error_span_sets_status_and_error_type():
         status="failure",
         error_information={"error_class": "RateLimitError", "error_message": "429"},
     )
-    engine.emit(
-        SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(payload)
-    )
+    engine.emit(SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(payload))
     (span,) = exporter.get_finished_spans()
     assert span.status.status_code is StatusCode.ERROR
     assert span.attributes["error.type"] == "RateLimitError"
@@ -203,15 +197,11 @@ def test_hierarchy_and_kinds_match_registry():
     root = engine.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions")
     root_ctx = ctx_mod.context_from_span(root)
     engine.emit(SpanRole.LLM_CALL, data, parent_context=root_ctx)
-    engine.emit(
-        SpanRole.GUARDRAIL, GuardrailSpanData("presidio", status="success"), root_ctx
-    )
+    engine.emit(SpanRole.GUARDRAIL, GuardrailSpanData("presidio", status="success"), root_ctx)
     # An outbound datastore call (DB_CALL) and an internal service call differ in
     # span kind; both are named "{service} {call_type}".
     engine.emit(SpanRole.DB_CALL, ServiceSpanData("redis", call_type="set"), root_ctx)
-    engine.emit(
-        SpanRole.SERVICE, ServiceSpanData("router", call_type="acompletion"), root_ctx
-    )
+    engine.emit(SpanRole.SERVICE, ServiceSpanData("router", call_type="acompletion"), root_ctx)
     root.end()
 
     by_name = {s.name: s for s in exporter.get_finished_spans()}
@@ -249,9 +239,7 @@ def test_dedup_cache_is_bounded(monkeypatch):
     for i in range(10):
         engine.emit(
             SpanRole.LLM_CALL,
-            LLMCallSpanData.from_standard_logging_payload(
-                _payload(litellm_call_id=f"call_{i}")
-            ),
+            LLMCallSpanData.from_standard_logging_payload(_payload(litellm_call_id=f"call_{i}")),
         )
     assert len(engine._emitted) <= 3
 
@@ -262,9 +250,7 @@ def test_service_error_span():
     engine, exporter = _engine()
     engine.emit(
         SpanRole.SERVICE,
-        ServiceSpanData(
-            "postgres", call_type="query", error=SpanError("DBError", "boom")
-        ),
+        ServiceSpanData("postgres", call_type="query", error=SpanError("DBError", "boom")),
     )
     (span,) = exporter.get_finished_spans()
     assert span.status.status_code is StatusCode.ERROR
@@ -299,9 +285,7 @@ def test_guardrail_success_span_is_unset():
     engine, exporter = _engine()
     engine.emit(
         SpanRole.GUARDRAIL,
-        GuardrailSpanData.from_logging_entry(
-            {"guardrail_name": "g", "guardrail_status": "success"}
-        ),
+        GuardrailSpanData.from_logging_entry({"guardrail_name": "g", "guardrail_status": "success"}),
     )
     (span,) = exporter.get_finished_spans()
     assert span.status.status_code is StatusCode.UNSET

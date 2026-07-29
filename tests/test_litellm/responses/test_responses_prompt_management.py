@@ -60,18 +60,15 @@ def _patch_responses_dispatch():
             return_value=("gpt-4o", "openai", None, None),
         ),
         patch(
-            "litellm.responses.mcp.litellm_proxy_mcp_handler."
-            "LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway",
+            "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway",
             return_value=False,
         ),
         patch(
-            "litellm.responses.main.ProviderConfigManager"
-            ".get_provider_responses_api_config",
+            "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
             return_value=None,
         ),
         patch(
-            "litellm.responses.main.litellm_completion_transformation_handler"
-            ".response_api_handler",
+            "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
             return_value=MagicMock(),
         ),
     ]
@@ -133,7 +130,6 @@ def _make_cache_control_case() -> tuple[
 
 
 class TestResponsesAPIPromptManagement:
-
     def test_str_input_coerced_and_merged(self):
         """[A] str input is wrapped into a message list before being passed to the hook."""
         template_messages: List[AllMessageValues] = [
@@ -164,9 +160,7 @@ class TestResponsesAPIPromptManagement:
         logging_obj.get_chat_completion_prompt.assert_called_once()
         call_kwargs = logging_obj.get_chat_completion_prompt.call_args.kwargs
         # str was coerced to a single user message before being passed to the hook
-        assert call_kwargs["messages"] == [
-            {"role": "user", "content": "Tell me about AI."}
-        ]
+        assert call_kwargs["messages"] == [{"role": "user", "content": "Tell me about AI."}]
         assert call_kwargs["prompt_id"] == "summariser-prompt"
 
     def test_list_input_merged_with_template(self):

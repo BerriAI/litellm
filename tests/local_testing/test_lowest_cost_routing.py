@@ -9,9 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os, copy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 from litellm import Router
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
@@ -124,9 +122,7 @@ async def test_lowest_cost_routing():
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
     print(response)
-    print(
-        response._hidden_params["model_id"]
-    )  # expect groq-llama, since groq/llama has lowest cost
+    print(response._hidden_params["model_id"])  # expect groq-llama, since groq/llama has lowest cost
     assert "gpt-3.5-turbo" == response._hidden_params["model_id"]
 
 
@@ -152,9 +148,7 @@ async def _deploy(lowest_cost_logger, deployment_id, tokens_used, duration):
     )
 
 
-@pytest.mark.parametrize(
-    "ans_rpm", [1, 5]
-)  # 1 should produce nothing, 10 should select first
+@pytest.mark.parametrize("ans_rpm", [1, 5])  # 1 should produce nothing, 10 should select first
 @pytest.mark.asyncio
 async def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     """

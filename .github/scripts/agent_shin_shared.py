@@ -183,11 +183,7 @@ def seconds_since_latest_marker_comment(
     pass it. ``now`` is injectable for tests / callers (like the daily
     sweep) that want every age calculation pinned to one snapshot.
     """
-    expected_login = (
-        bot_login
-        or os.environ.get("AGENT_SHIN_BOT_LOGIN")
-        or AGENT_SHIN_DEFAULT_BOT_LOGIN
-    ).lower()
+    expected_login = (bot_login or os.environ.get("AGENT_SHIN_BOT_LOGIN") or AGENT_SHIN_DEFAULT_BOT_LOGIN).lower()
     latest: dt.datetime | None = None
     for comment in comments:
         author = ((comment.get("user") or {}).get("login") or "").lower()

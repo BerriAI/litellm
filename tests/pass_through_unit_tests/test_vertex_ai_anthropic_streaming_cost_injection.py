@@ -93,11 +93,7 @@ async def test_vertex_ai_anthropic_streaming_cost_injection_enabled():
                             if json_part and json_part != "[DONE]":
                                 try:
                                     obj = json.loads(json_part)
-                                    if (
-                                        obj.get("type") == "message_delta"
-                                        and "usage" in obj
-                                        and "cost" in obj["usage"]
-                                    ):
+                                    if obj.get("type") == "message_delta" and "usage" in obj and "cost" in obj["usage"]:
                                         assert obj["usage"]["cost"] == 0.00015
                                         cost_injected = True
                                 except json.JSONDecodeError:

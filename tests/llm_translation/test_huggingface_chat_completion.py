@@ -9,9 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from base_llm_unit_tests import BaseLLMChatTest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import pytest
 
@@ -153,9 +151,7 @@ PROVIDER_MAPPING_RESPONSE = {
 
 @pytest.fixture
 def mock_provider_mapping():
-    with patch(
-        "litellm.llms.huggingface.chat.transformation._fetch_inference_provider_mapping"
-    ) as mock:
+    with patch("litellm.llms.huggingface.chat.transformation._fetch_inference_provider_mapping") as mock:
         mock.return_value = PROVIDER_MAPPING_RESPONSE
         yield mock
 
@@ -182,10 +178,7 @@ def mock_http_handler():
         def mock_side_effect(*args, **kwargs):
             if kwargs.get("stream", True):
                 mock_response.iter_lines.return_value = iter(
-                    [
-                        f"data: {json.dumps(chunk)}".encode("utf-8")
-                        for chunk in MOCK_STREAMING_CHUNKS
-                    ]
+                    [f"data: {json.dumps(chunk)}".encode("utf-8") for chunk in MOCK_STREAMING_CHUNKS]
                     + [b"data: [DONE]"]
                 )
             else:
@@ -246,10 +239,7 @@ class TestHuggingFace(BaseLLMChatTest):
 
         response = litellm.completion(model=self.model, messages=messages, stream=False)
         assert isinstance(response, ModelResponse)
-        assert (
-            response.choices[0].message.content
-            == "This is a test response from the mocked HuggingFace API."
-        )
+        assert response.choices[0].message.content == "This is a test response from the mocked HuggingFace API."
         assert response.usage is not None
         assert response.model == self.model.split("/", 2)[2]
 
@@ -279,9 +269,7 @@ class TestHuggingFace(BaseLLMChatTest):
     async def test_async_completion_streaming(self):
         """Test async streaming completion"""
         messages = [{"role": "user", "content": "This is a dummy message"}]
-        response = await litellm.acompletion(
-            model=self.model, messages=messages, stream=True
-        )
+        response = await litellm.acompletion(model=self.model, messages=messages, stream=True)
 
         chunks = []
         async for chunk in response:
@@ -297,16 +285,11 @@ class TestHuggingFace(BaseLLMChatTest):
     async def test_async_completion_non_streaming(self):
         """Test async non-streaming completion"""
         messages = [{"role": "user", "content": "This is a dummy message"}]
-        response = await litellm.acompletion(
-            model=self.model, messages=messages, stream=False
-        )
+        response = await litellm.acompletion(model=self.model, messages=messages, stream=False)
 
         assert self.mock_http_async.called
         assert isinstance(response, ModelResponse)
-        assert (
-            response.choices[0].message.content
-            == "This is a test response from the mocked HuggingFace API."
-        )
+        assert response.choices[0].message.content == "This is a test response from the mocked HuggingFace API."
         assert response.usage is not None
         assert response.model == self.model.split("/", 2)[2]
 
@@ -347,9 +330,7 @@ class TestHuggingFace(BaseLLMChatTest):
                 }
             ]
 
-            response = litellm.completion(
-                model=self.model, messages=messages, tools=tools, tool_choice="auto"
-            )
+            response = litellm.completion(model=self.model, messages=messages, tools=tools, tool_choice="auto")
 
             assert response.choices[0].message.tool_calls is not None
             assert len(response.choices[0].message.tool_calls) == 1
@@ -451,15 +432,10 @@ class TestHuggingFace(BaseLLMChatTest):
         messages = [{"role": "user", "content": "This is a test message"}]
         api_base = "https://abcd123.us-east-1.aws.endpoints.huggingface.cloud"
 
-        response = litellm.completion(
-            model="huggingface/tgi", messages=messages, api_base=api_base, stream=False
-        )
+        response = litellm.completion(model="huggingface/tgi", messages=messages, api_base=api_base, stream=False)
 
         assert isinstance(response, ModelResponse)
-        assert (
-            response.choices[0].message.content
-            == "This is a test response from the mocked HuggingFace API."
-        )
+        assert response.choices[0].message.content == "This is a test response from the mocked HuggingFace API."
 
         assert self.mock_http.called
         call_args = self.mock_http.call_args
@@ -478,10 +454,7 @@ class TestHuggingFace(BaseLLMChatTest):
         )
 
         assert isinstance(response, ModelResponse)
-        assert (
-            response.choices[0].message.content
-            == "This is a test response from the mocked HuggingFace API."
-        )
+        assert response.choices[0].message.content == "This is a test response from the mocked HuggingFace API."
 
         assert self.mock_http_async.called
         call_args = self.mock_http_async.call_args
@@ -495,9 +468,7 @@ class TestHuggingFace(BaseLLMChatTest):
         messages = [{"role": "user", "content": "This is a test message"}]
         api_base = "https://abcd123.us-east-1.aws.endpoints.huggingface.cloud"
 
-        response = litellm.completion(
-            model="huggingface/tgi", messages=messages, api_base=api_base, stream=True
-        )
+        response = litellm.completion(model="huggingface/tgi", messages=messages, api_base=api_base, stream=True)
 
         chunks = list(response)
         assert len(chunks) > 0
@@ -538,9 +509,7 @@ class TestHuggingFace(BaseLLMChatTest):
 
         for input_url, expected_url in test_cases:
             result = _build_chat_completion_url(input_url)
-            assert (
-                result == expected_url
-            ), f"Failed for input: {input_url}, expected: {expected_url}, got: {result}"
+            assert result == expected_url, f"Failed for input: {input_url}, expected: {expected_url}, got: {result}"
 
     def test_validate_environment(self):
         """Test that the environment is validated correctly"""

@@ -5,9 +5,7 @@ from datetime import datetime
 from io import BytesIO
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 
 import litellm
 from litellm import completion, embedding
@@ -31,9 +29,7 @@ async def test_litellm_gateway_from_sdk():
 
     openai_client = OpenAI(api_key="fake-key")
 
-    with patch.object(
-        openai_client.chat.completions.with_raw_response, "create", new=MagicMock()
-    ) as mock_call:
+    with patch.object(openai_client.chat.completions.with_raw_response, "create", new=MagicMock()) as mock_call:
         try:
             completion(
                 model="litellm_proxy/my-vllm-model",
@@ -65,15 +61,11 @@ async def test_litellm_gateway_from_sdk_structured_output():
 
     openai_client = OpenAI(api_key="fake-key")
 
-    with patch.object(
-        openai_client.chat.completions, "create", new=MagicMock()
-    ) as mock_call:
+    with patch.object(openai_client.chat.completions, "create", new=MagicMock()) as mock_call:
         try:
             litellm.completion(
                 model="litellm_proxy/openai/gpt-4o",
-                messages=[
-                    {"role": "user", "content": "What is the capital of France?"}
-                ],
+                messages=[{"role": "user", "content": "What is the capital of France?"}],
                 api_key="my-test-api-key",
                 user="test",
                 response_format=Result,
@@ -178,10 +170,7 @@ async def test_litellm_gateway_from_sdk_image_generation(is_async):
 
         print("Call KWARGS - {}".format(mock_method.call_args.kwargs))
 
-        assert (
-            "A beautiful sunset over mountains"
-            == mock_method.call_args.kwargs["prompt"]
-        )
+        assert "A beautiful sunset over mountains" == mock_method.call_args.kwargs["prompt"]
         assert "dall-e-3" == mock_method.call_args.kwargs["model"]
 
 
@@ -203,9 +192,7 @@ async def test_litellm_gateway_image_generation_direct(is_async):
         mock_async_client = AsyncMock()
         mock_async_client.images.generate = AsyncMock(return_value=mock_openai_response)
 
-        with patch(
-            "litellm.llms.openai.openai.AsyncOpenAI", return_value=mock_async_client
-        ) as mock_async_constructor:
+        with patch("litellm.llms.openai.openai.AsyncOpenAI", return_value=mock_async_client) as mock_async_constructor:
             response = await litellm.aimage_generation(
                 model="litellm_proxy/dall-e-3",
                 prompt="A beautiful sunset over mountains",
@@ -230,9 +217,7 @@ async def test_litellm_gateway_image_generation_direct(is_async):
         mock_sync_client = MagicMock()
         mock_sync_client.images.generate.return_value = mock_openai_response
 
-        with patch(
-            "litellm.llms.openai.openai.OpenAI", return_value=mock_sync_client
-        ) as mock_sync_constructor:
+        with patch("litellm.llms.openai.openai.OpenAI", return_value=mock_sync_client) as mock_sync_constructor:
             response = litellm.image_generation(
                 model="litellm_proxy/dall-e-3",
                 prompt="A beautiful sunset over mountains",
@@ -398,10 +383,7 @@ async def test_litellm_gateway_from_sdk_speech(is_async):
 
         print("Call KWARGS - {}".format(mock_method.call_args.kwargs))
 
-        assert (
-            "Hello, this is a test of text to speech"
-            == mock_method.call_args.kwargs["input"]
-        )
+        assert "Hello, this is a test of text to speech" == mock_method.call_args.kwargs["input"]
         assert "tts-1" == mock_method.call_args.kwargs["model"]
         assert "alloy" == mock_method.call_args.kwargs["voice"]
 
@@ -567,12 +549,7 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
 
         # Assert the headers were properly passed through
         print(f"additional_headers: {response._hidden_params['additional_headers']}")
-        assert (
-            response._hidden_params["additional_headers"][
-                "llm_provider-x-litellm-response-cost"
-            ]
-            == "120"
-        )
+        assert response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == "120"
 
         assert response._hidden_params["response_cost"] == 120
 

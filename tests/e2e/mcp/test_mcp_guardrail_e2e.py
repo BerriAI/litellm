@@ -89,9 +89,7 @@ class TestMcpToolCallGuardrail:
         marker = unique_marker()
         banned_keyword = f"e2eblocked{marker}"
 
-        guardrail_id = client.register_mcp_content_filter(
-            name=f"e2e-mcp-cf-{marker}", blocked_keyword=banned_keyword
-        )
+        guardrail_id = client.register_mcp_content_filter(name=f"e2e-mcp-cf-{marker}", blocked_keyword=banned_keyword)
         guardrail_created_at = time.monotonic()
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
@@ -163,6 +161,4 @@ class TestMcpToolCallGuardrail:
                     f"a clean MCP tool call must reach the server and not error, got: {result}"
                 )
             case _:
-                pytest.fail(
-                    f"a clean MCP tool call must pass the guardrail and reach the server; got {allowed}"
-                )
+                pytest.fail(f"a clean MCP tool call must pass the guardrail and reach the server; got {allowed}")

@@ -17,9 +17,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transfor
 
 def test_get_supported_params_thinking():
     config = AmazonAnthropicClaudeConfig()
-    params = config.get_supported_openai_params(
-        model="anthropic.claude-sonnet-4-20250514-v1:0"
-    )
+    params = config.get_supported_openai_params(model="anthropic.claude-sonnet-4-20250514-v1:0")
     assert "thinking" in params
 
 
@@ -71,50 +69,22 @@ def test_aws_params_filtered_from_request_body():
     result_json = json.dumps(result)
 
     # Verify AWS authentication params are NOT in the request body
-    assert (
-        "aws_access_key_id" not in result_json
-    ), "AWS access key should not be in request body"
-    assert (
-        "aws_secret_access_key" not in result_json
-    ), "AWS secret key should not be in request body"
-    assert (
-        "aws_session_token" not in result_json
-    ), "AWS session token should not be in request body"
-    assert (
-        "aws_region_name" not in result_json
-    ), "AWS region should not be in request body"
-    assert (
-        "aws_role_name" not in result_json
-    ), "AWS role name should not be in request body"
-    assert (
-        "aws_session_name" not in result_json
-    ), "AWS session name should not be in request body"
-    assert (
-        "aws_profile_name" not in result_json
-    ), "AWS profile name should not be in request body"
-    assert (
-        "aws_web_identity_token" not in result_json
-    ), "AWS web identity token should not be in request body"
-    assert (
-        "aws_sts_endpoint" not in result_json
-    ), "AWS STS endpoint should not be in request body"
-    assert (
-        "aws_bedrock_runtime_endpoint" not in result_json
-    ), "AWS bedrock endpoint should not be in request body"
-    assert (
-        "aws_external_id" not in result_json
-    ), "AWS external ID should not be in request body"
+    assert "aws_access_key_id" not in result_json, "AWS access key should not be in request body"
+    assert "aws_secret_access_key" not in result_json, "AWS secret key should not be in request body"
+    assert "aws_session_token" not in result_json, "AWS session token should not be in request body"
+    assert "aws_region_name" not in result_json, "AWS region should not be in request body"
+    assert "aws_role_name" not in result_json, "AWS role name should not be in request body"
+    assert "aws_session_name" not in result_json, "AWS session name should not be in request body"
+    assert "aws_profile_name" not in result_json, "AWS profile name should not be in request body"
+    assert "aws_web_identity_token" not in result_json, "AWS web identity token should not be in request body"
+    assert "aws_sts_endpoint" not in result_json, "AWS STS endpoint should not be in request body"
+    assert "aws_bedrock_runtime_endpoint" not in result_json, "AWS bedrock endpoint should not be in request body"
+    assert "aws_external_id" not in result_json, "AWS external ID should not be in request body"
 
     # Also check that the sensitive values themselves are not in the response
-    assert (
-        "AKIAIOSFODNN7EXAMPLE" not in result_json
-    ), "AWS access key value leaked in request body"
-    assert (
-        "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" not in result_json
-    ), "AWS secret key value leaked in request body"
-    assert (
-        "arn:aws:iam::123456789012:role/test-role" not in result_json
-    ), "AWS role ARN leaked in request body"
+    assert "AKIAIOSFODNN7EXAMPLE" not in result_json, "AWS access key value leaked in request body"
+    assert "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" not in result_json, "AWS secret key value leaked in request body"
+    assert "arn:aws:iam::123456789012:role/test-role" not in result_json, "AWS role ARN leaked in request body"
     assert "test-session" not in result_json, "AWS session name leaked in request body"
 
     # Verify normal params ARE still in the request body
@@ -123,9 +93,7 @@ def test_aws_params_filtered_from_request_body():
     assert result["top_p"] == 0.9, "top_p should be in request body"
 
     # Verify Bedrock-specific params are added
-    assert (
-        result["anthropic_version"] == "bedrock-2023-05-31"
-    ), "anthropic_version should be set"
+    assert result["anthropic_version"] == "bedrock-2023-05-31", "anthropic_version should be set"
     assert "model" not in result, "model should be removed for Bedrock Invoke API"
     assert "stream" not in result, "stream should be removed for Bedrock Invoke API"
 
@@ -182,9 +150,7 @@ def test_output_format_conversion_to_inline_schema():
     )
 
     # Verify output_format was removed from the request
-    assert (
-        "output_format" not in result
-    ), "output_format should be removed from request body"
+    assert "output_format" not in result, "output_format should be removed from request body"
 
     # Verify the schema was added to the last user message content
     assert "messages" in result
@@ -335,9 +301,7 @@ def test_opus_4_5_model_detection():
     ]
 
     for model in non_opus_4_5_models:
-        assert not config._is_claude_opus_4_5(
-            model
-        ), f"Should not detect {model} as Opus 4.5"
+        assert not config._is_claude_opus_4_5(model), f"Should not detect {model} as Opus 4.5"
 
 
 # def test_structured_outputs_beta_header_filtered_for_bedrock_invoke():
@@ -465,9 +429,7 @@ def test_output_config_format_converted_for_bedrock_chat_invoke_request():
         ("anthropic.claude-opus-4-7", "xhigh"),
     ],
 )
-def test_output_config_effort_normalized_for_bedrock_chat_invoke_request(
-    model, expected_effort
-):
+def test_output_config_effort_normalized_for_bedrock_chat_invoke_request(model, expected_effort):
     """Bedrock Invoke chat path accepts ``xhigh`` and forwards the provider-safe effort."""
     config = AmazonAnthropicClaudeConfig()
 
@@ -542,6 +504,6 @@ def test_output_format_removed_from_bedrock_invoke_request():
     )
 
     # Verify output_format is not in the request
-    assert (
-        "output_format" not in result
-    ), f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
+    assert "output_format" not in result, (
+        f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
+    )

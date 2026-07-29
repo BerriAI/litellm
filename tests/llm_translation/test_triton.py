@@ -9,9 +9,7 @@ load_dotenv()
 import io
 from unittest.mock import AsyncMock, MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 import litellm
 
@@ -30,9 +28,7 @@ def test_split_embedding_by_shape_passes():
                 "data": [1, 2, 3, 4, 5, 6],
             }
         ]
-        split_output_data = TritonEmbeddingConfig.split_embedding_by_shape(
-            data[0]["data"], data[0]["shape"]
-        )
+        split_output_data = TritonEmbeddingConfig.split_embedding_by_shape(data[0]["data"], data[0]["shape"])
         assert split_output_data == [[1, 2, 3], [4, 5, 6]]
     except Exception as e:
         pytest.fail(f"An exception occured: {e}")
@@ -46,9 +42,7 @@ def test_split_embedding_by_shape_fails_with_shape_value_error():
         }
     ]
     with pytest.raises(ValueError):
-        TritonEmbeddingConfig.split_embedding_by_shape(
-            data[0]["data"], data[0]["shape"]
-        )
+        TritonEmbeddingConfig.split_embedding_by_shape(data[0]["data"], data[0]["shape"])
 
 
 def test_triton_embedding_response_sets_usage_with_token_counter():
@@ -333,9 +327,7 @@ def test_completion_triton_infer_api():
             assert request_data["inputs"][0]["name"] == "text_input"
             assert request_data["inputs"][0]["shape"] == [1]
             assert request_data["inputs"][0]["datatype"] == "BYTES"
-            assert request_data["inputs"][0]["data"] == [
-                "0004900005025 0004900005026 0004900005027"
-            ]
+            assert request_data["inputs"][0]["data"] == ["0004900005025 0004900005026 0004900005027"]
 
             assert request_data["inputs"][1]["shape"] == [1]
             assert request_data["inputs"][1]["datatype"] == "INT32"

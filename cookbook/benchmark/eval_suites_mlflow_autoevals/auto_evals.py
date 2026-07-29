@@ -20,9 +20,7 @@ print(response)
 print("calling evaluator")
 evaluator = Factuality()
 result = evaluator(
-    output=response.choices[0]["message"][
-        "content"
-    ],  # response from litellm.completion()
+    output=response.choices[0]["message"]["content"],  # response from litellm.completion()
     expected="India",  # expected output
     input=question,  # question passed to litellm.completion
 )

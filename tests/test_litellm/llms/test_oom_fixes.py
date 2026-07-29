@@ -124,12 +124,8 @@ async def test_presidio_fix():
     # Cleanup
     await presidio._close_http_session()
 
-    print(
-        f"\n✅ RESULT: Session leak {'PREVENTED' if session_diff <= 1 else 'DETECTED'}"
-    )
-    print(
-        f"   Expected: ≤1 new session (the shared one), Got: {session_diff} new sessions"
-    )
+    print(f"\n✅ RESULT: Session leak {'PREVENTED' if session_diff <= 1 else 'DETECTED'}")
+    print(f"   Expected: ≤1 new session (the shared one), Got: {session_diff} new sessions")
 
 
 async def test_presidio_concurrent_load():
@@ -236,12 +232,8 @@ async def test_openai_client_caching():
     unique_clients = len(set(id(c) for c in clients if c is not None))
     print(f"  - Unique client instances returned: {unique_clients}")
 
-    print(
-        f"\n✅ RESULT: Client caching {'WORKING' if unique_clients <= 2 else 'BROKEN'}"
-    )
-    print(
-        f"   Expected: ≤2 unique clients (due to TTL), Got: {unique_clients} unique clients"
-    )
+    print(f"\n✅ RESULT: Client caching {'WORKING' if unique_clients <= 2 else 'BROKEN'}")
+    print(f"   Expected: ≤2 unique clients (due to TTL), Got: {unique_clients} unique clients")
 
 
 async def main():

@@ -12,9 +12,7 @@ from litellm.types.utils import StandardCallbackDynamicParams
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 import pytest
 
 import litellm
@@ -79,9 +77,7 @@ def test_basic_trimming_no_max_tokens_specified():
     print("trimmed messages for gpt-4")
     print(trimmed_messages)
     # print(get_token_count(messages=trimmed_messages, model="claude-2"))
-    assert (
-        get_token_count(messages=trimmed_messages, model="gpt-4")
-    ) <= litellm.model_cost["gpt-4"]["max_tokens"]
+    assert (get_token_count(messages=trimmed_messages, model="gpt-4")) <= litellm.model_cost["gpt-4"]["max_tokens"]
 
 
 # test_basic_trimming_no_max_tokens_specified()
@@ -98,9 +94,7 @@ def test_multiple_messages_trimming():
             "content": "This is another long message that will also exceed the limit.",
         },
     ]
-    trimmed_messages = trim_messages(
-        messages=messages, model="gpt-3.5-turbo", max_tokens=20
-    )
+    trimmed_messages = trim_messages(messages=messages, model="gpt-3.5-turbo", max_tokens=20)
     # print(get_token_count(messages=trimmed_messages, model="gpt-3.5-turbo"))
     assert (get_token_count(messages=trimmed_messages, model="gpt-3.5-turbo")) <= 20
 
@@ -119,9 +113,7 @@ def test_multiple_messages_no_trimming():
             "content": "This is another long message that will also exceed the limit.",
         },
     ]
-    trimmed_messages = trim_messages(
-        messages=messages, model="gpt-3.5-turbo", max_tokens=100
-    )
+    trimmed_messages = trim_messages(messages=messages, model="gpt-3.5-turbo", max_tokens=100)
     print("Trimmed messages")
     print(trimmed_messages)
     assert messages == trimmed_messages
@@ -148,9 +140,7 @@ def test_large_trimming_multiple_messages():
 
 
 def test_large_trimming_single_message():
-    messages = [
-        {"role": "user", "content": "This is a singlelongwordthatexceedsthelimit."}
-    ]
+    messages = [{"role": "user", "content": "This is a singlelongwordthatexceedsthelimit."}]
     trimmed_messages = trim_messages(messages, max_tokens=5, model="gpt-4-0613")
     assert (get_token_count(messages=trimmed_messages, model="gpt-4-0613")) <= 5
     assert (get_token_count(messages=trimmed_messages, model="gpt-4-0613")) > 0
@@ -281,10 +271,7 @@ def test_trimming_with_model_cost_max_input_tokens(model):
         },
     ]
     trimmed_messages = trim_messages(messages, model=model)
-    assert (
-        get_token_count(trimmed_messages, model=model)
-        < litellm.model_cost[model]["max_input_tokens"]
-    )
+    assert get_token_count(trimmed_messages, model=model) < litellm.model_cost[model]["max_input_tokens"]
 
 
 def test_trimming_with_untokenizable_field(caplog: pytest.LogCaptureFixture) -> None:
@@ -339,9 +326,7 @@ def test_aget_valid_models():
     print(valid_models)
 
     # list of openai supported llms on litellm
-    expected_models = (
-        litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
-    )
+    expected_models = litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
 
     assert set(valid_models) == set(expected_models)
 
@@ -372,9 +357,7 @@ def test_get_valid_models_with_custom_llm_provider(custom_llm_provider):
         provider=LlmProviders(custom_llm_provider),
     )
     assert provider_config is not None
-    valid_models = get_valid_models(
-        check_provider_endpoint=True, custom_llm_provider=custom_llm_provider
-    )
+    valid_models = get_valid_models(check_provider_endpoint=True, custom_llm_provider=custom_llm_provider)
     print(valid_models)
     assert len(valid_models) > 0
     assert set(provider_config.get_models()) == set(valid_models)
@@ -407,9 +390,7 @@ def test_validate_environment_empty_model():
 
 def test_validate_environment_api_key():
     response_obj = validate_environment(model="gpt-5-mini", api_key="sk-my-test-key")
-    assert (
-        response_obj["keys_in_environment"] is True
-    ), f"Missing keys={response_obj['missing_keys']}"
+    assert response_obj["keys_in_environment"] is True, f"Missing keys={response_obj['missing_keys']}"
 
 
 def test_validate_environment_api_version():
@@ -419,9 +400,7 @@ def test_validate_environment_api_version():
         api_base="https://fake.openai.azure.com/",
         api_version="2024-02-15",
     )
-    assert (
-        response_obj["keys_in_environment"] is True
-    ), f"Missing keys={response_obj['missing_keys']}"
+    assert response_obj["keys_in_environment"] is True, f"Missing keys={response_obj['missing_keys']}"
 
 
 def test_validate_environment_api_base_dynamic():
@@ -496,18 +475,14 @@ def test_function_to_dict():
     assert function_json["description"] == expected_output["description"]
     assert function_json["parameters"]["type"] == expected_output["parameters"]["type"]
     assert (
-        function_json["parameters"]["properties"]["location"]
-        == expected_output["parameters"]["properties"]["location"]
+        function_json["parameters"]["properties"]["location"] == expected_output["parameters"]["properties"]["location"]
     )
 
     # the enum can change it can be - which is why we don't assert on unit
     # {'type': 'string', 'description': 'Temperature unit', 'enum': "['fahrenheit', 'celsius']"}
     # {'type': 'string', 'description': 'Temperature unit', 'enum': "['celsius', 'fahrenheit']"}
 
-    assert (
-        function_json["parameters"]["required"]
-        == expected_output["parameters"]["required"]
-    )
+    assert function_json["parameters"]["required"] == expected_output["parameters"]["required"]
 
     print("passed")
 
@@ -576,9 +551,7 @@ def test_get_max_token_unit_test():
     """
     model = "bedrock/anthropic.claude-3-haiku-20240307-v1:0"
 
-    max_tokens = get_max_tokens(
-        model
-    )  # Returns a number instead of throwing an Exception
+    max_tokens = get_max_tokens(model)  # Returns a number instead of throwing an Exception
 
     assert isinstance(max_tokens, int)
 
@@ -617,9 +590,7 @@ def test_get_chat_completion_prompt():
         prompt_variables=None,
     )
 
-    assert litellm_logging_obj.messages == [
-        {"role": "user", "content": updated_message}
-    ]
+    assert litellm_logging_obj.messages == [{"role": "user", "content": updated_message}]
 
 
 def test_redact_msgs_from_logs():
@@ -691,9 +662,7 @@ def test_redact_embedding_response():
     litellm.turn_off_message_logging = True
 
     # Create a test EmbeddingResponse with usage data
-    original_usage = litellm.Usage(
-        prompt_tokens=10, completion_tokens=0, total_tokens=10
-    )
+    original_usage = litellm.Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10)
     original_data = [
         {"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3, 0.4, 0.5]},
         {"object": "embedding", "index": 1, "embedding": [0.6, 0.7, 0.8, 0.9, 1.0]},
@@ -729,9 +698,7 @@ def test_redact_embedding_response():
 
     # Assert the redacted response preserves critical metadata
     assert _redacted_response_obj.usage == original_usage  # usage should be preserved
-    assert (
-        _redacted_response_obj.model == "text-embedding-3-small"
-    )  # model should be preserved
+    assert _redacted_response_obj.model == "text-embedding-3-small"  # model should be preserved
     assert _redacted_response_obj.object == "list"  # object should be preserved
 
     # Assert sensitive data is cleared
@@ -785,12 +752,8 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     )
 
     # Test Case 1: standard_callback_dynamic_params = False (or not set)
-    standard_callback_dynamic_params = StandardCallbackDynamicParams(
-        turn_off_message_logging=False
-    )
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
-        standard_callback_dynamic_params
-    )
+    standard_callback_dynamic_params = StandardCallbackDynamicParams(turn_off_message_logging=False)
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = standard_callback_dynamic_params
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
@@ -799,12 +762,8 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     assert _redacted_response_obj.choices[0].message.content == test_content
 
     # Test Case 2: standard_callback_dynamic_params = True
-    standard_callback_dynamic_params = StandardCallbackDynamicParams(
-        turn_off_message_logging=True
-    )
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
-        standard_callback_dynamic_params
-    )
+    standard_callback_dynamic_params = StandardCallbackDynamicParams(turn_off_message_logging=True)
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = standard_callback_dynamic_params
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
@@ -815,9 +774,7 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     # Test Case 3: standard_callback_dynamic_params does not set turn_off_message_logging
     # since litellm.turn_off_message_logging is True redaction should occur
     standard_callback_dynamic_params = StandardCallbackDynamicParams()
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
-        standard_callback_dynamic_params
-    )
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = standard_callback_dynamic_params
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
@@ -922,9 +879,7 @@ def test_get_llm_provider_ft_models():
 
 
 @pytest.mark.parametrize("langfuse_trace_id", [None, "my-unique-trace-id"])
-@pytest.mark.parametrize(
-    "langfuse_existing_trace_id", [None, "my-unique-existing-trace-id"]
-)
+@pytest.mark.parametrize("langfuse_existing_trace_id", [None, "my-unique-existing-trace-id"])
 def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
     """
     - Unit test for `_get_trace_id` function in Logging obj
@@ -963,22 +918,13 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
 
     ## if existing_trace_id exists
     if langfuse_existing_trace_id is not None:
-        assert (
-            litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == langfuse_existing_trace_id
-        )
+        assert litellm_logging_obj._get_trace_id(service_name="langfuse") == langfuse_existing_trace_id
     ## if trace_id exists
     elif langfuse_trace_id is not None:
-        assert (
-            litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == langfuse_trace_id
-        )
+        assert litellm_logging_obj._get_trace_id(service_name="langfuse") == langfuse_trace_id
     ## if no trace_id or existing_trace_id is provided, use litellm_trace_id
     else:
-        assert (
-            litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == litellm_logging_obj.litellm_trace_id
-        )
+        assert litellm_logging_obj._get_trace_id(service_name="langfuse") == litellm_logging_obj.litellm_trace_id
 
 
 def test_convert_model_response_object():
@@ -1172,9 +1118,7 @@ def test_async_http_handler(mock_async_client):
     concurrent_limit = 2
 
     # Mock the transport creation to return a specific transport
-    with mock.patch.object(
-        AsyncHTTPHandler, "_create_async_transport"
-    ) as mock_create_transport:
+    with mock.patch.object(AsyncHTTPHandler, "_create_async_transport") as mock_create_transport:
         mock_transport = mock.MagicMock()
         mock_create_transport.return_value = mock_transport
 
@@ -1239,9 +1183,7 @@ def test_async_http_handler_force_ipv4(mock_async_client):
         litellm.force_ipv4 = False
 
 
-@pytest.mark.parametrize(
-    "model, expected_bool", [("gpt-3.5-turbo", False), ("gpt-4o-audio-preview", True)]
-)
+@pytest.mark.parametrize("model, expected_bool", [("gpt-3.5-turbo", False), ("gpt-4o-audio-preview", True)])
 def test_supports_audio_input(model, expected_bool):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1295,9 +1237,7 @@ def test_is_base64_encoded_2():
             [
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "image_url", "url": "https://example.com/image.png"}
-                    ],
+                    "content": [{"type": "image_url", "url": "https://example.com/image.png"}],
                 }
             ],
             True,
@@ -1373,10 +1313,7 @@ def test_models_by_provider():
             continue
         elif k == "sample_spec":
             continue
-        elif (
-            v["litellm_provider"] == "sagemaker"
-            or v["litellm_provider"] == "bedrock_converse"
-        ):
+        elif v["litellm_provider"] == "sagemaker" or v["litellm_provider"] == "bedrock_converse":
             continue
         elif v.get("mode") == "search":
             # Skip search providers as they don't have traditional models
@@ -1385,9 +1322,7 @@ def test_models_by_provider():
             providers.add(v["litellm_provider"])
 
     for provider in providers:
-        assert provider in models_by_provider.keys() or JSONProviderRegistry.exists(
-            provider
-        )
+        assert provider in models_by_provider.keys() or JSONProviderRegistry.exists(provider)
 
 
 @pytest.mark.parametrize(
@@ -1398,16 +1333,11 @@ def test_models_by_provider():
         ({"user_api_key_end_user_id": "123"}, True, None),
     ],
 )
-def test_get_end_user_id_for_cost_tracking(
-    litellm_params, disable_end_user_cost_tracking, expected_end_user_id
-):
+def test_get_end_user_id_for_cost_tracking(litellm_params, disable_end_user_cost_tracking, expected_end_user_id):
     from litellm.utils import get_end_user_id_for_cost_tracking
 
     litellm.disable_end_user_cost_tracking = disable_end_user_cost_tracking
-    assert (
-        get_end_user_id_for_cost_tracking(litellm_params=litellm_params)
-        == expected_end_user_id
-    )
+    assert get_end_user_id_for_cost_tracking(litellm_params=litellm_params) == expected_end_user_id
 
 
 @pytest.mark.parametrize(
@@ -1423,13 +1353,9 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
 ):
     from litellm.utils import get_end_user_id_for_cost_tracking
 
-    litellm.enable_end_user_cost_tracking_prometheus_only = (
-        enable_end_user_cost_tracking_prometheus_only
-    )
+    litellm.enable_end_user_cost_tracking_prometheus_only = enable_end_user_cost_tracking_prometheus_only
     assert (
-        get_end_user_id_for_cost_tracking(
-            litellm_params=litellm_params, service_type="prometheus"
-        )
+        get_end_user_id_for_cost_tracking(litellm_params=litellm_params, service_type="prometheus")
         == expected_end_user_id
     )
 
@@ -1444,20 +1370,14 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
         ),
         # Test with only litellm_metadata field (new behavior)
         (
-            {
-                "litellm_metadata": {
-                    "user_api_key_end_user_id": "user_from_litellm_metadata"
-                }
-            },
+            {"litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"}},
             "user_from_litellm_metadata",
         ),
         # Test with both fields - metadata should take precedence for user_api_key fields
         (
             {
                 "metadata": {"user_api_key_end_user_id": "user_from_metadata"},
-                "litellm_metadata": {
-                    "user_api_key_end_user_id": "user_from_litellm_metadata"
-                },
+                "litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"},
             },
             "user_from_metadata",
         ),
@@ -1473,9 +1393,7 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
         (
             {
                 "metadata": {},
-                "litellm_metadata": {
-                    "user_api_key_end_user_id": "user_from_litellm_metadata"
-                },
+                "litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"},
             },
             "user_from_litellm_metadata",
         ),
@@ -1483,9 +1401,7 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
         ({}, None),
     ],
 )
-def test_get_end_user_id_for_cost_tracking_metadata_handling(
-    litellm_params, expected_end_user_id
-):
+def test_get_end_user_id_for_cost_tracking_metadata_handling(litellm_params, expected_end_user_id):
     """
     Test that get_end_user_id_for_cost_tracking correctly handles both metadata and litellm_metadata
     fields using the get_litellm_metadata_from_kwargs helper function.
@@ -1649,9 +1565,7 @@ def test_get_valid_models_openai_proxy(monkeypatch):
     mock_response.status_code = 200
     mock_response.json.return_value = mock_response_data
 
-    with patch.object(
-        litellm.module_level_client, "get", return_value=mock_response
-    ) as mock_post:
+    with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_post:
         valid_models = get_valid_models(check_provider_endpoint=True)
         assert "litellm_proxy/gpt-5.5" in valid_models
 
@@ -1728,16 +1642,11 @@ def test_get_valid_models_fireworks_ai(monkeypatch):
     mock_response.status_code = 200
     mock_response.json.return_value = mock_response_data
 
-    with patch.object(
-        litellm.module_level_client, "get", return_value=mock_response
-    ) as mock_post:
+    with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_post:
         valid_models = get_valid_models(check_provider_endpoint=True)
         print("valid_models", valid_models)
         mock_post.assert_called_once()
-        assert (
-            "fireworks_ai/accounts/fireworks/models/llama-3.1-8b-instruct"
-            in valid_models
-        )
+        assert "fireworks_ai/accounts/fireworks/models/llama-3.1-8b-instruct" in valid_models
 
 
 def test_get_valid_models_default(monkeypatch):
@@ -1776,9 +1685,7 @@ def test_pick_cheapest_chat_model_from_llm_provider():
 def test_get_num_retries(num_retries):
     from litellm.utils import _get_wrapper_num_retries
 
-    assert _get_wrapper_num_retries(
-        kwargs={"num_retries": num_retries}, exception=Exception("test")
-    ) == (
+    assert _get_wrapper_num_retries(kwargs={"num_retries": num_retries}, exception=Exception("test")) == (
         num_retries,
         {
             "num_retries": num_retries,
@@ -2051,9 +1958,7 @@ def test_add_custom_logger_callback_to_specific_event_e2e_failure(monkeypatch):
     assert len(litellm.success_callback) == curr_len_success_callback
     assert len(litellm.failure_callback) == curr_len_failure_callback
 
-    assert any(
-        isinstance(callback, OpenMeterLogger) for callback in litellm.failure_callback
-    )
+    assert any(isinstance(callback, OpenMeterLogger) for callback in litellm.failure_callback)
 
 
 @pytest.mark.asyncio
@@ -2080,20 +1985,13 @@ async def test_wrapper_kwargs_passthrough():
     mock_original.assert_called_once()
 
     # get litellm logging object
-    litellm_logging_obj: LiteLLMLoggingObject = mock_original.call_args.kwargs.get(
-        "litellm_logging_obj"
-    )
+    litellm_logging_obj: LiteLLMLoggingObject = mock_original.call_args.kwargs.get("litellm_logging_obj")
     assert litellm_logging_obj is not None
 
-    print(
-        f"litellm_logging_obj.model_call_details: {litellm_logging_obj.model_call_details}"
-    )
+    print(f"litellm_logging_obj.model_call_details: {litellm_logging_obj.model_call_details}")
 
     # get base model
-    assert (
-        litellm_logging_obj.model_call_details["litellm_params"]["base_model"]
-        == "gpt-5-mini"
-    )
+    assert litellm_logging_obj.model_call_details["litellm_params"]["base_model"] == "gpt-5-mini"
 
 
 def test_dict_to_response_format_helper():
@@ -2164,20 +2062,14 @@ from unittest.mock import Mock
     [
         {
             "name": "default_on_guardrail",
-            "callbacks": [
-                CustomGuardrail(guardrail_name="test_guardrail", default_on=True)
-            ],
+            "callbacks": [CustomGuardrail(guardrail_name="test_guardrail", default_on=True)],
             "kwargs": {"metadata": {"requester_metadata": {"guardrails": []}}},
             "expected": ["test_guardrail"],
         },
         {
             "name": "request_specific_guardrail",
-            "callbacks": [
-                CustomGuardrail(guardrail_name="test_guardrail", default_on=False)
-            ],
-            "kwargs": {
-                "metadata": {"requester_metadata": {"guardrails": ["test_guardrail"]}}
-            },
+            "callbacks": [CustomGuardrail(guardrail_name="test_guardrail", default_on=False)],
+            "kwargs": {"metadata": {"requester_metadata": {"guardrails": ["test_guardrail"]}}},
             "expected": ["test_guardrail"],
         },
         {
@@ -2186,18 +2078,12 @@ from unittest.mock import Mock
                 CustomGuardrail(guardrail_name="default_guardrail", default_on=True),
                 CustomGuardrail(guardrail_name="request_guardrail", default_on=False),
             ],
-            "kwargs": {
-                "metadata": {
-                    "requester_metadata": {"guardrails": ["request_guardrail"]}
-                }
-            },
+            "kwargs": {"metadata": {"requester_metadata": {"guardrails": ["request_guardrail"]}}},
             "expected": ["default_guardrail", "request_guardrail"],
         },
         {
             "name": "empty_metadata",
-            "callbacks": [
-                CustomGuardrail(guardrail_name="test_guardrail", default_on=False)
-            ],
+            "callbacks": [CustomGuardrail(guardrail_name="test_guardrail", default_on=False)],
             "kwargs": {},
             "expected": [],
         },
@@ -2304,9 +2190,7 @@ def test_get_provider_audio_transcription_config():
     from litellm.types.utils import LlmProviders
 
     for provider in LlmProviders:
-        config = ProviderConfigManager.get_provider_audio_transcription_config(
-            model="whisper-1", provider=provider
-        )
+        config = ProviderConfigManager.get_provider_audio_transcription_config(model="whisper-1", provider=provider)
 
 
 @pytest.mark.parametrize(
@@ -2349,9 +2233,7 @@ def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
 
     monkeypatch.setenv("OPENAI_API_KEY", "123")
 
-    _model_cache.set_cached_model_info(
-        "openai", litellm_params=None, available_models=["gpt-5-mini"]
-    )
+    _model_cache.set_cached_model_info("openai", litellm_params=None, available_models=["gpt-5-mini"])
     monkeypatch.delenv("OPENAI_API_KEY")
 
     assert _model_cache.get_cached_model_info("openai") is None
@@ -2440,12 +2322,8 @@ def test_delta_tool_calls_sequential_indices():
     # Verify tool calls have sequential indices
     assert delta.tool_calls is not None, "Tool calls should not be None"
     assert len(delta.tool_calls) == 2
-    assert (
-        delta.tool_calls[0].index == 0
-    ), f"First tool call should have index 0, got {delta.tool_calls[0].index}"
-    assert (
-        delta.tool_calls[1].index == 1
-    ), f"Second tool call should have index 1, got {delta.tool_calls[1].index}"
+    assert delta.tool_calls[0].index == 0, f"First tool call should have index 0, got {delta.tool_calls[0].index}"
+    assert delta.tool_calls[1].index == 1, f"Second tool call should have index 1, got {delta.tool_calls[1].index}"
 
     # Verify tool call details are preserved
     assert delta.tool_calls[0].function.name == "get_weather_for_dallas"
@@ -2458,9 +2336,7 @@ def test_completion_with_no_model():
     """
     # test on empty
     with pytest.raises(TypeError):
-        response = litellm.completion(
-            messages=[{"role": "user", "content": "Hello, how are you?"}]
-        )
+        response = litellm.completion(messages=[{"role": "user", "content": "Hello, how are you?"}])
 
 
 def test_get_base_model_from_metadata():
@@ -2473,43 +2349,31 @@ def test_get_base_model_from_metadata():
     from litellm.utils import _get_base_model_from_metadata
 
     # Test 1: base_model in metadata (Chat Completions API pattern)
-    model_call_details_with_metadata = {
-        "litellm_params": {"metadata": {"model_info": {"base_model": "azure/gpt-5.5"}}}
-    }
+    model_call_details_with_metadata = {"litellm_params": {"metadata": {"model_info": {"base_model": "azure/gpt-5.5"}}}}
     result = _get_base_model_from_metadata(model_call_details_with_metadata)
     assert result == "azure/gpt-5.5", f"Expected 'azure/gpt-5.5', got {result}"
 
     # Test 2: base_model in litellm_metadata (Responses API and generic API calls pattern)
     model_call_details_with_litellm_metadata = {
-        "litellm_params": {
-            "litellm_metadata": {"model_info": {"base_model": "azure/gpt-5-mini"}}
-        }
+        "litellm_params": {"litellm_metadata": {"model_info": {"base_model": "azure/gpt-5-mini"}}}
     }
     result = _get_base_model_from_metadata(model_call_details_with_litellm_metadata)
     assert result == "azure/gpt-5-mini", f"Expected 'azure/gpt-5-mini', got {result}"
 
     # Test 3: base_model in litellm_params (direct base_model)
-    model_call_details_with_direct_base_model = {
-        "litellm_params": {"base_model": "azure/gpt-5-mini"}
-    }
+    model_call_details_with_direct_base_model = {"litellm_params": {"base_model": "azure/gpt-5-mini"}}
     result = _get_base_model_from_metadata(model_call_details_with_direct_base_model)
-    assert (
-        result == "azure/gpt-5-mini"
-    ), f"Expected 'azure/gpt-5-mini', got {result}"
+    assert result == "azure/gpt-5-mini", f"Expected 'azure/gpt-5-mini', got {result}"
 
     # Test 4: metadata takes precedence over litellm_metadata
     model_call_details_with_both = {
         "litellm_params": {
             "metadata": {"model_info": {"base_model": "azure/gpt-4-from-metadata"}},
-            "litellm_metadata": {
-                "model_info": {"base_model": "azure/gpt-4-from-litellm-metadata"}
-            },
+            "litellm_metadata": {"model_info": {"base_model": "azure/gpt-4-from-litellm-metadata"}},
         }
     }
     result = _get_base_model_from_metadata(model_call_details_with_both)
-    assert (
-        result == "azure/gpt-4-from-metadata"
-    ), f"Expected metadata to take precedence, got {result}"
+    assert result == "azure/gpt-4-from-metadata", f"Expected metadata to take precedence, got {result}"
 
     # Test 5: No base_model present
     model_call_details_without_base_model = {"litellm_params": {"metadata": {}}}

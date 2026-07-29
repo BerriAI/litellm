@@ -25,11 +25,7 @@ class testCustomCallbackProxy(CustomLogger):
         print(f"{blue_color_code}Initialized LiteLLM custom logger")
         try:
             print(f"Logger Initialized with following methods:")
-            methods = [
-                method
-                for method in dir(self)
-                if inspect.ismethod(getattr(self, method))
-            ]
+            methods = [method for method in dir(self) if inspect.ismethod(getattr(self, method))]
 
             # Pretty print the methods
             for method in methods:
@@ -60,10 +56,7 @@ class testCustomCallbackProxy(CustomLogger):
         self.async_success = True
         print("Value of async success: ", self.async_success)
         print("\n kwargs: ", kwargs)
-        if (
-            kwargs.get("model") == "text-embedding-ada-002"
-            or kwargs.get("model") == "ada"
-        ):
+        if kwargs.get("model") == "text-embedding-ada-002" or kwargs.get("model") == "ada":
             print("Got an embedding model", kwargs.get("model"))
             print("Setting embedding success to True")
             self.async_success_embedding = True
@@ -81,9 +74,7 @@ class testCustomCallbackProxy(CustomLogger):
 
         # Access litellm_params passed to litellm.completion(), example access `metadata`
         litellm_params = kwargs.get("litellm_params", {})
-        metadata = litellm_params.get(
-            "metadata", {}
-        )  # headers passed to LiteLLM proxy, can be found here
+        metadata = litellm_params.get("metadata", {})  # headers passed to LiteLLM proxy, can be found here
 
         # Calculate cost using  litellm.completion_cost()
         cost = litellm.completion_cost(completion_response=response_obj)

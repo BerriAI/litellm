@@ -10,9 +10,7 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -237,18 +235,10 @@ def test_combine_usage_handles_none_details():
 def test_is_chat_completion_cached_dict():
     from litellm.caching.caching_handler import _is_chat_completion_cached_dict
 
-    assert _is_chat_completion_cached_dict(
-        {"id": "chatcmpl-abc", "object": "chat.completion", "choices": []}
-    )
-    assert _is_chat_completion_cached_dict(
-        {"id": "other", "object": "chat.completion.chunk", "choices": []}
-    )
-    assert _is_chat_completion_cached_dict(
-        {"id": "no-object", "choices": [{"index": 0}]}
-    )
-    assert not _is_chat_completion_cached_dict(
-        {"id": "resp_abc", "object": "response", "output": []}
-    )
+    assert _is_chat_completion_cached_dict({"id": "chatcmpl-abc", "object": "chat.completion", "choices": []})
+    assert _is_chat_completion_cached_dict({"id": "other", "object": "chat.completion.chunk", "choices": []})
+    assert _is_chat_completion_cached_dict({"id": "no-object", "choices": [{"index": 0}]})
+    assert not _is_chat_completion_cached_dict({"id": "resp_abc", "object": "response", "output": []})
 
 
 def _build_logging_obj(call_type: str, stream: bool):
@@ -273,9 +263,7 @@ def test_convert_cached_aresponses_bridge_chat_completion_stream():
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.types.utils import CallTypes
 
-    caching_handler = LLMCachingHandler(
-        original_function=aresponses, request_kwargs={}, start_time=datetime.now()
-    )
+    caching_handler = LLMCachingHandler(original_function=aresponses, request_kwargs={}, start_time=datetime.now())
     cached_result = {
         "id": "chatcmpl-bridge-cache-test",
         "object": "chat.completion",
@@ -312,9 +300,7 @@ def test_convert_cached_responses_bridge_chat_completion_nonstream():
     from litellm import responses
     from litellm.types.utils import CallTypes, ModelResponse
 
-    caching_handler = LLMCachingHandler(
-        original_function=responses, request_kwargs={}, start_time=datetime.now()
-    )
+    caching_handler = LLMCachingHandler(original_function=responses, request_kwargs={}, start_time=datetime.now())
     cached_result = {
         "id": "chatcmpl-bridge-nonstream",
         "object": "chat.completion",
@@ -353,9 +339,7 @@ def test_convert_cached_responses_legacy_nonstream_path():
     from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.utils import CallTypes
 
-    caching_handler = LLMCachingHandler(
-        original_function=responses, request_kwargs={}, start_time=datetime.now()
-    )
+    caching_handler = LLMCachingHandler(original_function=responses, request_kwargs={}, start_time=datetime.now())
     cached_result = {
         "id": "resp_legacy_nonstream",
         "created_at": int(time.time()),
@@ -400,9 +384,7 @@ def test_convert_cached_responses_legacy_stream_path():
     )
     from litellm.types.utils import CallTypes
 
-    caching_handler = LLMCachingHandler(
-        original_function=responses, request_kwargs={}, start_time=datetime.now()
-    )
+    caching_handler = LLMCachingHandler(original_function=responses, request_kwargs={}, start_time=datetime.now())
     cached_result = {
         "id": "resp_legacy_stream",
         "created_at": int(time.time()),

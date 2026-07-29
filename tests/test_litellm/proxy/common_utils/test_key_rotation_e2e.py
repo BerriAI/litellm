@@ -70,22 +70,14 @@ class TestMultiPodKeyRotation:
         # Pod A
         pod_a_lock_mgr = MagicMock()
         pod_a_lock_mgr.redis_cache = MagicMock()
-        pod_a_lock_mgr.acquire_lock = AsyncMock(
-            side_effect=await make_acquire_lock("pod-a")
-        )
-        pod_a_lock_mgr.release_lock = AsyncMock(
-            side_effect=await make_release_lock("pod-a")
-        )
+        pod_a_lock_mgr.acquire_lock = AsyncMock(side_effect=await make_acquire_lock("pod-a"))
+        pod_a_lock_mgr.release_lock = AsyncMock(side_effect=await make_release_lock("pod-a"))
 
         # Pod B
         pod_b_lock_mgr = MagicMock()
         pod_b_lock_mgr.redis_cache = MagicMock()
-        pod_b_lock_mgr.acquire_lock = AsyncMock(
-            side_effect=await make_acquire_lock("pod-b")
-        )
-        pod_b_lock_mgr.release_lock = AsyncMock(
-            side_effect=await make_release_lock("pod-b")
-        )
+        pod_b_lock_mgr.acquire_lock = AsyncMock(side_effect=await make_acquire_lock("pod-b"))
+        pod_b_lock_mgr.release_lock = AsyncMock(side_effect=await make_release_lock("pod-b"))
 
         manager_a = KeyRotationManager(mock_prisma, pod_lock_manager=pod_a_lock_mgr)
         manager_b = KeyRotationManager(mock_prisma, pod_lock_manager=pod_b_lock_mgr)
@@ -272,9 +264,7 @@ class TestKeyRotationErrorResilience:
             rotation_count=0,
         )
 
-        mock_response = GenerateKeyResponse(
-            key="new-key", token_id="new-token-id", user_id="test-user"
-        )
+        mock_response = GenerateKeyResponse(key="new-key", token_id="new-token-id", user_id="test-user")
 
         with patch(
             "litellm.proxy.common_utils.key_rotation_manager.regenerate_key_fn",
@@ -292,9 +282,7 @@ class TestKeyRotationErrorResilience:
 
         # The DB update should have been called BEFORE the hook
         mock_prisma.db.litellm_verificationtoken.update.assert_called_once()
-        update_data = mock_prisma.db.litellm_verificationtoken.update.call_args[1][
-            "data"
-        ]
+        update_data = mock_prisma.db.litellm_verificationtoken.update.call_args[1]["data"]
         assert update_data["rotation_count"] == 1
 
     @pytest.mark.asyncio
@@ -311,9 +299,7 @@ class TestKeyRotationErrorResilience:
         manager = KeyRotationManager(mock_prisma, pod_lock_manager=mock_pod_lock)
 
         # Cleanup fails
-        manager._cleanup_expired_deprecated_keys = AsyncMock(
-            side_effect=Exception("Deprecated table doesn't exist")
-        )
+        manager._cleanup_expired_deprecated_keys = AsyncMock(side_effect=Exception("Deprecated table doesn't exist"))
 
         # process_rotations catches the exception internally (try/except),
         # but the lock must still be released in the finally block.
@@ -433,9 +419,7 @@ class TestKeyRotationFullFlow:
                 ):
                     await manager._rotate_key(key)
 
-            update_data = mock_prisma.db.litellm_verificationtoken.update.call_args[1][
-                "data"
-            ]
+            update_data = mock_prisma.db.litellm_verificationtoken.update.call_args[1]["data"]
             rotation_counts_seen.append(update_data["rotation_count"])
 
         assert rotation_counts_seen == [1, 2, 3]
@@ -584,9 +568,7 @@ class TestDeprecatedKeyLookupDbE2E:
 
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.failure_handler = AsyncMock()
-        prisma_client = PrismaClient(
-            database_url=db_url, proxy_logging_obj=proxy_logging_obj
-        )
+        prisma_client = PrismaClient(database_url=db_url, proxy_logging_obj=proxy_logging_obj)
 
         old_token_hash = f"old-{uuid4().hex}"
         active_token_hash = f"active-{uuid4().hex}"
@@ -633,15 +615,11 @@ class TestDeprecatedKeyLookupDbE2E:
         finally:
             # Best-effort cleanup for idempotent reruns.
             try:
-                await prisma_client.db.litellm_deprecatedverificationtoken.delete_many(
-                    where={"token": old_token_hash}
-                )
+                await prisma_client.db.litellm_deprecatedverificationtoken.delete_many(where={"token": old_token_hash})
             except Exception:
                 pass
             try:
-                await prisma_client.db.litellm_verificationtoken.delete_many(
-                    where={"token": active_token_hash}
-                )
+                await prisma_client.db.litellm_verificationtoken.delete_many(where={"token": active_token_hash})
             except Exception:
                 pass
             _deprecated_key_cache.clear()

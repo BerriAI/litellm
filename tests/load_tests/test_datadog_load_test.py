@@ -14,9 +14,7 @@ def test_datadog_logging_async():
     try:
         # litellm.set_verbose = True
         os.environ["DD_API_KEY"] = "anything"
-        os.environ["_DATADOG_BASE_URL"] = (
-            "https://exampleopenaiendpoint-production.up.railway.app"
-        )
+        os.environ["_DATADOG_BASE_URL"] = "https://exampleopenaiendpoint-production.up.railway.app"
 
         os.environ["DD_SITE"] = "us5.datadoghq.com"
         os.environ["DD_API_KEY"] = "xxxxxx"
@@ -44,11 +42,7 @@ def test_datadog_logging_async():
             print(f"Time with success_callback='datadog': {start_time_datadog}")
             print(f"Time with empty success_callback: {start_time_empty_callback}")
 
-            percentage_diff = (
-                abs(start_time_datadog - start_time_empty_callback)
-                / start_time_empty_callback
-                * 100
-            )
+            percentage_diff = abs(start_time_datadog - start_time_empty_callback) / start_time_empty_callback * 100
             percentage_diffs.append(percentage_diff)
             print(f"Performance difference: {percentage_diff:.2f}%")
 
@@ -56,9 +50,9 @@ def test_datadog_logging_async():
         avg_percentage_diff = sum(percentage_diffs) / len(percentage_diffs)
         print(f"\nAverage performance difference: {avg_percentage_diff:.2f}%")
 
-        assert (
-            avg_percentage_diff < 10
-        ), f"Average performance difference of {avg_percentage_diff:.2f}% exceeds 10% threshold"
+        assert avg_percentage_diff < 10, (
+            f"Average performance difference of {avg_percentage_diff:.2f}% exceeds 10% threshold"
+        )
 
     except litellm.Timeout:
         pass

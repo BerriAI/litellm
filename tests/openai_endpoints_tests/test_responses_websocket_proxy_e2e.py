@@ -34,10 +34,7 @@ def _generate_key() -> str:
     }
     response = httpx.post(url, headers=headers, json={}, timeout=10)
     if response.status_code != 200:
-        raise Exception(
-            f"Key generation failed with status: {response.status_code}. "
-            "Is the proxy running?"
-        )
+        raise Exception(f"Key generation failed with status: {response.status_code}. Is the proxy running?")
     return response.json()["key"]
 
 
@@ -46,17 +43,11 @@ def _assert_basic_response(events: list[dict], label: str = "") -> None:
     prefix = f"[{label}] " if label else ""
     types = [e.get("type") for e in events]
     assert len(events) > 0, f"{prefix}no events received"
-    assert (
-        "response.created" in types
-    ), f"{prefix}missing response.created, got: {types}"
-    assert (
-        "response.completed" in types
-    ), f"{prefix}missing response.completed, got: {types}"
+    assert "response.created" in types, f"{prefix}missing response.created, got: {types}"
+    assert "response.completed" in types, f"{prefix}missing response.completed, got: {types}"
     completed = next(e for e in events if e.get("type") == "response.completed")
     resp = completed.get("response", {})
-    assert (
-        resp.get("status") == "completed"
-    ), f"{prefix}status != completed: {resp.get('status')}"
+    assert resp.get("status") == "completed", f"{prefix}status != completed: {resp.get('status')}"
     usage = resp.get("usage", {})
     assert usage.get("input_tokens", 0) > 0, f"{prefix}input_tokens=0"
     assert usage.get("output_tokens", 0) > 0, f"{prefix}output_tokens=0"
@@ -94,9 +85,7 @@ async def test_responses_websocket_proxy_basic():
     events: list[dict] = []
 
     try:
-        async with websockets.connect(
-            url, additional_headers=headers, open_timeout=5
-        ) as ws:
+        async with websockets.connect(url, additional_headers=headers, open_timeout=5) as ws:
             payload = {
                 "type": "response.create",
                 "model": PROXY_MODEL,
@@ -105,9 +94,7 @@ async def test_responses_websocket_proxy_basic():
                     {
                         "type": "message",
                         "role": "user",
-                        "content": [
-                            {"type": "input_text", "text": "Say hello in one word."}
-                        ],
+                        "content": [{"type": "input_text", "text": "Say hello in one word."}],
                     }
                 ],
                 "tools": [],
@@ -124,10 +111,7 @@ async def test_responses_websocket_proxy_basic():
                 ):
                     break
     except Exception as e:
-        pytest.fail(
-            f"WebSocket connection failed: {e}. "
-            "Ensure proxy is running and model is configured."
-        )
+        pytest.fail(f"WebSocket connection failed: {e}. Ensure proxy is running and model is configured.")
 
     _assert_basic_response(events, "proxy-basic")
 
@@ -158,9 +142,7 @@ async def test_responses_websocket_proxy_multi_turn():
     first_id = None
 
     try:
-        async with websockets.connect(
-            url, additional_headers=headers, open_timeout=5
-        ) as ws:
+        async with websockets.connect(url, additional_headers=headers, open_timeout=5) as ws:
             # Turn 1
             await ws.send(
                 json.dumps(
@@ -230,12 +212,7 @@ async def test_responses_websocket_proxy_multi_turn():
                     break
 
     except Exception as e:
-        pytest.fail(
-            f"WebSocket multi-turn failed: {e}. "
-            "Ensure proxy is running and model is configured."
-        )
+        pytest.fail(f"WebSocket multi-turn failed: {e}. Ensure proxy is running and model is configured.")
 
-    assert (
-        len(completed) >= 2
-    ), f"Expected 2 response.completed events, got {len(completed)}"
+    assert len(completed) >= 2, f"Expected 2 response.completed events, got {len(completed)}"
     assert completed[1].get("response", {}).get("status") == "completed"

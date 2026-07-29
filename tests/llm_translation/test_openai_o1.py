@@ -4,9 +4,7 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, patch, MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 
 import httpx
@@ -35,9 +33,7 @@ async def test_o1_handle_system_role(model):
 
     client = AsyncOpenAI(api_key="fake-api-key")
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
         try:
             await litellm.acompletion(
                 model=model,
@@ -56,13 +52,9 @@ async def test_o1_handle_system_role(model):
         assert request_body["model"] == model
         assert request_body["max_completion_tokens"] == 10
         if supports_system_messages(model, "openai"):
-            assert request_body["messages"] == [
-                {"role": "system", "content": "Be a good bot!"}
-            ]
+            assert request_body["messages"] == [{"role": "system", "content": "Be a good bot!"}]
         else:
-            assert request_body["messages"] == [
-                {"role": "user", "content": "Be a good bot!"}
-            ]
+            assert request_body["messages"] == [{"role": "user", "content": "Be a good bot!"}]
 
 
 @pytest.mark.parametrize(
@@ -70,9 +62,7 @@ async def test_o1_handle_system_role(model):
     [("o1", True)],
 )
 @pytest.mark.asyncio
-async def test_o1_handle_tool_calling_optional_params(
-    model, expected_tool_calling_support
-):
+async def test_o1_handle_tool_calling_optional_params(model, expected_tool_calling_support):
     """
     Tests that:
     - max_tokens is translated to 'max_completion_tokens'
@@ -85,9 +75,7 @@ async def test_o1_handle_tool_calling_optional_params(
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    config = ProviderConfigManager.get_provider_chat_config(
-        model=model, provider=LlmProviders.OPENAI
-    )
+    config = ProviderConfigManager.get_provider_chat_config(model=model, provider=LlmProviders.OPENAI)
 
     supported_params = config.get_supported_openai_params(model=model)
 
@@ -107,9 +95,7 @@ async def test_o1_max_completion_tokens(model: str):
 
     client = AsyncOpenAI(api_key="fake-api-key")
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
         try:
             await litellm.acompletion(
                 model=model,

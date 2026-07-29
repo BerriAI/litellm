@@ -30,9 +30,7 @@ from litellm.types.utils import TranscriptionResponse
 
 def _make_wav_bytes(seconds: float = 1.0, sample_rate: int = 16000) -> bytes:
     n = int(sample_rate * seconds)
-    samples = (0.05 * np.sin(np.linspace(0, 2 * np.pi * 220 * seconds, n))).astype(
-        np.float32
-    )
+    samples = (0.05 * np.sin(np.linspace(0, 2 * np.pi * 220 * seconds, n))).astype(np.float32)
     buf = io.BytesIO()
     sf.write(buf, samples, sample_rate, format="WAV", subtype="PCM_16")
     return buf.getvalue()
@@ -137,13 +135,7 @@ def test_sync_path_aggregates_only_final_results(mock_riva, logging_obj):
         # Empty heartbeat chunk: ignore.
         _fake_response(results=[]),
         # Interim chunk (not final): ignore.
-        _fake_response(
-            results=[
-                _fake_result(
-                    is_final=False, alternatives=[_fake_alternative("partial...")]
-                )
-            ]
-        ),
+        _fake_response(results=[_fake_result(is_final=False, alternatives=[_fake_alternative("partial...")])]),
         # Two final chunks aggregated.
         _fake_response(
             results=[
@@ -193,17 +185,12 @@ def test_sync_path_aggregates_only_final_results(mock_riva, logging_obj):
 
     assert response.text == "Hello, world."
     # duration is propagated from the resampler.
-    assert response._hidden_params["audio_transcription_duration"] == pytest.approx(
-        1.0, abs=0.05
-    )
+    assert response._hidden_params["audio_transcription_duration"] == pytest.approx(1.0, abs=0.05)
     # word timestamps converted from ms to seconds.
     words = response["words"]
     assert words[0]["start"] == pytest.approx(0.0)
     assert words[1]["end"] == pytest.approx(0.87)
-    assert (
-        logging_obj.pre_call.call_args.kwargs["additional_args"]["atranscription"]
-        is False
-    )
+    assert logging_obj.pre_call.call_args.kwargs["additional_args"]["atranscription"] is False
 
 
 def test_auth_nvcf_defaults_use_ssl_and_attaches_function_id(mock_riva, logging_obj):
@@ -242,11 +229,7 @@ def test_auth_nvcf_defaults_use_ssl_and_attaches_function_id(mock_riva, logging_
 
 def test_auth_self_hosted_defaults_no_ssl_and_no_function_id(mock_riva, logging_obj):
     mock_riva.responses["value"] = [
-        _fake_response(
-            results=[
-                _fake_result(is_final=True, alternatives=[_fake_alternative("ok")])
-            ]
-        )
+        _fake_response(results=[_fake_result(is_final=True, alternatives=[_fake_alternative("ok")])])
     ]
     impl = NvidiaRivaAudioTranscription()
     impl.audio_transcriptions(
@@ -276,11 +259,7 @@ def test_explicit_use_ssl_override_wins(mock_riva, logging_obj):
     NVCF function id.
     """
     mock_riva.responses["value"] = [
-        _fake_response(
-            results=[
-                _fake_result(is_final=True, alternatives=[_fake_alternative("ok")])
-            ]
-        )
+        _fake_response(results=[_fake_result(is_final=True, alternatives=[_fake_alternative("ok")])])
     ]
     impl = NvidiaRivaAudioTranscription()
     impl.audio_transcriptions(
@@ -317,13 +296,7 @@ def test_missing_api_base_raises_clear_error(mock_riva, logging_obj):
 
 def test_async_path_uses_to_thread(mock_riva, logging_obj):
     mock_riva.responses["value"] = [
-        _fake_response(
-            results=[
-                _fake_result(
-                    is_final=True, alternatives=[_fake_alternative("async ok")]
-                )
-            ]
-        )
+        _fake_response(results=[_fake_result(is_final=True, alternatives=[_fake_alternative("async ok")])])
     ]
     impl = NvidiaRivaAudioTranscription()
     response = asyncio.run(
@@ -340,15 +313,10 @@ def test_async_path_uses_to_thread(mock_riva, logging_obj):
         )
     )
     assert response.text == "async ok"
-    assert (
-        logging_obj.pre_call.call_args.kwargs["additional_args"]["atranscription"]
-        is True
-    )
+    assert logging_obj.pre_call.call_args.kwargs["additional_args"]["atranscription"] is True
 
 
-def test_timeout_is_forwarded_to_streaming_generator_when_supported(
-    mock_riva, logging_obj
-):
+def test_timeout_is_forwarded_to_streaming_generator_when_supported(mock_riva, logging_obj):
     """
     Without a deadline the gRPC stream can block forever on a stalled Riva
     server. The handler must forward the call-level ``timeout`` to
@@ -360,13 +328,7 @@ def test_timeout_is_forwarded_to_streaming_generator_when_supported(
     def streaming_with_timeout(self, audio_chunks, streaming_config, timeout=None):
         captured_kwargs["timeout"] = timeout
         list(audio_chunks)
-        yield from [
-            _fake_response(
-                results=[
-                    _fake_result(is_final=True, alternatives=[_fake_alternative("ok")])
-                ]
-            )
-        ]
+        yield from [_fake_response(results=[_fake_result(is_final=True, alternatives=[_fake_alternative("ok")])])]
 
     mock_riva.client.ASRService.streaming_response_generator = streaming_with_timeout
 
@@ -397,9 +359,7 @@ def test_grpc_error_is_wrapped_as_nvidia_riva_exception(mock_riva, logging_obj):
         list(audio_chunks)
         raise FakeGrpcError("rpc fail")
 
-    mock_riva.client.ASRService.streaming_response_generator = (
-        raising_streaming_response_generator
-    )
+    mock_riva.client.ASRService.streaming_response_generator = raising_streaming_response_generator
 
     impl = NvidiaRivaAudioTranscription()
     with pytest.raises(NvidiaRivaException) as excinfo:

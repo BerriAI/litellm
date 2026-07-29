@@ -2,9 +2,7 @@ import os
 import sys
 from unittest.mock import MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.cohere.chat.transformation import CohereChatConfig
@@ -60,9 +58,7 @@ class TestCohereV2Transform:
 
     def test_v2_supports_max_completion_tokens(self):
         """max_completion_tokens must be advertised so get_optional_params does not reject it"""
-        assert "max_completion_tokens" in self.config.get_supported_openai_params(
-            self.model
-        )
+        assert "max_completion_tokens" in self.config.get_supported_openai_params(self.model)
 
     def test_v2_max_tokens_only_still_maps(self):
         """max_tokens alone maps to cohere max_tokens when max_completion_tokens is absent"""

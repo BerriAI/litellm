@@ -47,8 +47,7 @@ class TestMcpKeyWithoutAccessIsDenied:
 
         denied_tools = unwrap(client.list_tools(denied_key)).tool_names_for_server(server_id)
         assert denied_tools == frozenset(), (
-            f"ungranted key saw the server's tools; tools/list leaked across the permission "
-            f"boundary: {denied_tools}"
+            f"ungranted key saw the server's tools; tools/list leaked across the permission boundary: {denied_tools}"
         )
 
     @pytest.mark.covers("mcp.call_tool.api_key.denied_without_permission")

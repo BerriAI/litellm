@@ -41,16 +41,12 @@ def _audio_file2():
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../"))  # Adds the parent directory to the system path
 import litellm
 from litellm import Router
 
 
-async def _run_transcription(
-    model, api_key, api_base, response_format, timestamp_granularities
-):
+async def _run_transcription(model, api_key, api_base, response_format, timestamp_granularities):
     transcript = await litellm.atranscription(
         model=model,
         file=_audio_file(),
@@ -185,9 +181,7 @@ async def test_gpt_4o_transcribe():
     from datetime import datetime
     from unittest.mock import patch, MagicMock
 
-    await litellm.atranscription(
-        model="openai/gpt-4o-transcribe", file=_audio_file(), response_format="json"
-    )
+    await litellm.atranscription(model="openai/gpt-4o-transcribe", file=_audio_file(), response_format="json")
 
 
 @pytest.mark.asyncio
@@ -219,9 +213,7 @@ async def test_gpt_4o_transcribe_model_mapping():
     assert response2.text is not None
 
     # Test traditional whisper-1 still works
-    response3 = await litellm.atranscription(
-        model="openai/whisper-1", file=_audio_file(), response_format="json"
-    )
+    response3 = await litellm.atranscription(model="openai/whisper-1", file=_audio_file(), response_format="json")
 
     # Check that the response contains the correct model in hidden params
     assert response3._hidden_params is not None
@@ -245,9 +237,7 @@ async def test_azure_transcribe_model_mapping():
     class MockTranscriptionResponse(PydanticBaseModel):
         text: str
 
-    mock_transcription_response = MockTranscriptionResponse(
-        text="This is a test transcription"
-    )
+    mock_transcription_response = MockTranscriptionResponse(text="This is a test transcription")
 
     # Create mock raw response with headers and parse() method
     mock_raw_response = MagicMock()
@@ -256,14 +246,10 @@ async def test_azure_transcribe_model_mapping():
 
     # Create a mock Azure client instance
     mock_azure_client = MagicMock(spec=AsyncAzureOpenAI)
-    mock_azure_client.audio.transcriptions.with_raw_response.create = AsyncMock(
-        return_value=mock_raw_response
-    )
+    mock_azure_client.audio.transcriptions.with_raw_response.create = AsyncMock(return_value=mock_raw_response)
     mock_azure_client.api_key = "test-api-key"
     mock_azure_client._base_url = MagicMock()
-    mock_azure_client._base_url._uri_reference = (
-        "https://my-endpoint-europe-berri-992.openai.azure.com/"
-    )
+    mock_azure_client._base_url._uri_reference = "https://my-endpoint-europe-berri-992.openai.azure.com/"
 
     # Mock the get_azure_openai_client method to return our mock client
     with patch(
@@ -285,14 +271,10 @@ async def test_azure_transcribe_model_mapping():
         mock_azure_client.audio.transcriptions.with_raw_response.create.assert_called_once()
 
         # Get the call arguments to validate the model parameter
-        call_kwargs = (
-            mock_azure_client.audio.transcriptions.with_raw_response.create.call_args.kwargs
-        )
+        call_kwargs = mock_azure_client.audio.transcriptions.with_raw_response.create.call_args.kwargs
 
         # Assert that the model parameter is "whisper-1" (not hardcoded incorrectly)
-        assert (
-            call_kwargs["model"] == "whisper-1"
-        ), f"Expected model 'whisper-1', got {call_kwargs['model']}"
+        assert call_kwargs["model"] == "whisper-1", f"Expected model 'whisper-1', got {call_kwargs['model']}"
         assert "file" in call_kwargs
         assert call_kwargs["response_format"] == "json"
 

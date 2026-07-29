@@ -68,9 +68,7 @@ async def test_write_and_read_json_secret():
                 assert response["Name"] == test_secret_name
 
                 # Read and parse JSON secret
-                read_value = await secret_manager.async_read_secret(
-                    secret_name=test_secret_name
-                )
+                read_value = await secret_manager.async_read_secret(secret_name=test_secret_name)
                 assert read_value is not None
                 parsed_value = json.loads(read_value)
 
@@ -79,7 +77,5 @@ async def test_write_and_read_json_secret():
                 assert parsed_value["metadata"]["team"] == "ml"
 
                 # Cleanup
-                delete_resp = await secret_manager.async_delete_secret(
-                    secret_name=test_secret_name
-                )
+                delete_resp = await secret_manager.async_delete_secret(secret_name=test_secret_name)
                 assert delete_resp is not None

@@ -71,10 +71,7 @@ class TestLibertAIProviderConfig:
         assert info["max_output_tokens"] == 262144
 
         # thinking variants are marked as reasoning models
-        assert (
-            model_cost["libertai/qwen3.6-27b-thinking"].get("supports_reasoning")
-            is True
-        )
+        assert model_cost["libertai/qwen3.6-27b-thinking"].get("supports_reasoning") is True
 
     def test_libertai_router_config(self):
         """Test that libertai can be used in Router configuration"""
@@ -116,9 +113,7 @@ class TestLibertAIProviderConfig:
 
         import litellm as _litellm
 
-        backup_path = (
-            Path(_litellm.__file__).parent / "provider_endpoints_support_backup.json"
-        )
+        backup_path = Path(_litellm.__file__).parent / "provider_endpoints_support_backup.json"
         matrix = json.loads(backup_path.read_text())
 
         assert "libertai" in matrix["providers"]

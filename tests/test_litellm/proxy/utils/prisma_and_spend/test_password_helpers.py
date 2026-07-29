@@ -191,12 +191,10 @@ async def test_migrate_passwords_upgrades_only_plaintext_rows() -> None:
     result = await migrate_passwords_to_scrypt_async(pc)
 
     updated_user_ids = sorted(
-        call.kwargs["where"]["user_id"]
-        for call in pc.db.litellm_usertable.update.await_args_list
+        call.kwargs["where"]["user_id"] for call in pc.db.litellm_usertable.update.await_args_list
     )
     new_password_prefixes = sorted(
-        call.kwargs["data"]["password"][:7]
-        for call in pc.db.litellm_usertable.update.await_args_list
+        call.kwargs["data"]["password"][:7] for call in pc.db.litellm_usertable.update.await_args_list
     )
     outcome = {
         "message": result,
@@ -216,8 +214,6 @@ async def test_migrate_passwords_upgrades_only_plaintext_rows() -> None:
 async def test_migrate_passwords_raises_on_db_failure() -> None:
     pc = MagicMock()
     pc.db = MagicMock()
-    pc.db.litellm_usertable.find_many = AsyncMock(
-        side_effect=RuntimeError("db unavailable")
-    )
+    pc.db.litellm_usertable.find_many = AsyncMock(side_effect=RuntimeError("db unavailable"))
     with pytest.raises(RuntimeError, match="db unavailable"):
         await migrate_passwords_to_scrypt_async(pc)

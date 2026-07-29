@@ -82,9 +82,7 @@ def test_extract_region_swallows_unexpected_split_errors():
 def test_predict_output_file_uri_returns_none_for_directory_input_uri():
     """Input URI ending in `/` has an empty basename — we must bail rather
     than emit ``<prefix>/<job-id>/.out``."""
-    assert (
-        _predict_output_file_uri(OUTPUT_PREFIX, "s3://bucket/inputs/", JOB_ID) is None
-    )
+    assert _predict_output_file_uri(OUTPUT_PREFIX, "s3://bucket/inputs/", JOB_ID) is None
 
 
 _DT = datetime(2026, 4, 28, 12, 0, 0, tzinfo=timezone.utc)
@@ -106,9 +104,7 @@ def test_to_epoch_handles_supported_types(value, expected):
 
 def test_extract_job_id_from_arn():
     assert _extract_job_id_from_arn(JOB_ARN) == JOB_ID
-    assert (
-        _extract_job_id_from_arn("arn:aws:bedrock:us-west-2:1:async-invoke/x") is None
-    )
+    assert _extract_job_id_from_arn("arn:aws:bedrock:us-west-2:1:async-invoke/x") is None
 
 
 def test_predict_output_file_uri_happy_path():
@@ -181,9 +177,7 @@ def test_handle_model_invocation_job_status_completed(patched_boto3):
 )
 def test_status_mapping(patched_boto3, bedrock_status, openai_status):
     fake_client, _ = patched_boto3
-    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(
-        status=bedrock_status
-    )
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(status=bedrock_status)
 
     batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
 
@@ -198,9 +192,7 @@ def test_status_mapping(patched_boto3, bedrock_status, openai_status):
 
 def test_explicit_region_overrides_arn(patched_boto3):
     _, boto_client_factory = patched_boto3
-    BedrockBatchesHandler._handle_model_invocation_job_status(
-        batch_id=JOB_ARN, aws_region_name="eu-central-1"
-    )
+    BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN, aws_region_name="eu-central-1")
     _, kwargs = boto_client_factory.call_args
     assert kwargs["region_name"] == "eu-central-1"
 
@@ -246,9 +238,7 @@ def test_completed_with_unpredictable_output_uri_stays_none(patched_boto3):
 
 def test_cancelled_status_sets_cancelled_at(patched_boto3):
     fake_client, _ = patched_boto3
-    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(
-        status="Stopped"
-    )
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(status="Stopped")
 
     batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
 
@@ -261,9 +251,7 @@ def test_cancelled_status_sets_cancelled_at(patched_boto3):
 
 def test_expired_status_sets_expired_at(patched_boto3):
     fake_client, _ = patched_boto3
-    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(
-        status="Expired"
-    )
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(status="Expired")
 
     batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
 
@@ -280,18 +268,14 @@ def test_logging_obj_pre_and_post_call_invoked(patched_boto3):
     _, _ = patched_boto3
     logging_obj = MagicMock()
 
-    BedrockBatchesHandler._handle_model_invocation_job_status(
-        batch_id=JOB_ARN, logging_obj=logging_obj
-    )
+    BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN, logging_obj=logging_obj)
 
     logging_obj.pre_call.assert_called_once()
     logging_obj.post_call.assert_called_once()
 
     pre_kwargs = logging_obj.pre_call.call_args.kwargs
     assert pre_kwargs["input"] == JOB_ARN
-    assert pre_kwargs["additional_args"]["complete_input_dict"] == {
-        "jobIdentifier": JOB_ARN
-    }
+    assert pre_kwargs["additional_args"]["complete_input_dict"] == {"jobIdentifier": JOB_ARN}
     # Logged URL must use the bare job id, not the full ARN, so it doesn't
     # double the `model-invocation-job/` segment or embed colons in the path.
     assert pre_kwargs["additional_args"]["api_base"] == (
@@ -306,11 +290,7 @@ def test_logging_obj_pre_and_post_call_invoked(patched_boto3):
 def test_missing_boto3_raises_helpful_import_error():
     """If boto3 isn't installed we should raise a clear, actionable
     ImportError rather than letting a NameError escape."""
-    real_import = (
-        __builtins__["__import__"]
-        if isinstance(__builtins__, dict)
-        else __builtins__.__import__
-    )
+    real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__
 
     def fake_import(name, *args, **kwargs):
         if name == "boto3":

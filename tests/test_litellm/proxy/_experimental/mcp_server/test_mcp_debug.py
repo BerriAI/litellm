@@ -113,9 +113,7 @@ class TestBuildDebugHeaders:
                 "x-litellm-api-key": "Bearer sk-litellm-key-here",
                 "authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.atlassian",
             },
-            oauth2_headers={
-                "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.atlassian"
-            },
+            oauth2_headers={"Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.atlassian"},
             litellm_api_key="Bearer sk-litellm-key-here",
             auth_resolution="oauth2-passthrough",
             server_url="https://mcp.atlassian.com/v1/mcp",
@@ -244,9 +242,7 @@ class TestWrapSendWithDebugHeaders:
         async def mock_send(message):
             captured.append(message)
 
-        wrapped = MCPDebug.wrap_send_with_debug_headers(
-            mock_send, {"x-mcp-debug-test": "value123"}
-        )
+        wrapped = MCPDebug.wrap_send_with_debug_headers(mock_send, {"x-mcp-debug-test": "value123"})
 
         message = {"type": "http.response.start", "status": 200, "headers": []}
         asyncio.run(wrapped(message))
@@ -261,9 +257,7 @@ class TestWrapSendWithDebugHeaders:
         async def mock_send(message):
             captured.append(message)
 
-        wrapped = MCPDebug.wrap_send_with_debug_headers(
-            mock_send, {"x-mcp-debug-test": "value"}
-        )
+        wrapped = MCPDebug.wrap_send_with_debug_headers(mock_send, {"x-mcp-debug-test": "value"})
 
         body_msg = {"type": "http.response.body", "body": b"hello"}
         asyncio.run(wrapped(body_msg))

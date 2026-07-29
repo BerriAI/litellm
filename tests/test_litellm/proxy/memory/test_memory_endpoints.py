@@ -67,9 +67,7 @@ class _InMemoryMemoryTable:
             if isinstance(v, dict):
                 actual = getattr(row, k, None)
                 if "startsWith" in v:
-                    if not isinstance(actual, str) or not actual.startswith(
-                        v["startsWith"]
-                    ):
+                    if not isinstance(actual, str) or not actual.startswith(v["startsWith"]):
                         return False
                     continue
                 if "equals" in v:
@@ -534,12 +532,8 @@ class TestMemoryEndpoints:
         table = self.prisma.db.litellm_memorytable
         table.rows.extend(
             [
-                _make_row(
-                    memory_id="m1", key="user:profile", user_id="user-a", team_id=None
-                ),
-                _make_row(
-                    memory_id="m2", key="user:prefs", user_id="user-a", team_id=None
-                ),
+                _make_row(memory_id="m1", key="user:profile", user_id="user-a", team_id=None),
+                _make_row(memory_id="m2", key="user:prefs", user_id="user-a", team_id=None),
                 _make_row(
                     memory_id="m3",
                     key="project:context",
@@ -566,16 +560,10 @@ class TestMemoryEndpoints:
         table.rows.extend(
             [
                 # Caller's own "user:*" rows — should be visible.
-                _make_row(
-                    memory_id="m1", key="user:profile", user_id="user-a", team_id=None
-                ),
+                _make_row(memory_id="m1", key="user:profile", user_id="user-a", team_id=None),
                 # Another user's "user:*" rows — must NOT leak.
-                _make_row(
-                    memory_id="m2", key="user:secret", user_id="user-b", team_id=None
-                ),
-                _make_row(
-                    memory_id="m3", key="user:token", user_id="user-b", team_id=None
-                ),
+                _make_row(memory_id="m2", key="user:secret", user_id="user-b", team_id=None),
+                _make_row(memory_id="m3", key="user:token", user_id="user-b", team_id=None),
             ]
         )
         client = _make_client(_user_auth("user-a", "team-a"))
@@ -603,9 +591,7 @@ class TestMemoryEndpoints:
 
     def test_get_memory_by_key(self):
         table = self.prisma.db.litellm_memorytable
-        table.rows.append(
-            _make_row(memory_id="m1", key="notes", value="hi", user_id="user-a")
-        )
+        table.rows.append(_make_row(memory_id="m1", key="notes", value="hi", user_id="user-a"))
         client = _make_client(_user_auth("user-a", "team-a"))
         with _patch_prisma(self.prisma):
             resp = client.get("/v1/memory/notes")
@@ -614,9 +600,7 @@ class TestMemoryEndpoints:
 
     def test_get_memory_not_visible_returns_404(self):
         table = self.prisma.db.litellm_memorytable
-        table.rows.append(
-            _make_row(memory_id="m1", key="notes", user_id="user-b", team_id=None)
-        )
+        table.rows.append(_make_row(memory_id="m1", key="notes", user_id="user-b", team_id=None))
         client = _make_client(_user_auth("user-a", "team-a"))
         with _patch_prisma(self.prisma):
             resp = client.get("/v1/memory/notes")
@@ -671,9 +655,7 @@ class TestMemoryEndpoints:
         )
         client = _make_client(_user_auth("user-a", "team-a"))
         with _patch_prisma(self.prisma):
-            resp = client.put(
-                "/v1/memory/notes", json={"value": "new", "metadata": None}
-            )
+            resp = client.put("/v1/memory/notes", json={"value": "new", "metadata": None})
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["value"] == "new"
@@ -790,9 +772,7 @@ class TestMemoryEndpoints:
             )
         )
         # user-admin is registered as a team admin of team-shared.
-        self.prisma.db.litellm_teamtable.teams.append(
-            _make_team("team-shared", admin_user_ids=["user-admin"])
-        )
+        self.prisma.db.litellm_teamtable.teams.append(_make_team("team-shared", admin_user_ids=["user-admin"]))
         client = _make_client(_user_auth("user-admin", "team-shared"))
         with _patch_prisma(self.prisma):
             resp = client.put("/v1/memory/team_playbook", json={"value": "v2"})
@@ -815,9 +795,7 @@ class TestMemoryEndpoints:
             )
         )
         # team-shared exists, but user-b is NOT in members_with_roles as admin.
-        self.prisma.db.litellm_teamtable.teams.append(
-            _make_team("team-shared", admin_user_ids=["someone-else"])
-        )
+        self.prisma.db.litellm_teamtable.teams.append(_make_team("team-shared", admin_user_ids=["someone-else"]))
         client = _make_client(_user_auth("user-b", "team-shared"))
         with _patch_prisma(self.prisma):
             resp = client.put("/v1/memory/team_playbook", json={"value": "v2"})
@@ -835,9 +813,7 @@ class TestMemoryEndpoints:
                 team_id="team-shared",
             )
         )
-        self.prisma.db.litellm_teamtable.teams.append(
-            _make_team("team-shared", admin_user_ids=["user-admin"])
-        )
+        self.prisma.db.litellm_teamtable.teams.append(_make_team("team-shared", admin_user_ids=["user-admin"]))
         client = _make_client(_user_auth("user-b", "team-shared"))
         with _patch_prisma(self.prisma):
             resp = client.delete("/v1/memory/team_playbook")
@@ -888,15 +864,11 @@ class TestMemoryEndpoints:
         assert resp.status_code == 500
         body_text = resp.text
         for leak in ("LiteLLM_MemoryTable", "db.internal", "PrismaClient"):
-            assert (
-                leak not in body_text
-            ), f"Leaked '{leak}' in 500 response: {body_text}"
+            assert leak not in body_text, f"Leaked '{leak}' in 500 response: {body_text}"
 
     def test_delete_memory(self):
         table = self.prisma.db.litellm_memorytable
-        table.rows.append(
-            _make_row(memory_id="m1", key="notes", user_id="user-a", team_id="team-a")
-        )
+        table.rows.append(_make_row(memory_id="m1", key="notes", user_id="user-a", team_id="team-a"))
         client = _make_client(_user_auth("user-a", "team-a"))
         with _patch_prisma(self.prisma):
             resp = client.delete("/v1/memory/notes")
@@ -906,9 +878,7 @@ class TestMemoryEndpoints:
 
     def test_delete_memory_not_visible_returns_404(self):
         table = self.prisma.db.litellm_memorytable
-        table.rows.append(
-            _make_row(memory_id="m1", key="notes", user_id="user-b", team_id=None)
-        )
+        table.rows.append(_make_row(memory_id="m1", key="notes", user_id="user-b", team_id=None))
         client = _make_client(_user_auth("user-a", "team-a"))
         with _patch_prisma(self.prisma):
             resp = client.delete("/v1/memory/notes")

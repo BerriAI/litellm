@@ -232,9 +232,7 @@ class BaseSkillsAPITest(ABC):
         if not api_key:
             pytest.skip(f"No API key provided for {custom_llm_provider}")
 
-        pytest.skip(
-            "Anthropic requires deleting all skill versions first - skipping for now"
-        )
+        pytest.skip("Anthropic requires deleting all skill versions first - skipping for now")
 
         litellm.set_verbose = True
 

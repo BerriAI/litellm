@@ -189,9 +189,7 @@ def test_gemini_image_generation_usage_includes_chat_token_details():
     assert usage["output_tokens_details"]["text_tokens"] == 596
     assert usage["output_tokens_details"]["image_tokens"] == 1120
 
-    logging_usage = StandardLoggingPayloadSetup.get_usage_as_dict(
-        response_obj=result.model_dump()
-    )
+    logging_usage = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj=result.model_dump())
     assert logging_usage["completion_tokens_details"]["text_tokens"] == 596
     assert logging_usage["completion_tokens_details"]["image_tokens"] == 1120
 
@@ -263,18 +261,14 @@ def test_gemini_image_generation_preserves_tool_config_side_effect():
     config = GoogleImageGenConfig()
 
     mapped = config.map_openai_params(
-        non_default_params={
-            "tools": [{"googleMaps": {"latitude": 37.7, "longitude": -122.4}}]
-        },
+        non_default_params={"tools": [{"googleMaps": {"latitude": 37.7, "longitude": -122.4}}]},
         optional_params={},
         model="gemini-3.1-flash-image-preview",
         drop_params=False,
     )
 
     assert mapped["tools"] == [{"googleMaps": {}}]
-    assert mapped["toolConfig"] == {
-        "retrievalConfig": {"latLng": {"latitude": 37.7, "longitude": -122.4}}
-    }
+    assert mapped["toolConfig"] == {"retrievalConfig": {"latLng": {"latitude": 37.7, "longitude": -122.4}}}
 
     request = config.transform_image_generation_request(
         model="gemini-3.1-flash-image-preview",
@@ -285,9 +279,7 @@ def test_gemini_image_generation_preserves_tool_config_side_effect():
     )
 
     assert request["tools"] == [{"googleMaps": {}}]
-    assert request["toolConfig"] == {
-        "retrievalConfig": {"latLng": {"latitude": 37.7, "longitude": -122.4}}
-    }
+    assert request["toolConfig"] == {"retrievalConfig": {"latLng": {"latitude": 37.7, "longitude": -122.4}}}
 
 
 def test_gemini_image_generation_usage_without_output_details_treats_output_as_image():
@@ -351,9 +343,7 @@ def test_gemini_image_generation_response_tracks_web_search_requests():
                             }
                         ]
                     },
-                    "groundingMetadata": {
-                        "webSearchQueries": ["latest iphone", "iphone colors"]
-                    },
+                    "groundingMetadata": {"webSearchQueries": ["latest iphone", "iphone colors"]},
                 }
             ],
             "usageMetadata": {

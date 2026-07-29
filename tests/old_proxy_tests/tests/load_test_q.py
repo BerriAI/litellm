@@ -82,9 +82,7 @@ def create_job_and_poll(request_num):
     while True:
         try:
             print(f"\nPolling URL for request {request_num}", polling_url)
-            polling_response = requests.get(
-                url=polling_url, headers={"Authorization": f"Bearer {generated_key}"}
-            )
+            polling_response = requests.get(url=polling_url, headers={"Authorization": f"Bearer {generated_key}"})
             print(
                 f"\nResponse from polling url for request {request_num}",
                 polling_response.text,
@@ -98,9 +96,7 @@ def create_job_and_poll(request_num):
                 # Write the llm_response to load_test_log.txt
                 try:
                     with open("load_test_log.txt", "a") as response_file:
-                        response_file.write(
-                            f"Response for request: {request_num}\n{llm_response}\n\n"
-                        )
+                        response_file.write(f"Response for request: {request_num}\n{llm_response}\n\n")
                 except Exception as e:
                     print("GOT EXCEPTION", e)
                 break

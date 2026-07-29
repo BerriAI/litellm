@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Type-discipline checker: the rules ruff can't enforce.
- 
+
 Rules
 -----
 LIT001  Mutable collection in a type annotation, anywhere it appears: function
@@ -45,16 +45,16 @@ LIT009  `# type: ignore` in any shape (bare, with codes, with a reason).
 
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
- 
+
 Usage
 -----
     python check_type_discipline.py litellm/ tests/
 
 Exit code 1 if any violation is found. Stdlib only.
 """
- 
+
 from __future__ import annotations
- 
+
 import ast
 import io
 import re
@@ -64,27 +64,48 @@ from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Iterable, Iterator, Sequence
 from typing import NamedTuple
- 
+
 # Mutable collection types, banned in *every* annotation. Name-based, so `dict`,
 # `typing.Dict`, `collections.deque`, and `collections.abc.MutableMapping` all match
 # however they were imported. The read-only interfaces (Mapping, Sequence, the
 # immutable AbstractSet / `abc.Set`, Collection) and the immutable concretes (tuple,
 # frozenset) are the escape hatch and are deliberately absent -- as is the bare name
 # `Set`, which collides with the read-only `collections.abc.Set`.
-MUTABLE_COLLECTIONS = frozenset((
-    "dict", "list", "set",
-    "Dict", "List", "DefaultDict", "OrderedDict", "Counter", "Deque", "ChainMap",
-    "deque", "defaultdict",
-    "MutableMapping", "MutableSequence", "MutableSet",
-))
+MUTABLE_COLLECTIONS = frozenset(
+    (
+        "dict",
+        "list",
+        "set",
+        "Dict",
+        "List",
+        "DefaultDict",
+        "OrderedDict",
+        "Counter",
+        "Deque",
+        "ChainMap",
+        "deque",
+        "defaultdict",
+        "MutableMapping",
+        "MutableSequence",
+        "MutableSet",
+    )
+)
 
 # Callables whose result is a fresh *mutable* collection (LIT002). `tuple` and
 # `frozenset` are deliberately absent -- they are the wrappers you reach for, and
 # a generator expression fed to them is the blessed one-shot build.
-MUTABLE_CONSTRUCTORS = frozenset((
-    "dict", "list", "set",
-    "deque", "defaultdict", "OrderedDict", "Counter", "ChainMap",
-))
+MUTABLE_CONSTRUCTORS = frozenset(
+    (
+        "dict",
+        "list",
+        "set",
+        "deque",
+        "defaultdict",
+        "OrderedDict",
+        "Counter",
+        "ChainMap",
+    )
+)
 # A *qualified* call (`x.deque()`) counts as construction only for names that are rarely
 # method names; `dict`/`list`/`set` are dropped here because `.dict()` / `.set()` / `.list()`
 # are common methods (e.g. pydantic's `model.dict()`), not collection construction. A
@@ -92,7 +113,7 @@ MUTABLE_CONSTRUCTORS = frozenset((
 QUALIFIED_CONSTRUCTORS = MUTABLE_CONSTRUCTORS - frozenset(("dict", "list", "set"))
 UNSAFE_GUARDS = frozenset(("TypeGuard", "TypeIs"))
 MIN_REASON_LEN = 3
- 
+
 NOQA_RE = re.compile(
     r"#\s*noqa"
     r"(?P<colon>:\s*(?P<codes>[A-Z]+[0-9]+(?:\s*,\s*[A-Z]+[0-9]+)*))?"
@@ -100,9 +121,7 @@ NOQA_RE = re.compile(
     re.IGNORECASE,
 )
 TYPE_IGNORE_RE = re.compile(r"#\s*type:\s*ignore\b")
-IGNORE_RE = re.compile(
-    r"#\s*(?:pyright|mypy):\s*ignore(?P<codes>\[[^\]]*\])?(?P<rest>.*)"
-)
+IGNORE_RE = re.compile(r"#\s*(?:pyright|mypy):\s*ignore(?P<codes>\[[^\]]*\])?(?P<rest>.*)")
 MUTABLE_OK_RE = re.compile(r"#\s*mutable-ok(?::\s*(?P<reason>.*))?")
 CAST_OK_RE = re.compile(r"#\s*cast-ok(?::\s*(?P<reason>.*))?")
 GUARD_OK_RE = re.compile(r"#\s*guard-ok(?::\s*(?P<reason>.*))?")
@@ -115,18 +134,18 @@ OK_SUPPRESSIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("guard-ok", GUARD_OK_RE),
     ("kwargs-ok", KWARGS_OK_RE),
 )
- 
- 
+
+
 class Violation(NamedTuple):
     path: Path
     line: int
     code: str
     message: str
- 
+
     def render(self) -> str:
         return f"{self.path}:{self.line}: {self.code} {self.message}"
- 
- 
+
+
 @dataclass(frozen=True, slots=True)
 class Comments:
     """The lines carrying each valid `*-ok` suppression."""
@@ -135,17 +154,17 @@ class Comments:
     cast_ok_lines: frozenset[int]
     guard_ok_lines: frozenset[int]
     kwargs_ok_lines: frozenset[int]
- 
- 
+
+
 # --------------------------------------------------------------------------- #
 # Comment scanning (LIT003 / LIT004 / LIT005)
 # --------------------------------------------------------------------------- #
- 
- 
+
+
 def _reason_of(rest: str) -> str:
     return rest.strip().lstrip("#-").strip()
 
- 
+
 def _valid_ok(regex: re.Pattern[str], text: str) -> bool:
     """True iff `text` carries this suppression with a reason of usable length."""
     m = regex.search(text)
@@ -158,30 +177,34 @@ def _comment_violations(path: Path, line_no: int, text: str) -> Iterator[Violati
         m = regex.search(text)
         if m and len((m.group("reason") or "").strip()) < MIN_REASON_LEN:
             yield Violation(path, line_no, "LIT005", f"{token} requires a reason: `# {token}: <reason>`")
- 
+
     m = NOQA_RE.search(text)
     if m:
         if not m.group("codes"):
             yield Violation(path, line_no, "LIT003", "noqa requires rule codes: `# noqa: XXX123  # <reason>`")
         elif len(_reason_of(m.group("rest"))) < MIN_REASON_LEN:
             yield Violation(path, line_no, "LIT003", "noqa requires a reason: `# noqa: XXX123  # <reason>`")
- 
+
     if TYPE_IGNORE_RE.search(text):
-        yield Violation(path, line_no, "LIT009",
-                        "`# type: ignore` is inert (enableTypeIgnoreComments is false, so "
-                        "basedpyright never honors it); use `# pyright: ignore[ruleName]  # <reason>`")
+        yield Violation(
+            path,
+            line_no,
+            "LIT009",
+            "`# type: ignore` is inert (enableTypeIgnoreComments is false, so "
+            "basedpyright never honors it); use `# pyright: ignore[ruleName]  # <reason>`",
+        )
 
     m = IGNORE_RE.search(text)
     if m:
         codes = m.group("codes")
         if not codes or codes == "[]":
-            yield Violation(path, line_no, "LIT004",
-                            "ignore requires codes: `# pyright: ignore[ruleName]  # <reason>`")
+            yield Violation(path, line_no, "LIT004", "ignore requires codes: `# pyright: ignore[ruleName]  # <reason>`")
         elif len(_reason_of(m.group("rest"))) < MIN_REASON_LEN:
-            yield Violation(path, line_no, "LIT004",
-                            "ignore requires a reason: `# pyright: ignore[ruleName]  # <reason>`")
- 
- 
+            yield Violation(
+                path, line_no, "LIT004", "ignore requires a reason: `# pyright: ignore[ruleName]  # <reason>`"
+            )
+
+
 def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, ...]]:
     try:
         tokens = tokenize.generate_tokens(io.StringIO(source).readline)
@@ -204,11 +227,11 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
         ),
         tuple(v for line, text in comment_toks for v in _comment_violations(path, line, text)),
     )
- 
- 
+
+
 # --------------------------------------------------------------------------- #
- 
- 
+
+
 def mutable_names_in(annotation: ast.expr) -> Iterator[str]:
     """Yield mutable-collection names anywhere inside an annotation expression.
 
@@ -229,11 +252,13 @@ def mutable_names_in(annotation: ast.expr) -> Iterator[str]:
                 except SyntaxError:
                     continue
                 yield from mutable_names_in(inner)
- 
- 
+
+
 def _mutable_ann(path: Path, line: int, name: str, where: str) -> Violation:
     return Violation(
-        path, line, "LIT001",
+        path,
+        line,
+        "LIT001",
         f"mutable `{name}` in {where}: a mutable collection can be grown or rewritten "
         f"by whoever holds it. Annotate a read-only view -- Mapping[...], Sequence[...], "
         f"AbstractSet[...], tuple[X, ...], frozenset[X], or a frozen dataclass / "
@@ -248,8 +273,8 @@ def _annotation_violations(
     if annotation is None or line in ok_lines:
         return
     yield from (_mutable_ann(path, line, name, where) for name in mutable_names_in(annotation))
- 
- 
+
+
 def _function_violations(
     path: Path, node: ast.FunctionDef | ast.AsyncFunctionDef, comments: Comments
 ) -> Iterator[Violation]:
@@ -272,7 +297,9 @@ def _function_violations(
     # cannot ban the syntax, so this rule does.
     if args.kwarg is not None and args.kwarg.lineno not in comments.kwargs_ok_lines:
         yield Violation(
-            path, args.kwarg.lineno, "LIT008",
+            path,
+            args.kwarg.lineno,
+            "LIT008",
             f"`**{args.kwarg.arg}` is banned: it erases the keyword contract and forces "
             f"Any-typing; declare explicit keyword parameters, or accept one frozen payload "
             f"(frozen dataclass / NamedTuple / ReadOnly TypedDict) "
@@ -283,8 +310,8 @@ def _function_violations(
         yield from _annotation_violations(
             path, node.returns, node.returns.lineno, f"return type of `{node.name}`", mutable_ok
         )
- 
- 
+
+
 def iter_annotation_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
     # Every annotation is in scope: signatures (params / *args / return) plus every
     # `x: T` -- class attribute, local, or module global. The latter three are all
@@ -296,8 +323,11 @@ def iter_annotation_violations(path: Path, tree: ast.AST, comments: Comments) ->
         elif isinstance(node, ast.AnnAssign):
             target = node.target.id if isinstance(node.target, ast.Name) else "<target>"
             yield from _annotation_violations(
-                path, node.annotation, node.lineno,
-                f"the type of `{target}`", comments.mutable_ok_lines,
+                path,
+                node.annotation,
+                node.lineno,
+                f"the type of `{target}`",
+                comments.mutable_ok_lines,
             )
 
 
@@ -322,7 +352,9 @@ def iter_cast_violations(path: Path, tree: ast.AST, comments: Comments) -> Itera
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and _is_cast_call(node) and node.lineno not in comments.cast_ok_lines:
             yield Violation(
-                path, node.lineno, "LIT006",
+                path,
+                node.lineno,
+                "LIT006",
                 "cast() is an unchecked assertion (the type checker takes it on faith); "
                 "validate into a frozen dataclass/NamedTuple/ReadOnly TypedDict at the "
                 "boundary instead (suppress: `# cast-ok: <reason>`)",
@@ -337,20 +369,18 @@ def iter_guard_violations(path: Path, tree: ast.AST, comments: Comments) -> Iter
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.returns is None:
             continue
         for sub in ast.walk(node.returns):
-            name = (
-                sub.id if isinstance(sub, ast.Name)
-                else sub.attr if isinstance(sub, ast.Attribute)
-                else None
-            )
+            name = sub.id if isinstance(sub, ast.Name) else sub.attr if isinstance(sub, ast.Attribute) else None
             if name in UNSAFE_GUARDS and sub.lineno not in comments.guard_ok_lines:
                 yield Violation(
-                    path, sub.lineno, "LIT007",
+                    path,
+                    sub.lineno,
+                    "LIT007",
                     f"`{name}` narrowing predicate: the checker never verifies the body, so a "
                     f"wrong guard silently corrupts types; parse into a concrete type instead "
                     f"(suppress: `# guard-ok: <reason>`)",
                 )
- 
- 
+
+
 # --------------------------------------------------------------------------- #
 # Mutable-collection construction (LIT002)
 # --------------------------------------------------------------------------- #
@@ -374,11 +404,7 @@ def _annotation_node_ids(tree: ast.AST) -> frozenset[int]:
     not construction, so the LIT002 walk must skip those subtrees.
     """
     return frozenset(
-        id(sub)
-        for node in ast.walk(tree)
-        for ann in _annotations_of(node)
-        if ann is not None
-        for sub in ast.walk(ann)
+        id(sub) for node in ast.walk(tree) for ann in _annotations_of(node) if ann is not None for sub in ast.walk(ann)
     )
 
 
@@ -414,32 +440,34 @@ def iter_construction_violations(path: Path, tree: ast.AST, comments: Comments) 
         if kind is None or node.lineno in comments.mutable_ok_lines:
             continue
         yield Violation(
-            path, node.lineno, "LIT002",
+            path,
+            node.lineno,
+            "LIT002",
             f"mutable {kind}: this builds a collection that can be grown or rewritten. "
             f"Build it in one shot and freeze it -- a tuple/frozenset wrapping a generator "
             f"(`tuple(f(x) for x in xs)`), a tuple literal, or a frozen dataclass / NamedTuple "
             f"/ ReadOnly TypedDict (suppress: `# mutable-ok: <reason>`)",
         )
- 
- 
+
+
 # --------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------- #
- 
- 
+
+
 def check_file(path: Path) -> tuple[Violation, ...]:
     try:
         source = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         return (Violation(path, 0, "LIT000", f"could not read file: {exc}"),)
- 
+
     comments, violations = scan_comments(path, source)
- 
+
     try:
         tree = ast.parse(source, filename=str(path))
     except SyntaxError as exc:
         return (*violations, Violation(path, exc.lineno or 0, "LIT000", f"syntax error: {exc.msg}"))
- 
+
     return (
         *violations,
         *iter_annotation_violations(path, tree, comments),
@@ -447,8 +475,8 @@ def check_file(path: Path) -> tuple[Violation, ...]:
         *iter_guard_violations(path, tree, comments),
         *iter_construction_violations(path, tree, comments),
     )
- 
- 
+
+
 def collect_paths(raw: Iterable[str]) -> Iterator[Path]:
     for item in raw:
         p = Path(item)
@@ -456,24 +484,23 @@ def collect_paths(raw: Iterable[str]) -> Iterator[Path]:
             yield from sorted(p.rglob("*.py"))
         elif p.suffix == ".py":
             yield p
- 
- 
+
+
 def main(argv: Sequence[str]) -> int:
     paths = tuple(a for a in argv if not a.startswith("-"))
     if not paths:
         print("usage: check_type_discipline.py <files-or-dirs>...", file=sys.stderr)
         return 2
- 
+
     violations = sorted(v for path in collect_paths(paths) for v in check_file(path))
     for v in violations:
         print(v.render())
- 
+
     if violations:
         print(f"\n{len(violations)} violation(s).", file=sys.stderr)
         return 1
     return 0
- 
- 
+
+
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
- 

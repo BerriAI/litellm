@@ -106,9 +106,7 @@ def test_parse_lines_error_surfaces_name_and_traceback():
 
 
 def test_parse_lines_result_carries_png():
-    lines = [
-        json.dumps({"type": "result", "png": "BASE64DATA", "is_main_result": True})
-    ]
+    lines = [json.dumps({"type": "result", "png": "BASE64DATA", "is_main_result": True})]
     result = E2BSandboxConfig._parse_lines(lines)
     assert result.results and result.results[0]["png"] == "BASE64DATA"
     assert "type" not in result.results[0]
@@ -121,9 +119,7 @@ def test_parse_lines_result_carries_png():
 async def test_template_flows_into_create_request_as_templateID():
     client = FakeHTTPClient()
     cfg = E2BSandboxConfig()
-    handle = await cfg.acreate_sandbox(
-        template="my-custom-template", api_key="e2b_key", client=client
-    )
+    handle = await cfg.acreate_sandbox(template="my-custom-template", api_key="e2b_key", client=client)
 
     method, url, headers, body = client.calls[0]
     assert method == "POST"
@@ -145,15 +141,11 @@ async def test_create_defaults_template_when_omitted():
 
 @pytest.mark.asyncio
 async def test_run_code_targets_jupyter_host_with_access_token():
-    client = FakeHTTPClient(
-        execute_lines=[json.dumps({"type": "stdout", "text": "42\n", "timestamp": 1})]
-    )
+    client = FakeHTTPClient(execute_lines=[json.dumps({"type": "stdout", "text": "42\n", "timestamp": 1})])
     handle = ContainerHandle(id="sbx_xyz", provider="e2b", domain="e2b.app")
     handle._hidden_params = {"envd_access_token": "tok_run"}
 
-    result = await E2BSandboxConfig().arun_code(
-        container=handle, code="print(6*7)", client=client
-    )
+    result = await E2BSandboxConfig().arun_code(container=handle, code="print(6*7)", client=client)
 
     method, url, headers, body = client.calls[0]
     assert url == "https://49999-sbx_xyz.e2b.app/execute"
@@ -193,9 +185,7 @@ async def test_code_interpreter_tool_deletes_even_when_run_raises():
     client = FakeHTTPClient(execute_raises=RuntimeError("boom"))
 
     with pytest.raises(RuntimeError, match="boom"):
-        await litellm.acode_interpreter_tool(
-            provider="e2b", code="1/0", api_key="e2b_key", client=client
-        )
+        await litellm.acode_interpreter_tool(provider="e2b", code="1/0", api_key="e2b_key", client=client)
 
     methods = [c[0] for c in client.calls]
     urls = [c[1] for c in client.calls]
@@ -220,9 +210,7 @@ async def test_delete_reraises_non_404_http_error():
 @pytest.mark.asyncio
 async def test_create_preserves_explicit_zero_timeout():
     client = FakeHTTPClient()
-    await E2BSandboxConfig().acreate_sandbox(
-        timeout=0, api_key="e2b_key", client=client
-    )
+    await E2BSandboxConfig().acreate_sandbox(timeout=0, api_key="e2b_key", client=client)
     _, _, _, body = client.calls[0]
     assert body["timeout"] == 0
 
@@ -231,9 +219,7 @@ async def test_create_preserves_explicit_zero_timeout():
 async def test_run_code_rejects_bare_id_without_access_token():
     client = FakeHTTPClient()
     with pytest.raises(ValueError, match="access token"):
-        await E2BSandboxConfig().arun_code(
-            container="sbx_no_token", code="print(1)", client=client
-        )
+        await E2BSandboxConfig().arun_code(container="sbx_no_token", code="print(1)", client=client)
     assert client.calls == []  # never reached the network
 
 
@@ -256,9 +242,7 @@ async def test_run_code_aborts_on_output_over_cap():
     handle = ContainerHandle(id="sbx_big", provider="e2b", domain="e2b.app")
     handle._hidden_params = {"envd_access_token": "tok"}
     with pytest.raises(ValueError, match="exceeded"):
-        await E2BSandboxConfig().arun_code(
-            container=handle, code="print('x'*999)", client=client
-        )
+        await E2BSandboxConfig().arun_code(container=handle, code="print('x'*999)", client=client)
 
 
 # ---------- public entrypoints ----------
@@ -266,12 +250,8 @@ async def test_run_code_aborts_on_output_over_cap():
 
 @pytest.mark.asyncio
 async def test_public_lifecycle_create_run_delete():
-    client = FakeHTTPClient(
-        execute_lines=[json.dumps({"type": "stdout", "text": "42\n"})]
-    )
-    container = await litellm.acreate_sandbox(
-        provider="e2b", api_key="e2b_key", client=client
-    )
+    client = FakeHTTPClient(execute_lines=[json.dumps({"type": "stdout", "text": "42\n"})])
+    container = await litellm.acreate_sandbox(provider="e2b", api_key="e2b_key", client=client)
     assert container.id == "sbx_123"
 
     result = await litellm.arun_code(
@@ -283,12 +263,7 @@ async def test_public_lifecycle_create_run_delete():
     )
     assert result.stdout.strip() == "42"
 
-    assert (
-        await litellm.adelete_sandbox(
-            provider="e2b", container=container, api_key="e2b_key", client=client
-        )
-        is True
-    )
+    assert await litellm.adelete_sandbox(provider="e2b", container=container, api_key="e2b_key", client=client) is True
 
 
 @pytest.mark.asyncio
@@ -303,9 +278,7 @@ async def test_unsupported_provider_raises():
 @pytest.mark.asyncio
 async def test_create_uses_api_base_override():
     client = FakeHTTPClient()
-    await E2BSandboxConfig().acreate_sandbox(
-        api_base="http://my-sandbox:8080", api_key="k", client=client
-    )
+    await E2BSandboxConfig().acreate_sandbox(api_base="http://my-sandbox:8080", api_key="k", client=client)
     _, url, _, _ = client.calls[0]
     assert url == "http://my-sandbox:8080/sandboxes"
 

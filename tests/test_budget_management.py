@@ -79,9 +79,7 @@ async def test_create_budget_with_duration(budget_setup):
     necessarily created_at + wall-clock duration.
     """
 
-    assert (
-        budget_setup["budget_reset_at"] is not None
-    ), "The budget_reset_at field should not be None"
+    assert budget_setup["budget_reset_at"] is not None, "The budget_reset_at field should not be None"
 
     created_at = _parse_budget_api_datetime(budget_setup["created_at"])
     expected_reset_at = get_next_standardized_reset_time(

@@ -280,9 +280,7 @@ def test_qwen2_model_id_extraction_with_arn():
     model = "qwen2/arn:aws:bedrock:us-east-1:123456789012:imported-model/test-qwen2"
     provider = "qwen2"
 
-    result = BaseAWSLLM.get_bedrock_model_id(
-        optional_params={}, provider=provider, model=model
-    )
+    result = BaseAWSLLM.get_bedrock_model_id(optional_params={}, provider=provider, model=model)
 
     # The result should NOT contain "qwen2/" - it should be stripped
     assert "qwen2/" not in result
@@ -298,9 +296,7 @@ def test_qwen2_model_id_extraction_without_qwen2_prefix():
     model = "arn:aws:bedrock:us-east-1:123456789012:imported-model/test-qwen2"
     provider = "qwen2"
 
-    result = BaseAWSLLM.get_bedrock_model_id(
-        optional_params={}, provider=provider, model=model
-    )
+    result = BaseAWSLLM.get_bedrock_model_id(optional_params={}, provider=provider, model=model)
 
     # Result should be encoded ARN
     assert "arn" in result.lower() or "aws" in result.lower()
@@ -330,6 +326,6 @@ def test_qwen2_get_bedrock_model_id_with_various_formats():
             optional_params={}, provider=test_case["provider"], model=test_case["model"]
         )
 
-        assert (
-            test_case["should_not_contain"] not in result
-        ), f"Failed for {test_case['description']}: {test_case['should_not_contain']} found in {result}"
+        assert test_case["should_not_contain"] not in result, (
+            f"Failed for {test_case['description']}: {test_case['should_not_contain']} found in {result}"
+        )

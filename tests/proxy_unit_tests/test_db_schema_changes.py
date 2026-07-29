@@ -6,9 +6,7 @@ from typing import Dict, List, Set
 
 def get_schema_from_branch(branch: str = "main") -> str:
     """Get schema from specified git branch"""
-    result = subprocess.run(
-        ["git", "show", f"{branch}:schema.prisma"], capture_output=True, text=True
-    )
+    result = subprocess.run(["git", "show", f"{branch}:schema.prisma"], capture_output=True, text=True)
     return result.stdout
 
 
@@ -42,9 +40,7 @@ def parse_model_fields(schema: str) -> Dict[str, Dict[str, str]]:
     return models
 
 
-def check_breaking_changes(
-    old_schema: Dict[str, Dict[str, str]], new_schema: Dict[str, Dict[str, str]]
-) -> List[str]:
+def check_breaking_changes(old_schema: Dict[str, Dict[str, str]], new_schema: Dict[str, Dict[str, str]]) -> List[str]:
     """Check for breaking changes between schemas"""
     breaking_changes = []
 
@@ -59,9 +55,7 @@ def check_breaking_changes(
         # Check each field in old model
         for field_name, old_type in old_fields.items():
             if field_name not in new_fields:
-                breaking_changes.append(
-                    f"Breaking: Field {model_name}.{field_name} was removed"
-                )
+                breaking_changes.append(f"Breaking: Field {model_name}.{field_name} was removed")
                 continue
 
             new_type = new_fields[field_name]

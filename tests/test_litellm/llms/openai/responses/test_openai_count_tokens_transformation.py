@@ -1,9 +1,7 @@
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
 )
@@ -105,9 +103,7 @@ def test_messages_to_responses_input_basic():
         {"role": "user", "content": "How are you?"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-        messages
-    )
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
     assert len(input_items) == 3
     assert input_items[0] == {"role": "user", "content": "Hello"}
@@ -123,9 +119,7 @@ def test_messages_to_responses_input_with_system():
         {"role": "user", "content": "Hello"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-        messages
-    )
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
     assert len(input_items) == 1
     assert input_items[0] == {"role": "user", "content": "Hello"}
@@ -139,9 +133,7 @@ def test_messages_to_responses_input_with_developer():
         {"role": "user", "content": "Hello"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-        messages
-    )
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
     assert len(input_items) == 1
     assert instructions == "Be concise."
@@ -154,9 +146,7 @@ def test_messages_to_responses_input_with_tool():
         {"role": "tool", "content": "72°F", "tool_call_id": "call_123"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-        messages
-    )
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
     assert len(input_items) == 2
     assert input_items[1] == {
@@ -195,10 +185,7 @@ def test_validate_request_missing_input():
 def test_get_endpoint_default():
     """Test default endpoint URL."""
     config = OpenAICountTokensConfig()
-    assert (
-        config.get_openai_count_tokens_endpoint()
-        == "https://api.openai.com/v1/responses/input_tokens"
-    )
+    assert config.get_openai_count_tokens_endpoint() == "https://api.openai.com/v1/responses/input_tokens"
 
 
 def test_get_endpoint_custom_base():

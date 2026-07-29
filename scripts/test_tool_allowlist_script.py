@@ -88,9 +88,7 @@ async def test_check_tools_allowlist():
 
     # No allowlist -> pass
     await check_tools_allowlist(
-        request_body={
-            "tools": [{"type": "function", "function": {"name": "get_weather"}}]
-        },
+        request_body={"tools": [{"type": "function", "function": {"name": "get_weather"}}]},
         valid_token=token(),
         team_object=None,
         route="/v1/chat/completions",
@@ -99,9 +97,7 @@ async def test_check_tools_allowlist():
 
     # Allowed tool -> pass
     await check_tools_allowlist(
-        request_body={
-            "tools": [{"type": "function", "function": {"name": "get_weather"}}]
-        },
+        request_body={"tools": [{"type": "function", "function": {"name": "get_weather"}}]},
         valid_token=token(metadata={"allowed_tools": ["get_weather"]}),
         team_object=None,
         route="/v1/chat/completions",
@@ -111,9 +107,7 @@ async def test_check_tools_allowlist():
     # Disallowed tool -> raise
     try:
         await check_tools_allowlist(
-            request_body={
-                "tools": [{"type": "function", "function": {"name": "get_weather"}}]
-            },
+            request_body={"tools": [{"type": "function", "function": {"name": "get_weather"}}]},
             valid_token=token(metadata={"allowed_tools": ["other_tool"]}),
             team_object=None,
             route="/v1/chat/completions",
@@ -121,9 +115,7 @@ async def test_check_tools_allowlist():
         print("  DISALLOWED: expected ProxyException")
     except ProxyException as e:
         if e.type == ProxyErrorTypes.tool_access_denied:
-            print(
-                "  allowed_tools=['other_tool'], body has get_weather: PASS (raised tool_access_denied)"
-            )
+            print("  allowed_tools=['other_tool'], body has get_weather: PASS (raised tool_access_denied)")
         else:
             print(f"  Unexpected ProxyException type: {e.type}")
     except Exception as e:
@@ -131,9 +123,7 @@ async def test_check_tools_allowlist():
 
     # Team allowlist when key empty
     await check_tools_allowlist(
-        request_body={
-            "tools": [{"type": "function", "function": {"name": "get_weather"}}]
-        },
+        request_body={"tools": [{"type": "function", "function": {"name": "get_weather"}}]},
         valid_token=token(team_metadata={"allowed_tools": ["get_weather"]}),
         team_object=None,
         route="/v1/chat/completions",
@@ -147,9 +137,7 @@ def main():
     test_extraction()
     asyncio.run(test_check_tools_allowlist())
     print("Done. For full unit tests run:")
-    print(
-        "  poetry run pytest tests/test_litellm/proxy/test_tools_allowlist_enforcement.py -v"
-    )
+    print("  poetry run pytest tests/test_litellm/proxy/test_tools_allowlist_enforcement.py -v")
 
 
 if __name__ == "__main__":

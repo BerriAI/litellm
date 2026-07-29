@@ -12,9 +12,7 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from typing import Literal
 
 import pytest
@@ -60,14 +58,10 @@ async def test_delete_deployment():
     for k, v in encrypted_litellm_params.items():
         if isinstance(v, str):
             encrypted_value = encrypt_value(v, master_key)
-            encrypted_litellm_params[k] = base64.b64encode(encrypted_value).decode(
-                "utf-8"
-            )
+            encrypted_litellm_params[k] = base64.b64encode(encrypted_value).decode("utf-8")
 
     deployment = Deployment(model_name="gpt-3.5-turbo", litellm_params=litellm_params)
-    deployment_2 = Deployment(
-        model_name="gpt-3.5-turbo-2", litellm_params=litellm_params
-    )
+    deployment_2 = Deployment(model_name="gpt-3.5-turbo-2", litellm_params=litellm_params)
 
     llm_router = litellm.Router(
         model_list=[
@@ -136,9 +130,7 @@ async def test_add_existing_deployment():
         api_version=os.getenv("AZURE_API_VERSION"),
     )
     deployment = Deployment(model_name="gpt-3.5-turbo", litellm_params=litellm_params)
-    deployment_2 = Deployment(
-        model_name="gpt-3.5-turbo-2", litellm_params=litellm_params
-    )
+    deployment_2 = Deployment(model_name="gpt-3.5-turbo-2", litellm_params=litellm_params)
 
     llm_router = litellm.Router(
         model_list=[
@@ -159,9 +151,7 @@ async def test_add_existing_deployment():
     for k, v in encrypted_litellm_params.items():
         if isinstance(v, str):
             encrypted_value = encrypt_value(v, master_key)
-            encrypted_litellm_params[k] = base64.b64encode(encrypted_value).decode(
-                "utf-8"
-            )
+            encrypted_litellm_params[k] = base64.b64encode(encrypted_value).decode("utf-8")
     db_model = DBModel(
         model_id=deployment.model_info.id,
         model_name="gpt-3.5-turbo",
@@ -191,9 +181,7 @@ async def test_db_error_new_model_check():
         api_version=os.getenv("AZURE_API_VERSION"),
     )
     deployment = Deployment(model_name="gpt-3.5-turbo", litellm_params=litellm_params)
-    deployment_2 = Deployment(
-        model_name="gpt-3.5-turbo-2", litellm_params=litellm_params
-    )
+    deployment_2 = Deployment(model_name="gpt-3.5-turbo-2", litellm_params=litellm_params)
 
     llm_router = litellm.Router(
         model_list=[
@@ -214,9 +202,7 @@ async def test_db_error_new_model_check():
     for k, v in encrypted_litellm_params.items():
         if isinstance(v, str):
             encrypted_value = encrypt_value(v, master_key)
-            encrypted_litellm_params[k] = base64.b64encode(encrypted_value).decode(
-                "utf-8"
-            )
+            encrypted_litellm_params[k] = base64.b64encode(encrypted_value).decode("utf-8")
     db_model = DBModel(
         model_id=deployment.model_info.id,
         model_name="gpt-3.5-turbo",
@@ -275,9 +261,7 @@ def _create_model_list(flag_value: Literal[0, 1], master_key: str):
     for k, v in encrypted_litellm_params.items():
         if isinstance(v, str):
             encrypted_value = encrypt_value(v, master_key)
-            encrypted_litellm_params[k] = base64.b64encode(encrypted_value).decode(
-                "utf-8"
-            )
+            encrypted_litellm_params[k] = base64.b64encode(encrypted_value).decode("utf-8")
     db_model = DBModel(
         model_id="12345",
         model_name="gpt-3.5-turbo",
@@ -335,9 +319,7 @@ async def test_add_and_delete_deployments(llm_router, model_list_flag_value):
 
     pc.get_config = _monkey_patch_get_config
 
-    model_list = _create_model_list(
-        flag_value=model_list_flag_value, master_key=master_key
-    )
+    model_list = _create_model_list(flag_value=model_list_flag_value, master_key=master_key)
 
     if llm_router is None:
         prev_llm_router_val = None
@@ -376,9 +358,7 @@ def _check_provider_config(config: BaseConfig, provider: LlmProviders):
         and provider != litellm.LlmProviders.OPENAI_LIKE
         and provider != litellm.LlmProviders.CUSTOM_OPENAI
     ):
-        assert (
-            config.__class__.__name__ != "OpenAIGPTConfig"
-        ), f"Provider {provider} is an instance of OpenAIGPTConfig"
+        assert config.__class__.__name__ != "OpenAIGPTConfig", f"Provider {provider} is an instance of OpenAIGPTConfig"
 
     assert "_abc_impl" not in config.get_config(), f"Provider {provider} has _abc_impl"
 
@@ -429,9 +409,7 @@ def test_litellm_proxy_responses_api_config():
     )
     print(f"config: {config}")
     assert config is not None, "Config should not be None for litellm_proxy provider"
-    assert isinstance(
-        config, LiteLLMProxyResponsesAPIConfig
-    ), f"Expected LiteLLMProxyResponsesAPIConfig, got {type(config)}"
-    assert (
-        config.custom_llm_provider == LlmProviders.LITELLM_PROXY
-    ), "custom_llm_provider should be LITELLM_PROXY"
+    assert isinstance(config, LiteLLMProxyResponsesAPIConfig), (
+        f"Expected LiteLLMProxyResponsesAPIConfig, got {type(config)}"
+    )
+    assert config.custom_llm_provider == LlmProviders.LITELLM_PROXY, "custom_llm_provider should be LITELLM_PROXY"

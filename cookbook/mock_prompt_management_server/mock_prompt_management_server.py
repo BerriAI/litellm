@@ -31,21 +31,15 @@ class MessageContent(BaseModel):
     """A single message in the prompt template"""
 
     role: str = Field(..., description="Message role (system, user, assistant)")
-    content: str = Field(
-        ..., description="Message content with optional {variable} placeholders"
-    )
+    content: str = Field(..., description="Message content with optional {variable} placeholders")
 
 
 class PromptResponse(BaseModel):
     """Response format for the prompt management API"""
 
     prompt_id: str = Field(..., description="The ID of the prompt")
-    prompt_template: List[MessageContent] = Field(
-        ..., description="Array of messages in OpenAI format"
-    )
-    prompt_template_model: Optional[str] = Field(
-        None, description="Optional model to use for this prompt"
-    )
+    prompt_template: List[MessageContent] = Field(..., description="Array of messages in OpenAI format")
+    prompt_template_model: Optional[str] = Field(None, description="Optional model to use for this prompt")
     prompt_template_optional_params: Optional[Dict[str, Any]] = Field(
         None, description="Optional parameters like temperature, max_tokens, etc."
     )
@@ -197,9 +191,7 @@ def verify_api_key(authorization: Optional[str] = Header(None)) -> bool:
 @app.get("/beta/litellm_prompt_management", response_model=PromptResponse)
 async def get_prompt(
     prompt_id: str = Query(..., description="The ID of the prompt to fetch"),
-    project_name: Optional[str] = Query(
-        None, description="Optional project name filter"
-    ),
+    project_name: Optional[str] = Query(None, description="Optional project name filter"),
     slug: Optional[str] = Query(None, description="Optional slug filter"),
     version: Optional[str] = Query(None, description="Optional version filter"),
     authorization: Optional[str] = Header(None),
@@ -276,9 +268,7 @@ async def list_prompts(authorization: Optional[str] = Header(None)):
         {
             "prompt_id": pid,
             "model": p.get("prompt_template_model"),
-            "has_variables": any(
-                "{" in msg.get("content", "") for msg in p.get("prompt_template", [])
-            ),
+            "has_variables": any("{" in msg.get("content", "") for msg in p.get("prompt_template", [])),
         }
         for pid, p in PROMPTS_DB.items()
     ]
@@ -287,9 +277,7 @@ async def list_prompts(authorization: Optional[str] = Header(None)):
 
 
 @app.get("/prompts/{prompt_id}/variables")
-async def get_prompt_variables(
-    prompt_id: str, authorization: Optional[str] = Header(None)
-):
+async def get_prompt_variables(prompt_id: str, authorization: Optional[str] = Header(None)):
     """
     Get all variables in a prompt template.
 
@@ -328,9 +316,7 @@ async def get_prompt_variables(
 
 
 @app.post("/prompts")
-async def create_prompt(
-    prompt: PromptResponse, authorization: Optional[str] = Header(None)
-):
+async def create_prompt(prompt: PromptResponse, authorization: Optional[str] = Header(None)):
     """
     Create a new prompt (convenience endpoint for testing).
 
@@ -376,14 +362,10 @@ if __name__ == "__main__":
     print("  GET  /beta/litellm_prompt_management?prompt_id=<id>  (LiteLLM spec)")
     print("  GET  /health                                          (health check)")
     print("  GET  /prompts                                         (list all prompts)")
-    print(
-        "  GET  /prompts/{id}/variables                          (get prompt variables)"
-    )
+    print("  GET  /prompts/{id}/variables                          (get prompt variables)")
     print("  POST /prompts                                         (create prompt)")
     print("\nExample usage:")
-    print(
-        '  curl "http://localhost:8080/beta/litellm_prompt_management?prompt_id=hello-world-prompt"'
-    )
+    print('  curl "http://localhost:8080/beta/litellm_prompt_management?prompt_id=hello-world-prompt"')
     print("\nPress CTRL+C to stop the server")
     print("=" * 70)
 

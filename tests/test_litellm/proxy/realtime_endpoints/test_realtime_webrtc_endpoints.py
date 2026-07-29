@@ -126,9 +126,7 @@ def mock_route_request_client_secrets():
     future_expires_at = int(time.time()) + 3600
     mock_resp = MagicMock(spec=httpx.Response)
     mock_resp.status_code = 200
-    mock_resp.text = (
-        f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
-    )
+    mock_resp.text = f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
     mock_resp.content = f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'.encode()
     mock_resp.headers = {}
     mock_resp.json.return_value = {
@@ -205,9 +203,7 @@ async def test_client_secrets_success_with_mock(
     mock_pre_call_hook,
 ):
     """POST /v1/realtime/client_secrets returns 200 with valid auth and mocked upstream."""
-    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="test-user", team_id="test-team"
-    )
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="test-user", team_id="test-team")
     try:
         client = TestClient(proxy_app)
         with (
@@ -265,13 +261,7 @@ async def test_client_secrets_transcription_rejects_disallowed_nested_model(
                     "session": {
                         "type": "transcription",
                         "model": "gpt-4o-realtime-preview",
-                        "audio": {
-                            "input": {
-                                "transcription": {
-                                    "model": "gpt-realtime-whisper"
-                                }
-                            }
-                        },
+                        "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}},
                     },
                 },
             )
@@ -302,12 +292,8 @@ async def test_client_secrets_transcription_routes_on_nested_model(
         async def _inner():
             resp = MagicMock(spec=httpx.Response)
             resp.status_code = 200
-            resp.text = (
-                f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
-            )
-            resp.content = (
-                f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
-            ).encode()
+            resp.text = f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
+            resp.content = (f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}').encode()
             resp.headers = {}
             resp.json.return_value = {
                 "value": "upstream_ephemeral_key",
@@ -341,13 +327,7 @@ async def test_client_secrets_transcription_routes_on_nested_model(
                     "session": {
                         "type": "transcription",
                         "model": "gpt-4o-realtime-preview",
-                        "audio": {
-                            "input": {
-                                "transcription": {
-                                    "model": "gpt-realtime-whisper"
-                                }
-                            }
-                        },
+                        "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}},
                     },
                 },
             )
@@ -357,10 +337,7 @@ async def test_client_secrets_transcription_routes_on_nested_model(
         session = captured["data"]["session"]
         assert session["type"] == "transcription"
         assert "model" not in session
-        assert (
-            session["audio"]["input"]["transcription"]["model"]
-            == "gpt-realtime-whisper"
-        )
+        assert session["audio"]["input"]["transcription"]["model"] == "gpt-realtime-whisper"
         encrypted_value = response.json()["value"]
         decoded = _decode_realtime_token_payload(
             decrypt_value_helper(
@@ -520,10 +497,7 @@ async def test_realtime_calls_replays_transcription_session_type(
         )
 
     assert captured["session"]["type"] == "transcription"
-    assert (
-        captured["session"]["audio"]["input"]["transcription"]["model"]
-        == "gpt-realtime-whisper"
-    )
+    assert captured["session"]["audio"]["input"]["transcription"]["model"] == "gpt-realtime-whisper"
 
 
 # --- transcription_sessions endpoint ---
@@ -595,9 +569,7 @@ async def test_transcription_sessions_rejects_disallowed_resolved_model(
             response = client.post(
                 "/v1/realtime/transcription_sessions",
                 headers={"Authorization": "Bearer sk-test-master-key"},
-                json={
-                    "input_audio_transcription": {"model": "gpt-realtime-whisper"}
-                },
+                json={"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
             )
 
         assert response.status_code == 403
@@ -641,9 +613,7 @@ async def test_transcription_sessions_rejects_disallowed_team_model_scope(
             response = client.post(
                 "/v1/realtime/transcription_sessions",
                 headers={"Authorization": "Bearer sk-test-master-key"},
-                json={
-                    "input_audio_transcription": {"model": "gpt-realtime-whisper"}
-                },
+                json={"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
             )
 
         assert response.status_code == 403
@@ -686,9 +656,7 @@ async def test_transcription_sessions_rejects_disallowed_project_model_scope(
             response = client.post(
                 "/v1/realtime/transcription_sessions",
                 headers={"Authorization": "Bearer sk-test-master-key"},
-                json={
-                    "input_audio_transcription": {"model": "gpt-realtime-whisper"}
-                },
+                json={"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
             )
 
         assert response.status_code == 403
@@ -741,9 +709,7 @@ async def test_transcription_sessions_rejects_disallowed_team_member_model_scope
             response = client.post(
                 "/v1/realtime/transcription_sessions",
                 headers={"Authorization": "Bearer sk-test-master-key"},
-                json={
-                    "input_audio_transcription": {"model": "gpt-realtime-whisper"}
-                },
+                json={"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
             )
 
         assert response.status_code == 403
@@ -829,9 +795,7 @@ async def test_transcription_sessions_encrypts_client_secret(
     POST /v1/realtime/transcription_sessions returns 200 and the ephemeral key
     under client_secret.value must be encrypted (never the raw upstream key).
     """
-    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="test-user", team_id="test-team"
-    )
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="test-user", team_id="test-team")
     captured_route_type = {}
 
     async def _capturing_route(*args, **kwargs):
@@ -875,10 +839,7 @@ async def test_transcription_sessions_encrypts_client_secret(
         assert decrypted is not None
         assert "upstream_ephemeral_key" in decrypted
         # Routed through the dedicated transcription_sessions route type.
-        assert (
-            captured_route_type["route_type"]
-            == "acreate_realtime_transcription_session"
-        )
+        assert captured_route_type["route_type"] == "acreate_realtime_transcription_session"
     finally:
         proxy_app.dependency_overrides.pop(user_api_key_auth, None)
 
@@ -1024,9 +985,7 @@ async def test_transcription_sessions_returns_upstream_error_verbatim(
 
         return _inner()
 
-    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="test-user", team_id="test-team"
-    )
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="test-user", team_id="test-team")
     try:
         client = TestClient(proxy_app)
         with (
@@ -1066,9 +1025,7 @@ async def test_transcription_sessions_wraps_route_exception(
     async def _raise_http(*args, **kwargs):
         raise HTTPException(status_code=403, detail="Model not allowed")
 
-    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="test-user"
-    )
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="test-user")
     try:
         client = TestClient(proxy_app, raise_server_exceptions=False)
         with (

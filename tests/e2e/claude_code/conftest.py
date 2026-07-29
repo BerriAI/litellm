@@ -109,16 +109,11 @@ class CompatResult:
             raise TypeError("compat_result requires a dict")
         status = result.get("status")
         if status not in VALID_STATUSES:
-            raise ValueError(
-                f"compat_result status must be one of {sorted(VALID_STATUSES)}, "
-                f"got {status!r}"
-            )
+            raise ValueError(f"compat_result status must be one of {sorted(VALID_STATUSES)}, got {status!r}")
         if status == "fail" and not result.get("error"):
             raise ValueError("compat_result {'status': 'fail'} requires 'error'")
         if status == "not_applicable" and not result.get("reason"):
-            raise ValueError(
-                "compat_result {'status': 'not_applicable'} requires 'reason'"
-            )
+            raise ValueError("compat_result {'status': 'not_applicable'} requires 'reason'")
         return dict(result)
 
     def collected(self) -> List[Dict[str, Any]]:
@@ -188,11 +183,7 @@ def _manifest_feature_ids() -> FrozenSet[str]:
     features = raw.get("features")
     if not isinstance(features, list):
         return frozenset()
-    return frozenset(
-        entry["id"]
-        for entry in features
-        if isinstance(entry, dict) and isinstance(entry.get("id"), str)
-    )
+    return frozenset(entry["id"] for entry in features if isinstance(entry, dict) and isinstance(entry.get("id"), str))
 
 
 def _infer_feature_and_provider(node_path: Path) -> Optional[tuple]:
@@ -257,9 +248,7 @@ def pytest_runtest_makereport(item, call):
     feature_id, provider = inferred
 
     fixture = item.funcargs.get("compat_result") if hasattr(item, "funcargs") else None
-    collected: List[Dict[str, Any]] = (
-        fixture.collected() if isinstance(fixture, CompatResult) else []
-    )
+    collected: List[Dict[str, Any]] = fixture.collected() if isinstance(fixture, CompatResult) else []
 
     if report.failed and not any(entry.get("status") == "fail" for entry in collected):
         # The test body (or setup) raised and the test author hasn't
@@ -282,8 +271,7 @@ def pytest_runtest_makereport(item, call):
         collected = [
             {
                 "status": "fail",
-                "error": "test passed without reporting via compat_result; "
-                "every compat test must report a status.",
+                "error": "test passed without reporting via compat_result; every compat test must report a status.",
             }
         ]
 
@@ -416,11 +404,7 @@ def _print_rate_limit_summary(summary: Dict[str, Any]) -> None:
         lines.append("[compat] per-provider breakdown:")
         for provider in sorted(per_provider):
             counts = per_provider[provider]
-            parts = " ".join(
-                f"{k}={v}"
-                for k, v in sorted(counts.items())
-                if k != "not_tested" or v > 0
-            )
+            parts = " ".join(f"{k}={v}" for k, v in sorted(counts.items()) if k != "not_tested" or v > 0)
             lines.append(f"  {provider:<20s} {parts}")
     if totals.get("rate_limited", 0):
         lines.append(
@@ -543,9 +527,7 @@ def pytest_sessionfinish(session, exitstatus):
     )
 
     summary = _build_rate_limit_summary(merged_rows)
-    summary_path = Path(
-        os.environ.get(RATE_LIMIT_SUMMARY_ENV) or DEFAULT_RATE_LIMIT_SUMMARY_PATH
-    )
+    summary_path = Path(os.environ.get(RATE_LIMIT_SUMMARY_ENV) or DEFAULT_RATE_LIMIT_SUMMARY_PATH)
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
     _print_rate_limit_summary(summary)
 
@@ -642,9 +624,7 @@ def _compat_models_registered() -> Any:
             except (AssertionError, RequestException) as exc:
                 failures.append((deployment.model_name, str(exc)))
         if failures:
-            summary = "\n".join(
-                f"  - {name}: {reason}" for name, reason in failures
-            )
+            summary = "\n".join(f"  - {name}: {reason}" for name, reason in failures)
             print(
                 f"[compat fixture] {len(failures)} of "
                 f"{len(failures) + len(registered_ids)} deployments "

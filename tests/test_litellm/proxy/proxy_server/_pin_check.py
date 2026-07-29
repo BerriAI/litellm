@@ -57,9 +57,7 @@ class TestFunction:
     asserts: List[ast.Assert] = field(default_factory=list)
     raises_calls: int = 0
     status_code_asserts: List[int] = field(default_factory=list)
-    has_strong_assertion: bool = (
-        False  # normalize() or .model_validate() or large dict-eq
-    )
+    has_strong_assertion: bool = False  # normalize() or .model_validate() or large dict-eq
 
 
 def parse_pin_list(path: Path) -> List[str]:
@@ -80,11 +78,7 @@ def _has_strong_assertion(node: ast.AST) -> bool:
                 return True
             if isinstance(func, ast.Attribute) and func.attr == "model_validate":
                 return True
-        if (
-            isinstance(sub, ast.Compare)
-            and len(sub.ops) == 1
-            and isinstance(sub.ops[0], ast.Eq)
-        ):
+        if isinstance(sub, ast.Compare) and len(sub.ops) == 1 and isinstance(sub.ops[0], ast.Eq):
             # response.json() == {<dict literal with >= 3 keys>}
             rhs = sub.comparators[0]
             if isinstance(rhs, ast.Dict) and len(rhs.keys) >= 3:
@@ -137,9 +131,7 @@ def collect_test_functions(test_dir: Path) -> List[TestFunction]:
                 if isinstance(sub, ast.With):
                     for item in sub.items:
                         ctx = item.context_expr
-                        if isinstance(ctx, ast.Call) and isinstance(
-                            ctx.func, ast.Attribute
-                        ):
+                        if isinstance(ctx, ast.Call) and isinstance(ctx.func, ast.Attribute):
                             if ctx.func.attr == "raises":
                                 tf.raises_calls += 1
             funcs.append(tf)
@@ -178,10 +170,7 @@ def check(pin_list: List[str], funcs: List[TestFunction]) -> Tuple[bool, List[st
 
     status_only = [tf for tf in funcs if _is_status_only(tf)]
     for tf in status_only:
-        failures.append(
-            f"status-only test (only asserts response.status_code): "
-            f"{tf.file.name}::{tf.name}"
-        )
+        failures.append(f"status-only test (only asserts response.status_code): {tf.file.name}::{tf.name}")
 
     by_pin: Dict[str, List[TestFunction]] = {pin: [] for pin in pin_list}
     for tf in funcs:
@@ -193,14 +182,11 @@ def check(pin_list: List[str], funcs: List[TestFunction]) -> Tuple[bool, List[st
         if not matches:
             failures.append(f"no tests reference pin: {pin}")
             continue
-        has_happy = any(
-            tf.has_strong_assertion and not _looks_like_error_test(tf) for tf in matches
-        )
+        has_happy = any(tf.has_strong_assertion and not _looks_like_error_test(tf) for tf in matches)
         has_error = any(_looks_like_error_test(tf) for tf in matches)
         if not has_happy:
             failures.append(
-                f"no happy-path test with strong assertion (normalize/model_validate/dict-eq>=3) "
-                f"for pin: {pin}"
+                f"no happy-path test with strong assertion (normalize/model_validate/dict-eq>=3) for pin: {pin}"
             )
         if not has_error:
             failures.append(f"no error-path test for pin: {pin}")

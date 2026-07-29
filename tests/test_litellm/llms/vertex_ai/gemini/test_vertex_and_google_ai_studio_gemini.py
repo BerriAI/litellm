@@ -237,9 +237,7 @@ def test_vertex_ai_response_json_schema_preserves_refs_for_gemini_2():
     # $defs and $ref should be preserved (not unpacked)
     assert "response_json_schema" in transformed_request
     result_schema = transformed_request["response_json_schema"]
-    assert (
-        "$defs" in result_schema
-    ), "responseJsonSchema should preserve $defs for Gemini 2.0+"
+    assert "$defs" in result_schema, "responseJsonSchema should preserve $defs for Gemini 2.0+"
 
 
 def test_vertex_ai_get_json_schema_preserves_refs_for_nested_pydantic():
@@ -319,22 +317,14 @@ def test_vertex_ai_response_json_schema_for_gemini_2():
 
     # Types should be lowercase (standard JSON Schema format)
     assert transformed_request["response_json_schema"]["type"] == "object"
-    assert (
-        transformed_request["response_json_schema"]["properties"]["name"]["type"]
-        == "string"
-    )
-    assert (
-        transformed_request["response_json_schema"]["properties"]["age"]["type"]
-        == "integer"
-    )
+    assert transformed_request["response_json_schema"]["properties"]["name"]["type"] == "string"
+    assert transformed_request["response_json_schema"]["properties"]["age"]["type"] == "integer"
 
     # Should NOT have propertyOrdering (not needed for responseJsonSchema)
     assert "propertyOrdering" not in transformed_request["response_json_schema"]
 
     # additionalProperties should be preserved (supported by responseJsonSchema)
-    assert (
-        transformed_request["response_json_schema"].get("additionalProperties") == False
-    )
+    assert transformed_request["response_json_schema"].get("additionalProperties") == False
 
 
 def test_vertex_ai_response_schema_for_old_models():
@@ -492,17 +482,12 @@ def test_vertex_ai_empty_content():
         ),
     ],
 )
-def test_vertex_ai_candidate_token_count_inclusive(
-    usage_metadata, inclusive, expected_usage
-):
+def test_vertex_ai_candidate_token_count_inclusive(usage_metadata, inclusive, expected_usage):
     """
     Test that the candidate token count is inclusive of the thinking token count
     """
     v = VertexGeminiConfig()
-    assert (
-        VertexGeminiConfig.is_candidate_token_count_inclusive(usage_metadata)
-        is inclusive
-    )
+    assert VertexGeminiConfig.is_candidate_token_count_inclusive(usage_metadata) is inclusive
 
     usage = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
     assert usage.prompt_tokens == expected_usage.prompt_tokens
@@ -575,7 +560,9 @@ def test_response_has_search_grounding_detection():
         is False
     )
     assert (
-        VertexGeminiConfig._response_has_search_grounding({"candidates": [{"groundingMetadata": {"webSearchQueries": []}}]})
+        VertexGeminiConfig._response_has_search_grounding(
+            {"candidates": [{"groundingMetadata": {"webSearchQueries": []}}]}
+        )
         is False
     )
     assert VertexGeminiConfig._response_has_search_grounding({"candidates": []}) is False
@@ -621,9 +608,7 @@ def test_vertex_ai_url_context_tool_use_tokens_billed_as_input_tokens():
         "candidates": [
             {
                 "urlContextMetadata": {"urlMetadata": []},
-                "groundingMetadata": {
-                    "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]
-                },
+                "groundingMetadata": {"groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]},
             }
         ],
         "usageMetadata": UsageMetadata(
@@ -661,9 +646,7 @@ def test_streaming_chunk_includes_reasoning_tokens():
             "thoughtsTokenCount": 3,
         },
     }
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
-    )
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=litellm_logging)
     streaming_chunk = iterator.chunk_parser(chunk)
     assert streaming_chunk.usage is not None
     assert streaming_chunk.usage.prompt_tokens == 5
@@ -699,17 +682,12 @@ def test_streaming_chunk_includes_reasoning_content():
         "usageMetadata": {},
     }
 
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
-    )
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=litellm_logging)
     streaming_chunk = iterator.chunk_parser(chunk)
 
     # The text content should be empty and reasoning_content should be populated
     assert streaming_chunk.choices[0].delta.content is None
-    assert (
-        streaming_chunk.choices[0].delta.reasoning_content
-        == "I'm thinking through the problem..."
-    )
+    assert streaming_chunk.choices[0].delta.reasoning_content == "I'm thinking through the problem..."
 
 
 def test_streaming_chunk_with_tool_calls_and_thought_includes_reasoning_content():
@@ -754,24 +732,16 @@ def test_streaming_chunk_with_tool_calls_and_thought_includes_reasoning_content(
         },
     }
 
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
-    )
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=litellm_logging)
     streaming_chunk = iterator.chunk_parser(chunk)
 
     # Verify reasoning_content comes from the thought: true part
-    assert (
-        streaming_chunk.choices[0].delta.reasoning_content
-        == "Let me think about how to get the time..."
-    )
+    assert streaming_chunk.choices[0].delta.reasoning_content == "Let me think about how to get the time..."
 
     # Verify tool calls are also present
     assert streaming_chunk.choices[0].delta.tool_calls is not None
     assert len(streaming_chunk.choices[0].delta.tool_calls) == 1
-    assert (
-        streaming_chunk.choices[0].delta.tool_calls[0].function.name
-        == "get_current_time"
-    )
+    assert streaming_chunk.choices[0].delta.tool_calls[0].function.name == "get_current_time"
 
 
 def test_streaming_chunk_with_tool_calls_no_thought_no_reasoning_content():
@@ -813,9 +783,7 @@ def test_streaming_chunk_with_tool_calls_no_thought_no_reasoning_content():
         },
     }
 
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
-    )
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=litellm_logging)
     streaming_chunk = iterator.chunk_parser(chunk)
 
     # reasoning_content should be None - thoughtSignature alone does NOT mean reasoning
@@ -824,21 +792,13 @@ def test_streaming_chunk_with_tool_calls_no_thought_no_reasoning_content():
     # Tool calls should still work
     assert streaming_chunk.choices[0].delta.tool_calls is not None
     assert len(streaming_chunk.choices[0].delta.tool_calls) == 1
-    assert (
-        streaming_chunk.choices[0].delta.tool_calls[0].function.name
-        == "get_current_time"
-    )
+    assert streaming_chunk.choices[0].delta.tool_calls[0].function.name == "get_current_time"
 
 
 def test_check_finish_reason():
     finish_reason_mappings = VertexGeminiConfig.get_finish_reason_mapping()
     for k, v in finish_reason_mappings.items():
-        assert (
-            VertexGeminiConfig._check_finish_reason(
-                chat_completion_message=None, finish_reason=k
-            )
-            == v
-        )
+        assert VertexGeminiConfig._check_finish_reason(chat_completion_message=None, finish_reason=k) == v
 
 
 def test_finish_reason_unspecified_and_malformed_function_call():
@@ -851,18 +811,14 @@ def test_finish_reason_unspecified_and_malformed_function_call():
     # Test FINISH_REASON_UNSPECIFIED maps to "stop"
     assert finish_reason_mappings["FINISH_REASON_UNSPECIFIED"] == "stop"
     assert (
-        VertexGeminiConfig._check_finish_reason(
-            chat_completion_message=None, finish_reason="FINISH_REASON_UNSPECIFIED"
-        )
+        VertexGeminiConfig._check_finish_reason(chat_completion_message=None, finish_reason="FINISH_REASON_UNSPECIFIED")
         == "stop"
     )
 
     # Test MALFORMED_FUNCTION_CALL maps to "stop"
     assert finish_reason_mappings["MALFORMED_FUNCTION_CALL"] == "stop"
     assert (
-        VertexGeminiConfig._check_finish_reason(
-            chat_completion_message=None, finish_reason="MALFORMED_FUNCTION_CALL"
-        )
+        VertexGeminiConfig._check_finish_reason(chat_completion_message=None, finish_reason="MALFORMED_FUNCTION_CALL")
         == "stop"
     )
 
@@ -1023,11 +979,7 @@ def test_vertex_ai_usage_metadata_with_image_tokens_in_prompt():
 
     # Verify the math: prompt_tokens = text + image
     # 533 = 6 (text) + 527 (image)
-    assert (
-        result.prompt_tokens_details.text_tokens
-        + result.prompt_tokens_details.image_tokens
-        == result.prompt_tokens
-    )
+    assert result.prompt_tokens_details.text_tokens + result.prompt_tokens_details.image_tokens == result.prompt_tokens
 
 
 def test_map_response_modalities_video():
@@ -1092,17 +1044,13 @@ def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
 def test_vertex_ai_map_tools():
     v = VertexGeminiConfig()
     optional_params = {}
-    tools = v._map_function(
-        value=[{"code_execution": {}}], optional_params=optional_params
-    )
+    tools = v._map_function(value=[{"code_execution": {}}], optional_params=optional_params)
     assert len(tools) == 1
     assert tools[0]["code_execution"] == {}
     print(tools)
 
     new_optional_params = {}
-    new_tools = v._map_function(
-        value=[{"codeExecution": {}}], optional_params=new_optional_params
-    )
+    new_tools = v._map_function(value=[{"codeExecution": {}}], optional_params=new_optional_params)
     assert len(new_tools) == 1
     print("new_tools", new_tools)
     assert new_tools[0]["code_execution"] == {}
@@ -1144,11 +1092,11 @@ def test_vertex_ai_map_tool_with_anyof():
     ]
     tools = v._map_function(value=value, optional_params=optional_params)
 
-    assert tools[0]["function_declarations"][0]["parameters"]["properties"][
-        "base_branch"
-    ] == {
+    assert tools[0]["function_declarations"][0]["parameters"]["properties"]["base_branch"] == {
         "anyOf": [{"type": "string", "nullable": True, "title": "Base Branch"}]
-    }, f"Expected only anyOf field and its contents to be kept, but got {tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
+    }, (
+        f"Expected only anyOf field and its contents to be kept, but got {tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
+    )
 
     new_optional_params = {}
     new_value = [
@@ -1175,11 +1123,11 @@ def test_vertex_ai_map_tool_with_anyof():
     ]
     new_tools = v._map_function(value=new_value, optional_params=new_optional_params)
 
-    assert new_tools[0]["function_declarations"][0]["parameters"]["properties"][
-        "base_branch"
-    ] == {
+    assert new_tools[0]["function_declarations"][0]["parameters"]["properties"]["base_branch"] == {
         "anyOf": [{"type": "string", "nullable": True}]
-    }, f"Expected only anyOf field and its contents to be kept, but got {new_tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
+    }, (
+        f"Expected only anyOf field and its contents to be kept, but got {new_tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
+    )
 
 
 def test_vertex_ai_streaming_usage_calculation():
@@ -1209,9 +1157,7 @@ def test_vertex_ai_streaming_usage_calculation():
         }
 
         # Create iterator and parse chunk
-        iterator = ModelResponseIterator(
-            streaming_response=[], sync_stream=True, logging_obj=MagicMock()
-        )
+        iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=MagicMock())
         iterator.chunk_parser(chunk)
 
         # Verify _calculate_usage was called with correct parameters
@@ -1282,9 +1228,7 @@ def test_vertex_ai_streaming_usage_web_search_calculation():
     }
 
     # Create iterator and parse chunk
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=MagicMock()
-    )
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=MagicMock())
     completed_response = iterator.chunk_parser(chunk)
 
     usage: Usage = completed_response.usage
@@ -1330,9 +1274,7 @@ def test_vertex_ai_transform_parts():
 
     # Test case 2: Tool call mode (is_function_call=False) - Single message with multiple tool calls
     parts_with_multiple_functions = [
-        HttpxPartType(
-            functionCall={"name": "get_current_weather", "args": {"location": "Boston"}}
-        ),
+        HttpxPartType(functionCall={"name": "get_current_weather", "args": {"location": "Boston"}}),
         HttpxPartType(
             functionCall={
                 "name": "get_forecast",
@@ -1362,9 +1304,7 @@ def test_vertex_ai_transform_parts():
     # Test case 3: Simulating multiple messages - cumulative indexing across messages
     # First message with 2 tool calls (starting from index 0)
     first_message_parts = [
-        HttpxPartType(
-            functionCall={"name": "get_weather", "args": {"location": "Boston"}}
-        ),
+        HttpxPartType(functionCall={"name": "get_weather", "args": {"location": "Boston"}}),
         HttpxPartType(functionCall={"name": "get_time", "args": {"timezone": "EST"}}),
     ]
 
@@ -1381,9 +1321,7 @@ def test_vertex_ai_transform_parts():
 
     # Second message with 1 tool call (continuing from previous index)
     second_message_parts = [
-        HttpxPartType(
-            functionCall={"name": "send_email", "args": {"to": "user@example.com"}}
-        ),
+        HttpxPartType(functionCall={"name": "send_email", "args": {"to": "user@example.com"}}),
     ]
 
     function, tools, updated_idx = VertexGeminiConfig._transform_parts(
@@ -1401,9 +1339,7 @@ def test_vertex_ai_transform_parts():
 
     # Third message with 2 more tool calls (continuing from previous index)
     third_message_parts = [
-        HttpxPartType(
-            functionCall={"name": "create_calendar_event", "args": {"title": "Meeting"}}
-        ),
+        HttpxPartType(functionCall={"name": "create_calendar_event", "args": {"title": "Meeting"}}),
         HttpxPartType(functionCall={"name": "set_reminder", "args": {"time": "10:00"}}),
     ]
 
@@ -1450,9 +1386,7 @@ def test_vertex_ai_transform_parts():
     assert updated_idx == 10  # Index should remain unchanged
 
     # Test case 6: Function call with empty args
-    parts_with_empty_args = [
-        HttpxPartType(functionCall={"name": "simple_function", "args": {}})
-    ]
+    parts_with_empty_args = [HttpxPartType(functionCall={"name": "simple_function", "args": {}})]
 
     function, tools, updated_idx = VertexGeminiConfig._transform_parts(
         parts=parts_with_empty_args, cumulative_tool_call_idx=0, is_function_call=True
@@ -1468,13 +1402,9 @@ def test_vertex_ai_transform_parts():
     # Test case 7: Mixed content with function calls - ensuring tool call IDs are unique
     mixed_parts = [
         HttpxPartType(text="Before function call"),
-        HttpxPartType(
-            functionCall={"name": "function_a", "args": {"param": "value_a"}}
-        ),
+        HttpxPartType(functionCall={"name": "function_a", "args": {"param": "value_a"}}),
         HttpxPartType(text="Between function calls"),
-        HttpxPartType(
-            functionCall={"name": "function_b", "args": {"param": "value_b"}}
-        ),
+        HttpxPartType(functionCall={"name": "function_b", "args": {"param": "value_b"}}),
         HttpxPartType(text="After function calls"),
     ]
 
@@ -1516,12 +1446,8 @@ def test_vertex_ai_usage_metadata_missing_token_count():
     assert result.prompt_tokens == 57
     assert result.completion_tokens == 74
     assert result.total_tokens == 131
-    assert (
-        result.completion_tokens_details.text_tokens == 0
-    )  # Default value for missing tokenCount
-    assert (
-        result.completion_tokens_details.audio_tokens == 0
-    )  # Default value for missing tokenCount
+    assert result.completion_tokens_details.text_tokens == 0  # Default value for missing tokenCount
+    assert result.completion_tokens_details.audio_tokens == 0  # Default value for missing tokenCount
 
 
 def test_vertex_ai_process_candidates_with_grounding_metadata():
@@ -1616,9 +1542,7 @@ def test_vertex_ai_process_candidates_with_grounding_metadata():
 
 
 def test_set_stream_metadata_mirrors_non_streaming_safety_field_names():
-    safety_ratings = [
-        [{"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"}]
-    ]
+    safety_ratings = [[{"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"}]]
 
     model_response = ModelResponse()
     VertexGeminiConfig._set_stream_metadata_on_response(
@@ -1672,25 +1596,17 @@ def test_vertex_ai_tool_call_id_format():
         tool_id = tool["id"]
 
         # Should start with 'call_'
-        assert tool_id.startswith(
-            "call_"
-        ), f"ID should start with 'call_', got: {tool_id}"
+        assert tool_id.startswith("call_"), f"ID should start with 'call_', got: {tool_id}"
 
         # Should have exactly 33 total characters (call_ + 28 hex chars)
-        assert (
-            len(tool_id) == 33
-        ), f"ID should be 33 characters long, got {len(tool_id)}: {tool_id}"
+        assert len(tool_id) == 33, f"ID should be 33 characters long, got {len(tool_id)}: {tool_id}"
 
         # The part after 'call_' should be 28 hex characters
         hex_part = tool_id[5:]  # Remove 'call_' prefix
-        assert (
-            len(hex_part) == 28
-        ), f"Hex part should be 28 characters, got {len(hex_part)}: {hex_part}"
+        assert len(hex_part) == 28, f"Hex part should be 28 characters, got {len(hex_part)}: {hex_part}"
 
         # Should only contain valid hex characters
-        assert re.match(
-            r"^[0-9a-f]{28}$", hex_part
-        ), f"Should contain only lowercase hex chars, got: {hex_part}"
+        assert re.match(r"^[0-9a-f]{28}$", hex_part), f"Should contain only lowercase hex chars, got: {hex_part}"
 
     # Verify IDs are unique
     assert tools[0]["id"] != tools[1]["id"], "Tool call IDs should be unique"
@@ -1707,9 +1623,7 @@ def test_vertex_ai_tool_call_id_format():
             ids_generated.add(test_tools[0]["id"])
 
     # All generated IDs should be unique
-    assert (
-        len(ids_generated) == 10
-    ), f"All 10 IDs should be unique, got {len(ids_generated)} unique IDs"
+    assert len(ids_generated) == 10, f"All 10 IDs should be unique, got {len(ids_generated)} unique IDs"
 
 
 def test_vertex_ai_code_line_length():
@@ -1738,14 +1652,10 @@ def test_vertex_ai_code_line_length():
 
     # Check that the line is 40 characters or less (excluding indentation)
     line_length = len(id_line)
-    assert (
-        line_length <= 40
-    ), f"ID generation line is {line_length} characters, should be ≤40: {id_line}"
+    assert line_length <= 40, f"ID generation line is {line_length} characters, should be ≤40: {id_line}"
 
     # Verify it contains the expected UUID format
-    assert (
-        "uuid.uuid4().hex[:28]" in id_line
-    ), f"Line should contain shortened UUID format: {id_line}"
+    assert "uuid.uuid4().hex[:28]" in id_line, f"Line should contain shortened UUID format: {id_line}"
 
 
 def test_vertex_ai_map_google_maps_tool_simple():
@@ -1859,19 +1769,16 @@ def test_vertex_ai_penalty_parameters_validation():
 
     for model, should_support in test_cases:
         # Test _supports_penalty_parameters method
-        assert (
-            v._supports_penalty_parameters(model) == should_support
-        ), f"Model {model} penalty support should be {should_support}"
+        assert v._supports_penalty_parameters(model) == should_support, (
+            f"Model {model} penalty support should be {should_support}"
+        )
 
         # Test get_supported_openai_params method
         supported_params = v.get_supported_openai_params(model)
-        has_penalty_params = (
-            "frequency_penalty" in supported_params
-            and "presence_penalty" in supported_params
+        has_penalty_params = "frequency_penalty" in supported_params and "presence_penalty" in supported_params
+        assert has_penalty_params == should_support, (
+            f"Model {model} should {'include' if should_support else 'exclude'} penalty params in supported list"
         )
-        assert (
-            has_penalty_params == should_support
-        ), f"Model {model} should {'include' if should_support else 'exclude'} penalty params in supported list"
 
     # Test parameter mapping for unsupported model
     model = "gemini-2.5-pro-preview-06-05"
@@ -1891,12 +1798,8 @@ def test_vertex_ai_penalty_parameters_validation():
     )
 
     # Penalty parameters should be filtered out for unsupported models
-    assert (
-        "frequency_penalty" not in result
-    ), "frequency_penalty should be filtered out for unsupported model"
-    assert (
-        "presence_penalty" not in result
-    ), "presence_penalty should be filtered out for unsupported model"
+    assert "frequency_penalty" not in result, "frequency_penalty should be filtered out for unsupported model"
+    assert "presence_penalty" not in result, "presence_penalty should be filtered out for unsupported model"
 
     # Other parameters should still be included
     assert "temperature" in result, "temperature should still be included"
@@ -1925,18 +1828,18 @@ def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
 
     for model in gemini_3_models:
         # Test _supports_penalty_parameters method
-        assert (
-            v._supports_penalty_parameters(model) == False
-        ), f"Gemini 3 model {model} should not support penalty parameters"
+        assert v._supports_penalty_parameters(model) == False, (
+            f"Gemini 3 model {model} should not support penalty parameters"
+        )
 
         # Test get_supported_openai_params method
         supported_params = v.get_supported_openai_params(model)
-        assert (
-            "frequency_penalty" not in supported_params
-        ), f"frequency_penalty should not be in supported params for {model}"
-        assert (
-            "presence_penalty" not in supported_params
-        ), f"presence_penalty should not be in supported params for {model}"
+        assert "frequency_penalty" not in supported_params, (
+            f"frequency_penalty should not be in supported params for {model}"
+        )
+        assert "presence_penalty" not in supported_params, (
+            f"presence_penalty should not be in supported params for {model}"
+        )
 
         # Test parameter mapping - penalty params should be filtered out
         non_default_params = {
@@ -1955,36 +1858,28 @@ def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
         )
 
         # Penalty parameters should be filtered out for Gemini 3 models
-        assert (
-            "frequency_penalty" not in result
-        ), f"frequency_penalty should be filtered out for Gemini 3 model {model}"
-        assert (
-            "presence_penalty" not in result
-        ), f"presence_penalty should be filtered out for Gemini 3 model {model}"
+        assert "frequency_penalty" not in result, f"frequency_penalty should be filtered out for Gemini 3 model {model}"
+        assert "presence_penalty" not in result, f"presence_penalty should be filtered out for Gemini 3 model {model}"
 
         # Other parameters should still be included
-        assert (
-            "temperature" in result
-        ), f"temperature should still be included for Gemini 3 model {model}"
-        assert (
-            "max_output_tokens" in result
-        ), f"max_output_tokens should still be included for Gemini 3 model {model}"
+        assert "temperature" in result, f"temperature should still be included for Gemini 3 model {model}"
+        assert "max_output_tokens" in result, f"max_output_tokens should still be included for Gemini 3 model {model}"
         assert result["temperature"] == 0.7
         assert result["max_output_tokens"] == 100
 
     # Test that non-Gemini 3 models still support penalty parameters (if they're not in the unsupported list)
     non_gemini_3_model = "gemini-2.5-pro"
-    assert (
-        v._supports_penalty_parameters(non_gemini_3_model) == True
-    ), f"Non-Gemini 3 model {non_gemini_3_model} should support penalty parameters"
+    assert v._supports_penalty_parameters(non_gemini_3_model) == True, (
+        f"Non-Gemini 3 model {non_gemini_3_model} should support penalty parameters"
+    )
 
     supported_params = v.get_supported_openai_params(non_gemini_3_model)
-    assert (
-        "frequency_penalty" in supported_params
-    ), f"frequency_penalty should be in supported params for {non_gemini_3_model}"
-    assert (
-        "presence_penalty" in supported_params
-    ), f"presence_penalty should be in supported params for {non_gemini_3_model}"
+    assert "frequency_penalty" in supported_params, (
+        f"frequency_penalty should be in supported params for {non_gemini_3_model}"
+    )
+    assert "presence_penalty" in supported_params, (
+        f"presence_penalty should be in supported params for {non_gemini_3_model}"
+    )
 
 
 def test_vertex_ai_annotation_streaming_events():
@@ -2007,14 +1902,10 @@ def test_vertex_ai_annotation_streaming_events():
     chunk_with_annotations = {
         "candidates": [
             {
-                "content": {
-                    "parts": [{"text": "The weather in San Francisco today is clear."}]
-                },
+                "content": {"parts": [{"text": "The weather in San Francisco today is clear."}]},
                 "groundingMetadata": {
                     "webSearchQueries": ["weather San Francisco today"],
-                    "searchEntryPoint": {
-                        "renderedContent": "<div>Search results</div>"
-                    },
+                    "searchEntryPoint": {"renderedContent": "<div>Search results</div>"},
                     "groundingChunks": [
                         {
                             "web": {
@@ -2046,9 +1937,7 @@ def test_vertex_ai_annotation_streaming_events():
     }
 
     # Create iterator and parse chunk
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
-    )
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=litellm_logging)
     streaming_chunk = iterator.chunk_parser(chunk_with_annotations)
 
     # Verify the chunk was parsed correctly
@@ -2170,12 +2059,8 @@ def test_vertex_ai_annotation_conversion():
     }
 
     # Convert grounding metadata to annotations
-    content_text = (
-        "The weather in San Francisco is currently 72°F and the time is 2:30 PM"
-    )
-    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
-        [grounding_metadata], content_text
-    )
+    content_text = "The weather in San Francisco is currently 72°F and the time is 2:30 PM"
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations([grounding_metadata], content_text)
 
     # Verify annotations were created
     assert len(annotations) == 3  # One for each grounding support
@@ -2217,9 +2102,7 @@ def test_vertex_ai_annotation_empty_grounding_metadata():
 
     # Test with empty grounding metadata
     empty_metadata = {}
-    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
-        [empty_metadata], "test content"
-    )
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations([empty_metadata], "test content")
     assert len(annotations) == 0
 
     # Test with missing groundingSupports
@@ -2227,9 +2110,7 @@ def test_vertex_ai_annotation_empty_grounding_metadata():
         "webSearchQueries": ["test query"],
         "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Test"}}],
     }
-    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
-        [metadata_no_supports], "test content"
-    )
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata_no_supports], "test content")
     assert len(annotations) == 0
 
     # Test with empty groundingSupports
@@ -2257,13 +2138,8 @@ def test_is_gemini_3_or_newer():
     assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-pro-preview") == True
     assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-flash") == True
     assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-pro") == True
-    assert (
-        VertexGeminiConfig._is_gemini_3_or_newer("vertex_ai/gemini-3-pro-preview")
-        == True
-    )
-    assert (
-        VertexGeminiConfig._is_gemini_3_or_newer("gemini/gemini-3-pro-preview") == True
-    )
+    assert VertexGeminiConfig._is_gemini_3_or_newer("vertex_ai/gemini-3-pro-preview") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini/gemini-3-pro-preview") == True
 
     # Gemini 2.5 and older models
     assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-2.5-pro") == False
@@ -2283,21 +2159,11 @@ def test_forward_gemini_function_call_id_vertex_vs_google_ai_studio():
     )
 
     model = "gemini-3.5-flash"
-    assert (
-        VertexGeminiConfig._forward_gemini_function_call_id(model, "vertex_ai") is False
-    )
-    assert (
-        VertexGeminiConfig._forward_gemini_function_call_id(model, "vertex_ai_beta")
-        is False
-    )
+    assert VertexGeminiConfig._forward_gemini_function_call_id(model, "vertex_ai") is False
+    assert VertexGeminiConfig._forward_gemini_function_call_id(model, "vertex_ai_beta") is False
     assert VertexGeminiConfig._forward_gemini_function_call_id(model, "gemini") is True
     assert VertexGeminiConfig._forward_gemini_function_call_id(model, None) is False
-    assert (
-        VertexGeminiConfig._forward_gemini_function_call_id(
-            "gemini-2.5-flash", "gemini"
-        )
-        is False
-    )
+    assert VertexGeminiConfig._forward_gemini_function_call_id("gemini-2.5-flash", "gemini") is False
 
 
 def test_vertex_ai_gemini_35_tool_calls_omit_function_call_id():
@@ -2574,12 +2440,8 @@ def test_media_resolution_from_detail_parameter():
     )
 
     # Test detail -> media_resolution enum mapping
-    assert _convert_detail_to_media_resolution_enum("low") == {
-        "level": "MEDIA_RESOLUTION_LOW"
-    }
-    assert _convert_detail_to_media_resolution_enum("high") == {
-        "level": "MEDIA_RESOLUTION_HIGH"
-    }
+    assert _convert_detail_to_media_resolution_enum("low") == {"level": "MEDIA_RESOLUTION_LOW"}
+    assert _convert_detail_to_media_resolution_enum("high") == {"level": "MEDIA_RESOLUTION_HIGH"}
     assert _convert_detail_to_media_resolution_enum("auto") is None
     assert _convert_detail_to_media_resolution_enum(None) is None
 
@@ -2598,9 +2460,7 @@ def test_media_resolution_from_detail_parameter():
         }
     ]
 
-    contents = _gemini_convert_messages_with_history(
-        messages=messages, model="gemini-3-pro-preview"
-    )
+    contents = _gemini_convert_messages_with_history(messages=messages, model="gemini-3-pro-preview")
 
     # Verify media_resolution is set at the Part level (not inside inline_data)
     assert len(contents) == 1
@@ -2638,9 +2498,7 @@ def test_media_resolution_low_detail():
         }
     ]
 
-    contents = _gemini_convert_messages_with_history(
-        messages=messages, model="gemini-3-pro-preview"
-    )
+    contents = _gemini_convert_messages_with_history(messages=messages, model="gemini-3-pro-preview")
 
     # Find the part with inline_data
     image_part = None
@@ -2737,9 +2595,7 @@ def test_media_resolution_per_part():
         }
     ]
 
-    contents = _gemini_convert_messages_with_history(
-        messages=messages, model="gemini-3-pro-preview"
-    )
+    contents = _gemini_convert_messages_with_history(messages=messages, model="gemini-3-pro-preview")
 
     # Should have one content with multiple parts
     assert len(contents) == 1
@@ -2782,9 +2638,7 @@ def test_media_resolution_only_for_gemini_3_models():
         }
     ]
 
-    contents = _gemini_convert_messages_with_history(
-        messages=messages, model="gemini-2.5-pro"
-    )
+    contents = _gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-pro")
     image_part = None
     for part in contents[0]["parts"]:
         if "inline_data" in part:
@@ -2888,9 +2742,7 @@ def test_gemini_image_models_excluded_from_thinking():
         )
 
         # None of these should have thinkingConfig
-        assert (
-            "thinkingConfig" not in result
-        ), f"Model {model} should not have thinkingConfig"
+        assert "thinkingConfig" not in result, f"Model {model} should not have thinkingConfig"
 
 
 def test_partial_json_chunk_after_first_chunk():
@@ -2921,9 +2773,7 @@ def test_partial_json_chunk_after_first_chunk():
     first_chunk = '{"candidates": [{"content": {"parts": [{"text": "Hello"}]}}]}'
     result1 = iterator.handle_valid_json_chunk(first_chunk)
     assert result1 is not None, "First complete chunk should parse OK"
-    assert (
-        iterator.sent_first_chunk is True
-    ), "sent_first_chunk should be True after first chunk"
+    assert iterator.sent_first_chunk is True, "sent_first_chunk should be True after first chunk"
 
     # Later chunk arrives PARTIAL (simulating network fragmentation)
     partial_chunk = '{"candidates": [{"content":'
@@ -2931,9 +2781,7 @@ def test_partial_json_chunk_after_first_chunk():
 
     # Should switch to accumulation mode instead of crashing
     assert result2 is None, "Partial chunk should return None while accumulating"
-    assert (
-        iterator.chunk_type == "accumulated_json"
-    ), "Should switch to accumulated_json mode"
+    assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
 
 
 def test_partial_json_chunk_on_first_chunk():
@@ -2953,9 +2801,7 @@ def test_partial_json_chunk_on_first_chunk():
     result = iterator.handle_valid_json_chunk(partial)
 
     assert result is None, "Partial first chunk should return None"
-    assert (
-        iterator.chunk_type == "accumulated_json"
-    ), "Should switch to accumulated_json mode"
+    assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
 
 
 def test_accumulated_json_does_not_reparse_every_fragment():
@@ -2984,9 +2830,7 @@ def test_accumulated_json_does_not_reparse_every_fragment():
     iterator.chunk_type = "accumulated_json"
 
     text = "x" * 200_000  # no braces/brackets so only the final fragment closes
-    blob = json.dumps(
-        {"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]}
-    )
+    blob = json.dumps({"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]})
     fragments = [blob[i : i + 4096] for i in range(0, len(blob), 4096)]
     assert len(fragments) > 10, "need a multi-fragment payload to exercise the bug"
 
@@ -3092,17 +2936,11 @@ def test_vertex_ai_multiple_tool_types_separate_objects():
     tool_types_in_first = [k for k in tools[0].keys()]
     tool_types_in_second = [k for k in tools[1].keys()]
 
-    assert (
-        len(tool_types_in_first) == 1
-    ), f"First Tool should have exactly 1 type, got {tool_types_in_first}"
-    assert (
-        len(tool_types_in_second) == 1
-    ), f"Second Tool should have exactly 1 type, got {tool_types_in_second}"
+    assert len(tool_types_in_first) == 1, f"First Tool should have exactly 1 type, got {tool_types_in_first}"
+    assert len(tool_types_in_second) == 1, f"Second Tool should have exactly 1 type, got {tool_types_in_second}"
 
     # Verify the correct tool types are present
-    assert (
-        "enterpriseWebSearch" in tools[0]
-    ), "First Tool should contain enterpriseWebSearch"
+    assert "enterpriseWebSearch" in tools[0], "First Tool should contain enterpriseWebSearch"
     assert "url_context" in tools[1], "Second Tool should contain url_context"
 
 
@@ -3180,9 +3018,7 @@ def test_vertex_ai_single_tool_type_still_works():
     v = VertexGeminiConfig()
     optional_params = {}
 
-    tools = v._map_function(
-        value=[{"code_execution": {}}], optional_params=optional_params
-    )
+    tools = v._map_function(value=[{"code_execution": {}}], optional_params=optional_params)
 
     assert len(tools) == 1
     assert "code_execution" in tools[0]
@@ -3457,17 +3293,11 @@ def test_vertex_ai_openai_web_search_tool_transformation():
     optional_params = {}
 
     # Test web_search transformation
-    tools = v._map_function(
-        value=[{"type": "web_search"}], optional_params=optional_params
-    )
+    tools = v._map_function(value=[{"type": "web_search"}], optional_params=optional_params)
 
     assert len(tools) == 1, f"Expected 1 Tool object, got {len(tools)}"
-    assert (
-        "googleSearch" in tools[0]
-    ), f"Expected googleSearch in tool, got {tools[0].keys()}"
-    assert (
-        tools[0]["googleSearch"] == {}
-    ), f"Expected empty googleSearch config, got {tools[0]['googleSearch']}"
+    assert "googleSearch" in tools[0], f"Expected googleSearch in tool, got {tools[0].keys()}"
+    assert tools[0]["googleSearch"] == {}, f"Expected empty googleSearch config, got {tools[0]['googleSearch']}"
 
 
 def test_vertex_ai_openai_web_search_preview_tool_transformation():
@@ -3484,17 +3314,11 @@ def test_vertex_ai_openai_web_search_preview_tool_transformation():
     optional_params = {}
 
     # Test web_search_preview transformation
-    tools = v._map_function(
-        value=[{"type": "web_search_preview"}], optional_params=optional_params
-    )
+    tools = v._map_function(value=[{"type": "web_search_preview"}], optional_params=optional_params)
 
     assert len(tools) == 1, f"Expected 1 Tool object, got {len(tools)}"
-    assert (
-        "googleSearch" in tools[0]
-    ), f"Expected googleSearch in tool, got {tools[0].keys()}"
-    assert (
-        tools[0]["googleSearch"] == {}
-    ), f"Expected empty googleSearch config, got {tools[0]['googleSearch']}"
+    assert "googleSearch" in tools[0], f"Expected googleSearch in tool, got {tools[0].keys()}"
+    assert tools[0]["googleSearch"] == {}, f"Expected empty googleSearch config, got {tools[0]['googleSearch']}"
 
 
 def test_vertex_ai_openai_web_search_with_function_tools():
@@ -3578,9 +3402,7 @@ def test_vertex_ai_multiple_function_declarations_grouped():
     )
 
     # Should have only 1 Tool object (function declarations grouped)
-    assert (
-        len(tools) == 1
-    ), f"Expected 1 Tool object for grouped functions, got {len(tools)}"
+    assert len(tools) == 1, f"Expected 1 Tool object for grouped functions, got {len(tools)}"
 
     # Should contain function_declarations with 2 functions
     assert "function_declarations" in tools[0]
@@ -3706,26 +3528,20 @@ def test_gemini_image_gen_usage_metadata_prompt_vs_completion_separation():
     assert result.total_tokens == 1391
 
     # CRITICAL: Prompt tokens details should show NO image tokens (text-only input)
-    assert (
-        result.prompt_tokens_details.text_tokens == 101
-    ), "Prompt text tokens should be 101"
-    assert (
-        result.prompt_tokens_details.image_tokens is None
-    ), "Prompt image tokens should be None (text-only input, no images in prompt)"
-    assert (
-        result.prompt_tokens_details.audio_tokens is None
-    ), "Prompt audio tokens should be None"
+    assert result.prompt_tokens_details.text_tokens == 101, "Prompt text tokens should be 101"
+    assert result.prompt_tokens_details.image_tokens is None, (
+        "Prompt image tokens should be None (text-only input, no images in prompt)"
+    )
+    assert result.prompt_tokens_details.audio_tokens is None, "Prompt audio tokens should be None"
 
     # Completion tokens details should show the generated image tokens
-    assert (
-        result.completion_tokens_details.image_tokens == 1290
-    ), "Completion image tokens should be 1290 (generated image)"
+    assert result.completion_tokens_details.image_tokens == 1290, (
+        "Completion image tokens should be 1290 (generated image)"
+    )
 
     # Verify text_tokens is auto-calculated for completion
     # candidatesTokenCount (1290) - image_tokens (1290) = 0
-    assert (
-        result.completion_tokens_details.text_tokens == 0
-    ), "Completion text tokens should be 0 (image-only response)"
+    assert result.completion_tokens_details.text_tokens == 0, "Completion text tokens should be 0 (image-only response)"
 
 
 def test_file_object_detail_parameter():
@@ -3751,9 +3567,7 @@ def test_file_object_detail_parameter():
         }
     ]
 
-    contents = _gemini_convert_messages_with_history(
-        messages=messages, model="gemini-3-pro-preview"
-    )
+    contents = _gemini_convert_messages_with_history(messages=messages, model="gemini-3-pro-preview")
 
     # Verify media_resolution is set for file objects
     assert len(contents) == 1
@@ -3767,9 +3581,7 @@ def test_file_object_detail_parameter():
             break
 
     assert file_part is not None, "File part should exist"
-    assert (
-        "media_resolution" in file_part
-    ), "media_resolution should be set for file objects"
+    assert "media_resolution" in file_part, "media_resolution should be set for file objects"
     assert file_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_LOW"}
 
 
@@ -3796,9 +3608,7 @@ def test_video_metadata_fps():
         }
     ]
 
-    contents = _gemini_convert_messages_with_history(
-        messages=messages, model="gemini-3-pro-preview"
-    )
+    contents = _gemini_convert_messages_with_history(messages=messages, model="gemini-3-pro-preview")
 
     # Find the file part
     file_part = None
@@ -3839,9 +3649,7 @@ def test_video_metadata_complete():
         }
     ]
 
-    contents = _gemini_convert_messages_with_history(
-        messages=messages, model="gemini-3-pro-preview"
-    )
+    contents = _gemini_convert_messages_with_history(messages=messages, model="gemini-3-pro-preview")
 
     # Find the file part
     file_part = None
@@ -3884,9 +3692,7 @@ def test_detail_and_video_metadata_combined():
         }
     ]
 
-    contents = _gemini_convert_messages_with_history(
-        messages=messages, model="gemini-3-pro-preview"
-    )
+    contents = _gemini_convert_messages_with_history(messages=messages, model="gemini-3-pro-preview")
 
     # Find the file part
     file_part = None
@@ -3910,18 +3716,10 @@ def test_new_detail_levels():
     )
 
     # Test mapping function
-    assert _convert_detail_to_media_resolution_enum("low") == {
-        "level": "MEDIA_RESOLUTION_LOW"
-    }
-    assert _convert_detail_to_media_resolution_enum("medium") == {
-        "level": "MEDIA_RESOLUTION_MEDIUM"
-    }
-    assert _convert_detail_to_media_resolution_enum("high") == {
-        "level": "MEDIA_RESOLUTION_HIGH"
-    }
-    assert _convert_detail_to_media_resolution_enum("ultra_high") == {
-        "level": "MEDIA_RESOLUTION_ULTRA_HIGH"
-    }
+    assert _convert_detail_to_media_resolution_enum("low") == {"level": "MEDIA_RESOLUTION_LOW"}
+    assert _convert_detail_to_media_resolution_enum("medium") == {"level": "MEDIA_RESOLUTION_MEDIUM"}
+    assert _convert_detail_to_media_resolution_enum("high") == {"level": "MEDIA_RESOLUTION_HIGH"}
+    assert _convert_detail_to_media_resolution_enum("ultra_high") == {"level": "MEDIA_RESOLUTION_ULTRA_HIGH"}
 
     # Test with actual message transformation
     messages = [
@@ -3940,9 +3738,7 @@ def test_new_detail_levels():
         }
     ]
 
-    contents = _gemini_convert_messages_with_history(
-        messages=messages, model="gemini-3-pro-preview"
-    )
+    contents = _gemini_convert_messages_with_history(messages=messages, model="gemini-3-pro-preview")
 
     file_part = None
     for part in contents[0]["parts"]:
@@ -3992,25 +3788,19 @@ def test_video_metadata_supported_for_all_gemini_models():
                 break
 
         assert file_part is not None, f"{model}: file part should exist"
-        assert (
-            "video_metadata" in file_part
-        ), f"{model}: video_metadata should be present"
+        assert "video_metadata" in file_part, f"{model}: video_metadata should be present"
         assert file_part["video_metadata"]["fps"] == 5, f"{model}: fps should be 5"
 
     # Per-part media_resolution is Gemini 3+ only; 2.x uses generation_config global
     for model in ["gemini-3-pro-preview"]:
         contents = _gemini_convert_messages_with_history(messages=messages, model=model)
         file_part = next(p for p in contents[0]["parts"] if "file_data" in p)
-        assert (
-            "media_resolution" in file_part
-        ), f"{model}: media_resolution should be present"
+        assert "media_resolution" in file_part, f"{model}: media_resolution should be present"
 
     for model in ["gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro"]:
         contents = _gemini_convert_messages_with_history(messages=messages, model=model)
         file_part = next(p for p in contents[0]["parts"] if "file_data" in p)
-        assert (
-            "media_resolution" not in file_part
-        ), f"{model}: per-part media_resolution should not be set"
+        assert "media_resolution" not in file_part, f"{model}: per-part media_resolution should not be set"
 
 
 def test_chunk_parser_handles_prompt_feedback_block():
@@ -4034,9 +3824,7 @@ def test_chunk_parser_handles_prompt_feedback_block():
     logging_obj = Mock()
     logging_obj.optional_params = {}
 
-    streaming_obj = ModelResponseIterator(
-        streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj
-    )
+    streaming_obj = ModelResponseIterator(streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj)
 
     # Act
     result = streaming_obj.chunk_parser(blocked_chunk)
@@ -4044,9 +3832,9 @@ def test_chunk_parser_handles_prompt_feedback_block():
     # Assert
     assert result is not None, "Result should not be None"
     assert len(result.choices) == 1, "Should have exactly one choice"
-    assert (
-        result.choices[0].finish_reason == "content_filter"
-    ), f"finish_reason should be content_filter, got {result.choices[0].finish_reason}"
+    assert result.choices[0].finish_reason == "content_filter", (
+        f"finish_reason should be content_filter, got {result.choices[0].finish_reason}"
+    )
     assert result.choices[0].delta.content is None, "content should be None"
 
 
@@ -4070,9 +3858,7 @@ def test_chunk_parser_handles_prompt_feedback_safety_block():
     logging_obj = Mock()
     logging_obj.optional_params = {}
 
-    streaming_obj = ModelResponseIterator(
-        streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj
-    )
+    streaming_obj = ModelResponseIterator(streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj)
 
     # Act
     result = streaming_obj.chunk_parser(blocked_chunk)
@@ -4109,9 +3895,7 @@ def test_chunk_parser_handles_prompt_feedback_block_with_usage():
     logging_obj = Mock()
     logging_obj.optional_params = {}
 
-    streaming_obj = ModelResponseIterator(
-        streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj
-    )
+    streaming_obj = ModelResponseIterator(streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj)
 
     # Act
     result = streaming_obj.chunk_parser(blocked_chunk)
@@ -4119,23 +3903,17 @@ def test_chunk_parser_handles_prompt_feedback_block_with_usage():
     # Assert - 验证 content_filter 响应和 usage 都被正确处理
     assert result is not None, "Result should not be None"
     assert len(result.choices) == 1, "Should have exactly one choice"
-    assert (
-        result.choices[0].finish_reason == "content_filter"
-    ), f"finish_reason should be content_filter, got {result.choices[0].finish_reason}"
+    assert result.choices[0].finish_reason == "content_filter", (
+        f"finish_reason should be content_filter, got {result.choices[0].finish_reason}"
+    )
     assert result.choices[0].delta.content is None, "content should be None"
 
     # 验证 usage 信息被正确提取
     assert hasattr(result, "usage"), "result should have usage attribute"
     assert result.usage is not None, "usage should not be None"
-    assert (
-        result.usage.prompt_tokens == 8175
-    ), f"prompt_tokens should be 8175, got {result.usage.prompt_tokens}"
-    assert (
-        result.usage.completion_tokens == 0
-    ), f"completion_tokens should be 0, got {result.usage.completion_tokens}"
-    assert (
-        result.usage.total_tokens == 8175
-    ), f"total_tokens should be 8175, got {result.usage.total_tokens}"
+    assert result.usage.prompt_tokens == 8175, f"prompt_tokens should be 8175, got {result.usage.prompt_tokens}"
+    assert result.usage.completion_tokens == 0, f"completion_tokens should be 0, got {result.usage.completion_tokens}"
+    assert result.usage.total_tokens == 8175, f"total_tokens should be 8175, got {result.usage.total_tokens}"
 
 
 def test_vertex_ai_traffic_type_preserved_in_hidden_params_streaming():
@@ -4154,14 +3932,10 @@ def test_vertex_ai_traffic_type_preserved_in_hidden_params_streaming():
         },
     }
 
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=MagicMock()
-    )
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=MagicMock())
     result = iterator.chunk_parser(chunk)
 
-    assert (
-        result._hidden_params["provider_specific_fields"]["traffic_type"] == "ON_DEMAND"
-    )
+    assert result._hidden_params["provider_specific_fields"]["traffic_type"] == "ON_DEMAND"
 
 
 def test_vertex_ai_traffic_type_preserved_in_hidden_params_non_streaming():
@@ -4200,10 +3974,7 @@ def test_vertex_ai_traffic_type_preserved_in_hidden_params_non_streaming():
         encoding=None,
     )
 
-    assert (
-        result._hidden_params["provider_specific_fields"]["traffic_type"]
-        == "PROVISIONED_THROUGHPUT"
-    )
+    assert result._hidden_params["provider_specific_fields"]["traffic_type"] == "PROVISIONED_THROUGHPUT"
 
 
 def test_vertex_ai_service_tier_streaming():
@@ -4287,9 +4058,7 @@ def test_vertex_ai_traffic_type_surfaced_in_responses_api():
     from litellm.types.utils import Choices, Message
 
     model_response = ModelResponse()
-    model_response._hidden_params["provider_specific_fields"] = {
-        "traffic_type": "ON_DEMAND"
-    }
+    model_response._hidden_params["provider_specific_fields"] = {"traffic_type": "ON_DEMAND"}
     model_response.choices = [
         Choices(
             message=Message(content="Hello", role="assistant"),
@@ -4298,15 +4067,15 @@ def test_vertex_ai_traffic_type_surfaced_in_responses_api():
         )
     ]
 
-    responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-        request_input="test",
-        chat_completion_response=model_response,
-        responses_api_request={},
+    responses_api_response = (
+        LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="test",
+            chat_completion_response=model_response,
+            responses_api_request={},
+        )
     )
 
-    assert (
-        responses_api_response.provider_specific_fields["traffic_type"] == "ON_DEMAND"
-    )
+    assert responses_api_response.provider_specific_fields["traffic_type"] == "ON_DEMAND"
 
 
 def test_vertex_ai_web_search_options_parameter():
@@ -4339,12 +4108,8 @@ def test_vertex_ai_web_search_options_parameter():
     _tools = v._map_web_search_options(web_search_options)
 
     # Verify the tool is a googleSearch tool
-    assert (
-        "googleSearch" in _tools
-    ), f"Expected googleSearch in tool, got {_tools.keys()}"
-    assert (
-        _tools["googleSearch"] == {}
-    ), f"Expected empty googleSearch config, got {_tools['googleSearch']}"
+    assert "googleSearch" in _tools, f"Expected googleSearch in tool, got {_tools.keys()}"
+    assert _tools["googleSearch"] == {}, f"Expected empty googleSearch config, got {_tools['googleSearch']}"
 
 
 def test_vertex_ai_web_search_options_in_map_openai_params():
@@ -4372,9 +4137,7 @@ def test_vertex_ai_web_search_options_in_map_openai_params():
     # Call the transformation that happens in map_openai_params
     # Lines 1075-1079 in vertex_and_google_ai_studio_gemini.py (after fix)
     web_search_value = optional_params.get("web_search_options")
-    if isinstance(
-        web_search_value, dict
-    ):  # Fixed: removed 'value and' check to support empty dicts
+    if isinstance(web_search_value, dict):  # Fixed: removed 'value and' check to support empty dicts
         _tools = v._map_web_search_options(web_search_value)
         # Simulate _add_tools_to_optional_params
         optional_params = v._add_tools_to_optional_params(optional_params, [_tools])
@@ -4386,12 +4149,8 @@ def test_vertex_ai_web_search_options_in_map_openai_params():
     assert "tools" in optional_params, "tools should be added to optional_params"
     assert len(optional_params["tools"]) == 1, "Should have exactly one tool"
     assert "googleSearch" in optional_params["tools"][0], "Tool should be googleSearch"
-    assert (
-        optional_params["tools"][0]["googleSearch"] == {}
-    ), "googleSearch should be empty config"
-    assert (
-        "web_search_options" not in optional_params
-    ), "web_search_options should be removed after transformation"
+    assert optional_params["tools"][0]["googleSearch"] == {}, "googleSearch should be empty config"
+    assert "web_search_options" not in optional_params, "web_search_options should be removed after transformation"
 
 
 def test_vertex_ai_service_tier_in_map_openai_params():
@@ -4479,24 +4238,16 @@ def test_vertex_ai_usage_metadata_with_video_tokens_in_prompt():
 
     # Verify prompt token details include video tokens
     assert result.prompt_tokens_details is not None
-    assert (
-        result.prompt_tokens_details.video_tokens == 10240
-    ), "Prompt video tokens should be 10240"
-    assert (
-        result.prompt_tokens_details.text_tokens == 9
-    ), "Prompt text tokens should be 9"
-    assert (
-        result.prompt_tokens_details.audio_tokens == 200
-    ), "Prompt audio tokens should be 200"
+    assert result.prompt_tokens_details.video_tokens == 10240, "Prompt video tokens should be 10240"
+    assert result.prompt_tokens_details.text_tokens == 9, "Prompt text tokens should be 9"
+    assert result.prompt_tokens_details.audio_tokens == 200, "Prompt audio tokens should be 200"
 
     # Verify completion token details
     assert result.completion_tokens_details is not None
-    assert (
-        result.completion_tokens_details.text_tokens == 79
-    ), "Completion text tokens should be 79"
-    assert (
-        result.completion_tokens_details.video_tokens is None
-    ), "Completion video tokens should be None (text-only response)"
+    assert result.completion_tokens_details.text_tokens == 79, "Completion text tokens should be 79"
+    assert result.completion_tokens_details.video_tokens is None, (
+        "Completion video tokens should be None (text-only response)"
+    )
 
 
 def test_vertex_ai_usage_metadata_with_video_tokens_in_candidates():
@@ -4526,17 +4277,11 @@ def test_vertex_ai_usage_metadata_with_video_tokens_in_candidates():
 
     assert result.completion_tokens == 10330
     assert result.completion_tokens_details is not None
-    assert (
-        result.completion_tokens_details.video_tokens == 10240
-    ), "Completion video tokens should be 10240"
-    assert (
-        result.completion_tokens_details.text_tokens == 90
-    ), "Completion text tokens should be 90"
+    assert result.completion_tokens_details.video_tokens == 10240, "Completion video tokens should be 10240"
+    assert result.completion_tokens_details.text_tokens == 90, "Completion text tokens should be 90"
 
     # Verify prompt side has no video tokens
-    assert (
-        result.prompt_tokens_details.video_tokens is None
-    ), "Prompt video tokens should be None (text-only input)"
+    assert result.prompt_tokens_details.video_tokens is None, "Prompt video tokens should be None (text-only input)"
 
 
 def test_vertex_ai_usage_metadata_video_tokens_auto_calculated_text():
@@ -4562,9 +4307,9 @@ def test_vertex_ai_usage_metadata_video_tokens_auto_calculated_text():
 
     assert result.completion_tokens_details.video_tokens == 10240
     # text = 10330 - 10240 = 90
-    assert (
-        result.completion_tokens_details.text_tokens == 90
-    ), "text_tokens should be auto-calculated as candidatesTokenCount - video_tokens"
+    assert result.completion_tokens_details.text_tokens == 90, (
+        "text_tokens should be auto-calculated as candidatesTokenCount - video_tokens"
+    )
 
 
 def test_vertex_ai_usage_metadata_video_tokens_with_caching():
@@ -4595,9 +4340,9 @@ def test_vertex_ai_usage_metadata_video_tokens_with_caching():
     result = v._calculate_usage(completion_response=completion_response)
 
     # video tokens should be reduced by cached amount: 10240 - 5120 = 5120
-    assert (
-        result.prompt_tokens_details.video_tokens == 5120
-    ), "Prompt video tokens should be 10240 - 5120 (cached) = 5120"
+    assert result.prompt_tokens_details.video_tokens == 5120, (
+        "Prompt video tokens should be 10240 - 5120 (cached) = 5120"
+    )
     assert result.prompt_tokens_details.text_tokens == 9
     assert result.prompt_tokens_details.audio_tokens == 200
 
@@ -4643,9 +4388,9 @@ def test_vertex_ai_usage_metadata_with_document_tokens_in_prompt():
 
     # DOCUMENT tokens should be included in text_tokens: 8 (TEXT) + 774 (DOCUMENT) = 782
     assert result.prompt_tokens_details is not None
-    assert (
-        result.prompt_tokens_details.text_tokens == 782
-    ), "DOCUMENT modality tokens should be added to text_tokens (8 TEXT + 774 DOCUMENT = 782)"
+    assert result.prompt_tokens_details.text_tokens == 782, (
+        "DOCUMENT modality tokens should be added to text_tokens (8 TEXT + 774 DOCUMENT = 782)"
+    )
 
     # Verify completion token details
     assert result.completion_tokens_details is not None
@@ -4680,9 +4425,7 @@ def test_vertex_ai_usage_metadata_with_document_tokens_cached():
 
     # DOCUMENT cached tokens map to cached_text_tokens, so:
     # text_tokens = (8 TEXT + 774 DOCUMENT) - 400 cached = 382
-    assert (
-        result.prompt_tokens_details.text_tokens == 382
-    ), "text_tokens should be (8 + 774) - 400 cached = 382"
+    assert result.prompt_tokens_details.text_tokens == 382, "text_tokens should be (8 + 774) - 400 cached = 382"
     assert result.prompt_tokens_details.cached_tokens == 400
 
 
@@ -5152,9 +4895,7 @@ def test_mid_stream_429_error_raises_during_iteration():
                 {
                     "content": {
                         "role": "model",
-                        "parts": [
-                            {"text": "Let me think about this...", "thought": True}
-                        ],
+                        "parts": [{"text": "Let me think about this...", "thought": True}],
                     },
                     "index": 0,
                 }
@@ -5174,9 +4915,7 @@ def test_mid_stream_429_error_raises_during_iteration():
                 {
                     "content": {
                         "role": "model",
-                        "parts": [
-                            {"text": "I'll generate the image now.", "thought": True}
-                        ],
+                        "parts": [{"text": "I'll generate the image now.", "thought": True}],
                     },
                     "index": 0,
                 }
@@ -5219,9 +4958,7 @@ def test_mid_stream_429_error_raises_during_iteration():
                 results.append(chunk)
 
     # Verify: received normal chunks before the error
-    assert (
-        len(results) >= 1
-    ), "Should have received at least 1 normal chunk before the error"
+    assert len(results) >= 1, "Should have received at least 1 normal chunk before the error"
 
     # Verify: 429 error is properly raised
     assert exc_info.value.status_code == 429
@@ -5414,9 +5151,7 @@ def _accumulating_gemini_iterator():
         ModelResponseIterator,
     )
 
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=MagicMock()
-    )
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=MagicMock())
     iterator.chunk_type = "accumulated_json"
     return iterator
 

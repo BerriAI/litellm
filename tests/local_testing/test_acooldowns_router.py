@@ -9,9 +9,7 @@ import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import concurrent
 
 from dotenv import load_dotenv
@@ -187,9 +185,7 @@ async def test_cooldown_same_model_name(sync_mode):
             print("\n litellm model ids ", model_ids)
 
             # example litellm_model_names ['azure/gpt-4.1-mini-ModelID-64321', 'azure/gpt-4.1-mini-ModelID-63960']
-            assert (
-                model_ids[0] != model_ids[1]
-            )  # ensure both models have a uuid added, and they have different names
+            assert model_ids[0] != model_ids[1]  # ensure both models have a uuid added, and they have different names
 
             print("\ngot response\n", response)
         else:
@@ -204,9 +200,7 @@ async def test_cooldown_same_model_name(sync_mode):
             print("\n litellm model ids ", model_ids)
 
             # example litellm_model_names ['azure/gpt-4.1-mini-ModelID-64321', 'azure/gpt-4.1-mini-ModelID-63960']
-            assert (
-                model_ids[0] != model_ids[1]
-            )  # ensure both models have a uuid added, and they have different names
+            assert model_ids[0] != model_ids[1]  # ensure both models have a uuid added, and they have different names
 
             print("\ngot response\n", response)
     except Exception as e:

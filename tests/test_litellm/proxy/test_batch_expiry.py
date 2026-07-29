@@ -8,9 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -46,13 +44,9 @@ def llm_router() -> Router:
 
 
 def _setup_proxy(monkeypatch, llm_router: Router):
-    proxy_logging_obj = ProxyLogging(
-        user_api_key_cache=DualCache(default_in_memory_ttl=1)
-    )
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache(default_in_memory_ttl=1))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj)
 
 
 def _make_batch_response() -> LiteLLMBatch:
@@ -181,9 +175,7 @@ class TestBatchEndpointTeamOverride:
 class TestBatchEndpointPolicyMetadata:
     """Batch create must not forward LiteLLM policy tracking via OpenAI metadata."""
 
-    def test_create_batch_does_not_forward_applied_policies_metadata(
-        self, monkeypatch, llm_router
-    ):
+    def test_create_batch_does_not_forward_applied_policies_metadata(self, monkeypatch, llm_router):
         from litellm.proxy.policy_engine.attachment_registry import (
             get_attachment_registry,
         )
@@ -244,9 +236,7 @@ class TestBatchEndpointPolicyMetadata:
             attachment_registry._initialized = False
 
         assert captured_kwargs.get("metadata") in (None, {})
-        assert (
-            "global-baseline" in captured_kwargs["litellm_metadata"]["applied_policies"]
-        )
+        assert "global-baseline" in captured_kwargs["litellm_metadata"]["applied_policies"]
 
 
 class TestBatchEndpointTeamValidation:

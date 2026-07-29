@@ -87,9 +87,7 @@ def handle_model_list(available_models: list[str], current_model: str):
         print(f"  {marker} {i}. {model}")
 
 
-def handle_model_switch(
-    available_models: list[str], current_model: str
-) -> tuple[str, bool]:
+def handle_model_switch(available_models: list[str], current_model: str) -> tuple[str, bool]:
     """
     Handle model switching
 
@@ -146,9 +144,7 @@ async def stream_response(client, user_input: str):
                         print(msg.delta.text, end="", flush=True)
                 elif msg.type == "content_block_start":
                     # Start of content block
-                    if hasattr(msg, "content_block") and hasattr(
-                        msg.content_block, "text"
-                    ):
+                    if hasattr(msg, "content_block") and hasattr(msg.content_block, "text"):
                         print(msg.content_block.text, end="", flush=True)
 
             # Fallback to original content handling

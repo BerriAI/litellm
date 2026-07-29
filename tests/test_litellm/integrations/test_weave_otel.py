@@ -32,16 +32,11 @@ def test_get_weave_otel_config():
         assert config.endpoint == "https://trace.wandb.ai/otel/v1/traces"
 
         # Verify environment variables were set
-        assert (
-            os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"]
-            == "https://trace.wandb.ai/otel/v1/traces"
-        )
+        assert os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] == "https://trace.wandb.ai/otel/v1/traces"
         assert os.environ["OTEL_EXPORTER_OTLP_HEADERS"] == config.otlp_auth_headers
 
     # Test ValueError when WANDB_API_KEY is missing
-    with patch.dict(
-        os.environ, {"WANDB_PROJECT_ID": "test-entity/test-project"}, clear=True
-    ):
+    with patch.dict(os.environ, {"WANDB_PROJECT_ID": "test-entity/test-project"}, clear=True):
         with pytest.raises(ValueError, match="WANDB_API_KEY must be set"):
             get_weave_otel_config()
 
@@ -65,10 +60,7 @@ def test_get_weave_otel_config_with_custom_host():
     ):
         config = get_weave_otel_config()
         assert config.endpoint == "https://custom.wandb.io/otel/v1/traces"
-        assert (
-            os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"]
-            == "https://custom.wandb.io/otel/v1/traces"
-        )
+        assert os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] == "https://custom.wandb.io/otel/v1/traces"
 
     # Test with host without http:// or https://
     with patch.dict(
@@ -105,15 +97,11 @@ def test_set_weave_specific_attributes_display_name_from_metadata():
         "model": "gpt-4",
     }
 
-    with patch(
-        "litellm.integrations.weave.weave_otel.safe_set_attribute"
-    ) as mock_safe_set:
+    with patch("litellm.integrations.weave.weave_otel.safe_set_attribute") as mock_safe_set:
         _set_weave_specific_attributes(mock_span, kwargs, None)
 
         # Should set display_name from metadata
-        mock_safe_set.assert_any_call(
-            mock_span, WeaveSpanAttributes.DISPLAY_NAME.value, "custom-display-name"
-        )
+        mock_safe_set.assert_any_call(mock_span, WeaveSpanAttributes.DISPLAY_NAME.value, "custom-display-name")
 
 
 def test_set_weave_specific_attributes_display_name_from_model():
@@ -124,15 +112,11 @@ def test_set_weave_specific_attributes_display_name_from_model():
         "metadata": {},
     }
 
-    with patch(
-        "litellm.integrations.weave.weave_otel.safe_set_attribute"
-    ) as mock_safe_set:
+    with patch("litellm.integrations.weave.weave_otel.safe_set_attribute") as mock_safe_set:
         _set_weave_specific_attributes(mock_span, kwargs, None)
 
         # Should set display_name from model
-        mock_safe_set.assert_any_call(
-            mock_span, WeaveSpanAttributes.DISPLAY_NAME.value, "openai__gpt-4o-mini"
-        )
+        mock_safe_set.assert_any_call(mock_span, WeaveSpanAttributes.DISPLAY_NAME.value, "openai__gpt-4o-mini")
 
 
 def test_set_weave_specific_attributes_thread_id_and_is_turn():
@@ -142,15 +126,9 @@ def test_set_weave_specific_attributes_thread_id_and_is_turn():
         "metadata": {"session_id": "session-123"},
     }
 
-    with patch(
-        "litellm.integrations.weave.weave_otel.safe_set_attribute"
-    ) as mock_safe_set:
+    with patch("litellm.integrations.weave.weave_otel.safe_set_attribute") as mock_safe_set:
         _set_weave_specific_attributes(mock_span, kwargs, None)
 
         # Should set thread_id and is_turn
-        mock_safe_set.assert_any_call(
-            mock_span, WeaveSpanAttributes.THREAD_ID.value, "session-123"
-        )
-        mock_safe_set.assert_any_call(
-            mock_span, WeaveSpanAttributes.IS_TURN.value, True
-        )
+        mock_safe_set.assert_any_call(mock_span, WeaveSpanAttributes.THREAD_ID.value, "session-123")
+        mock_safe_set.assert_any_call(mock_span, WeaveSpanAttributes.IS_TURN.value, True)

@@ -19,9 +19,7 @@ from litellm.proxy import proxy_server
 from .conftest import normalize  # type: ignore[import-not-found]
 
 
-def _stub_model_info_response(
-    model_id: str = "gpt-4", provider: str = "openai"
-) -> dict:
+def _stub_model_info_response(model_id: str = "gpt-4", provider: str = "openai") -> dict:
     return {
         "id": model_id,
         "object": "model",
@@ -59,9 +57,7 @@ def patched_models(monkeypatch):
     def _fake_create_model_info_response(model_id, provider="openai", **kwargs):
         return _stub_model_info_response(model_id=model_id, provider=provider)
 
-    monkeypatch.setattr(
-        proxy_utils, "create_model_info_response", _fake_create_model_info_response
-    )
+    monkeypatch.setattr(proxy_utils, "create_model_info_response", _fake_create_model_info_response)
 
     monkeypatch.setattr(proxy_utils, "validate_model_access", lambda **kwargs: None)
 

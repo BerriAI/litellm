@@ -30,10 +30,7 @@ class ConfigChecker(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call):
         # Check for map_openai_params calls
-        if (
-            isinstance(node.func, ast.Attribute)
-            and node.func.attr == "map_openai_params"
-        ):
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "map_openai_params":
             if isinstance(node.func.value, ast.Name):
                 config_name = node.func.value.id
                 self.map_openai_calls.add(config_name)
@@ -67,10 +64,7 @@ class ConfigChecker(ast.NodeVisitor):
         """Extract the provider name from an if condition checking custom_llm_provider"""
         if isinstance(node.test, ast.Compare):
             if len(node.test.ops) == 1 and isinstance(node.test.ops[0], ast.Eq):
-                if (
-                    isinstance(node.test.left, ast.Name)
-                    and node.test.left.id == "custom_llm_provider"
-                ):
+                if isinstance(node.test.left, ast.Name) and node.test.left.id == "custom_llm_provider":
                     if isinstance(node.test.comparators[0], ast.Constant):
                         return node.test.comparators[0].value
         return None
@@ -79,17 +73,10 @@ class ConfigChecker(ast.NodeVisitor):
         # Check if all configs using map_openai_params inherit from BaseConfig
         for config_name in self.map_openai_calls:
             print(f"Checking config: {config_name}")
-            if (
-                config_name not in self.class_inheritance
-                or "BaseConfig" not in self.class_inheritance[config_name]
-            ):
+            if config_name not in self.class_inheritance or "BaseConfig" not in self.class_inheritance[config_name]:
                 # Retrieve the associated class name, if any
                 class_name = next(
-                    (
-                        cls
-                        for cls, bases in self.class_inheritance.items()
-                        if config_name in bases
-                    ),
+                    (cls for cls, bases in self.class_inheritance.items() if config_name in bases),
                     "Unknown Class",
                 )
                 self.errors.append(

@@ -60,9 +60,7 @@ async def test_feature_not_disabled_allows_internal_user():
 @pytest.mark.asyncio
 async def test_feature_not_disabled_allows_vector_stores():
     user = _make_user(LitellmUserRoles.INTERNAL_USER.value)
-    with patch.dict(
-        _GS_PATH, {"disable_vector_stores_for_internal_users": False}, clear=True
-    ):
+    with patch.dict(_GS_PATH, {"disable_vector_stores_for_internal_users": False}, clear=True):
         await check_feature_access_for_user(user, "vector_stores")
 
 
@@ -238,8 +236,6 @@ async def test_org_admin_role_enum_and_string_both_blocked():
         with pytest.raises(HTTPException):
             await check_org_admin_can_generate_keys(user_str)
 
-        user_enum = UserAPIKeyAuth(
-            user_role=LitellmUserRoles.ORG_ADMIN, user_id="user-1"
-        )
+        user_enum = UserAPIKeyAuth(user_role=LitellmUserRoles.ORG_ADMIN, user_id="user-1")
         with pytest.raises(HTTPException):
             await check_org_admin_can_generate_keys(user_enum)

@@ -78,16 +78,12 @@ def find_requests_usage(directory: str) -> List[Tuple[str, int, str]]:
                 if isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name == "requests":
-                            requests_usages.append(
-                                (file_path, node.lineno, f"Import: {alias.name}")
-                            )
+                            requests_usages.append((file_path, node.lineno, f"Import: {alias.name}"))
 
                 # Check import from statements
                 elif isinstance(node, ast.ImportFrom):
                     if node.module == "requests":
-                        requests_usages.append(
-                            (file_path, node.lineno, f"Import from: {node.module}")
-                        )
+                        requests_usages.append((file_path, node.lineno, f"Import from: {node.module}"))
 
                 # Check method calls
                 elif isinstance(node, ast.Call):

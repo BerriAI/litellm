@@ -41,9 +41,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 def _attach_mock_success_dispatch(mock_logging_obj, async_success_fn):
     """Match production entrypoint: ``_run_deferred_stream_guardrails`` uses dispatch."""
 
-    async def dispatch_success_handlers(
-        result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
-    ):
+    async def dispatch_success_handlers(result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
         await async_success_fn(
             result,
             start_time=start_time,
@@ -66,9 +64,7 @@ class PostCallGuardrail(CustomGuardrail):
             event_hook=GuardrailEventHooks.post_call,
         )
 
-    async def async_post_call_success_hook(
-        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: Any
-    ) -> Any:
+    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: Any) -> Any:
         return response
 
 
@@ -166,9 +162,7 @@ class TestHasPostCallGuardrailsForPassthrough:
 
     @staticmethod
     def _has(data: dict) -> bool:
-        return ProxyBaseLLMRequestProcessing(
-            data=data
-        )._has_post_call_guardrails_for_passthrough()
+        return ProxyBaseLLMRequestProcessing(data=data)._has_post_call_guardrails_for_passthrough()
 
     def test_returns_true_for_event_hook_none(self):
         with patch("litellm.callbacks", [AllEventsGuardrail()]):
@@ -512,9 +506,7 @@ class TestDeferredStreamingClosure:
                 return response
 
         class TrackingLogger(CustomLogger):
-            async def async_post_call_success_hook(
-                self, user_api_key_dict, data, response
-            ):
+            async def async_post_call_success_hook(self, user_api_key_dict, data, response):
                 nonlocal logger_called
                 logger_called = True
                 return response
@@ -564,9 +556,7 @@ class TestDeferredStreamingClosure:
             await asyncio.sleep(0)
 
         assert guardrail_called is True, "Guardrail hook should be called"
-        assert (
-            logger_called is False
-        ), "Non-guardrail logger should NOT be called by closure"
+        assert logger_called is False, "Non-guardrail logger should NOT be called by closure"
 
     @pytest.mark.asyncio
     async def test_closure_passes_guardrail_modified_response_to_logging(self):
@@ -611,9 +601,7 @@ class TestDeferredStreamingClosure:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-        assert (
-            logged_response is modified_response
-        ), "Logging must receive the guardrail-modified response"
+        assert logged_response is modified_response, "Logging must receive the guardrail-modified response"
 
     @pytest.mark.asyncio
     async def test_closure_logs_even_on_guardrail_exception(self):
@@ -660,13 +648,10 @@ class TestDeferredStreamingClosure:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-        assert (
-            logging_called is True
-        ), "Logging must fire even when guardrail raises HTTPException"
-        assert (
-            mock_logging_obj.model_call_details["metadata"].get("guardrail_blocked")
-            is True
-        ), "guardrail_blocked must be set for HTTPException"
+        assert logging_called is True, "Logging must fire even when guardrail raises HTTPException"
+        assert mock_logging_obj.model_call_details["metadata"].get("guardrail_blocked") is True, (
+            "guardrail_blocked must be set for HTTPException"
+        )
 
     @pytest.mark.asyncio
     async def test_transient_error_does_not_set_guardrail_blocked(self):
@@ -707,10 +692,9 @@ class TestDeferredStreamingClosure:
 
         await asyncio.sleep(0)
 
-        assert (
-            mock_logging_obj.model_call_details["metadata"].get("guardrail_blocked")
-            is not True
-        ), "guardrail_blocked must NOT be set for transient errors"
+        assert mock_logging_obj.model_call_details["metadata"].get("guardrail_blocked") is not True, (
+            "guardrail_blocked must NOT be set for transient errors"
+        )
 
     @pytest.mark.asyncio
     async def test_production_closure_integration(self):
@@ -776,9 +760,9 @@ class TestDeferredStreamingClosure:
             await asyncio.sleep(0)
 
         assert hook_called is True, "Production closure must call guardrail hook"
-        assert (
-            logged_response is modified_response
-        ), "Production closure must pass guardrail-modified response to logging"
+        assert logged_response is modified_response, (
+            "Production closure must pass guardrail-modified response to logging"
+        )
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_skipped_in_deferred_path(self):
@@ -825,9 +809,7 @@ class TestDeferredStreamingClosure:
 
         await asyncio.sleep(0)
 
-        assert (
-            apply_guardrail_called is False
-        ), "apply_guardrail guardrails must be SKIPPED in deferred path"
+        assert apply_guardrail_called is False, "apply_guardrail guardrails must be SKIPPED in deferred path"
 
     @pytest.mark.asyncio
     async def test_streaming_iterator_hook_skipped_in_deferred_path(self):
@@ -844,9 +826,7 @@ class TestDeferredStreamingClosure:
                     event_hook=GuardrailEventHooks.post_call,
                 )
 
-            async def async_post_call_streaming_iterator_hook(
-                self, user_api_key_dict, response, request_data
-            ):
+            async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
                 async for chunk in response:
                     yield chunk
 
@@ -950,12 +930,12 @@ class TestDeferredStreamingClosure:
             )
 
         assert hook_received_data is not None, "Guardrail hook must be called"
-        assert (
-            hook_received_data.get("_merged_marker") is True
-        ), "Hook must receive guardrail_data (merged), not original captured_data"
-        assert "model-guardrail" in hook_received_data.get("metadata", {}).get(
-            "guardrails", []
-        ), "Hook data must contain model-level guardrails"
+        assert hook_received_data.get("_merged_marker") is True, (
+            "Hook must receive guardrail_data (merged), not original captured_data"
+        )
+        assert "model-guardrail" in hook_received_data.get("metadata", {}).get("guardrails", []), (
+            "Hook data must contain model-level guardrails"
+        )
 
     @pytest.mark.asyncio
     async def test_multiple_guardrails_all_receive_merged_data(self):
@@ -1015,9 +995,9 @@ class TestDeferredStreamingClosure:
 
         for name in ("guardrail-a", "guardrail-b"):
             assert name in received_data_per_guardrail, f"{name} must be called"
-            assert (
-                received_data_per_guardrail[name].get("_merged_marker") is True
-            ), f"{name} must receive guardrail_data (merged), not captured_data"
+            assert received_data_per_guardrail[name].get("_merged_marker") is True, (
+                f"{name} must receive guardrail_data (merged), not captured_data"
+            )
 
     @pytest.mark.asyncio
     async def test_logging_fires_even_if_guardrail_init_raises(self):
@@ -1053,9 +1033,7 @@ class TestDeferredStreamingClosure:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-        assert (
-            logging_called is True
-        ), "Logging must fire even when guardrail initialization raises"
+        assert logging_called is True, "Logging must fire even when guardrail initialization raises"
 
     @pytest.mark.asyncio
     async def test_deferred_logging_forces_async_for_sync_classified_call_type(self):
@@ -1091,12 +1069,8 @@ class TestDeferredStreamingClosure:
         assert LiteLLMLoggingObj._is_sync_litellm_request({}) is True
 
         with (
-            patch.object(
-                logging_obj, "async_success_handler", new_callable=AsyncMock
-            ) as mock_async,
-            patch.object(
-                logging_obj, "success_handler", new_callable=MagicMock
-            ) as mock_sync,
+            patch.object(logging_obj, "async_success_handler", new_callable=AsyncMock) as mock_async,
+            patch.object(logging_obj, "success_handler", new_callable=MagicMock) as mock_sync,
             patch.object(
                 logging_obj,
                 "_should_run_sync_callbacks_for_async_calls",
@@ -1201,9 +1175,7 @@ class TestFireDeferredStreamLogging:
             ) -> Any:
                 # Simulate writing guardrail_information
                 metadata = data.setdefault("metadata", {})
-                info_list = metadata.setdefault(
-                    "standard_logging_guardrail_information", []
-                )
+                info_list = metadata.setdefault("standard_logging_guardrail_information", [])
                 info_list.append({"guardrail_name": "info-writer", "status": "success"})
                 return response
 

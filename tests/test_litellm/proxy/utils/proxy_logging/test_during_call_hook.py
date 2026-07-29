@@ -32,7 +32,9 @@ def _make_guardrail(name="g1", should_run=True, response=None):
 
 
 @pytest.mark.asyncio
-async def test_during_call_hook_no_guardrail_fast_path_returns_data(proxy_logging, make_user_api_key_auth, mock_callbacks_disabled):
+async def test_during_call_hook_no_guardrail_fast_path_returns_data(
+    proxy_logging, make_user_api_key_auth, mock_callbacks_disabled
+):
     data = {"messages": [{"role": "user"}], "model": "m", "temperature": 0.1}
     out = await proxy_logging.during_call_hook(
         data=data,
@@ -62,7 +64,9 @@ async def test_during_call_hook_runs_guardrails_in_parallel(proxy_logging, make_
 
 
 @pytest.mark.asyncio
-async def test_during_call_hook_guardrail_skipped_when_should_not_run(proxy_logging, make_user_api_key_auth, monkeypatch):
+async def test_during_call_hook_guardrail_skipped_when_should_not_run(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
     g = _make_guardrail("g", should_run=False)
     monkeypatch.setattr(litellm, "callbacks", [g])
     await proxy_logging.during_call_hook(

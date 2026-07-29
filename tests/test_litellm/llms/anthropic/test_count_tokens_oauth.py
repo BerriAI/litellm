@@ -10,9 +10,7 @@ Regression test for https://github.com/BerriAI/litellm/issues/22040
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
@@ -78,9 +76,5 @@ class TestCountTokensOAuthHeaders:
         headers = config.get_required_headers(FAKE_OAUTH_TOKEN)
 
         beta_value = headers.get("anthropic-beta", "")
-        assert (
-            "token-counting" in beta_value
-        ), f"token-counting beta missing from OAuth headers: {beta_value}"
-        assert (
-            "oauth-2025-04-20" in beta_value
-        ), f"oauth beta missing from OAuth headers: {beta_value}"
+        assert "token-counting" in beta_value, f"token-counting beta missing from OAuth headers: {beta_value}"
+        assert "oauth-2025-04-20" in beta_value, f"oauth beta missing from OAuth headers: {beta_value}"

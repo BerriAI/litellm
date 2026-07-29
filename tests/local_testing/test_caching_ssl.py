@@ -9,9 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm import embedding, completion, Router
@@ -34,10 +32,7 @@ def test_caching_v2():  # test in memory cache
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         litellm.cache = None  # disable cache
-        if (
-            response2["choices"][0]["message"]["content"]
-            != response1["choices"][0]["message"]["content"]
-        ):
+        if response2["choices"][0]["message"]["content"] != response1["choices"][0]["message"]["content"]:
             print(f"response1: {response1}")
             print(f"response2: {response2}")
             raise Exception()
@@ -82,17 +77,11 @@ def test_caching_router():
         )  # type: ignore
         response1 = completion(model="gpt-3.5-turbo", messages=messages)
         response2 = completion(model="gpt-3.5-turbo", messages=messages)
-        if (
-            response2["choices"][0]["message"]["content"]
-            != response1["choices"][0]["message"]["content"]
-        ):
+        if response2["choices"][0]["message"]["content"] != response1["choices"][0]["message"]["content"]:
             print(f"response1: {response1}")
             print(f"response2: {response2}")
         litellm.cache = None  # disable cache
-        assert (
-            response2["choices"][0]["message"]["content"]
-            == response1["choices"][0]["message"]["content"]
-        )
+        assert response2["choices"][0]["message"]["content"] == response1["choices"][0]["message"]["content"]
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")

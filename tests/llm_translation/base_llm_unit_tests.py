@@ -10,9 +10,7 @@ import time
 import base64
 import inspect
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -313,9 +311,7 @@ class BaseLLMChatTest(ABC):
 
         response = self.completion_function(
             **base_completion_call_args,
-            messages=[
-                {"role": "user", "content": "What's the weather like in Boston today?"}
-            ],
+            messages=[{"role": "user", "content": "What's the weather like in Boston today?"}],
             web_search_options={},
             max_tokens=100,
         )
@@ -469,9 +465,7 @@ class BaseLLMChatTest(ABC):
             messages = [
                 {"role": "user", "content": "Hello", "name": "test_name"},
             ]
-            response = self.completion_function(
-                **base_completion_call_args, messages=messages
-            )
+            response = self.completion_function(**base_completion_call_args, messages=messages)
             assert response is not None
         except litellm.RateLimitError:
             pass
@@ -526,9 +520,7 @@ class BaseLLMChatTest(ABC):
         ],
     )
     @pytest.mark.flaky(retries=6, delay=1)
-    def test_response_format_type_text_with_tool_calls_no_tool_choice(
-        self, response_format
-    ):
+    def test_response_format_type_text_with_tool_calls_no_tool_choice(self, response_format):
         base_completion_call_args = self.get_base_completion_call_args()
         messages = [
             {"role": "user", "content": "What's the weather like in Boston today?"},
@@ -579,9 +571,7 @@ class BaseLLMChatTest(ABC):
         base_completion_call_args = self.get_base_completion_call_args()
         litellm.set_verbose = True
 
-        _, provider, _, _ = litellm.get_llm_provider(
-            model=base_completion_call_args["model"]
-        )
+        _, provider, _, _ = litellm.get_llm_provider(model=base_completion_call_args["model"])
 
         provider_config = ProviderConfigManager.get_provider_chat_config(
             base_completion_call_args["model"], LlmProviders(provider)
@@ -597,9 +587,7 @@ class BaseLLMChatTest(ABC):
         )
 
         assert "tool_choice" not in translated_params
-        assert (
-            "tools" not in translated_params
-        ), f"Got tools={translated_params['tools']}, expected no tools"
+        assert "tools" not in translated_params, f"Got tools={translated_params['tools']}, expected no tools"
 
         print(f"translated_params={translated_params}")
 
@@ -668,15 +656,11 @@ class BaseLLMChatTest(ABC):
         class EventsList(BaseModel):
             events: list[CalendarEvent]
 
-        messages = [
-            {"role": "user", "content": "List 5 important events in the XIX century"}
-        ]
+        messages = [{"role": "user", "content": "List 5 important events in the XIX century"}]
 
         base_completion_call_args = self.get_base_completion_call_args()
         if not supports_response_schema(base_completion_call_args["model"], None):
-            pytest.skip(
-                f"Model={base_completion_call_args['model']} does not support response schema"
-            )
+            pytest.skip(f"Model={base_completion_call_args['model']} does not support response schema")
 
         try:
             res = self.completion_function(
@@ -719,15 +703,11 @@ class BaseLLMChatTest(ABC):
 
         response_format = type_to_response_format_param(EventsList)
 
-        messages = [
-            {"role": "user", "content": "List 5 important events in the XIX century"}
-        ]
+        messages = [{"role": "user", "content": "List 5 important events in the XIX century"}]
 
         base_completion_call_args = self.get_base_completion_call_args()
         if not supports_response_schema(base_completion_call_args["model"], None):
-            pytest.skip(
-                f"Model={base_completion_call_args['model']} does not support response schema"
-            )
+            pytest.skip(f"Model={base_completion_call_args['model']} does not support response schema")
 
         try:
             res = self.completion_function(
@@ -757,9 +737,7 @@ class BaseLLMChatTest(ABC):
         litellm._turn_on_debug()
         base_completion_call_args = self.get_base_completion_call_args()
         if not supports_audio_input(base_completion_call_args["model"], None):
-            pytest.skip(
-                f"Model={base_completion_call_args['model']} does not support audio input"
-            )
+            pytest.skip(f"Model={base_completion_call_args['model']} does not support audio input")
 
         url = "https://openaiassets.blob.core.windows.net/$web/API/docs/audio/alloy.wav"
         response = httpx.get(url)
@@ -917,9 +895,7 @@ class BaseLLMChatTest(ABC):
                 }
             ]
         try:
-            response = self.completion_function(
-                **base_completion_call_args, messages=messages
-            )
+            response = self.completion_function(**base_completion_call_args, messages=messages)
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
 
@@ -937,9 +913,7 @@ class BaseLLMChatTest(ABC):
         base_completion_call_args = self.get_base_completion_call_args()
         if not supports_vision(base_completion_call_args["model"], None):
             pytest.skip("Model does not support image input")
-        elif "http://" in image_url and "fireworks_ai" in base_completion_call_args.get(
-            "model"
-        ):
+        elif "http://" in image_url and "fireworks_ai" in base_completion_call_args.get("model"):
             pytest.skip("Model does not support http:// input")
 
         image_url_param = image_url
@@ -957,9 +931,7 @@ class BaseLLMChatTest(ABC):
         ]
 
         try:
-            response = self.completion_function(
-                **base_completion_call_args, messages=messages
-            )
+            response = self.completion_function(**base_completion_call_args, messages=messages)
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
 
@@ -988,10 +960,7 @@ class BaseLLMChatTest(ABC):
                 "content": [
                     {
                         "type": "text",
-                        "text": "Here is the full text of a complex legal agreement {}".format(
-                            uuid_str
-                        )
-                        * 400,
+                        "text": "Here is the full text of a complex legal agreement {}".format(uuid_str) * 400,
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
@@ -1046,9 +1015,7 @@ class BaseLLMChatTest(ABC):
 
             cached_cost = response._hidden_params["response_cost"]
 
-            assert (
-                cached_cost <= initial_cost
-            ), "Cached cost={} should be less than initial cost={}".format(
+            assert cached_cost <= initial_cost, "Cached cost={} should be less than initial cost={}".format(
                 cached_cost, initial_cost
             )
 
@@ -1061,9 +1028,9 @@ class BaseLLMChatTest(ABC):
 
             assert "prompt_tokens_details" in response.usage
             if response.usage.prompt_tokens_details is not None:
-                assert (
-                    response.usage.prompt_tokens_details.cached_tokens > 0
-                ), f"cached_tokens={response.usage.prompt_tokens_details.cached_tokens} should be greater than 0. Got usage={response.usage}"
+                assert response.usage.prompt_tokens_details.cached_tokens > 0, (
+                    f"cached_tokens={response.usage.prompt_tokens_details.cached_tokens} should be greater than 0. Got usage={response.usage}"
+                )
         except litellm.InternalServerError as e:
             print("InternalServerError", e)
 
@@ -1188,28 +1155,18 @@ class BaseLLMChatTest(ABC):
                     "<thinking>" in response.choices[0].message.content
                     and "</thinking>" in response.choices[0].message.content
                 ):
-                    pytest.fail(
-                        "Thinking block returned in content instead of separate reasoning_content"
-                    )
+                    pytest.fail("Thinking block returned in content instead of separate reasoning_content")
             if response.choices[0].message.tool_calls is None:
                 return
             # Add any assertions here to check the response
 
-            assert isinstance(
-                response.choices[0].message.tool_calls[0].function.name, str
+            assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+            assert isinstance(response.choices[0].message.tool_calls[0].function.arguments, str)
+            assert response.choices[0].finish_reason == "tool_calls", (
+                f"finish_reason: {response.choices[0].finish_reason}, expected: tool_calls"
             )
-            assert isinstance(
-                response.choices[0].message.tool_calls[0].function.arguments, str
-            )
-            assert (
-                response.choices[0].finish_reason == "tool_calls"
-            ), f"finish_reason: {response.choices[0].finish_reason}, expected: tool_calls"
-            messages.append(
-                response.choices[0].message.model_dump()
-            )  # Add assistant tool invokes
-            tool_result = (
-                '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
-            )
+            messages.append(response.choices[0].message.model_dump())  # Add assistant tool invokes
+            tool_result = '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
             # Add user submitted tool results in the OpenAI format
             messages.append(
                 {
@@ -1323,13 +1280,9 @@ class BaseLLMChatTest(ABC):
         print("raw_request: ", raw_request)
 
         if input_type == "input_audio":
-            assert encoded_string in json.dumps(
-                raw_request
-            ), "Audio data not sent to gemini"
+            assert encoded_string in json.dumps(raw_request), "Audio data not sent to gemini"
         elif input_type == "audio_url":
-            assert test_file_id in json.dumps(
-                raw_request
-            ), "Audio URL not sent to gemini"
+            assert test_file_id in json.dumps(raw_request), "Audio URL not sent to gemini"
 
     def test_function_calling_with_tool_response(self):
         from litellm.utils import supports_function_calling
@@ -1337,7 +1290,6 @@ class BaseLLMChatTest(ABC):
 
         litellm._turn_on_debug()
         try:
-
             os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
             litellm.model_cost = litellm.get_model_cost_map(url="")
 
@@ -1398,9 +1350,7 @@ class BaseLLMChatTest(ABC):
                             if index not in final_tool_calls:
                                 final_tool_calls[index] = tool_call
                             else:
-                                final_tool_calls[
-                                    index
-                                ].function.arguments += tool_call.function.arguments
+                                final_tool_calls[index].function.arguments += tool_call.function.arguments
                 if final_tool_calls:
                     for tool_call in final_tool_calls.values():
                         if tool_call.function.name == "get_weather":
@@ -1437,9 +1387,7 @@ class BaseLLMChatTest(ABC):
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        base_completion_call_args = (
-            self.get_base_completion_call_args_with_reasoning_model()
-        )
+        base_completion_call_args = self.get_base_completion_call_args_with_reasoning_model()
         if len(base_completion_call_args) == 0:
             print("base_completion_call_args is empty")
             pytest.skip("Model does not support reasoning")
@@ -1447,9 +1395,7 @@ class BaseLLMChatTest(ABC):
             print("Model does not support reasoning")
             pytest.skip("Model does not support reasoning")
 
-        _, provider, _, _ = litellm.get_llm_provider(
-            model=base_completion_call_args["model"]
-        )
+        _, provider, _, _ = litellm.get_llm_provider(model=base_completion_call_args["model"])
 
         ## CHECK PARAM MAPPING
         optional_params = get_optional_params(
@@ -1494,9 +1440,7 @@ class BaseOSeriesModelsTest(ABC):  # test across azure/openai
 
         completion_args = self.get_base_completion_call_args()
 
-        with patch.object(
-            client.chat.completions.with_raw_response, "create"
-        ) as mock_client:
+        with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
             try:
                 completion(
                     **completion_args,
@@ -1520,9 +1464,7 @@ class BaseOSeriesModelsTest(ABC):  # test across azure/openai
 
         completion_args = self.get_base_completion_call_args()
 
-        with patch.object(
-            client.chat.completions.with_raw_response, "create"
-        ) as mock_client:
+        with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
             try:
                 completion(
                     **completion_args,
@@ -1539,9 +1481,9 @@ class BaseOSeriesModelsTest(ABC):  # test across azure/openai
             mock_client.assert_called_once()
             request_body = mock_client.call_args.kwargs
             print("request_body: ", request_body)
-            assert (
-                request_body["messages"][0]["role"] == "developer"
-            ), "Got={} instead of system".format(request_body["messages"][0]["role"])
+            assert request_body["messages"][0]["role"] == "developer", "Got={} instead of system".format(
+                request_body["messages"][0]["role"]
+            )
             assert request_body["messages"][0]["content"] == "Be a good bot!"
 
     def test_completion_o_series_models_temperature(self):
@@ -1555,9 +1497,7 @@ class BaseOSeriesModelsTest(ABC):  # test across azure/openai
 
             completion_args = self.get_base_completion_call_args()
 
-            with patch.object(
-                client.chat.completions.with_raw_response, "create"
-            ) as mock_client:
+            with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
                 try:
                     completion(
                         **completion_args,
@@ -1577,9 +1517,7 @@ class BaseOSeriesModelsTest(ABC):  # test across azure/openai
             mock_client.assert_called_once()
             request_body = mock_client.call_args.kwargs
             print("request_body: ", request_body)
-            assert (
-                "temperature" not in request_body
-            ), "temperature should not be in the request body"
+            assert "temperature" not in request_body, "temperature should not be in the request body"
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
@@ -1622,9 +1560,7 @@ class BaseAnthropicChatTest(ABC):
                     "strict": True,
                     "schema": {
                         "description": 'Progress report for the thinking process\n\nThis model represents a snapshot of the agent\'s current progress during\nthe thinking process, providing a brief description of the current activity.\n\nAttributes:\n    agent_doing: Brief description of what the agent is currently doing.\n                Should be kept under 10 words. Example: "Learning about home automation"',
-                        "properties": {
-                            "agent_doing": {"title": "Agent Doing", "type": "string"}
-                        },
+                        "properties": {"agent_doing": {"title": "Agent Doing", "type": "string"}},
                         "required": ["agent_doing"],
                         "title": "ThinkingStep",
                         "type": "object",
@@ -1636,9 +1572,7 @@ class BaseAnthropicChatTest(ABC):
 
         base_completion_call_args = self.get_base_completion_call_args()
 
-        response = self.completion_function(
-            **base_completion_call_args, **args, stream=True
-        )
+        response = self.completion_function(**base_completion_call_args, **args, stream=True)
 
         chunks = []
         for chunk in response:
@@ -1648,9 +1582,7 @@ class BaseAnthropicChatTest(ABC):
         print(f"chunks: {chunks}")
         built_response = stream_chunk_builder(chunks=chunks)
 
-        non_stream_response = self.completion_function(
-            **base_completion_call_args, **args, stream=False
-        )
+        non_stream_response = self.completion_function(**base_completion_call_args, **args, stream=False)
 
         print(
             "built_response.choices[0].message.content",
@@ -1663,7 +1595,9 @@ class BaseAnthropicChatTest(ABC):
         assert (
             json.loads(built_response.choices[0].message.content).keys()
             == json.loads(non_stream_response.choices[0].message.content).keys()
-        ), f"Got={json.loads(built_response.choices[0].message.content)}, Expected={json.loads(non_stream_response.choices[0].message.content)}"
+        ), (
+            f"Got={json.loads(built_response.choices[0].message.content)}, Expected={json.loads(non_stream_response.choices[0].message.content)}"
+        )
 
     def test_completion_thinking_with_response_format(self):
         from pydantic import BaseModel
@@ -1738,9 +1672,7 @@ class BaseAnthropicChatTest(ABC):
     def test_anthropic_thinking_output_stream(self):
         # litellm.set_verbose = True
         try:
-            base_completion_call_args = (
-                self.get_base_completion_call_args_with_thinking()
-            )
+            base_completion_call_args = self.get_base_completion_call_args_with_thinking()
             resp = litellm.completion(
                 **base_completion_call_args,
                 messages=[{"role": "user", "content": "Tell me a joke."}],
@@ -1775,9 +1707,7 @@ class BaseAnthropicChatTest(ABC):
 
     def test_anthropic_reasoning_effort_thinking_translation(self):
         base_completion_call_args = self.get_base_completion_call_args_with_thinking()
-        _, provider, _, _ = litellm.get_llm_provider(
-            model=base_completion_call_args["model"]
-        )
+        _, provider, _, _ = litellm.get_llm_provider(model=base_completion_call_args["model"])
 
         from litellm.constants import DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
 
@@ -1820,9 +1750,7 @@ class BaseReasoningLLMTests(ABC):
         """
         litellm._turn_on_debug()
         base_completion_call_args = self.get_base_completion_call_args()
-        response: ModelResponse = self.completion_function(
-            **base_completion_call_args, reasoning_effort="low"
-        )
+        response: ModelResponse = self.completion_function(**base_completion_call_args, reasoning_effort="low")
 
         # user gets `reasoning_content` in the response message
         assert response.choices[0].message.reasoning_content is not None

@@ -4,9 +4,7 @@ import os
 import sys
 from unittest.mock import patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm import MorphChatConfig, get_llm_provider
@@ -31,9 +29,7 @@ def test_morph_config_get_provider_info():
     assert api_key == "direct-key"
 
     # Test with custom api_base
-    api_base, api_key = config._get_openai_compatible_provider_info(
-        "https://custom.morph.com", "key"
-    )
+    api_base, api_key = config._get_openai_compatible_provider_info("https://custom.morph.com", "key")
     assert api_base == "https://custom.morph.com"
     assert api_key == "key"
 
@@ -66,10 +62,7 @@ def test_morph_in_provider_lists():
     assert "morph" in litellm.provider_list
 
     # Check models are in model_list after initialization
-    assert all(
-        model in litellm.model_list
-        for model in ["morph/morph-v3-large", "morph/morph-v3-fast"]
-    )
+    assert all(model in litellm.model_list for model in ["morph/morph-v3-large", "morph/morph-v3-fast"])
 
 
 def test_morph_model_info():

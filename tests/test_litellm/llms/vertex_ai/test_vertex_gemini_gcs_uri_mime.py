@@ -2,6 +2,7 @@
 
 Split from test_vertex.py to satisfy CI per-file size limits.
 """
+
 import asyncio
 import os
 import sys
@@ -56,9 +57,7 @@ def test_process_gemini_media_gcs_without_extension_errors_and_metadata_mock():
         return_value="image/jpeg",
     ) as m:
         r = _process_gemini_media("gs://bucket/image-without-extension")
-    assert r["file_data"] == FileDataType(
-        mime_type="image/jpeg", file_uri="gs://bucket/image-without-extension"
-    )
+    assert r["file_data"] == FileDataType(mime_type="image/jpeg", file_uri="gs://bucket/image-without-extension")
     m.assert_called()
 
     with patch(
@@ -102,9 +101,7 @@ def test_file_block_uses_mime_type_alias_for_extensionless_gcs():
             ],
         }
     ]
-    converted = _gemini_convert_messages_with_history(
-        messages=messages, model="gemini-2.5-flash"
-    )
+    converted = _gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash")
     assert converted[0]["parts"][0]["file_data"] == FileDataType(
         mime_type="application/pdf", file_uri="gs://bucket/no-extension-object"
     )
@@ -221,10 +218,7 @@ def test_get_gcs_object_content_type_http_error_explicit_vs_anonymous():
             return_value=http2,
         ),
     ):
-        assert (
-            gt._get_gcs_object_content_type(image_url="gs://public-bucket/public-object")
-            is None
-        )
+        assert gt._get_gcs_object_content_type(image_url="gs://public-bucket/public-object") is None
     mock_v2.get_access_token.assert_not_called()
 
 
@@ -246,10 +240,7 @@ def test_get_gcs_object_content_type_anonymous_success_no_auth_header():
             return_value=http,
         ),
     ):
-        assert (
-            gt._get_gcs_object_content_type(image_url="gs://public-bucket/public-object")
-            == "image/jpeg"
-        )
+        assert gt._get_gcs_object_content_type(image_url="gs://public-bucket/public-object") == "image/jpeg"
     mock_v.get_access_token.assert_not_called()
     hdrs = http.get.call_args.kwargs.get("headers")
     assert hdrs is None or "Authorization" not in hdrs
@@ -330,8 +321,7 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
         sleep_elapsed = asyncio.run(run_scenario())
 
     assert sleep_elapsed < 0.4, (
-        f"Event loop blocked for {sleep_elapsed:.3f}s; "
-        "async_transform_request_body did not offload sync GCS metadata"
+        f"Event loop blocked for {sleep_elapsed:.3f}s; async_transform_request_body did not offload sync GCS metadata"
     )
 
     async def fake_cache2(self, **kwargs):

@@ -227,7 +227,9 @@ async def test_otel_request_validation_exception_handler_empty_errors_invalid_pa
 async def test_otel_request_validation_exception_handler_returns_a_problem_on_the_control_plane():
     """`/management/v1` answers validation errors as RFC 9457, so a caller there gets a
     400 problem document rather than the proxy-wide 422 `{"detail": [...]}` shape."""
-    errors = [{"loc": ["query", "page_size"], "msg": "Input should be less than or equal to 100", "type": "less_than_equal"}]
+    errors = [
+        {"loc": ["query", "page_size"], "msg": "Input should be less than or equal to 100", "type": "less_than_equal"}
+    ]
     exc = RequestValidationError(errors)
     request = _make_request(path="/management/v1/spend_logs/end_users")
 
@@ -249,9 +251,7 @@ async def test_otel_request_validation_exception_handler_leaves_other_routes_on_
     exc = RequestValidationError([])
 
     for path in ("/management", "/v1/management/foo", "/customer/list"):
-        response = await otel_request_validation_exception_handler(
-            request=_make_request(path=path), exc=exc
-        )
+        response = await otel_request_validation_exception_handler(request=_make_request(path=path), exc=exc)
 
         assert response.status_code == 422, path
         assert json.loads(response.body) == {"detail": []}, path
@@ -294,6 +294,4 @@ async def test_otel_unhandled_exception_handler_reraises_proxy_exception_error()
 async def test_otel_unhandled_exception_handler_reraises_http_exception_invalid():
     request = _make_request()
     with pytest.raises(HTTPException):
-        await otel_unhandled_exception_handler(
-            request=request, exc=HTTPException(status_code=418, detail="teapot")
-        )
+        await otel_unhandled_exception_handler(request=request, exc=HTTPException(status_code=418, detail="teapot"))

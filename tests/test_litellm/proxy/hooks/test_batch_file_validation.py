@@ -18,11 +18,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 def _models(file_content_as_dict):
     """Distinct body.model values, mirroring how the rate limiter collects the
     models from a streamed batch file before the access check."""
-    return [
-        entry["body"]["model"]
-        for entry in file_content_as_dict
-        if (entry.get("body") or {}).get("model")
-    ]
+    return [entry["body"]["model"] for entry in file_content_as_dict if (entry.get("body") or {}).get("model")]
 
 
 # ---------------------------------------------------------------------------
@@ -49,18 +45,14 @@ def test_token_counter_counts_text_completion_prompt():
     `messages`), letting `prompt`-style batches slip past TPM limits."""
     from litellm.batches.batch_utils import _count_entry_tokens
 
-    tokens = _count_entry_tokens(
-        {"body": {"model": "gpt-3.5-turbo-instruct", "prompt": "hello world"}}
-    )
+    tokens = _count_entry_tokens({"body": {"model": "gpt-3.5-turbo-instruct", "prompt": "hello world"}})
     assert tokens > 0
 
 
 def test_token_counter_counts_embedding_input_string():
     from litellm.batches.batch_utils import _count_entry_tokens
 
-    tokens = _count_entry_tokens(
-        {"body": {"model": "text-embedding-3-small", "input": "hello world"}}
-    )
+    tokens = _count_entry_tokens({"body": {"model": "text-embedding-3-small", "input": "hello world"}})
     assert tokens > 0
 
 
@@ -160,9 +152,7 @@ async def test_pre_call_rejects_unauthorized_model_in_batch_file():
 
     # Simulated decoded batch file: caller is restricted to gpt-3.5
     # but the JSONL points at gpt-4o.
-    file_dict = [
-        {"body": {"model": "gpt-4o", "messages": [{"role": "user", "content": "x"}]}}
-    ]
+    file_dict = [{"body": {"model": "gpt-4o", "messages": [{"role": "user", "content": "x"}]}}]
 
     user = UserAPIKeyAuth(
         api_key="sk-restricted",
@@ -632,10 +622,7 @@ async def test_pre_call_does_not_skip_for_spoofed_provider():
     mock_router.resolve_model_name_from_model_id.return_value = "my-openai-model"
 
     mock_content = MagicMock()
-    mock_content.content = (
-        b'{"body": {"model": "my-openai-model", '
-        b'"messages": [{"role": "user", "content": "hi"}]}}\n'
-    )
+    mock_content.content = b'{"body": {"model": "my-openai-model", "messages": [{"role": "user", "content": "hi"}]}}\n'
 
     with (
         patch(
@@ -647,9 +634,7 @@ async def test_pre_call_does_not_skip_for_spoofed_provider():
             "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
             return_value={"custom_llm_provider": "openai"},
         ),
-        patch(
-            "litellm.afile_content", new=AsyncMock(return_value=mock_content)
-        ) as mock_afile_content,
+        patch("litellm.afile_content", new=AsyncMock(return_value=mock_content)) as mock_afile_content,
     ):
         await rate_limiter.async_pre_call_hook(
             user_api_key_dict=user,
@@ -676,11 +661,7 @@ async def test_count_input_file_usage_decodes_model_embedded_file_id():
 
     original_file_id = "file-provider-xyz"
     encoded_payload = (
-        base64.urlsafe_b64encode(
-            f"litellm:{original_file_id};model,my-vllm-batch".encode()
-        )
-        .decode()
-        .rstrip("=")
+        base64.urlsafe_b64encode(f"litellm:{original_file_id};model,my-vllm-batch".encode()).decode().rstrip("=")
     )
     encoded_file_id = f"file-{encoded_payload}"
 
@@ -734,9 +715,7 @@ async def test_pre_call_allows_stripped_provider_model_when_key_has_proxy_alias(
         parallel_request_limiter=MagicMock(),
     )
     proxy_alias = "openai/openai/gpt-5.5-batch"
-    file_dict = [
-        {"body": {"model": "gpt-5.5", "messages": [{"role": "user", "content": "x"}]}}
-    ]
+    file_dict = [{"body": {"model": "gpt-5.5", "messages": [{"role": "user", "content": "x"}]}}]
     user = UserAPIKeyAuth(
         api_key="sk-ok",
         user_id="alice",
@@ -821,17 +800,13 @@ async def test_pre_call_uses_target_model_names_not_stripped_reverse_lookup(
     def _resolve(model_id):
         for deployment in mock_router.model_list:
             actual_model = deployment.get("litellm_params", {}).get("model")
-            if actual_model == model_id or (
-                actual_model and actual_model.endswith(f"/{model_id}")
-            ):
+            if actual_model == model_id or (actual_model and actual_model.endswith(f"/{model_id}")):
                 return deployment.get("model_name")
         return None
 
     mock_router.resolve_model_name_from_model_id.side_effect = _resolve
 
-    file_dict = [
-        {"body": {"model": "gpt-5.5", "messages": [{"role": "user", "content": "x"}]}}
-    ]
+    file_dict = [{"body": {"model": "gpt-5.5", "messages": [{"role": "user", "content": "x"}]}}]
     user = UserAPIKeyAuth(
         api_key="sk-ok",
         user_id="alice",
@@ -899,9 +874,7 @@ def _make_rate_limiter():
 
 def test_get_batch_routing_model_uses_request_model_for_plain_file():
     rate_limiter = _make_rate_limiter()
-    assert (
-        rate_limiter._get_batch_routing_model({"model": "gpt-4o-mini"}) == "gpt-4o-mini"
-    )
+    assert rate_limiter._get_batch_routing_model({"model": "gpt-4o-mini"}) == "gpt-4o-mini"
 
 
 def test_get_batch_routing_model_prefers_file_bound_over_request_model():
@@ -912,15 +885,9 @@ def test_get_batch_routing_model_prefers_file_bound_over_request_model():
     import base64
 
     rate_limiter = _make_rate_limiter()
-    encoded = (
-        base64.urlsafe_b64encode(b"litellm:file-xyz;model,vllm-batch")
-        .decode()
-        .rstrip("=")
-    )
+    encoded = base64.urlsafe_b64encode(b"litellm:file-xyz;model,vllm-batch").decode().rstrip("=")
     assert (
-        rate_limiter._get_batch_routing_model(
-            {"input_file_id": f"file-{encoded}", "model": "gpt-4o-mini"}
-        )
+        rate_limiter._get_batch_routing_model({"input_file_id": f"file-{encoded}", "model": "gpt-4o-mini"})
         == "vllm-batch"
     )
 
@@ -935,15 +902,8 @@ def test_get_batch_routing_model_decodes_model_embedded_file_id():
     import base64
 
     rate_limiter = _make_rate_limiter()
-    encoded = (
-        base64.urlsafe_b64encode(b"litellm:file-xyz;model,vllm-batch")
-        .decode()
-        .rstrip("=")
-    )
-    assert (
-        rate_limiter._get_batch_routing_model({"input_file_id": f"file-{encoded}"})
-        == "vllm-batch"
-    )
+    encoded = base64.urlsafe_b64encode(b"litellm:file-xyz;model,vllm-batch").decode().rstrip("=")
+    assert rate_limiter._get_batch_routing_model({"input_file_id": f"file-{encoded}"}) == "vllm-batch"
 
 
 def test_get_batch_routing_model_uses_unified_file_id_target():
@@ -962,10 +922,7 @@ def test_get_batch_routing_model_uses_unified_file_id_target():
             return_value=["model-a", "model-b"],
         ),
     ):
-        assert (
-            rate_limiter._get_batch_routing_model({"input_file_id": "file-managed"})
-            == "model-a"
-        )
+        assert rate_limiter._get_batch_routing_model({"input_file_id": "file-managed"}) == "model-a"
 
 
 def test_key_requires_batch_model_access_check_branches():
@@ -974,36 +931,17 @@ def test_key_requires_batch_model_access_check_branches():
     check = _PROXY_BatchRateLimiter._key_requires_batch_model_access_check
     assert check(UserAPIKeyAuth(api_key="sk", models=["*"])) is False
     assert check(UserAPIKeyAuth(api_key="sk", models=["all-proxy-models"])) is False
-    assert (
-        check(UserAPIKeyAuth(api_key="sk", models=[], access_group_ids=["grp"])) is True
-    )
+    assert check(UserAPIKeyAuth(api_key="sk", models=[], access_group_ids=["grp"])) is True
     assert check(UserAPIKeyAuth(api_key="sk", models=[])) is False
     assert check(UserAPIKeyAuth(api_key="sk", models=["gpt-4o-mini"])) is True
     # Wildcard / all-proxy-models grant access to every model, so
     # can_key_call_model passes any model regardless of access groups (which
     # only ever widen access). Such keys must not be forced to download and
     # validate the JSONL even when access_group_ids are also present.
-    assert (
-        check(UserAPIKeyAuth(api_key="sk", models=["*"], access_group_ids=["grp"]))
-        is False
-    )
-    assert (
-        check(
-            UserAPIKeyAuth(
-                api_key="sk", models=["all-proxy-models"], access_group_ids=["grp"]
-            )
-        )
-        is False
-    )
+    assert check(UserAPIKeyAuth(api_key="sk", models=["*"], access_group_ids=["grp"])) is False
+    assert check(UserAPIKeyAuth(api_key="sk", models=["all-proxy-models"], access_group_ids=["grp"])) is False
     # A concrete model allowlist is still a subset even with access groups.
-    assert (
-        check(
-            UserAPIKeyAuth(
-                api_key="sk", models=["gpt-4o-mini"], access_group_ids=["grp"]
-            )
-        )
-        is True
-    )
+    assert check(UserAPIKeyAuth(api_key="sk", models=["gpt-4o-mini"], access_group_ids=["grp"])) is True
 
 
 def test_has_applicable_batch_rate_limits():
@@ -1037,14 +975,12 @@ def test_should_skip_ignores_client_supplied_metadata_flag():
     ]
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
     with patch("litellm.proxy.proxy_server.general_settings", {}):
-        should_skip, descriptors = (
-            rate_limiter._should_skip_batch_input_file_processing(
-                data={
-                    "input_file_id": "file-abc",
-                    "litellm_metadata": {"skip_batch_input_file_rate_limiting": True},
-                },
-                user_api_key_dict=user,
-            )
+        should_skip, descriptors = rate_limiter._should_skip_batch_input_file_processing(
+            data={
+                "input_file_id": "file-abc",
+                "litellm_metadata": {"skip_batch_input_file_rate_limiting": True},
+            },
+            user_api_key_dict=user,
         )
     assert should_skip is False
 
@@ -1063,20 +999,14 @@ def test_should_not_skip_for_forged_model_embedded_file_id():
         {"rate_limit": {"requests_per_unit": 5}}
     ]
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
-    encoded = (
-        base64.urlsafe_b64encode(b"litellm:file-xyz;model,gpt-4o-mini")
-        .decode()
-        .rstrip("=")
-    )
+    encoded = base64.urlsafe_b64encode(b"litellm:file-xyz;model,gpt-4o-mini").decode().rstrip("=")
     with patch(
         "litellm.proxy.proxy_server.general_settings",
         {"skip_batch_input_file_rate_limiting_for_models": ["gpt-4o-mini"]},
     ):
-        should_skip, descriptors = (
-            rate_limiter._should_skip_batch_input_file_processing(
-                data={"input_file_id": f"file-{encoded}"},
-                user_api_key_dict=user,
-            )
+        should_skip, descriptors = rate_limiter._should_skip_batch_input_file_processing(
+            data={"input_file_id": f"file-{encoded}"},
+            user_api_key_dict=user,
         )
     assert should_skip is False
     assert descriptors is not None
@@ -1096,11 +1026,9 @@ def test_should_not_skip_for_skip_listed_top_level_model():
         "litellm.proxy.proxy_server.general_settings",
         {"skip_batch_input_file_rate_limiting_for_models": ["gpt-4o-mini"]},
     ):
-        should_skip, descriptors = (
-            rate_limiter._should_skip_batch_input_file_processing(
-                data={"model": "gpt-4o-mini", "input_file_id": "file-abc"},
-                user_api_key_dict=user,
-            )
+        should_skip, descriptors = rate_limiter._should_skip_batch_input_file_processing(
+            data={"model": "gpt-4o-mini", "input_file_id": "file-abc"},
+            user_api_key_dict=user,
         )
     assert should_skip is False
 
@@ -1118,11 +1046,7 @@ def test_should_not_skip_when_file_bound_provider_is_rate_limited():
         {"rate_limit": {"requests_per_unit": 5}}
     ]
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
-    encoded = (
-        base64.urlsafe_b64encode(b"litellm:file-orig;model,vllm-batch")
-        .decode()
-        .rstrip("=")
-    )
+    encoded = base64.urlsafe_b64encode(b"litellm:file-orig;model,vllm-batch").decode().rstrip("=")
 
     def _creds(model_id, **kwargs):
         provider = "hosted_vllm" if model_id == "vllm-batch" else "openai"
@@ -1139,11 +1063,9 @@ def test_should_not_skip_when_file_bound_provider_is_rate_limited():
             side_effect=_creds,
         ),
     ):
-        should_skip, descriptors = (
-            rate_limiter._should_skip_batch_input_file_processing(
-                data={"input_file_id": f"file-{encoded}", "model": "gpt-skip"},
-                user_api_key_dict=user,
-            )
+        should_skip, descriptors = rate_limiter._should_skip_batch_input_file_processing(
+            data={"input_file_id": f"file-{encoded}", "model": "gpt-skip"},
+            user_api_key_dict=user,
         )
     assert should_skip is False
     assert descriptors is not None
@@ -1160,11 +1082,7 @@ def test_should_skip_when_file_bound_provider_is_skip_listed():
         {"rate_limit": {"requests_per_unit": 5}}
     ]
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
-    encoded = (
-        base64.urlsafe_b64encode(b"litellm:file-orig;model,vllm-batch")
-        .decode()
-        .rstrip("=")
-    )
+    encoded = base64.urlsafe_b64encode(b"litellm:file-orig;model,vllm-batch").decode().rstrip("=")
 
     def _creds(model_id, **kwargs):
         provider = "hosted_vllm" if model_id == "vllm-batch" else "openai"
@@ -1181,11 +1099,9 @@ def test_should_skip_when_file_bound_provider_is_skip_listed():
             side_effect=_creds,
         ),
     ):
-        should_skip, descriptors = (
-            rate_limiter._should_skip_batch_input_file_processing(
-                data={"input_file_id": f"file-{encoded}", "model": "gpt-skip"},
-                user_api_key_dict=user,
-            )
+        should_skip, descriptors = rate_limiter._should_skip_batch_input_file_processing(
+            data={"input_file_id": f"file-{encoded}", "model": "gpt-skip"},
+            user_api_key_dict=user,
         )
     assert should_skip is True
 
@@ -1203,9 +1119,7 @@ def test_warns_once_for_unsupported_model_skip_setting():
             "litellm.proxy.proxy_server.general_settings",
             {"skip_batch_input_file_rate_limiting_for_models": ["gpt-4o-mini"]},
         ),
-        patch(
-            "litellm.proxy.hooks.batch_rate_limiter.verbose_proxy_logger"
-        ) as mock_logger,
+        patch("litellm.proxy.hooks.batch_rate_limiter.verbose_proxy_logger") as mock_logger,
     ):
         for _ in range(3):
             rate_limiter._should_skip_batch_input_file_processing(
@@ -1213,10 +1127,7 @@ def test_warns_once_for_unsupported_model_skip_setting():
                 user_api_key_dict=user,
             )
     assert mock_logger.warning.call_count == 1
-    assert (
-        "skip_batch_input_file_rate_limiting_for_models"
-        in mock_logger.warning.call_args[0][0]
-    )
+    assert "skip_batch_input_file_rate_limiting_for_models" in mock_logger.warning.call_args[0][0]
 
 
 def test_no_warning_when_model_skip_setting_absent():
@@ -1230,9 +1141,7 @@ def test_no_warning_when_model_skip_setting_absent():
             "litellm.proxy.proxy_server.general_settings",
             {"skip_batch_input_file_rate_limiting_for_providers": ["openai"]},
         ),
-        patch(
-            "litellm.proxy.hooks.batch_rate_limiter.verbose_proxy_logger"
-        ) as mock_logger,
+        patch("litellm.proxy.hooks.batch_rate_limiter.verbose_proxy_logger") as mock_logger,
     ):
         rate_limiter._should_skip_batch_input_file_processing(
             data={"model": "gpt-4o-mini", "input_file_id": "file-abc"},
@@ -1243,16 +1152,12 @@ def test_no_warning_when_model_skip_setting_absent():
 
 def test_should_skip_when_no_rate_limits_configured():
     rate_limiter = _make_rate_limiter()
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
-        {"rate_limit": {}}
-    ]
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [{"rate_limit": {}}]
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
     with patch("litellm.proxy.proxy_server.general_settings", {}):
-        should_skip, descriptors = (
-            rate_limiter._should_skip_batch_input_file_processing(
-                data={"model": "gpt-4o-mini", "input_file_id": "file-abc"},
-                user_api_key_dict=user,
-            )
+        should_skip, descriptors = rate_limiter._should_skip_batch_input_file_processing(
+            data={"model": "gpt-4o-mini", "input_file_id": "file-abc"},
+            user_api_key_dict=user,
         )
     assert should_skip is True
     assert descriptors is None
@@ -1261,9 +1166,7 @@ def test_should_skip_when_no_rate_limits_configured():
 def test_should_not_skip_and_reuses_descriptors_when_limits_present():
     rate_limiter = _make_rate_limiter()
     descriptors = [{"rate_limit": {"tokens_per_unit": 100}}]
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = (
-        descriptors
-    )
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = descriptors
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
     with patch("litellm.proxy.proxy_server.general_settings", {}):
         should_skip, returned = rate_limiter._should_skip_batch_input_file_processing(
@@ -1287,12 +1190,10 @@ def test_resolve_fetch_params_uses_request_model_credentials():
             },
         ),
     ):
-        provider_file_id, fetch_kwargs = (
-            rate_limiter._resolve_batch_input_file_fetch_params(
-                file_id="file-plain-openai",
-                custom_llm_provider="openai",
-                data={"model": "my-vllm-batch"},
-            )
+        provider_file_id, fetch_kwargs = rate_limiter._resolve_batch_input_file_fetch_params(
+            file_id="file-plain-openai",
+            custom_llm_provider="openai",
+            data={"model": "my-vllm-batch"},
         )
     assert provider_file_id == "file-plain-openai"
     assert fetch_kwargs["model"] == "my-vllm-batch"
@@ -1309,12 +1210,10 @@ def test_resolve_fetch_params_fails_open_on_credential_lookup_error():
             side_effect=HTTPException(status_code=404, detail="no creds"),
         ),
     ):
-        provider_file_id, fetch_kwargs = (
-            rate_limiter._resolve_batch_input_file_fetch_params(
-                file_id="file-plain-openai",
-                custom_llm_provider="openai",
-                data={"model": "my-vllm-batch"},
-            )
+        provider_file_id, fetch_kwargs = rate_limiter._resolve_batch_input_file_fetch_params(
+            file_id="file-plain-openai",
+            custom_llm_provider="openai",
+            data={"model": "my-vllm-batch"},
         )
     assert provider_file_id == "file-plain-openai"
     assert fetch_kwargs == {"custom_llm_provider": "openai"}
@@ -1324,16 +1223,10 @@ def test_resolve_fetch_params_model_embedded_fails_open_on_credential_error():
     import base64
 
     rate_limiter = _make_rate_limiter()
-    encoded = (
-        base64.urlsafe_b64encode(b"litellm:file-orig;model,vllm-batch")
-        .decode()
-        .rstrip("=")
-    )
+    encoded = base64.urlsafe_b64encode(b"litellm:file-orig;model,vllm-batch").decode().rstrip("=")
     encoded_file_id = f"file-{encoded}"
 
-    get_credentials = MagicMock(
-        side_effect=HTTPException(status_code=404, detail="no creds")
-    )
+    get_credentials = MagicMock(side_effect=HTTPException(status_code=404, detail="no creds"))
     with (
         patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
         patch(
@@ -1341,12 +1234,10 @@ def test_resolve_fetch_params_model_embedded_fails_open_on_credential_error():
             get_credentials,
         ),
     ):
-        provider_file_id, fetch_kwargs = (
-            rate_limiter._resolve_batch_input_file_fetch_params(
-                file_id=encoded_file_id,
-                custom_llm_provider="openai",
-                data={},
-            )
+        provider_file_id, fetch_kwargs = rate_limiter._resolve_batch_input_file_fetch_params(
+            file_id=encoded_file_id,
+            custom_llm_provider="openai",
+            data={},
         )
     get_credentials.assert_called_once()
     assert provider_file_id == "file-orig"
@@ -1361,9 +1252,7 @@ async def test_check_and_increment_computes_descriptors_when_not_passed():
     )
 
     parallel_request_limiter = MagicMock()
-    parallel_request_limiter._create_rate_limit_descriptors.return_value = [
-        {"rate_limit": {"tokens_per_unit": 100}}
-    ]
+    parallel_request_limiter._create_rate_limit_descriptors.return_value = [{"rate_limit": {"tokens_per_unit": 100}}]
     parallel_request_limiter.atomic_check_and_increment_by_n = AsyncMock(
         return_value={"overall_code": "OK", "statuses": []}
     )
@@ -1503,9 +1392,7 @@ async def test_count_input_file_usage_streams_without_building_list():
 
     with (
         patch("litellm.afile_content", new=AsyncMock(return_value=fake_content)),
-        patch(
-            "litellm.batches.batch_utils._get_file_content_as_dictionary"
-        ) as mock_dict_list,
+        patch("litellm.batches.batch_utils._get_file_content_as_dictionary") as mock_dict_list,
     ):
         usage = await rate_limiter.count_input_file_usage(
             file_id="file-not-managed",
@@ -1640,9 +1527,7 @@ async def test_count_input_file_usage_collects_models_after_malformed_line():
     )
     fake_content = MagicMock()
     fake_content.content = (
-        _one_row_batch_bytes("only-allowed")
-        + b"{ this is not valid json\n"
-        + _one_row_batch_bytes("restricted-model")
+        _one_row_batch_bytes("only-allowed") + b"{ this is not valid json\n" + _one_row_batch_bytes("restricted-model")
     )
     user = UserAPIKeyAuth(
         api_key="sk-x",

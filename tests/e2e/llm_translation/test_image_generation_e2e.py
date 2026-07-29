@@ -22,9 +22,7 @@ def _assert_image_returned(body: str) -> None:
     parsed = ImagesResult.model_validate_json(body)
     assert parsed.data, f"/images/generations returned no data: {body[:300]}"
     first = parsed.data[0]
-    assert first.b64_json or first.url, (
-        f"generated image has neither b64_json nor url: {body[:300]}"
-    )
+    assert first.b64_json or first.url, f"generated image has neither b64_json nor url: {body[:300]}"
 
 
 class TestImageGeneration:
@@ -35,9 +33,7 @@ class TestImageGeneration:
         model = f"e2e-image-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
-            LiteLLMParamsBody(
-                model="openai/gpt-image-1-mini", api_key="os.environ/OPENAI_API_KEY"
-            ),
+            LiteLLMParamsBody(model="openai/gpt-image-1-mini", api_key="os.environ/OPENAI_API_KEY"),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()

@@ -16,9 +16,7 @@ import litellm
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy._types import UserAPIKeyAuth
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
 def test_add_key_level_controls_with_none_metadata():
@@ -87,9 +85,7 @@ def test_add_key_level_controls_simulates_original_issue():
 
     except AttributeError as e:
         if "'NoneType' object has no attribute 'get'" in str(e):
-            pytest.fail(
-                "The fix for issue #13995 is not working - still getting NoneType error"
-            )
+            pytest.fail("The fix for issue #13995 is not working - still getting NoneType error")
         else:
             # Some other AttributeError, re-raise it
             raise
@@ -121,9 +117,7 @@ def test_batch_create_with_litellm_sdk():
 
         except Exception as e:
             if "'NoneType' object has no attribute 'get'" in str(e):
-                pytest.fail(
-                    "The fix for issue #13995 is not working - still getting NoneType error"
-                )
+                pytest.fail("The fix for issue #13995 is not working - still getting NoneType error")
             else:
                 # Some other exception, re-raise it
                 raise

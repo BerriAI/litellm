@@ -37,20 +37,12 @@ def test_basedpyright_counts_per_rule_from_json_not_warnings():
 
 
 def test_basedpyright_error_without_a_rule_is_bucketed():
-    payload = json.dumps(
-        {"generalDiagnostics": [_bpr(f"{ROOT}/litellm/x.py", "error", None)]}
-    )
+    payload = json.dumps({"generalDiagnostics": [_bpr(f"{ROOT}/litellm/x.py", "error", None)]})
     assert gate.count_basedpyright(payload) == {gate.UNCODED: 1}
 
 
 def test_paths_outside_repo_are_skipped():
-    payload = json.dumps(
-        {
-            "generalDiagnostics": [
-                _bpr("/tmp/elsewhere.py", "error", "reportArgumentType")
-            ]
-        }
-    )
+    payload = json.dumps({"generalDiagnostics": [_bpr("/tmp/elsewhere.py", "error", "reportArgumentType")]})
     assert gate.count_basedpyright(payload) == {}
 
 
@@ -59,13 +51,7 @@ def test_symlinked_root_keeps_diagnostics_in_tree(tmp_path):
     real.mkdir()
     link = tmp_path / "link"
     link.symlink_to(real)
-    payload = json.dumps(
-        {
-            "generalDiagnostics": [
-                _bpr(link / "litellm" / "x.py", "error", "reportArgumentType")
-            ]
-        }
-    )
+    payload = json.dumps({"generalDiagnostics": [_bpr(link / "litellm" / "x.py", "error", "reportArgumentType")]})
     assert gate.count_basedpyright(payload, root=link) == {"reportArgumentType": 1}
 
 
@@ -76,17 +62,13 @@ def test_at_or_under_ceiling_passes():
 
 def test_one_more_error_than_ceiling_fails():
     budget = {"no-any-return": {"limit": 5}}
-    assert gate.evaluate({"no-any-return": 6}, {}, budget) == [
-        gate.Breach("no-any-return", 6, 5, 6)
-    ]
+    assert gate.evaluate({"no-any-return": 6}, {}, budget) == [gate.Breach("no-any-return", 6, 5, 6)]
 
 
 def test_limit_absorbs_increase_up_to_it_then_fails_past_it():
     budget = {"arg-type": {"limit": 10}}
     assert gate.evaluate({"arg-type": 10}, {}, budget) == []
-    assert gate.evaluate({"arg-type": 11}, {}, budget) == [
-        gate.Breach("arg-type", 11, 10, 11)
-    ]
+    assert gate.evaluate({"arg-type": 11}, {}, budget) == [gate.Breach("arg-type", 11, 10, 11)]
 
 
 def test_unbudgeted_new_code_uses_default_limit():
@@ -113,9 +95,7 @@ def test_change_that_grows_an_over_cap_rule_is_blamed_for_only_what_it_added():
     # Over limit AND above base: blamed, and `added` is the delta vs base, not the
     # whole overage, so the message points at this change's contribution.
     budget = {"arg-type": {"limit": 10}}
-    assert gate.evaluate({"arg-type": 14}, {"arg-type": 12}, budget) == [
-        gate.Breach("arg-type", 14, 10, 2)
-    ]
+    assert gate.evaluate({"arg-type": 14}, {"arg-type": 12}, budget) == [gate.Breach("arg-type", 14, 10, 2)]
 
 
 def test_reducing_an_over_cap_rule_below_base_passes():
@@ -132,9 +112,7 @@ def test_no_output_against_a_nonempty_budget_is_a_vacuous_run():
 def test_genuine_zero_and_empty_budget_are_not_vacuous():
     assert gate.is_vacuous_run({}, {}) is False
     assert gate.is_vacuous_run({}, {"no-untyped-def": {"limit": 0}}) is False
-    assert (
-        gate.is_vacuous_run({"arg-type": 1}, {"arg-type": {"limit": 10}}) is False
-    )
+    assert gate.is_vacuous_run({"arg-type": 1}, {"arg-type": {"limit": 10}}) is False
 
 
 def test_update_ratchets_a_limit_down_by_what_the_branch_fixed():
@@ -142,24 +120,18 @@ def test_update_ratchets_a_limit_down_by_what_the_branch_fixed():
     # limit of 100 falls to 90 -- the granted headroom (60) is preserved, not the
     # raw count.
     budget = {"reportAny": {"limit": 100}}
-    assert gate.ratcheted_budget(budget, {"reportAny": 30}, {"reportAny": 40}) == {
-        "reportAny": {"limit": 90}
-    }
+    assert gate.ratcheted_budget(budget, {"reportAny": 30}, {"reportAny": 40}) == {"reportAny": {"limit": 90}}
 
 
 def test_update_never_raises_a_limit_when_a_rule_grows():
     # Adding violations must not loosen the ceiling; the limit holds flat.
     budget = {"reportAny": {"limit": 100}}
-    assert gate.ratcheted_budget(budget, {"reportAny": 55}, {"reportAny": 40}) == {
-        "reportAny": {"limit": 100}
-    }
+    assert gate.ratcheted_budget(budget, {"reportAny": 55}, {"reportAny": 40}) == {"reportAny": {"limit": 100}}
 
 
 def test_update_clamps_a_limit_at_zero_never_negative():
     budget = {"reportAny": {"limit": 5}}
-    assert gate.ratcheted_budget(budget, {"reportAny": 0}, {"reportAny": 40}) == {
-        "reportAny": {"limit": 0}
-    }
+    assert gate.ratcheted_budget(budget, {"reportAny": 0}, {"reportAny": 40}) == {"reportAny": {"limit": 0}}
 
 
 def test_malformed_basedpyright_json_exits_loudly_not_as_zero_errors():
@@ -184,16 +156,12 @@ def test_over_ceiling_flags_only_rules_above_their_limit():
 
 def test_over_ceiling_holds_unbudgeted_rules_to_the_default_limit():
     assert gate.over_ceiling({"brand-new": gate.DEFAULT_LIMIT}, {}) == frozenset()
-    assert gate.over_ceiling({"brand-new": gate.DEFAULT_LIMIT + 1}, {}) == frozenset(
-        {"brand-new"}
-    )
+    assert gate.over_ceiling({"brand-new": gate.DEFAULT_LIMIT + 1}, {}) == frozenset({"brand-new"})
 
 
 def test_over_ceiling_is_independent_across_rules():
     budget = {"reportAny": {"limit": 10}, "reportArgumentType": {"limit": 5}}
-    assert gate.over_ceiling(
-        {"reportAny": 9, "reportArgumentType": 6}, budget
-    ) == frozenset({"reportArgumentType"})
+    assert gate.over_ceiling({"reportAny": 9, "reportArgumentType": 6}, budget) == frozenset({"reportArgumentType"})
 
 
 def test_cache_key_changes_with_base_point_and_each_fingerprint():
@@ -258,9 +226,7 @@ def test_base_counts_cached_returns_the_hit_without_recomputing(tmp_path):
     def explode(ref):
         raise AssertionError("a cache hit must not re-run the base pass")
 
-    assert gate.base_counts_cached("abc123", cache_dir=tmp_path, compute=explode) == {
-        "reportAny": 7
-    }
+    assert gate.base_counts_cached("abc123", cache_dir=tmp_path, compute=explode) == {"reportAny": 7}
 
 
 def test_base_counts_cached_computes_once_then_hits(tmp_path):

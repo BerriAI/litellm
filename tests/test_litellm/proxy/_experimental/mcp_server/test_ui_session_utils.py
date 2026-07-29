@@ -31,9 +31,7 @@ async def test_resolve_ui_session_team_ids_returns_unique_ids(monkeypatch):
         user_id="user-1",
     )
 
-    fake_user = SimpleNamespace(
-        teams=["team-a", "team-b", "team-a", "", None, "team-c"]
-    )
+    fake_user = SimpleNamespace(teams=["team-a", "team-b", "team-a", "", None, "team-c"])
 
     monkeypatch.setattr(
         "litellm.proxy.auth.auth_checks.get_user_object",

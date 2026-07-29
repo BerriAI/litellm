@@ -3,9 +3,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 """
 Unit tests for OllamaModelInfo.get_models functionality.
@@ -39,9 +37,7 @@ class DummyResponse:
     def raise_for_status(self):
         if self.status_code >= 400:
             # Simulate an HTTP status error
-            raise httpx.HTTPStatusError(
-                "Error status code", request=None, response=None
-            )
+            raise httpx.HTTPStatusError("Error status code", request=None, response=None)
 
     def json(self):
         return self._json
@@ -101,13 +97,9 @@ class TestOllamaModelInfo:
         assert models == []
         # Ensure correct endpoint was called
         assert calls and calls[0].endswith("/api/tags")
-        assert call_headers and call_headers[0] == {
-            "Authorization": "Bearer test_api_key"
-        }
+        assert call_headers and call_headers[0] == {"Authorization": "Bearer test_api_key"}
 
-    def test_get_models_does_not_leak_server_key_to_provided_api_base(
-        self, monkeypatch
-    ):
+    def test_get_models_does_not_leak_server_key_to_provided_api_base(self, monkeypatch):
         """Model discovery should not send server-side keys to caller-supplied bases."""
         call_headers = []
 
@@ -146,9 +138,7 @@ class TestOllamaModelInfo:
         assert models == []
         assert call_headers[0] == {"Authorization": "Bearer explicit-api-key"}
 
-    def test_get_models_empty_key_does_not_leak_to_provided_api_base(
-        self, monkeypatch
-    ):
+    def test_get_models_empty_key_does_not_leak_to_provided_api_base(self, monkeypatch):
         """An empty explicit key must not fall back to server-side creds for a custom base."""
         call_headers = []
 
@@ -251,9 +241,7 @@ class TestOllamaGetModelInfo:
         monkeypatch.setattr("litellm.module_level_client.post", mock_post)
 
         config = OllamaConfig()
-        result = config.get_model_info(
-            "my-custom-model", api_base="http://my-remote-server:11434"
-        )
+        result = config.get_model_info("my-custom-model", api_base="http://my-remote-server:11434")
 
         assert captured_urls[0] == "http://my-remote-server:11434/api/show"
         assert result["max_tokens"] == 4096
@@ -280,9 +268,7 @@ class TestOllamaGetModelInfo:
         assert captured_urls[0] == "http://env-server:11434/api/show"
         assert captured_headers[0] == {"Authorization": "Bearer env-api-key"}
 
-    def test_get_model_info_uses_explicit_api_key_for_provided_api_base(
-        self, monkeypatch
-    ):
+    def test_get_model_info_uses_explicit_api_key_for_provided_api_base(self, monkeypatch):
         """When api_key is explicit, model info should send it to the provided api_base."""
         from litellm.llms.ollama.completion.transformation import OllamaConfig
 
@@ -303,9 +289,7 @@ class TestOllamaGetModelInfo:
 
         assert captured_headers[0] == {"Authorization": "Bearer explicit-api-key"}
 
-    def test_get_model_info_empty_key_does_not_leak_to_provided_api_base(
-        self, monkeypatch
-    ):
+    def test_get_model_info_empty_key_does_not_leak_to_provided_api_base(self, monkeypatch):
         """An empty explicit key must not fall back to server-side creds for a custom base."""
         from litellm.llms.ollama.completion.transformation import OllamaConfig
 
@@ -329,9 +313,7 @@ class TestOllamaGetModelInfo:
 
         assert captured_headers[0] == {}
 
-    def test_litellm_get_model_info_does_not_leak_server_key_to_provided_api_base(
-        self, monkeypatch
-    ):
+    def test_litellm_get_model_info_does_not_leak_server_key_to_provided_api_base(self, monkeypatch):
         """Global model info should not send server-side keys to caller-supplied bases."""
         captured_headers = []
 
@@ -361,9 +343,7 @@ class TestOllamaGetModelInfo:
         assert model_info["max_input_tokens"] == 32768
         assert captured_headers[0] == {}
 
-    def test_litellm_get_model_info_forwards_explicit_api_key_to_provided_base(
-        self, monkeypatch
-    ):
+    def test_litellm_get_model_info_forwards_explicit_api_key_to_provided_base(self, monkeypatch):
         """An explicit api_key passed to litellm.get_model_info must reach the provided base."""
         captured_headers = []
 
@@ -446,9 +426,7 @@ class TestOllamaGetModelInfo:
         monkeypatch.setattr("litellm.module_level_client.post", mock_post)
 
         config = OllamaConfig()
-        config.get_model_info(
-            "my-custom-model", api_base="http://localhost:11434/api/generate"
-        )
+        config.get_model_info("my-custom-model", api_base="http://localhost:11434/api/generate")
 
         assert captured_urls[0] == "http://localhost:11434/api/show"
 
@@ -463,9 +441,7 @@ class TestOllamaGetModelInfo:
         monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
 
         config = OllamaConfig()
-        result = config.get_model_info(
-            "my-custom-model", api_base="http://unreachable:11434"
-        )
+        result = config.get_model_info("my-custom-model", api_base="http://unreachable:11434")
 
         assert result["key"] == "my-custom-model"
         assert result["litellm_provider"] == "ollama"
@@ -489,9 +465,7 @@ class TestOllamaGetModelInfo:
         monkeypatch.setattr("litellm.module_level_client.post", mock_post)
 
         config = OllamaConfig()
-        result = config.get_model_info(
-            "my-custom-model", api_base="http://localhost:11434"
-        )
+        result = config.get_model_info("my-custom-model", api_base="http://localhost:11434")
 
         assert result["key"] == "my-custom-model"
         assert result["litellm_provider"] == "ollama"
@@ -512,14 +486,10 @@ class TestOllamaGetModelInfo:
         monkeypatch.setattr("litellm.module_level_client.post", mock_post)
 
         config = OllamaConfig()
-        config.get_model_info(
-            "ollama/my-custom-model", api_base="http://localhost:11434"
-        )
+        config.get_model_info("ollama/my-custom-model", api_base="http://localhost:11434")
         assert captured_json[0]["name"] == "my-custom-model"
 
-        config.get_model_info(
-            "ollama_chat/my-custom-model", api_base="http://localhost:11434"
-        )
+        config.get_model_info("ollama_chat/my-custom-model", api_base="http://localhost:11434")
         assert captured_json[1]["name"] == "my-custom-model"
 
     def test_get_model_info_skips_network_for_static_model(self, monkeypatch):
@@ -534,9 +504,7 @@ class TestOllamaGetModelInfo:
         config = OllamaConfig()
         assert config.get_model_info("ollama/llama2") is None
 
-    def test_litellm_get_model_info_uses_provider_hook_for_unknown_model(
-        self, monkeypatch
-    ):
+    def test_litellm_get_model_info_uses_provider_hook_for_unknown_model(self, monkeypatch):
         """Unmapped Ollama models should use the provider-level dynamic hook."""
         captured_json = []
 
@@ -553,9 +521,7 @@ class TestOllamaGetModelInfo:
         litellm.get_model_info.cache_clear()
         monkeypatch.setattr("litellm.module_level_client.post", mock_post)
         try:
-            model_info = litellm.get_model_info(
-                "ollama/unknown-model", api_base="http://localhost:11434"
-            )
+            model_info = litellm.get_model_info("ollama/unknown-model", api_base="http://localhost:11434")
         finally:
             litellm.get_model_info.cache_clear()
 
@@ -609,9 +575,7 @@ class TestOllamaAuthHeaders:
             return mock_response
 
         # Mock the base_llm_http_handler.completion method at the module level
-        with patch(
-            "litellm.main.base_llm_http_handler.completion", side_effect=mock_completion
-        ):
+        with patch("litellm.main.base_llm_http_handler.completion", side_effect=mock_completion):
             try:
                 # Call completion with ollama provider and api_key
                 litellm.completion(
@@ -622,12 +586,12 @@ class TestOllamaAuthHeaders:
                 )
 
                 # Verify that Authorization header was added
-                assert (
-                    "Authorization" in captured_headers
-                ), "Authorization header should be present when api_key is provided"
-                assert (
-                    captured_headers["Authorization"] == "Bearer test-api-key-12345"
-                ), f"Authorization header should be 'Bearer test-api-key-12345', got {captured_headers.get('Authorization')}"
+                assert "Authorization" in captured_headers, (
+                    "Authorization header should be present when api_key is provided"
+                )
+                assert captured_headers["Authorization"] == "Bearer test-api-key-12345", (
+                    f"Authorization header should be 'Bearer test-api-key-12345', got {captured_headers.get('Authorization')}"
+                )
 
             except Exception as e:
                 pytest.fail(f"Ollama completion with api_key failed: {e}")
@@ -657,9 +621,7 @@ class TestOllamaAuthHeaders:
             return mock_response
 
         # Mock the base_llm_http_handler.completion method at the module level
-        with patch(
-            "litellm.main.base_llm_http_handler.completion", side_effect=mock_completion
-        ):
+        with patch("litellm.main.base_llm_http_handler.completion", side_effect=mock_completion):
             try:
                 # Call completion with ollama_chat provider and api_key
                 litellm.completion(
@@ -670,12 +632,12 @@ class TestOllamaAuthHeaders:
                 )
 
                 # Verify that Authorization header was added
-                assert (
-                    "Authorization" in captured_headers
-                ), "Authorization header should be present when api_key is provided"
-                assert (
-                    captured_headers["Authorization"] == "Bearer test-api-key-67890"
-                ), f"Authorization header should be 'Bearer test-api-key-67890', got {captured_headers.get('Authorization')}"
+                assert "Authorization" in captured_headers, (
+                    "Authorization header should be present when api_key is provided"
+                )
+                assert captured_headers["Authorization"] == "Bearer test-api-key-67890", (
+                    f"Authorization header should be 'Bearer test-api-key-67890', got {captured_headers.get('Authorization')}"
+                )
 
             except Exception as e:
                 pytest.fail(f"Ollama_chat completion with api_key failed: {e}")
@@ -703,9 +665,7 @@ class TestOllamaAuthHeaders:
             return mock_response
 
         # Mock the base_llm_http_handler.completion method at the module level
-        with patch(
-            "litellm.main.base_llm_http_handler.completion", side_effect=mock_completion
-        ):
+        with patch("litellm.main.base_llm_http_handler.completion", side_effect=mock_completion):
             try:
                 # Call completion without api_key
                 litellm.completion(
@@ -715,9 +675,9 @@ class TestOllamaAuthHeaders:
                 )
 
                 # Verify that Authorization header was NOT added
-                assert (
-                    "Authorization" not in captured_headers
-                ), "Authorization header should not be present when api_key is not provided"
+                assert "Authorization" not in captured_headers, (
+                    "Authorization header should not be present when api_key is not provided"
+                )
 
             except Exception as e:
                 pytest.fail(f"Ollama completion without api_key failed: {e}")
@@ -747,9 +707,7 @@ class TestOllamaAuthHeaders:
             return mock_response
 
         # Mock the base_llm_http_handler.completion method at the module level
-        with patch(
-            "litellm.main.base_llm_http_handler.completion", side_effect=mock_completion
-        ):
+        with patch("litellm.main.base_llm_http_handler.completion", side_effect=mock_completion):
             try:
                 # Call completion with both api_key and existing Authorization header
                 existing_auth = "Bearer existing-token"
@@ -762,12 +720,10 @@ class TestOllamaAuthHeaders:
                 )
 
                 # Verify that existing Authorization header was preserved
-                assert (
-                    "Authorization" in captured_headers
-                ), "Authorization header should be present"
-                assert (
-                    captured_headers["Authorization"] == existing_auth
-                ), f"Existing Authorization header should be preserved, got {captured_headers.get('Authorization')}"
+                assert "Authorization" in captured_headers, "Authorization header should be present"
+                assert captured_headers["Authorization"] == existing_auth, (
+                    f"Existing Authorization header should be preserved, got {captured_headers.get('Authorization')}"
+                )
 
             except Exception as e:
                 pytest.fail(f"Ollama completion with existing auth header failed: {e}")
@@ -801,9 +757,7 @@ class TestOllamaAuthHeaders:
             return mock_response
 
         # Mock the base_llm_http_handler.completion method at the module level
-        with patch(
-            "litellm.main.base_llm_http_handler.completion", side_effect=mock_completion
-        ):
+        with patch("litellm.main.base_llm_http_handler.completion", side_effect=mock_completion):
             try:
                 # Call completion with ollama.com as api_base and api_key
                 litellm.completion(
@@ -814,18 +768,17 @@ class TestOllamaAuthHeaders:
                 )
 
                 # Verify that Authorization header was added
-                assert (
-                    "Authorization" in captured_headers
-                ), "Authorization header should be present when using ollama.com with api_key"
-                assert (
-                    captured_headers["Authorization"]
-                    == "Bearer test-ollama-com-api-key"
-                ), f"Authorization header should be 'Bearer test-ollama-com-api-key', got {captured_headers.get('Authorization')}"
+                assert "Authorization" in captured_headers, (
+                    "Authorization header should be present when using ollama.com with api_key"
+                )
+                assert captured_headers["Authorization"] == "Bearer test-ollama-com-api-key", (
+                    f"Authorization header should be 'Bearer test-ollama-com-api-key', got {captured_headers.get('Authorization')}"
+                )
 
                 # Verify the api_base was passed correctly
-                assert (
-                    captured_api_base == "https://ollama.com"
-                ), f"API base should be 'https://ollama.com', got {captured_api_base}"
+                assert captured_api_base == "https://ollama.com", (
+                    f"API base should be 'https://ollama.com', got {captured_api_base}"
+                )
 
             except Exception as e:
                 pytest.fail(f"Ollama completion with ollama.com api_base failed: {e}")
@@ -859,9 +812,7 @@ class TestOllamaAuthHeaders:
             return mock_response
 
         # Mock the base_llm_http_handler.completion method at the module level
-        with patch(
-            "litellm.main.base_llm_http_handler.completion", side_effect=mock_completion
-        ):
+        with patch("litellm.main.base_llm_http_handler.completion", side_effect=mock_completion):
             try:
                 # Call completion with ollama.com as api_base and api_key
                 litellm.completion(
@@ -872,27 +823,22 @@ class TestOllamaAuthHeaders:
                 )
 
                 # Verify that Authorization header was added
-                assert (
-                    "Authorization" in captured_headers
-                ), "Authorization header should be present when using ollama.com with api_key"
-                assert (
-                    captured_headers["Authorization"]
-                    == "Bearer test-ollama-com-chat-key"
-                ), f"Authorization header should be 'Bearer test-ollama-com-chat-key', got {captured_headers.get('Authorization')}"
-
-                # Verify the api_base was passed correctly
-                assert (
-                    captured_api_base == "https://ollama.com"
-                ), f"API base should be 'https://ollama.com', got {captured_api_base}"
-
-            except Exception as e:
-                pytest.fail(
-                    f"Ollama_chat completion with ollama.com api_base failed: {e}"
+                assert "Authorization" in captured_headers, (
+                    "Authorization header should be present when using ollama.com with api_key"
+                )
+                assert captured_headers["Authorization"] == "Bearer test-ollama-com-chat-key", (
+                    f"Authorization header should be 'Bearer test-ollama-com-chat-key', got {captured_headers.get('Authorization')}"
                 )
 
-    def test_ollama_completion_with_ollama_com_without_api_key_fails_gracefully(
-        self, monkeypatch
-    ):
+                # Verify the api_base was passed correctly
+                assert captured_api_base == "https://ollama.com", (
+                    f"API base should be 'https://ollama.com', got {captured_api_base}"
+                )
+
+            except Exception as e:
+                pytest.fail(f"Ollama_chat completion with ollama.com api_base failed: {e}")
+
+    def test_ollama_completion_with_ollama_com_without_api_key_fails_gracefully(self, monkeypatch):
         """
         Test that when using https://ollama.com as api_base without an api_key,
         no Authorization header is added (which would likely fail on the server side,
@@ -918,9 +864,7 @@ class TestOllamaAuthHeaders:
             return mock_response
 
         # Mock the base_llm_http_handler.completion method at the module level
-        with patch(
-            "litellm.main.base_llm_http_handler.completion", side_effect=mock_completion
-        ):
+        with patch("litellm.main.base_llm_http_handler.completion", side_effect=mock_completion):
             try:
                 # Call completion with ollama.com but no api_key
                 litellm.completion(
@@ -930,11 +874,9 @@ class TestOllamaAuthHeaders:
                 )
 
                 # Verify that Authorization header was NOT added
-                assert (
-                    "Authorization" not in captured_headers
-                ), "Authorization header should not be present when api_key is not provided, even with ollama.com"
+                assert "Authorization" not in captured_headers, (
+                    "Authorization header should not be present when api_key is not provided, even with ollama.com"
+                )
 
             except Exception as e:
-                pytest.fail(
-                    f"Ollama completion with ollama.com without api_key failed: {e}"
-                )
+                pytest.fail(f"Ollama completion with ollama.com without api_key failed: {e}")

@@ -31,10 +31,7 @@ class TestVertexAIFilesHandler:
     def test_extract_bucket_and_object_from_file_id_standard_path(self):
         """Test extraction of bucket and object from URL-encoded file_id with standard path"""
         # Sample file_id with nested folder structure
-        file_id = (
-            "gs%3A%2F%2Ftest-bucket%2Flitellm-vertex-files"
-            "%2Ftest-folder%2Fsub-folder%2Ftest-file.txt"
-        )
+        file_id = "gs%3A%2F%2Ftest-bucket%2Flitellm-vertex-files%2Ftest-folder%2Fsub-folder%2Ftest-file.txt"
 
         bucket_name, object_path = self.handler._extract_bucket_and_object_from_file_id(
             file_id=file_id,
@@ -105,21 +102,14 @@ class TestVertexAIFilesHandler:
     async def test_afile_content_success(self):
         """Test successful async file content retrieval"""
         # Setup test data
-        file_id = (
-            "gs%3A%2F%2Ftest-bucket%2Flitellm-vertex-files"
-            "%2Fuploads%2Fabc-test-file.txt"
-        )
+        file_id = "gs%3A%2F%2Ftest-bucket%2Flitellm-vertex-files%2Fuploads%2Fabc-test-file.txt"
         expected_content = b"test file content"
 
-        file_content_request = FileContentRequest(
-            file_id=file_id, extra_headers=None, extra_body=None
-        )
+        file_content_request = FileContentRequest(file_id=file_id, extra_headers=None, extra_body=None)
 
         # Mock the download_gcs_object method
         with (
-            patch.object(
-                self.handler, "download_gcs_object", new_callable=AsyncMock
-            ) as mock_download,
+            patch.object(self.handler, "download_gcs_object", new_callable=AsyncMock) as mock_download,
             patch.object(
                 self.handler,
                 "get_gcs_logging_config",
@@ -148,15 +138,9 @@ class TestVertexAIFilesHandler:
             # Verify the download was called with correct parameters
             mock_download.assert_called_once()
             call_args = mock_download.call_args
-            assert (
-                call_args.kwargs["object_name"]
-                == "litellm-vertex-files/uploads/abc-test-file.txt"
-            )
+            assert call_args.kwargs["object_name"] == "litellm-vertex-files/uploads/abc-test-file.txt"
             assert "standard_callback_dynamic_params" in call_args.kwargs
-            assert (
-                call_args.kwargs["standard_callback_dynamic_params"]["gcs_bucket_name"]
-                == "test-bucket"
-            )
+            assert call_args.kwargs["standard_callback_dynamic_params"]["gcs_bucket_name"] == "test-bucket"
 
     @pytest.mark.asyncio
     async def test_afile_content_missing_file_id(self):
@@ -164,9 +148,7 @@ class TestVertexAIFilesHandler:
         file_content_request = FileContentRequest(extra_headers=None, extra_body=None)
 
         # Should raise ValueError for missing file_id
-        with pytest.raises(
-            ValueError, match="file_id is required in file_content_request"
-        ):
+        with pytest.raises(ValueError, match="file_id is required in file_content_request"):
             await self.handler.afile_content(
                 file_content_request=file_content_request,
                 vertex_credentials=None,
@@ -179,20 +161,13 @@ class TestVertexAIFilesHandler:
     @pytest.mark.asyncio
     async def test_afile_content_download_failure(self):
         """Test async file content retrieval when download fails"""
-        file_id = (
-            "gs%3A%2F%2Ftest-bucket%2Flitellm-vertex-files"
-            "%2Fuploads%2Fabc-test-file.txt"
-        )
+        file_id = "gs%3A%2F%2Ftest-bucket%2Flitellm-vertex-files%2Fuploads%2Fabc-test-file.txt"
 
-        file_content_request = FileContentRequest(
-            file_id=file_id, extra_headers=None, extra_body=None
-        )
+        file_content_request = FileContentRequest(file_id=file_id, extra_headers=None, extra_body=None)
 
         # Mock download to return None (failure)
         with (
-            patch.object(
-                self.handler, "download_gcs_object", new_callable=AsyncMock
-            ) as mock_download,
+            patch.object(self.handler, "download_gcs_object", new_callable=AsyncMock) as mock_download,
             patch.object(
                 self.handler,
                 "get_gcs_logging_config",
@@ -221,9 +196,7 @@ class TestVertexAIFilesHandler:
         file_id = "gs%3A%2F%2Ftest-bucket%2Ftest-file.txt"
         expected_content = b"test file content"
 
-        file_content_request = FileContentRequest(
-            file_id=file_id, extra_headers=None, extra_body=None
-        )
+        file_content_request = FileContentRequest(file_id=file_id, extra_headers=None, extra_body=None)
 
         # Create expected response
         mock_response = httpx.Response(
@@ -261,25 +234,17 @@ class TestVertexAIFilesHandler:
         file_id = "gs%3A%2F%2Ftest-bucket%2Ftest-file.txt"
         expected_content = b"test file content"
 
-        file_content_request = FileContentRequest(
-            file_id=file_id, extra_headers=None, extra_body=None
-        )
+        file_content_request = FileContentRequest(file_id=file_id, extra_headers=None, extra_body=None)
 
         # Mock the afile_content method
-        with patch.object(
-            self.handler, "afile_content", new_callable=AsyncMock
-        ) as mock_afile_content:
+        with patch.object(self.handler, "afile_content", new_callable=AsyncMock) as mock_afile_content:
             mock_response = httpx.Response(
                 status_code=200,
                 content=expected_content,
                 headers={"content-type": "application/octet-stream"},
-                request=httpx.Request(
-                    method="GET", url="gs://test-bucket/test-file.txt"
-                ),
+                request=httpx.Request(method="GET", url="gs://test-bucket/test-file.txt"),
             )
-            mock_afile_content.return_value = HttpxBinaryResponseContent(
-                response=mock_response
-            )
+            mock_afile_content.return_value = HttpxBinaryResponseContent(response=mock_response)
 
             # Call the method with _is_async=True
             result = self.handler.file_content(

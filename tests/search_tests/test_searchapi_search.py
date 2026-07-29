@@ -61,9 +61,7 @@ class TestSearchAPIConfig:
         mock_get_secret.return_value = "test_api_key"
         config = SearchAPIConfig()
 
-        result = config.transform_search_request(
-            query="test query", optional_params={}, api_key="test_api_key"
-        )
+        result = config.transform_search_request(query="test query", optional_params={}, api_key="test_api_key")
 
         assert "_searchapi_params" in result
         params = result["_searchapi_params"]
@@ -123,9 +121,7 @@ class TestSearchAPIConfig:
         mock_get_secret.return_value = "test_api_key"
         config = SearchAPIConfig()
 
-        result = config.transform_search_request(
-            query=["test", "query"], optional_params={}, api_key="test_api_key"
-        )
+        result = config.transform_search_request(query=["test", "query"], optional_params={}, api_key="test_api_key")
 
         params = result["_searchapi_params"]
         assert params["q"] == "test query"
@@ -173,9 +169,7 @@ class TestSearchAPIConfig:
             ]
         }
 
-        result = config.transform_search_response(
-            raw_response=mock_response, logging_obj=None
-        )
+        result = config.transform_search_response(raw_response=mock_response, logging_obj=None)
 
         assert isinstance(result, SearchResponse)
         assert result.object == "search"
@@ -201,9 +195,7 @@ class TestSearchAPIConfig:
         mock_response = Mock(spec=httpx.Response)
         mock_response.json.return_value = {"organic_results": []}
 
-        result = config.transform_search_response(
-            raw_response=mock_response, logging_obj=None
-        )
+        result = config.transform_search_response(raw_response=mock_response, logging_obj=None)
 
         assert isinstance(result, SearchResponse)
         assert len(result.results) == 0
@@ -238,9 +230,7 @@ class TestSearchAPIIntegration:
         """
         import litellm
 
-        response = litellm.search(
-            query="Python programming", search_provider="searchapi", max_results=5
-        )
+        response = litellm.search(query="Python programming", search_provider="searchapi", max_results=5)
 
         assert response is not None
         assert hasattr(response, "results")

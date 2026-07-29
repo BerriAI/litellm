@@ -40,9 +40,7 @@ _SCENARIOS = [
 
 
 async def _info(proxy_client, cleartext: str):
-    return await proxy_client.get(
-        "/key/info", headers={"Authorization": f"Bearer {cleartext}"}
-    )
+    return await proxy_client.get("/key/info", headers={"Authorization": f"Bearer {cleartext}"})
 
 
 @pytest.mark.parametrize(
@@ -62,9 +60,7 @@ async def test_key_regenerate_authz_matrix(
     seeder = world.keys[Actor.PROXY_ADMIN].cleartext
 
     if target_shape == "self":
-        target_cleartext = await create_scratch_key(
-            proxy_client, seeder, scratch.prefix, user_id=caller.user_id
-        )
+        target_cleartext = await create_scratch_key(proxy_client, seeder, scratch.prefix, user_id=caller.user_id)
     elif target_shape == "owner":
         target_cleartext = await create_scratch_key(
             proxy_client,
@@ -89,9 +85,7 @@ async def test_key_regenerate_authz_matrix(
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"key": target_cleartext},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value} {target_shape}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value} {target_shape}: {resp.status_code} {resp.text}"
 
     if expected_status == 200:
         new_cleartext = resp.json()["key"]
@@ -106,9 +100,7 @@ async def test_key_regenerate_authz_matrix(
 async def test_key_path_regenerate_smoke(proxy_client, scratch, world):
     """Pins that POST /key/{key:path}/regenerate shares the same handler."""
     caller = world.keys[Actor.PROXY_ADMIN]
-    target_cleartext = await create_scratch_key(
-        proxy_client, caller.cleartext, scratch.prefix, user_id=caller.user_id
-    )
+    target_cleartext = await create_scratch_key(proxy_client, caller.cleartext, scratch.prefix, user_id=caller.user_id)
 
     resp = await proxy_client.post(
         f"/key/{target_cleartext}/regenerate",
@@ -122,9 +114,7 @@ async def test_key_path_regenerate_smoke(proxy_client, scratch, world):
     assert (await _info(proxy_client, new_cleartext)).status_code == 200
 
 
-async def test_key_regenerate_enforces_upperbound_key_params(
-    proxy_client, scratch, world, monkeypatch
-):
+async def test_key_regenerate_enforces_upperbound_key_params(proxy_client, scratch, world, monkeypatch):
     """Regenerate runs _enforce_upperbound_key_params: a max_budget above
     litellm.upperbound_key_generate_params is rejected 400, a value within the
     bound is accepted. Pins #26340 (db8ef44323) — regenerate previously
@@ -152,9 +142,7 @@ async def test_key_regenerate_enforces_upperbound_key_params(
     )
     headers = {"Authorization": f"Bearer {admin.cleartext}"}
 
-    over = await proxy_client.post(
-        "/key/regenerate", headers=headers, json={"key": over_key, "max_budget": 500.0}
-    )
+    over = await proxy_client.post("/key/regenerate", headers=headers, json={"key": over_key, "max_budget": 500.0})
     assert over.status_code == 400, over.text
 
     within = await proxy_client.post(

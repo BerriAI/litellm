@@ -50,9 +50,7 @@ def test_adapt_messages_with_empty_content_and_tool_calls():
     assert result[2].role == "TOOL"  # Tool responses have TOOL role, not USER
     assert result[2].content[0].type == "TEXT"
     assert "weather" in result[2].content[0].text
-    assert (
-        result[2].toolCallId == "call_test_empty"
-    )  # Tool call ID is in separate field
+    assert result[2].toolCallId == "call_test_empty"  # Tool call ID is in separate field
 
 
 def test_adapt_messages_with_none_content_and_tool_calls():

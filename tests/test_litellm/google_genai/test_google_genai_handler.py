@@ -2,6 +2,7 @@
 """
 Test to verify the Google GenAI generate_content handler functionality
 """
+
 import json
 import os
 import sys
@@ -9,9 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
@@ -140,9 +139,7 @@ async def test_stream_response_when_stream_requested_async():
     """
     # Mock a stream response
     mock_stream = MagicMock()
-    mock_stream.__aiter__ = AsyncMock(
-        return_value=iter([])
-    )  # Return an empty async iterator
+    mock_stream.__aiter__ = AsyncMock(return_value=iter([]))  # Return an empty async iterator
 
     # Mock the GoogleGenAIAdapter's translate_completion_output_params_streaming method
     with patch.object(
@@ -152,13 +149,11 @@ async def test_stream_response_when_stream_requested_async():
     ) as mock_translate:
         with patch("litellm.acompletion", return_value=mock_stream):
             # Call the handler with stream=True
-            result = (
-                await GenerateContentToCompletionHandler.async_generate_content_handler(
-                    model="gemini-pro",
-                    contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
-                    litellm_params={},  # Empty dict for params
-                    stream=True,
-                )
+            result = await GenerateContentToCompletionHandler.async_generate_content_handler(
+                model="gemini-pro",
+                contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+                litellm_params={},  # Empty dict for params
+                stream=True,
             )
 
             # Verify that translate_completion_output_params_streaming was called
@@ -184,9 +179,7 @@ def test_stream_transformation_error_sync():
         # Patch litellm.completion directly to prevent real API calls
         with patch("litellm.completion", return_value=mock_stream):
             # Call the handler with stream=True and expect a ValueError
-            with pytest.raises(
-                ValueError, match="Failed to transform streaming response"
-            ):
+            with pytest.raises(ValueError, match="Failed to transform streaming response"):
                 GenerateContentToCompletionHandler.generate_content_handler(
                     model="gemini-pro",
                     contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
@@ -216,9 +209,7 @@ async def test_stream_transformation_error_async():
             # Use AsyncMock for async function
             mock_litellm.acompletion = AsyncMock(return_value=mock_stream)
             # Call the handler with stream=True and expect a ValueError
-            with pytest.raises(
-                ValueError, match="Failed to transform streaming response"
-            ):
+            with pytest.raises(ValueError, match="Failed to transform streaming response"):
                 await GenerateContentToCompletionHandler.async_generate_content_handler(
                     model="gemini-pro",
                     contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
@@ -244,11 +235,7 @@ def test_citation_metadata_transformation():
         "candidates": [
             {
                 "content": {
-                    "parts": [
-                        {
-                            "text": "This is a video analysis response with citation metadata."
-                        }
-                    ],
+                    "parts": [{"text": "This is a video analysis response with citation metadata."}],
                     "role": "model",
                 },
                 "finishReason": "STOP",
@@ -323,26 +310,13 @@ def test_citation_metadata_transformation():
                 citation_metadata = candidate.citationMetadata
 
                 # Check that citations field exists
-                assert hasattr(
-                    citation_metadata, "citations"
-                ), "citations field should exist after transformation"
+                assert hasattr(citation_metadata, "citations"), "citations field should exist after transformation"
 
                 # Verify the citations data is preserved
-                if (
-                    hasattr(citation_metadata, "citations")
-                    and citation_metadata.citations
-                ):
-                    assert (
-                        len(citation_metadata.citations) == 2
-                    ), "Should have 2 citations"
-                    assert (
-                        citation_metadata.citations[0]["uri"]
-                        == "https://example.com/video-source"
-                    )
-                    assert (
-                        citation_metadata.citations[1]["uri"]
-                        == "https://another-source.com/reference"
-                    )
+                if hasattr(citation_metadata, "citations") and citation_metadata.citations:
+                    assert len(citation_metadata.citations) == 2, "Should have 2 citations"
+                    assert citation_metadata.citations[0]["uri"] == "https://example.com/video-source"
+                    assert citation_metadata.citations[1]["uri"] == "https://another-source.com/reference"
 
         print("✅ Citation metadata transformation test passed!")
 

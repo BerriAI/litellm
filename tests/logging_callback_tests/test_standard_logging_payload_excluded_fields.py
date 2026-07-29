@@ -62,9 +62,7 @@ def create_sample_standard_logging_payload() -> Dict:
         "requester_ip_address": None,
         "user_agent": None,
         "messages": [{"role": "user", "content": "Hello, this is sensitive data!"}],
-        "response": {
-            "choices": [{"message": {"content": "This is a sensitive response!"}}]
-        },
+        "response": {"choices": [{"message": {"content": "This is a sensitive response!"}}]},
         "error_str": None,
         "error_information": None,
         "model_parameters": {},
@@ -103,9 +101,7 @@ class TestStandardLoggingPayloadExcludedFields:
         model_call_details = create_model_call_details()
         original_keys = set(model_call_details["standard_logging_object"].keys())
 
-        result = logger.redact_standard_logging_payload_from_model_call_details(
-            model_call_details
-        )
+        result = logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
 
         result_keys = set(result["standard_logging_object"].keys())
         assert result_keys == original_keys
@@ -117,9 +113,7 @@ class TestStandardLoggingPayloadExcludedFields:
         logger = CustomLogger()
         model_call_details = create_model_call_details()
 
-        result = logger.redact_standard_logging_payload_from_model_call_details(
-            model_call_details
-        )
+        result = logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
 
         assert "response" not in result["standard_logging_object"]
         assert "messages" in result["standard_logging_object"]
@@ -132,9 +126,7 @@ class TestStandardLoggingPayloadExcludedFields:
         logger = CustomLogger()
         model_call_details = create_model_call_details()
 
-        result = logger.redact_standard_logging_payload_from_model_call_details(
-            model_call_details
-        )
+        result = logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
 
         assert "response" not in result["standard_logging_object"]
         assert "messages" not in result["standard_logging_object"]
@@ -150,9 +142,7 @@ class TestStandardLoggingPayloadExcludedFields:
         payload["metadata"] = {"sensitive_key": "sensitive_value"}
         model_call_details = create_model_call_details(payload)
 
-        result = logger.redact_standard_logging_payload_from_model_call_details(
-            model_call_details
-        )
+        result = logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
 
         assert "metadata" not in result["standard_logging_object"]
 
@@ -165,9 +155,7 @@ class TestStandardLoggingPayloadExcludedFields:
         payload["hidden_params"] = {"api_key": "sk-secret-key"}
         model_call_details = create_model_call_details(payload)
 
-        result = logger.redact_standard_logging_payload_from_model_call_details(
-            model_call_details
-        )
+        result = logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
 
         assert "hidden_params" not in result["standard_logging_object"]
 
@@ -182,9 +170,7 @@ class TestStandardLoggingPayloadExcludedFields:
         model_call_details = create_model_call_details()
 
         # Should not raise an exception
-        result = logger.redact_standard_logging_payload_from_model_call_details(
-            model_call_details
-        )
+        result = logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
 
         assert "response" not in result["standard_logging_object"]
         assert "messages" in result["standard_logging_object"]
@@ -197,9 +183,7 @@ class TestStandardLoggingPayloadExcludedFields:
         model_call_details = create_model_call_details()
         original_payload = deepcopy(model_call_details)
 
-        logger.redact_standard_logging_payload_from_model_call_details(
-            model_call_details
-        )
+        logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
 
         # Original should still have the fields
         assert "response" in model_call_details["standard_logging_object"]
@@ -213,9 +197,7 @@ class TestStandardLoggingPayloadExcludedFields:
         logger = CustomLogger(turn_off_message_logging=True)
         model_call_details = create_model_call_details()
 
-        result = logger.redact_standard_logging_payload_from_model_call_details(
-            model_call_details
-        )
+        result = logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
 
         # excluded_fields should remove these
         assert "metadata" not in result["standard_logging_object"]
@@ -223,15 +205,8 @@ class TestStandardLoggingPayloadExcludedFields:
 
         # turn_off_message_logging should redact these
         redacted_str = "redacted-by-litellm"
-        assert (
-            result["standard_logging_object"]["messages"][0]["content"] == redacted_str
-        )
-        assert (
-            result["standard_logging_object"]["response"]["choices"][0]["message"][
-                "content"
-            ]
-            == redacted_str
-        )
+        assert result["standard_logging_object"]["messages"][0]["content"] == redacted_str
+        assert result["standard_logging_object"]["response"]["choices"][0]["message"]["content"] == redacted_str
 
     def test_excluded_fields_takes_precedence_over_redaction(self):
         """Test that if a field is both excluded and would be redacted, it's excluded."""
@@ -240,18 +215,14 @@ class TestStandardLoggingPayloadExcludedFields:
         logger = CustomLogger(turn_off_message_logging=True)
         model_call_details = create_model_call_details()
 
-        result = logger.redact_standard_logging_payload_from_model_call_details(
-            model_call_details
-        )
+        result = logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
 
         # response should be excluded (not redacted)
         assert "response" not in result["standard_logging_object"]
 
         # messages should still be redacted
         redacted_str = "redacted-by-litellm"
-        assert (
-            result["standard_logging_object"]["messages"][0]["content"] == redacted_str
-        )
+        assert result["standard_logging_object"]["messages"][0]["content"] == redacted_str
 
     def test_exclude_all_sensitive_fields(self):
         """Test excluding all potentially sensitive fields."""
@@ -268,9 +239,7 @@ class TestStandardLoggingPayloadExcludedFields:
         logger = CustomLogger()
         model_call_details = create_model_call_details()
 
-        result = logger.redact_standard_logging_payload_from_model_call_details(
-            model_call_details
-        )
+        result = logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
 
         standard_obj = result["standard_logging_object"]
 
@@ -297,9 +266,7 @@ class TestStandardLoggingPayloadExcludedFields:
         model_call_details = create_model_call_details()
         original_keys = set(model_call_details["standard_logging_object"].keys())
 
-        result = logger.redact_standard_logging_payload_from_model_call_details(
-            model_call_details
-        )
+        result = logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
 
         result_keys = set(result["standard_logging_object"].keys())
         assert result_keys == original_keys
@@ -311,9 +278,7 @@ class TestStandardLoggingPayloadExcludedFields:
         logger = CustomLogger()
         model_call_details = {"other_key": "other_value"}
 
-        result = logger.redact_standard_logging_payload_from_model_call_details(
-            model_call_details
-        )
+        result = logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
 
         # Should return unchanged when no standard_logging_object
         assert result == model_call_details
@@ -346,11 +311,7 @@ class TestExcludedFieldsIntegration:
         model_call_details = create_model_call_details()
 
         # Simulate what litellm_logging.py does
-        filtered_details = (
-            callback.redact_standard_logging_payload_from_model_call_details(
-                model_call_details
-            )
-        )
+        filtered_details = callback.redact_standard_logging_payload_from_model_call_details(model_call_details)
 
         callback.log_success_event(
             kwargs=filtered_details,
@@ -406,9 +367,7 @@ class TestExcludedFieldsConfigLoading:
         logger = CustomLogger()
         model_call_details = create_model_call_details()
 
-        result = logger.redact_standard_logging_payload_from_model_call_details(
-            model_call_details
-        )
+        result = logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
 
         assert "response" not in result["standard_logging_object"]
         assert "messages" not in result["standard_logging_object"]

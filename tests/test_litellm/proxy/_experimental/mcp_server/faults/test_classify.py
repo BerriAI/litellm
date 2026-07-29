@@ -15,7 +15,9 @@ from litellm.proxy._experimental.mcp_server.faults.types import (
 )
 
 
-def _response(status_code: int, *, json_body: object = None, text_body: str = "", headers: dict = None) -> httpx.Response:
+def _response(
+    status_code: int, *, json_body: object = None, text_body: str = "", headers: dict = None
+) -> httpx.Response:
     request = httpx.Request("POST", "https://idp.example.com/token")
     if json_body is not None:
         return httpx.Response(status_code, json=json_body, request=request)

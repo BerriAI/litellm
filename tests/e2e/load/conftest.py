@@ -20,20 +20,14 @@ LOAD_MODEL_PARAMS = LiteLLMParamsBody(
 )
 
 
-def pytest_collection_modifyitems(
-    config: pytest.Config, items: list[pytest.Item]
-) -> None:
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     if os.environ.get(WEEKLY_ANOMALY_OPT_IN_ENV):
         return
-    deselected = [
-        item for item in items if item.get_closest_marker("weekly") is not None
-    ]
+    deselected = [item for item in items if item.get_closest_marker("weekly") is not None]
     if not deselected:
         return
     config.hook.pytest_deselected(items=deselected)
-    items[:] = [
-        item for item in items if item.get_closest_marker("weekly") is None
-    ]
+    items[:] = [item for item in items if item.get_closest_marker("weekly") is None]
 
 
 @pytest.fixture(scope="session")
@@ -76,9 +70,7 @@ def ensure_load_model(client: LoadClient) -> Iterator[None]:
 
 
 @pytest.fixture
-def load_key(
-    resources: ResourceManager, client: LoadClient, ensure_load_model: None
-) -> str:
+def load_key(resources: ResourceManager, client: LoadClient, ensure_load_model: None) -> str:
     key = client.proxy.generate_key(KeyGenerateBody(models=[LOAD_MODEL], user_id="e2e-load"))
     resources.defer(lambda: client.proxy.delete_key(key))
     return key

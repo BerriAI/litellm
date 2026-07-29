@@ -46,11 +46,7 @@ async def test_log_db_metrics_success():
         # Assertions
         assert result == "success"
         mock_proxy_logging.service_logging_obj.async_service_success_hook.assert_called_once()
-        call_args = (
-            mock_proxy_logging.service_logging_obj.async_service_success_hook.call_args[
-                1
-            ]
-        )
+        call_args = mock_proxy_logging.service_logging_obj.async_service_success_hook.call_args[1]
 
         assert call_args["service"] == ServiceTypes.DB
         assert call_args["call_type"] == "sample_db_function"
@@ -84,11 +80,7 @@ async def test_log_db_metrics_event_metadata_is_safe():
         )
         await asyncio.sleep(0)
 
-        call_args = (
-            mock_proxy_logging.service_logging_obj.async_service_success_hook.call_args[
-                1
-            ]
-        )
+        call_args = mock_proxy_logging.service_logging_obj.async_service_success_hook.call_args[1]
         assert call_args["event_metadata"] == {"table_name": "LiteLLM_SpendLogs"}
 
 
@@ -114,11 +106,7 @@ async def test_log_db_metrics_duration():
         actual_duration = end - start
 
         # Get the logged duration from the mock call
-        call_args = (
-            mock_proxy_logging.service_logging_obj.async_service_success_hook.call_args[
-                1
-            ]
-        )
+        call_args = mock_proxy_logging.service_logging_obj.async_service_success_hook.call_args[1]
         logged_duration = call_args["duration"]
 
         # Assert the logged duration is approximately equal to actual duration (within 0.1 seconds)
@@ -150,11 +138,7 @@ async def test_log_db_metrics_failure():
         # Assertions
         assert "Client is not connected to the query engine" in str(exc_info.value)
         mock_proxy_logging.service_logging_obj.async_service_failure_hook.assert_called_once()
-        call_args = (
-            mock_proxy_logging.service_logging_obj.async_service_failure_hook.call_args[
-                1
-            ]
-        )
+        call_args = mock_proxy_logging.service_logging_obj.async_service_failure_hook.call_args[1]
 
         assert call_args["service"] == ServiceTypes.DB
         assert call_args["call_type"] == "failing_function"
@@ -202,9 +186,7 @@ async def test_log_db_metrics_failure_error_types(exception, should_log):
         if should_log:
             # Assert failure was logged for DB-related errors
             mock_proxy_logging.service_logging_obj.async_service_failure_hook.assert_called_once()
-            call_args = mock_proxy_logging.service_logging_obj.async_service_failure_hook.call_args[
-                1
-            ]
+            call_args = mock_proxy_logging.service_logging_obj.async_service_failure_hook.call_args[1]
             assert call_args["service"] == ServiceTypes.DB
             assert call_args["call_type"] == "failing_function"
             assert call_args["parent_otel_span"] == "test_span"

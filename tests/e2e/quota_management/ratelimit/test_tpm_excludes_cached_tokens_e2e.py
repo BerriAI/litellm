@@ -101,20 +101,14 @@ class TestTpmExcludesCachedTokens:
         "quota_management.ratelimit.tpm.excludes_cached_tokens",
         exercised_on=["chat_completions"],
     )
-    def test_cache_hit_reduces_tpm_by_non_cached_only(
-        self, client: QuotaClient, resources: ResourceManager
-    ) -> None:
+    def test_cache_hit_reduces_tpm_by_non_cached_only(self, client: QuotaClient, resources: ResourceManager) -> None:
         model = f"e2e-tpm-cache-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
-            LiteLLMParamsBody(
-                model=ANTHROPIC_MODEL, api_key="os.environ/ANTHROPIC_API_KEY"
-            ),
+            LiteLLMParamsBody(model=ANTHROPIC_MODEL, api_key="os.environ/ANTHROPIC_API_KEY"),
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
-        key = client.proxy.generate_key(
-            KeyGenerateBody(models=[model], tpm_limit=TPM_LIMIT)
-        )
+        key = client.proxy.generate_key(KeyGenerateBody(models=[model], tpm_limit=TPM_LIMIT))
         resources.defer(lambda: client.proxy.delete_key(key))
 
         prefix = _prefix()
@@ -132,9 +126,7 @@ class TestTpmExcludesCachedTokens:
             parsed = ChatResponse.model_validate_json(outcome.body)
             if _cached_tokens(parsed.usage) > 0:
                 second_usage = parsed.usage
-                remaining_after = outcome.headers.get(
-                    "x-ratelimit-api_key-remaining-tokens"
-                )
+                remaining_after = outcome.headers.get("x-ratelimit-api_key-remaining-tokens")
                 break
             time.sleep(2.0)
 
@@ -142,9 +134,7 @@ class TestTpmExcludesCachedTokens:
         cached = _cached_tokens(second_usage)
         assert cached > 0
         second_total = second_usage.total_tokens or 0
-        assert second_total > cached, (
-            f"need total > cached so non-cached slice is measurable: {second_usage}"
-        )
+        assert second_total > cached, f"need total > cached so non-cached slice is measurable: {second_usage}"
 
         assert remaining_after is not None and remaining_after.isdigit(), (
             f"cache-hit response must expose remaining TPM headers, got {remaining_after!r}"

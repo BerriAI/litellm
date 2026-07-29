@@ -84,9 +84,7 @@ class TestPrometheusUserTeamCountMetrics:
             try:
                 metric.set(value)
             except Exception as e:
-                pytest.fail(
-                    f"litellm_total_users_metric should accept value {value}: {e}"
-                )
+                pytest.fail(f"litellm_total_users_metric should accept value {value}: {e}")
 
     def test_team_count_metric_accepts_various_values(self, prometheus_logger):
         """Test that team count metric accepts various realistic values"""
@@ -98,9 +96,7 @@ class TestPrometheusUserTeamCountMetrics:
             try:
                 metric.set(value)
             except Exception as e:
-                pytest.fail(
-                    f"litellm_teams_count_metric should accept value {value}: {e}"
-                )
+                pytest.fail(f"litellm_teams_count_metric should accept value {value}: {e}")
 
     def test_user_count_metric_with_zero(self, prometheus_logger):
         """Test that user count metric handles zero users"""
@@ -157,25 +153,17 @@ class TestPrometheusUserTeamCountMetrics:
                 metrics[sample.name] = sample.value
 
         # Verify our metrics are in the collected metrics
-        assert (
-            "litellm_total_users" in metrics or "litellm_total_users_total" in metrics
-        )
-        assert (
-            "litellm_teams_count" in metrics or "litellm_teams_count_total" in metrics
-        )
+        assert "litellm_total_users" in metrics or "litellm_total_users_total" in metrics
+        assert "litellm_teams_count" in metrics or "litellm_teams_count_total" in metrics
 
-    def test_initialize_user_and_team_count_metrics_method_exists(
-        self, prometheus_logger
-    ):
+    def test_initialize_user_and_team_count_metrics_method_exists(self, prometheus_logger):
         """Test that _initialize_user_and_team_count_metrics method exists and is callable"""
         # Verify the method exists
         assert hasattr(prometheus_logger, "_initialize_user_and_team_count_metrics")
         assert callable(prometheus_logger._initialize_user_and_team_count_metrics)
 
     @pytest.mark.asyncio
-    async def test_initialize_remaining_budget_metrics_includes_user_team_counts(
-        self, prometheus_logger
-    ):
+    async def test_initialize_remaining_budget_metrics_includes_user_team_counts(self, prometheus_logger):
         """Test that _initialize_remaining_budget_metrics calls user/team count initialization"""
         from unittest.mock import AsyncMock
 
@@ -327,9 +315,7 @@ async def test_assemble_team_object_uses_db_max_budget_when_metadata_is_none(
             response_cost=0.5,
         )
 
-    assert (
-        team_object.max_budget == 3000.0
-    ), "max_budget should be populated from DB when metadata value is None"
+    assert team_object.max_budget == 3000.0, "max_budget should be populated from DB when metadata value is None"
     assert team_object.budget_reset_at == datetime(2026, 3, 1, tzinfo=timezone.utc)
 
 
@@ -354,9 +340,7 @@ async def test_assemble_team_object_does_not_override_metadata_max_budget(
             response_cost=1.0,
         )
 
-    assert (
-        team_object.max_budget == 100.0
-    ), "max_budget from metadata must not be replaced by the DB value"
+    assert team_object.max_budget == 100.0, "max_budget from metadata must not be replaced by the DB value"
 
 
 async def test_set_team_budget_metrics_after_api_request_no_inf_when_metadata_budget_none(
@@ -384,20 +368,14 @@ async def test_set_team_budget_metrics_after_api_request_no_inf_when_metadata_bu
             response_cost=0.5,
         )
 
-    set_call_args = (
-        prometheus_logger.litellm_remaining_team_budget_metric.labels().set.call_args
-    )
-    assert (
-        set_call_args is not None
-    ), "remaining_team_budget_metric.labels().set was not called"
+    set_call_args = prometheus_logger.litellm_remaining_team_budget_metric.labels().set.call_args
+    assert set_call_args is not None, "remaining_team_budget_metric.labels().set was not called"
     actual_value = set_call_args[0][0]
-    assert actual_value != float(
-        "inf"
-    ), f"remaining_team_budget_metric must not be +Inf when team has a real budget; got {actual_value}"
+    assert actual_value != float("inf"), (
+        f"remaining_team_budget_metric must not be +Inf when team has a real budget; got {actual_value}"
+    )
     expected = 3000.0 - 1617.02 - 0.5
-    assert (
-        abs(actual_value - expected) < 0.01
-    ), f"Expected remaining budget ~{expected}, got {actual_value}"
+    assert abs(actual_value - expected) < 0.01, f"Expected remaining budget ~{expected}, got {actual_value}"
 
 
 async def test_set_team_budget_metrics_after_api_request_inf_when_genuinely_no_budget(
@@ -425,14 +403,10 @@ async def test_set_team_budget_metrics_after_api_request_inf_when_genuinely_no_b
             response_cost=1.0,
         )
 
-    set_call_args = (
-        prometheus_logger.litellm_remaining_team_budget_metric.labels().set.call_args
-    )
+    set_call_args = prometheus_logger.litellm_remaining_team_budget_metric.labels().set.call_args
     assert set_call_args is not None
     actual_value = set_call_args[0][0]
-    assert actual_value == float(
-        "inf"
-    ), "remaining_team_budget_metric should be +Inf when team truly has no budget"
+    assert actual_value == float("inf"), "remaining_team_budget_metric should be +Inf when team truly has no budget"
 
 
 # ---------------------------------------------------------------------------
@@ -462,9 +436,7 @@ async def test_assemble_user_object_uses_db_max_budget_when_metadata_is_none(
             response_cost=0.5,
         )
 
-    assert (
-        user_object.max_budget == 500.0
-    ), "max_budget should be populated from DB when metadata value is None"
+    assert user_object.max_budget == 500.0, "max_budget should be populated from DB when metadata value is None"
     assert user_object.budget_reset_at == datetime(2026, 3, 1, tzinfo=timezone.utc)
 
 
@@ -488,9 +460,7 @@ async def test_assemble_user_object_does_not_override_metadata_max_budget(
             response_cost=1.0,
         )
 
-    assert (
-        user_object.max_budget == 100.0
-    ), "max_budget from metadata must not be replaced by the DB value"
+    assert user_object.max_budget == 100.0, "max_budget from metadata must not be replaced by the DB value"
 
 
 async def test_assemble_user_object_populates_user_email_and_alias_from_db(
@@ -579,9 +549,7 @@ def test_set_user_budget_metrics_includes_user_email_and_alias_labels_when_opted
             user_email="alice@example.com",
             user_alias="Alice",
         )
-        prometheus_logger.litellm_remaining_user_budget_metric.labels().set.assert_called_once_with(
-            75.0
-        )
+        prometheus_logger.litellm_remaining_user_budget_metric.labels().set.assert_called_once_with(75.0)
         prometheus_logger.litellm_user_max_budget_metric.labels.assert_called_once_with(
             user="user-abc-123",
             user_email="alice@example.com",
@@ -620,20 +588,14 @@ async def test_set_user_budget_metrics_after_api_request_no_inf_when_metadata_bu
             response_cost=0.5,
         )
 
-    set_call_args = (
-        prometheus_logger.litellm_remaining_user_budget_metric.labels().set.call_args
-    )
-    assert (
-        set_call_args is not None
-    ), "remaining_user_budget_metric.labels().set was not called"
+    set_call_args = prometheus_logger.litellm_remaining_user_budget_metric.labels().set.call_args
+    assert set_call_args is not None, "remaining_user_budget_metric.labels().set was not called"
     actual_value = set_call_args[0][0]
-    assert actual_value != float(
-        "inf"
-    ), f"remaining_user_budget_metric must not be +Inf when user has a real budget; got {actual_value}"
+    assert actual_value != float("inf"), (
+        f"remaining_user_budget_metric must not be +Inf when user has a real budget; got {actual_value}"
+    )
     expected = 500.0 - 120.0 - 0.5
-    assert (
-        abs(actual_value - expected) < 0.01
-    ), f"Expected remaining budget ~{expected}, got {actual_value}"
+    assert abs(actual_value - expected) < 0.01, f"Expected remaining budget ~{expected}, got {actual_value}"
 
 
 async def test_set_user_budget_metrics_after_api_request_inf_when_genuinely_no_budget(
@@ -660,14 +622,10 @@ async def test_set_user_budget_metrics_after_api_request_inf_when_genuinely_no_b
             response_cost=1.0,
         )
 
-    set_call_args = (
-        prometheus_logger.litellm_remaining_user_budget_metric.labels().set.call_args
-    )
+    set_call_args = prometheus_logger.litellm_remaining_user_budget_metric.labels().set.call_args
     assert set_call_args is not None
     actual_value = set_call_args[0][0]
-    assert actual_value == float(
-        "inf"
-    ), "remaining_user_budget_metric should be +Inf when user truly has no budget"
+    assert actual_value == float("inf"), "remaining_user_budget_metric should be +Inf when user truly has no budget"
 
 
 def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
@@ -703,9 +661,7 @@ def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
 
     try:
         # org labels are always included in per-request metrics
-        prometheus_logger._increment_top_level_request_and_spend_metrics(
-            **common_kwargs
-        )
+        prometheus_logger._increment_top_level_request_and_spend_metrics(**common_kwargs)
         label_kwargs = prometheus_logger.litellm_requests_metric.labels.call_args.kwargs
         assert label_kwargs["org_id"] == "org-abc"
         assert label_kwargs["org_alias"] == "my-org"
@@ -780,9 +736,7 @@ def test_set_org_budget_metrics_max_budget(prometheus_logger):
         budget_reset_at=None,
     )
 
-    prometheus_logger.litellm_org_max_budget_metric.labels().set.assert_called_once_with(
-        1000.0
-    )
+    prometheus_logger.litellm_org_max_budget_metric.labels().set.assert_called_once_with(1000.0)
 
 
 def test_set_org_budget_metrics_no_max_budget(prometheus_logger):
@@ -857,15 +811,11 @@ async def test_set_org_budget_metrics_after_api_request(prometheus_logger):
         )
 
     # remaining budget should reflect spend + response_cost (300 + 50 = 350, remaining = 1000 - 350 = 650)
-    remaining_call = (
-        prometheus_logger.litellm_remaining_org_budget_metric.labels().set.call_args
-    )
+    remaining_call = prometheus_logger.litellm_remaining_org_budget_metric.labels().set.call_args
     assert remaining_call is not None
     assert remaining_call[0][0] == pytest.approx(650.0)
 
-    prometheus_logger.litellm_org_max_budget_metric.labels().set.assert_called_once_with(
-        1000.0
-    )
+    prometheus_logger.litellm_org_max_budget_metric.labels().set.assert_called_once_with(1000.0)
     prometheus_logger.litellm_org_budget_remaining_hours_metric.labels().set.assert_called_once()
 
 
@@ -906,9 +856,7 @@ async def test_initialize_org_budget_metrics(prometheus_logger):
     org_mock.litellm_budget_table = budget_mock
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_organizationtable.find_many = AsyncMock(
-        return_value=[org_mock]
-    )
+    mock_prisma.db.litellm_organizationtable.find_many = AsyncMock(return_value=[org_mock])
     mock_prisma.db.litellm_organizationtable.count = AsyncMock(return_value=1)
 
     mock_proxy_server = MagicMock()
@@ -918,9 +866,7 @@ async def test_initialize_org_budget_metrics(prometheus_logger):
         await prometheus_logger._initialize_org_budget_metrics()
 
     prometheus_logger.litellm_remaining_org_budget_metric.labels().set.assert_called_once()
-    prometheus_logger.litellm_org_max_budget_metric.labels().set.assert_called_once_with(
-        500.0
-    )
+    prometheus_logger.litellm_org_max_budget_metric.labels().set.assert_called_once_with(500.0)
 
 
 def test_default_latency_buckets(prometheus_logger):
@@ -982,9 +928,7 @@ class TestSetTeamMembersMetric:
         team = LiteLLM_TeamTable(
             team_id="team-a",
             team_alias="Acme",
-            members_with_roles=[
-                Member(user_id=f"u{i}", role="user") for i in range(count)
-            ],
+            members_with_roles=[Member(user_id=f"u{i}", role="user") for i in range(count)],
         )
         prometheus_logger.set_team_members_metric(team)
         assert self._gauge_value("team-a", "Acme") == float(count)
@@ -994,9 +938,7 @@ class TestSetTeamMembersMetric:
         from litellm.proxy._types import LiteLLM_TeamTable, Member
 
         members = [Member(user_id=f"u{i}", role="user") for i in range(4)]
-        team = LiteLLM_TeamTable(
-            team_id="team-b", team_alias="Beta", members_with_roles=members
-        )
+        team = LiteLLM_TeamTable(team_id="team-b", team_alias="Beta", members_with_roles=members)
         prometheus_logger.set_team_members_metric(team)
         assert self._gauge_value("team-b", "Beta") == 4.0
 

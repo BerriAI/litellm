@@ -30,9 +30,7 @@ def test_bedrock_agentcore_basic(model):
     litellm._turn_on_debug()
     response = litellm.completion(
         model=model,
-        messages=[
-            {"role": "user", "content": "Explain machine learning in simple terms"}
-        ],
+        messages=[{"role": "user", "content": "Explain machine learning in simple terms"}],
     )
     print("response from agentcore=", response.model_dump_json(indent=4))
     # Assert that the message content has a response with some length
@@ -115,10 +113,7 @@ def test_bedrock_agentcore_with_custom_params():
         headers = call_kwargs["headers"]
         print(f"Headers: {headers}")
         assert "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id" in headers
-        assert (
-            headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"]
-            == "litellm-test-session-id-12345678901234567890"
-        )
+        assert headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] == "litellm-test-session-id-12345678901234567890"
 
         # Verify the request body - should just be the payload
         assert "data" in call_kwargs or "json" in call_kwargs
@@ -212,9 +207,7 @@ def test_bedrock_agentcore_with_session_and_user():
         headers = call_kwargs["headers"]
         print(f"Headers: {headers}")
         assert "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id" in headers
-        assert (
-            headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] == "session-abc-123"
-        )
+        assert headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] == "session-abc-123"
         assert "X-Amzn-Bedrock-AgentCore-Runtime-User-Id" in headers
         assert headers["X-Amzn-Bedrock-AgentCore-Runtime-User-Id"] == "user-xyz-789"
 
@@ -319,14 +312,9 @@ def test_bedrock_agentcore_with_all_parameters():
 
         # Check session and user IDs
         assert "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id" in headers
-        assert (
-            headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"]
-            == "full-test-session-id"
-        )
+        assert headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] == "full-test-session-id"
         assert "X-Amzn-Bedrock-AgentCore-Runtime-User-Id" in headers
-        assert (
-            headers["X-Amzn-Bedrock-AgentCore-Runtime-User-Id"] == "full-test-user-id"
-        )
+        assert headers["X-Amzn-Bedrock-AgentCore-Runtime-User-Id"] == "full-test-user-id"
 
         # Verify JSON body
         assert "data" in call_kwargs
@@ -381,10 +369,7 @@ def test_bedrock_agentcore_without_api_key_uses_sigv4():
 
         # Session ID should still be present
         assert "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id" in headers
-        assert (
-            headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"]
-            == "sigv4-test-session"
-        )
+        assert headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] == "sigv4-test-session"
 
 
 def test_agentcore_parse_json_response():

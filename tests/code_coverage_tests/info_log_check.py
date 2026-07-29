@@ -44,9 +44,7 @@ class SensitiveLogDetector(ast.NodeVisitor):
         if node.func.attr == "info":
             if isinstance(node.func.value, ast.Name):
                 logger_name = node.func.value.id
-                return any(
-                    pattern in logger_name.lower() for pattern in ["logger", "log"]
-                )
+                return any(pattern in logger_name.lower() for pattern in ["logger", "log"])
 
         return False
 
@@ -157,9 +155,7 @@ class SensitiveLogDetector(ast.NodeVisitor):
                         "password",
                         "passwd",
                     ]
-                    if any(
-                        pattern in value_str for pattern in sensitive_f_string_patterns
-                    ):
+                    if any(pattern in value_str for pattern in sensitive_f_string_patterns):
                         return True
 
         # Check for .format() calls
@@ -187,10 +183,7 @@ class SensitiveLogDetector(ast.NodeVisitor):
                     ]
                     for format_arg in arg.args:
                         format_str = self._get_arg_string(format_arg).lower()
-                        if any(
-                            pattern in format_str
-                            for pattern in sensitive_format_patterns
-                        ):
+                        if any(pattern in format_str for pattern in sensitive_format_patterns):
                             return True
 
         return False
@@ -210,16 +203,9 @@ class SensitiveLogDetector(ast.NodeVisitor):
                 return True
 
             # Check for str() calls on potentially sensitive objects
-            if (
-                isinstance(arg.func, ast.Name)
-                and arg.func.id == "str"
-                and len(arg.args) > 0
-            ):
+            if isinstance(arg.func, ast.Name) and arg.func.id == "str" and len(arg.args) > 0:
                 obj_str = self._get_arg_string(arg.args[0]).lower()
-                if any(
-                    pattern in obj_str
-                    for pattern in ["request", "response", "data", "body"]
-                ):
+                if any(pattern in obj_str for pattern in ["request", "response", "data", "body"]):
                     return True
 
         return False
@@ -247,9 +233,7 @@ class SensitiveLogDetector(ast.NodeVisitor):
             return "Potentially logging request data"
         elif "response" in arg_str:
             return "Potentially logging response data"
-        elif any(
-            pattern in arg_str for pattern in ["data", "body", "payload", "content"]
-        ):
+        elif any(pattern in arg_str for pattern in ["data", "body", "payload", "content"]):
             return "Potentially logging sensitive data/body/content"
         elif any(pattern in arg_str for pattern in ["messages", "input", "output"]):
             return "Potentially logging message/input/output data"
@@ -339,9 +323,7 @@ def check_sensitive_logging(base_dir: str) -> List[Dict[str, Any]]:
 
             # Skip if we're in a virtual environment or third-party directory
             relative_root = os.path.relpath(root, base_dir)
-            if any(
-                excluded in relative_root.split(os.sep) for excluded in exclude_dirs
-            ):
+            if any(excluded in relative_root.split(os.sep) for excluded in exclude_dirs):
                 continue
 
             for file in files:
@@ -365,9 +347,7 @@ def check_sensitive_logging(base_dir: str) -> List[Dict[str, Any]]:
                         print(f"Warning: Syntax error in file {relative_path}: {e}")
                         continue
                     except UnicodeDecodeError as e:
-                        print(
-                            f"Warning: Unicode decode error in file {relative_path}: {e}"
-                        )
+                        print(f"Warning: Unicode decode error in file {relative_path}: {e}")
                         continue
                     except Exception as e:
                         print(f"Warning: Error processing file {relative_path}: {e}")
@@ -410,9 +390,7 @@ def main():
         print("These logger.info() statements may log sensitive request/response data.")
         print("Consider changing them to logger.debug() or removing sensitive data.")
         print("This is critical for PII compliance and security.")
-        print(
-            "Please contact @ishaan-jaff for more details about this check. DO NOT VIOLATE THIS CHECK."
-        )
+        print("Please contact @ishaan-jaff for more details about this check. DO NOT VIOLATE THIS CHECK.")
 
         return 1  # Exit with error code
     else:

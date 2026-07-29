@@ -100,9 +100,7 @@ def test_spend_log_error_drops_traceback_when_env_set(reset_env_and_level, caplo
     assert record.exc_info is None
 
 
-def test_spend_log_error_keeps_traceback_at_debug_even_with_env(
-    reset_env_and_level, caplog
-):
+def test_spend_log_error_keeps_traceback_at_debug_even_with_env(reset_env_and_level, caplog):
     """DEBUG operators always get tracebacks; the env var doesn't apply."""
     reset_env_and_level.setenv(SUPPRESS_SPEND_LOG_TRACEBACKS_ENV, "true")
     verbose_proxy_logger.setLevel(logging.DEBUG)
@@ -120,9 +118,7 @@ def test_spend_log_error_keeps_traceback_at_debug_even_with_env(
     assert record.exc_info[0] is RuntimeError
 
 
-def test_spend_log_error_uses_active_exception_when_exc_omitted(
-    reset_env_and_level, caplog
-):
+def test_spend_log_error_uses_active_exception_when_exc_omitted(reset_env_and_level, caplog):
     """When called inside an ``except`` block without ``exc=``, the active
     exception's traceback should still be attached."""
     verbose_proxy_logger.setLevel(logging.INFO)

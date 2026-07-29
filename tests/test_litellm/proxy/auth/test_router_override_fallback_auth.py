@@ -41,9 +41,11 @@ def _key_with_models(models: List[str]) -> UserAPIKeyAuth:
 
 def test_fallback_model_names_router_config_shape():
     """Router-config shape: ``[{primary: [fallback_list]}]``."""
-    assert _fallback_model_names(
-        [{"gpt-3.5-turbo": ["gpt-4", "claude-3"]}, {"gpt-4o": ["o1"]}]
-    ) == ["gpt-4", "claude-3", "o1"]
+    assert _fallback_model_names([{"gpt-3.5-turbo": ["gpt-4", "claude-3"]}, {"gpt-4o": ["o1"]}]) == [
+        "gpt-4",
+        "claude-3",
+        "o1",
+    ]
 
 
 def test_fallback_model_names_simple_string_shape():
@@ -61,9 +63,10 @@ def test_fallback_model_names_client_side_shape():
 
 def test_fallback_model_names_nested_deployment_fallbacks():
     """A deployment target's own nested fallback field is unrolled too."""
-    assert _fallback_model_names(
-        [{"primary": [{"model": "gpt-4", "fallbacks": [{"gpt-4": ["deepseek-chat"]}]}]}]
-    ) == ["gpt-4", "deepseek-chat"]
+    assert _fallback_model_names([{"primary": [{"model": "gpt-4", "fallbacks": [{"gpt-4": ["deepseek-chat"]}]}]}]) == [
+        "gpt-4",
+        "deepseek-chat",
+    ]
 
 
 def test_fallback_model_names_empty_or_none():

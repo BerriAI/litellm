@@ -98,9 +98,7 @@ class TestShouldRedactMessageLogging:
     def test_enable_redaction_via_header_in_litellm_metadata(self):
         """Headers inside litellm_metadata (SDK direct call) should work."""
         details = _make_model_call_details(
-            litellm_metadata={
-                "headers": {"x-litellm-enable-message-redaction": "true"}
-            },
+            litellm_metadata={"headers": {"x-litellm-enable-message-redaction": "true"}},
         )
         assert should_redact_message_logging(details) is True
 
@@ -202,21 +200,15 @@ class TestPerformRedaction:
 
         redacted = perform_redaction(details, result)
 
-        assert details["messages"] == [
-            {"role": "user", "content": "redacted-by-litellm"}
-        ]
+        assert details["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
         assert details["prompt"] == ""
         assert details["input"] == ""
 
         logged_response = details["standard_logging_object"]["response"]
         assert logged_response["usage"] == {"total_tokens": 1}
         assert logged_response["output"][0]["text"] == "redacted-by-litellm"
-        assert logged_response["output"][1]["content"][0]["text"] == (
-            "redacted-by-litellm"
-        )
-        assert logged_response["output"][2]["summary"][0]["text"] == (
-            "redacted-by-litellm"
-        )
+        assert logged_response["output"][1]["content"][0]["text"] == ("redacted-by-litellm")
+        assert logged_response["output"][2]["summary"][0]["text"] == ("redacted-by-litellm")
 
         assert redacted["usage"] == {"total_tokens": 1}
         assert redacted["output"][0]["text"] == "redacted-by-litellm"
@@ -409,9 +401,7 @@ class TestPerformRedaction:
         tool_call = redacted.choices[0].message.tool_calls[0]
         assert tool_call.function.arguments == "redacted-by-litellm"
         assert tool_call.function.name == "get_weather"
-        assert result.choices[0].message.tool_calls[0].function.arguments == (
-            '{"city": "sensitive-city"}'
-        )
+        assert result.choices[0].message.tool_calls[0].function.arguments == ('{"city": "sensitive-city"}')
 
     def test_redacts_tool_call_arguments_on_streaming_response_object(self):
         """Reproduces the Stream=True path where tool calls arrive as deltas."""
@@ -535,12 +525,8 @@ class TestPerformRedaction:
                             }
                         }
                     ],
-                    "vertex_ai_grounding_metadata": [
-                        {"webSearchQueries": ["sensitive search term"]}
-                    ],
-                    "vertex_ai_url_context_metadata": [
-                        {"urlMetadata": [{"retrievedUrl": "https://example.com"}]}
-                    ],
+                    "vertex_ai_grounding_metadata": [{"webSearchQueries": ["sensitive search term"]}],
+                    "vertex_ai_url_context_metadata": [{"urlMetadata": [{"retrievedUrl": "https://example.com"}]}],
                 },
             }
         }
@@ -570,9 +556,7 @@ class TestPerformRedaction:
             "vertex_ai_grounding_metadata",
             [{"webSearchQueries": ["sensitive search term"]}],
         )
-        response._hidden_params["vertex_ai_grounding_metadata"] = [
-            {"webSearchQueries": ["sensitive search term"]}
-        ]
+        response._hidden_params["vertex_ai_grounding_metadata"] = [{"webSearchQueries": ["sensitive search term"]}]
 
         details = {
             "stream": True,
@@ -593,12 +577,8 @@ class TestPerformRedaction:
                 "metadata": {
                     "hidden_params": {
                         "response_cost": 0.01,
-                        "vertex_ai_grounding_metadata": [
-                            {"webSearchQueries": ["sensitive search term"]}
-                        ],
-                        "vertex_ai_url_context_metadata": [
-                            {"urlMetadata": [{"retrievedUrl": "https://example.com"}]}
-                        ],
+                        "vertex_ai_grounding_metadata": [{"webSearchQueries": ["sensitive search term"]}],
+                        "vertex_ai_url_context_metadata": [{"urlMetadata": [{"retrievedUrl": "https://example.com"}]}],
                         "vertex_ai_safety_ratings": [{"category": "HARM"}],
                         "vertex_ai_citation_metadata": [{"citations": ["source"]}],
                     }
@@ -618,11 +598,7 @@ class TestPerformRedaction:
     def test_redact_async_complete_streaming_response(self):
         """Test that async_complete_streaming_response is properly redacted."""
         response_obj = litellm.ModelResponse(
-            choices=[
-                litellm.Choices(
-                    message=litellm.Message(content="secret content", role="assistant")
-                )
-            ]
+            choices=[litellm.Choices(message=litellm.Message(content="secret content", role="assistant"))]
         )
 
         model_call_details = {
@@ -641,11 +617,7 @@ class TestPerformRedaction:
     def test_redact_complete_streaming_response(self):
         """Test that complete_streaming_response is properly redacted."""
         response_obj = litellm.ModelResponse(
-            choices=[
-                litellm.Choices(
-                    message=litellm.Message(content="secret content", role="assistant")
-                )
-            ]
+            choices=[litellm.Choices(message=litellm.Message(content="secret content", role="assistant"))]
         )
 
         model_call_details = {
@@ -663,11 +635,7 @@ class TestPerformRedaction:
 
     def test_streaming_responses_untouched_when_disabled(self):
         response_obj = litellm.ModelResponse(
-            choices=[
-                litellm.Choices(
-                    message=litellm.Message(content="secret content", role="assistant")
-                )
-            ]
+            choices=[litellm.Choices(message=litellm.Message(content="secret content", role="assistant"))]
         )
 
         model_call_details = {
@@ -686,11 +654,7 @@ class TestPerformRedaction:
 class TestRedactStreamingResponsesForCustomLogger:
     def _model_call_details(self):
         response_obj = litellm.ModelResponse(
-            choices=[
-                litellm.Choices(
-                    message=litellm.Message(content="secret content", role="assistant")
-                )
-            ]
+            choices=[litellm.Choices(message=litellm.Message(content="secret content", role="assistant"))]
         )
         return {
             "stream": True,

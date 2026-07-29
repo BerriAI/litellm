@@ -51,9 +51,7 @@ class TestBlockCodeExecutionGuardrail:
         model = client.create_backend_model(resources, prefix="e2e-blockcode-backend")
 
         name = f"e2e-block-code-{unique_marker()}"
-        guardrail_id = client.register(
-            name, BlockCodeExecutionParamsBody(mode="pre_call", default_on=False)
-        )
+        guardrail_id = client.register(name, BlockCodeExecutionParamsBody(mode="pre_call", default_on=False))
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
         # This guardrail replaces the reply rather than erroring, so wait for the
@@ -79,9 +77,7 @@ class TestBlockCodeExecutionGuardrail:
                 f"the model must not run when the guardrail blocks; usage was {blocked.usage}"
             )
 
-        allowed = unwrap(
-            client.chat(scoped_key, model, EXPLANATION_REQUEST, guardrails=[name], max_tokens=256)
-        )
+        allowed = unwrap(client.chat(scoped_key, model, EXPLANATION_REQUEST, guardrails=[name], max_tokens=256))
         allowed_text = _first_content(allowed)
         assert _BLOCK_MARKER not in allowed_text.lower(), (
             "an explanation request that says 'don't run it' must not be blocked, but got the "

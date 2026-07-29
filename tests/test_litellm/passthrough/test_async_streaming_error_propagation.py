@@ -21,9 +21,7 @@ def _make_mock_response(status_code: int, body: bytes, headers: dict = None):  #
 
     def _raise_for_status():
         if status_code >= 400:
-            request = httpx.Request(
-                "POST", "https://azure.example.com/openai/responses"
-            )
+            request = httpx.Request("POST", "https://azure.example.com/openai/responses")
             real_response = httpx.Response(
                 status_code=status_code,
                 content=body,
@@ -56,9 +54,7 @@ async def test_async_streaming_429_raises():
     """429 from upstream should raise HTTPStatusError, not yield error bytes."""
     from litellm.passthrough.main import _async_streaming
 
-    error_body = json.dumps(
-        {"error": {"code": "429", "message": "Rate limit exceeded."}}
-    ).encode()
+    error_body = json.dumps({"error": {"code": "429", "message": "Rate limit exceeded."}}).encode()
     mock_response = _make_mock_response(429, error_body)
 
     async def response_coro():
@@ -82,9 +78,7 @@ async def test_async_streaming_500_raises():
     """500 from upstream should also raise, not yield error bytes."""
     from litellm.passthrough.main import _async_streaming
 
-    error_body = json.dumps(
-        {"error": {"code": "500", "message": "Internal server error"}}
-    ).encode()
+    error_body = json.dumps({"error": {"code": "500", "message": "Internal server error"}}).encode()
     mock_response = _make_mock_response(500, error_body)
 
     async def response_coro():

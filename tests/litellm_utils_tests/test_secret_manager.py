@@ -13,9 +13,7 @@ import os
 import tempfile
 from uuid import uuid4
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm.llms.azure.azure import get_azure_ad_token_from_oidc
@@ -251,14 +249,10 @@ def test_google_secret_manager():
         secret_manager.sync_httpx_client = MagicMock()
         secret_manager.sync_httpx_client.get.return_value = mock_response
 
-        secret_val = secret_manager.get_secret_from_google_secret_manager(
-            secret_name="OPENAI_API_KEY"
-        )
+        secret_val = secret_manager.get_secret_from_google_secret_manager(secret_name="OPENAI_API_KEY")
         print("secret_val: {}".format(secret_val))
 
-        assert (
-            secret_val == "anything"
-        ), "did not get expected secret value. expect 'anything', got '{}'".format(
+        assert secret_val == "anything", "did not get expected secret value. expect 'anything', got '{}'".format(
             secret_val
         )
 
@@ -287,15 +281,11 @@ def test_google_secret_manager_read_in_memory():
         secret_manager.cache.cache_dict["UNIQUE_KEY"] = None
         secret_manager.cache.cache_dict["UNIQUE_KEY_2"] = "lite-llm"
 
-        secret_val = secret_manager.get_secret_from_google_secret_manager(
-            secret_name="UNIQUE_KEY"
-        )
+        secret_val = secret_manager.get_secret_from_google_secret_manager(secret_name="UNIQUE_KEY")
         print("secret_val: {}".format(secret_val))
         assert secret_val is None
 
-        secret_val = secret_manager.get_secret_from_google_secret_manager(
-            secret_name="UNIQUE_KEY_2"
-        )
+        secret_val = secret_manager.get_secret_from_google_secret_manager(secret_name="UNIQUE_KEY_2")
         print("secret_val: {}".format(secret_val))
         assert secret_val == "lite-llm"
 
@@ -317,9 +307,7 @@ def test_should_read_secret_from_secret_manager():
     assert _should_read_secret_from_secret_manager() is True
 
     # Test with secret manager client and read_and_write access
-    litellm._key_management_settings = KeyManagementSettings(
-        access_mode="read_and_write"
-    )
+    litellm._key_management_settings = KeyManagementSettings(access_mode="read_and_write")
     assert _should_read_secret_from_secret_manager() is True
 
     # Test with secret manager client and write_only access
@@ -357,9 +345,7 @@ def test_get_secret_with_access_mode():
     assert _should_read_secret_from_secret_manager() is True
 
     # Test with read_and_write access
-    litellm._key_management_settings = KeyManagementSettings(
-        access_mode="read_and_write"
-    )
+    litellm._key_management_settings = KeyManagementSettings(access_mode="read_and_write")
     assert _should_read_secret_from_secret_manager() is True
 
     # Reset global variables

@@ -8,9 +8,7 @@ Nebius AI Studio is an OpenAI-compatible provider with minor customizations.
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 import pytest
 
@@ -54,9 +52,7 @@ class TestNebiusConfig:
         This test mocks the actual HTTP request to test the integration properly.
         """
 
-        litellm.disable_aiohttp_transport = (
-            True  # since this uses respx, we need to set use_aiohttp_transport to False
-        )
+        litellm.disable_aiohttp_transport = True  # since this uses respx, we need to set use_aiohttp_transport to False
 
         # Set up environment variables for the test
         api_key = "fake-nebius-key"
@@ -93,9 +89,7 @@ class TestNebiusConfig:
         # Make the actual API call through LiteLLM
         response = completion(
             model=model,
-            messages=[
-                {"role": "user", "content": "write code for saying hey from LiteLLM"}
-            ],
+            messages=[{"role": "user", "content": "write code for saying hey from LiteLLM"}],
             api_key=api_key,
             api_base=api_base,
         )

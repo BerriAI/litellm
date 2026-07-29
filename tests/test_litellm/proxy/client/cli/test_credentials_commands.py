@@ -7,9 +7,7 @@ import pytest
 import requests
 from click.testing import CliRunner
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 
 from litellm.proxy.client.cli.main import cli
@@ -144,9 +142,7 @@ def test_acreate_credential_http_error(cli_runner, mock_credentials_client):
     mock_error_response = MagicMock()
     mock_error_response.status_code = 400
     mock_error_response.json.return_value = {"error": "Invalid request"}
-    mock_instance.create.side_effect = requests.exceptions.HTTPError(
-        response=mock_error_response
-    )
+    mock_instance.create.side_effect = requests.exceptions.HTTPError(response=mock_error_response)
 
     # Run command
     result = cli_runner.invoke(
@@ -190,9 +186,7 @@ def test_adelete_credential_http_error(cli_runner, mock_credentials_client):
     mock_error_response = MagicMock()
     mock_error_response.status_code = 404
     mock_error_response.json.return_value = {"error": "Credential not found"}
-    mock_instance.delete.side_effect = requests.exceptions.HTTPError(
-        response=mock_error_response
-    )
+    mock_instance.delete.side_effect = requests.exceptions.HTTPError(response=mock_error_response)
 
     # Run command
     result = cli_runner.invoke(cli, ["credentials", "delete", "test-cred"])

@@ -53,9 +53,7 @@ def test_model_list_function_signature():
     include_metadata_param = sig.parameters["include_metadata"]
     fallback_type_param = sig.parameters["fallback_type"]
 
-    assert (
-        include_metadata_param.default is False
-    ), "include_metadata should default to False"
+    assert include_metadata_param.default is False, "include_metadata should default to False"
     assert fallback_type_param.default is None, "fallback_type should default to None"
 
 
@@ -122,17 +120,13 @@ def test_model_list_with_fallback_metadata(
 
         if include_metadata:
             metadata = {}
-            effective_fallback_type = (
-                fallback_type if fallback_type is not None else "general"
-            )
+            effective_fallback_type = fallback_type if fallback_type is not None else "general"
 
             # Validate fallback_type
             valid_fallback_types = ["general", "context_window", "content_policy"]
             assert effective_fallback_type in valid_fallback_types
 
-            fallbacks = fallback_side_effect(
-                model, mock_router_instance, effective_fallback_type
-            )
+            fallbacks = fallback_side_effect(model, mock_router_instance, effective_fallback_type)
             metadata["fallbacks"] = fallbacks
             model_info["metadata"] = metadata
 
@@ -149,9 +143,7 @@ def test_model_list_with_fallback_metadata(
     assert response["object"] == "list"
 
     # Find claude-4-sonnet in response
-    claude_model = next(
-        (m for m in response["data"] if m["id"] == "claude-4-sonnet"), None
-    )
+    claude_model = next((m for m in response["data"] if m["id"] == "claude-4-sonnet"), None)
     assert claude_model is not None
     assert "metadata" in claude_model
     assert "fallbacks" in claude_model["metadata"]
@@ -161,9 +153,7 @@ def test_model_list_with_fallback_metadata(
     ]
 
     # Find bedrock-claude-sonnet-4 in response (should have no fallbacks)
-    bedrock_model = next(
-        (m for m in response["data"] if m["id"] == "bedrock-claude-sonnet-4"), None
-    )
+    bedrock_model = next((m for m in response["data"] if m["id"] == "bedrock-claude-sonnet-4"), None)
     assert bedrock_model is not None
     assert "metadata" in bedrock_model
     assert "fallbacks" in bedrock_model["metadata"]
@@ -210,9 +200,7 @@ def test_fallback_type_defaults_to_general():
     fallback_type = None
 
     if include_metadata:
-        effective_fallback_type = (
-            fallback_type if fallback_type is not None else "general"
-        )
+        effective_fallback_type = fallback_type if fallback_type is not None else "general"
         assert effective_fallback_type == "general"
 
     # Test with explicit general type
@@ -243,16 +231,12 @@ def test_response_structure_compatibility():
     # Test model with metadata
     metadata_model = {
         **basic_model,
-        "metadata": {
-            "fallbacks": ["bedrock-claude-sonnet-4", "google-claude-sonnet-4"]
-        },
+        "metadata": {"fallbacks": ["bedrock-claude-sonnet-4", "google-claude-sonnet-4"]},
     }
 
     # Should still have all required keys
     for key in required_keys:
-        assert (
-            key in metadata_model
-        ), f"Required OpenAI key '{key}' missing from metadata model"
+        assert key in metadata_model, f"Required OpenAI key '{key}' missing from metadata model"
 
     # Should have metadata
     assert "metadata" in metadata_model
@@ -283,9 +267,7 @@ def test_get_all_fallbacks_integration():
 
     # Test default parameter values
     fallback_type_param = sig.parameters["fallback_type"]
-    assert (
-        fallback_type_param.default == "general"
-    ), "fallback_type should default to 'general'"
+    assert fallback_type_param.default == "general", "fallback_type should default to 'general'"
 
     llm_router_param = sig.parameters["llm_router"]
     assert llm_router_param.default is None, "llm_router should default to None"

@@ -74,9 +74,7 @@ def test_baggage_keys_from_config_yaml_kwargs():
 
 
 def test_baggage_processor_allowlist_uses_config_keys():
-    cfg = OpenTelemetryV2Config(
-        exporter="in_memory", baggage_promoted_keys=[LiteLLM.TEAM_ID]
-    )
+    cfg = OpenTelemetryV2Config(exporter="in_memory", baggage_promoted_keys=[LiteLLM.TEAM_ID])
     provider, exporter = providers.in_memory_provider(cfg)
     from litellm.integrations.otel.plumbing import context as ctx_mod
     from litellm.integrations.otel.emitter import SpanEmitter
@@ -124,9 +122,7 @@ def test_passthrough_llm_span_parents_to_ambient_server_span():
     later (possibly detached) success callback only closes the already-parented
     span, so it never becomes a separate root trace."""
     logger, exporter = _logger()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     kwargs = {
         "standard_logging_object": _payload(),
         "litellm_params": {"metadata": {}},
@@ -150,9 +146,7 @@ def test_llm_span_unaffected_by_phase_span_active_at_close():
     successor to the old auth-failure-401 case where the LLM log nested under
     ``auth``: the span is now born after auth, parented to the request root."""
     logger, exporter = _logger()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     kwargs = {
         "standard_logging_object": _payload(),
         "litellm_params": {"metadata": {}},

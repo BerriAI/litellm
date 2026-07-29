@@ -10,9 +10,7 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -3731,10 +3729,7 @@ def test_unit_test_text_completion_object():
     assert text_completion_obj.id == "cmpl-99y7B2svVoRWe1xd7UFRmeGjZrFSh"
     assert text_completion_obj.object == "text_completion"
     assert text_completion_obj.created == 1712163061
-    assert (
-        text_completion_obj.model
-        == "ft:babbage-002:ai-r-d-zapai:v3-fields-used:84jb9rtr"
-    )
+    assert text_completion_obj.model == "ft:babbage-002:ai-r-d-zapai:v3-fields-used:84jb9rtr"
     assert text_completion_obj.system_fingerprint == None
     assert len(text_completion_obj.choices) == len(openai_object["choices"])
 
@@ -3840,9 +3835,7 @@ def test_completion_openai_engine():
 def test_completion_chatgpt_prompt():
     try:
         print("\n gpt3.5 test\n")
-        response = text_completion(
-            model="openai/gpt-3.5-turbo", prompt="What's the weather in SF?"
-        )
+        response = text_completion(model="openai/gpt-3.5-turbo", prompt="What's the weather in SF?")
         print(response)
         response_str = response["choices"][0]["text"]
         print("\n", response.choices)
@@ -3971,9 +3964,7 @@ def test_completion_hf_prompt_array():
 # test_completion_hf_prompt_array()
 
 
-@pytest.mark.skip(
-    reason="HF Inference API is unstable, this is now the 3rd time it's stopped working"
-)
+@pytest.mark.skip(reason="HF Inference API is unstable, this is now the 3rd time it's stopped working")
 def test_text_completion_stream():
     try:
         for _ in range(2):  # check if closed client used
@@ -4075,9 +4066,7 @@ def test_async_text_completion_stream():
                     num_finish_reason += 1
                     print("finish_reason", chunk["choices"][0].get("finish_reason"))
 
-            assert (
-                num_finish_reason == 1
-            ), f"expected only one finish reason. Got {num_finish_reason}"
+            assert num_finish_reason == 1, f"expected only one finish reason. Got {num_finish_reason}"
         except Exception as e:
             pytest.fail(f"GOT exception for gpt-3.5 instruct In streaming{e}")
 
@@ -4105,9 +4094,7 @@ async def test_async_text_completion_chat_model_stream():
             if chunk["choices"][0].get("finish_reason") is not None:
                 num_finish_reason += 1
 
-        assert (
-            num_finish_reason == 1
-        ), f"expected only one finish reason. Got {num_finish_reason}"
+        assert num_finish_reason == 1, f"expected only one finish reason. Got {num_finish_reason}"
         response_obj = litellm.stream_chunk_builder(chunks=chunks)
         cost = litellm.completion_cost(completion_response=response_obj)
         assert cost > 0
@@ -4150,9 +4137,7 @@ def test_completion_vllm(provider):
 
     client = OpenAI(api_key="my-fake-key")
 
-    with patch.object(
-        client.completions.with_raw_response, "create", side_effect=mock_post
-    ) as mock_call:
+    with patch.object(client.completions.with_raw_response, "create", side_effect=mock_post) as mock_call:
         response = text_completion(
             model="{provider}/gemini-2.5-flash-lite".format(provider=provider),
             prompt="ping",

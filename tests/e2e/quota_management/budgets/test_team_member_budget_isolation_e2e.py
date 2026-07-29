@@ -101,9 +101,9 @@ class TestTeamMemberBudgetIsolation:
 
         sent = frozenset(_roomy_send(client, pair.roomy_key) for _ in range(ROOMY_BURST))
 
-        assert is_budget_block(
-            client.chat(pair.tight_key, MODEL, f"tight {unique_marker()}", max_tokens=16)
-        ), "tight member stopped being blocked once the peer spent"
+        assert is_budget_block(client.chat(pair.tight_key, MODEL, f"tight {unique_marker()}", max_tokens=16)), (
+            "tight member stopped being blocked once the peer spent"
+        )
 
         rows = client.proxy.poll_logs_for_key(
             pair.roomy_key, predicate=lambda rs: bool(sent & {r.request_id for r in rs})

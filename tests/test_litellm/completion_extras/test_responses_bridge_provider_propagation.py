@@ -50,13 +50,9 @@ def test_sync_completion_forwards_custom_llm_provider():
         # that would TypeError against an already-present key).
         "custom_llm_provider": "should-be-overwritten",
     }
-    handler.transformation_handler.transform_response.return_value = (
-        _validated_kwargs()["model_response"]
-    )
+    handler.transformation_handler.transform_response.return_value = _validated_kwargs()["model_response"]
     with (
-        patch.object(
-            handler, "validate_input_kwargs", return_value=_validated_kwargs()
-        ),
+        patch.object(handler, "validate_input_kwargs", return_value=_validated_kwargs()),
         patch(
             "litellm.responses",
             return_value=MagicMock(spec=[]),
@@ -100,9 +96,7 @@ async def test_async_completion_forwards_custom_llm_provider():
     _fake_aresponses.kwargs = {}
 
     with (
-        patch.object(
-            handler, "validate_input_kwargs", return_value=_validated_kwargs()
-        ),
+        patch.object(handler, "validate_input_kwargs", return_value=_validated_kwargs()),
         patch("litellm.aresponses", _fake_aresponses),
     ):
         try:

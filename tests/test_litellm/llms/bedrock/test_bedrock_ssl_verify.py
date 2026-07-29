@@ -156,39 +156,32 @@ class TestBedrockSSLVerify:
                 call
                 for call in mock_boto3_client.call_args_list
                 if (len(call[0]) > 0 and call[0][0] == "sts")
-                or (
-                    "service_name" not in call[1]
-                )  # STS calls don't use service_name kwarg
+                or ("service_name" not in call[1])  # STS calls don't use service_name kwarg
             ]
 
             assert len(sts_calls) > 0, "STS client should have been created"
 
             # Check that verify parameter was passed to STS client
             sts_call = sts_calls[0]
-            assert (
-                "verify" in sts_call[1]
-            ), "verify parameter should be passed to STS client"
-            assert (
-                sts_call[1]["verify"] == ca_bundle_path
-            ), f"verify should be set to CA bundle path, got {sts_call[1]['verify']}"
+            assert "verify" in sts_call[1], "verify parameter should be passed to STS client"
+            assert sts_call[1]["verify"] == ca_bundle_path, (
+                f"verify should be set to CA bundle path, got {sts_call[1]['verify']}"
+            )
 
             # Verify that boto3.client was called with verify parameter for Bedrock
             bedrock_calls = [
                 call
                 for call in mock_boto3_client.call_args_list
-                if "service_name" in call[1]
-                and call[1]["service_name"] == "bedrock-runtime"
+                if "service_name" in call[1] and call[1]["service_name"] == "bedrock-runtime"
             ]
 
             assert len(bedrock_calls) > 0, "Bedrock client should have been created"
 
             bedrock_call = bedrock_calls[0]
-            assert (
-                "verify" in bedrock_call[1]
-            ), "verify parameter should be passed to Bedrock client"
-            assert (
-                bedrock_call[1]["verify"] == ca_bundle_path
-            ), f"verify should be set to CA bundle path, got {bedrock_call[1]['verify']}"
+            assert "verify" in bedrock_call[1], "verify parameter should be passed to Bedrock client"
+            assert bedrock_call[1]["verify"] == ca_bundle_path, (
+                f"verify should be set to CA bundle path, got {bedrock_call[1]['verify']}"
+            )
 
         finally:
             # Clean up
@@ -244,12 +237,10 @@ class TestBedrockSSLVerify:
             assert mock_boto3_client.called, "boto3.client should have been called"
 
             call_kwargs = mock_boto3_client.call_args[1]
-            assert (
-                "verify" in call_kwargs
-            ), "verify parameter should be passed to STS client"
-            assert (
-                call_kwargs["verify"] == ca_bundle_path
-            ), f"verify should be set to CA bundle path, got {call_kwargs['verify']}"
+            assert "verify" in call_kwargs, "verify parameter should be passed to STS client"
+            assert call_kwargs["verify"] == ca_bundle_path, (
+                f"verify should be set to CA bundle path, got {call_kwargs['verify']}"
+            )
 
         finally:
             # Clean up
@@ -258,9 +249,7 @@ class TestBedrockSSLVerify:
 
     @patch("litellm.llms.bedrock.base_aws_llm.get_secret")
     @patch("boto3.client")
-    def test_base_aws_llm_auth_with_web_identity_passes_ssl_verify(
-        self, mock_boto3_client, mock_get_secret
-    ):
+    def test_base_aws_llm_auth_with_web_identity_passes_ssl_verify(self, mock_boto3_client, mock_get_secret):
         """Test that _auth_with_web_identity_token passes ssl_verify to STS client."""
         base_aws = BaseAWSLLM()
 
@@ -290,9 +279,7 @@ class TestBedrockSSLVerify:
                 "PackedPolicySize": 100,
             }
 
-            mock_sts_client.assume_role_with_web_identity.return_value = (
-                mock_sts_response
-            )
+            mock_sts_client.assume_role_with_web_identity.return_value = mock_sts_response
 
             # Mock boto3.Session
             mock_session = MagicMock()
@@ -315,12 +302,10 @@ class TestBedrockSSLVerify:
             assert mock_boto3_client.called, "boto3.client should have been called"
 
             call_kwargs = mock_boto3_client.call_args[1]
-            assert (
-                "verify" in call_kwargs
-            ), "verify parameter should be passed to STS client"
-            assert (
-                call_kwargs["verify"] == ca_bundle_path
-            ), f"verify should be set to CA bundle path, got {call_kwargs['verify']}"
+            assert "verify" in call_kwargs, "verify parameter should be passed to STS client"
+            assert call_kwargs["verify"] == ca_bundle_path, (
+                f"verify should be set to CA bundle path, got {call_kwargs['verify']}"
+            )
 
         finally:
             # Clean up
@@ -363,9 +348,7 @@ class TestBedrockSSLVerify:
             litellm.ssl_verify = True
 
             ssl_verify = base_aws._get_ssl_verify()
-            assert (
-                ssl_verify == ca_bundle_path
-            ), "SSL_CERT_FILE should be used when ssl_verify is True"
+            assert ssl_verify == ca_bundle_path, "SSL_CERT_FILE should be used when ssl_verify is True"
         finally:
             # Clean up
             os.environ.pop("SSL_CERT_FILE", None)

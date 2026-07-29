@@ -4,9 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy._types import KeyManagementRoutes, Member, ProxyException
 from litellm.proxy.management_helpers.team_member_permission_checks import (
@@ -28,9 +26,7 @@ class TestGetPermissionsForTeamMember:
         team = _make_team_table(None)
         member = MagicMock(spec=Member)
 
-        result = TeamMemberPermissionChecks.get_permissions_for_team_member(
-            team_member_object=member, team_table=team
-        )
+        result = TeamMemberPermissionChecks.get_permissions_for_team_member(team_member_object=member, team_table=team)
 
         assert set(result) == set(BASELINE_TEAM_MEMBER_PERMISSIONS)
 
@@ -39,9 +35,7 @@ class TestGetPermissionsForTeamMember:
         team = _make_team_table([])
         member = MagicMock(spec=Member)
 
-        result = TeamMemberPermissionChecks.get_permissions_for_team_member(
-            team_member_object=member, team_table=team
-        )
+        result = TeamMemberPermissionChecks.get_permissions_for_team_member(team_member_object=member, team_table=team)
 
         assert KeyManagementRoutes.KEY_INFO in result
         assert KeyManagementRoutes.KEY_HEALTH in result
@@ -51,9 +45,7 @@ class TestGetPermissionsForTeamMember:
         team = _make_team_table(["/key/generate", "/key/delete"])
         member = MagicMock(spec=Member)
 
-        result = TeamMemberPermissionChecks.get_permissions_for_team_member(
-            team_member_object=member, team_table=team
-        )
+        result = TeamMemberPermissionChecks.get_permissions_for_team_member(team_member_object=member, team_table=team)
 
         assert KeyManagementRoutes.KEY_GENERATE in result
         assert KeyManagementRoutes.KEY_DELETE in result
@@ -65,9 +57,7 @@ class TestGetPermissionsForTeamMember:
         team = _make_team_table(["/key/info", "/key/generate"])
         member = MagicMock(spec=Member)
 
-        result = TeamMemberPermissionChecks.get_permissions_for_team_member(
-            team_member_object=member, team_table=team
-        )
+        result = TeamMemberPermissionChecks.get_permissions_for_team_member(team_member_object=member, team_table=team)
 
         # Using set ensures no duplicates from the implementation
         assert KeyManagementRoutes.KEY_INFO in result
@@ -206,9 +196,7 @@ class TestCanTeamMemberExecuteKeyManagementEndpoint:
             return team
 
         monkeypatch.setattr(module, "get_team_object", _mock_get_team_object)
-        monkeypatch.setattr(
-            key_management_endpoints, "_get_user_in_team", lambda **kwargs: None
-        )
+        monkeypatch.setattr(key_management_endpoints, "_get_user_in_team", lambda **kwargs: None)
 
         user_api_key_dict = MagicMock()
         user_api_key_dict.user_role = "internal_user"

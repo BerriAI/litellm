@@ -809,7 +809,10 @@ def test_anthropic_response_body_is_result_message():
 
 
 def test_anthropic_usage_conversion_includes_cache_tokens():
-    body = {"model": "claude-sonnet-4-5-20250929", "usage": _anthropic_usage(1000, 200, cache_creation=2000, cache_read=8000)}
+    body = {
+        "model": "claude-sonnet-4-5-20250929",
+        "usage": _anthropic_usage(1000, 200, cache_creation=2000, cache_read=8000),
+    }
     usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="anthropic")
     assert usage.prompt_tokens == 11000
     assert usage.completion_tokens == 200
@@ -824,7 +827,9 @@ def test_bedrock_model_output_line_success_check():
         "modelOutput": {"model": "claude-sonnet-4-6", "usage": {"input_tokens": 13, "output_tokens": 5}},
     }
     assert bu._batch_response_was_successful(row, custom_llm_provider="bedrock") is True
-    assert bu._get_response_from_batch_job_output_file(row, custom_llm_provider="bedrock")["model"] == "claude-sonnet-4-6"
+    assert (
+        bu._get_response_from_batch_job_output_file(row, custom_llm_provider="bedrock")["model"] == "claude-sonnet-4-6"
+    )
 
 
 def test_bedrock_cost_uses_deployment_model_name():
@@ -868,7 +873,13 @@ def test_total_usage_without_cache_tokens_has_no_prompt_details():
     rows = [
         {
             "custom_id": "req-1",
-            "response": {"status_code": 200, "body": {"model": "gpt-5.2", "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}},
+            "response": {
+                "status_code": 200,
+                "body": {
+                    "model": "gpt-5.2",
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                },
+            },
         }
     ]
     usage = bu._get_batch_job_total_usage_from_file_content(rows, custom_llm_provider="openai")
@@ -910,9 +921,7 @@ def test_anthropic_cost_without_model_info_uses_batch_cost_calculator(monkeypatc
         lambda **kw: pytest.fail("anthropic rows must not go through completion_cost"),
     )
 
-    total = bu._get_batch_job_cost_from_file_content(
-        [_anthropic_succeeded_row()], custom_llm_provider="anthropic"
-    )
+    total = bu._get_batch_job_cost_from_file_content([_anthropic_succeeded_row()], custom_llm_provider="anthropic")
 
     assert total == pytest.approx(0.3)
     assert seen[0]["model"] == "claude-sonnet-4-5-20250929"

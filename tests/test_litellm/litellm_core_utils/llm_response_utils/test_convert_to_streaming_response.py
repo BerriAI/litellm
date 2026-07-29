@@ -204,9 +204,7 @@ def test_sync_multi_chunk_and_lossless_join():
 
 
 def test_sync_delta_and_choice_metadata_only_on_first_chunk():
-    thinking_blocks = [
-        {"type": "thinking", "thinking": "cached thinking", "signature": "sig"}
-    ]
+    thinking_blocks = [{"type": "thinking", "thinking": "cached thinking", "signature": "sig"}]
     payload = {
         "id": "chatcmpl-test-sync",
         "object": "chat.completion",

@@ -75,12 +75,7 @@ def test_transform_search_request_uses_only_retrieval_config_from_extra_body():
 
     assert url.endswith("/kb123/retrieve")
     assert body["retrievalQuery"].get("text") == "hello"
-    assert (
-        body["retrievalConfiguration"]["vectorSearchConfiguration"][
-            "overrideSearchType"
-        ]
-        == "HYBRID"
-    )
+    assert body["retrievalConfiguration"]["vectorSearchConfiguration"]["overrideSearchType"] == "HYBRID"
     assert "unrelatedField" not in body
 
 
@@ -107,16 +102,8 @@ def test_transform_search_request_does_not_mutate_extra_body_and_overrides_numbe
         extra_body=extra_body,
     )
 
-    assert (
-        body["retrievalConfiguration"]["vectorSearchConfiguration"]["numberOfResults"]
-        == 10
-    )
-    assert (
-        extra_body["retrievalConfiguration"]["vectorSearchConfiguration"][
-            "numberOfResults"
-        ]
-        == 8
-    )
+    assert body["retrievalConfiguration"]["vectorSearchConfiguration"]["numberOfResults"] == 10
+    assert extra_body["retrievalConfiguration"]["vectorSearchConfiguration"]["numberOfResults"] == 8
 
 
 def test_transform_search_request_overrides_filter_without_mutating_extra_body():
@@ -124,11 +111,7 @@ def test_transform_search_request_overrides_filter_without_mutating_extra_body()
     mock_log = MagicMock()
     mock_log.model_call_details = {}
     extra_body = {
-        "retrievalConfiguration": {
-            "vectorSearchConfiguration": {
-                "filter": {"equals": {"key": "tenant", "value": "a"}}
-            }
-        }
+        "retrievalConfiguration": {"vectorSearchConfiguration": {"filter": {"equals": {"key": "tenant", "value": "a"}}}}
     }
     new_filter = {"equals": {"key": "tenant", "value": "b"}}
 
@@ -142,13 +125,5 @@ def test_transform_search_request_overrides_filter_without_mutating_extra_body()
         extra_body=extra_body,
     )
 
-    assert (
-        body["retrievalConfiguration"]["vectorSearchConfiguration"]["filter"]
-        == new_filter
-    )
-    assert (
-        extra_body["retrievalConfiguration"]["vectorSearchConfiguration"]["filter"][
-            "equals"
-        ]["value"]
-        == "a"
-    )
+    assert body["retrievalConfiguration"]["vectorSearchConfiguration"]["filter"] == new_filter
+    assert extra_body["retrievalConfiguration"]["vectorSearchConfiguration"]["filter"]["equals"]["value"] == "a"

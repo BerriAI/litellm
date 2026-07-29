@@ -65,11 +65,7 @@ def setup_vector_store_registry():
 
     # Init vector store registry
     litellm.vector_store_registry = VectorStoreRegistry(
-        vector_stores=[
-            LiteLLM_ManagedVectorStore(
-                vector_store_id="T37J8R4WTM", custom_llm_provider="bedrock"
-            )
-        ]
+        vector_stores=[LiteLLM_ManagedVectorStore(vector_store_id="T37J8R4WTM", custom_llm_provider="bedrock")]
     )
 
 
@@ -212,14 +208,10 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_streaming(
         if hasattr(chunk, "choices") and chunk.choices:
             for choice in chunk.choices:
                 if hasattr(choice, "delta") and choice.delta:
-                    provider_fields = getattr(
-                        choice.delta, "provider_specific_fields", None
-                    )
+                    provider_fields = getattr(choice.delta, "provider_specific_fields", None)
                     if provider_fields and "search_results" in provider_fields:
                         search_results = provider_fields["search_results"]
-                        print(
-                            f"Found search_results in streaming chunk: {len(search_results)} results"
-                        )
+                        print(f"Found search_results in streaming chunk: {len(search_results)} results")
 
                         # Verify structure
                         assert search_results is not None
@@ -227,10 +219,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_streaming(
 
                         first_search_result = search_results[0]
                         assert "object" in first_search_result
-                        assert (
-                            first_search_result["object"]
-                            == "vector_store.search_results.page"
-                        )
+                        assert first_search_result["object"] == "vector_store.search_results.page"
                         assert "data" in first_search_result
                         assert len(first_search_result["data"]) > 0
 
@@ -296,14 +285,10 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_with_tools_
     assert hasattr(response.choices[0].message, "provider_specific_fields")
     provider_fields = response.choices[0].message.provider_specific_fields
     assert provider_fields is not None
-    assert (
-        "search_results" in provider_fields
-    ), "search_results not in provider_specific_fields"
+    assert "search_results" in provider_fields, "search_results not in provider_specific_fields"
 
     search_results = provider_fields["search_results"]
-    assert (
-        search_results is not None and len(search_results) > 0
-    ), "No search results found"
+    assert search_results is not None and len(search_results) > 0, "No search results found"
 
     # The search was performed - this confirms filters were passed through
     # The logs above show:  litellm.asearch(... filters={'key': 'user_id', 'value': 'fake-user-id', 'operator': 'eq'})
@@ -346,16 +331,14 @@ async def test_bedrock_kb_request_body_has_transformed_filters(
             litellm_params=litellm_params_dict,
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_search_vector_store_request(
-                vector_store_id=vector_store_id,
-                query=query,
-                vector_store_search_optional_params=vector_store_search_optional_params,
-                api_base=api_base,
-                litellm_logging_obj=logging_obj,
-                litellm_params=litellm_params_dict,
-                extra_body=None,
-            )
+        url, request_body = vector_store_provider_config.transform_search_vector_store_request(
+            vector_store_id=vector_store_id,
+            query=query,
+            vector_store_search_optional_params=vector_store_search_optional_params,
+            api_base=api_base,
+            litellm_logging_obj=logging_obj,
+            litellm_params=litellm_params_dict,
+            extra_body=None,
         )
         captured_request_body["url"] = url
         captured_request_body["body"] = request_body
@@ -366,11 +349,7 @@ async def test_bedrock_kb_request_body_has_transformed_filters(
             data=[
                 VectorStoreSearchResult(
                     score=0.9,
-                    content=[
-                        VectorStoreResultContent(
-                            text="LiteLLM is a library", type="text"
-                        )
-                    ],
+                    content=[VectorStoreResultContent(text="LiteLLM is a library", type="text")],
                 )
             ],
         )
@@ -404,9 +383,7 @@ async def test_bedrock_kb_request_body_has_transformed_filters(
     )
     assert "body" in captured_request_body, "Bedrock KB request body was not captured"
 
-    vector_search = captured_request_body["body"]["retrievalConfiguration"][
-        "vectorSearchConfiguration"
-    ]
+    vector_search = captured_request_body["body"]["retrievalConfiguration"]["vectorSearchConfiguration"]
     aws_filter = vector_search["filter"]
     assert "equals" in aws_filter, f"Expected 'equals' in AWS format, got: {aws_filter}"
     assert aws_filter["equals"]["key"] == "user_id"
@@ -428,20 +405,12 @@ async def test_openai_with_knowledge_base_mock_openai(setup_vector_store_registr
     # Variable to capture the request
     captured_request = {}
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
         # Create async mock that returns proper structure
         async def mock_create(**kwargs):
             mock_response = Mock()
-            mock_response.choices = [
-                Mock(
-                    message=Mock(content="Mock response from OpenAI", role="assistant")
-                )
-            ]
-            mock_response.usage = Mock(
-                prompt_tokens=100, completion_tokens=50, total_tokens=150
-            )
+            mock_response.choices = [Mock(message=Mock(content="Mock response from OpenAI", role="assistant"))]
+            mock_response.usage = Mock(prompt_tokens=100, completion_tokens=50, total_tokens=150)
             mock_response.id = "chatcmpl-123"
             mock_response.object = "chat.completion"
             mock_response.created = 1234567890
@@ -504,20 +473,12 @@ async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(
     # Variable to capture the request
     captured_request = {}
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
         # Create async mock that returns proper structure
         async def mock_create(**kwargs):
             mock_response = Mock()
-            mock_response.choices = [
-                Mock(
-                    message=Mock(content="Mock response from OpenAI", role="assistant")
-                )
-            ]
-            mock_response.usage = Mock(
-                prompt_tokens=100, completion_tokens=50, total_tokens=150
-            )
+            mock_response.choices = [Mock(message=Mock(content="Mock response from OpenAI", role="assistant"))]
+            mock_response.usage = Mock(prompt_tokens=100, completion_tokens=50, total_tokens=150)
             mock_response.id = "chatcmpl-123"
             mock_response.object = "chat.completion"
             mock_response.created = 1234567890
@@ -577,20 +538,12 @@ async def test_openai_with_mixed_tool_call_mock_openai(setup_vector_store_regist
     # Variable to capture the request
     captured_request = {}
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
         # Create async mock that returns proper structure
         async def mock_create(**kwargs):
             mock_response = Mock()
-            mock_response.choices = [
-                Mock(
-                    message=Mock(content="Mock response from OpenAI", role="assistant")
-                )
-            ]
-            mock_response.usage = Mock(
-                prompt_tokens=100, completion_tokens=50, total_tokens=150
-            )
+            mock_response.choices = [Mock(message=Mock(content="Mock response from OpenAI", role="assistant"))]
+            mock_response.usage = Mock(prompt_tokens=100, completion_tokens=50, total_tokens=150)
             mock_response.id = "chatcmpl-123"
             mock_response.object = "chat.completion"
             mock_response.created = 1234567890
@@ -887,9 +840,7 @@ async def test_provider_specific_fields_in_proxy_http_response(
     mock_choice = litellm.Choices(finish_reason="stop", index=0, message=mock_message)
 
     mock_response.choices = [mock_choice]
-    mock_response.usage = litellm.Usage(
-        prompt_tokens=10, completion_tokens=20, total_tokens=30
-    )
+    mock_response.usage = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
 
     # Patch the completion call at the proxy level
     with mock_patch("litellm.acompletion", new=AsyncMock(return_value=mock_response)):
@@ -918,9 +869,9 @@ async def test_provider_specific_fields_in_proxy_http_response(
         message = choice["message"]
 
         # Verify provider_specific_fields is in the JSON response
-        assert (
-            "provider_specific_fields" in message
-        ), "provider_specific_fields missing from HTTP JSON response! This means exclude=True is preventing serialization."
+        assert "provider_specific_fields" in message, (
+            "provider_specific_fields missing from HTTP JSON response! This means exclude=True is preventing serialization."
+        )
 
         assert "search_results" in message["provider_specific_fields"]
         search_results = message["provider_specific_fields"]["search_results"]

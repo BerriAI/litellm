@@ -14,9 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 
@@ -81,15 +79,11 @@ class TestHostedVLLMSSLVerify:
             # Keyword argument
             params = call_args[1].get("params", {})
 
-        assert (
-            params.get("ssl_verify") is False
-        ), f"Expected ssl_verify=False in params, got {params}"
+        assert params.get("ssl_verify") is False, f"Expected ssl_verify=False in params, got {params}"
 
     @patch("litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client")
     @pytest.mark.asyncio
-    async def test_hosted_vllm_ssl_verify_false_async(
-        self, mock_get_async_httpx_client
-    ):
+    async def test_hosted_vllm_ssl_verify_false_async(self, mock_get_async_httpx_client):
         """Test that ssl_verify=False is passed to the HTTP client for async calls."""
         # Setup mock async client
         mock_client = MagicMock()
@@ -143,9 +137,7 @@ class TestHostedVLLMSSLVerify:
 
         # Check that params contains ssl_verify=False
         params = call_kwargs.get("params", {})
-        assert (
-            params.get("ssl_verify") is False
-        ), f"Expected ssl_verify=False in params, got {params}"
+        assert params.get("ssl_verify") is False, f"Expected ssl_verify=False in params, got {params}"
 
 
 if __name__ == "__main__":

@@ -29,12 +29,8 @@ def test_build_ui_login_form_hides_disclosure_when_flag_set():
 
 
 def test_build_ui_login_form_hint_independent_of_deprecation_banner():
-    with_banner = build_ui_login_form(
-        show_deprecation_banner=True, hide_default_credentials_hint=True
-    )
-    without_banner = build_ui_login_form(
-        show_deprecation_banner=False, hide_default_credentials_hint=True
-    )
+    with_banner = build_ui_login_form(show_deprecation_banner=True, hide_default_credentials_hint=True)
+    without_banner = build_ui_login_form(show_deprecation_banner=False, hide_default_credentials_hint=True)
 
     assert "Deprecated:" in with_banner
     assert "Deprecated:" not in without_banner

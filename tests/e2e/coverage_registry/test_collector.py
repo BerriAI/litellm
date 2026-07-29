@@ -29,9 +29,7 @@ from coverage_registry.schema import (
 )
 
 
-def _llm(
-    cell_id: str, tier: Tier, subject_endpoint: LlmEndpoint = "chat_completions"
-) -> LlmCell:
+def _llm(cell_id: str, tier: Tier, subject_endpoint: LlmEndpoint = "chat_completions") -> LlmCell:
     return LlmCell(
         id=cell_id,
         module="llm",
@@ -83,9 +81,7 @@ def test_logging_and_guardrail_roll_up_into_one_module() -> None:
         ),
     )
     report = compute_coverage(cells, frozenset())
-    logging_and_guardrails = next(
-        m for m in report.modules if m.module == "Logging & Guardrails"
-    )
+    logging_and_guardrails = next(m for m in report.modules if m.module == "Logging & Guardrails")
     assert logging_and_guardrails.total == 2
 
 
@@ -161,18 +157,12 @@ def test_loki_render_exposes_exact_stdout_lines_for_loki() -> None:
 
     assert len(lines) == 1 + len(report.modules)
     assert lines[0] == "COVERAGE_TOTAL percent=50.0 covered=1 total=2"
-    assert (
-        lines[1] == "COVERAGE_MODULE module=core_llms percent=100.0 covered=1 total=1"
-    )
-    assert (
-        lines[2] == "COVERAGE_MODULE module=non_core_llms percent=0.0 covered=0 total=1"
-    )
+    assert lines[1] == "COVERAGE_MODULE module=core_llms percent=100.0 covered=1 total=1"
+    assert lines[2] == "COVERAGE_MODULE module=non_core_llms percent=0.0 covered=0 total=1"
     assert [line.split("module=", 1)[1].split(" ", 1)[0] for line in lines[1:]] == [
         loki_module_label(module.module) for module in report.modules
     ]
-    assert all(
-        " " not in line.split("module=", 1)[1].split(" ", 1)[0] for line in lines[1:]
-    )
+    assert all(" " not in line.split("module=", 1)[1].split(" ", 1)[0] for line in lines[1:])
 
 
 def test_real_registry_loads_and_ids_are_unique() -> None:

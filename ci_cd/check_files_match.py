@@ -17,9 +17,7 @@ def main(argv=None):
         print(f"Passed! Files {file1} and {file2} match.")
         return 0
     else:
-        print(
-            f"Failed! Files {file1} and {file2} do not match. Copying content from {file1} to {file2}."
-        )
+        print(f"Failed! Files {file1} and {file2} do not match. Copying content from {file1} to {file2}.")
         copy_content(file1, file2)
         return 1
 

@@ -89,18 +89,14 @@ async def test_mlflow_logging_functionality():
             "jobID": "214590dsff09fds",
             "taskName": "run_page_classification",
         }
-        assert (
-            tags_param == expected_tags
-        ), f"Expected tags {expected_tags}, got {tags_param}"
+        assert tags_param == expected_tags, f"Expected tags {expected_tags}, got {tags_param}"
 
         # Check that prediction parameter was included in inputs
         inputs_param = call_args.kwargs.get("inputs", {})
-        assert (
-            "prediction" in inputs_param
-        ), "Prediction should be included in span inputs"
-        assert (
-            inputs_param["prediction"] == test_prediction
-        ), f"Expected prediction {test_prediction}, got {inputs_param['prediction']}"
+        assert "prediction" in inputs_param, "Prediction should be included in span inputs"
+        assert inputs_param["prediction"] == test_prediction, (
+            f"Expected prediction {test_prediction}, got {inputs_param['prediction']}"
+        )
 
 
 def test_mlflow_token_usage_attribute_structure():
@@ -193,8 +189,5 @@ def test_mlflow_stream_handler_uses_async_complete_response():
         )
 
         mlflow_logger._end_span_or_trace.assert_called_once()
-        assert (
-            mlflow_logger._end_span_or_trace.call_args.kwargs["outputs"]
-            is final_response
-        )
+        assert mlflow_logger._end_span_or_trace.call_args.kwargs["outputs"] is final_response
         assert "abc123" not in mlflow_logger._stream_id_to_span

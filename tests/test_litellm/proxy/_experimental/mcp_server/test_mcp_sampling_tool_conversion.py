@@ -29,14 +29,10 @@ def _tool_use(*, name: str, tool_id: str, input_data: Dict[str, Any]) -> SimpleN
     return SimpleNamespace(type="tool_use", name=name, id=tool_id, input=input_data)
 
 
-def _tool_result(
-    *, tool_use_id: str, content: Any = None, is_error: bool = False
-) -> SimpleNamespace:
+def _tool_result(*, tool_use_id: str, content: Any = None, is_error: bool = False) -> SimpleNamespace:
     if content is None:
         content = []
-    return SimpleNamespace(
-        type="tool_result", toolUseId=tool_use_id, content=content, isError=is_error
-    )
+    return SimpleNamespace(type="tool_result", toolUseId=tool_use_id, content=content, isError=is_error)
 
 
 def _sampling_msg(role: str, content: Any) -> SimpleNamespace:
@@ -129,9 +125,7 @@ class TestConvertMcpMessagesMultiTurnTools:
         """An assistant message with tool_use content should produce
         a proper tool_calls array, not a text stub."""
         messages = [
-            _sampling_msg("assistant", _tool_use(
-                name="search", tool_id="call_1", input_data={"query": "LiteLLM"}
-            )),
+            _sampling_msg("assistant", _tool_use(name="search", tool_id="call_1", input_data={"query": "LiteLLM"})),
         ]
         result = _convert_mcp_messages_to_openai(messages)
 
@@ -148,10 +142,13 @@ class TestConvertMcpMessagesMultiTurnTools:
         """A user message with tool_result content should produce
         a separate role='tool' message."""
         messages = [
-            _sampling_msg("user", _tool_result(
-                tool_use_id="call_1",
-                content=[_text("Found 42 results")],
-            )),
+            _sampling_msg(
+                "user",
+                _tool_result(
+                    tool_use_id="call_1",
+                    content=[_text("Found 42 results")],
+                ),
+            ),
         ]
         result = _convert_mcp_messages_to_openai(messages)
 
@@ -167,14 +164,21 @@ class TestConvertMcpMessagesMultiTurnTools:
         """
         messages = [
             _sampling_msg("user", _text("What's the weather in NYC?")),
-            _sampling_msg("assistant", _tool_use(
-                name="get_weather", tool_id="call_w1",
-                input_data={"city": "NYC"},
-            )),
-            _sampling_msg("user", _tool_result(
-                tool_use_id="call_w1",
-                content=[_text("72°F, sunny")],
-            )),
+            _sampling_msg(
+                "assistant",
+                _tool_use(
+                    name="get_weather",
+                    tool_id="call_w1",
+                    input_data={"city": "NYC"},
+                ),
+            ),
+            _sampling_msg(
+                "user",
+                _tool_result(
+                    tool_use_id="call_w1",
+                    content=[_text("72°F, sunny")],
+                ),
+            ),
             _sampling_msg("assistant", _text("It's 72°F and sunny in NYC!")),
         ]
         result = _convert_mcp_messages_to_openai(messages)
@@ -200,10 +204,13 @@ class TestConvertMcpMessagesMultiTurnTools:
     def test_should_handle_mixed_text_and_tool_use_in_assistant(self):
         """An assistant message with both text and tool_use content."""
         messages = [
-            _sampling_msg("assistant", [
-                _text("Let me check that for you."),
-                _tool_use(name="lookup", tool_id="call_lu1", input_data={"id": 42}),
-            ]),
+            _sampling_msg(
+                "assistant",
+                [
+                    _text("Let me check that for you."),
+                    _tool_use(name="lookup", tool_id="call_lu1", input_data={"id": 42}),
+                ],
+            ),
         ]
         result = _convert_mcp_messages_to_openai(messages)
 
@@ -218,10 +225,13 @@ class TestConvertMcpMessagesMultiTurnTools:
     def test_should_handle_multiple_tool_uses_in_single_message(self):
         """Multiple tool_use items in a single assistant message → multiple tool_calls."""
         messages = [
-            _sampling_msg("assistant", [
-                _tool_use(name="tool_a", tool_id="call_a", input_data={}),
-                _tool_use(name="tool_b", tool_id="call_b", input_data={"x": 1}),
-            ]),
+            _sampling_msg(
+                "assistant",
+                [
+                    _tool_use(name="tool_a", tool_id="call_a", input_data={}),
+                    _tool_use(name="tool_b", tool_id="call_b", input_data={"x": 1}),
+                ],
+            ),
         ]
         result = _convert_mcp_messages_to_openai(messages)
 
@@ -234,10 +244,13 @@ class TestConvertMcpMessagesMultiTurnTools:
     def test_should_handle_multiple_tool_results_in_single_message(self):
         """Multiple tool_result items in a single user message → multiple tool messages."""
         messages = [
-            _sampling_msg("user", [
-                _tool_result(tool_use_id="call_a", content=[_text("Result A")]),
-                _tool_result(tool_use_id="call_b", content=[_text("Result B")]),
-            ]),
+            _sampling_msg(
+                "user",
+                [
+                    _tool_result(tool_use_id="call_a", content=[_text("Result A")]),
+                    _tool_result(tool_use_id="call_b", content=[_text("Result B")]),
+                ],
+            ),
         ]
         result = _convert_mcp_messages_to_openai(messages)
 
@@ -249,9 +262,7 @@ class TestConvertMcpMessagesMultiTurnTools:
     def test_should_preserve_system_prompt(self):
         """System prompt should still be emitted first."""
         messages = [_sampling_msg("user", _text("Hi"))]
-        result = _convert_mcp_messages_to_openai(
-            messages, system_prompt="You are helpful."
-        )
+        result = _convert_mcp_messages_to_openai(messages, system_prompt="You are helpful.")
 
         assert result[0]["role"] == "system"
         assert result[0]["content"] == "You are helpful."
@@ -270,9 +281,7 @@ class TestConvertMcpMessagesMarkerHoisting:
 
     def test_should_hoist_tool_use_arriving_on_user_role(self):
         messages = [
-            _sampling_msg("user", _tool_use(
-                name="search", tool_id="call_1", input_data={"q": "x"}
-            )),
+            _sampling_msg("user", _tool_use(name="search", tool_id="call_1", input_data={"q": "x"})),
         ]
         result = _convert_mcp_messages_to_openai(messages)
 
@@ -282,9 +291,7 @@ class TestConvertMcpMessagesMarkerHoisting:
 
     def test_should_hoist_tool_result_arriving_on_assistant_role(self):
         messages = [
-            _sampling_msg("assistant", _tool_result(
-                tool_use_id="call_1", content=[_text("done")]
-            )),
+            _sampling_msg("assistant", _tool_result(tool_use_id="call_1", content=[_text("done")])),
         ]
         result = _convert_mcp_messages_to_openai(messages)
 
@@ -295,10 +302,13 @@ class TestConvertMcpMessagesMarkerHoisting:
 
     def test_should_keep_text_when_hoisting_tool_use_on_user_role(self):
         messages = [
-            _sampling_msg("user", [
-                _text("here you go"),
-                _tool_use(name="lookup", tool_id="call_2", input_data={}),
-            ]),
+            _sampling_msg(
+                "user",
+                [
+                    _text("here you go"),
+                    _tool_use(name="lookup", tool_id="call_2", input_data={}),
+                ],
+            ),
         ]
         result = _convert_mcp_messages_to_openai(messages)
 
@@ -306,7 +316,4 @@ class TestConvertMcpMessagesMarkerHoisting:
         msg = result[0]
         assert msg["role"] == "assistant"
         assert msg["tool_calls"][0]["function"]["name"] == "lookup"
-        assert any(
-            isinstance(p, dict) and p.get("text") == "here you go"
-            for p in msg["content"]
-        )
+        assert any(isinstance(p, dict) and p.get("text") == "here you go" for p in msg["content"])

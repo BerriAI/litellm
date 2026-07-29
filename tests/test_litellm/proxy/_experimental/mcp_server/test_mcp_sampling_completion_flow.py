@@ -23,11 +23,7 @@ from litellm.proxy._experimental.mcp_server.sampling_handler import (
 
 def _params(**overrides):
     base = dict(
-        messages=[
-            SimpleNamespace(
-                role="user", content=SimpleNamespace(type="text", text="hi")
-            )
-        ],
+        messages=[SimpleNamespace(role="user", content=SimpleNamespace(type="text", text="hi"))],
         systemPrompt="be concise",
         maxTokens=128,
         temperature=None,
@@ -53,11 +49,7 @@ class TestBuildCompletionKwargs:
         params = _params(
             temperature=0.3,
             stopSequences=["STOP"],
-            tools=[
-                SimpleNamespace(
-                    name="search", description="d", inputSchema={"type": "object"}
-                )
-            ],
+            tools=[SimpleNamespace(name="search", description="d", inputSchema={"type": "object"})],
             toolChoice=SimpleNamespace(mode="required"),
             metadata={"trace": "abc"},
         )
@@ -136,9 +128,7 @@ class TestHandleSamplingCreateMessagePipeline:
         response = SimpleNamespace(
             choices=[
                 SimpleNamespace(
-                    message=SimpleNamespace(
-                        content="the answer is 42", tool_calls=None
-                    ),
+                    message=SimpleNamespace(content="the answer is 42", tool_calls=None),
                     finish_reason="stop",
                 )
             ],
@@ -203,9 +193,7 @@ class TestHandleSamplingCreateMessagePipeline:
             patch(
                 "litellm.proxy._experimental.mcp_server.sampling_handler._build_completion_kwargs",
                 new_callable=AsyncMock,
-                side_effect=RateLimitError(
-                    "rate limited", llm_provider="openai", model="gpt-4o"
-                ),
+                side_effect=RateLimitError("rate limited", llm_provider="openai", model="gpt-4o"),
             ),
         ):
             with pytest.raises(RateLimitError):

@@ -68,11 +68,8 @@ class TestThinkingBudgetTokensConstraint:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(
-                logger, "_execute_search", return_value=("search result", None)
-            ),
+            patch.object(logger, "_execute_search", return_value=("search result", None)),
         ):
-
             await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",
                 messages=[{"role": "user", "content": "hi"}],
@@ -104,11 +101,8 @@ class TestThinkingBudgetTokensConstraint:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(
-                logger, "_execute_search", return_value=("search result", None)
-            ),
+            patch.object(logger, "_execute_search", return_value=("search result", None)),
         ):
-
             await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",
                 messages=[{"role": "user", "content": "hi"}],
@@ -140,11 +134,8 @@ class TestThinkingBudgetTokensConstraint:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(
-                logger, "_execute_search", return_value=("search result", None)
-            ),
+            patch.object(logger, "_execute_search", return_value=("search result", None)),
         ):
-
             await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",
                 messages=[{"role": "user", "content": "hi"}],
@@ -176,11 +167,8 @@ class TestThinkingBudgetTokensConstraint:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(
-                logger, "_execute_search", return_value=("search result", None)
-            ),
+            patch.object(logger, "_execute_search", return_value=("search result", None)),
         ):
-
             await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",
                 messages=[{"role": "user", "content": "hi"}],
@@ -209,11 +197,8 @@ class TestThinkingBudgetTokensConstraint:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(
-                logger, "_execute_search", return_value=("search result", None)
-            ),
+            patch.object(logger, "_execute_search", return_value=("search result", None)),
         ):
-
             await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",
                 messages=[{"role": "user", "content": "hi"}],
@@ -296,11 +281,8 @@ class TestLoggingObjExcludedFromFollowUp:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(
-                logger, "_execute_search", return_value=("search result", None)
-            ),
+            patch.object(logger, "_execute_search", return_value=("search result", None)),
         ):
-
             await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",
                 messages=[{"role": "user", "content": "hi"}],
@@ -337,11 +319,8 @@ class TestLoggingObjExcludedFromFollowUp:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(
-                logger, "_execute_search", return_value=("search result", None)
-            ),
+            patch.object(logger, "_execute_search", return_value=("search result", None)),
         ):
-
             await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",
                 messages=[{"role": "user", "content": "hi"}],
@@ -387,11 +366,8 @@ class TestFollowUpErrorScenarios:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fail_acreate,
             ),
-            patch.object(
-                logger, "_execute_search", return_value=("search result", None)
-            ),
+            patch.object(logger, "_execute_search", return_value=("search result", None)),
         ):
-
             with pytest.raises(Exception, match="max_tokens must be greater"):
                 await logger._execute_agentic_loop(
                     model="us.anthropic.claude-opus-4-6-v1",
@@ -419,11 +395,8 @@ class TestFollowUpErrorScenarios:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(
-                logger, "_execute_search", side_effect=Exception("search API down")
-            ),
+            patch.object(logger, "_execute_search", side_effect=Exception("search API down")),
         ):
-
             result = await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",
                 messages=[{"role": "user", "content": "hi"}],
@@ -466,11 +439,8 @@ class TestFollowUpErrorScenarios:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(
-                logger, "_execute_search", return_value=("search result", None)
-            ),
+            patch.object(logger, "_execute_search", return_value=("search result", None)),
         ):
-
             await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",
                 messages=[{"role": "user", "content": "hi"}],

@@ -41,9 +41,7 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = mock_api_key
     # Test with dynamic endpoint
-    config.authenticator.get_api_base.return_value = (
-        "https://api.enterprise.githubcopilot.com"
-    )
+    config.authenticator.get_api_base.return_value = "https://api.enterprise.githubcopilot.com"
 
     # Test with default values
     model = "github_copilot/gpt-4"
@@ -162,25 +160,19 @@ def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):
             {"role": "system", "content": "System message."},
             {"role": "user", "content": "User message."},
         ]
-        out = config._transform_messages(
-            [m.copy() for m in messages], model="github_copilot/gpt-4"
-        )
+        out = config._transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
         assert out[0]["role"] == "assistant"
         assert out[1]["role"] == "user"
 
         # Case 2: Flag is True (conversion does not happen)
         litellm.disable_copilot_system_to_assistant = True
-        out = config._transform_messages(
-            [m.copy() for m in messages], model="github_copilot/gpt-4"
-        )
+        out = config._transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
         assert out[0]["role"] == "system"
         assert out[1]["role"] == "user"
 
         # Case 3: Flag is False again (conversion happens)
         litellm.disable_copilot_system_to_assistant = False
-        out = config._transform_messages(
-            [m.copy() for m in messages], model="github_copilot/gpt-4"
-        )
+        out = config._transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
         assert out[0]["role"] == "assistant"
         assert out[1]["role"] == "user"
     finally:
@@ -385,9 +377,7 @@ def test_get_supported_openai_params_claude_model():
     assert "reasoning_effort" in supported_params
 
     # Test Claude 3-7 model supports thinking and reasoning_effort parameters
-    supported_params_claude37 = config.get_supported_openai_params(
-        "claude-3-7-sonnet-20250219"
-    )
+    supported_params_claude37 = config.get_supported_openai_params("claude-3-7-sonnet-20250219")
     assert "thinking" in supported_params_claude37
     assert "reasoning_effort" in supported_params_claude37
 
@@ -414,16 +404,12 @@ def test_get_supported_openai_params_case_insensitive():
     config = GithubCopilotConfig()
 
     # Test uppercase Claude 4 model with full model name
-    supported_params_upper = config.get_supported_openai_params(
-        "CLAUDE-SONNET-4-20250514"
-    )
+    supported_params_upper = config.get_supported_openai_params("CLAUDE-SONNET-4-20250514")
     assert "thinking" in supported_params_upper
     assert "reasoning_effort" in supported_params_upper
 
     # Test mixed case Claude 3-7 model (has extended thinking) with full model name
-    supported_params_mixed = config.get_supported_openai_params(
-        "Claude-3-7-Sonnet-20250219"
-    )
+    supported_params_mixed = config.get_supported_openai_params("Claude-3-7-Sonnet-20250219")
     assert "thinking" in supported_params_mixed
     assert "reasoning_effort" in supported_params_mixed
 
@@ -757,13 +743,8 @@ class TestGithubCopilotTransformResponse:
         assert result.choices[0].message.tool_calls is not None
         assert len(result.choices[0].message.tool_calls) == 1
         assert result.choices[0].message.tool_calls[0]["id"] == "toolu_01ABC"
-        assert (
-            result.choices[0].message.tool_calls[0]["function"]["name"] == "get_weather"
-        )
-        assert (
-            '"Boston, MA"'
-            in result.choices[0].message.tool_calls[0]["function"]["arguments"]
-        )
+        assert result.choices[0].message.tool_calls[0]["function"]["name"] == "get_weather"
+        assert '"Boston, MA"' in result.choices[0].message.tool_calls[0]["function"]["arguments"]
 
     def test_transform_response_anthropic_native_multiple_text_blocks(self):
         """All text blocks must be concatenated, not only the first."""
@@ -931,12 +912,8 @@ class TestGithubCopilotTransformParsedResponseDict:
 
 
 @patch("litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client")
-@patch(
-    "litellm.llms.openai.openai.OpenAIChatCompletion.make_sync_openai_chat_completion_request"
-)
-def test_openai_handler_repairs_github_copilot_empty_choices(
-    mock_request, mock_get_client
-):
+@patch("litellm.llms.openai.openai.OpenAIChatCompletion.make_sync_openai_chat_completion_request")
+def test_openai_handler_repairs_github_copilot_empty_choices(mock_request, mock_get_client):
     """
     The OpenAI SDK handler calls convert_to_model_response_object directly on the
     SDK's parsed output, bypassing transform_response. convert raises APIError on

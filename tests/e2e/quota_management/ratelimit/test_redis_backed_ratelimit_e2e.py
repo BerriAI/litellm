@@ -40,9 +40,7 @@ class TestRedisBackedRateLimit:
         "quota_management.ratelimit.redis_backed.blocks_over_limit",
         exercised_on=["chat_completions"],
     )
-    def test_rpm_limit_one_blocks_second_call(
-        self, client: QuotaClient, resources: ResourceManager
-    ) -> None:
+    def test_rpm_limit_one_blocks_second_call(self, client: QuotaClient, resources: ResourceManager) -> None:
         _require_redis_reachable()
         model = f"e2e-redis-rpm-{unique_marker()}"
         model_id = client.proxy.create_model(
@@ -68,8 +66,7 @@ class TestRedisBackedRateLimit:
 
         second = client.chat(key, model, f"pong {unique_marker()}")
         assert second.status_code == 429, (
-            f"second call over rpm_limit=1 must be 429, got {second.status_code}: "
-            f"{second.body[:300]}"
+            f"second call over rpm_limit=1 must be 429, got {second.status_code}: {second.body[:300]}"
         )
         assert "rate" in second.body.lower() or "limit" in second.body.lower(), (
             f"429 body should name the rate limit: {second.body[:300]}"

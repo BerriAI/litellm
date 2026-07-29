@@ -40,9 +40,7 @@ def wired_otel(otel_with_exporter, monkeypatch):
 
 
 @pytest.mark.parametrize("status,path", [(500, "/model/new"), (422, "/key/generate")])
-def test_close_dangling_span_stamps_status(
-    wired_otel, server_span_factory, status, path
-):
+def test_close_dangling_span_stamps_status(wired_otel, server_span_factory, status, path):
     request = _fake_request(parent_otel_span=server_span_factory(path), path=path)
     _close_dangling_otel_server_span(request, status)
     assert_server_span_attrs(
@@ -82,9 +80,7 @@ def test_close_dangling_span_noop_when_otel_absent(server_span_factory, monkeypa
         ),
     ],
 )
-def test_exception_handler_closes_span(
-    wired_otel, server_span_factory, handler, exc, status, path
-):
+def test_exception_handler_closes_span(wired_otel, server_span_factory, handler, exc, status, path):
     request = _fake_request(parent_otel_span=server_span_factory(path), path=path)
     response = asyncio.run(handler(request, exc))
     assert response.status_code == status
@@ -116,9 +112,7 @@ def test_validation_handler_closes_span_on_the_control_plane_too(wired_otel, ser
 
 
 @pytest.mark.parametrize("path", ["/team/list", "/organization/list"])
-def test_openai_exception_handler_stamps_structured_error_on_span(
-    wired_otel, server_span_factory, path
-):
+def test_openai_exception_handler_stamps_structured_error_on_span(wired_otel, server_span_factory, path):
     """A ProxyException 401 (invalid/expired key on a management endpoint) must
     leave error.type, error.code AND error.message on the SERVER span. Pre-fix,
     ProxyException stringified to "" so error.message was dropped — the span
@@ -146,11 +140,7 @@ def test_unhandled_handler_reraises_known_exceptions(wired_otel, server_span_fac
     """ProxyException / HTTPException / RequestValidationError have dedicated handlers."""
     request = _fake_request(parent_otel_span=server_span_factory("/key/generate"), path="/key/generate")
     with pytest.raises(HTTPException):
-        asyncio.run(
-            otel_unhandled_exception_handler(
-                request, HTTPException(status_code=403, detail="forbidden")
-            )
-        )
+        asyncio.run(otel_unhandled_exception_handler(request, HTTPException(status_code=403, detail="forbidden")))
 
 
 # Covers ProxyException raised after auth stashed the span (e.g., invalid-JSON
@@ -165,9 +155,7 @@ def test_unhandled_handler_reraises_known_exceptions(wired_otel, server_span_fac
         (503, "/v1/chat/completions"),
     ],
 )
-def test_openai_exception_handler_closes_span(
-    wired_otel, server_span_factory, code, path
-):
+def test_openai_exception_handler_closes_span(wired_otel, server_span_factory, code, path):
     request = _fake_request(parent_otel_span=server_span_factory(path), path=path)
     exc = ProxyException(
         message="boom",

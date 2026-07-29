@@ -281,7 +281,10 @@ class TestFilterAnthropicOutputSchema:
             "unevaluatedProperties",
         ):
             assert field not in result
-        assert 'properties whose names match each pattern must satisfy: {"^x": {"type": "string"}}' in result["description"]
+        assert (
+            'properties whose names match each pattern must satisfy: {"^x": {"type": "string"}}'
+            in result["description"]
+        )
         assert 'property names must satisfy: {"pattern": "^[a-z]+$"}' in result["description"]
         assert 'dependent required properties: {"first": ["last"]}' in result["description"]
         assert 'dependent schemas: {"first": {"required": ["last"]}}' in result["description"]

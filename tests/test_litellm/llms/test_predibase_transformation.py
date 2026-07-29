@@ -159,10 +159,7 @@ def test_predibase_transform_response_success_best_of(monkeypatch):
     assert result.choices[1].message.content == "secondary-output"
     assert result.usage.prompt_tokens == 5
     assert result.usage.completion_tokens == 3
-    assert (
-        result._hidden_params["additional_headers"]["llm_provider-x-request-id"]
-        == "req-123"
-    )
+    assert result._hidden_params["additional_headers"]["llm_provider-x-request-id"] == "req-123"
 
 
 def test_predibase_transform_response_invalid_json():
@@ -191,9 +188,7 @@ def test_predibase_transform_response_error_field():
     with pytest.raises(PredibaseError) as exc:
         config.transform_response(
             model="predibase-model",
-            raw_response=httpx.Response(
-                status_code=400, json={"error": "invalid request"}
-            ),
+            raw_response=httpx.Response(status_code=400, json={"error": "invalid request"}),
             model_response=_build_model_response(),
             logging_obj=Mock(),
             request_data={},
@@ -423,9 +418,7 @@ def test_predibase_transform_response_usage_fallbacks(monkeypatch):
     logging_obj = Mock()
     encoding = Mock()
     encoding.encode.side_effect = RuntimeError("encoding failure")
-    monkeypatch.setattr(
-        "litellm.token_counter", lambda messages: (_ for _ in ()).throw(RuntimeError())
-    )
+    monkeypatch.setattr("litellm.token_counter", lambda messages: (_ for _ in ()).throw(RuntimeError()))
 
     raw_response = httpx.Response(
         status_code=200,

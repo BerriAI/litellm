@@ -82,6 +82,7 @@ def _streamed_tool_call(events: list[str]) -> tuple[str, str]:
 CAT_IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg"
 OPENAI_VISION_BACKEND = "openai/gpt-4o"
 
+
 # OpenAI caches a shared prompt prefix once it exceeds ~1024 tokens; this is well
 # past that, so a repeat call reports cached prompt tokens.
 def _vision_messages() -> list[ChatMessage]:
@@ -222,16 +223,12 @@ class TestChatCompletionsRegression:
             )
         )
 
-        assert (
-            response.model
-        ), f"{model} ({route}): response carried no model name: {response}"
-        assert (
-            response.choices
-        ), f"{model} ({route}): response had no choices: {response}"
+        assert response.model, f"{model} ({route}): response carried no model name: {response}"
+        assert response.choices, f"{model} ({route}): response had no choices: {response}"
         message = response.choices[0].message
-        assert (
-            message is not None and message.content and message.content.strip()
-        ), f"{model} ({route}): 200 with an empty completion (#28991): {response}"
+        assert message is not None and message.content and message.content.strip(), (
+            f"{model} ({route}): 200 with an empty completion (#28991): {response}"
+        )
 
 
 class TestCohereChat:
@@ -241,9 +238,7 @@ class TestCohereChat:
         "llm.chat_completions.cohere.basic.nonstream.works",
         exercised_on=["chat_completions"],
     )
-    def test_cohere_chat_returns_content(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_cohere_chat_returns_content(self, client: PassthroughClient, resources: ResourceManager) -> None:
         cohere_key = os.environ["COHERE_API_KEY"]
         model = f"e2e-cohere-chat-{unique_marker()}"
         model_id = client.proxy.create_model(
@@ -334,18 +329,11 @@ class TestHostedVllmChat:
         "llm.chat_completions.hosted_vllm.basic.nonstream.works",
         exercised_on=["chat_completions"],
     )
-    def test_hosted_vllm_chat_returns_content(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_hosted_vllm_chat_returns_content(self, client: PassthroughClient, resources: ResourceManager) -> None:
         api_base = os.environ.get("HOSTED_VLLM_API_BASE")
         if api_base is None:
-            pytest.skip(
-                "set HOSTED_VLLM_API_BASE (the live vLLM server this deployment targets)"
-            )
-        backend = (
-            os.environ.get("HOSTED_VLLM_MODEL")
-            or "Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M"
-        ).strip()
+            pytest.skip("set HOSTED_VLLM_API_BASE (the live vLLM server this deployment targets)")
+        backend = (os.environ.get("HOSTED_VLLM_MODEL") or "Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M").strip()
         model = f"e2e-vllm-chat-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
@@ -389,9 +377,7 @@ class TestOpenAIChatCompletions:
         "llm.chat_completions.openai.basic.stream.works",
         exercised_on=["chat_completions"],
     )
-    def test_openai_chat_streams_real_content(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_openai_chat_streams_real_content(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-openai-chat-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -416,9 +402,7 @@ class TestOpenAIChatCompletions:
         "llm.chat_completions.openai.basic.nonstream.cost_logged",
         exercised_on=["chat_completions"],
     )
-    def test_openai_chat_logs_cost(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_openai_chat_logs_cost(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-openai-cost-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -438,9 +422,7 @@ class TestOpenAIChatCompletions:
         )
         assert response.choices, f"openai chat returned no choices: {response}"
 
-        rows = client.proxy.poll_logs_for_key(
-            key, min_rows=1, predicate=lambda rs: any((r.spend or 0) > 0 for r in rs)
-        )
+        rows = client.proxy.poll_logs_for_key(key, min_rows=1, predicate=lambda rs: any((r.spend or 0) > 0 for r in rs))
         priced = [r for r in rows if (r.spend or 0) > 0]
         assert priced, f"openai chat was not costed on key ...{key[-6:]}: {rows}"
         assert priced[0].status == "success", f"openai chat spend status={priced[0].status!r}"
@@ -449,9 +431,7 @@ class TestOpenAIChatCompletions:
         "llm.chat_completions.openai.tool_use.nonstream.works",
         exercised_on=["chat_completions"],
     )
-    def test_openai_chat_returns_tool_call(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_openai_chat_returns_tool_call(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-openai-tool-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -465,7 +445,9 @@ class TestOpenAIChatCompletions:
                 ChatBody(
                     model=model,
                     messages=[
-                        ChatMessage(role="user", content="What is the weather in San Francisco? Use the get_weather tool.")
+                        ChatMessage(
+                            role="user", content="What is the weather in San Francisco? Use the get_weather tool."
+                        )
                     ],
                     tools=[_WEATHER_TOOL],
                     tool_choice="required",
@@ -505,9 +487,7 @@ class TestOpenAIChatCompletions:
         content = response.choices[0].message.content if response.choices[0].message else None
         assert content, f"structured output returned empty content: {response}"
         person = _Person.model_validate_json(content)
-        assert person.name.strip() and person.age == 42, (
-            f"schema-constrained extraction was wrong: {person}"
-        )
+        assert person.name.strip() and person.age == 42, f"schema-constrained extraction was wrong: {person}"
 
     @pytest.mark.covers(
         "llm.chat_completions.openai.thinking.nonstream.works",
@@ -563,9 +543,7 @@ class TestOpenAIChatCompletions:
         "llm.chat_completions.openai.vision.nonstream.works",
         exercised_on=["chat_completions"],
     )
-    def test_openai_chat_vision_describes_image(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_openai_chat_vision_describes_image(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-openai-vision-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_VISION_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -580,9 +558,7 @@ class TestOpenAIChatCompletions:
         "llm.chat_completions.openai.tool_use.stream.works",
         exercised_on=["chat_completions"],
     )
-    def test_openai_chat_streams_tool_call(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_openai_chat_streams_tool_call(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-openai-tool-stream-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -627,9 +603,7 @@ class TestBedrockConverseChatCompletions:
         "llm.chat_completions.bedrock_converse.basic.nonstream.works",
         exercised_on=["chat_completions"],
     )
-    def test_bedrock_converse_chat_returns_content(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_bedrock_converse_chat_returns_content(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = self._register(client, resources, "e2e-bedrock-chat")
         key = resources.key()
 
@@ -686,7 +660,9 @@ class TestBedrockConverseChatCompletions:
                 ChatBody(
                     model=model,
                     messages=[
-                        ChatMessage(role="user", content="What is the weather in San Francisco? Use the get_weather tool.")
+                        ChatMessage(
+                            role="user", content="What is the weather in San Francisco? Use the get_weather tool."
+                        )
                     ],
                     tools=[_WEATHER_TOOL],
                     tool_choice="required",

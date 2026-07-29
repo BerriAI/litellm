@@ -27,19 +27,13 @@ class TestCustomOpenAPISpec:
             },
         }
 
-    @patch(
-        "litellm.proxy.common_utils.custom_openapi_spec.CustomOpenAPISpec.add_request_schema"
-    )
-    def test_add_chat_completion_request_schema(
-        self, mock_add_schema, base_openapi_schema
-    ):
+    @patch("litellm.proxy.common_utils.custom_openapi_spec.CustomOpenAPISpec.add_request_schema")
+    def test_add_chat_completion_request_schema(self, mock_add_schema, base_openapi_schema):
         """Test that chat completion schema is added correctly."""
         mock_add_schema.return_value = base_openapi_schema
 
         with patch("litellm.proxy._types.ProxyChatCompletionRequest") as mock_model:
-            result = CustomOpenAPISpec.add_chat_completion_request_schema(
-                base_openapi_schema
-            )
+            result = CustomOpenAPISpec.add_chat_completion_request_schema(base_openapi_schema)
 
             mock_add_schema.assert_called_once_with(
                 openapi_schema=base_openapi_schema,
@@ -50,9 +44,7 @@ class TestCustomOpenAPISpec:
             )
             assert result == base_openapi_schema
 
-    @patch(
-        "litellm.proxy.common_utils.custom_openapi_spec.CustomOpenAPISpec.add_request_schema"
-    )
+    @patch("litellm.proxy.common_utils.custom_openapi_spec.CustomOpenAPISpec.add_request_schema")
     def test_add_embedding_request_schema(self, mock_add_schema, base_openapi_schema):
         """Test that embedding schema is added correctly."""
         mock_add_schema.return_value = base_openapi_schema
@@ -69,19 +61,13 @@ class TestCustomOpenAPISpec:
             )
             assert result == base_openapi_schema
 
-    @patch(
-        "litellm.proxy.common_utils.custom_openapi_spec.CustomOpenAPISpec.add_request_schema"
-    )
-    def test_add_responses_api_request_schema(
-        self, mock_add_schema, base_openapi_schema
-    ):
+    @patch("litellm.proxy.common_utils.custom_openapi_spec.CustomOpenAPISpec.add_request_schema")
+    def test_add_responses_api_request_schema(self, mock_add_schema, base_openapi_schema):
         """Test that responses API schema is added correctly."""
         mock_add_schema.return_value = base_openapi_schema
 
         with patch("litellm.types.llms.openai.ResponsesAPIRequestParams") as mock_model:
-            result = CustomOpenAPISpec.add_responses_api_request_schema(
-                base_openapi_schema
-            )
+            result = CustomOpenAPISpec.add_responses_api_request_schema(base_openapi_schema)
 
             mock_add_schema.assert_called_once_with(
                 openapi_schema=base_openapi_schema,
@@ -123,15 +109,11 @@ def test_defs_rewritten_in_add_schema_to_components():
     )
     assert "$defs" not in openapi_schema
     assert (
-        openapi_schema["components"]["schemas"]["SchemaName"]["properties"]["messages"][
-            "items"
-        ]["anyOf"][0]["$ref"]
+        openapi_schema["components"]["schemas"]["SchemaName"]["properties"]["messages"]["items"]["anyOf"][0]["$ref"]
         == "#/components/schemas/UserMessage"
     )
     assert (
-        openapi_schema["components"]["schemas"]["SchemaName"]["properties"]["messages"][
-            "items"
-        ]["anyOf"][1]["$ref"]
+        openapi_schema["components"]["schemas"]["SchemaName"]["properties"]["messages"]["items"]["anyOf"][1]["$ref"]
         == "#/components/schemas/AssistantMessage"
     )
 
@@ -188,11 +170,5 @@ def test_rewrite_defs_refs():
     rewritten = CustomOpenAPISpec._rewrite_defs_refs(schema=schema)
 
     assert "$defs" not in rewritten
-    assert (
-        rewritten["properties"]["messages"]["items"]["anyOf"][0]["$ref"]
-        == "#/components/schemas/UserMessage"
-    )
-    assert (
-        rewritten["properties"]["messages"]["items"]["anyOf"][1]["$ref"]
-        == "#/components/schemas/AssistantMessage"
-    )
+    assert rewritten["properties"]["messages"]["items"]["anyOf"][0]["$ref"] == "#/components/schemas/UserMessage"
+    assert rewritten["properties"]["messages"]["items"]["anyOf"][1]["$ref"] == "#/components/schemas/AssistantMessage"

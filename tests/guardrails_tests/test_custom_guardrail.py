@@ -48,24 +48,15 @@ def test_get_guardrail_from_metadata():
     assert guardrail.get_guardrail_from_metadata(data) == ["guardrail1", "guardrail2"]
 
     # Test with dict guardrails
-    data = {
-        "metadata": {
-            "guardrails": [{"test-guardrail": {"extra_body": {"key": "value"}}}]
-        }
-    }
-    assert guardrail.get_guardrail_from_metadata(data) == [
-        {"test-guardrail": {"extra_body": {"key": "value"}}}
-    ]
+    data = {"metadata": {"guardrails": [{"test-guardrail": {"extra_body": {"key": "value"}}}]}}
+    assert guardrail.get_guardrail_from_metadata(data) == [{"test-guardrail": {"extra_body": {"key": "value"}}}]
 
 
 def test_guardrail_is_in_requested_guardrails():
     guardrail = CustomGuardrail(guardrail_name="test-guardrail")
 
     # Test with string list
-    assert (
-        guardrail._guardrail_is_in_requested_guardrails(["test-guardrail", "other"])
-        == True
-    )
+    assert guardrail._guardrail_is_in_requested_guardrails(["test-guardrail", "other"]) == True
     assert guardrail._guardrail_is_in_requested_guardrails(["other"]) == False
 
     # Test with dict list
@@ -95,9 +86,7 @@ def test_guardrail_is_in_requested_guardrails():
 
 
 def test_should_run_guardrail():
-    guardrail = CustomGuardrail(
-        guardrail_name="test-guardrail", event_hook=GuardrailEventHooks.pre_call
-    )
+    guardrail = CustomGuardrail(guardrail_name="test-guardrail", event_hook=GuardrailEventHooks.pre_call)
 
     # Test matching event hook and guardrail
     assert (
@@ -135,19 +124,11 @@ def test_get_guardrail_dynamic_request_body_params():
     assert guardrail.get_guardrail_dynamic_request_body_params(data) == {}
 
     # Test with extra_body
-    data = {
-        "metadata": {
-            "guardrails": [{"test-guardrail": {"extra_body": {"key": "value"}}}]
-        }
-    }
+    data = {"metadata": {"guardrails": [{"test-guardrail": {"extra_body": {"key": "value"}}}]}}
     assert guardrail.get_guardrail_dynamic_request_body_params(data) == {"key": "value"}
 
     # Test with non-matching guardrail
-    data = {
-        "metadata": {
-            "guardrails": [{"other-guardrail": {"extra_body": {"key": "value"}}}]
-        }
-    }
+    data = {"metadata": {"guardrails": [{"other-guardrail": {"extra_body": {"key": "value"}}}]}}
     assert guardrail.get_guardrail_dynamic_request_body_params(data) == {}
 
 
@@ -225,10 +206,7 @@ def test_default_on_guardrail():
     )
 
     # Should not run when event_type doesn't match
-    assert (
-        guardrail.should_run_guardrail({"metadata": {}}, GuardrailEventHooks.post_call)
-        == False
-    )
+    assert guardrail.should_run_guardrail({"metadata": {}}, GuardrailEventHooks.post_call) == False
 
     # Should run even when different guardrail explicitly requested
     # run test-guardrail-5 and test-guardrail

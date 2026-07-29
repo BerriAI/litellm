@@ -95,7 +95,4 @@ def test_gemini_completion_both_env_vars(monkeypatch, api_key_env):
         messages=[{"role": "user", "content": f"Test with {api_key_env}"}],
         mock_response=f"Mocked response using {api_key_env}",
     )
-    assert (
-        response["choices"][0]["message"]["content"]
-        == f"Mocked response using {api_key_env}"
-    )
+    assert response["choices"][0]["message"]["content"] == f"Mocked response using {api_key_env}"

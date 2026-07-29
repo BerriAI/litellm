@@ -51,16 +51,12 @@ class TestHintMatching:
     @patch("litellm.model_list", [{"model_name": "gpt-4o"}])
     def test_should_skip_hint_without_name(self):
         prefs = _prefs(hints=[SimpleNamespace()])  # hint has no `.name`
-        assert (
-            _resolve_model_from_preferences(prefs, default_model="gpt-4o") == "gpt-4o"
-        )
+        assert _resolve_model_from_preferences(prefs, default_model="gpt-4o") == "gpt-4o"
 
 
 class TestFallbackChain:
     @patch("litellm.proxy.proxy_server.llm_router", None)
-    @patch(
-        "litellm.model_list", [{"model_name": "first-model"}, {"model_name": "second"}]
-    )
+    @patch("litellm.model_list", [{"model_name": "first-model"}, {"model_name": "second"}])
     def test_should_fall_back_to_first_available_when_no_default(self):
         prefs = _prefs(hints=[SimpleNamespace(name="no-such")])
         assert _resolve_model_from_preferences(prefs) == "first-model"
@@ -70,9 +66,7 @@ class TestFallbackChain:
     def test_should_use_configured_default_sampling_model(self, monkeypatch):
         import litellm
 
-        monkeypatch.setattr(
-            litellm, "default_mcp_sampling_model", "fallback-model", raising=False
-        )
+        monkeypatch.setattr(litellm, "default_mcp_sampling_model", "fallback-model", raising=False)
         prefs = _prefs()
         assert _resolve_model_from_preferences(prefs) == "fallback-model"
 

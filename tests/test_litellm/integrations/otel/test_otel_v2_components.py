@@ -108,9 +108,7 @@ def test_request_params_max_completion_tokens_fallback():
 
 def test_server_info_from_api_base():
     assert ServerInfo.from_api_base(None) is None
-    assert ServerInfo.from_api_base("api.host.com:8080") == ServerInfo(
-        "api.host.com", 8080
-    )
+    assert ServerInfo.from_api_base("api.host.com:8080") == ServerInfo("api.host.com", 8080)
     assert ServerInfo.from_api_base("https://h.com/v1") == ServerInfo("h.com", None)
     # scheme present but empty netloc -> no hostname
     assert ServerInfo.from_api_base("http:///v1") is None
@@ -144,18 +142,12 @@ def test_service_span_data_from_payload():
 
 
 def test_name_builders():
-    assert (
-        proxy_request_span_name(ProxyRequestSpanData("POST", "/chat/completions"))
-        == "POST /chat/completions"
-    )
+    assert proxy_request_span_name(ProxyRequestSpanData("POST", "/chat/completions")) == "POST /chat/completions"
     # "{service} {call_type}" so same-service calls stay distinguishable; the
     # service name alone when there's no call type.
     assert service_span_name(ServiceSpanData("redis", call_type="set")) == "redis set"
     assert service_span_name(ServiceSpanData("redis")) == "redis"
-    assert (
-        guardrail_span_name(GuardrailSpanData("presidio"))
-        == "execute_guardrail presidio"
-    )
+    assert guardrail_span_name(GuardrailSpanData("presidio")) == "execute_guardrail presidio"
 
 
 # --- registry validator failure paths --------------------------------------- #
@@ -168,11 +160,7 @@ def test_validate_registry_detects_role_mismatch():
 
 
 def test_validate_registry_detects_unknown_parent():
-    bad = {
-        SpanRole.LLM_CALL: SpanSpec(
-            SpanRole.LLM_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST
-        )
-    }
+    bad = {SpanRole.LLM_CALL: SpanSpec(SpanRole.LLM_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST)}
     with pytest.raises(ValueError, match="unknown parent"):
         validate_registry(bad)
 
@@ -257,9 +245,7 @@ def test_genai_mapper_stamps_input_output_messages():
         {"role": "system", "content": "Be concise."},
         {"role": "user", "content": "What's the weather?"},
     ]
-    assert json.loads(attrs[GenAI.OUTPUT_MESSAGES]) == [
-        {"role": "assistant", "content": "Sunny."}
-    ]
+    assert json.loads(attrs[GenAI.OUTPUT_MESSAGES]) == [{"role": "assistant", "content": "Sunny."}]
 
 
 def test_genai_mapper_omits_messages_when_content_not_captured():
@@ -319,10 +305,7 @@ def test_genai_mapper_cost_breakdown_absent():
 
     attrs = GenAIMapper().map(_full_llm_call())
     assert attrs[f"{LiteLLM.COST_PREFIX}total"] == 0.002
-    assert not any(
-        k.startswith(LiteLLM.COST_PREFIX) and k != f"{LiteLLM.COST_PREFIX}total"
-        for k in attrs
-    )
+    assert not any(k.startswith(LiteLLM.COST_PREFIX) and k != f"{LiteLLM.COST_PREFIX}total" for k in attrs)
 
 
 def test_llm_cost_from_breakdown_maps_costbreakdown_keys():
@@ -461,10 +444,7 @@ def test_otlp_traces_endpoint_normalization():
     # Another signal's path is rewritten to traces.
     assert norm("http://collector:4318/v1/logs") == "http://collector:4318/v1/traces"
     # Splunk's path is preserved; None passes through.
-    assert (
-        norm("https://x.splunk.com/v2/trace/otlp")
-        == "https://x.splunk.com/v2/trace/otlp"
-    )
+    assert norm("https://x.splunk.com/v2/trace/otlp") == "https://x.splunk.com/v2/trace/otlp"
     assert norm(None) is None
 
 
@@ -481,9 +461,7 @@ def test_build_span_exporter_variants():
         providers.build_span_exporter(OpenTelemetryV2Config(exporter="unknown")),
         ConsoleSpanExporter,
     )
-    http_exporter = providers.build_span_exporter(
-        OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318")
-    )
+    http_exporter = providers.build_span_exporter(OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318"))
     assert "OTLPSpanExporter" in type(http_exporter).__name__
 
 
@@ -517,9 +495,7 @@ def test_build_log_exporter_variants():
         providers.build_log_exporter(OpenTelemetryV2Config(exporter="unknown")),
         ConsoleLogExporter,
     )
-    http_exporter = providers.build_log_exporter(
-        OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318")
-    )
+    http_exporter = providers.build_log_exporter(OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318"))
     assert "OTLPLogExporter" in type(http_exporter).__name__
 
 
@@ -546,23 +522,17 @@ def test_build_logger_provider_picks_processor_by_exporter_kind():
         processor_of(providers.build_logger_provider(cfg, log_exporter=ConsoleLogExporter())),
         SimpleLogRecordProcessor,
     )
-    http_exporter = providers.build_log_exporter(
-        OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318")
-    )
+    http_exporter = providers.build_log_exporter(OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318"))
     assert isinstance(
         processor_of(providers.build_logger_provider(cfg, log_exporter=http_exporter)),
         BatchLogRecordProcessor,
     )
-    grpc_exporter = providers.build_span_exporter(
-        OpenTelemetryV2Config(exporter="otlp_grpc", endpoint="http://h:4317")
-    )
+    grpc_exporter = providers.build_span_exporter(OpenTelemetryV2Config(exporter="otlp_grpc", endpoint="http://h:4317"))
     assert "OTLPSpanExporter" in type(grpc_exporter).__name__
 
 
 def test_build_resource_includes_deployment_environment():
-    resource = providers.build_resource(
-        OpenTelemetryV2Config(service_name="svc", deployment_environment="prod")
-    )
+    resource = providers.build_resource(OpenTelemetryV2Config(service_name="svc", deployment_environment="prod"))
     assert resource.attributes["service.name"] == "svc"
     assert resource.attributes["deployment.environment"] == "prod"
 
@@ -570,9 +540,7 @@ def test_build_resource_includes_deployment_environment():
 def test_build_tracer_provider_processor_selection():
     cfg = OpenTelemetryV2Config(exporter="in_memory")
     simple = providers.build_tracer_provider(cfg, exporter=InMemorySpanExporter())
-    batch = providers.build_tracer_provider(
-        cfg, exporter=ConsoleSpanExporter(), use_simple_processor=False
-    )
+    batch = providers.build_tracer_provider(cfg, exporter=ConsoleSpanExporter(), use_simple_processor=False)
     # both build without error; assert the requested processor type was used
     simple_procs = simple._active_span_processor._span_processors
     batch_procs = batch._active_span_processor._span_processors

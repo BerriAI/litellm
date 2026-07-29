@@ -64,9 +64,7 @@ class MockAsyncClient:
 def test_utf8_streaming_sync():
     """Test that synchronous streaming handles UTF-8 characters correctly."""
     # Content with the µ character that was causing issues
-    test_content = (
-        'data: {"choices":[{"delta":{"content":"The symbol µ represents micro"}}]}\n\n'
-    )
+    test_content = 'data: {"choices":[{"delta":{"content":"The symbol µ represents micro"}}]}\n\n'
 
     mock_client = MockSyncClient(test_content)
     mock_logging = Mock()
@@ -90,9 +88,7 @@ def test_utf8_streaming_sync():
 async def test_utf8_streaming_async():
     """Test that asynchronous streaming handles UTF-8 characters correctly."""
     # Content with the µ character that was causing issues
-    test_content = (
-        'data: {"choices":[{"delta":{"content":"The symbol µ represents micro"}}]}\n\n'
-    )
+    test_content = 'data: {"choices":[{"delta":{"content":"The symbol µ represents micro"}}]}\n\n'
 
     mock_client = MockAsyncClient(test_content)
     mock_logging = Mock()
@@ -141,9 +137,7 @@ def test_various_unicode_characters():
             logging_obj=mock_logging,
         )
 
-        assert (
-            completion_stream is not None
-        ), f"Failed to handle Unicode character: {unicode_char}"
+        assert completion_stream is not None, f"Failed to handle Unicode character: {unicode_char}"
 
 
 if __name__ == "__main__":

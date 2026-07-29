@@ -15,9 +15,7 @@ import json
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 import asyncio
 from typing import Optional
@@ -69,22 +67,14 @@ async def _verify_web_search_cost(test_custom_logger, expected_context_size):
     # Calculate token cost
     model_map_information = standard_logging_payload["model_map_information"]
     model_map_value: ModelInfoBase = model_map_information["model_map_value"]
-    total_token_cost = (
-        standard_logging_payload["prompt_tokens"]
-        * model_map_value["input_cost_per_token"]
-    ) + (
-        standard_logging_payload["completion_tokens"]
-        * model_map_value["output_cost_per_token"]
+    total_token_cost = (standard_logging_payload["prompt_tokens"] * model_map_value["input_cost_per_token"]) + (
+        standard_logging_payload["completion_tokens"] * model_map_value["output_cost_per_token"]
     )
 
     # Verify total cost
-    if StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
-        response
-    ):
+    if StandardBuiltInToolCostTracking.response_object_includes_web_search_call(response):
         assert (
-            response_cost
-            == total_token_cost
-            + model_map_value["search_context_cost_per_query"][expected_context_size]
+            response_cost == total_token_cost + model_map_value["search_context_cost_per_query"][expected_context_size]
         )
 
 
@@ -97,9 +87,7 @@ async def _verify_web_search_cost(test_custom_logger, expected_context_size):
         ({"search_context_size": "high"}, "search_context_size_high"),
     ],
 )
-async def test_openai_web_search_logging_cost_tracking(
-    web_search_options, expected_context_size
-):
+async def test_openai_web_search_logging_cost_tracking(web_search_options, expected_context_size):
     """Test web search cost tracking with different search context sizes"""
     test_custom_logger = await _setup_web_search_test()
     from litellm._uuid import uuid
@@ -139,17 +127,13 @@ async def test_openai_web_search_logging_cost_tracking(
         ([{"type": "web_search_preview"}], "search_context_size_medium", False),
     ],
 )
-async def test_openai_responses_api_web_search_cost_tracking(
-    tools_config, expected_context_size, stream
-):
+async def test_openai_responses_api_web_search_cost_tracking(tools_config, expected_context_size, stream):
     """Test web search cost tracking with different search context sizes and streaming options"""
     test_custom_logger = await _setup_web_search_test()
 
     response = await litellm.aresponses(
         model="openai/gpt-4o",
-        input=[
-            {"role": "user", "content": "What was a positive news story from today?"}
-        ],
+        input=[{"role": "user", "content": "What was a positive news story from today?"}],
         tools=tools_config,
         stream=stream,
     )

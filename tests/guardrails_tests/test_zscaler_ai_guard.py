@@ -29,12 +29,8 @@ async def test_make_zscaler_ai_guard_api_call_allow():
         "zscaler_ai_guard_response": {},
     }
 
-    guardrail = ZscalerAIGuard(
-        api_key="test_api_key", api_base="http://example.com", policy_id=1
-    )
-    with patch.object(
-        guardrail, "_send_request", new_callable=AsyncMock
-    ) as mock_send_request:
+    guardrail = ZscalerAIGuard(api_key="test_api_key", api_base="http://example.com", policy_id=1)
+    with patch.object(guardrail, "_send_request", new_callable=AsyncMock) as mock_send_request:
         mock_send_request.return_value = mock_response
         result = await guardrail.make_zscaler_ai_guard_api_call(
             guardrail.zscaler_ai_guard_url,
@@ -45,9 +41,7 @@ async def test_make_zscaler_ai_guard_api_call_allow():
         )
 
         assert result["action"] == "ALLOW"
-        assert (
-            result["zscaler_ai_guard_response"]["zscaler_ai_guard_response"] == {}
-        )  # Validating response structure
+        assert result["zscaler_ai_guard_response"]["zscaler_ai_guard_response"] == {}  # Validating response structure
         assert result["direction"] == "IN"  # Check additional fields returned
 
 
@@ -64,12 +58,8 @@ async def test_make_zscaler_ai_guard_api_call_block():
         "detectorResponses": {"detector-1": {"triggered": True, "action": "BLOCK"}},
     }
 
-    guardrail = ZscalerAIGuard(
-        api_key="test_api_key", api_base="http://example.com", policy_id=1
-    )
-    with patch.object(
-        guardrail, "_send_request", new_callable=AsyncMock
-    ) as mock_send_request:
+    guardrail = ZscalerAIGuard(api_key="test_api_key", api_base="http://example.com", policy_id=1)
+    with patch.object(guardrail, "_send_request", new_callable=AsyncMock) as mock_send_request:
         mock_send_request.return_value = mock_response
         result = await guardrail.make_zscaler_ai_guard_api_call(
             guardrail.zscaler_ai_guard_url,
@@ -81,23 +71,14 @@ async def test_make_zscaler_ai_guard_api_call_block():
 
         assert result["action"] == "BLOCK"
         assert result["zscaler_ai_guard_response"]["transactionId"] == "12345"
-        assert (
-            result["zscaler_ai_guard_response"]["detectorResponses"]["detector-1"][
-                "action"
-            ]
-            == "BLOCK"
-        )
+        assert result["zscaler_ai_guard_response"]["detectorResponses"]["detector-1"]["action"] == "BLOCK"
 
 
 @pytest.mark.asyncio
 async def test_make_zscaler_ai_guard_api_call_request_exception():
     """Test Zscaler AI Guard API call where an exception in the request occurs."""
-    guardrail = ZscalerAIGuard(
-        api_key="test_api_key", api_base="http://example.com", policy_id=1
-    )
-    with patch.object(
-        guardrail, "_send_request", new_callable=AsyncMock
-    ) as mock_send_request:
+    guardrail = ZscalerAIGuard(api_key="test_api_key", api_base="http://example.com", policy_id=1)
+    with patch.object(guardrail, "_send_request", new_callable=AsyncMock) as mock_send_request:
         mock_send_request.side_effect = Exception("Connection error")
 
         with pytest.raises(HTTPException) as e:
@@ -115,9 +96,7 @@ async def test_make_zscaler_ai_guard_api_call_request_exception():
 
 def test_extract_blocking_info():
     """Test extract_blocking_info method."""
-    guardrail = ZscalerAIGuard(
-        api_key="test_api_key", api_base="http://example.com", policy_id=1
-    )
+    guardrail = ZscalerAIGuard(api_key="test_api_key", api_base="http://example.com", policy_id=1)
 
     response = {
         "transactionId": "12345",

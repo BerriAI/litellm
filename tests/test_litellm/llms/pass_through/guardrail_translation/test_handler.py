@@ -20,18 +20,11 @@ class TestRegistry:
         assert CallTypes.allm_passthrough_route in guardrail_translation_mappings
 
     def test_allm_passthrough_route_maps_to_llm_passthrough_route_handler(self):
-        assert (
-            guardrail_translation_mappings[CallTypes.allm_passthrough_route]
-            is LlmPassthroughRouteHandler
-        )
+        assert guardrail_translation_mappings[CallTypes.allm_passthrough_route] is LlmPassthroughRouteHandler
 
     def test_pass_through_still_registered(self):
         from litellm.llms.pass_through.guardrail_translation.handler import (
             PassThroughEndpointHandler,
         )
 
-        assert (
-            guardrail_translation_mappings[CallTypes.pass_through]
-            is PassThroughEndpointHandler
-        )
-
+        assert guardrail_translation_mappings[CallTypes.pass_through] is PassThroughEndpointHandler

@@ -113,9 +113,7 @@ class TestAimGuardrailSSLVerify:
 
         # Use patch.object on the actual module reference for reliable patching
         # across different import orders / CI environments
-        with patch.object(
-            _aim_module, "get_async_httpx_client", return_value=mock_handler
-        ) as mock_get_client:
+        with patch.object(_aim_module, "get_async_httpx_client", return_value=mock_handler) as mock_get_client:
             # Initialize with ssl_verify
             cert_path = "/path/to/aim_cert.pem"
             AimGuardrail(
@@ -136,9 +134,7 @@ class TestAimGuardrailSSLVerify:
         mock_handler = Mock()
 
         # Use patch.object on the actual module reference for reliable patching
-        with patch.object(
-            _aim_module, "get_async_httpx_client", return_value=mock_handler
-        ) as mock_get_client:
+        with patch.object(_aim_module, "get_async_httpx_client", return_value=mock_handler) as mock_get_client:
             # Initialize without ssl_verify
             AimGuardrail(api_key="test_key", api_base="https://test.aim.api")
 
@@ -156,7 +152,7 @@ class TestCatoNetworksGuardrailSSLVerify:
         # Use patch.object on the actual module reference for reliable patching
         # across different import orders / CI environments
         with patch.object(
-                _cato_networks_module, "get_async_httpx_client", return_value=mock_handler
+            _cato_networks_module, "get_async_httpx_client", return_value=mock_handler
         ) as mock_get_client:
             # Initialize with ssl_verify
             cert_path = "/path/to/cato_cert.pem"
@@ -179,7 +175,7 @@ class TestCatoNetworksGuardrailSSLVerify:
 
         # Use patch.object on the actual module reference for reliable patching
         with patch.object(
-                _cato_networks_module, "get_async_httpx_client", return_value=mock_handler
+            _cato_networks_module, "get_async_httpx_client", return_value=mock_handler
         ) as mock_get_client:
             # Initialize without ssl_verify
             CatoNetworksGuardrail(api_key="test_key", api_base="https://test.catonetworks.api")

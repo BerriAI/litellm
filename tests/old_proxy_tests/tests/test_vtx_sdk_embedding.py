@@ -45,9 +45,7 @@ vertexai.init(
 )
 
 model = MultiModalEmbeddingModel.from_pretrained("multimodalembedding")
-image = Image.load_from_file(
-    "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
-)
+image = Image.load_from_file("gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png")
 
 embeddings = model.get_embeddings(
     image=image,

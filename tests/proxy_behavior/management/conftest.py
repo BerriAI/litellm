@@ -70,9 +70,7 @@ async def proxy_app():
 @pytest_asyncio.fixture(scope="session")
 async def proxy_client(proxy_app) -> AsyncIterator[httpx.AsyncClient]:
     transport = httpx.ASGITransport(app=proxy_app)
-    async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver"
-    ) as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         yield client
 
 
@@ -166,9 +164,9 @@ async def create_scratch_team(
     """
     admin_user_ids = list(admin_user_ids or [])
     member_user_ids = list(member_user_ids or [])
-    members_with_roles = [
-        {"user_id": uid, "role": "admin"} for uid in admin_user_ids
-    ] + [{"user_id": uid, "role": "user"} for uid in member_user_ids]
+    members_with_roles = [{"user_id": uid, "role": "admin"} for uid in admin_user_ids] + [
+        {"user_id": uid, "role": "user"} for uid in member_user_ids
+    ]
     data: Dict[str, Any] = {
         "team_id": team_id,
         "team_alias": team_id,
@@ -322,36 +320,22 @@ async def scratch(prisma):
                 ]
             }
         )
-        await prisma.db.litellm_teammembership.delete_many(
-            where={"team_id": {"startswith": handle.prefix}}
-        )
-        await prisma.db.litellm_organizationmembership.delete_many(
-            where={"user_id": {"startswith": handle.prefix}}
-        )
-        await prisma.db.litellm_teamtable.delete_many(
-            where={"team_id": {"startswith": handle.prefix}}
-        )
-        await prisma.db.litellm_usertable.delete_many(
-            where={"user_id": {"startswith": handle.prefix}}
-        )
+        await prisma.db.litellm_teammembership.delete_many(where={"team_id": {"startswith": handle.prefix}})
+        await prisma.db.litellm_organizationmembership.delete_many(where={"user_id": {"startswith": handle.prefix}})
+        await prisma.db.litellm_teamtable.delete_many(where={"team_id": {"startswith": handle.prefix}})
+        await prisma.db.litellm_usertable.delete_many(where={"user_id": {"startswith": handle.prefix}})
         # F1+F3 seed scratch orgs via create_scratch_org; the world seeder is
         # the only other writer of LiteLLM_OrganizationTable and uses the
         # behavior-pin- prefix, so a scratch-prefixed sweep here cannot
         # collide with the read-world. Org must be reclaimed BEFORE its
         # budget — org.budget_id → budget.budget_id, so deleting the parent
         # first would FK-violate on any still-attached scratch org.
-        await prisma.db.litellm_organizationtable.delete_many(
-            where={"organization_id": {"startswith": handle.prefix}}
-        )
-        await prisma.db.litellm_budgettable.delete_many(
-            where={"budget_id": {"startswith": handle.prefix}}
-        )
+        await prisma.db.litellm_organizationtable.delete_many(where={"organization_id": {"startswith": handle.prefix}})
+        await prisma.db.litellm_budgettable.delete_many(where={"budget_id": {"startswith": handle.prefix}})
         # /team/member_add writes LiteLLM_UserTable.teams; the available-team
         # self-join writes it on a world actor whose row must survive. Strip
         # dangling scratch-team refs so the read-world stays immutable.
-        polluted = await prisma.db.litellm_usertable.find_many(
-            where={"teams": {"isEmpty": False}}
-        )
+        polluted = await prisma.db.litellm_usertable.find_many(where={"teams": {"isEmpty": False}})
         for user in polluted:
             cleaned = [t for t in user.teams if not t.startswith(handle.prefix)]
             if cleaned != list(user.teams):

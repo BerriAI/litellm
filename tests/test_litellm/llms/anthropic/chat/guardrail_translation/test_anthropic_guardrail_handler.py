@@ -12,9 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
@@ -51,9 +49,7 @@ class MockDynamicGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional[Any] = None,
     ) -> GenericGuardrailAPIInputs:
-        self.dynamic_params = self.get_guardrail_dynamic_request_body_params(
-            request_data
-        )
+        self.dynamic_params = self.get_guardrail_dynamic_request_body_params(request_data)
         return inputs
 
 
@@ -116,9 +112,7 @@ class TestAnthropicMessagesHandlerStreamingRequestData:
 
         assert guardrail.request_data is not None
         assert guardrail.request_data["response"] is mock_response
-        assert (
-            guardrail.request_data["litellm_metadata"]["user_api_key_user_id"] == "u-1"
-        )
+        assert guardrail.request_data["litellm_metadata"]["user_api_key_user_id"] == "u-1"
 
     @pytest.mark.asyncio
     async def test_mid_stream_chunk_passes_responses_so_far_and_metadata(self):
@@ -130,9 +124,7 @@ class TestAnthropicMessagesHandlerStreamingRequestData:
 
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=False),
-            patch.object(
-                handler, "get_streaming_string_so_far", return_value="partial text"
-            ),
+            patch.object(handler, "get_streaming_string_so_far", return_value="partial text"),
         ):
             await handler.process_output_streaming_response(
                 responses_so_far=responses_so_far,
@@ -144,9 +136,7 @@ class TestAnthropicMessagesHandlerStreamingRequestData:
 
         assert guardrail.request_data is not None
         assert guardrail.request_data["responses"] is responses_so_far
-        assert (
-            guardrail.request_data["litellm_metadata"]["user_api_key_user_id"] == "u-1"
-        )
+        assert guardrail.request_data["litellm_metadata"]["user_api_key_user_id"] == "u-1"
 
 
 class TestAnthropicMessagesHandlerStreamingOutputProcessing:
@@ -195,17 +185,11 @@ class TestAnthropicMessagesHandlerInputProcessing:
         data = {
             "model": "claude-3-5-sonnet-20241022",
             "messages": [{"role": "user", "content": "hello"}],
-            "litellm_metadata": {
-                "guardrails": [
-                    {"cygnal-monitor": {"extra_body": {"policy_id": "policy-123"}}}
-                ]
-            },
+            "litellm_metadata": {"guardrails": [{"cygnal-monitor": {"extra_body": {"policy_id": "policy-123"}}}]},
         }
 
         with patch("litellm.proxy.proxy_server.premium_user", True):
-            await handler.process_input_messages(
-                data=data, guardrail_to_apply=guardrail
-            )
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
         assert data.get("litellm_metadata", {}).get("guardrails")
         assert guardrail.dynamic_params == {"policy_id": "policy-123"}
@@ -308,9 +292,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
         # Mock _check_streaming_has_ended to return False (stream not ended)
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=False),
-            patch.object(
-                handler, "get_streaming_string_so_far", return_value="partial text"
-            ),
+            patch.object(handler, "get_streaming_string_so_far", return_value="partial text"),
         ):
             responses_so_far = [b"data: some chunk"]
 
@@ -341,9 +323,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
 
         data = {
             "model": "claude-opus-4-6",
-            "messages": [
-                {"role": "user", "content": "What is the weather in San Francisco?"}
-            ],
+            "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
             "tools": [
                 {
                     "type": "tool_search_tool_regex_20251119",
@@ -506,17 +486,11 @@ class TestAnthropicMessagesIncrementalScan:
         ]
         with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
-            await handler.process_input_messages(
-                data=self._data(turn1, sid), guardrail_to_apply=guardrail
-            )
+            await handler.process_input_messages(data=self._data(turn1, sid), guardrail_to_apply=guardrail)
             assert mock_api.call_count == 1
-            assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == [
-                "What is the capital of France?"
-            ]
+            assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == ["What is the capital of France?"]
             mock_api.reset_mock()
-            await handler.process_input_messages(
-                data=self._data(turn2, sid), guardrail_to_apply=guardrail
-            )
+            await handler.process_input_messages(data=self._data(turn2, sid), guardrail_to_apply=guardrail)
             assert mock_api.call_count == 1
             assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == [
                 "Paris.",

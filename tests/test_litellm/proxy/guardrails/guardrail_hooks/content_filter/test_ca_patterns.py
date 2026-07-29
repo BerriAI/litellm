@@ -56,10 +56,7 @@ class TestCanadianOHIP:
 
     def test_ohip_in_sentence(self):
         pattern = get_compiled_pattern("ca_ohip")
-        assert (
-            pattern.search("My OHIP number is 9876543210ZZ for my appointment")
-            is not None
-        )
+        assert pattern.search("My OHIP number is 9876543210ZZ for my appointment") is not None
 
     def test_without_version_code_not_matched(self):
         """OHIP pattern requires the 2-letter version code"""
@@ -128,10 +125,7 @@ class TestCanadianImmigrationDoc:
 
     def test_imm_in_sentence(self):
         pattern = get_compiled_pattern("ca_immigration_doc")
-        assert (
-            pattern.search("Submit immigration form IMM-5645 with your application")
-            is not None
-        )
+        assert pattern.search("Submit immigration form IMM-5645 with your application") is not None
 
     def test_too_short_imm_rejected(self):
         pattern = get_compiled_pattern("ca_immigration_doc")
@@ -155,10 +149,7 @@ class TestCanadianBankAccount:
 
     def test_in_sentence(self):
         pattern = get_compiled_pattern("ca_bank_account")
-        assert (
-            pattern.search("Direct deposit to bank account 12345-003-1234567 please")
-            is not None
-        )
+        assert pattern.search("Direct deposit to bank account 12345-003-1234567 please") is not None
 
     def test_without_separators_rejected(self):
         pattern = get_compiled_pattern("ca_bank_account")

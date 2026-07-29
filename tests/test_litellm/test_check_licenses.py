@@ -12,9 +12,7 @@ import os
 import sys
 from pathlib import Path
 
-_CODE_COVERAGE_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "code_coverage_tests"
-)
+_CODE_COVERAGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "code_coverage_tests")
 sys.path.insert(0, _CODE_COVERAGE_DIR)
 
 import check_licenses  # noqa: E402
@@ -95,10 +93,7 @@ def test_get_license_falls_back_to_classifiers(monkeypatch):
         },
     )
     checker = _make_checker()
-    assert (
-        checker.get_package_license_from_pypi("pkg", "1.0.0")
-        == "Apache Software License"
-    )
+    assert checker.get_package_license_from_pypi("pkg", "1.0.0") == "Apache Software License"
 
 
 def test_get_license_returns_none_when_unset(monkeypatch):
@@ -144,9 +139,7 @@ def test_spdx_compound_or_expression_is_authorized():
 def test_spdx_with_exception_in_compound_is_authorized():
     """The 'WITH <exception>' suffix is stripped; the base license is checked."""
     checker = _make_checker()
-    is_ok, reason = checker.is_license_acceptable(
-        "Apache-2.0 WITH LLVM-exception OR MIT"
-    )
+    is_ok, reason = checker.is_license_acceptable("Apache-2.0 WITH LLVM-exception OR MIT")
     assert is_ok is True, reason
 
 
@@ -167,9 +160,7 @@ def test_spdx_compound_with_copyleft_component_is_rejected():
 
 def test_or_later_identifier_is_not_split_as_operator():
     """The lowercase '-or-later' inside an identifier is not the SPDX OR operator."""
-    assert (
-        check_licenses.LicenseChecker._split_spdx_expression("GPL-2.0-or-later") is None
-    )
+    assert check_licenses.LicenseChecker._split_spdx_expression("GPL-2.0-or-later") is None
 
 
 def test_free_text_license_is_not_treated_as_spdx():

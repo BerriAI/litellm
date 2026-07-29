@@ -15,9 +15,7 @@ import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system-path
 
 
 def test_audit_log_masking():
@@ -59,9 +57,7 @@ def test_team_membership_null_budget_table():
     membership = LiteLLM_TeamMembership(user_id="u1", team_id="t1")
     assert membership.litellm_budget_table is None
 
-    membership_explicit = LiteLLM_TeamMembership(
-        user_id="u1", team_id="t1", litellm_budget_table=None
-    )
+    membership_explicit = LiteLLM_TeamMembership(user_id="u1", team_id="t1", litellm_budget_table=None)
     assert membership_explicit.litellm_budget_table is None
 
 

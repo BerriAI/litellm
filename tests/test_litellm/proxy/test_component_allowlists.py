@@ -107,12 +107,8 @@ def test_gateway_plus_backend_covers_full_app():
         for r in app.router.routes
         if not isinstance(r, Mount) and getattr(r, "path", None) is not None
     }
-    gateway_paths = _component_paths(
-        app.router.routes, GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
-    )
-    backend_paths = _component_paths(
-        app.router.routes, BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES
-    )
+    gateway_paths = _component_paths(app.router.routes, GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES)
+    backend_paths = _component_paths(app.router.routes, BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES)
 
     uncovered = all_paths - (gateway_paths | backend_paths)
 
@@ -125,16 +121,15 @@ def test_gateway_plus_backend_covers_full_app():
 
 def test_backend_mount_paths_defined():
     """BACKEND_MOUNT_PATHS constant must exist and be a frozenset."""
-    assert isinstance(BACKEND_MOUNT_PATHS, frozenset), \
+    assert isinstance(BACKEND_MOUNT_PATHS, frozenset), (
         f"BACKEND_MOUNT_PATHS must be a frozenset, got {type(BACKEND_MOUNT_PATHS)}"
-    assert len(BACKEND_MOUNT_PATHS) > 0, \
-        "BACKEND_MOUNT_PATHS must contain at least one Mount path"
+    )
+    assert len(BACKEND_MOUNT_PATHS) > 0, "BACKEND_MOUNT_PATHS must contain at least one Mount path"
 
 
 def test_swagger_mount_in_backend_allowlist():
     """The /swagger Mount must be in BACKEND_MOUNT_PATHS."""
-    assert "/swagger" in BACKEND_MOUNT_PATHS, \
-        "/swagger Mount path must be in BACKEND_MOUNT_PATHS"
+    assert "/swagger" in BACKEND_MOUNT_PATHS, "/swagger Mount path must be in BACKEND_MOUNT_PATHS"
 
 
 def test_backend_keeps_swagger_mount():
@@ -144,32 +139,31 @@ def test_backend_keeps_swagger_mount():
         for r in app.router.routes
         if isinstance(r, Mount) and getattr(r, "path", None) in BACKEND_MOUNT_PATHS
     }
-    assert "/swagger" in backend_mounts, \
+    assert "/swagger" in backend_mounts, (
         "/swagger Mount is expected on the proxy app and should be in BACKEND_MOUNT_PATHS"
+    )
 
 
 def test_backend_drops_non_allowlisted_mounts():
     """Verify that Mounts NOT in BACKEND_MOUNT_PATHS would be dropped from backend."""
     all_mounts = {
-        getattr(r, "path")
-        for r in app.router.routes
-        if isinstance(r, Mount) and getattr(r, "path", None) is not None
+        getattr(r, "path") for r in app.router.routes if isinstance(r, Mount) and getattr(r, "path", None) is not None
     }
     non_backend_mounts = all_mounts - BACKEND_MOUNT_PATHS
 
-    assert len(non_backend_mounts) > 0, \
+    assert len(non_backend_mounts) > 0, (
         "Expected at least one non-backend Mount (e.g., /ui, /_next) to verify filtering logic"
+    )
     for mount_path in non_backend_mounts:
-        assert mount_path not in BACKEND_MOUNT_PATHS, \
-            f"Mount {mount_path} should not be in BACKEND_MOUNT_PATHS"
+        assert mount_path not in BACKEND_MOUNT_PATHS, f"Mount {mount_path} should not be in BACKEND_MOUNT_PATHS"
 
 
 def test_gateway_mount_paths_defined():
     """GATEWAY_MOUNT_PATHS constant must exist and expose /metrics."""
-    assert isinstance(GATEWAY_MOUNT_PATHS, frozenset), \
+    assert isinstance(GATEWAY_MOUNT_PATHS, frozenset), (
         f"GATEWAY_MOUNT_PATHS must be a frozenset, got {type(GATEWAY_MOUNT_PATHS)}"
-    assert "/metrics" in GATEWAY_MOUNT_PATHS, \
-        "/metrics Mount path must be in GATEWAY_MOUNT_PATHS"
+    )
+    assert "/metrics" in GATEWAY_MOUNT_PATHS, "/metrics Mount path must be in GATEWAY_MOUNT_PATHS"
 
 
 def test_gateway_trim_keeps_metrics_mount():
@@ -184,15 +178,15 @@ def test_gateway_trim_keeps_metrics_mount():
     metrics_mount = Mount("/metrics", app=make_asgi_app())
     routes = [*app.router.routes, metrics_mount]
     trimmed = [r for r in routes if _is_gateway_route(r)]
-    assert metrics_mount in trimmed, \
-        "/metrics Mount must survive the gateway route trim"
+    assert metrics_mount in trimmed, "/metrics Mount must survive the gateway route trim"
 
 
 def test_gateway_drops_ui_and_swagger_mounts():
     """UI static and swagger Mounts must still be trimmed from the gateway."""
     for path in ("/ui", "/_next", "/litellm-asset-prefix/_next", "/swagger"):
-        assert not _is_gateway_route(Mount(path, app=make_asgi_app())), \
+        assert not _is_gateway_route(Mount(path, app=make_asgi_app())), (
             f"Mount {path} must not be served by the gateway"
+        )
 
 
 def test_every_app_mount_is_assigned_to_a_component():

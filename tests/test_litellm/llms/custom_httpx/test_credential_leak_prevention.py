@@ -79,9 +79,7 @@ class TestMaskedHTTPStatusError:
         with patch.object(
             type(orig.response),
             "content",
-            new_callable=lambda: property(
-                lambda self: (_ for _ in ()).throw(Exception("zlib error"))
-            ),
+            new_callable=lambda: property(lambda self: (_ for _ in ()).throw(Exception("zlib error"))),
         ):
             masked = MaskedHTTPStatusError(orig)
 
@@ -169,9 +167,7 @@ class TestSafeResponseHelpers:
     def test_safe_get_response_text_error(self):
         response = MagicMock(spec=httpx.Response)
         type(response).text = property(
-            lambda self: (_ for _ in ()).throw(
-                UnicodeDecodeError("utf-8", b"", 0, 1, "bad")
-            )
+            lambda self: (_ for _ in ()).throw(UnicodeDecodeError("utf-8", b"", 0, 1, "bad"))
         )
         assert _safe_get_response_text(response) == ""
 
@@ -202,9 +198,7 @@ class TestSafeResponseHelpers:
 
 class TestRaiseMaskedError:
     def test_sync_non_stream(self):
-        orig = _make_httpx_status_error(
-            url="https://api.example.com?key=LEAKED_KEY", body="error body"
-        )
+        orig = _make_httpx_status_error(url="https://api.example.com?key=LEAKED_KEY", body="error body")
         with pytest.raises(MaskedHTTPStatusError) as exc_info:
             _raise_masked_sync_error(orig, stream=False)
 
@@ -214,9 +208,7 @@ class TestRaiseMaskedError:
         assert err.text == "error body"
 
     def test_sync_stream(self):
-        orig = _make_httpx_status_error(
-            url="https://api.example.com?key=LEAKED_KEY", body="stream body"
-        )
+        orig = _make_httpx_status_error(url="https://api.example.com?key=LEAKED_KEY", body="stream body")
         with pytest.raises(MaskedHTTPStatusError) as exc_info:
             _raise_masked_sync_error(orig, stream=True)
 
@@ -233,9 +225,7 @@ class TestRaiseMaskedError:
 
     @pytest.mark.asyncio
     async def test_async_non_stream(self):
-        orig = _make_httpx_status_error(
-            url="https://api.example.com?key=LEAKED_KEY", body="async error"
-        )
+        orig = _make_httpx_status_error(url="https://api.example.com?key=LEAKED_KEY", body="async error")
         with pytest.raises(MaskedHTTPStatusError) as exc_info:
             await _raise_masked_async_error(orig, stream=False)
 
@@ -246,9 +236,7 @@ class TestRaiseMaskedError:
 
     @pytest.mark.asyncio
     async def test_async_stream(self):
-        orig = _make_httpx_status_error(
-            url="https://api.example.com?key=LEAKED_KEY", body="async stream"
-        )
+        orig = _make_httpx_status_error(url="https://api.example.com?key=LEAKED_KEY", body="async stream")
         with pytest.raises(MaskedHTTPStatusError) as exc_info:
             await _raise_masked_async_error(orig, stream=True)
 

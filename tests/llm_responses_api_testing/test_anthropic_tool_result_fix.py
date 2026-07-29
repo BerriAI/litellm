@@ -95,18 +95,13 @@ def test_fix_ensures_tool_calls_for_tool_results():
     # Check if tool_calls were added
     tool_calls = assistant_message.get("tool_calls") or []
     assert len(tool_calls) > 0, (
-        f"Fix should have added tool_calls to assistant message. "
-        f"Found: {json.dumps(assistant_message, indent=2)}"
+        f"Fix should have added tool_calls to assistant message. Found: {json.dumps(assistant_message, indent=2)}"
     )
 
     # Verify the tool_call has the correct ID
     found_tool_call = False
     for tool_call in tool_calls:
-        tool_call_id_from_msg = (
-            tool_call.get("id")
-            if isinstance(tool_call, dict)
-            else getattr(tool_call, "id", None)
-        )
+        tool_call_id_from_msg = tool_call.get("id") if isinstance(tool_call, dict) else getattr(tool_call, "id", None)
         if tool_call_id_from_msg == tool_call_id:
             found_tool_call = True
             break
@@ -137,16 +132,12 @@ def test_fix_ensures_tool_calls_for_tool_results():
             anthropic_assistant_msg = msg
             break
 
-    assert (
-        anthropic_assistant_msg is not None
-    ), "Assistant message should be present in Anthropic format"
+    assert anthropic_assistant_msg is not None, "Assistant message should be present in Anthropic format"
 
     # Verify the assistant message has tool_use blocks
     assistant_content = anthropic_assistant_msg.get("content", [])
     tool_use_blocks = [
-        block
-        for block in assistant_content
-        if isinstance(block, dict) and block.get("type") == "tool_use"
+        block for block in assistant_content if isinstance(block, dict) and block.get("type") == "tool_use"
     ]
 
     assert len(tool_use_blocks) > 0, (
@@ -156,9 +147,7 @@ def test_fix_ensures_tool_calls_for_tool_results():
 
     # Verify the tool_use block has the correct ID
     tool_use_id = tool_use_blocks[0].get("id")
-    assert (
-        tool_use_id == tool_call_id
-    ), f"Tool use ID {tool_use_id} should match tool_call_id {tool_call_id}"
+    assert tool_use_id == tool_call_id, f"Tool use ID {tool_use_id} should match tool_call_id {tool_call_id}"
 
     print("\n" + "=" * 80)
     print("[PASS] Fix verified: tool_calls are added when missing")

@@ -78,9 +78,7 @@ def test_stream_chunk_builder_preserves_images():
     response = stream_chunk_builder(chunks=chunks)
 
     # Verify that images are preserved in the rebuilt response
-    assert (
-        response.choices[0].message.images is not None
-    ), "Images should be preserved in stream_chunk_builder"
+    assert response.choices[0].message.images is not None, "Images should be preserved in stream_chunk_builder"
     assert len(response.choices[0].message.images) == 1, "Should have exactly 1 image"
     assert response.choices[0].message.images[0]["type"] == "image_url"
     assert "base64" in response.choices[0].message.images[0]["image_url"]["url"]

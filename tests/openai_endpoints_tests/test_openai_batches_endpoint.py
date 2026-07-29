@@ -57,9 +57,7 @@ async def test_batches_operations():
     print("response from cancel batch", _canceled_batch)
 
     assert _canceled_batch.status is not None
-    assert (
-        _canceled_batch.status == "cancelling" or _canceled_batch.status == "cancelled"
-    )
+    assert _canceled_batch.status == "cancelling" or _canceled_batch.status == "cancelled"
 
     # finally delete the file
     _deleted_file = client.files.delete(file_id=file_obj.id)
@@ -97,9 +95,7 @@ def await_batch_completion(batch_id: str, custom_llm_provider: str):
     tries = 0
 
     while tries < max_tries:
-        batch = client.batches.retrieve(
-            batch_id, extra_headers={"custom-llm-provider": custom_llm_provider}
-        )
+        batch = client.batches.retrieve(batch_id, extra_headers={"custom-llm-provider": custom_llm_provider})
         if batch.status == "completed":
             print(f"Batch {batch_id} completed.")
             return batch.id
@@ -108,17 +104,11 @@ def await_batch_completion(batch_id: str, custom_llm_provider: str):
         print(f"waiting for batch to complete... (attempt {tries}/{max_tries})")
         time.sleep(10)
 
-    print(
-        f"Reached maximum number of attempts ({max_tries}). Batch may still be processing."
-    )
+    print(f"Reached maximum number of attempts ({max_tries}). Batch may still be processing.")
 
 
-def write_content_to_file(
-    batch_id: str, output_path: str, custom_llm_provider: str
-) -> str:
-    batch = client.batches.retrieve(
-        batch_id=batch_id, extra_headers={"custom-llm-provider": custom_llm_provider}
-    )
+def write_content_to_file(batch_id: str, output_path: str, custom_llm_provider: str) -> str:
+    batch = client.batches.retrieve(batch_id=batch_id, extra_headers={"custom-llm-provider": custom_llm_provider})
     content = client.files.content(
         file_id=batch.output_file_id,
         extra_headers={"custom-llm-provider": custom_llm_provider},
@@ -144,9 +134,7 @@ def read_jsonl(filepath: str):
 
 def get_any_completed_batch_id_azure():
     print("AZURE getting any completed batch id")
-    list_of_batches = client.batches.list(
-        extra_headers={"custom-llm-provider": "azure"}
-    )
+    list_of_batches = client.batches.list(extra_headers={"custom-llm-provider": "azure"})
     print("list of batches", list_of_batches)
     for batch in list_of_batches:
         if batch.status == "completed":
@@ -159,26 +147,20 @@ def test_e2e_batches_files(custom_llm_provider):
     """
     [PROD Test] Ensures OpenAI Batches + files work with OpenAI SDK
     """
-    input_path = (
-        "input.jsonl" if custom_llm_provider == "openai" else "input_azure.jsonl"
-    )
+    input_path = "input.jsonl" if custom_llm_provider == "openai" else "input_azure.jsonl"
     output_path = "out.jsonl" if custom_llm_provider == "openai" else "out_azure.jsonl"
 
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     input_file_path = os.path.join(_current_dir, input_path)
     output_file_path = os.path.join(_current_dir, output_path)
     print("running e2e batches files with custom_llm_provider=", custom_llm_provider)
-    batch_id = create_batch_oai_sdk(
-        filepath=input_file_path, custom_llm_provider=custom_llm_provider
-    )
+    batch_id = create_batch_oai_sdk(filepath=input_file_path, custom_llm_provider=custom_llm_provider)
 
     if custom_llm_provider == "azure":
         # azure takes very long to complete a batch
         return
     else:
-        response_batch_id = await_batch_completion(
-            batch_id=batch_id, custom_llm_provider=custom_llm_provider
-        )
+        response_batch_id = await_batch_completion(batch_id=batch_id, custom_llm_provider=custom_llm_provider)
         if response_batch_id is None:
             return
 
@@ -209,9 +191,9 @@ def test_vertex_batches_endpoint():
     print("Response from creating file=", file_obj)
 
     batch_input_file_id = file_obj.id
-    assert (
-        batch_input_file_id is not None
-    ), f"Failed to create file, expected a non null file_id but got {batch_input_file_id}"
+    assert batch_input_file_id is not None, (
+        f"Failed to create file, expected a non null file_id but got {batch_input_file_id}"
+    )
 
     create_batch_response = oai_client.batches.create(
         completion_window="24h",
@@ -266,12 +248,9 @@ async def test_list_batches_with_target_model_names():
 
     # Mock _read_request_body to return our target_model_names
     with (
-        patch(
-            "litellm.proxy.batches_endpoints.endpoints._read_request_body"
-        ) as mock_read_body,
+        patch("litellm.proxy.batches_endpoints.endpoints._read_request_body") as mock_read_body,
         patch("litellm.proxy.proxy_server.llm_router") as mock_router,
     ):
-
         mock_read_body.return_value = {"target_model_names": target_model_names}
         mock_router.alist_batches = AsyncMock(return_value=mock_batch_response)
 
@@ -339,9 +318,7 @@ async def test_batch_status_sync_from_provider_to_database():
 
     # Mock prisma client
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
-        return_value=mock_db_batch
-    )
+    mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=mock_db_batch)
     mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
 
     # Mock managed_files_obj
@@ -404,9 +381,7 @@ async def test_batch_status_sync_from_provider_to_database():
 
     # Verify the update call had correct parameters
     assert update_call_args.kwargs["where"]["unified_object_id"] == batch_id
-    assert (
-        update_call_args.kwargs["data"]["status"] == "complete"
-    )  # "completed" normalized to "complete"
+    assert update_call_args.kwargs["data"]["status"] == "complete"  # "completed" normalized to "complete"
     assert "file_object" in update_call_args.kwargs["data"]
     assert "updated_at" in update_call_args.kwargs["data"]
     # batch_processed must be set to True when batch transitions to complete
@@ -526,9 +501,7 @@ async def test_batch_terminal_state_skip_provider_call():
 
     # Mock prisma client
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
-        return_value=mock_db_batch
-    )
+    mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=mock_db_batch)
 
     # Mock managed_files_obj
     mock_managed_files = MagicMock()

@@ -9,9 +9,7 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import os
 from datetime import datetime
@@ -40,9 +38,7 @@ async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):
 
     PROD Test
     """
-    litellm.disable_aiohttp_transport = (
-        True  # since this uses respx, we need to set use_aiohttp_transport to False
-    )
+    litellm.disable_aiohttp_transport = True  # since this uses respx, we need to set use_aiohttp_transport to False
 
     # Clear the HTTP client cache to ensure respx mocking works
     # This is critical because respx only intercepts clients created AFTER mocking is active
@@ -87,9 +83,7 @@ async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):
         return_value=httpx.Response(200, json=obj.model_dump(mode="json"))
     )
 
-    await router.acompletion(
-        model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world!"}]
-    )
+    await router.acompletion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world!"}])
 
     # Ensure all mocks were called
     respx_mock.assert_all_called()

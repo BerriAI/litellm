@@ -72,9 +72,7 @@ class TestAnthropicCursorBug:
         token_counter fallback can estimate from completion text.
         """
         # Anthropic message_start: input_tokens accurate, output_tokens=1 cursor
-        message_start = _make_chunk(
-            usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025)
-        )
+        message_start = _make_chunk(usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025))
         # Several content_block_delta chunks (no usage attached)
         text_chunks = [
             _make_chunk(content="Hello"),
@@ -100,9 +98,7 @@ class TestAnthropicCursorBug:
         Normal complete stream: message_start cursor=1, then message_delta=3847.
         Last-wins must give 3847 (the real value).
         """
-        message_start = _make_chunk(
-            usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025)
-        )
+        message_start = _make_chunk(usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025))
         text_chunks = [_make_chunk(content=t) for t in ["Hello", " world", "!"]]
         # message_delta with the real cumulative output_tokens
         message_delta = _make_chunk(
@@ -122,19 +118,14 @@ class TestAnthropicCursorBug:
         End-to-end via calculate_usage(): cursor-only stream + real completion
         text should produce a token-counter estimate, NOT 1.
         """
-        message_start = _make_chunk(
-            usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025)
-        )
+        message_start = _make_chunk(usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025))
         # ~50 visible chars ≈ ~12 tokens (anthropic-style tokenizer ballpark)
         text_chunks = [
             _make_chunk(content="Based on your question, I think the answer is "),
             _make_chunk(content="forty-two. Here is my reasoning: "),
         ]
         chunks = [message_start, *text_chunks]
-        completion_output = (
-            "Based on your question, I think the answer is forty-two. "
-            "Here is my reasoning: "
-        )
+        completion_output = "Based on your question, I think the answer is forty-two. Here is my reasoning: "
 
         processor = ChunkProcessor(chunks=chunks, messages=[])
         usage = processor.calculate_usage(
@@ -152,9 +143,7 @@ class TestAnthropicCursorBug:
 
     def test_cache_fields_preserved_from_message_start(self):
         """cache_read / cache_creation come from message_start and must survive."""
-        message_start_usage = Usage(
-            prompt_tokens=1024, completion_tokens=1, total_tokens=1025
-        )
+        message_start_usage = Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025)
         # Anthropic puts these in message_start
         message_start_usage.cache_read_input_tokens = 512
         message_start_usage.cache_creation_input_tokens = 128
@@ -196,9 +185,7 @@ class TestAnthropicCursorBug:
         on a 1-token string also gives ~1, so billing is still approximately
         correct. This test pins that the result is sane (1 or 0).
         """
-        message_start = _make_chunk(
-            usage=Usage(prompt_tokens=20, completion_tokens=1, total_tokens=21)
-        )
+        message_start = _make_chunk(usage=Usage(prompt_tokens=20, completion_tokens=1, total_tokens=21))
         text_chunk = _make_chunk(content="Yes.")
         # Anthropic's message_delta also gives output_tokens=1 in this case
         message_delta = _make_chunk(
@@ -234,9 +221,7 @@ class TestAnthropicCursorBug:
         must fire so token_counter estimates from completion text instead of
         billing the placeholder.
         """
-        message_start_usage = Usage(
-            prompt_tokens=1024, completion_tokens=1, total_tokens=1025
-        )
+        message_start_usage = Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025)
         message_start_usage.cache_read_input_tokens = 4096
         message_start = _make_chunk(usage=message_start_usage)
         # Subsequent chunks with cache fields but no completion_tokens
@@ -303,9 +288,7 @@ class TestNonAnthropicStreamingIntact:
         """Any chunk reporting completion_tokens > 1 sets saw_non_cursor
         and prevents the reset."""
         chunks = [
-            _make_chunk(
-                usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
-            ),
+            _make_chunk(usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)),
         ]
         processor = ChunkProcessor(chunks=chunks, messages=[])
         result = processor._calculate_usage_per_chunk(chunks=chunks)

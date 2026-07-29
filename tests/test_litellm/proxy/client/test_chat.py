@@ -123,9 +123,7 @@ def test_completions_request_creation(client, base_url, api_key, sample_messages
 
 def test_completions_minimal_request(client, sample_messages):
     """Test that completions works with only required parameters"""
-    request = client.completions(
-        model="gpt-4", messages=sample_messages, return_request=True
-    )
+    request = client.completions(model="gpt-4", messages=sample_messages, return_request=True)
 
     # Check request body has only required fields
     assert request.json == {"model": "gpt-4", "messages": sample_messages}
@@ -192,10 +190,7 @@ def test_completions_mock_response(client, sample_messages):
     response = client.completions(model="gpt-4", messages=sample_messages)
 
     assert response == mock_response
-    assert (
-        response["choices"][0]["message"]["content"]
-        == "Hello! How can I help you today?"
-    )
+    assert response["choices"][0]["message"]["content"] == "Hello! How can I help you today?"
 
 
 @responses.activate

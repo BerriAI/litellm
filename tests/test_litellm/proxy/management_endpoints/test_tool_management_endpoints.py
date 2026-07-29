@@ -71,7 +71,10 @@ def _rollup_row(date: str, tool_name: str, spend: float, request_count: int, tot
 
 
 def _group_row(tool_name: str, spend: float, request_count: int, total_tokens: int) -> dict:
-    return {"tool_name": tool_name, "_sum": {"spend": spend, "total_tokens": total_tokens, "request_count": request_count}}
+    return {
+        "tool_name": tool_name,
+        "_sum": {"spend": spend, "total_tokens": total_tokens, "request_count": request_count},
+    }
 
 
 def _rollup_prisma(group_rows: list, daily_rows: list | None = None) -> MagicMock:

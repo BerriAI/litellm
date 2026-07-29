@@ -22,9 +22,7 @@ def test_flags_entry_one_char_over_budget(tmp_path):
 
 def test_allows_entry_exactly_at_budget(tmp_path):
     at_limit = "a" * (MAX_PATH - WORST_CASE_PREFIX)
-    assert (
-        overlong_install_paths(_wheel(tmp_path, at_limit, "litellm/__init__.py")) == []
-    )
+    assert overlong_install_paths(_wheel(tmp_path, at_limit, "litellm/__init__.py")) == []
 
 
 def test_orders_offenders_longest_first(tmp_path):

@@ -76,9 +76,7 @@ def test_github_copilot_embedding_config_get_complete_url():
     assert url == "https://api.githubcopilot.com/embeddings"
 
     # Test with custom API base from authenticator
-    config.authenticator.get_api_base.return_value = (
-        "https://api.enterprise.githubcopilot.com"
-    )
+    config.authenticator.get_api_base.return_value = "https://api.enterprise.githubcopilot.com"
     url = config.get_complete_url(
         api_base=None,
         api_key=None,

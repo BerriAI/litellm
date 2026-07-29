@@ -116,7 +116,6 @@ def _common_patches(mock_proxy_logging, mock_response):
 
 @pytest.mark.asyncio
 class TestPassthroughPostCallGuardrails:
-
     @patch(_COLLECT, return_value=["rubrik"])
     async def test_post_call_success_hook_called_when_guardrails_configured(
         self,
@@ -127,9 +126,7 @@ class TestPassthroughPostCallGuardrails:
 
         mock_proxy_logging = MagicMock()
         mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
-        mock_proxy_logging.post_call_success_hook = AsyncMock(
-            return_value=_GEMINI_RESPONSE
-        )
+        mock_proxy_logging.post_call_success_hook = AsyncMock(return_value=_GEMINI_RESPONSE)
         mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
 
         with _common_patches(mock_proxy_logging, mock_response):
@@ -181,9 +178,7 @@ class TestPassthroughPostCallGuardrails:
                 {
                     "content": {
                         "role": "model",
-                        "parts": [
-                            {"functionCall": {"name": "dangerous_tool", "args": {}}}
-                        ],
+                        "parts": [{"functionCall": {"name": "dangerous_tool", "args": {}}}],
                     }
                 }
             ]
@@ -246,9 +241,7 @@ class TestPassthroughPostCallGuardrails:
         mock_proxy_logging = MagicMock()
         mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
         mock_proxy_logging.post_call_success_hook = AsyncMock(side_effect=_block)
-        mock_proxy_logging.post_call_failure_hook = AsyncMock(
-            side_effect=_capture_failure
-        )
+        mock_proxy_logging.post_call_failure_hook = AsyncMock(side_effect=_capture_failure)
 
         with _common_patches(mock_proxy_logging, mock_response):
             with pytest.raises(Exception):
@@ -261,15 +254,12 @@ class TestPassthroughPostCallGuardrails:
                 )
 
         mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
-        entries = captured["request_data"]["metadata"][
-            "standard_logging_guardrail_information"
-        ]
+        entries = captured["request_data"]["metadata"]["standard_logging_guardrail_information"]
         assert any(e.get("guardrail_name") == "rubrik" for e in entries)
 
 
 @pytest.mark.asyncio
 class TestUnifiedGuardrailCallTypeResolution:
-
     async def test_pass_through_call_type_resolved_from_logging_obj(self):
         """Unified guardrail should resolve call_type from logging_obj for pass-through."""
         from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
@@ -298,9 +288,7 @@ class TestUnifiedGuardrailCallTypeResolution:
             "litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail.load_guardrail_translation_mappings"
         ) as mock_load:
             mock_handler_instance = AsyncMock()
-            mock_handler_instance.process_output_response = AsyncMock(
-                return_value=response_body
-            )
+            mock_handler_instance.process_output_response = AsyncMock(return_value=response_body)
             mock_handler_class = MagicMock(return_value=mock_handler_instance)
 
             from litellm.types.utils import CallTypes

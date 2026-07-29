@@ -56,10 +56,7 @@ def validate_stream_chunk(chunk):
     assert hasattr(chunk.choices[0], "delta")
 
     # Some chunks might not have content in the delta
-    if (
-        hasattr(chunk.choices[0].delta, "content")
-        and chunk.choices[0].delta.content is not None
-    ):
+    if hasattr(chunk.choices[0].delta, "content") and chunk.choices[0].delta.content is not None:
         assert isinstance(chunk.choices[0].delta.content, str)
 
     assert hasattr(chunk, "id")
@@ -73,9 +70,7 @@ def validate_stream_chunk(chunk):
 @pytest.mark.flaky(retries=3, delay=2)
 def test_basic_response():
     client = get_test_client()
-    response = client.responses.create(
-        model="gpt-5.5", input="just respond with the word 'ping'"
-    )
+    response = client.responses.create(model="gpt-5.5", input="just respond with the word 'ping'")
     print("basic response=", response)
 
     # get the response
@@ -93,9 +88,7 @@ def test_basic_response():
 
 def test_streaming_response():
     client = get_test_client()
-    stream = client.responses.create(
-        model="gpt-5.5", input="just respond with the word 'ping'", stream=True
-    )
+    stream = client.responses.create(model="gpt-5.5", input="just respond with the word 'ping'", stream=True)
 
     collected_chunks = []
     for chunk in stream:
@@ -116,9 +109,7 @@ def test_bad_request_bad_param_error():
     client = get_test_client()
     with pytest.raises(BadRequestError):
         # Trigger error with invalid model name
-        client.responses.create(
-            model="gpt-5.5", input="This should fail", temperature=2000
-        )
+        client.responses.create(model="gpt-5.5", input="This should fail", temperature=2000)
 
 
 def test_anthropic_with_responses_api():
@@ -136,9 +127,7 @@ def test_cancel_response():
         client = get_test_client()
         from litellm.types.llms.openai import ResponsesAPIResponse
 
-        response = client.responses.create(
-            model="gpt-5.5", input="just respond with the word 'ping'", background=True
-        )
+        response = client.responses.create(model="gpt-5.5", input="just respond with the word 'ping'", background=True)
         print("basic response=", response)
 
         # cancel the response
@@ -172,11 +161,7 @@ def test_cancel_streaming_response():
             print("stream chunk=", chunk)
             collected_chunks.append(chunk)
             # Extract response ID from the first chunk that has it
-            if (
-                response_id is None
-                and hasattr(chunk, "response")
-                and hasattr(chunk.response, "id")
-            ):
+            if response_id is None and hasattr(chunk, "response") and hasattr(chunk.response, "id"):
                 response_id = chunk.response.id
 
         assert len(collected_chunks) > 0

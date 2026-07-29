@@ -4,9 +4,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.openai.common_utils import BaseOpenAILLM
@@ -86,11 +84,7 @@ async def test_openai_client_reuse(function_name, is_async, args):
     litellm.set_verbose = True
 
     # Determine which client class to mock based on whether the test is async
-    client_path = (
-        "litellm.llms.openai.openai.AsyncOpenAI"
-        if is_async
-        else "litellm.llms.openai.openai.OpenAI"
-    )
+    client_path = "litellm.llms.openai.openai.AsyncOpenAI" if is_async else "litellm.llms.openai.openai.OpenAI"
 
     # Create the appropriate patches
     with (
@@ -100,9 +94,7 @@ async def test_openai_client_reuse(function_name, is_async, args):
     ):
         # Setup the mock to return None first time (cache miss) then a client for subsequent calls
         mock_client = MagicMock()
-        mock_get_cache.side_effect = [None] + [
-            mock_client
-        ] * 9  # First call returns None, rest return the mock client
+        mock_get_cache.side_effect = [None] + [mock_client] * 9  # First call returns None, rest return the mock client
 
         # Make 10 API calls
         for _ in range(10):
@@ -120,9 +112,9 @@ async def test_openai_client_reuse(function_name, is_async, args):
                 pass
 
         # Verify client was created only once
-        assert (
-            mock_client_class.call_count == 1
-        ), f"{'Async' if is_async else ''}OpenAI client should be created only once"
+        assert mock_client_class.call_count == 1, (
+            f"{'Async' if is_async else ''}OpenAI client should be created only once"
+        )
 
         # Verify the client was cached
         assert mock_set_cache.call_count == 1, "Client should be cached once"
@@ -146,12 +138,8 @@ def test_precomputed_init_params_match_inspect_signature():
         _OPENAI_INIT_PARAMS,
     )
 
-    expected_openai = tuple(
-        p for p in inspect.signature(OpenAI.__init__).parameters if p != "self"
-    )
-    expected_azure = tuple(
-        p for p in inspect.signature(AzureOpenAI.__init__).parameters if p != "self"
-    )
+    expected_openai = tuple(p for p in inspect.signature(OpenAI.__init__).parameters if p != "self")
+    expected_azure = tuple(p for p in inspect.signature(AzureOpenAI.__init__).parameters if p != "self")
 
     assert _OPENAI_INIT_PARAMS == expected_openai
     assert _AZURE_OPENAI_INIT_PARAMS == expected_azure

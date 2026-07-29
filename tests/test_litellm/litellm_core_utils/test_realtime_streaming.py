@@ -2966,7 +2966,9 @@ async def test_log_messages_routes_async_logging_through_bounded_worker():
 
         mock_worker.ensure_initialized_and_enqueue.assert_called_once()
         enqueued = mock_worker.ensure_initialized_and_enqueue.call_args
-        assert (enqueued.args or tuple(enqueued.kwargs.values()))[0] is logging_obj.dispatch_success_handlers.return_value
+        assert (enqueued.args or tuple(enqueued.kwargs.values()))[
+            0
+        ] is logging_obj.dispatch_success_handlers.return_value
         logging_obj.dispatch_success_handlers.assert_called_once_with(streaming.messages, prefer_async_handlers=True)
         logging_obj.success_handler.assert_not_called()
         # the bare create_task path must no longer be used for success logging

@@ -71,9 +71,7 @@ def _make_otel():
 
 def _server_span(otel):
     """Mirror the SERVER span user_api_key_auth opens per request."""
-    return otel.create_litellm_proxy_request_started_span(
-        start_time=datetime.now(), headers={}
-    )
+    return otel.create_litellm_proxy_request_started_span(start_time=datetime.now(), headers={})
 
 
 def _slo(call_type, with_guardrail=False):
@@ -128,12 +126,10 @@ def _spans_by_name(exporter):
 
 def _assert_team_attrs(span, where):
     assert span.attributes.get(TEAM_ID_ATTR) == TEAM_ID, (
-        f"{where}: missing/blank {TEAM_ID_ATTR} "
-        f"(got {span.attributes.get(TEAM_ID_ATTR)!r})"
+        f"{where}: missing/blank {TEAM_ID_ATTR} (got {span.attributes.get(TEAM_ID_ATTR)!r})"
     )
     assert span.attributes.get(TEAM_ALIAS_ATTR) == TEAM_ALIAS, (
-        f"{where}: missing/blank {TEAM_ALIAS_ATTR} "
-        f"(got {span.attributes.get(TEAM_ALIAS_ATTR)!r})"
+        f"{where}: missing/blank {TEAM_ALIAS_ATTR} (got {span.attributes.get(TEAM_ALIAS_ATTR)!r})"
     )
 
 
@@ -211,24 +207,16 @@ class TestLLMFailureCells(unittest.TestCase):
             _assert_team_attrs(spans[name], f"{where} [{name}]")
 
     def test_chat_completions_4xx(self):
-        self._assert_all(
-            self._run_failure(_ClientErr("bad key")), "chat/completions 4xx"
-        )
+        self._assert_all(self._run_failure(_ClientErr("bad key")), "chat/completions 4xx")
 
     def test_chat_completions_5xx(self):
-        self._assert_all(
-            self._run_failure(_Boom("upstream blew up")), "chat/completions 5xx"
-        )
+        self._assert_all(self._run_failure(_Boom("upstream blew up")), "chat/completions 5xx")
 
     def test_v1_messages_4xx(self):
-        self._assert_all(
-            self._run_failure(_ClientErr("bad anthropic key")), "v1/messages 4xx"
-        )
+        self._assert_all(self._run_failure(_ClientErr("bad anthropic key")), "v1/messages 4xx")
 
     def test_v1_messages_5xx(self):
-        self._assert_all(
-            self._run_failure(_Boom("anthropic upstream timeout")), "v1/messages 5xx"
-        )
+        self._assert_all(self._run_failure(_Boom("anthropic upstream timeout")), "v1/messages 5xx")
 
 
 # ---------------------------------------------------------------------------
@@ -272,9 +260,7 @@ class TestAdminTeamInfoCells(unittest.TestCase):
         server_span = _server_span(otel)
         server_span.end()
         spans = _spans_by_name(exporter)
-        assert set(spans) == {
-            LITELLM_PROXY_REQUEST_SPAN_NAME
-        }, f"/team/info 2xx: unexpected child spans {set(spans)}"
+        assert set(spans) == {LITELLM_PROXY_REQUEST_SPAN_NAME}, f"/team/info 2xx: unexpected child spans {set(spans)}"
 
     def test_team_info_3xx_not_applicable(self):
         """Management endpoints return JSON, never a 3xx redirect."""

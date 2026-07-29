@@ -10,9 +10,7 @@ import asyncio
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import openai
 import pytest
 from fastapi import Response
@@ -62,10 +60,8 @@ def test_active_callbacks(client):
             if callback_name in callback:
                 found_match = True
                 break
-        assert (
-            found_match is True
-        ), f"{callback_name} not found in _active_callbacks={_active_callbacks}"
+        assert found_match is True, f"{callback_name} not found in _active_callbacks={_active_callbacks}"
 
-    assert not any(
-        "_ENTERPRISE_OpenAI_Moderation" in callback for callback in _active_callbacks
-    ), f"_ENTERPRISE_OpenAI_Moderation should not be in _active_callbacks={_active_callbacks}"
+    assert not any("_ENTERPRISE_OpenAI_Moderation" in callback for callback in _active_callbacks), (
+        f"_ENTERPRISE_OpenAI_Moderation should not be in _active_callbacks={_active_callbacks}"
+    )

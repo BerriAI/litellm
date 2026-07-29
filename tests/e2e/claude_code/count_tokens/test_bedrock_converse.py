@@ -61,9 +61,7 @@ def test_count_tokens_bedrock_converse(compat_result):
 
     failures = []
     for model in BEDROCK_CONVERSE_MODELS:
-        result = probe_count_tokens(
-            client=client, api_key=api_key, model=model
-        )
+        result = probe_count_tokens(client=client, api_key=api_key, model=model)
         shape_error = assert_count_tokens_shape(result)
         if shape_error is not None:
             error = f"[{model}] count_tokens probe failed: {shape_error}"

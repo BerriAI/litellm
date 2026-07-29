@@ -147,9 +147,7 @@ def test_get_fallback_model_group_does_not_mutate_fallbacks():
     fallbacks list, which is the live router config shared across requests."""
     fallbacks = [{"gpt-3.5-turbo": ["claude-3-haiku"]}, "gpt-4o-mini"]
 
-    fallback_model_group, _ = get_fallback_model_group(
-        fallbacks=fallbacks, model_group="unmatched-model"
-    )
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="unmatched-model")
 
     assert fallback_model_group == ["gpt-4o-mini"]
     assert fallbacks == [{"gpt-3.5-turbo": ["claude-3-haiku"]}, "gpt-4o-mini"]

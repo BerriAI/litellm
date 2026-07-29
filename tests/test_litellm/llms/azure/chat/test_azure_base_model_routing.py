@@ -20,33 +20,23 @@ class TestGetAzureConfigWithBaseModel:
     """ProviderConfigManager._get_azure_config should use base_model for detection."""
 
     def test_should_return_gpt5_config_when_base_model_is_gpt5(self):
-        config = ProviderConfigManager._get_azure_config(
-            model="my-deployment-id", base_model="azure/gpt-5.2"
-        )
+        config = ProviderConfigManager._get_azure_config(model="my-deployment-id", base_model="azure/gpt-5.2")
         assert isinstance(config, AzureOpenAIGPT5Config)
 
     def test_should_return_o_series_config_when_base_model_is_o_series(self):
-        config = ProviderConfigManager._get_azure_config(
-            model="my-deployment-id", base_model="azure/o4-mini"
-        )
+        config = ProviderConfigManager._get_azure_config(model="my-deployment-id", base_model="azure/o4-mini")
         assert isinstance(config, AzureOpenAIO1Config)
 
     def test_should_return_default_config_when_base_model_is_regular(self):
-        config = ProviderConfigManager._get_azure_config(
-            model="my-deployment-id", base_model="azure/gpt-4o"
-        )
+        config = ProviderConfigManager._get_azure_config(model="my-deployment-id", base_model="azure/gpt-4o")
         assert type(config).__name__ == "AzureOpenAIConfig"
 
     def test_should_fallback_to_model_when_base_model_is_none(self):
-        config = ProviderConfigManager._get_azure_config(
-            model="gpt-5.2", base_model=None
-        )
+        config = ProviderConfigManager._get_azure_config(model="gpt-5.2", base_model=None)
         assert isinstance(config, AzureOpenAIGPT5Config)
 
     def test_should_return_default_config_when_both_are_non_standard(self):
-        config = ProviderConfigManager._get_azure_config(
-            model="my-deployment-id", base_model=None
-        )
+        config = ProviderConfigManager._get_azure_config(model="my-deployment-id", base_model=None)
         assert type(config).__name__ == "AzureOpenAIConfig"
 
 
@@ -182,9 +172,7 @@ class TestBackwardCompatibility:
         assert isinstance(config, AzureOpenAIGPT5Config)
 
     def test_should_detect_gpt5_from_gpt5_series_prefix(self):
-        config = ProviderConfigManager._get_azure_config(
-            model="gpt5_series/my-deployment"
-        )
+        config = ProviderConfigManager._get_azure_config(model="gpt5_series/my-deployment")
         assert isinstance(config, AzureOpenAIGPT5Config)
 
     def test_should_detect_o_series_from_model_name(self):
@@ -203,9 +191,7 @@ class TestBackwardCompatibility:
     def test_base_model_overrides_model_detection(self):
         """base_model should take priority over model for type detection."""
         # model looks like o-series, but base_model says gpt-5
-        config = ProviderConfigManager._get_azure_config(
-            model="o3-mini", base_model="azure/gpt-5.2"
-        )
+        config = ProviderConfigManager._get_azure_config(model="o3-mini", base_model="azure/gpt-5.2")
         assert isinstance(config, AzureOpenAIGPT5Config)
 
 

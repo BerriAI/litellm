@@ -43,9 +43,7 @@ def test_update_pass_through_route_updates_registry():
 
             # Verify Initial State
             assert route_key in _registered_pass_through_routes
-            initial_headers = _registered_pass_through_routes[route_key][
-                "passthrough_params"
-            ]["custom_headers"]
+            initial_headers = _registered_pass_through_routes[route_key]["passthrough_params"]["custom_headers"]
             assert initial_headers["Authorization"] == "Bearer INITIAL_TOKEN"
 
             # 2. Perform Update (Simulate API Update)
@@ -54,9 +52,7 @@ def test_update_pass_through_route_updates_registry():
                 app=MagicMock(),
                 path=path,
                 target=target,
-                custom_headers={
-                    "Authorization": "Bearer NEW_UPDATED_TOKEN"
-                },  # Changed Header
+                custom_headers={"Authorization": "Bearer NEW_UPDATED_TOKEN"},  # Changed Header
                 forward_headers=False,
                 merge_query_params=False,
                 dependencies=[],
@@ -65,14 +61,12 @@ def test_update_pass_through_route_updates_registry():
             )
 
             # 3. Verify Update Occurred
-            updated_headers = _registered_pass_through_routes[route_key][
-                "passthrough_params"
-            ]["custom_headers"]
+            updated_headers = _registered_pass_through_routes[route_key]["passthrough_params"]["custom_headers"]
 
             # This assertion protects against the regression
-            assert (
-                updated_headers["Authorization"] == "Bearer NEW_UPDATED_TOKEN"
-            ), "Registry failed to update! Old headers persisted despite update call."
+            assert updated_headers["Authorization"] == "Bearer NEW_UPDATED_TOKEN", (
+                "Registry failed to update! Old headers persisted despite update call."
+            )
 
         finally:
             # Cleanup: Remove test entry
@@ -115,9 +109,7 @@ def test_update_subpath_route_updates_registry():
             )
 
             assert (
-                _registered_pass_through_routes[route_key]["passthrough_params"][
-                    "custom_headers"
-                ]["Authorization"]
+                _registered_pass_through_routes[route_key]["passthrough_params"]["custom_headers"]["Authorization"]
                 == "Bearer INITIAL_SUBPATH_TOKEN"
             )
 
@@ -135,12 +127,8 @@ def test_update_subpath_route_updates_registry():
             )
 
             # 3. Verify
-            updated_headers = _registered_pass_through_routes[route_key][
-                "passthrough_params"
-            ]["custom_headers"]
-            assert (
-                updated_headers["Authorization"] == "Bearer NEW_SUBPATH_TOKEN"
-            ), "Subpath registry failed to update!"
+            updated_headers = _registered_pass_through_routes[route_key]["passthrough_params"]["custom_headers"]
+            assert updated_headers["Authorization"] == "Bearer NEW_SUBPATH_TOKEN", "Subpath registry failed to update!"
 
         finally:
             if route_key in _registered_pass_through_routes:

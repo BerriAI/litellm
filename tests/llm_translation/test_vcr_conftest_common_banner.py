@@ -72,12 +72,8 @@ def patch_capacity_snapshot(monkeypatch):
     return _set
 
 
-def test_banner_silent_when_no_failures_and_capacity_healthy(
-    health_reset, vcr_enabled, patch_capacity_snapshot
-):
-    patch_capacity_snapshot(
-        {"used_memory_bytes": 100, "maxmemory_bytes": 1000, "used_pct": 10.0}
-    )
+def test_banner_silent_when_no_failures_and_capacity_healthy(health_reset, vcr_enabled, patch_capacity_snapshot):
+    patch_capacity_snapshot({"used_memory_bytes": 100, "maxmemory_bytes": 1000, "used_pct": 10.0})
     reporter = _FakeTerminalReporter()
 
     emit_cassette_cache_session_banner(reporter)
@@ -85,16 +81,10 @@ def test_banner_silent_when_no_failures_and_capacity_healthy(
     assert reporter.output == ""
 
 
-def test_banner_red_section_when_save_failures_recorded(
-    health_reset, vcr_enabled, patch_capacity_snapshot
-):
+def test_banner_red_section_when_save_failures_recorded(health_reset, vcr_enabled, patch_capacity_snapshot):
     _cache_health["save_failures"] = 3
-    _cache_health["save_failure_last_error"] = (
-        "OutOfMemoryError: command not allowed when used memory > 'maxmemory'."
-    )
-    patch_capacity_snapshot(
-        {"used_memory_bytes": 990, "maxmemory_bytes": 1000, "used_pct": 99.0}
-    )
+    _cache_health["save_failure_last_error"] = "OutOfMemoryError: command not allowed when used memory > 'maxmemory'."
+    patch_capacity_snapshot({"used_memory_bytes": 990, "maxmemory_bytes": 1000, "used_pct": 99.0})
     reporter = _FakeTerminalReporter()
 
     emit_cassette_cache_session_banner(reporter)
@@ -106,9 +96,7 @@ def test_banner_red_section_when_save_failures_recorded(
     assert "99.0% of maxmemory" in out
 
 
-def test_banner_red_section_when_load_failures_recorded(
-    health_reset, vcr_enabled, patch_capacity_snapshot
-):
+def test_banner_red_section_when_load_failures_recorded(health_reset, vcr_enabled, patch_capacity_snapshot):
     _cache_health["load_failures"] = 2
     _cache_health["load_failure_last_error"] = "ConnectionError: simulated outage"
     patch_capacity_snapshot(None)
@@ -125,9 +113,7 @@ def test_banner_red_section_when_load_failures_recorded(
 def test_banner_yellow_high_water_when_no_failures_but_near_capacity(
     health_reset, vcr_enabled, patch_capacity_snapshot
 ):
-    patch_capacity_snapshot(
-        {"used_memory_bytes": 900, "maxmemory_bytes": 1000, "used_pct": 90.0}
-    )
+    patch_capacity_snapshot({"used_memory_bytes": 900, "maxmemory_bytes": 1000, "used_pct": 90.0})
     reporter = _FakeTerminalReporter()
 
     emit_cassette_cache_session_banner(reporter)
@@ -138,12 +124,8 @@ def test_banner_yellow_high_water_when_no_failures_but_near_capacity(
     assert "VCR CASSETTE CACHE DEGRADED" not in out
 
 
-def test_banner_silent_when_below_high_water_and_no_failures(
-    health_reset, vcr_enabled, patch_capacity_snapshot
-):
-    patch_capacity_snapshot(
-        {"used_memory_bytes": 800, "maxmemory_bytes": 1000, "used_pct": 80.0}
-    )
+def test_banner_silent_when_below_high_water_and_no_failures(health_reset, vcr_enabled, patch_capacity_snapshot):
+    patch_capacity_snapshot({"used_memory_bytes": 800, "maxmemory_bytes": 1000, "used_pct": 80.0})
     reporter = _FakeTerminalReporter()
 
     emit_cassette_cache_session_banner(reporter)
@@ -151,15 +133,11 @@ def test_banner_silent_when_below_high_water_and_no_failures(
     assert reporter.output == ""
 
 
-def test_banner_silent_when_vcr_disabled(
-    monkeypatch, health_reset, patch_capacity_snapshot
-):
+def test_banner_silent_when_vcr_disabled(monkeypatch, health_reset, patch_capacity_snapshot):
     monkeypatch.delenv("CASSETTE_REDIS_URL", raising=False)
     _cache_health["save_failures"] = 5
     _cache_health["save_failure_last_error"] = "OutOfMemoryError: foo"
-    patch_capacity_snapshot(
-        {"used_memory_bytes": 999, "maxmemory_bytes": 1000, "used_pct": 99.9}
-    )
+    patch_capacity_snapshot({"used_memory_bytes": 999, "maxmemory_bytes": 1000, "used_pct": 99.9})
     reporter = _FakeTerminalReporter()
 
     emit_cassette_cache_session_banner(reporter)
@@ -194,9 +172,7 @@ def test_diagnostic_log_dedupes_repeated_blocks(tmp_path, monkeypatch):
 def test_diagnostic_log_caps_unique_lines(tmp_path, monkeypatch):
     monkeypatch.setenv("LITELLM_VCR_DIAG_DIR", str(tmp_path))
     total = VCR_DIAG_EMIT_MAX_LINES + 50
-    (tmp_path / "123.log").write_text(
-        "\n".join(f"unique-diagnostic-{i}" for i in range(total)), encoding="utf-8"
-    )
+    (tmp_path / "123.log").write_text("\n".join(f"unique-diagnostic-{i}" for i in range(total)), encoding="utf-8")
     reporter = _FakeTerminalReporter()
 
     emit_vcr_diagnostic_log(reporter)
@@ -216,15 +192,11 @@ def test_diagnostic_log_silent_when_no_dir(tmp_path, monkeypatch):
     assert reporter.output == ""
 
 
-def test_banner_silent_on_xdist_worker(
-    monkeypatch, vcr_enabled, health_reset, patch_capacity_snapshot
-):
+def test_banner_silent_on_xdist_worker(monkeypatch, vcr_enabled, health_reset, patch_capacity_snapshot):
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw3")
     _cache_health["save_failures"] = 1
     _cache_health["save_failure_last_error"] = "OutOfMemoryError: bar"
-    patch_capacity_snapshot(
-        {"used_memory_bytes": 999, "maxmemory_bytes": 1000, "used_pct": 99.9}
-    )
+    patch_capacity_snapshot({"used_memory_bytes": 999, "maxmemory_bytes": 1000, "used_pct": 99.9})
     reporter = _FakeTerminalReporter()
 
     emit_cassette_cache_session_banner(reporter)
@@ -243,9 +215,7 @@ def test_banner_silent_on_xdist_worker(
 
 
 class _FakeRequest:
-    def __init__(
-        self, host, scheme="https", method="POST", path="/api/public/ingestion"
-    ):
+    def __init__(self, host, scheme="https", method="POST", path="/api/public/ingestion"):
         self.host = host
         self.scheme = scheme
         self.uri = f"{scheme}://{host}{path}"
@@ -342,9 +312,7 @@ def current_test(monkeypatch):
         ),
     ],
 )
-def test_should_drop_telemetry_record(
-    current_test, nodeid, host, method, expected_drop
-):
+def test_should_drop_telemetry_record(current_test, nodeid, host, method, expected_drop):
     import tests._vcr_conftest_common as common
 
     current_test(nodeid)

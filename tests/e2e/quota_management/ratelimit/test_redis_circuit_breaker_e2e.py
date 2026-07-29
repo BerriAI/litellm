@@ -22,9 +22,7 @@ from quota_client import QuotaClient
 pytestmark = pytest.mark.e2e
 
 BACKEND = "anthropic/claude-haiku-4-5-20251001"
-RECOVERY_TIMEOUT = float(
-    os.environ.get("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", "60") or "60"
-)
+RECOVERY_TIMEOUT = float(os.environ.get("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", "60") or "60")
 
 
 def _require_redis() -> None:
@@ -35,8 +33,7 @@ def _require_redis() -> None:
             return
     except OSError as exc:
         raise AssertionError(
-            f"REDIS_HOST={host!r}:{port} unreachable ({exc}); "
-            "LIT-3523 e2e needs Redis the proxy shares."
+            f"REDIS_HOST={host!r}:{port} unreachable ({exc}); LIT-3523 e2e needs Redis the proxy shares."
         ) from exc
 
 
@@ -45,9 +42,7 @@ class TestRedisCircuitBreakerPath:
         "reliability.circuit_breaker.redis.trips_then_recovers",
         exercised_on=["chat_completions"],
     )
-    def test_burst_rate_limit_does_not_freeze_fresh_key(
-        self, client: QuotaClient, resources: ResourceManager
-    ) -> None:
+    def test_burst_rate_limit_does_not_freeze_fresh_key(self, client: QuotaClient, resources: ResourceManager) -> None:
         _require_redis()
         model = f"e2e-cb-model-{unique_marker()}"
         model_id = client.proxy.create_model(
@@ -75,9 +70,7 @@ class TestRedisCircuitBreakerPath:
         with ThreadPoolExecutor(max_workers=8) as pool:
             futures = [pool.submit(_hit) for _ in range(12)]
             codes = tuple(f.result() for f in as_completed(futures))
-        assert any(code == 429 for code in codes), (
-            f"expected some 429 under rpm_limit=1 burst, got {codes}"
-        )
+        assert any(code == 429 for code in codes), f"expected some 429 under rpm_limit=1 burst, got {codes}"
 
         started = time.monotonic()
         cool = client.chat(cool_key, model, f"fresh {unique_marker()}")

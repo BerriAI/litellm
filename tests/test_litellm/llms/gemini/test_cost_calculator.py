@@ -113,9 +113,7 @@ def test_gemini_image_edit_cost_prefers_token_usage_metadata():
         prompt_tokens * model_info["input_cost_per_token"]
         + output_image_tokens * model_info["output_cost_per_image_token"]
     )
-    flat_image_cost = (
-        len(image_response.data or []) * model_info["output_cost_per_image"]
-    )
+    flat_image_cost = len(image_response.data or []) * model_info["output_cost_per_image"]
     assert round(cost, 10) == round(expected_cost, 10)
     assert cost != flat_image_cost
 
@@ -169,8 +167,7 @@ def test_gemini_image_edit_cost_uses_output_token_details():
     )
     all_output_as_image_cost = (
         input_text_tokens * model_info["input_cost_per_token"]
-        + (output_text_tokens + output_image_tokens)
-        * model_info["output_cost_per_image_token"]
+        + (output_text_tokens + output_image_tokens) * model_info["output_cost_per_image_token"]
     )
     assert round(cost, 10) == round(expected_cost, 10)
     assert cost != all_output_as_image_cost
@@ -225,8 +222,7 @@ def test_gemini_image_generation_cost_uses_output_token_details():
     )
     all_output_as_image_cost = (
         input_text_tokens * model_info["input_cost_per_token"]
-        + (output_text_tokens + output_image_tokens)
-        * model_info["output_cost_per_image_token"]
+        + (output_text_tokens + output_image_tokens) * model_info["output_cost_per_image_token"]
     )
     assert round(cost, 10) == round(expected_cost, 10)
     assert cost != all_output_as_image_cost
@@ -237,9 +233,7 @@ def test_gemini_image_edit_cost_falls_back_to_flat_image_pricing():
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model = "gemini/gemini-3-pro-image-preview"
     model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
-    image_response = ImageResponse(
-        data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")]
-    )
+    image_response = ImageResponse(data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")])
 
     cost = gemini_image_edit_cost_calculator(
         model=model,
@@ -279,9 +273,7 @@ def test_gemini_image_generation_cost_adds_web_search_grounding():
         image_response=_image_response_with_web_search(None),
     )
 
-    expected_web_search_cost = cost_per_web_search_request(
-        usage=_make_usage(2), model_info=model_info
-    )
+    expected_web_search_cost = cost_per_web_search_request(usage=_make_usage(2), model_info=model_info)
     assert expected_web_search_cost > 0
     assert round(grounded - ungrounded, 10) == round(expected_web_search_cost, 10)
 
