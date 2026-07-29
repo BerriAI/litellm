@@ -1643,6 +1643,9 @@ if TYPE_CHECKING:
     from .llms.cloudflare.chat.transformation import (
         CloudflareChatConfig as CloudflareChatConfig,
     )
+    from .llms.cloudflare.embedding.transformation import (
+        CloudflareEmbeddingConfig as CloudflareEmbeddingConfig,
+    )
     from .llms.novita.chat.transformation import NovitaConfig as NovitaConfig
     from .llms.petals.completion.transformation import PetalsConfig as PetalsConfig
     from .llms.ollama.chat.transformation import OllamaChatConfig as OllamaChatConfig
