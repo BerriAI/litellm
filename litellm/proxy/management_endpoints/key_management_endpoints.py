@@ -2023,7 +2023,7 @@ def _validate_max_budget(max_budget: Optional[float]) -> None:
 
 
 async def _get_and_validate_existing_key(
-    token: str, prisma_client: Optional[PrismaClient]
+    token: str | None, prisma_client: Optional[PrismaClient], key_alias: str | None = None
 ) -> LiteLLM_VerificationToken:
     """
     Get existing key from database and validate it exists.
@@ -2031,12 +2031,13 @@ async def _get_and_validate_existing_key(
     Args:
         token: The key token to look up
         prisma_client: Prisma client instance
+        key_alias: Alias to look the key up by when token is not provided
 
     Returns:
         LiteLLM_VerificationToken: The existing key row
 
     Raises:
-        ProxyException: 404 if key is not found
+        ProxyException: 404 if key is not found, 400 if the alias matches multiple keys
     """
     if prisma_client is None:
         raise HTTPException(
@@ -2044,19 +2045,65 @@ async def _get_and_validate_existing_key(
             detail={"error": "Database not connected"},
         )
 
-    hashed_token = _hash_token_if_needed(token=token)
+    if token is not None:
+        hashed_token = _hash_token_if_needed(token=token)
 
-    existing_key_row = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": hashed_token})
+        existing_key_row: LiteLLM_VerificationToken | None = await VerificationTokenRepository(
+            prisma_client
+        ).table.find_unique(where={"token": hashed_token})
 
-    if existing_key_row is None:
+        if existing_key_row is None:
+            raise ProxyException(
+                message="Key not found.",
+                type=ProxyErrorTypes.not_found_error,
+                param="key",
+                code=status.HTTP_404_NOT_FOUND,
+            )
+
+        return existing_key_row
+
+    if key_alias is None:
+        raise ProxyException(
+            message="either key or key_alias must be provided",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    rows: list[LiteLLM_VerificationToken] = await VerificationTokenRepository(prisma_client).table.find_many(
+        where={"key_alias": key_alias}, take=2
+    )
+
+    if len(rows) == 0:
+        raise ProxyException(
+            message=f"Key not found. No key with key_alias='{key_alias}'.",
+            type=ProxyErrorTypes.not_found_error,
+            param="key_alias",
+            code=status.HTTP_404_NOT_FOUND,
+        )
+
+    if len(rows) > 1:
+        raise ProxyException(
+            message=f"Multiple keys share key_alias='{key_alias}', so it cannot be used as an identifier.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key_alias",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    return rows[0]
+
+
+def _resolve_token_to_update(data: UpdateKeyRequest, existing_key_row: LiteLLM_VerificationToken) -> str:
+    if data.key is not None:
+        return data.key
+    if existing_key_row.token is None:
         raise ProxyException(
             message="Key not found.",
             type=ProxyErrorTypes.not_found_error,
             param="key",
             code=status.HTTP_404_NOT_FOUND,
         )
-
-    return existing_key_row
+    return existing_key_row.token
 
 
 async def _process_single_key_update(
@@ -2508,8 +2555,8 @@ async def update_key_fn(
     Update an existing API key's parameters.
 
     Parameters:
-    - key: str - The key to update
-    - key_alias: Optional[str] - User-friendly key alias
+    - key: Optional[str] - The key to update. Either key or key_alias must be provided.
+    - key_alias: Optional[str] - User-friendly key alias. If key is omitted, also identifies the key to update (must match exactly one key, same as /key/delete's key_aliases)
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
     - agent_id: Optional[str] - The agent id associated with the key.
@@ -2592,14 +2639,14 @@ async def update_key_fn(
                 detail={"error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"},
             )
 
-        data_json: dict = data.model_dump(exclude_unset=True)
-        key = data_json.pop("key")
-
         # get the row from db
         existing_key_row = await _get_and_validate_existing_key(
             token=data.key,
             prisma_client=prisma_client,
+            key_alias=data.key_alias,
         )
+        key = _resolve_token_to_update(data=data, existing_key_row=existing_key_row)
+        data.key = key
 
         await _validate_update_key_data(
             data=data,
