@@ -10210,6 +10210,8 @@ class ProviderConfigManager:
             )
 
             return VercelAIGatewayEmbeddingConfig()
+        elif litellm.LlmProviders.CLOUDFLARE == provider:
+            return litellm.CloudflareEmbeddingConfig()
         elif litellm.LlmProviders.GIGACHAT == provider:
             return litellm.GigaChatEmbeddingConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
