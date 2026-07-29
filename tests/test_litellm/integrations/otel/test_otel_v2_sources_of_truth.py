@@ -218,6 +218,53 @@ def test_vector_store_search_is_a_retrieval_operation(call_type):
     assert resolve_operation(call_type).value == "retrieval"
 
 
+@pytest.mark.parametrize("call_type", ["query", "aquery"])
+def test_rag_query_is_a_retrieval_operation(call_type):
+    """``/rag/query`` reaches the same recorder as a vector-store search and is the
+    same operation, so it must not be the one retrieval surface left reading as chat."""
+    assert resolve_operation(call_type) is GenAIOperation.RETRIEVAL
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        f"{prefix}vector_store_{verb}"
+        for verb in ("create", "retrieve", "list", "update", "delete")
+        for prefix in ("", "a")
+    ],
+)
+def test_vector_store_management_is_not_chat(call_type):
+    """The store lifecycle calls are not GenAI client operations and the convention
+    names nothing for them, so they take a vendor value rather than defaulting into
+    the chat series."""
+    assert resolve_operation(call_type) is GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT
+    assert resolve_operation(call_type).value == "litellm.vector_store_management"
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        f"{prefix}vector_store_file_{verb}"
+        for verb in ("create", "list", "retrieve", "content", "update", "delete")
+        for prefix in ("", "a")
+    ],
+)
+def test_vector_store_file_management_is_not_chat(call_type):
+    """The file operations are a distinct REST resource from the store lifecycle, so
+    they get their own vendor value instead of sharing one bucket."""
+    assert resolve_operation(call_type) is GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT
+    assert resolve_operation(call_type).value == "litellm.vector_store_file_management"
+
+
+def test_vendor_operation_values_are_namespaced():
+    """A vendor value must stay under the ``litellm.`` prefix: an unprefixed invented
+    name could collide with a value the convention adds later, silently changing what
+    a conformant consumer thinks it is reading."""
+    vendor = [op for op in GenAIOperation if op.name.startswith("LITELLM_")]
+    assert vendor, "no vendor operation values defined"
+    assert all(op.value.startswith("litellm.") for op in vendor)
+
+
 @pytest.mark.parametrize("call_type", ["send_message", "asend_message"])
 def test_agent_message_is_an_invoke_agent_operation(call_type):
     """An agent (A2A) message send is an agent invocation, not a chat completion."""

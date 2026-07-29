@@ -438,6 +438,25 @@ def test_vector_store_search_is_not_labelled_as_chat():
             assert dp.attributes[OPERATION_KEY] == "retrieval"
 
 
+@pytest.mark.parametrize(
+    "call_type,expected",
+    [
+        ("avector_store_create", "litellm.vector_store_management"),
+        ("avector_store_delete", "litellm.vector_store_management"),
+        ("avector_store_file_create", "litellm.vector_store_file_management"),
+        ("avector_store_file_list", "litellm.vector_store_file_management"),
+    ],
+)
+def test_vector_store_management_is_not_labelled_as_chat(call_type, expected):
+    """Store and file management reach the recorder through the same success hook as a
+    completion, so leaving them unmapped kept billing- and latency-relevant admin calls
+    inside the chat series."""
+    metrics = _drive_success(InMemoryMetricReader(), call_type=call_type)
+
+    for dp in metrics[OPERATION_DURATION]:
+        assert dp.attributes[OPERATION_KEY] == expected
+
+
 def test_agent_message_is_not_labelled_as_chat():
     """An A2A agent send records under gen_ai.operation.name=invoke_agent."""
     metrics = _drive_success(InMemoryMetricReader(), call_type="asend_message")

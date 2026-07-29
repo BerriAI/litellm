@@ -10,16 +10,26 @@ from litellm._logging import verbose_logger
 
 
 class GenAIOperation(str, Enum):
-    """Values for ``gen_ai.operation.name``."""
+    """Values for ``gen_ai.operation.name``.
+
+    The first block is the convention's own vocabulary. The ``LITELLM_`` members
+    are vendor values for operations the convention names nothing for; its note
+    on this attribute directs instrumentation to use a system-specific name in
+    exactly that case, the same allowance :func:`resolve_provider` relies on for
+    unmapped providers. They stay under the ``litellm.`` prefix so a value the
+    convention adds later can never collide with one of ours.
+    """
 
     CHAT = "chat"
     TEXT_COMPLETION = "text_completion"
     EMBEDDINGS = "embeddings"
     GENERATE_CONTENT = "generate_content"
-    RETRIEVAL = "retrieval"  # vector-store search spans
+    RETRIEVAL = "retrieval"  # vector-store search / RAG query spans
     CREATE_AGENT = "create_agent"  # reserved for future agent spans
     INVOKE_AGENT = "invoke_agent"  # agent (A2A) message spans
     EXECUTE_TOOL = "execute_tool"  # MCP tool-call spans
+    LITELLM_VECTOR_STORE_MANAGEMENT = "litellm.vector_store_management"
+    LITELLM_VECTOR_STORE_FILE_MANAGEMENT = "litellm.vector_store_file_management"
 
 
 class GenAIProvider(str, Enum):
@@ -327,8 +337,32 @@ _OPERATION_BY_CALL_TYPE: dict[str, GenAIOperation] = {
     "call_mcp_tool": GenAIOperation.EXECUTE_TOOL,
     "vector_store_search": GenAIOperation.RETRIEVAL,
     "avector_store_search": GenAIOperation.RETRIEVAL,
+    "query": GenAIOperation.RETRIEVAL,
+    "aquery": GenAIOperation.RETRIEVAL,
     "send_message": GenAIOperation.INVOKE_AGENT,
     "asend_message": GenAIOperation.INVOKE_AGENT,
+    "vector_store_create": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "avector_store_create": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "vector_store_retrieve": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "avector_store_retrieve": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "vector_store_list": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "avector_store_list": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "vector_store_update": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "avector_store_update": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "vector_store_delete": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "avector_store_delete": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "vector_store_file_create": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "avector_store_file_create": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "vector_store_file_list": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "avector_store_file_list": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "vector_store_file_retrieve": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "avector_store_file_retrieve": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "vector_store_file_content": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "avector_store_file_content": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "vector_store_file_update": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "avector_store_file_update": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "vector_store_file_delete": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "avector_store_file_delete": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
 }
 
 
