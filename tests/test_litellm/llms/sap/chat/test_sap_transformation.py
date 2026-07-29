@@ -639,3 +639,63 @@ class TestSAPTransformationIntegration:
                 config["config"]["modules"][1]["translation"]["input"]["type"]
                 == "sap_document_translation"
             )
+
+    def test_transform_request_with_file_content_part(self, mock_config):
+        pdf_data = "data:application/pdf;base64,JVBERi0xLjQK"
+        result = mock_config.transform_request(
+            model="anthropic--claude-4-sonnet",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Summarize this document."},
+                        {
+                            "type": "file",
+                            "file": {"file_data": pdf_data, "filename": "report.pdf"},
+                        },
+                    ],
+                }
+            ],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        content = result["config"]["modules"]["prompt_templating"]["prompt"]["template"][0]["content"]
+        assert content == [
+            {"type": "text", "text": "Summarize this document."},
+            {"type": "file", "file": {"file_data": pdf_data, "filename": "report.pdf"}},
+        ]
+
+    def test_transform_request_with_file_content_part_without_filename(self, mock_config):
+        pdf_data = "data:application/pdf;base64,JVBERi0xLjQK"
+        result = mock_config.transform_request(
+            model="gemini-2.5-pro",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "file", "file": {"file_data": pdf_data}}],
+                }
+            ],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        content = result["config"]["modules"]["prompt_templating"]["prompt"]["template"][0]["content"]
+        assert content == [{"type": "file", "file": {"file_data": pdf_data}}]
+
+    def test_file_content_part_requires_file_data(self, mock_config):
+        with pytest.raises(ValidationError):
+            mock_config.transform_request(
+                model="anthropic--claude-4-sonnet",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [{"type": "file", "file": {"filename": "report.pdf"}}],
+                    }
+                ],
+                optional_params={},
+                litellm_params={},
+                headers={},
+            )
