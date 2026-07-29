@@ -20,6 +20,7 @@ class RustMessages(Protocol):
         custom_llm_provider: str | None,
         extra_headers: dict[str, object] | None,
         timeout_seconds: float | None,
+        aws_region_name: str | None = None,
     ) -> dict[str, object]:
         raise NotImplementedError
 
@@ -34,6 +35,7 @@ class RustAmessages(Protocol):
         custom_llm_provider: str | None,
         extra_headers: dict[str, object] | None,
         timeout_seconds: float | None,
+        aws_region_name: str | None = None,
     ) -> Awaitable[dict[str, object]]:
         raise NotImplementedError
 
@@ -96,6 +98,7 @@ def messages(
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     timeout: Union[float, httpx.Timeout] | None,
+    aws_region_name: str | None = None,
 ) -> dict[str, object] | None:
     rust_messages = load_rust_messages()
     if rust_messages is None:
@@ -108,6 +111,7 @@ def messages(
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
         timeout_seconds=timeout_to_seconds(timeout),
+        **({"aws_region_name": aws_region_name} if aws_region_name is not None else {}),
     )
 
 
@@ -120,6 +124,7 @@ async def amessages(
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     timeout: Union[float, httpx.Timeout] | None,
+    aws_region_name: str | None = None,
 ) -> dict[str, object] | None:
     rust_amessages = load_rust_amessages()
     if rust_amessages is None:
@@ -132,4 +137,5 @@ async def amessages(
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
         timeout_seconds=timeout_to_seconds(timeout),
+        **({"aws_region_name": aws_region_name} if aws_region_name is not None else {}),
     )

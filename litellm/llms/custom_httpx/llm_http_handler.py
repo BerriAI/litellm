@@ -2273,7 +2273,7 @@ class BaseLLMHTTPHandler:
         request_body: dict,
         timeout: float | httpx.Timeout | None,
     ) -> AnthropicMessagesResponse | None:
-        if custom_llm_provider not in ("azure_ai", "anthropic"):
+        if custom_llm_provider not in ("azure_ai", "anthropic", "bedrock"):
             return None
         if litellm_params.get("rust") is not True and not BaseLLMHTTPHandler._rust_env_enabled():
             return None
@@ -2283,6 +2283,7 @@ class BaseLLMHTTPHandler:
         from litellm.rust_bridge import messages as rust_messages_bridge
 
         upstream_body = {key: value for key, value in request_body.items() if key != "stream"}
+        upstream_body.setdefault("model", model)
         try:
             rust_response = await rust_messages_bridge.amessages(
                 model=model,
@@ -2292,6 +2293,7 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 extra_headers=headers,
                 timeout=timeout,
+                aws_region_name=litellm_params.get("aws_region_name"),
             )
         except Exception as rust_error:  # noqa: BLE001  # rollout-safety fallback: any Rust bridge failure must fall back to the Python path
             verbose_logger.debug(

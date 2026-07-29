@@ -11,6 +11,7 @@ pub struct MessagesRequest<'a> {
     pub custom_llm_provider: Option<&'a str>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
+    pub aws_region_name: Option<&'a str>,
 }
 
 pub(crate) struct ProviderMessagesRequest {

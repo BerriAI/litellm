@@ -54,6 +54,7 @@ pub async fn run(
         custom_llm_provider,
         extra_headers,
         timeout: None,
+        aws_region_name: deployment.litellm_params.aws_region_name.as_deref(),
     };
     let stream = request.body.get("stream").and_then(Value::as_bool) == Some(true);
     execute_messages(request, stream)

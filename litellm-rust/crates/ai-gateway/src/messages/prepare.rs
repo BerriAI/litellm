@@ -29,7 +29,15 @@ pub(super) fn prepare_messages_call(
 
     let config = messages_provider_config(provider)
         .ok_or_else(|| CoreError::InvalidProvider(provider.to_string()))?;
-    let env_lookup = |key: &str| std::env::var(key).ok();
+    let env_lookup = |key: &str| {
+        if key == "AWS_REGION_NAME" {
+            return request
+                .aws_region_name
+                .map(str::to_string)
+                .or_else(|| std::env::var(key).ok());
+        }
+        std::env::var(key).ok()
+    };
 
     let mut headers = string_headers(request.extra_headers)?;
 
