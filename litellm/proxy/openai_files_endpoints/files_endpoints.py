@@ -46,9 +46,9 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     encode_file_id_with_model,
     extract_file_creation_params,
     get_credentials_for_model,
-    get_team_provider_credentials,
     handle_model_based_routing,
     prepare_data_with_credentials,
+    resolve_provider_scoped_credentials,
     validate_managed_files_requirement,
 )
 from litellm.proxy.utils import ProxyLogging, is_known_model
@@ -253,11 +253,22 @@ async def route_create_file(
             _create_file_request=_create_file_request,
         )
     else:
-        # get configs for custom_llm_provider
-        llm_provider_config = get_files_provider_config(custom_llm_provider=custom_llm_provider)
-        if llm_provider_config is not None:
-            # add llm_provider_config to data
-            _create_file_request.update(llm_provider_config)
+        provider_credentials = resolve_provider_scoped_credentials(
+            llm_router=llm_router,
+            custom_llm_provider=custom_llm_provider,
+            user_api_key_dict=user_api_key_dict,
+        )
+        if provider_credentials is not None:
+            prepare_data_with_credentials(
+                data=cast(dict, _create_file_request),  # cast-ok: TypedDict is a plain dict at runtime
+                credentials=dict(provider_credentials),
+            )
+        else:
+            # get configs for custom_llm_provider
+            llm_provider_config = get_files_provider_config(custom_llm_provider=custom_llm_provider)
+            if llm_provider_config is not None:
+                # add llm_provider_config to data
+                _create_file_request.update(llm_provider_config)
         _create_file_request.pop("custom_llm_provider", None)  # type: ignore
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)  # type: ignore
@@ -735,6 +746,15 @@ async def get_file_content(
                 check_file_id_encoding=True,
             )
 
+            if not should_route:
+                provider_credentials = resolve_provider_scoped_credentials(
+                    llm_router=llm_router,
+                    custom_llm_provider=custom_llm_provider,
+                    user_api_key_dict=user_api_key_dict,
+                )
+                if provider_credentials is not None:
+                    prepare_data_with_credentials(data=data, credentials=dict(provider_credentials))
+
             from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
                 FileContentStreamingHandler,
             )
@@ -983,6 +1003,13 @@ async def get_file(
             # Remove file_id from data to avoid "multiple values for keyword argument" error
             # data was initialized with {"file_id": file_id}
             data.pop("file_id", None)
+            provider_credentials = resolve_provider_scoped_credentials(
+                llm_router=llm_router,
+                custom_llm_provider=custom_llm_provider,
+                user_api_key_dict=user_api_key_dict,
+            )
+            if provider_credentials is not None:
+                prepare_data_with_credentials(data=data, credentials=dict(provider_credentials))
             response = await litellm.afile_retrieve(
                 custom_llm_provider=custom_llm_provider,
                 file_id=file_id,
@@ -1183,6 +1210,13 @@ async def delete_file(
             )
         else:
             data.pop("file_id", None)
+            provider_credentials = resolve_provider_scoped_credentials(
+                llm_router=llm_router,
+                custom_llm_provider=custom_llm_provider,
+                user_api_key_dict=user_api_key_dict,
+            )
+            if provider_credentials is not None:
+                prepare_data_with_credentials(data=data, credentials=dict(provider_credentials))
             response = await litellm.afile_delete(
                 custom_llm_provider=custom_llm_provider,
                 file_id=file_id,
@@ -1354,14 +1388,13 @@ async def list_files(
             # No model/target_model_names pinned: resolve upstream credentials from
             # the team's deployment for this provider so the call is authenticated
             # against the team's own account (e.g. the team's openai deployment).
-            team_credentials = get_team_provider_credentials(
+            provider_credentials = resolve_provider_scoped_credentials(
                 llm_router=llm_router,
-                team_models=user_api_key_dict.team_models or [],
                 custom_llm_provider=custom_llm_provider,
-                team_id=user_api_key_dict.team_id,
+                user_api_key_dict=user_api_key_dict,
             )
-            if team_credentials is not None:
-                prepare_data_with_credentials(data=data, credentials=team_credentials)
+            if provider_credentials is not None:
+                prepare_data_with_credentials(data=data, credentials=dict(provider_credentials))
 
             response = await litellm.afile_list(
                 custom_llm_provider=custom_llm_provider,

@@ -3,7 +3,7 @@ import mimetypes
 import re
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, List, Literal, Mapping, Optional, Union
 
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
@@ -14,6 +14,7 @@ from litellm.types.utils import SpecialEnums
 if TYPE_CHECKING:
     from fastapi import Request
 
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
 
 
@@ -371,6 +372,26 @@ def get_team_provider_credentials(
             return credentials
 
     return None
+
+
+def resolve_provider_scoped_credentials(
+    llm_router: Optional["Router"],
+    custom_llm_provider: str,
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> "Mapping[str, object] | None":
+    """
+    Resolve the caller's deployment credentials for ``custom_llm_provider`` on
+    provider-scoped batch/file operations that don't pin a model, so those
+    calls don't fall through to environment defaults (e.g.
+    ``google.auth.default()`` for Vertex AI). Returns None when no authorized
+    deployment matches the provider.
+    """
+    return get_team_provider_credentials(
+        llm_router=llm_router,
+        team_models=user_api_key_dict.team_models or [],
+        custom_llm_provider=custom_llm_provider,
+        team_id=user_api_key_dict.team_id,
+    )
 
 
 def prepare_data_with_credentials(

@@ -2610,3 +2610,135 @@ def test_list_files_with_all_proxy_models_team_uses_openai_deployment(
     assert captured_kwargs.get("api_key") == "team-openai-key"
     assert captured_kwargs.get("custom_llm_provider") == "openai"
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+def _openai_file_object() -> OpenAIFileObject:
+    return OpenAIFileObject(
+        id="file-abc",
+        object="file",
+        bytes=2,
+        created_at=1,
+        filename="data.jsonl",
+        purpose="batch",
+        status="uploaded",
+    )
+
+
+async def _run_route_create_file(
+    mocker: MockerFixture,
+    router: Router,
+    custom_llm_provider: str,
+) -> dict:
+    from litellm.proxy.openai_files_endpoints import files_endpoints as fe
+    from litellm.types.llms.openai import CreateFileRequest
+
+    acreate_file = mocker.patch.object(
+        litellm,
+        "acreate_file",
+        new=mocker.AsyncMock(return_value=_openai_file_object()),
+    )
+
+    await fe.route_create_file(
+        llm_router=router,
+        _create_file_request=CreateFileRequest(
+            file=("data.jsonl", b"{}", "application/json"),
+            purpose="batch",
+        ),
+        purpose="batch",
+        proxy_logging_obj=mocker.MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        target_model_names_list=[],
+        is_router_model=False,
+        router_model=None,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert acreate_file.call_count == 1
+    return dict(acreate_file.call_args.kwargs)
+
+
+@pytest.mark.asyncio
+async def test_route_create_file_provider_only_uses_deployment_credentials(
+    mocker: MockerFixture,
+):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini-batch",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.0-flash",
+                    "vertex_project": "configured-project",
+                    "vertex_location": "us-central1",
+                    "vertex_credentials": "/etc/keys/vertex-sa.json",
+                },
+                "model_info": {"id": "gemini-batch-id"},
+            }
+        ]
+    )
+
+    kwargs = await _run_route_create_file(mocker, router, "vertex_ai")
+
+    assert kwargs["custom_llm_provider"] == "vertex_ai"
+    assert kwargs["vertex_project"] == "configured-project"
+    assert kwargs["vertex_location"] == "us-central1"
+    assert kwargs["vertex_credentials"] == "/etc/keys/vertex-sa.json"
+
+
+@pytest.mark.asyncio
+async def test_route_create_file_provider_only_deployment_beats_files_settings(
+    mocker: MockerFixture, monkeypatch
+):
+    from litellm.proxy.openai_files_endpoints import files_endpoints as fe
+
+    monkeypatch.setattr(
+        fe,
+        "files_config",
+        [{"custom_llm_provider": "openai", "api_key": "sk-files-settings"}],
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "sk-deployment",
+                },
+                "model_info": {"id": "gpt-4o-id"},
+            }
+        ]
+    )
+
+    kwargs = await _run_route_create_file(mocker, router, "openai")
+
+    assert kwargs["custom_llm_provider"] == "openai"
+    assert kwargs["api_key"] == "sk-deployment"
+
+
+@pytest.mark.asyncio
+async def test_route_create_file_provider_only_falls_back_to_files_settings(
+    mocker: MockerFixture, monkeypatch
+):
+    from litellm.proxy.openai_files_endpoints import files_endpoints as fe
+
+    monkeypatch.setattr(
+        fe,
+        "files_config",
+        [{"custom_llm_provider": "openai", "api_key": "sk-files-settings"}],
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini-batch",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.0-flash",
+                    "vertex_project": "configured-project",
+                },
+                "model_info": {"id": "gemini-batch-id"},
+            }
+        ]
+    )
+
+    kwargs = await _run_route_create_file(mocker, router, "openai")
+
+    assert kwargs["custom_llm_provider"] == "openai"
+    assert kwargs["api_key"] == "sk-files-settings"
