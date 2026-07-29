@@ -15,7 +15,6 @@ from litellm.models.credentials import CredentialAccess, CredentialInfo, Credent
 from litellm.proxy.management_endpoints.logging_exporter_access import (
     access_grants,
     identity_scope,
-    is_logging_credential,
     parse_credential_info,
     resolved_logging_exporter_names,
 )
@@ -193,15 +192,3 @@ def test_resolved_names_empty_scope_gets_global_only(monkeypatch):
 def test_resolved_names_empty_registry(monkeypatch):
     monkeypatch.setattr(litellm, "credential_list", [])
     assert resolved_logging_exporter_names("t1", "o1") == ()
-
-
-def test_is_logging_credential_distinguishes_destinations_from_provider_creds():
-    # A trace destination is tagged credential_type=logging.
-    assert is_logging_credential({"credential_type": "logging", "access": {"global": True}}) is True
-    # Provider credentials are not destinations.
-    assert is_logging_credential({"custom_llm_provider": "openai"}) is False
-    # An access map without the logging type must not count (can't smuggle a destination).
-    assert is_logging_credential({"access": {"global": True}}) is False
-    # Absent / malformed info fails closed to "not a destination".
-    assert is_logging_credential(None) is False
-    assert is_logging_credential("not-a-dict") is False

@@ -11,10 +11,9 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
-from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
-from litellm.proxy.management_endpoints.logging_exporter_access import is_logging_credential
 from litellm.proxy.management_endpoints.logging_exporter_validation import (
     validate_credential_access,
 )
@@ -27,34 +26,6 @@ from litellm.types.utils import (
 )
 
 router = APIRouter()
-
-
-def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail={"error": "Only the proxy admin can manage credentials"},
-        )
-
-
-def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
-    return user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-
-
-def _is_admin_tier(user_api_key_dict: UserAPIKeyAuth) -> bool:
-    return _is_proxy_admin(user_api_key_dict) or (user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
-
-
-def _require_proxy_admin_for_logging(user_api_key_dict: UserAPIKeyAuth, *credential_infos: object) -> None:
-    """Require proxy admin only when a trace destination is involved.
-
-    Trace destinations (``credential_type == "logging"``) are admin-managed regardless of a
-    key's ``allowed_routes``; provider credentials keep their existing route-level authorization.
-    Passing several infos (e.g. the stored credential and an update patch) gates the write when
-    any of them is a destination, which also blocks converting a provider credential into one.
-    """
-    if any(is_logging_credential(info) for info in credential_infos):
-        _require_proxy_admin(user_api_key_dict)
 
 
 class CredentialHelperUtils:
@@ -94,7 +65,6 @@ async def create_credential(
     """
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
-    _require_proxy_admin_for_logging(user_api_key_dict, credential.credential_info)
     validate_credential_access(credential.credential_info)
 
     try:
@@ -160,29 +130,17 @@ async def get_credentials(
 ):
     """
     [BETA] endpoint. This might change unexpectedly.
-
-    Lists credentials with secret values masked. Trace destinations
-    (``credential_type == "logging"``) are shown only to the proxy admin or a
-    proxy-admin-viewer; other callers see provider credentials only. Destinations
-    and their ``access`` scoping stay proxy-admin information.
     """
     try:
-        visible_credentials = (
-            litellm.credential_list
-            if _is_admin_tier(user_api_key_dict)
-            else [c for c in litellm.credential_list if not is_logging_credential(c.credential_info)]
-        )
         masked_credentials = [
             {
                 "credential_name": credential.credential_name,
                 "credential_values": _get_masked_values(credential.credential_values),
                 "credential_info": credential.credential_info,
             }
-            for credential in visible_credentials
+            for credential in litellm.credential_list
         ]
         return {"success": True, "credentials": masked_credentials}
-    except HTTPException:
-        raise
     except Exception as e:
         return handle_exception_on_proxy(e)
 
@@ -205,11 +163,6 @@ async def get_credential_by_name(
     try:
         for credential in litellm.credential_list:
             if credential.credential_name == credential_name:
-                if is_logging_credential(credential.credential_info) and not _is_admin_tier(user_api_key_dict):
-                    raise HTTPException(
-                        status_code=403,
-                        detail={"error": CommonProxyErrors.not_allowed_access.value},
-                    )
                 masked_credential = CredentialItem(
                     credential_name=credential.credential_name,
                     credential_values=_get_masked_values(
@@ -224,8 +177,6 @@ async def get_credential_by_name(
             status_code=404,
             detail="Credential not found. Got credential name: " + credential_name,
         )
-    except HTTPException:
-        raise
     except Exception as e:
         verbose_proxy_logger.exception(e)
         raise handle_exception_on_proxy(e)
@@ -295,19 +246,11 @@ async def delete_credential(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
-        credentials_repository = CredentialsRepository(prisma_client)
-        db_credential = await credentials_repository.find_by_name(credential_name)
-        _require_proxy_admin_for_logging(
-            user_api_key_dict,
-            db_credential.credential_info if db_credential is not None else None,
-        )
-        await credentials_repository.delete_by_name(credential_name)
+        await CredentialsRepository(prisma_client).delete_by_name(credential_name)
 
         ## DELETE FROM LITELLM ##
         litellm.credential_list = [cred for cred in litellm.credential_list if cred.credential_name != credential_name]
         return {"success": True, "message": "Credential deleted successfully"}
-    except HTTPException:
-        raise
     except Exception as e:
         return handle_exception_on_proxy(e)
 
@@ -398,10 +341,6 @@ async def update_credential(
 ):
     """
     [BETA] endpoint. This might change unexpectedly.
-
-    Updating a trace destination (``credential_type == "logging"``), or converting a
-    credential into one, requires the proxy admin. Provider credentials keep their
-    existing route-level authorization.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -417,7 +356,6 @@ async def update_credential(
         db_credential = await credentials_repository.find_by_name(credential_name)
         if db_credential is None:
             raise HTTPException(status_code=404, detail="Credential not found in DB.")
-        _require_proxy_admin_for_logging(user_api_key_dict, db_credential.credential_info, credential.credential_info)
         merged_credential = update_db_credential(db_credential, _patch_to_credential_item(credential, credential_name))
         credential_object_jsonified = jsonify_object(merged_credential.model_dump())
         await credentials_repository.update_by_name(
@@ -433,8 +371,6 @@ async def update_credential(
             patch=credential,
         )
         return {"success": True, "message": "Credential updated successfully"}
-    except HTTPException:
-        raise
     except Exception as e:
         return handle_exception_on_proxy(e)
 
