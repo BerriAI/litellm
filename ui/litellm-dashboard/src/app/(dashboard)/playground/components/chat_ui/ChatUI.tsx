@@ -76,6 +76,7 @@ import RealtimePlayground from "./RealtimePlayground";
 import { A2ATaskMetadata, MessageType } from "@/components/chat_ui/types";
 import { useCodeInterpreter } from "../../hooks/useCodeInterpreter";
 import { useChatHistory } from "../../hooks/useChatHistory";
+import { MIGRATED_PAGES, migratedHref } from "@/utils/migratedPages";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 
@@ -1619,7 +1620,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       title={
                         <span>
                           Select vector store(s) to use for this LLM API call. You can set up your vector store{" "}
-                          <a href="?page=vector-stores" style={{ color: "#1890ff" }}>
+                          <a href={migratedHref(MIGRATED_PAGES["vector-stores"])} style={{ color: "#1890ff" }}>
                             here
                           </a>
                           .
@@ -1645,7 +1646,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       title={
                         <span>
                           Select guardrail(s) to use for this LLM API call. You can set up your guardrails{" "}
-                          <a href="?page=guardrails" style={{ color: "#1890ff" }}>
+                          <a href={migratedHref(MIGRATED_PAGES["guardrails"])} style={{ color: "#1890ff" }}>
                             here
                           </a>
                           .
@@ -1672,7 +1673,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         <span>
                           Select policy/policies to apply to this LLM API call. Policies define which guardrails are
                           applied based on conditions. You can set up your policies{" "}
-                          <a href="?page=policies" style={{ color: "#1890ff" }}>
+                          <a href={migratedHref(MIGRATED_PAGES["policies"])} style={{ color: "#1890ff" }}>
                             here
                           </a>
                           .

@@ -14,6 +14,9 @@ vi.mock("@/components/networking", () => ({
   vectorStoreListCall: vi.fn().mockResolvedValue({ data: [] }),
   getGuardrailsList: vi.fn().mockResolvedValue({ data: [] }),
   modelHubCall: vi.fn().mockResolvedValue({ data: [] }),
+  // migratedPages reads this to prefix hrefs with SERVER_ROOT_PATH; "" is the
+  // default deployment where the UI is mounted at /ui.
+  serverRootPath: "",
 }));
 
 // Mock scrollIntoView which is not available in jsdom
@@ -49,6 +52,33 @@ describe("ChatUI", () => {
       />,
     );
     expect(getByText("Test Key")).toBeInTheDocument();
+  });
+
+  // The playground lives at /ui/playground, so a relative `?page=<id>` href resolves to
+  // /ui/playground?page=<id> — a URL no route redirects, leaving the user on the playground.
+  // Only the dashboard root honours the legacy `?page=` switch, so these tooltips must point
+  // at the path-based routes.
+  it.each([
+    ["Vector Store", "/ui/vector-stores"],
+    ["Guardrails", "/ui/guardrails"],
+    ["Policies", "/ui/policies"],
+  ])("points the %s tooltip link at its path-based route", async (label, expectedHref) => {
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    const infoIcon = (await screen.findByText(label)).querySelector(".anticon-info-circle");
+    expect(infoIcon).not.toBeNull();
+    fireEvent.mouseEnter(infoIcon!);
+
+    const link = await screen.findByRole("link", { name: "here" });
+    expect(link).toHaveAttribute("href", expectedHref);
   });
 
   it("should show the voice selector when the endpoint type is audio_speech", async () => {
