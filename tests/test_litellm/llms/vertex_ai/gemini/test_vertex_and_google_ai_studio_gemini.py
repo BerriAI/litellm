@@ -5586,3 +5586,43 @@ def test_map_openai_params_include_thoughts_default_true_gemini3():
 def test_include_thoughts_in_supported_openai_params():
     params = VertexGeminiConfig().get_supported_openai_params("gemini-3.6-flash")
     assert "include_thoughts" in params
+
+def test_map_openai_params_include_thoughts_with_thinking_param():
+    """include_thoughts must apply when paired with Anthropic-style thinking."""
+    optional_params = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+            "include_thoughts": False,
+        },
+        optional_params={},
+        model="gemini-3.6-flash",
+        drop_params=False,
+    )
+    assert optional_params["thinkingConfig"]["includeThoughts"] is False
+
+
+def test_map_openai_params_include_thoughts_false_after_thinking_order():
+    """Param order must not matter: thinking first, then include_thoughts."""
+    optional_params = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+            "include_thoughts": False,
+        },
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+    assert optional_params["thinkingConfig"]["includeThoughts"] is False
+
+
+def test_none_locks_include_thoughts_true_override():
+    optional_params = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "reasoning_effort": "none",
+            "include_thoughts": True,
+        },
+        optional_params={},
+        model="gemini-3.6-flash",
+        drop_params=False,
+    )
+    assert optional_params["thinkingConfig"]["includeThoughts"] is False

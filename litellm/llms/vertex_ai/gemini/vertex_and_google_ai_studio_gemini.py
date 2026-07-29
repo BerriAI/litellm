@@ -835,6 +835,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return bool(include_thoughts)
 
     @staticmethod
+    def _apply_include_thoughts_override(
+        thinking_config: Dict,
+        include_thoughts: bool,
+        *,
+        thoughts_locked_off: bool = False,
+    ) -> Dict:
+        """Apply ``include_thoughts`` onto an existing Gemini thinkingConfig.
+
+        ``none`` / ``disable`` mappings lock thoughts off and cannot be forced
+        back on. Otherwise ``include_thoughts`` overrides ``includeThoughts``.
+        """
+        patched = dict(thinking_config)
+        if thoughts_locked_off:
+            patched["includeThoughts"] = False
+        else:
+            patched["includeThoughts"] = bool(include_thoughts)
+        return patched
+
+    @staticmethod
     def _map_reasoning_effort_to_thinking_budget(
         reasoning_effort: str,
         model: Optional[str] = None,
@@ -1121,6 +1140,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> Dict:
         self._apply_include_server_side_tool_invocations(non_default_params, optional_params)
         gemini_sampling_params_warned: bool = False
+        thoughts_locked_off: bool = False
         for param, value in non_default_params.items():
             if param == "temperature":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model):
@@ -1230,6 +1250,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         raise ValueError(
                             "include_thoughts must be a boolean when provided"
                         )
+                    if effort_value in ("none", "disable"):
+                        thoughts_locked_off = True
                     if VertexGeminiConfig._is_gemini_3_or_newer(model):
                         optional_params["thinkingConfig"] = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
                             effort_value,
@@ -1243,8 +1265,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                             include_thoughts=include_thoughts_value,
                         )
             elif param == "include_thoughts":
-                # Consumed alongside reasoning_effort above; ignore when alone / after map.
-                continue
+                # Applied after the loop onto whatever thinkingConfig was built
+                # (reasoning_effort and/or Anthropic-style thinking). Validate early.
+                if value is not None and not isinstance(value, bool):
+                    raise ValueError("include_thoughts must be a boolean when provided")
             elif param == "thinking":
                 # Validate no conflict with thinking_level
                 VertexGeminiConfig._validate_thinking_config_conflicts(
@@ -1266,6 +1290,23 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 self._map_service_tier_param(value, optional_params)
             elif param == "include_server_side_tool_invocations" and value is True:
                 optional_params["include_server_side_tool_invocations"] = True
+
+        # Apply include_thoughts onto reasoning_effort and/or thinking configs so
+        # standalone/out-of-order use (e.g. thinking + include_thoughts=False) works.
+        include_thoughts_value = non_default_params.get("include_thoughts")
+        if include_thoughts_value is not None:
+            if not isinstance(include_thoughts_value, bool):
+                raise ValueError("include_thoughts must be a boolean when provided")
+            thinking_config = optional_params.get("thinkingConfig")
+            if isinstance(thinking_config, dict):
+                optional_params["thinkingConfig"] = (
+                    VertexGeminiConfig._apply_include_thoughts_override(
+                        thinking_config,
+                        include_thoughts_value,
+                        thoughts_locked_off=thoughts_locked_off,
+                    )
+                )
+
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
 
@@ -1285,7 +1326,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self._drop_search_tools_mixed_with_functions(optional_params)
 
         return optional_params
-
     def get_mapped_special_auth_params(self) -> dict:
         """
         Common auth params across bedrock/vertex_ai/azure/watsonx
