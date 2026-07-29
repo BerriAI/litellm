@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.rag import RAGChunkingStrategy
 
@@ -37,8 +38,10 @@ class VertexAIRAGTransformation(VertexBase):
         Note: The REST endpoint for importRagFiles may not be publicly available.
         Vertex AI RAG Engine primarily uses gRPC-based SDK.
         """
-        base_url = f"https://{vertex_location}-aiplatform.googleapis.com/v1"
-        return f"{base_url}/projects/{vertex_project}/locations/{vertex_location}/ragCorpora/{corpus_id}:importRagFiles"
+        base_url = get_vertex_base_url(vertex_location)
+        return (
+            f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/ragCorpora/{corpus_id}:importRagFiles"
+        )
 
     def get_retrieve_contexts_url(
         self,
@@ -46,8 +49,8 @@ class VertexAIRAGTransformation(VertexBase):
         vertex_location: str,
     ) -> str:
         """Get the URL for retrieving contexts (search)."""
-        base_url = f"https://{vertex_location}-aiplatform.googleapis.com/v1"
-        return f"{base_url}/projects/{vertex_project}/locations/{vertex_location}:retrieveContexts"
+        base_url = get_vertex_base_url(vertex_location)
+        return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}:retrieveContexts"
 
     def transform_chunking_strategy_to_vertex_format(
         self,
@@ -88,8 +91,7 @@ class VertexAIRAGTransformation(VertexBase):
         # Log if separators are provided (not supported by Vertex AI)
         if chunking_strategy.get("separators"):
             verbose_logger.warning(
-                "Vertex AI RAG Engine does not support custom separators. "
-                "The 'separators' parameter will be ignored."
+                "Vertex AI RAG Engine does not support custom separators. The 'separators' parameter will be ignored."
             )
 
         return {
@@ -114,15 +116,11 @@ class VertexAIRAGTransformation(VertexBase):
         Returns:
             Request payload dict for importRagFiles API
         """
-        transformation_config = self.transform_chunking_strategy_to_vertex_format(
-            chunking_strategy
-        )
+        transformation_config = self.transform_chunking_strategy_to_vertex_format(chunking_strategy)
 
         return {
             "import_rag_files_config": {
-                "gcs_source": {
-                    "uris": [gcs_uri]
-                },
+                "gcs_source": {"uris": [gcs_uri]},
                 "rag_file_transformation_config": transformation_config,
             }
         }
@@ -137,9 +135,7 @@ class VertexAIRAGTransformation(VertexBase):
 
         Uses the base class method to get credentials.
         """
-        credentials = self.get_vertex_ai_credentials(
-            {"vertex_credentials": vertex_credentials}
-        )
+        credentials = self.get_vertex_ai_credentials({"vertex_credentials": vertex_credentials})
         project = vertex_project or self.get_vertex_ai_project({})
 
         access_token, _ = self._ensure_access_token(
@@ -152,4 +148,3 @@ class VertexAIRAGTransformation(VertexBase):
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
         }
-

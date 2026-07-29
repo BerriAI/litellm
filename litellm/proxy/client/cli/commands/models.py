@@ -129,7 +129,7 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
             table.add_row(
                 str(model.get("id", "")),
                 str(model.get("object", "model")),
-                format_timestamp(created) if isinstance(created, int) else format_iso_datetime_str(created),
+                (format_timestamp(created) if isinstance(created, int) else format_iso_datetime_str(created)),
                 str(model.get("owned_by", "")),
             )
 
@@ -267,7 +267,11 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
         for col_name in requested_columns:
             if col_name in column_configs:
                 config = column_configs[col_name]
-                table.add_column(config["header"], style=config["style"], justify=config.get("justify", "left"))
+                table.add_column(
+                    config["header"],
+                    style=config["style"],
+                    justify=config.get("justify", "left"),
+                )
             else:
                 click.echo(f"Warning: Unknown column '{col_name}'", err=True)
 
@@ -387,7 +391,11 @@ def _import_models_get_table_title(dry_run: bool) -> str:
 
 @models.command("import")
 @click.argument("yaml_file", type=click.Path(exists=True, dir_okay=False, readable=True))
-@click.option("--dry-run", is_flag=True, help="Show what would be imported without making any changes.")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be imported without making any changes.",
+)
 @click.option(
     "--only-models-matching-regex",
     default=None,

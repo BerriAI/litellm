@@ -24,7 +24,7 @@ from .transformation import AnthropicBatchesConfig
 class AnthropicBatchesHandler:
     """
     Handler for Anthropic Message Batches API.
-    
+
     Supports:
     - retrieve_batch() - Retrieve batch status and information
     """
@@ -44,7 +44,7 @@ class AnthropicBatchesHandler:
     ) -> LiteLLMBatch:
         """
         Async: Retrieve a batch from Anthropic.
-        
+
         Args:
             batch_id: The batch ID to retrieve
             api_base: Anthropic API base URL
@@ -52,20 +52,23 @@ class AnthropicBatchesHandler:
             timeout: Request timeout
             max_retries: Max retry attempts (unused for now)
             logging_obj: Optional logging object
-            
+
         Returns:
             LiteLLMBatch: Batch information in OpenAI format
         """
         # Resolve API credentials
         api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
         api_key = api_key or self.anthropic_model_info.get_api_key()
-        
+
         if not api_key:
             raise ValueError("Missing Anthropic API Key")
-        
+
         # Create a minimal logging object if not provided
         if logging_obj is None:
-            from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObjClass
+            from litellm.litellm_core_utils.litellm_logging import (
+                Logging as LiteLLMLoggingObjClass,
+            )
+
             logging_obj = LiteLLMLoggingObjClass(
                 model="anthropic/unknown",
                 messages=[],
@@ -75,7 +78,7 @@ class AnthropicBatchesHandler:
                 litellm_call_id=f"batch_retrieve_{batch_id}",
                 function_id="batch_retrieve",
             )
-        
+
         # Get the complete URL for batch retrieval
         retrieve_url = self.provider_config.get_retrieve_batch_url(
             api_base=api_base,
@@ -83,7 +86,7 @@ class AnthropicBatchesHandler:
             optional_params={},
             litellm_params={},
         )
-        
+
         # Validate environment and get headers
         headers = self.provider_config.validate_environment(
             headers={},
@@ -106,12 +109,9 @@ class AnthropicBatchesHandler:
         )
         # Make the request
         async_client = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
-        response = await async_client.get(
-            url=retrieve_url,
-            headers=headers
-        )
+        response = await async_client.get(url=retrieve_url, headers=headers)
         response.raise_for_status()
-        
+
         # Transform response to LiteLLM format
         return self.provider_config.transform_retrieve_batch_response(
             model=None,
@@ -132,7 +132,7 @@ class AnthropicBatchesHandler:
     ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
         """
         Retrieve a batch from Anthropic.
-        
+
         Args:
             _is_async: Whether to run asynchronously
             batch_id: The batch ID to retrieve
@@ -141,7 +141,7 @@ class AnthropicBatchesHandler:
             timeout: Request timeout
             max_retries: Max retry attempts (unused for now)
             logging_obj: Optional logging object
-            
+
         Returns:
             LiteLLMBatch or Coroutine: Batch information in OpenAI format
         """
@@ -165,4 +165,3 @@ class AnthropicBatchesHandler:
                     logging_obj=logging_obj,
                 )
             )
-

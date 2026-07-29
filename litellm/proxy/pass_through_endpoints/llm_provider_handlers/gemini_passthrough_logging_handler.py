@@ -42,7 +42,7 @@ class GeminiPassthroughLoggingHandler:
     ) -> PassThroughEndpointLoggingTypedDict:
         if "predictLongRunning" in url_route:
             model = GeminiPassthroughLoggingHandler.extract_model_from_url(url_route)
-            
+
             gemini_video_config = GeminiVideoConfig()
             litellm_video_response = gemini_video_config.transform_video_create_response(
                 model=model,
@@ -55,19 +55,19 @@ class GeminiPassthroughLoggingHandler:
             logging_obj.model_call_details["model"] = model
             logging_obj.model_call_details["custom_llm_provider"] = "gemini"
             logging_obj.custom_llm_provider = "gemini"
-            
+
             response_cost = litellm.completion_cost(
                 completion_response=litellm_video_response,
                 model=model,
                 custom_llm_provider="gemini",
                 call_type="create_video",
             )
-            
+
             # Set response_cost in _hidden_params to prevent recalculation
             if not hasattr(litellm_video_response, "_hidden_params"):
                 litellm_video_response._hidden_params = {}
             litellm_video_response._hidden_params["response_cost"] = response_cost
-            
+
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
             kwargs["custom_llm_provider"] = "gemini"
@@ -76,7 +76,7 @@ class GeminiPassthroughLoggingHandler:
                 "result": litellm_video_response,
                 "kwargs": kwargs,
             }
-        
+
         if "generateContent" in url_route:
             model = GeminiPassthroughLoggingHandler.extract_model_from_url(url_route)
 

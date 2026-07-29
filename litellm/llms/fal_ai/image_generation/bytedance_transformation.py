@@ -102,5 +102,3 @@ class FalAIBytedanceDreaminaV31Config(FalAIBytedanceBaseConfig):
     """
 
     IMAGE_GENERATION_ENDPOINT: str = "fal-ai/bytedance/dreamina/v3.1/text-to-image"
-
-

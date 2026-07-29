@@ -21,7 +21,6 @@ class LeastBusyLoggingHandler(CustomLogger):
     def __init__(self, router_cache: DualCache):
         self.router_cache = router_cache
 
-
     def log_pre_api_call(self, model, messages, kwargs):
         """
         Log when a model is being used.
@@ -32,9 +31,7 @@ class LeastBusyLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
-                    "model_group", None
-                )
+                model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
                     return
@@ -43,14 +40,10 @@ class LeastBusyLoggingHandler(CustomLogger):
 
                 request_count_api_key = f"{model_group}_request_count"
                 # update cache
-                request_count_dict = (
-                    self.router_cache.get_cache(key=request_count_api_key) or {}
-                )
+                request_count_dict = self.router_cache.get_cache(key=request_count_api_key) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + 1
 
-                self.router_cache.set_cache(
-                    key=request_count_api_key, value=request_count_dict
-                )
+                self.router_cache.set_cache(key=request_count_api_key, value=request_count_dict)
         except Exception:
             pass
 
@@ -59,9 +52,7 @@ class LeastBusyLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
-                    "model_group", None
-                )
+                model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
 
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
@@ -71,16 +62,12 @@ class LeastBusyLoggingHandler(CustomLogger):
 
                 request_count_api_key = f"{model_group}_request_count"
                 # decrement count in cache
-                request_count_dict = (
-                    self.router_cache.get_cache(key=request_count_api_key) or {}
-                )
+                request_count_dict = self.router_cache.get_cache(key=request_count_api_key) or {}
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
                 request_count_dict[id] = request_count_value - 1
-                self.router_cache.set_cache(
-                    key=request_count_api_key, value=request_count_dict
-                )
+                self.router_cache.set_cache(key=request_count_api_key, value=request_count_dict)
 
                 ### TESTING ###
                 if self.test_flag:
@@ -93,9 +80,7 @@ class LeastBusyLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
-                    "model_group", None
-                )
+                model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
                     return
@@ -104,16 +89,12 @@ class LeastBusyLoggingHandler(CustomLogger):
 
                 request_count_api_key = f"{model_group}_request_count"
                 # decrement count in cache
-                request_count_dict = (
-                    self.router_cache.get_cache(key=request_count_api_key) or {}
-                )
+                request_count_dict = self.router_cache.get_cache(key=request_count_api_key) or {}
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
                 request_count_dict[id] = request_count_value - 1
-                self.router_cache.set_cache(
-                    key=request_count_api_key, value=request_count_dict
-                )
+                self.router_cache.set_cache(key=request_count_api_key, value=request_count_dict)
 
                 ### TESTING ###
                 if self.test_flag:
@@ -126,9 +107,7 @@ class LeastBusyLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
-                    "model_group", None
-                )
+                model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
 
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
@@ -138,17 +117,12 @@ class LeastBusyLoggingHandler(CustomLogger):
 
                 request_count_api_key = f"{model_group}_request_count"
                 # decrement count in cache
-                request_count_dict = (
-                    await self.router_cache.async_get_cache(key=request_count_api_key)
-                    or {}
-                )
+                request_count_dict = await self.router_cache.async_get_cache(key=request_count_api_key) or {}
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
                 request_count_dict[id] = request_count_value - 1
-                await self.router_cache.async_set_cache(
-                    key=request_count_api_key, value=request_count_dict
-                )
+                await self.router_cache.async_set_cache(key=request_count_api_key, value=request_count_dict)
 
                 ### TESTING ###
                 if self.test_flag:
@@ -161,9 +135,7 @@ class LeastBusyLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
-                    "model_group", None
-                )
+                model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
                     return
@@ -172,17 +144,12 @@ class LeastBusyLoggingHandler(CustomLogger):
 
                 request_count_api_key = f"{model_group}_request_count"
                 # decrement count in cache
-                request_count_dict = (
-                    await self.router_cache.async_get_cache(key=request_count_api_key)
-                    or {}
-                )
+                request_count_dict = await self.router_cache.async_get_cache(key=request_count_api_key) or {}
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
                 request_count_dict[id] = request_count_value - 1
-                await self.router_cache.async_set_cache(
-                    key=request_count_api_key, value=request_count_dict
-                )
+                await self.router_cache.async_set_cache(key=request_count_api_key, value=request_count_dict)
 
                 ### TESTING ###
                 if self.test_flag:
@@ -235,16 +202,12 @@ class LeastBusyLoggingHandler(CustomLogger):
             all_deployments=all_deployments,
         )
 
-    async def async_get_available_deployments(
-        self, model_group: str, healthy_deployments: list
-    ):
+    async def async_get_available_deployments(self, model_group: str, healthy_deployments: list):
         """
         Async helper to get deployments using least busy strategy
         """
         request_count_api_key = f"{model_group}_request_count"
-        all_deployments = (
-            await self.router_cache.async_get_cache(key=request_count_api_key) or {}
-        )
+        all_deployments = await self.router_cache.async_get_cache(key=request_count_api_key) or {}
         return self._get_available_deployments(
             healthy_deployments=healthy_deployments,
             all_deployments=all_deployments,

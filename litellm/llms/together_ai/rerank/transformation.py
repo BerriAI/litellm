@@ -1,5 +1,5 @@
 """
-Transformation logic from Cohere's /v1/rerank format to Together AI's  `/v1/rerank` format. 
+Transformation logic from Cohere's /v1/rerank format to Together AI's  `/v1/rerank` format.
 
 Why separate file? Make it easy to see how transformation works
 """
@@ -37,11 +37,7 @@ class TogetherAIRerankConfig:
 
             # Get document data if it exists
             document_data = result.get("document", {})
-            document = (
-                RerankResponseDocument(text=str(document_data.get("text", "")))
-                if document_data
-                else None
-            )
+            document = RerankResponseDocument(text=str(document_data.get("text", ""))) if document_data else None
 
             # Create typed result
             rerank_result = RerankResponseResult(

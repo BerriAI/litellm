@@ -1,6 +1,6 @@
 # litellm/proxy/guardrails/guardrail_hooks/pangea.py
 import os
-from typing import TYPE_CHECKING, Any, Optional, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, cast
 
 from fastapi import HTTPException
 
@@ -77,9 +77,7 @@ class PangeaHandler(CustomGuardrail):
             api_base (Optional[str]): The Pangea API base URL. Reads from PANGEA_API_BASE env var or uses default if None.
             **kwargs: Additional arguments passed to the CustomGuardrail base class.
         """
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.api_key = api_key or os.environ.get("PANGEA_API_KEY")
         if not self.api_key:
             raise PangeaGuardrailMissingSecrets(
@@ -87,23 +85,21 @@ class PangeaHandler(CustomGuardrail):
             )
 
         # Default Pangea base URL if not provided
-        self.api_base = (
-            api_base
-            or os.environ.get("PANGEA_API_BASE")
-            or "https://ai-guard.aws.us.pangea.cloud"
-        )
+        self.api_base = api_base or os.environ.get("PANGEA_API_BASE") or "https://ai-guard.aws.us.pangea.cloud"
         self.pangea_input_recipe = pangea_input_recipe
         self.pangea_output_recipe = pangea_output_recipe
 
         # Pass relevant kwargs to the parent class
-        super().__init__(guardrail_name=guardrail_name, **kwargs)
+        super().__init__(
+            guardrail_name=guardrail_name,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
+            **kwargs,
+        )
         verbose_proxy_logger.debug(
             f"Initialized Pangea Guardrail: name={guardrail_name}, recipe={pangea_input_recipe}, api_base={self.api_base}"
         )
 
-    async def _call_pangea_ai_guard(
-        self, api: str, payload: dict, hook_name: str
-    ) -> dict:
+    async def _call_pangea_ai_guard(self, api: str, payload: dict, hook_name: str) -> dict:
         """
         Makes the API call to the Pangea AI Guard endpoint.
         The function itself will raise an error in the case that a response
@@ -134,17 +130,13 @@ class PangeaHandler(CustomGuardrail):
             f"Pangea Guardrail ({hook_name}): Calling endpoint {endpoint} with payload: {payload}"
         )
 
-        response = await self.async_handler.post(
-            url=endpoint, json=payload, headers=headers
-        )
+        response = await self.async_handler.post(url=endpoint, json=payload, headers=headers)
         response.raise_for_status()
 
         result = response.json()
 
         if result.get("result", {}).get("blocked"):
-            verbose_proxy_logger.warning(
-                f"Pangea Guardrail ({hook_name}): Request blocked. Response: {result}"
-            )
+            verbose_proxy_logger.warning(f"Pangea Guardrail ({hook_name}): Request blocked. Response: {result}")
             raise HTTPException(
                 status_code=400,  # Bad Request, indicating violation
                 detail={
@@ -163,7 +155,7 @@ class PangeaHandler(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: str
+        call_type: str,
     ):
         transformer = None
         messages: Any = None
@@ -175,32 +167,24 @@ class PangeaHandler(CustomGuardrail):
 
         ai_guard_payload = {
             "debug": False,
-            "input": {
-                "messages": messages,  # type: ignore
-                "tools": data.get("tools")
-            },
+            "input": {"messages": messages, "tools": data.get("tools")},  # type: ignore
             "event_type": "input",
         }
         if self.pangea_input_recipe:
             ai_guard_payload["recipe"] = self.pangea_input_recipe
 
-        ai_guard_response = await self._call_pangea_ai_guard(
-            "v1beta/guard", ai_guard_payload, "async_pre_call_hook"
-        )
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        ai_guard_response = await self._call_pangea_ai_guard("v1beta/guard", ai_guard_payload, "async_pre_call_hook")
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
         if not ai_guard_response.get("result", {}).get("transformed"):
             return
 
         output = ai_guard_response.get("result", {}).get("output", {})
         if call_type == "text_completion" or call_type == "atext_completion":
-            data = transformer.update_original_body(output["messages"]) # type: ignore
+            data = transformer.update_original_body(output["messages"])  # type: ignore
         else:
             data["messages"] = output["messages"]
         return data
-
 
     @log_guardrail_information
     async def async_pre_call_hook(
@@ -228,7 +212,7 @@ class PangeaHandler(CustomGuardrail):
                     "error": "Error in Pangea Guardrail",
                     "guardrail_name": self.guardrail_name,
                     "exceptions": str(e),
-                }
+                },
             ) from e
 
     async def _async_post_call_success_hook(
@@ -241,10 +225,13 @@ class PangeaHandler(CustomGuardrail):
         if isinstance(response, TextCompletionResponse):
             # Assume the earlier call type as well
             input_messages = _TextCompletionRequest(data).get_messages()
-        if not isinstance(response, ModelResponse):
-            return
+        elif isinstance(response, ModelResponse):
+            messages = data.get("messages")
+            if messages is None:
+                return  # No messages to check
+            input_messages = cast(List[Dict[Any, Any]], messages)
         else:
-            input_messages = data.get("messages")
+            return
 
         if choices := response.get("choices"):
             if isinstance(choices, list):
@@ -272,12 +259,8 @@ class PangeaHandler(CustomGuardrail):
         if self.pangea_output_recipe:
             ai_guard_payload["recipe"] = self.pangea_output_recipe
 
-        ai_guard_response = await self._call_pangea_ai_guard(
-            "v1beta/guard", ai_guard_payload, "async_pre_call_hook"
-        )
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        ai_guard_response = await self._call_pangea_ai_guard("v1beta/guard", ai_guard_payload, "async_pre_call_hook")
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
         if not ai_guard_response.get("result", {}).get("transformed"):
             return
@@ -319,7 +302,7 @@ class PangeaHandler(CustomGuardrail):
                     "error": "Error in Pangea Guardrail",
                     "guardrail_name": self.guardrail_name,
                     "exceptions": str(e),
-                }
+                },
             ) from e
 
     @staticmethod
@@ -329,3 +312,10 @@ class PangeaHandler(CustomGuardrail):
         )
 
         return PangeaGuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]

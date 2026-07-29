@@ -29,9 +29,7 @@ class SpeechToCompletionBridgeHandler:
         super().__init__()
         self.transformation_handler = SpeechToCompletionBridgeTransformationHandler()
 
-    def validate_input_kwargs(
-        self, kwargs: dict
-    ) -> SpeechToCompletionBridgeHandlerInputKwargs:
+    def validate_input_kwargs(self, kwargs: dict) -> SpeechToCompletionBridgeHandlerInputKwargs:
         from litellm import LiteLLMLoggingObj
 
         model = kwargs.get("model")

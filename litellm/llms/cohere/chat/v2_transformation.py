@@ -7,7 +7,7 @@ import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.cohere import CohereV2ChatResponse
 from litellm.types.llms.openai import (
-    AllMessageValues, 
+    AllMessageValues,
     ChatCompletionToolCallChunk,
     ChatCompletionAnnotation,
     ChatCompletionAnnotationURLCitation,
@@ -120,6 +120,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             "stream",
             "temperature",
             "max_tokens",
+            "max_completion_tokens",
             "top_p",
             "frequency_penalty",
             "presence_penalty",
@@ -143,7 +144,9 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
                 optional_params["stream"] = value
             if param == "temperature":
                 optional_params["temperature"] = value
-            if param == "max_tokens":
+            if param == "max_tokens" and "max_completion_tokens" not in non_default_params:
+                optional_params["max_tokens"] = value
+            if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "n":
                 optional_params["num_generations"] = value
@@ -173,7 +176,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         Cohere v2 chat api is in openai format, so we can use the openai transform request function to transform the request.
         """
         data = super().transform_request(model, messages, optional_params, litellm_params, headers)
-        
+
         return data
 
     def transform_response(
@@ -193,9 +196,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         try:
             raw_response_json = raw_response.json()
         except Exception:
-            raise CohereError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise CohereError(message=raw_response.text, status_code=raw_response.status_code)
 
         try:
             cohere_v2_chat_response = CohereV2ChatResponse(**raw_response_json)  # type: ignore
@@ -205,20 +206,16 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         cohere_content = cohere_v2_chat_response["message"].get("content", None)
         if cohere_content is not None:
             model_response.choices[0].message.content = "".join(  # type: ignore
-                [
-                    content.get("text", "")
-                    for content in cohere_content
-                    if content is not None
-                ]
+                [content.get("text", "") for content in cohere_content if content is not None]
             )
 
         ## ADD CITATIONS AS ANNOTATIONS
         annotations: Optional[List[ChatCompletionAnnotation]] = None
         citations = None
-        
+
         if "message" in cohere_v2_chat_response and "citations" in cohere_v2_chat_response["message"]:
             citations = cohere_v2_chat_response["message"]["citations"]
-            
+
         if citations:
             annotations = self._translate_citations_to_openai_annotations(citations)
 
@@ -296,10 +293,10 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
     def _translate_citations_to_openai_annotations(self, citations: List[dict]) -> List[ChatCompletionAnnotation]:
         """
         Transform Cohere citations to OpenAI annotations format.
-        
+
         Creates separate annotations for each source in a citation, allowing multiple
         annotations with the same start/end index if they reference different sources.
-        
+
         Args:
             citations: List of Cohere citation objects with format:
                 {
@@ -318,40 +315,40 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
                         }
                     ]
                 }
-        
+
         Returns:
             List of OpenAI ChatCompletionAnnotation objects (one per source)
         """
         annotations: List[ChatCompletionAnnotation] = []
-        
+
         for citation in citations:
             start_index = citation.get("start", 0)
             end_index = citation.get("end", 0)
-            
+
             # Extract source information - loop through all sources
             sources = citation.get("sources", [])
             if not sources:
                 continue
-                
+
             # Create an annotation for each source
             for source in sources:
                 if source.get("type") == "document" and "document" in source:
                     document = source["document"]
                     title = document.get("title", "")
                     url = source.get("url") or f"source:{source.get('id', 'unknown')}"
-                    
+
                     url_citation: ChatCompletionAnnotationURLCitation = {
                         "start_index": start_index,
                         "end_index": end_index,
                         "title": title,
                         "url": url,
                     }
-                    
+
                     annotation: ChatCompletionAnnotation = {
                         "type": "url_citation",
                         "url_citation": url_citation,
                     }
-                    
+
                     annotations.append(annotation)
-        
+
         return annotations

@@ -1,18 +1,7 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import UserAgentActivity from "./user_agent_activity";
 import * as networking from "./networking";
-
-// Polyfill ResizeObserver for test environment
-beforeAll(() => {
-  if (typeof window !== "undefined" && !window.ResizeObserver) {
-    window.ResizeObserver = class ResizeObserver {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    } as any;
-  }
-});
 
 // Mock the networking module
 vi.mock("./networking", () => ({
@@ -135,8 +124,8 @@ describe("UserAgentActivity", () => {
 
     // Check that user agent cards are displayed
     await waitFor(() => {
-      expect(screen.getByText("Chrome/1.0")).toBeInTheDocument();
-      expect(screen.getByText("Firefox/2.0")).toBeInTheDocument();
+      expect(screen.getAllByText("Chrome/1.0").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Firefox/2.0").length).toBeGreaterThan(0);
     });
 
     // Check that metrics are displayed
@@ -191,5 +180,91 @@ describe("UserAgentActivity", () => {
     // The Ant Design Select component should be in the document with placeholder
     const selectElement = screen.getByText("All User Agents");
     expect(selectElement).toBeInTheDocument();
+  });
+
+  const getPanelForTitle = (title: string): HTMLElement => {
+    // Assumes two wrapper divs between the Tremor <Title> and the panel root; update if Tremor's TabPanel depth changes.
+    const panel = screen.getByText(title).closest("div")?.parentElement;
+    expect(panel).not.toBeNull();
+    return panel!;
+  };
+
+  const expectStackedTwoCategoryChart = (panel: HTMLElement, firstBucketLabel: string) => {
+    const chart = panel.querySelector('[data-slot="chart"]');
+    expect(chart).not.toBeNull();
+    expect(chart!.querySelectorAll(".recharts-bar")).toHaveLength(2);
+
+    const rectangles = Array.from(chart!.querySelectorAll("path.recharts-rectangle"));
+    const fills = new Set(rectangles.map((rect) => rect.getAttribute("fill")));
+    expect(fills).toEqual(new Set(["var(--color-blue-500, #3b82f6)", "var(--color-cyan-500, #06b6d4)"]));
+
+    const xPositions = new Set(rectangles.map((rect) => rect.getAttribute("d")?.match(/^M\s*([\d.]+)/)?.[1]));
+    expect(xPositions.size).toBe(1);
+
+    expect(chart!.textContent).toContain("Chrome/1.0");
+    expect(chart!.textContent).toContain("Firefox/2.0");
+    expect(chart!.textContent).toContain(firstBucketLabel);
+
+    const tickTexts = Array.from(chart!.querySelectorAll(".recharts-cartesian-axis-tick-value")).map(
+      (tick) => tick.textContent ?? "",
+    );
+    expect(tickTexts.some((tick) => /^\d+K$/.test(tick))).toBe(true);
+  };
+
+  it("renders the DAU chart stacked with default color cycle and abbreviated axis ticks", async () => {
+    const firstBucketDate = new Date();
+    firstBucketDate.setDate(firstBucketDate.getDate() - 6);
+    const todayStr = new Date().toISOString().split("T")[0];
+    mockTagDauCall.mockResolvedValue({
+      results: [
+        { tag: "User-Agent: Chrome/1.0", active_users: 4000, date: todayStr },
+        { tag: "User-Agent: Firefox/2.0", active_users: 2600, date: todayStr },
+      ],
+    });
+
+    render(<UserAgentActivity {...defaultProps} />);
+
+    const panel = getPanelForTitle("Daily Active Users - Last 7 Days");
+    await waitFor(() => {
+      expect(panel.querySelectorAll("path.recharts-rectangle")).toHaveLength(2);
+    });
+
+    expectStackedTwoCategoryChart(panel, firstBucketDate.toISOString().split("T")[0]);
+  });
+
+  it("renders the WAU chart stacked with week buckets and abbreviated axis ticks", async () => {
+    mockTagWauCall.mockResolvedValue({
+      results: [
+        { tag: "User-Agent: Chrome/1.0", active_users: 2000, date: "Week 3 (Jan 15)" },
+        { tag: "User-Agent: Firefox/2.0", active_users: 1500, date: "Week 3 (Jan 15)" },
+      ],
+    });
+
+    render(<UserAgentActivity {...defaultProps} />);
+
+    const panel = getPanelForTitle("Weekly Active Users - Last 7 Weeks");
+    await waitFor(() => {
+      expect(panel.querySelectorAll("path.recharts-rectangle")).toHaveLength(2);
+    });
+
+    expectStackedTwoCategoryChart(panel, "Week 1");
+  });
+
+  it("renders the MAU chart stacked with month buckets and abbreviated axis ticks", async () => {
+    mockTagMauCall.mockResolvedValue({
+      results: [
+        { tag: "User-Agent: Chrome/1.0", active_users: 5000, date: "Month 2 (Feb)" },
+        { tag: "User-Agent: Firefox/2.0", active_users: 3000, date: "Month 2 (Feb)" },
+      ],
+    });
+
+    render(<UserAgentActivity {...defaultProps} />);
+
+    const panel = getPanelForTitle("Monthly Active Users - Last 7 Months");
+    await waitFor(() => {
+      expect(panel.querySelectorAll("path.recharts-rectangle")).toHaveLength(2);
+    });
+
+    expectStackedTwoCategoryChart(panel, "Month 1");
   });
 });

@@ -4,7 +4,7 @@ This is a file for the AWS Secret Manager Integration
 Relevant issue: https://github.com/BerriAI/litellm/issues/1883
 
 Requires:
-* `os.environ["AWS_REGION_NAME"], 
+* `os.environ["AWS_REGION_NAME"],
 * `pip install boto3>=1.28.57`
 """
 
@@ -88,9 +88,7 @@ class AWSKeyManagementService_V2:
             raise ValueError("kms_client is None")
         encrypted_value = os.getenv(secret_name, None)
         if encrypted_value is None:
-            raise Exception(
-                "AWS KMS - Encrypted Value of Key={} is None".format(secret_name)
-            )
+            raise Exception("AWS KMS - Encrypted Value of Key={} is None".format(secret_name))
         if isinstance(encrypted_value, str) and encrypted_value.startswith("aws_kms/"):
             encrypted_value = encrypted_value.replace("aws_kms/", "")
 
@@ -130,11 +128,9 @@ def decrypt_env_var() -> Dict[str, Any]:
     # iterate through env - for `aws_kms/`
     new_values = {}
     for k, v in os.environ.items():
-        if (
-            k is not None
-            and isinstance(k, str)
-            and k.lower().startswith("litellm_secret_aws_kms")
-        ) or (v is not None and isinstance(v, str) and v.startswith("aws_kms/")):
+        if (k is not None and isinstance(k, str) and k.lower().startswith("litellm_secret_aws_kms")) or (
+            v is not None and isinstance(v, str) and v.startswith("aws_kms/")
+        ):
             decrypted_value = aws_kms.decrypt_value(secret_name=k)
             # reset env var
             k = re.sub("litellm_secret_aws_kms_", "", k, flags=re.IGNORECASE)

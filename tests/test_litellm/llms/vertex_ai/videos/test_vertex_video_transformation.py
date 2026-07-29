@@ -1,19 +1,21 @@
 """
 Tests for Vertex AI (Veo) video generation transformation.
 """
+
+import base64
 import json
 import os
-import pytest
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
+
 import httpx
-import base64
+import pytest
 
 from litellm.llms.vertex_ai.videos.transformation import (
     VertexAIVideoConfig,
     _convert_image_to_vertex_format,
 )
-from litellm.types.videos.main import VideoObject
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.videos.main import VideoObject
 
 
 class TestVertexAIVideoConfig:
@@ -34,20 +36,20 @@ class TestVertexAIVideoConfig:
         assert "seconds" in params
         assert "size" in params
 
-    @patch.object(VertexAIVideoConfig, 'get_access_token')
+    @patch.object(VertexAIVideoConfig, "get_access_token")
     def test_validate_environment(self, mock_get_access_token):
         """Test environment validation for Vertex AI."""
         # Mock the authentication
         mock_get_access_token.return_value = ("mock-access-token", "test-project")
-        
+
         headers = {}
         litellm_params = {"vertex_project": "test-project"}
-        
+
         result = self.config.validate_environment(
             headers=headers,
             model="veo-002",
             api_key=None,
-            litellm_params=litellm_params
+            litellm_params=litellm_params,
         )
 
         # Should add Authorization header
@@ -284,7 +286,7 @@ class TestVertexAIVideoConfig:
     def test_transform_video_status_retrieve_request(self):
         """Test transformation of video status retrieve request."""
         operation_name = "projects/test-project/locations/us-central1/publishers/google/models/veo-002/operations/12345"
-        
+
         # Provide an api_base that would be returned from get_complete_url
         api_base = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/veo-002"
 
@@ -435,9 +437,7 @@ class TestVertexAIVideoConfig:
             "done": False,
         }
 
-        with pytest.raises(
-            ValueError, match="Video generation is not complete yet"
-        ):
+        with pytest.raises(ValueError, match="Video generation is not complete yet"):
             self.config.transform_video_content_response(
                 raw_response=mock_response, logging_obj=self.mock_logging_obj
             )
@@ -456,11 +456,130 @@ class TestVertexAIVideoConfig:
                 raw_response=mock_response, logging_obj=self.mock_logging_obj
             )
 
+    def test_get_video_edit_prefetch_params(self):
+        """Test that prefetch params returns the fetchPredictOperation URL and body."""
+        operation_name = "projects/test-project/locations/us-central1/publishers/google/models/veo-3.1-generate-001/operations/op-123"
+        api_base = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models"
+
+        fetch_url, fetch_body = self.config.get_video_edit_prefetch_params(
+            video_id=operation_name,
+            api_base=api_base,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "fetchPredictOperation" in fetch_url
+        assert "veo-3.1-generate-001" in fetch_url
+        assert fetch_body == {"operationName": operation_name}
+
+    def test_transform_video_edit_request_with_bytes(self):
+        """Test video edit request builds predictLongRunning body from pre-fetched bytes."""
+        operation_name = "projects/test-project/locations/us-central1/publishers/google/models/veo-3.1-generate-001/operations/op-123"
+        api_base = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models"
+        fake_bytes = base64.b64encode(b"fake_video").decode()
+
+        prefetched = {
+            "done": True,
+            "response": {
+                "videos": [{"bytesBase64Encoded": fake_bytes, "mimeType": "video/mp4"}]
+            },
+        }
+
+        url, data = self.config.transform_video_edit_request(
+            prompt="Make it brighter",
+            video_id=operation_name,
+            api_base=api_base,
+            litellm_params=GenericLiteLLMParams(),
+            headers={"Authorization": "Bearer token"},
+            prefetched_source_data=prefetched,
+        )
+
+        assert url.endswith(":predictLongRunning")
+        assert "veo-3.1-generate-001" in url
+        instance = data["instances"][0]
+        assert instance["prompt"] == "Make it brighter"
+        assert instance["video"]["bytesBase64Encoded"] == fake_bytes
+        assert instance["video"]["mimeType"] == "video/mp4"
+
+    def test_transform_video_edit_request_with_gcs_uri(self):
+        """Test that gcsUri is used when present in source video."""
+        operation_name = "projects/test-project/locations/us-central1/publishers/google/models/veo-3.1-generate-001/operations/op-456"
+        api_base = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models"
+
+        prefetched = {
+            "done": True,
+            "response": {
+                "videos": [{"gcsUri": "gs://bucket/video.mp4", "mimeType": "video/mp4"}]
+            },
+        }
+
+        _, data = self.config.transform_video_edit_request(
+            prompt="Make it darker",
+            video_id=operation_name,
+            api_base=api_base,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+            prefetched_source_data=prefetched,
+        )
+
+        assert data["instances"][0]["video"] == {"gcsUri": "gs://bucket/video.mp4"}
+
+    def test_transform_video_edit_request_source_not_done_raises(self):
+        """Test that editing an in-progress video raises a clear error."""
+        operation_name = "projects/test-project/locations/us-central1/publishers/google/models/veo-3.1-generate-001/operations/op-789"
+        api_base = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models"
+
+        with pytest.raises(ValueError, match="not complete yet"):
+            self.config.transform_video_edit_request(
+                prompt="Make it brighter",
+                video_id=operation_name,
+                api_base=api_base,
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+                prefetched_source_data={"done": False},
+            )
+
+    def test_transform_video_edit_response(self):
+        """Test that edit response returns a processing VideoObject with encoded ID."""
+        operation_name = "projects/test-project/locations/us-central1/publishers/google/models/veo-3.1-generate-001/operations/new-op-123"
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {"name": operation_name}
+
+        video_obj = self.config.transform_video_edit_response(
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="vertex_ai",
+        )
+
+        assert isinstance(video_obj, VideoObject)
+        assert video_obj.status == "processing"
+        assert video_obj.id
+        assert video_obj.model == "veo-3.1-generate-001"
+
+    def test_transform_video_edit_response_includes_usage_for_cost(self):
+        """Edit responses include duration/resolution usage for spend accounting."""
+        operation_name = "projects/test-project/locations/us-central1/publishers/google/models/veo-3.1-generate-001/operations/new-op-123"
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {"name": operation_name}
+        request_data = {
+            "instances": [{"prompt": "Make it brighter", "video": {}}],
+            "parameters": {"durationSeconds": 8, "resolution": "1080p"},
+        }
+
+        video_obj = self.config.transform_video_edit_response(
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="vertex_ai",
+            request_data=request_data,
+        )
+
+        assert video_obj.usage is not None
+        assert video_obj.usage["duration_seconds"] == 8.0
+        assert video_obj.usage["video_resolution"] == "1080p"
+
     def test_transform_video_remix_request_not_supported(self):
         """Test that video remix raises NotImplementedError."""
-        with pytest.raises(
-            NotImplementedError, match="Video remix is not supported"
-        ):
+        with pytest.raises(NotImplementedError, match="Video remix is not supported"):
             self.config.transform_video_remix_request(
                 video_id="test-video-id",
                 prompt="new prompt",
@@ -480,9 +599,7 @@ class TestVertexAIVideoConfig:
 
     def test_transform_video_delete_request_not_supported(self):
         """Test that video delete raises NotImplementedError."""
-        with pytest.raises(
-            NotImplementedError, match="Video delete is not supported"
-        ):
+        with pytest.raises(NotImplementedError, match="Video delete is not supported"):
             self.config.transform_video_delete_request(
                 video_id="test-video-id",
                 api_base="https://example.com",
@@ -548,3 +665,172 @@ class TestConvertImageToVertexFormat:
         decoded = base64.b64decode(result["bytesBase64Encoded"])
         assert decoded == fake_image_data
 
+
+class TestImageAndParametersPassthrough:
+    """
+    Tests that image (gcsUri / bare gs:// / file-like) and a pre-built
+    parameters dict are correctly forwarded through map_openai_params and
+    transform_video_create_request.
+    """
+
+    def setup_method(self):
+        self.config = VertexAIVideoConfig()
+        self.api_base = (
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/"
+            "test-project/locations/us-central1/publishers/google/models/veo-002"
+        )
+
+    # ------------------------------------------------------------------ #
+    # map_openai_params                                                    #
+    # ------------------------------------------------------------------ #
+
+    def test_map_openai_params_passes_image_dict(self):
+        """image dict (gcsUri format) is forwarded as-is."""
+        image = {"gcsUri": "gs://my-bucket/boardwalk.jpg"}
+        mapped = self.config.map_openai_params(
+            video_create_optional_params={"image": image},
+            model="veo-002",
+            drop_params=False,
+        )
+        assert mapped["image"] == image
+
+    def test_map_openai_params_passes_parameters_dict(self):
+        """A pre-built parameters dict is forwarded as-is."""
+        params = {"sampleCount": 1, "videoLengthSeconds": 5, "aspectRatio": "16:9"}
+        mapped = self.config.map_openai_params(
+            video_create_optional_params={"parameters": params},
+            model="veo-002",
+            drop_params=False,
+        )
+        assert mapped["parameters"] == params
+
+    def test_map_openai_params_input_reference_takes_priority_over_image(self):
+        """input_reference wins over a directly passed image key."""
+        mock_file = Mock()
+        image_dict = {"gcsUri": "gs://my-bucket/other.jpg"}
+        mapped = self.config.map_openai_params(
+            video_create_optional_params={
+                "input_reference": mock_file,
+                "image": image_dict,
+            },
+            model="veo-002",
+            drop_params=False,
+        )
+        assert mapped["image"] is mock_file
+
+    # ------------------------------------------------------------------ #
+    # transform_video_create_request – image forms                        #
+    # ------------------------------------------------------------------ #
+
+    def test_transform_request_image_gcs_uri_dict(self):
+        """image passed as {"gcsUri": "gs://..."} is placed in instances as-is."""
+        image = {"gcsUri": "gs://my-bucket/boardwalk.jpg"}
+        data, _, url = self.config.transform_video_create_request(
+            model="veo-002",
+            prompt="Cinematic drone shot",
+            api_base=self.api_base,
+            video_create_optional_request_params={"image": image},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert data["instances"][0]["image"] == image
+        assert url.endswith(":predictLongRunning")
+
+    def test_transform_request_image_bare_gs_uri_string(self):
+        """A bare gs:// string is wrapped in {"gcsUri": ...} without downloading."""
+        gs_uri = "gs://my-bucket/boardwalk.jpg"
+        data, _, _ = self.config.transform_video_create_request(
+            model="veo-002",
+            prompt="Cinematic drone shot",
+            api_base=self.api_base,
+            video_create_optional_request_params={"image": gs_uri},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert data["instances"][0]["image"] == {"gcsUri": gs_uri}
+
+    def test_transform_request_image_bytes_base64_dict(self):
+        """image already in bytesBase64Encoded format is passed through unchanged."""
+        image = {"bytesBase64Encoded": "abc123", "mimeType": "image/jpeg"}
+        data, _, _ = self.config.transform_video_create_request(
+            model="veo-002",
+            prompt="Cinematic drone shot",
+            api_base=self.api_base,
+            video_create_optional_request_params={"image": image},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert data["instances"][0]["image"] == image
+
+    # ------------------------------------------------------------------ #
+    # transform_video_create_request – parameters dict                    #
+    # ------------------------------------------------------------------ #
+
+    def test_transform_request_parameters_dict_not_double_nested(self):
+        """A pre-built parameters dict becomes request_data["parameters"] directly."""
+        params = {"sampleCount": 1, "videoLengthSeconds": 5, "aspectRatio": "16:9"}
+        data, _, _ = self.config.transform_video_create_request(
+            model="veo-002",
+            prompt="Cinematic drone shot",
+            api_base=self.api_base,
+            video_create_optional_request_params={"parameters": params},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert data["parameters"] == params
+        # Must NOT be double-nested
+        assert "parameters" not in data["parameters"]
+
+    # ------------------------------------------------------------------ #
+    # Full user scenario                                                   #
+    # ------------------------------------------------------------------ #
+
+    def test_transform_request_full_user_scenario(self):
+        """
+        Reproduces the exact user request:
+            image: {"gcsUri": "gs://your-bucket-name/path/to/boardwalk.jpg"}
+            parameters: {"sampleCount": 1, "videoLengthSeconds": 5,
+                         "aspectRatio": "16:9", "storageUri": "gs://test/outputs/"}
+        """
+        image = {"gcsUri": "gs://your-bucket-name/path/to/boardwalk.jpg"}
+        parameters = {
+            "sampleCount": 1,
+            "videoLengthSeconds": 5,
+            "aspectRatio": "16:9",
+            "storageUri": "gs://test/outputs/",
+        }
+
+        # Simulate the full pipeline: map_openai_params → transform_video_create_request
+        mapped = self.config.map_openai_params(
+            video_create_optional_params={"image": image, "parameters": parameters},
+            model="veo-3.1-generate-preview",
+            drop_params=False,
+        )
+
+        data, _, url = self.config.transform_video_create_request(
+            model="veo-3.1-generate-preview",
+            prompt="Cinematic drone shot moving forward along the beach boardwalk",
+            api_base=self.api_base,
+            video_create_optional_request_params=mapped,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        # instances contains prompt + image
+        assert len(data["instances"]) == 1
+        instance = data["instances"][0]
+        assert (
+            instance["prompt"]
+            == "Cinematic drone shot moving forward along the beach boardwalk"
+        )
+        assert instance["image"] == image
+
+        # parameters block is correct and not double-nested
+        assert data["parameters"] == parameters
+        assert "parameters" not in data["parameters"]
+
+        assert url.endswith(":predictLongRunning")

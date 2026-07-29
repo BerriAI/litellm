@@ -10,7 +10,9 @@ if TYPE_CHECKING:
 
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
-    from litellm.proxy.guardrails.guardrail_hooks.prompt_security import PromptSecurityGuardrail
+    from litellm.proxy.guardrails.guardrail_hooks.prompt_security import (
+        PromptSecurityGuardrail,
+    )
 
     _prompt_security_callback = PromptSecurityGuardrail(
         api_base=litellm_params.api_base,

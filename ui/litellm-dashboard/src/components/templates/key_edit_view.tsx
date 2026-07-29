@@ -1,24 +1,42 @@
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import PolicySelector from "@/components/policies/PolicySelector";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput, Button as TremorButton } from "@tremor/react";
 import { Form, Input, Select, Switch, Tooltip } from "antd";
 import { useEffect, useState } from "react";
+import { rolesWithWriteAccess } from "../../utils/roles";
+import AgentSelector from "../agent_management/AgentSelector";
+import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
+import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
+import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
+import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
+import {
+  TagRateLimitEditor,
+  TagRateLimitEntry,
+  tagLimitsToRows,
+  tagRowsToLimits,
+} from "../key_team_helpers/TagRateLimitEditor";
+import { excludeProxyWideSentinel, hasAllModelsSentinel } from "../key_team_helpers/fetch_available_models_team_key";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
-import AgentSelector from "../agent_management/AgentSelector";
 import NotificationsManager from "../molecules/notifications_manager";
-import { fetchMCPAccessGroups, getPromptsList, modelAvailableCall, tagListCall } from "../networking";
+import { getPromptsList, modelAvailableCall, tagListCall } from "../networking";
 import { fetchTeamModels } from "../organisms/create_key_button";
 import NumericalInput from "../shared/numerical_input";
 import { Tag } from "../tag_management/types";
 import EditLoggingSettings from "../team/EditLoggingSettings";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
-import { InfoCircleOutlined } from "@ant-design/icons";
 
 interface KeyEditViewProps {
   keyData: KeyResponse;
@@ -34,7 +52,6 @@ interface KeyEditViewProps {
 // Add this helper function
 const getAvailableModelsForKey = (keyData: KeyResponse, teams: any[] | null): string[] => {
   // If no teams data is available, return empty array
-  console.log("getAvailableModelsForKey:", teams);
   if (!teams || !keyData.team_id) {
     return [];
   }
@@ -81,34 +98,41 @@ export function KeyEditView({
   userRole,
   premiumUser = false,
 }: KeyEditViewProps) {
+  const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const [form] = Form.useForm();
-  const [userModels, setUserModels] = useState<string[]>([]);
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   const team = teams?.find((team) => team.team_id === keyData.team_id);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
-  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
-  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>(
     Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
       : [],
   );
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(keyData.organization_id || null);
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(keyData.auto_rotate || false);
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
+  const [neverExpire, setNeverExpire] = useState<boolean>(!keyData.expires);
   const [isKeySaving, setIsKeySaving] = useState(false);
-
-  const fetchMcpAccessGroups = async () => {
-    if (!accessToken) return;
-    if (mcpAccessGroupsLoaded) return;
-    try {
-      const groups = await fetchMCPAccessGroups(accessToken);
-      setMcpAccessGroups(groups);
-      setMcpAccessGroupsLoaded(true);
-    } catch (error) {
-      console.error("Failed to fetch MCP access groups:", error);
-    }
-  };
+  const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>(
+    Array.isArray(keyData.budget_limits) ? keyData.budget_limits : [],
+  );
+  const [tagRateLimits, setTagRateLimits] = useState<TagRateLimitEntry[]>(
+    tagLimitsToRows(keyData.metadata?.tag_rpm_limit),
+  );
+  const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>(
+    keyData.budget_fallbacks && typeof keyData.budget_fallbacks === "object" ? keyData.budget_fallbacks : {},
+  );
+  const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
+  const { data: projects } = useProjects();
+  const { data: uiSettingsData } = useUISettings();
+  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
+  const hasProject = Boolean(keyData.project_id);
+  const projectDisplay = (() => {
+    if (!keyData.project_id) return null;
+    const project = projects?.find((p) => p.project_id === keyData.project_id);
+    return project?.project_alias ? `${project.project_alias} (${keyData.project_id})` : keyData.project_id;
+  })();
 
   useEffect(() => {
     const fetchModels = async () => {
@@ -119,11 +143,11 @@ export function KeyEditView({
           // Fetch user models if no team
           const model_available = await modelAvailableCall(accessToken, userID, userRole);
           const available_model_names = model_available["data"].map((element: { id: string }) => element.id);
-          setAvailableModels(available_model_names);
+          setAvailableModels(excludeProxyWideSentinel(available_model_names));
         } else if (team?.team_id) {
           // Fetch team models if team exists
           const models = await fetchTeamModels(userID, userRole, accessToken, team.team_id);
-          setAvailableModels(Array.from(new Set([...team.models, ...models])));
+          setAvailableModels(excludeProxyWideSentinel(Array.from(new Set([...team.models, ...models]))));
         }
       } catch (error) {
         console.error("Error fetching models:", error);
@@ -149,15 +173,16 @@ export function KeyEditView({
     form.setFieldValue("disabled_callbacks", disabledCallbacks);
   }, [form, disabledCallbacks]);
 
-  // Convert API budget duration to form format
+  // Normalize any legacy word-form budget duration to the canonical value the dropdown uses
   const getBudgetDuration = (duration: string | null) => {
     if (!duration) return null;
-    const durationMap: Record<string, string> = {
-      "24h": "daily",
-      "7d": "weekly",
-      "30d": "monthly",
+    const wordToCanonical: Record<string, string> = {
+      hourly: "1h",
+      daily: "24h",
+      weekly: "7d",
+      monthly: "30d",
     };
-    return durationMap[duration] || null;
+    return wordToCanonical[duration] ?? duration;
   };
 
   // Set initial form values
@@ -168,12 +193,14 @@ export function KeyEditView({
     metadata: formatMetadataForDisplay(stripTagsFromMetadata(keyData.metadata)),
     guardrails: keyData.metadata?.guardrails,
     disable_global_guardrails: keyData.metadata?.disable_global_guardrails || false,
+    throttle_on_budget_exceeded: keyData.metadata?.throttle_on_budget_exceeded || false,
     prompts: keyData.metadata?.prompts,
     tags: keyData.metadata?.tags,
     vector_stores: keyData.object_permission?.vector_stores || [],
     mcp_servers_and_groups: {
       servers: keyData.object_permission?.mcp_servers || [],
       accessGroups: keyData.object_permission?.mcp_access_groups || [],
+      toolsets: keyData.object_permission?.mcp_toolsets || [],
     },
     mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
     agents_and_groups: {
@@ -184,9 +211,13 @@ export function KeyEditView({
     disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
       : [],
+    access_group_ids: keyData.access_group_ids || [],
     auto_rotate: keyData.auto_rotate || false,
     ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
-    allowed_routes: keyData.allowed_routes,
+    allowed_routes:
+      Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
+        ? keyData.allowed_routes.join(", ")
+        : "",
   };
 
   useEffect(() => {
@@ -203,15 +234,21 @@ export function KeyEditView({
       mcp_servers_and_groups: {
         servers: keyData.object_permission?.mcp_servers || [],
         accessGroups: keyData.object_permission?.mcp_access_groups || [],
+        toolsets: keyData.object_permission?.mcp_toolsets || [],
       },
       mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
+      throttle_on_budget_exceeded: keyData.metadata?.throttle_on_budget_exceeded || false,
       logging_settings: extractLoggingSettings(keyData.metadata),
       disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
         ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
         : [],
+      access_group_ids: keyData.access_group_ids || [],
       auto_rotate: keyData.auto_rotate || false,
       ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
-      allowed_routes: keyData.allowed_routes,
+      allowed_routes:
+        Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
+          ? keyData.allowed_routes.join(", ")
+          : "",
     });
   }, [keyData, form]);
 
@@ -240,11 +277,80 @@ export function KeyEditView({
     fetchTags();
   }, [accessToken]);
 
-  console.log("premiumUser:", premiumUser);
-
   const handleSubmit = async (values: any) => {
     try {
       setIsKeySaving(true);
+
+      // Parse allowed_routes from comma-separated string to array
+      if (typeof values.allowed_routes === "string") {
+        const trimmedInput = values.allowed_routes.trim();
+        if (trimmedInput === "") {
+          values.allowed_routes = [];
+        } else {
+          values.allowed_routes = trimmedInput
+            .split(",")
+            .map((route: string) => route.trim())
+            .filter((route: string) => route.length > 0);
+        }
+      }
+      // If it's already an array (shouldn't happen, but handle it), keep as is
+
+      // Backend rejects non-empty allowed_routes from non-admins, so re-sending
+      // an unchanged value 403s a team admin. Set compare tolerates reorder.
+      const originalRoutesSet = new Set<string>(Array.isArray(keyData.allowed_routes) ? keyData.allowed_routes : []);
+      const submittedRoutesSet = new Set<string>(Array.isArray(values.allowed_routes) ? values.allowed_routes : []);
+      const allowedRoutesUnchanged =
+        originalRoutesSet.size === submittedRoutesSet.size &&
+        [...submittedRoutesSet].every((r) => originalRoutesSet.has(r));
+      if (allowedRoutesUnchanged) {
+        delete values.allowed_routes;
+      }
+
+      if (neverExpire) {
+        values.duration = null;
+      }
+
+      // Reconcile multi-window budget limits from the editor state, dropping
+      // incomplete entries (no max_budget). The backend treats any budget_limits
+      // in a /key/update request as an admin-only budget change, so re-sending
+      // the stored windows on an unrelated edit 403s a non-admin key owner
+      // (issue #33246). Only send the field when the user actually changed the
+      // windows, mirroring how allowed_routes is dropped above when unchanged:
+      // compare on (duration, cap), ignoring server-owned reset_at and order.
+      // Sending [] clears every window, so send it only when the user removed
+      // the last one; otherwise leave the field off (JSON.stringify drops the
+      // undefined key) so an unchanged or incomplete editor state never touches
+      // storage.
+      const windowSignature = (windows: Array<{ budget_duration: string; max_budget: number | null }> | undefined) =>
+        (windows ?? [])
+          .filter((w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined)
+          .map((w) => `${w.budget_duration}:${w.max_budget}`)
+          .sort()
+          .join("|");
+      const validWindows = budgetLimits.filter(
+        (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
+      );
+      const budgetLimitsUnchanged = windowSignature(keyData.budget_limits) === windowSignature(validWindows);
+      if (budgetLimitsUnchanged) {
+        // no-op: leave budget_limits off the payload
+      } else if (validWindows.length > 0) {
+        values.budget_limits = validWindows;
+      } else if (budgetLimits.length === 0) {
+        values.budget_limits = [];
+      }
+
+      // Always send the current per-tag limit map so removing every row
+      // clears the stored limits ({} overwrites the metadata field).
+      const { tag_rpm_limit } = tagRowsToLimits(tagRateLimits);
+      values.tag_rpm_limit = tag_rpm_limit;
+
+      const hadExistingFallbacks = keyData.budget_fallbacks != null && Object.keys(keyData.budget_fallbacks).length > 0;
+      if (Object.keys(budgetFallbacks).length > 0) {
+        values.budget_fallbacks = budgetFallbacks;
+      } else if (hadExistingFallbacks) {
+        values.budget_fallbacks = {};
+      }
+
       await onSubmit(values);
     } finally {
       setIsKeySaving(false);
@@ -265,7 +371,15 @@ export function KeyEditView({
           }
         >
           {({ getFieldValue, setFieldValue }) => {
-            const allowedRoutes = getFieldValue("allowed_routes") || [];
+            const allowedRoutesValue = getFieldValue("allowed_routes") || "";
+            // Convert string to array for checking
+            const allowedRoutes =
+              typeof allowedRoutesValue === "string" && allowedRoutesValue.trim() !== ""
+                ? allowedRoutesValue
+                    .split(",")
+                    .map((r: string) => r.trim())
+                    .filter((r: string) => r.length > 0)
+                : [];
             const isDisabled = allowedRoutes.includes("management_routes") || allowedRoutes.includes("info_routes");
             const models = getFieldValue("models") || [];
 
@@ -277,12 +391,23 @@ export function KeyEditView({
                   style={{ width: "100%" }}
                   disabled={isDisabled}
                   value={isDisabled ? [] : models}
-                  onChange={(value) => setFieldValue("models", value)}
+                  onChange={(value) => {
+                    if (value.includes("all-team-models")) {
+                      setFieldValue("models", ["all-team-models"]);
+                    } else if (value.includes("all-proxy-models")) {
+                      setFieldValue("models", ["all-proxy-models"]);
+                    } else {
+                      setFieldValue("models", value);
+                    }
+                  }}
                 >
-                  {/* Only show All Team Models if team has models */}
-                  {availableModels.length > 0 && <Select.Option value="all-team-models">All Team Models</Select.Option>}
+                  {keyData.team_id != null ? (
+                    team != null && <Select.Option value="all-team-models">All Team Models</Select.Option>
+                  ) : (
+                    <Select.Option value="all-proxy-models">All Proxy Models</Select.Option>
+                  )}
                   {availableModels.map((model) => (
-                    <Select.Option key={model} value={model}>
+                    <Select.Option key={model} value={model} disabled={hasAllModelsSentinel(models)}>
                       {model}
                     </Select.Option>
                   ))}
@@ -304,7 +429,15 @@ export function KeyEditView({
           shouldUpdate={(prevValues, currentValues) => prevValues.allowed_routes !== currentValues.allowed_routes}
         >
           {({ getFieldValue, setFieldValue }) => {
-            const allowedRoutes = getFieldValue("allowed_routes");
+            const allowedRoutesValue = getFieldValue("allowed_routes") || "";
+            // Convert string to array for getKeyTypeFromRoutes
+            const allowedRoutes =
+              typeof allowedRoutesValue === "string" && allowedRoutesValue.trim() !== ""
+                ? allowedRoutesValue
+                    .split(",")
+                    .map((r: string) => r.trim())
+                    .filter((r: string) => r.length > 0)
+                : [];
             const keyTypeValue = getKeyTypeFromRoutes(allowedRoutes);
 
             return (
@@ -316,31 +449,31 @@ export function KeyEditView({
                 onChange={(value) => {
                   switch (value) {
                     case "default":
-                      setFieldValue("allowed_routes", []);
+                      setFieldValue("allowed_routes", "");
                       break;
                     case "llm_api":
-                      setFieldValue("allowed_routes", ["llm_api_routes"]);
+                      setFieldValue("allowed_routes", "llm_api_routes");
                       break;
                     case "management":
-                      setFieldValue("allowed_routes", ["management_routes"]);
+                      setFieldValue("allowed_routes", "management_routes");
                       setFieldValue("models", []);
                       break;
                   }
                 }}
               >
-                <Select.Option value="default" label="Default">
+                <Select.Option value="default" label="Full Access">
                   <div style={{ padding: "4px 0" }}>
-                    <div style={{ fontWeight: 500 }}>Default</div>
+                    <div style={{ fontWeight: 500 }}>Full Access</div>
                     <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                      Can call LLM API + Management routes
+                      Can call all routes (AI APIs, Management, and read-only)
                     </div>
                   </div>
                 </Select.Option>
-                <Select.Option value="llm_api" label="LLM API">
+                <Select.Option value="llm_api" label="AI APIs">
                   <div style={{ padding: "4px 0" }}>
-                    <div style={{ fontWeight: 500 }}>LLM API</div>
+                    <div style={{ fontWeight: 500 }}>AI APIs</div>
                     <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                      Can call only LLM API routes (chat/completions, embeddings, etc.)
+                      Can call only AI API routes (chat/completions, embeddings, etc.)
                     </div>
                   </div>
                 </Select.Option>
@@ -358,16 +491,56 @@ export function KeyEditView({
         </Form.Item>
       </Form.Item>
 
+      <Form.Item
+        label={
+          <span>
+            Allowed Routes{" "}
+            <Tooltip title="List of allowed routes for the key (comma-separated). Can be specific routes (e.g., '/chat/completions') or route patterns (e.g., 'llm_api_routes', 'management_routes', '/keys/*'). Leave empty to allow all routes.">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="allowed_routes"
+      >
+        <Input placeholder="Enter allowed routes (comma-separated). Special values: llm_api_routes, management_routes. Examples: llm_api_routes, /chat/completions, /keys/*. Leave empty to allow all routes" />
+      </Form.Item>
+
       <Form.Item label="Max Budget (USD)" name="max_budget">
         <NumericalInput step={0.01} style={{ width: "100%" }} placeholder="Enter a numerical value" />
       </Form.Item>
 
       <Form.Item label="Reset Budget" name="budget_duration">
-        <Select placeholder="n/a">
-          <Select.Option value="daily">Daily</Select.Option>
-          <Select.Option value="weekly">Weekly</Select.Option>
-          <Select.Option value="monthly">Monthly</Select.Option>
-        </Select>
+        <BudgetDurationDropdown />
+      </Form.Item>
+
+      <Form.Item
+        label={
+          <span>
+            Budget Windows{" "}
+            <Tooltip title="Set multiple independent budget windows (e.g., hourly $10 AND monthly $200). Each window tracks spend separately and resets on its own schedule.">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+      >
+        <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
+      </Form.Item>
+
+      <Form.Item
+        label={
+          <span>
+            Budget Fallbacks{" "}
+            <Tooltip title="When a model exceeds its per-model budget, requests automatically reroute to fallback models instead of failing">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+      >
+        <BudgetFallbacksEditor
+          value={budgetFallbacks}
+          onChange={setBudgetFallbacks}
+          availableModels={availableModels}
+        />
       </Form.Item>
 
       <Form.Item label="TPM Limit" name="tpm_limit">
@@ -382,6 +555,21 @@ export function KeyEditView({
 
       <RateLimitTypeFormItem type="rpm" name="rpm_limit_type" showDetailedDescriptions={false} />
 
+      <Form.Item
+        label={
+          <span>
+            Throttle on budget exceeded{" "}
+            <Tooltip title="When this key exceeds its max budget, throttle its TPM/RPM to the globally configured percentage instead of blocking access entirely. Requires budget_exceeded_throttle_percentage in litellm_settings and a TPM/RPM limit on the key.">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="throttle_on_budget_exceeded"
+        valuePropName="checked"
+      >
+        <Switch checkedChildren="Yes" unCheckedChildren="No" />
+      </Form.Item>
+
       <Form.Item label="Max Parallel Requests" name="max_parallel_requests">
         <NumericalInput min={0} />
       </Form.Item>
@@ -394,6 +582,19 @@ export function KeyEditView({
         <Input.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
       </Form.Item>
 
+      <Form.Item
+        label={
+          <span>
+            Per-Tag Rate Limits{" "}
+            <Tooltip title="Scope rate limits to a request tag so each tag (e.g. a cell or group) gets its own RPM counter. Requests without a matching tag fall back to the key-level limit.">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+      >
+        <TagRateLimitEditor value={tagRateLimits} onChange={setTagRateLimits} />
+      </Form.Item>
+
       <Form.Item label="Guardrails" name="guardrails">
         {accessToken && (
           <GuardrailSelector
@@ -401,7 +602,7 @@ export function KeyEditView({
               form.setFieldValue("guardrails", v);
             }}
             accessToken={accessToken}
-            disabled={!premiumUser}
+            disabled={!canEditGuardrails}
           />
         )}
       </Form.Item>
@@ -418,7 +619,29 @@ export function KeyEditView({
         name="disable_global_guardrails"
         valuePropName="checked"
       >
-        <Switch disabled={!premiumUser} checkedChildren="Yes" unCheckedChildren="No" />
+        <Switch disabled={!canEditGuardrails} checkedChildren="Yes" unCheckedChildren="No" />
+      </Form.Item>
+
+      <Form.Item
+        label={
+          <span>
+            Policies{" "}
+            <Tooltip title="Apply policies to this key to control guardrails and other settings">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="policies"
+      >
+        {accessToken && (
+          <PolicySelector
+            onChange={(v) => {
+              form.setFieldValue("policies", v);
+            }}
+            accessToken={accessToken}
+            disabled={!premiumUser}
+          />
+        )}
       </Form.Item>
 
       <Form.Item label="Tags" name="tags">
@@ -450,6 +673,20 @@ export function KeyEditView({
             options={promptsList.map((name) => ({ value: name, label: name }))}
           />
         </Tooltip>
+      </Form.Item>
+
+      <Form.Item
+        label={
+          <span>
+            Access Groups{" "}
+            <Tooltip title="Assign access groups to this key. Access groups control which models, MCP servers, and agents this key can use">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="access_group_ids"
+      >
+        <AccessGroupSelector placeholder="Select access groups (optional)" />
       </Form.Item>
 
       <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
@@ -489,6 +726,7 @@ export function KeyEditView({
           value={form.getFieldValue("mcp_servers_and_groups")}
           accessToken={accessToken || ""}
           placeholder="Select MCP servers or access groups (optional)"
+          allowNoMcpServers
         />
       </Form.Item>
 
@@ -508,7 +746,9 @@ export function KeyEditView({
           <div className="mb-6">
             <MCPToolPermissions
               accessToken={accessToken || ""}
-              selectedServers={form.getFieldValue("mcp_servers_and_groups")?.servers || []}
+              selectedServers={(form.getFieldValue("mcp_servers_and_groups")?.servers || []).filter(
+                (s: string) => s !== NO_MCP_SERVERS_SENTINEL,
+              )}
               toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
               onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
             />
@@ -525,16 +765,71 @@ export function KeyEditView({
         />
       </Form.Item>
 
-      <Form.Item label="Team ID" name="team_id">
-        <Select placeholder="Select team" style={{ width: "100%" }}>
-          {/* Only show All Team Models if team has models */}
-          {teams?.map((team) => (
-            <Select.Option key={team.team_id} value={team.team_id}>
-              {`${team.team_alias} (${team.team_id})`}
-            </Select.Option>
-          ))}
+      <Form.Item
+        label={
+          <span>
+            Organization{" "}
+            <Tooltip title="The organization this key belongs to. Selecting an organization filters the available teams.">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="organization_id"
+      >
+        <OrganizationDropdown
+          organizations={organizations}
+          loading={isOrganizationsLoading}
+          disabled={userRole !== "Admin"}
+          onChange={(orgId) => {
+            setSelectedOrganizationId(orgId || null);
+            form.setFieldValue("team_id", undefined);
+          }}
+        />
+      </Form.Item>
+
+      <Form.Item
+        label="Team ID"
+        name="team_id"
+        help={enableProjectsUI && hasProject ? "Team is locked because this key belongs to a project" : undefined}
+      >
+        <Select
+          placeholder="Select team"
+          showSearch
+          disabled={enableProjectsUI && hasProject}
+          style={{ width: "100%" }}
+          onChange={(teamId) => {
+            const selectedTeam = teams?.find((t) => t.team_id === teamId) || null;
+            if (selectedTeam?.organization_id) {
+              setSelectedOrganizationId(selectedTeam.organization_id);
+              form.setFieldValue("organization_id", selectedTeam.organization_id);
+            } else if (!teamId) {
+              setSelectedOrganizationId(null);
+              form.setFieldValue("organization_id", undefined);
+            }
+          }}
+          filterOption={(input, option) => {
+            const filteredTeams = selectedOrganizationId
+              ? teams?.filter((t) => t.organization_id === selectedOrganizationId)
+              : teams;
+            const team = filteredTeams?.find((t) => t.team_id === option?.value);
+            if (!team) return false;
+            return team.team_alias?.toLowerCase().includes(input.toLowerCase()) ?? false;
+          }}
+        >
+          {(selectedOrganizationId ? teams?.filter((t) => t.organization_id === selectedOrganizationId) : teams)?.map(
+            (team) => (
+              <Select.Option key={team.team_id} value={team.team_id}>
+                {`${team.team_alias} (${team.team_id})`}
+              </Select.Option>
+            ),
+          )}
         </Select>
       </Form.Item>
+      {enableProjectsUI && hasProject && (
+        <Form.Item label="Project">
+          <Input value={projectDisplay ?? ""} disabled />
+        </Form.Item>
+      )}
       <Form.Item label="Logging Settings" name="logging_settings">
         <EditLoggingSettings
           value={form.getFieldValue("logging_settings")}
@@ -562,19 +857,13 @@ export function KeyEditView({
           onAutoRotationChange={setAutoRotationEnabled}
           rotationInterval={rotationInterval}
           onRotationIntervalChange={setRotationInterval}
+          neverExpire={neverExpire}
+          onNeverExpireChange={setNeverExpire}
         />
-        <Form.Item name="duration" hidden initialValue="">
-          <Input />
-        </Form.Item>
       </div>
 
       {/* Hidden form field for token */}
       <Form.Item name="token" hidden>
-        <Input />
-      </Form.Item>
-
-      {/* Hidden form field for allowed_routes */}
-      <Form.Item name="allowed_routes" hidden>
         <Input />
       </Form.Item>
 
@@ -591,7 +880,7 @@ export function KeyEditView({
         <Input />
       </Form.Item>
 
-      <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
+      <div className="sticky z-10 bg-white p-4 border-t border-gray-200 -bottom-6 -inset-x-6">
         <div className="flex justify-end items-center gap-2">
           <TremorButton variant="secondary" onClick={onCancel} disabled={isKeySaving}>
             Cancel

@@ -5,6 +5,7 @@ This test verifies the fix for issue #15740 where kwargs.pop() was removing
 the logging object before passing kwargs to internal acompletion() calls,
 causing duplicate spend log entries for non-OpenAI providers.
 """
+
 import asyncio
 import os
 import sys
@@ -69,7 +70,9 @@ async def test_async_no_duplicate_spend_logs():
             self.tracking_id = tracking_id
             self.log_count = 0
 
-        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        async def async_log_success_event(
+            self, kwargs, response_obj, start_time, end_time
+        ):
             # Only count logs for our specific test request
             litellm_call_id = kwargs.get("litellm_call_id", "")
             if litellm_call_id == self.tracking_id:
@@ -86,19 +89,33 @@ async def test_async_no_duplicate_spend_logs():
         # Pass our unique ID as litellm_call_id to track this specific request
         response = await litellm.aresponses(
             model="anthropic/claude-3-7-sonnet-latest",
-            input=[{
-                "role": "user",
-                "content": [{"type": "input_text", "text": "Hello"}],
-                "type": "message"
-            }],
+            input=[
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Hello"}],
+                    "type": "message",
+                }
+            ],
             instructions="You are a helpful assistant.",
             mock_response="Hello! I'm doing well.",
             litellm_call_id=test_request_id,
         )
 
-        # Wait for async logging to complete
+        # Yield to the event loop so the _client_async_logging_helper task
+        # (scheduled via asyncio.create_task in the @client decorator) runs first
+        # and initializes GLOBAL_LOGGING_WORKER on the current event loop.
+        # Without this, flush() may block on a stale queue from a previous test's loop.
+        await asyncio.sleep(0)
+
+        # Wait for async logging to complete. Use a timeout so that if the
+        # worker is on a stale event loop (common in CI), flush() doesn't hang
+        # indefinitely — the queue.join() inside flush() would never resolve.
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-        await GLOBAL_LOGGING_WORKER.flush()
+
+        try:
+            await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+        except asyncio.TimeoutError:
+            pass
         await asyncio.sleep(0.5)
 
         # Verify that log_success_event was called exactly once for our request

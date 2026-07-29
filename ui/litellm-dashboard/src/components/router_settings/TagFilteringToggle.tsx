@@ -1,5 +1,5 @@
 import React from "react";
-import { Switch } from "@tremor/react";
+import { Switch } from "antd";
 
 interface TagFilteringToggleProps {
   enabled: boolean;
@@ -7,11 +7,7 @@ interface TagFilteringToggleProps {
   onToggle: (enabled: boolean) => void;
 }
 
-const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({
-  enabled,
-  routerFieldsMetadata,
-  onToggle,
-}) => {
+const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({ enabled, routerFieldsMetadata, onToggle }) => {
   return (
     <div className="space-y-3 max-w-3xl">
       <div className="flex items-start justify-between">
@@ -36,15 +32,10 @@ const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({
             )}
           </p>
         </div>
-        <Switch
-          checked={enabled}
-          onChange={onToggle}
-          className="ml-4"
-        />
+        <Switch checked={enabled} onChange={onToggle} className="ml-4" />
       </div>
     </div>
   );
 };
 
 export default TagFilteringToggle;
-

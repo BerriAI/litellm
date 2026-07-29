@@ -57,18 +57,11 @@ class AmazonDeepSeekR1Config(AmazonLlamaConfig):
             json_mode,
         )
         prompt = cast(Optional[str], request_data.get("prompt"))
-        message_content = cast(
-            Optional[str], cast(Choices, response.choices[0]).message.get("content")
-        )
+        message_content = cast(Optional[str], cast(Choices, response.choices[0]).message.get("content"))
         if prompt and prompt.strip().endswith("<think>") and message_content:
             message_content_with_reasoning_token = "<think>" + message_content
-            reasoning, content = _parse_content_for_reasoning(
-                message_content_with_reasoning_token
-            )
-            provider_specific_fields = (
-                cast(Choices, response.choices[0]).message.provider_specific_fields
-                or {}
-            )
+            reasoning, content = _parse_content_for_reasoning(message_content_with_reasoning_token)
+            provider_specific_fields = cast(Choices, response.choices[0]).message.provider_specific_fields or {}
             if reasoning:
                 provider_specific_fields["reasoning_content"] = reasoning
 
@@ -96,9 +89,7 @@ class AmazonDeepseekR1ResponseIterator(BaseModelResponseIterator):
             typed_chunk = AmazonDeepSeekR1StreamingResponse(**chunk)  # type: ignore
             generated_content = typed_chunk["generation"]
             if generated_content == "</think>" and not self.has_finished_thinking:
-                verbose_logger.debug(
-                    "Deepseek r1: </think> received, setting has_finished_thinking to True"
-                )
+                verbose_logger.debug("Deepseek r1: </think> received, setting has_finished_thinking to True")
                 generated_content = ""
                 self.has_finished_thinking = True
 
@@ -115,16 +106,8 @@ class AmazonDeepseekR1ResponseIterator(BaseModelResponseIterator):
                     StreamingChoices(
                         finish_reason=typed_chunk["stop_reason"],
                         delta=Delta(
-                            content=(
-                                generated_content
-                                if self.has_finished_thinking
-                                else None
-                            ),
-                            reasoning_content=(
-                                generated_content
-                                if not self.has_finished_thinking
-                                else None
-                            ),
+                            content=(generated_content if self.has_finished_thinking else None),
+                            reasoning_content=(generated_content if not self.has_finished_thinking else None),
                         ),
                     )
                 ],

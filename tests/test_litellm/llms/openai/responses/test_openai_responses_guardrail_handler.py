@@ -17,20 +17,16 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from fastapi import HTTPException
+from openai.types.responses import ResponseFunctionToolCall
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
-from litellm.types.guardrails import GenericGuardrailAPIInputs
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.responses.main import (
-    GenericResponseOutputItem,
-    OutputFunctionToolCall,
-    OutputText,
-)
-from litellm.types.utils import CallTypes
+from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 
 class MockGuardrail(CustomGuardrail):
@@ -544,11 +540,11 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
     """Test tool call extraction functionality"""
 
     def test_extract_tool_call_from_function_call_output(self):
-        """Test extracting tool calls from OutputFunctionToolCall in response output"""
+        """Test extracting tool calls from ResponseFunctionToolCall in response output"""
         handler = OpenAIResponsesHandler()
 
         # Create output item matching the user's provided response structure
-        output_item = OutputFunctionToolCall(
+        output_item = ResponseFunctionToolCall(
             arguments='{"location":"Boston, MA","unit":"celsius"}',
             call_id="call_4SjsMeA6DUHwGKaE87ZojgOF",
             name="get_current_weather",
@@ -644,7 +640,7 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
             object="response",
             status="completed",
             output=[
-                OutputFunctionToolCall(
+                ResponseFunctionToolCall(
                     arguments='{"location":"Boston, MA","unit":"celsius"}',
                     call_id="call_4SjsMeA6DUHwGKaE87ZojgOF",
                     name="get_current_weather",
@@ -693,7 +689,7 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         )
 
         # Then extract from a tool call output
-        tool_call_output = OutputFunctionToolCall(
+        tool_call_output = ResponseFunctionToolCall(
             arguments='{"location":"Boston, MA","unit":"celsius"}',
             call_id="call_4SjsMeA6DUHwGKaE87ZojgOF",
             name="get_current_weather",
@@ -716,3 +712,525 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert texts_to_check[0] == "I'll check the weather for you"
         assert len(tool_calls_to_check) == 1
         assert tool_calls_to_check[0]["function"]["name"] == "get_current_weather"
+
+    def test_extract_text_from_basemodel_instance(self):
+        """Test extracting text from GenericResponseOutputItem as BaseModel instance
+
+        This test verifies that _extract_output_text_and_images correctly handles
+        GenericResponseOutputItem when passed as a Pydantic BaseModel instance
+        (not as a dict). This addresses the issue where isinstance(output_item, BaseModel)
+        was failing because the handler was importing BaseModel from openai instead of pydantic.
+        """
+        handler = OpenAIResponsesHandler()
+
+        # Create a proper GenericResponseOutputItem instance (Pydantic BaseModel)
+        output_item = GenericResponseOutputItem(
+            type="message",
+            id="msg_123",
+            status="completed",
+            role="assistant",
+            content=[
+                OutputText(
+                    type="output_text",
+                    text="Hi! My name is Ishaan.",
+                    annotations=[],
+                )
+            ],
+        )
+
+        texts_to_check: List[str] = []
+        images_to_check: List[str] = []
+        tool_calls_to_check: List[Any] = []
+        task_mappings: List[Tuple[int, int]] = []
+
+        # Extract text from the BaseModel instance
+        handler._extract_output_text_and_images(
+            output_item=output_item,
+            output_idx=0,
+            texts_to_check=texts_to_check,
+            images_to_check=images_to_check,
+            task_mappings=task_mappings,
+            tool_calls_to_check=tool_calls_to_check,
+        )
+
+        # Verify text was extracted correctly
+        assert len(texts_to_check) == 1
+        assert texts_to_check[0] == "Hi! My name is Ishaan."
+        assert len(task_mappings) == 1
+        assert task_mappings[0] == (0, 0)  # (output_idx, content_idx)
+        assert len(tool_calls_to_check) == 0  # No tool calls in this output
+
+    def test_extract_text_from_basemodel_with_multiple_content_items(self):
+        """Test extracting multiple text items from GenericResponseOutputItem BaseModel
+
+        This test verifies that the handler correctly processes a BaseModel instance
+        with multiple content items in the content array.
+        """
+        handler = OpenAIResponsesHandler()
+
+        # Create GenericResponseOutputItem with multiple content items
+        output_item = GenericResponseOutputItem(
+            type="message",
+            id="msg_456",
+            status="completed",
+            role="assistant",
+            content=[
+                OutputText(
+                    type="output_text",
+                    text="First paragraph.",
+                    annotations=[],
+                ),
+                OutputText(
+                    type="output_text",
+                    text="Second paragraph.",
+                    annotations=[],
+                ),
+                OutputText(
+                    type="output_text",
+                    text="Third paragraph.",
+                    annotations=[],
+                ),
+            ],
+        )
+
+        texts_to_check: List[str] = []
+        images_to_check: List[str] = []
+        tool_calls_to_check: List[Any] = []
+        task_mappings: List[Tuple[int, int]] = []
+
+        # Extract all text items
+        handler._extract_output_text_and_images(
+            output_item=output_item,
+            output_idx=0,
+            texts_to_check=texts_to_check,
+            images_to_check=images_to_check,
+            task_mappings=task_mappings,
+            tool_calls_to_check=tool_calls_to_check,
+        )
+
+        # Verify all text items were extracted
+        assert len(texts_to_check) == 3
+        assert texts_to_check[0] == "First paragraph."
+        assert texts_to_check[1] == "Second paragraph."
+        assert texts_to_check[2] == "Third paragraph."
+        assert len(task_mappings) == 3
+        assert task_mappings[0] == (0, 0)
+        assert task_mappings[1] == (0, 1)
+        assert task_mappings[2] == (0, 2)
+
+
+class MockPassThroughGuardrail(CustomGuardrail):
+    """Mock guardrail that passes through without blocking - for testing streaming fallback behavior"""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        """Simply return inputs unchanged"""
+        return inputs
+
+
+class TestOpenAIResponsesHandlerStreamingOutputProcessing:
+    """Test streaming output processing functionality"""
+
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_empty_output(self):
+        """Test that streaming response with empty output doesn't raise IndexError
+
+        This test verifies the fix for the bug where accessing model_response_choices[0]
+        would raise IndexError when the response.completed event has an empty output array.
+        """
+        handler = OpenAIResponsesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+
+        # Simulate a response.completed streaming event with empty output
+        responses_so_far = [
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_123",
+                    "output": [],  # Empty output - this was causing the IndexError
+                    "status": "completed",
+                },
+            }
+        ]
+
+        # This should not raise IndexError
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        # Should return the responses unchanged
+        assert result == responses_so_far
+
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_missing_output_key(self):
+        """Test that streaming response with missing output key doesn't raise IndexError
+
+        This test verifies the handler gracefully handles when the response dict
+        doesn't contain an 'output' key at all.
+        """
+        handler = OpenAIResponsesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+
+        # Simulate a response.completed streaming event with missing output key
+        responses_so_far = [
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_123",
+                    "status": "completed",
+                    # No 'output' key - get() will return []
+                },
+            }
+        ]
+
+        # This should not raise IndexError
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        # Should return the responses unchanged
+        assert result == responses_so_far
+
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_null_response(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+        responses_so_far = [{"type": "response.completed", "response": None}]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        assert result == responses_so_far
+
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_unrecognized_output_type(self):
+        """Test that streaming response with unrecognized output types doesn't raise IndexError
+
+        This test verifies the handler gracefully handles when output items are of
+        unrecognized types that _convert_response_output_to_choices skips over.
+        """
+        handler = OpenAIResponsesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+
+        # Simulate a response.completed streaming event with unrecognized output type
+        responses_so_far = [
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_123",
+                    "output": [
+                        {
+                            "type": "unknown_type",  # Unrecognized type
+                            "id": "item_123",
+                            "data": "some data",
+                        }
+                    ],
+                    "status": "completed",
+                },
+            }
+        ]
+
+        # This should not raise IndexError
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        # Should return the responses unchanged
+        assert result == responses_so_far
+
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_with_valid_output(self):
+        """Test that streaming response with valid output still works correctly"""
+        handler = OpenAIResponsesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+
+        # Simulate a response.completed streaming event with valid message output
+        responses_so_far = [
+            {
+                "type": "response.created",
+                "response": {"id": "resp_123"},
+            },
+            {
+                "type": "response.output_item.added",
+                "item": {"type": "message", "id": "msg_123"},
+            },
+            {
+                "type": "response.content_part.added",
+                "part": {"type": "output_text", "text": ""},
+            },
+            {
+                "type": "response.output_text.delta",
+                "delta": "Hello",
+            },
+            {
+                "type": "response.output_text.delta",
+                "delta": " world",
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_123",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_123",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [
+                                {"type": "output_text", "text": "Hello world"},
+                            ],
+                        }
+                    ],
+                    "status": "completed",
+                },
+            },
+        ]
+
+        # This should process successfully
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        # Should return the responses
+        assert result == responses_so_far
+
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_writes_back_guardrailed_text(self):
+        """Guardrailed text must be written back into the response.completed chunk in-place."""
+
+        class RewriteGuardrail(CustomGuardrail):
+            """Replaces '<TOKEN_1>' with 'john@example.com' to simulate PII unmasking."""
+
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[Any] = None,
+            ) -> GenericGuardrailAPIInputs:
+                texts = inputs.get("texts", [])
+                inputs["texts"] = [
+                    t.replace("<TOKEN_1>", "john@example.com") for t in texts
+                ]
+                return inputs
+
+        handler = OpenAIResponsesHandler()
+        guardrail = RewriteGuardrail(guardrail_name="test-rewrite")
+
+        responses_so_far = [
+            {"type": "response.output_text.delta", "delta": "send to "},
+            {"type": "response.output_text.delta", "delta": "<TOKEN_1>"},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_123",
+                    "model": "gpt-4o",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_123",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [
+                                {"type": "output_text", "text": "send to <TOKEN_1>"},
+                            ],
+                        }
+                    ],
+                    "status": "completed",
+                },
+            },
+        ]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        completed_chunk = next(
+            c
+            for c in result
+            if isinstance(c, dict) and c.get("type") == "response.completed"
+        )
+        output_text = completed_chunk["response"]["output"][0]["content"][0]["text"]
+        assert (
+            output_text == "send to john@example.com"
+        ), f"Expected PII token to be unmasked in response.completed output, got: {output_text!r}"
+
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_pass_through_unchanged(self):
+        """A pass-through guardrail must not modify the output text."""
+        handler = OpenAIResponsesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="pass-through")
+
+        original_text = "No PII here, just normal text."
+        responses_so_far = [
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_456",
+                    "model": "gpt-4o",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_456",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": original_text}],
+                        }
+                    ],
+                    "status": "completed",
+                },
+            }
+        ]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        output_text = result[-1]["response"]["output"][0]["content"][0]["text"]
+        assert output_text == original_text
+
+
+class TestGetStructuredMessages:
+    """Test the get_structured_messages method for Responses API handler."""
+
+    def test_should_convert_string_input_to_messages(self):
+        """Test that a simple string input is converted to OpenAI messages."""
+        handler = OpenAIResponsesHandler()
+        data = {"input": "What is the capital of France?"}
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        assert len(result) >= 1
+        found_user = False
+        for msg in result:
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                found_user = True
+                break
+        assert found_user, f"Expected a user message, got: {result}"
+
+    def test_should_convert_list_input_to_messages(self):
+        """Test that list input (ResponseInputParam) is converted to OpenAI messages."""
+        handler = OpenAIResponsesHandler()
+        data = {
+            "input": [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi there!"},
+                {"role": "user", "content": "How are you?"},
+            ]
+        }
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        assert len(result) >= 3
+
+    def test_should_include_instructions_as_system_message(self):
+        """Test that instructions are included as a system message."""
+        handler = OpenAIResponsesHandler()
+        data = {
+            "input": "Roll a d20",
+            "instructions": "You are a helpful dungeon master.",
+        }
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        has_system = any(
+            isinstance(msg, dict) and msg.get("role") == "system" for msg in result
+        )
+        assert has_system, f"Expected system message from instructions, got: {result}"
+
+    def test_should_return_none_when_no_input(self):
+        """Test that None is returned when input key is missing."""
+        handler = OpenAIResponsesHandler()
+        data = {"model": "gpt-4o"}
+        result = handler.get_structured_messages(data)
+        assert result is None
+
+    def test_should_return_none_for_none_input(self):
+        """Test that None is returned when input is explicitly None."""
+        handler = OpenAIResponsesHandler()
+        data = {"input": None}
+        result = handler.get_structured_messages(data)
+        assert result is None
+
+
+class ToolAppendingGuardrail(CustomGuardrail):
+    """Guardrail that appends a new function tool, mimicking a guardrail that
+    injects a retrieval/recovery tool the model can later call."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tools = list(inputs.get("tools") or [])
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": "injected_tool",
+                    "description": "injected by guardrail",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        )
+        inputs["tools"] = tools
+        return inputs
+
+
+class TestOpenAIResponsesHandlerToolInjection:
+    """A tool a guardrail injects must survive the write-back to Responses format."""
+
+    def test_merge_keeps_guardrail_appended_tool(self):
+        """_merge_tools_after_guardrail must not drop the extra appended tool."""
+        handler = OpenAIResponsesHandler()
+        original = [{"type": "function", "name": "a"}]
+        remapped = [
+            {"type": "function", "name": "a"},
+            {"type": "function", "name": "b"},
+        ]
+        merged = handler._merge_tools_after_guardrail(original, remapped)
+        assert [t["name"] for t in merged] == ["a", "b"]
+
+    @pytest.mark.asyncio
+    async def test_injected_tool_survives_when_request_already_has_tools(self):
+        """Regression: the merge dropped the injected tool whenever the request
+        already carried tools, so the model never saw it."""
+        handler = OpenAIResponsesHandler()
+        guardrail = ToolAppendingGuardrail(guardrail_name="test")
+
+        data = {
+            "input": [{"role": "user", "content": "hi", "type": "message"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+            "model": "gpt-4",
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        names = [t.get("name") for t in result["tools"]]
+        assert "get_weather" in names
+        assert "injected_tool" in names

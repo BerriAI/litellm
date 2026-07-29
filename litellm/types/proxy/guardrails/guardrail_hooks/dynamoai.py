@@ -10,11 +10,14 @@ from .base import GuardrailConfigModel
 
 class DynamoAIMessage(TypedDict):
     """Message structure for DynamoAI API"""
+
     role: str
     content: str
 
+
 class DynamoRequestMetadata(TypedDict):
     endUserId: Optional[str]
+
 
 class DynamoTextType(str, enum.Enum):
     MODEL_INPUT = "MODEL_INPUT"
@@ -37,6 +40,7 @@ class PolicyApplicableTo(str, enum.Enum):
 
 class DynamoAIRequest(TypedDict, total=False):
     """Request structure for DynamoAI /moderation/analyze endpoint"""
+
     messages: List[Dict[str, Any]]
     textType: Optional[DynamoTextType]
     policyIds: List[str]
@@ -47,6 +51,7 @@ class DynamoAIRequest(TypedDict, total=False):
 
 class PolicyInfo(TypedDict, total=False):
     """Policy information from DynamoAI response"""
+
     id: str
     name: str
     description: str
@@ -61,12 +66,14 @@ class PolicyInfo(TypedDict, total=False):
 
 class PolicyOutputs(TypedDict, total=False):
     """Outputs from the policy"""
+
     action: Literal["BLOCK", "WARN", "REDACT", "SANITIZE", "NONE"]
     message: Optional[str]
 
 
 class AppliedPolicyDto(TypedDict, total=False):
     """Applied policy details from DynamoAI response"""
+
     policy: PolicyInfo
     outputs: Optional[Dict[str, Any]]
     action: Optional[str]
@@ -74,6 +81,7 @@ class AppliedPolicyDto(TypedDict, total=False):
 
 class DynamoAIResponse(TypedDict, total=False):
     """Response structure from DynamoAI /moderation/analyze endpoint"""
+
     text: str
     textType: DynamoTextType
     finalAction: Literal["BLOCK", "WARN", "REDACT", "SANITIZE", "NONE"]
@@ -83,14 +91,14 @@ class DynamoAIResponse(TypedDict, total=False):
 
 class DynamoAIProcessedResult(TypedDict):
     """Processed result from DynamoAI guardrail check"""
+
     violations_detected: List[str]
     violation_details: Dict[str, Any]
 
 
-
 class DynamoAIGuardrailConfigModel(GuardrailConfigModel):
     """Configuration model for DynamoAI Guardrails"""
-    
+
     api_key: Optional[str] = Field(
         default=None,
         description="API key for DynamoAI Guardrails. If not provided, the `DYNAMOAI_API_KEY` environment variable is checked.",
@@ -111,8 +119,7 @@ class DynamoAIGuardrailConfigModel(GuardrailConfigModel):
         default=None,
         description="Name of the guardrail for identification in logs and traces.",
     )
-    
+
     @staticmethod
     def ui_friendly_name() -> str:
         return "DynamoAI Guardrails"
-

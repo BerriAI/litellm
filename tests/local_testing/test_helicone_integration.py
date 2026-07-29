@@ -132,26 +132,26 @@ def test_helicone_removes_otel_span_from_metadata():
     """
     from litellm.integrations.helicone import HeliconeLogger
     from unittest.mock import MagicMock
-    
+
     # Create a mock span object (similar to what OpenTelemetry would create)
     mock_span = MagicMock()
     mock_span.__class__.__name__ = "_Span"
-    
+
     # Create metadata with the problematic span object
     metadata = {
         "user_id": "test_user",
         "request_id": "test_request_123",
         "litellm_parent_otel_span": mock_span,  # This would cause JSON serialization error
-        "other_metadata": "some_value"
+        "other_metadata": "some_value",
     }
-    
+
     # Create HeliconeLogger instance
     logger = HeliconeLogger()
-    
+
     # Test the add_metadata_from_header method
     litellm_params = {"proxy_server_request": {"headers": {}}}
     result_metadata = logger.add_metadata_from_header(litellm_params, metadata)
-    
+
     # Verify that litellm_parent_otel_span was removed
     assert "litellm_parent_otel_span" not in result_metadata
     assert "user_id" in result_metadata
@@ -160,5 +160,7 @@ def test_helicone_removes_otel_span_from_metadata():
     assert result_metadata["user_id"] == "test_user"
     assert result_metadata["request_id"] == "test_request_123"
     assert result_metadata["other_metadata"] == "some_value"
-    
-    print("✅ Test passed: litellm_parent_otel_span was successfully removed from metadata")
+
+    print(
+        "✅ Test passed: litellm_parent_otel_span was successfully removed from metadata"
+    )

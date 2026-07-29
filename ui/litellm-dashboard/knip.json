@@ -1,0 +1,32 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": ["scripts/**/*.{ts,mjs}", "src/components/ui/**/*.{ts,tsx}"],
+  "project": ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}", "scripts/**/*.{ts,mjs}"],
+  "ignore": ["src/lib/http/schema.d.ts"],
+  "ignoreDependencies": [
+    "openapi-typescript",
+    "@headlessui/tailwindcss",
+    "@tailwindcss/forms",
+    "tailwindcss",
+    "tw-animate-css"
+  ],
+  "vitest": {
+    "config": ["vitest.config.ts"]
+  },
+  "rules": {
+    "files": "error",
+    "dependencies": "error",
+    "devDependencies": "error",
+    "optionalPeerDependencies": "error",
+    "unlisted": "error",
+    "binaries": "error",
+    "unresolved": "error",
+    "exports": "warn",
+    "nsExports": "warn",
+    "types": "warn",
+    "nsTypes": "warn",
+    "enumMembers": "warn",
+    "classMembers": "warn",
+    "duplicates": "warn"
+  }
+}

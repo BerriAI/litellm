@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cas
 import httpx
 from httpx import Headers, Response
 
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
@@ -42,9 +43,10 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         """Validate and prepare environment-specific headers and parameters."""
-        # Resolve api_key from environment if not provided
-        api_key = api_key or self.anthropic_model_info.get_api_key()
-        if api_key is None:
+        if api_base is None and isinstance(litellm_params, dict):
+            api_base = litellm_params.get("api_base")
+        auth_header = self.anthropic_model_info.get_auth_header(api_key, api_base)
+        if auth_header is None:
             raise ValueError(
                 "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
             )
@@ -52,8 +54,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             "accept": "application/json",
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
-            "x-api-key": api_key,
         }
+        _headers.update(auth_header)
         # Add beta header for message batches
         if "anthropic-beta" not in headers:
             headers["anthropic-beta"] = "message-batches-2024-09-24"
@@ -84,7 +86,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
     ) -> Union[bytes, str, Dict[str, Any]]:
         """
         Transform the batch creation request to Anthropic format.
-        
+
         Not currently implemented - placeholder to satisfy abstract base class.
         """
         raise NotImplementedError("Batch creation not yet implemented for Anthropic")
@@ -98,7 +100,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
     ) -> LiteLLMBatch:
         """
         Transform Anthropic MessageBatch creation response to LiteLLM format.
-        
+
         Not currently implemented - placeholder to satisfy abstract base class.
         """
         raise NotImplementedError("Batch creation not yet implemented for Anthropic")
@@ -112,18 +114,19 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
     ) -> str:
         """
         Get the complete URL for batch retrieval request.
-        
+
         Args:
             api_base: Base API URL (optional, will use default if not provided)
             batch_id: Batch ID to retrieve
             optional_params: Optional parameters
             litellm_params: LiteLLM parameters
-            
+
         Returns:
             Complete URL for Anthropic batch retrieval: {api_base}/v1/messages/batches/{batch_id}
         """
         api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
-        return f"{api_base.rstrip('/')}/v1/messages/batches/{batch_id}"
+        encoded_batch_id = encode_url_path_segment(batch_id, field_name="batch_id")
+        return f"{api_base.rstrip('/')}/v1/messages/batches/{encoded_batch_id}"
 
     def transform_retrieve_batch_request(
         self,
@@ -133,7 +136,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
     ) -> Union[bytes, str, Dict[str, Any]]:
         """
         Transform batch retrieval request for Anthropic.
-        
+
         For Anthropic, the URL is constructed by get_retrieve_batch_url(),
         so this method returns an empty dict (no additional request params needed).
         """
@@ -156,9 +159,21 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         # Map Anthropic MessageBatch to OpenAI Batch format
         batch_id = response_data.get("id", "")
         processing_status = response_data.get("processing_status", "in_progress")
-        
+
         # Map Anthropic processing_status to OpenAI status
-        status_mapping: Dict[str, Literal["validating", "failed", "in_progress", "finalizing", "completed", "expired", "cancelling", "cancelled"]] = {
+        status_mapping: Dict[
+            str,
+            Literal[
+                "validating",
+                "failed",
+                "in_progress",
+                "finalizing",
+                "completed",
+                "expired",
+                "cancelling",
+                "cancelled",
+            ],
+        ] = {
             "in_progress": "in_progress",
             "canceling": "cancelling",
             "ended": "completed",
@@ -171,7 +186,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
                 return None
             try:
                 from datetime import datetime
-                dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+
+                dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                 return int(dt.timestamp())
             except Exception:
                 return None
@@ -185,14 +201,17 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         # Extract request counts
         request_counts_data = response_data.get("request_counts", {})
         from openai.types.batch import BatchRequestCounts
+
         request_counts = BatchRequestCounts(
-            total=sum([
-                request_counts_data.get("processing", 0),
-                request_counts_data.get("succeeded", 0),
-                request_counts_data.get("errored", 0),
-                request_counts_data.get("canceled", 0),
-                request_counts_data.get("expired", 0),
-            ]),
+            total=sum(
+                [
+                    request_counts_data.get("processing", 0),
+                    request_counts_data.get("succeeded", 0),
+                    request_counts_data.get("errored", 0),
+                    request_counts_data.get("canceled", 0),
+                    request_counts_data.get("expired", 0),
+                ]
+            ),
             completed=request_counts_data.get("succeeded", 0),
             failed=request_counts_data.get("errored", 0),
         )
@@ -214,8 +233,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             completed_at=ended_at if processing_status == "ended" else None,
             failed_at=None,
             expired_at=archived_at if archived_at else None,
-            cancelling_at=cancel_initiated_at if processing_status == "canceling" else None,
-            cancelled_at=ended_at if processing_status == "canceling" and ended_at else None,
+            cancelling_at=(cancel_initiated_at if processing_status == "canceling" else None),
+            cancelled_at=(ended_at if processing_status == "canceling" and ended_at else None),
             request_counts=request_counts,
             metadata={},
         )
@@ -265,17 +284,13 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
                     response_json = json.loads(line)
                     # Update model_response with the parsed JSON
                     completion_response = response_json["result"]["message"]
-                    transformed_response = (
-                        self.anthropic_chat_config.transform_parsed_response(
-                            completion_response=completion_response,
-                            raw_response=raw_response,
-                            model_response=model_response,
-                        )
+                    transformed_response = self.anthropic_chat_config.transform_parsed_response(
+                        completion_response=completion_response,
+                        raw_response=raw_response,
+                        model_response=model_response,
                     )
 
-                    transformed_response_usage = getattr(
-                        transformed_response, "usage", None
-                    )
+                    transformed_response_usage = getattr(transformed_response, "usage", None)
                     if transformed_response_usage:
                         all_usage.append(cast(Usage, transformed_response_usage))
                 except json.JSONDecodeError:

@@ -6,7 +6,10 @@ This module provides the configuration for GitHub Copilot's Embedding API.
 Implementation based on analysis of the copilot-api project by caozhiyuan:
 https://github.com/caozhiyuan/copilot-api
 """
+
 from typing import TYPE_CHECKING, Any, Optional
+
+import os
 
 import httpx
 
@@ -20,7 +23,7 @@ from litellm.utils import convert_to_model_response_object
 from ..authenticator import Authenticator
 from ..common_utils import (
     GetAPIKeyError,
-    GITHUB_COPILOT_API_BASE,
+    DEFAULT_GITHUB_COPILOT_API_BASE,
     get_copilot_default_headers,
 )
 
@@ -73,9 +76,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
             # Merge with existing headers (user's extra_headers take priority)
             merged_headers = {**default_headers, **headers}
 
-            verbose_logger.debug(
-                f"GitHub Copilot Embedding API: Successfully configured headers for model {model}"
-            )
+            verbose_logger.debug(f"GitHub Copilot Embedding API: Successfully configured headers for model {model}")
 
             return merged_headers
 
@@ -99,17 +100,18 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         Get the complete URL for GitHub Copilot Embedding API endpoint.
         """
         # Use provided api_base or fall back to authenticator's base or default
-        api_base = (
-            self.authenticator.get_api_base()
-            or api_base
-            or GITHUB_COPILOT_API_BASE
+        effective_api_base = (
+            api_base
+            or self.authenticator.get_api_base()
+            or os.getenv("GITHUB_COPILOT_API_BASE")
+            or DEFAULT_GITHUB_COPILOT_API_BASE
         )
 
         # Remove trailing slashes
-        api_base = api_base.rstrip("/")
+        effective_api_base = effective_api_base.rstrip("/")
 
         # Return the embeddings endpoint
-        return f"{api_base}/embeddings"
+        return f"{effective_api_base}/embeddings"
 
     def transform_embedding_request(
         self,
@@ -121,7 +123,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         Transform embedding request to GitHub Copilot format.
         """
-        
+
         # Ensure input is a list
         if isinstance(input, str):
             input = [input]
@@ -151,10 +153,10 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         Transform embedding response from GitHub Copilot format.
         """
         logging_obj.post_call(original_response=raw_response.text)
-        
+
         # GitHub Copilot returns standard OpenAI-compatible embedding response
         response_json = raw_response.json()
-        
+
         return convert_to_model_response_object(
             response_object=response_json,
             model_response_object=model_response,
@@ -181,12 +183,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
                 optional_params[param] = value
         return optional_params
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Any
-    ) -> Any:
+    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> Any:
         from litellm.llms.openai.openai import OpenAIConfig
 
-        return OpenAIConfig().get_error_class(
-            error_message=error_message, status_code=status_code, headers=headers
-        )
-
+        return OpenAIConfig().get_error_class(error_message=error_message, status_code=status_code, headers=headers)

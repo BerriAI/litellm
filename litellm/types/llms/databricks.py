@@ -43,9 +43,7 @@ class DatabricksReasoningContent(TypedDict, total=False):
     citations: Optional[List[Dict[str, Any]]]
 
 
-AllDatabricksContentListValues = Union[
-    DatabricksTextContent, DatabricksReasoningContent
-]
+AllDatabricksContentListValues = Union[DatabricksTextContent, DatabricksReasoningContent]
 
 AllDatabricksContentValues = Union[str, List[AllDatabricksContentListValues]]
 

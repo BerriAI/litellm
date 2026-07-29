@@ -9,6 +9,7 @@ Custom implementation with zero external dependencies.
 Supported syntax:
 - "field" - top-level field
 - "parent.child" - nested field
+- "parent\\.with\\.dots.child" - keys containing dots (escape with backslash)
 - "array[*]" - all array elements (wildcard)
 - "array[0]" - specific array element (index)
 - "array[*].field" - field in all array elements
@@ -27,9 +28,7 @@ from typing import Any, Dict, List, Optional, TypeVar, Union
 T = TypeVar("T")
 
 
-def get_nested_value(
-    data: Dict[str, Any], key_path: str, default: Optional[T] = None
-) -> Optional[T]:
+def get_nested_value(data: Dict[str, Any], key_path: str, default: Optional[T] = None) -> Optional[T]:
     """
     Retrieves a value from a nested dictionary using dot notation.
 
@@ -47,19 +46,21 @@ def get_nested_value(
         'value'
         >>> get_nested_value(data, "a.b.d", "default")
         'default'
+        >>> data = {"kubernetes.io": {"namespace": "default"}}
+        >>> get_nested_value(data, "kubernetes\\.io.namespace")
+        'default'
     """
     if not key_path:
         return default
 
     # Remove metadata. prefix if it exists
-    key_path = (
-        key_path.replace("metadata.", "", 1)
-        if key_path.startswith("metadata.")
-        else key_path
-    )
+    key_path = key_path.replace("metadata.", "", 1) if key_path.startswith("metadata.") else key_path
 
-    # Split the key path into parts
-    parts = key_path.split(".")
+    # Split the key path into parts, respecting escaped dots (\.)
+    # Use a temporary placeholder, split on unescaped dots, then restore
+    placeholder = "\x00"
+    parts = key_path.replace("\\.", placeholder).split(".")
+    parts = [p.replace(placeholder, ".") for p in parts]
 
     # Traverse through the dictionary
     current: Any = data
@@ -100,7 +101,7 @@ def _parse_path_segments(path: str) -> list:
 
     # Match field names OR bracket expressions
     # Pattern: field_name (anything except . or [) | [anything_in_brackets]
-    pattern = r'[^\.\[]+|\[[^\]]*\]'
+    pattern = r"[^\.\[]+|\[[^\]]*\]"
     segments = re.findall(pattern, path)
     return segments
 

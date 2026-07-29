@@ -1,0 +1,74 @@
+# Singapore PDPA Section 26 — Transfer Limitation Obligation
+# Blocks requests to transfer Singapore personal data overseas
+# without adequate protections or binding legal agreements.
+# Reference: https://www.pdpc.gov.sg/overview-of-pdpa/the-legislation/personal-data-protection-act
+category_name: "sg_pdpa_data_transfer"
+description: "PDPA s.26 — Blocks unprotected overseas transfer of Singapore personal data without adequate safeguards"
+default_action: "BLOCK"
+
+identifier_words:
+  # Singapore data context
+  - "Singapore personal data"
+  - "Singaporean data"
+  - "Singapore user data"
+  - "Singapore customer data"
+  - "SG user records"
+  - "SG resident data"
+  - "PDPA data"
+  - "Singapore employee data"
+  # PDPA alone implies Singapore regulatory context
+  - "PDPA"
+
+additional_block_words:
+  # Transfer actions
+  - "transfer overseas"
+  - "transfer abroad"
+  - "send overseas"
+  - "send offshore"
+  - "export"
+  - "move to server"
+  - "replicate to"
+  - "sync to"
+  - "migrate to"
+  - "copy to"
+
+  # Inadequate protection
+  - "without protection"
+  - "without agreement"
+  - "without safeguards"
+  - "unprotected transfer"
+  - "unencrypted"
+  - "no safeguards"
+  - "no agreement"
+  - "without PDPA"
+
+  # Storage locations
+  - "backup to foreign"
+  - "store offshore"
+  - "cloud without"
+
+always_block_keywords:
+  - keyword: "transfer Singapore data without PDPA compliance"
+    severity: "high"
+  - keyword: "send personal data overseas unencrypted"
+    severity: "high"
+  - keyword: "bypass transfer limitation"
+    severity: "high"
+  - keyword: "export Singapore data without safeguards"
+    severity: "high"
+  - keyword: "move Singapore user data offshore unprotected"
+    severity: "high"
+
+exceptions:
+  - "binding corporate rules"
+  - "data processing agreement"
+  - "adequacy decision"
+  - "explicit consent"
+  - "PDPA compliant"
+  - "model contractual clauses"
+  - "encrypted transfer"
+  - "standard contractual clauses"
+  - "explain"
+  - "what is"
+  - "how to comply"
+  - "compliance review"

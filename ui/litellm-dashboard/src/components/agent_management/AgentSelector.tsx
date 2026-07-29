@@ -10,12 +10,9 @@ interface Agent {
 }
 
 interface AgentSelectorProps {
-  onChange: (selected: { 
-    agents: string[]; 
-    accessGroups: string[];
-  }) => void;
-  value?: { 
-    agents: string[]; 
+  onChange: (selected: { agents: string[]; accessGroups: string[] }) => void;
+  value?: {
+    agents: string[];
     accessGroups: string[];
   };
   className?: string;
@@ -44,7 +41,7 @@ const AgentSelector: React.FC<AgentSelectorProps> = ({
         const response = await getAgentsList(accessToken);
         let agentsList = response?.agents || [];
         setAgents(agentsList);
-        
+
         // Extract unique access groups from agents
         const groups = new Set<string>();
         agentsList.forEach((agent: Agent) => {
@@ -80,17 +77,12 @@ const AgentSelector: React.FC<AgentSelectorProps> = ({
   ];
 
   // Flatten value for Select
-  const selectedValues = [
-    ...(value?.agents || []),
-    ...(value?.accessGroups || []).map((g) => `group:${g}`),
-  ];
+  const selectedValues = [...(value?.agents || []), ...(value?.accessGroups || []).map((g) => `group:${g}`)];
 
   // Handle selection
   const handleChange = (selected: string[]) => {
     const agentsSelected = selected.filter((v) => !v.startsWith("group:"));
-    const accessGroupsSelected = selected
-      .filter((v) => v.startsWith("group:"))
-      .map((v) => v.replace("group:", ""));
+    const accessGroupsSelected = selected.filter((v) => v.startsWith("group:")).map((v) => v.replace("group:", ""));
     onChange({ agents: agentsSelected, accessGroups: accessGroupsSelected });
   };
 
@@ -103,6 +95,7 @@ const AgentSelector: React.FC<AgentSelectorProps> = ({
         value={selectedValues}
         loading={loading}
         className={className}
+        allowClear
         showSearch
         style={{ width: "100%" }}
         disabled={disabled}
@@ -144,4 +137,3 @@ const AgentSelector: React.FC<AgentSelectorProps> = ({
 };
 
 export default AgentSelector;
-

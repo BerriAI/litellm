@@ -2,6 +2,7 @@
 Helper functions to query prometheus API
 """
 
+import json
 import time
 from datetime import datetime, timedelta
 from typing import Optional
@@ -15,9 +16,7 @@ from litellm.llms.custom_httpx.http_handler import (
 
 PROMETHEUS_URL: Optional[str] = get_secret("PROMETHEUS_URL")  # type: ignore
 PROMETHEUS_SELECTED_INSTANCE: Optional[str] = get_secret("PROMETHEUS_SELECTED_INSTANCE")  # type: ignore
-async_http_handler = get_async_httpx_client(
-    llm_provider=httpxSpecialProvider.LoggingCallback
-)
+async_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
 
 async def get_metric_from_prometheus(
@@ -25,9 +24,7 @@ async def get_metric_from_prometheus(
 ):
     # Get the start of the current day in Unix timestamp
     if PROMETHEUS_URL is None:
-        raise ValueError(
-            "PROMETHEUS_URL not set please set 'PROMETHEUS_URL=<>' in .env"
-        )
+        raise ValueError("PROMETHEUS_URL not set please set 'PROMETHEUS_URL=<>' in .env")
 
     query = f"{metric_name}[24h]"
     now = int(time.time())
@@ -81,6 +78,24 @@ def is_prometheus_connected() -> bool:
     return False
 
 
+def _quote_promql_string_literal(value: str) -> str:
+    """Render ``value`` as a PromQL double-quoted string literal.
+
+    PromQL string literals follow Go's escape rules
+    (https://prometheus.io/docs/prometheus/latest/querying/basics/): a
+    backslash begins an escape sequence and a bare ``"`` ends the literal.
+    Without escaping, callers that accept arbitrary user-supplied values
+    (like the ``api_key`` filter on ``/global/spend/logs``) can inject extra
+    label matchers or selectors and read cross-tenant metrics.
+
+    JSON's quoting rules are a strict subset of Go's, so ``json.dumps`` of
+    a Python string produces a literal Prometheus accepts: ``\\``, ``\\"``,
+    and the standard ``\\n`` / ``\\t`` / ``\\uNNNN`` control-character
+    escapes. The returned value already includes the surrounding quotes.
+    """
+    return json.dumps(value, ensure_ascii=False)
+
+
 async def get_daily_spend_from_prometheus(api_key: Optional[str]):
     """
     Expected Response Format:
@@ -92,9 +107,7 @@ async def get_daily_spend_from_prometheus(api_key: Optional[str]):
     ...]
     """
     if PROMETHEUS_URL is None:
-        raise ValueError(
-            "PROMETHEUS_URL not set please set 'PROMETHEUS_URL=<>' in .env"
-        )
+        raise ValueError("PROMETHEUS_URL not set please set 'PROMETHEUS_URL=<>' in .env")
 
     # Calculate the start and end dates for the last 30 days
     end_date = datetime.utcnow()
@@ -109,9 +122,8 @@ async def get_daily_spend_from_prometheus(api_key: Optional[str]):
     if api_key is None:
         query = "sum(delta(litellm_spend_metric_total[1d]))"
     else:
-        query = (
-            f'sum(delta(litellm_spend_metric_total{{hashed_api_key="{api_key}"}}[1d]))'
-        )
+        quoted_api_key = _quote_promql_string_literal(api_key)
+        query = f"sum(delta(litellm_spend_metric_total{{hashed_api_key={quoted_api_key}}}[1d]))"
 
     params = {
         "query": query,

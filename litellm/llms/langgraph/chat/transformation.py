@@ -65,11 +65,7 @@ class LangGraphConfig(BaseConfig):
         """
         from litellm.secret_managers.main import get_secret_str
 
-        api_base = (
-            api_base
-            or get_secret_str("LANGGRAPH_API_BASE")
-            or "http://localhost:2024"
-        )
+        api_base = api_base or get_secret_str("LANGGRAPH_API_BASE") or "http://localhost:2024"
 
         api_key = api_key or get_secret_str("LANGGRAPH_API_KEY")
 
@@ -139,16 +135,16 @@ class LangGraphConfig(BaseConfig):
                 return parts[1]
         return model
 
-    def _convert_messages_to_langgraph_format(
-        self, messages: List[AllMessageValues]
-    ) -> List[Dict[str, str]]:
+    def _convert_messages_to_langgraph_format(self, messages: List[AllMessageValues]) -> List[Dict[str, Any]]:
         """
         Convert OpenAI-format messages to LangGraph format.
 
         OpenAI format: {"role": "user", "content": "..."}
         LangGraph format: {"role": "human", "content": "..."}
+
+        Preserves per-message ``metadata`` when present (e.g. A2A ``skillId``).
         """
-        langgraph_messages: List[Dict[str, str]] = []
+        langgraph_messages: List[Dict[str, Any]] = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -166,12 +162,20 @@ class LangGraphConfig(BaseConfig):
             # Handle content that might be a list
             if isinstance(content, list):
                 content = convert_content_list_to_str(msg)
-            
+
             # Ensure content is a string
             if not isinstance(content, str):
                 content = str(content)
 
-            langgraph_messages.append({"role": langgraph_role, "content": content})
+            langgraph_message: Dict[str, Any] = {
+                "role": langgraph_role,
+                "content": content,
+            }
+            message_metadata = msg.get("metadata")
+            if isinstance(message_metadata, dict) and message_metadata:
+                langgraph_message["metadata"] = message_metadata
+
+            langgraph_messages.append(langgraph_message)
 
         return langgraph_messages
 
@@ -257,9 +261,7 @@ class LangGraphConfig(BaseConfig):
                             return msg.get("content", "")
 
         # Fallback: try to serialize the whole response
-        verbose_logger.warning(
-            "Could not extract content from LangGraph response, returning raw"
-        )
+        verbose_logger.warning("Could not extract content from LangGraph response, returning raw")
         return json.dumps(response_json)
 
     def get_streaming_response(
@@ -309,14 +311,10 @@ class LangGraphConfig(BaseConfig):
         )
 
         if response.status_code != 200:
-            raise LangGraphError(
-                status_code=response.status_code, message=str(response.read())
-            )
+            raise LangGraphError(status_code=response.status_code, message=str(response.read()))
 
         # Create iterator for SSE stream
-        completion_stream = self.get_streaming_response(
-            model=model, raw_response=response
-        )
+        completion_stream = self.get_streaming_response(model=model, raw_response=response)
 
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -358,9 +356,7 @@ class LangGraphConfig(BaseConfig):
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(
-                llm_provider=cast(Any, "langgraph"), params={}
-            )
+            client = get_async_httpx_client(llm_provider=cast(Any, "langgraph"), params={})
 
         verbose_logger.debug(f"Making async streaming request to: {api_base}")
 
@@ -374,14 +370,10 @@ class LangGraphConfig(BaseConfig):
         )
 
         if response.status_code != 200:
-            raise LangGraphError(
-                status_code=response.status_code, message=str(await response.aread())
-            )
+            raise LangGraphError(status_code=response.status_code, message=str(await response.aread()))
 
         # Create iterator for SSE stream
-        completion_stream = self.get_streaming_response(
-            model=model, raw_response=response
-        )
+        completion_stream = self.get_streaming_response(model=model, raw_response=response)
 
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -451,9 +443,7 @@ class LangGraphConfig(BaseConfig):
                 from litellm.utils import token_counter
 
                 prompt_tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
-                completion_tokens = token_counter(
-                    model="gpt-3.5-turbo", text=content, count_response_tokens=True
-                )
+                completion_tokens = token_counter(model="gpt-3.5-turbo", text=content, count_response_tokens=True)
                 total_tokens = prompt_tokens + completion_tokens
 
                 usage = Usage(
@@ -510,4 +500,3 @@ class LangGraphConfig(BaseConfig):
         LangGraph has native streaming support, so we don't need to fake stream.
         """
         return False
-

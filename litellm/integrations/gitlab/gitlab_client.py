@@ -45,7 +45,7 @@ class GitLabClient:
         self.auth_method = config.get("auth_method", "token")  # 'token' or 'oauth'
         self.branch = config.get("branch", None)
         if not self.branch:
-            self.branch = 'main'
+            self.branch = "main"
         self.tag = config.get("tag")
         self.base_url = config.get("base_url", "https://gitlab.com/api/v4")
 
@@ -86,7 +86,13 @@ class GitLabClient:
         ref_q = quote(ref or self.ref, safe="")
         return f"{self.base_url}/projects/{self._project_enc}/repository/files/{file_enc}?ref={ref_q}"
 
-    def _tree_url(self, directory_path: str = "", recursive: bool = False, *, ref: Optional[str] = None) -> str:
+    def _tree_url(
+        self,
+        directory_path: str = "",
+        recursive: bool = False,
+        *,
+        ref: Optional[str] = None,
+    ) -> str:
         path_q = f"&path={quote(directory_path, safe='')}" if directory_path else ""
         rec_q = "&recursive=true" if recursive else ""
         ref_q = quote(ref or self.ref, safe="")
@@ -175,12 +181,12 @@ class GitLabClient:
             raise Exception(f"Failed to fetch file '{file_path}' via JSON endpoint: {e}")
 
     def list_files(
-            self,
-            directory_path: str = "",
-            file_extension: str = ".prompt",
-            recursive: bool = False,
-            *,
-            ref: Optional[str] = None,
+        self,
+        directory_path: str = "",
+        file_extension: str = ".prompt",
+        recursive: bool = False,
+        *,
+        ref: Optional[str] = None,
     ) -> List[str]:
         """
         List files in a directory with a specific extension using the repository tree API.

@@ -1,9 +1,11 @@
 """GCS Cache implementation
 Supports syncing responses to Google Cloud Storage Buckets using HTTP requests.
 """
+
 import json
 import asyncio
 from typing import Optional
+from urllib.parse import quote
 
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
@@ -16,7 +18,12 @@ from .base_cache import BaseCache
 
 
 class GCSCache(BaseCache):
-    def __init__(self, bucket_name: Optional[str] = None, path_service_account: Optional[str] = None, gcs_path: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        bucket_name: Optional[str] = None,
+        path_service_account: Optional[str] = None,
+        gcs_path: Optional[str] = None,
+    ) -> None:
         super().__init__()
         self.bucket_name = bucket_name or GCSBucketBase(bucket_name=None).BUCKET_NAME
         self.path_service_account = path_service_account or GCSBucketBase(bucket_name=None).path_service_account_json
@@ -37,7 +44,7 @@ class GCSCache(BaseCache):
             headers = self._construct_headers()
             object_name = self.key_prefix + key
             bucket_name = self.bucket_name
-            url = f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}"
+            url = f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={quote(object_name, safe='')}"
             data = json.dumps(value)
             self.sync_client.post(url=url, data=data, headers=headers)
         except Exception as e:
@@ -48,7 +55,7 @@ class GCSCache(BaseCache):
             headers = self._construct_headers()
             object_name = self.key_prefix + key
             bucket_name = self.bucket_name
-            url = f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}"
+            url = f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={quote(object_name, safe='')}"
             data = json.dumps(value)
             await self.async_client.post(url=url, data=data, headers=headers)
         except Exception as e:
@@ -59,7 +66,7 @@ class GCSCache(BaseCache):
             headers = self._construct_headers()
             object_name = self.key_prefix + key
             bucket_name = self.bucket_name
-            url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{object_name}?alt=media"
+            url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{quote(object_name, safe='')}?alt=media"
             response = self.sync_client.get(url=url, headers=headers)
             if response.status_code == 200:
                 cached_response = json.loads(response.text)
@@ -76,7 +83,7 @@ class GCSCache(BaseCache):
             headers = self._construct_headers()
             object_name = self.key_prefix + key
             bucket_name = self.bucket_name
-            url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{object_name}?alt=media"
+            url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{quote(object_name, safe='')}?alt=media"
             response = await self.async_client.get(url=url, headers=headers)
             if response.status_code == 200:
                 return json.loads(response.text)

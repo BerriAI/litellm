@@ -4,6 +4,8 @@ Tests for the LoggingWorker class to ensure graceful shutdown handling.
 
 import asyncio
 import contextvars
+import io
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -64,6 +66,57 @@ class TestLoggingWorker:
 
         # Verify the queue is empty after clearing
         assert logging_worker._queue.empty()
+
+    def test_flush_on_exit_suppresses_closed_handler_errors(self, capsys):
+        """Atexit flushing should not print logging errors after streams close."""
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        worker._queue = asyncio.Queue(maxsize=10)
+
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        logger = logging.getLogger("test_logging_worker_closed_handler")
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+
+        async def log_with_closed_handler():
+            logger.debug("flush me during shutdown")
+
+        previous_raise_exceptions = logging.raiseExceptions
+        logging.raiseExceptions = True
+
+        try:
+            worker.enqueue(log_with_closed_handler())
+            stream.close()
+
+            worker._flush_on_exit()
+
+            captured = capsys.readouterr()
+            assert "I/O operation on closed file" not in captured.err
+        finally:
+            logging.raiseExceptions = previous_raise_exceptions
+            logger.removeHandler(handler)
+
+    def test_flush_on_exit_swallows_errors_and_drains_remaining(self):
+        """A failing queued coroutine must not abort the atexit drain of later events."""
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        worker._queue = asyncio.Queue(maxsize=10)
+
+        processed = []
+
+        async def raises_during_flush():
+            raise RuntimeError("boom during shutdown flush")
+
+        async def records_during_flush():
+            processed.append("ran")
+
+        worker.enqueue(raises_during_flush())
+        worker.enqueue(records_during_flush())
+
+        worker._flush_on_exit()
+
+        assert processed == ["ran"]
+        assert worker._queue.empty()
 
     @pytest.mark.asyncio
     async def test_worker_handles_cancellation_gracefully(self, logging_worker):
@@ -323,3 +376,40 @@ class TestLoggingWorker:
         await worker.clear_queue()
 
         assert len(processed) >= 4, f"Expected 4+ tasks processed, got {len(processed)}"
+
+    @pytest.mark.asyncio
+    async def test_event_loop_change_handling(self):
+        """Test that LoggingWorker handles event loop changes correctly.
+
+        This tests the fix for GitHub issue #17813 where asyncio.Queue
+        was bound to a different event loop when using multiprocessing.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+
+        # Start the worker in the current event loop
+        worker.start()
+
+        # Verify queue was created and bound to current loop
+        assert worker._queue is not None
+        assert worker._bound_loop is not None
+        original_queue = worker._queue
+
+        await worker.stop()
+
+        # Simulate a new event loop by creating a mock scenario
+        # In a real multiprocessing case, asyncio.run() creates a new loop
+        # We test the internal state detection
+
+        # Create a new worker to test the _ensure_queue logic
+        worker2 = LoggingWorker(timeout=1.0, max_queue_size=10)
+        worker2._queue = original_queue  # Pretend we have an old queue
+        worker2._bound_loop = None  # No bound loop (simulates first call)
+
+        # Calling start should create a new queue since _bound_loop != current
+        worker2.start()
+
+        # The queue should be reinitialized since bound_loop was None
+        assert worker2._queue is not None
+        assert worker2._bound_loop is not None
+
+        await worker2.stop()

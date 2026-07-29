@@ -42,7 +42,7 @@ mock_response_data = {
     "response_time": 0.1622769832611084,
     "model": "my-fake-model",
     "metadata": {
-        "user_api_key_hash": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+        "user_api_key_hash": "sk-test-mock-api-key-123",
         "user_api_key_alias": None,
         "user_api_key_team_id": None,
         "user_api_key_org_id": None,

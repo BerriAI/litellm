@@ -3,7 +3,7 @@ Types for Vertex Embeddings Requests
 """
 
 from enum import Enum
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from typing_extensions import TypedDict
 
@@ -50,8 +50,13 @@ class EmbeddingParameters(TypedDict, total=False):
 
 
 class VertexEmbeddingRequest(TypedDict, total=False):
-    instances: Union[List[TextEmbeddingInput], List[TextEmbeddingBGEInput], List[TextEmbeddingFineTunedInput]]
+    instances: Union[
+        List[TextEmbeddingInput],
+        List[TextEmbeddingBGEInput],
+        List[TextEmbeddingFineTunedInput],
+    ]
     parameters: Optional[Union[EmbeddingParameters, TextEmbeddingFineTunedParameters]]
+    labels: Optional[Dict[str, str]]
 
 
 # Example usage:

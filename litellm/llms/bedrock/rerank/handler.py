@@ -29,12 +29,18 @@ class BedrockRerankHandler(BaseAWSLLM):
     async def arerank(
         self,
         prepared_request: BedrockPreparedRequest,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
     ):
         if client is None:
             client = get_async_httpx_client(llm_provider=litellm.LlmProviders.BEDROCK)
         try:
-            response = await client.post(url=prepared_request["endpoint_url"], headers=dict(prepared_request["prepped"].headers), data=prepared_request["body"])
+            response = await client.post(
+                url=prepared_request["endpoint_url"],
+                headers=dict(prepared_request["prepped"].headers),
+                data=prepared_request["body"],
+                timeout=timeout,
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -56,6 +62,7 @@ class BedrockRerankHandler(BaseAWSLLM):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
         _is_async: Optional[bool] = False,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
         api_base: Optional[str] = None,
         extra_headers: Optional[dict] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
@@ -89,12 +96,21 @@ class BedrockRerankHandler(BaseAWSLLM):
         )
 
         if _is_async:
-            return self.arerank(prepared_request, client=client if client is not None and isinstance(client, AsyncHTTPHandler) else None)  # type: ignore
+            return self.arerank(
+                prepared_request,
+                timeout=timeout,
+                client=client if client is not None and isinstance(client, AsyncHTTPHandler) else None,
+            )  # type: ignore
 
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client()
         try:
-            response = client.post(url=prepared_request["endpoint_url"], headers=dict(prepared_request["prepped"].headers), data=prepared_request["body"])
+            response = client.post(
+                url=prepared_request["endpoint_url"],
+                headers=dict(prepared_request["prepped"].headers),
+                data=prepared_request["body"],
+                timeout=timeout,
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -124,9 +140,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             from botocore.awsrequest import AWSRequest
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-        boto3_credentials_info = self._get_boto_credentials_from_optional_params(
-            optional_params, model
-        )
+        boto3_credentials_info = self._get_boto_credentials_from_optional_params(optional_params, model)
 
         ### SET RUNTIME ENDPOINT ###
         _, proxy_endpoint_url = self.get_runtime_endpoint(
@@ -134,9 +148,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             aws_bedrock_runtime_endpoint=boto3_credentials_info.aws_bedrock_runtime_endpoint,
             aws_region_name=boto3_credentials_info.aws_region_name,
         )
-        proxy_endpoint_url = proxy_endpoint_url.replace(
-            "bedrock-runtime", "bedrock-agent-runtime"
-        )
+        proxy_endpoint_url = proxy_endpoint_url.replace("bedrock-runtime", "bedrock-agent-runtime")
         proxy_endpoint_url = f"{proxy_endpoint_url}/rerank"
         sigv4 = SigV4Auth(
             boto3_credentials_info.credentials,
@@ -149,9 +161,7 @@ class BedrockRerankHandler(BaseAWSLLM):
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
-        request = AWSRequest(
-            method="POST", url=proxy_endpoint_url, data=body, headers=headers
-        )
+        request = AWSRequest(method="POST", url=proxy_endpoint_url, data=body, headers=headers)
         sigv4.add_auth(request)
         if (
             extra_headers is not None and "Authorization" in extra_headers

@@ -33,9 +33,7 @@ class LlamaAPIConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        mapped_openai_params = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
+        mapped_openai_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         # Only json_schema is working for response_format
         if (

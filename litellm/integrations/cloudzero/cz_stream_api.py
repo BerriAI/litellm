@@ -71,21 +71,21 @@ class CloudZeroStreamer:
         daily_batches: dict[str, list[dict[str, Any]]] = {}
 
         # Ensure we have the required columns
-        if 'time/usage_start' not in data.columns:
+        if "time/usage_start" not in data.columns:
             self.console.print("[red]Error: Missing 'time/usage_start' column for date grouping[/red]")
             return {}
-        
+
         timestamp_str: Optional[str] = None
         for row in data.iter_rows(named=True):
             try:
                 # Parse the timestamp and convert to UTC
-                timestamp_str = row.get('time/usage_start')
+                timestamp_str = row.get("time/usage_start")
                 if not timestamp_str:
                     continue
 
                 # Parse timestamp and handle timezone conversion
                 dt = self._parse_and_convert_timestamp(timestamp_str)
-                batch_date = dt.strftime('%Y-%m-%d')
+                batch_date = dt.strftime("%Y-%m-%d")
 
                 if batch_date not in daily_batches:
                     daily_batches[batch_date] = []
@@ -104,14 +104,37 @@ class CloudZeroStreamer:
         # Try to parse the timestamp string
         try:
             # Handle various ISO 8601 formats
-            if timestamp_str.endswith('Z'):
-                dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-            elif '+' in timestamp_str or timestamp_str.endswith(('-00:00', '-01:00', '-02:00', '-03:00',
-                                                                   '-04:00', '-05:00', '-06:00', '-07:00',
-                                                                   '-08:00', '-09:00', '-10:00', '-11:00',
-                                                                   '-12:00', '+01:00', '+02:00', '+03:00',
-                                                                   '+04:00', '+05:00', '+06:00', '+07:00',
-                                                                   '+08:00', '+09:00', '+10:00', '+11:00', '+12:00')):
+            if timestamp_str.endswith("Z"):
+                dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+            elif "+" in timestamp_str or timestamp_str.endswith(
+                (
+                    "-00:00",
+                    "-01:00",
+                    "-02:00",
+                    "-03:00",
+                    "-04:00",
+                    "-05:00",
+                    "-06:00",
+                    "-07:00",
+                    "-08:00",
+                    "-09:00",
+                    "-10:00",
+                    "-11:00",
+                    "-12:00",
+                    "+01:00",
+                    "+02:00",
+                    "+03:00",
+                    "+04:00",
+                    "+05:00",
+                    "+06:00",
+                    "+07:00",
+                    "+08:00",
+                    "+09:00",
+                    "+10:00",
+                    "+11:00",
+                    "+12:00",
+                )
+            ):
                 dt = datetime.fromisoformat(timestamp_str)
             else:
                 # Assume user timezone if no timezone info
@@ -131,8 +154,8 @@ class CloudZeroStreamer:
             return
 
         headers = {
-            'Authorization': f'Bearer {self.api_key}',
-            'Content-Type': 'application/json'
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
         }
 
         # Use the correct API endpoint format from documentation
@@ -148,24 +171,28 @@ class CloudZeroStreamer:
                 response = client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
 
-                self.console.print(f"[green]✓ Successfully sent batch for {batch_date} ({len(batch_data)} records)[/green]")
+                self.console.print(
+                    f"[green]✓ Successfully sent batch for {batch_date} ({len(batch_data)} records)[/green]"
+                )
 
         except httpx.RequestError as e:
             self.console.print(f"[red]✗ Network error sending batch for {batch_date}: {e}[/red]")
             raise
         except httpx.HTTPStatusError as e:
-            self.console.print(f"[red]✗ HTTP error sending batch for {batch_date}: {e.response.status_code} {e.response.text}[/red]")
+            self.console.print(
+                f"[red]✗ HTTP error sending batch for {batch_date}: {e.response.status_code} {e.response.text}[/red]"
+            )
             raise
 
     def _prepare_batch_payload(self, batch_date: str, batch_data: pl.DataFrame, operation: str) -> dict[str, Any]:
         """Prepare batch payload according to CloudZero AnyCost API format."""
         # Convert batch_date to month for the API (YYYY-MM format)
         try:
-            date_obj = datetime.strptime(batch_date, '%Y-%m-%d')
-            month_str = date_obj.strftime('%Y-%m')
+            date_obj = datetime.strptime(batch_date, "%Y-%m-%d")
+            month_str = date_obj.strftime("%Y-%m")
         except ValueError:
             # Fallback to current month
-            month_str = datetime.now().strftime('%Y-%m')
+            month_str = datetime.now().strftime("%Y-%m")
 
         # Convert DataFrame rows to API format
         data_records = []
@@ -174,11 +201,7 @@ class CloudZeroStreamer:
             if record:
                 data_records.append(record)
 
-        payload = {
-            'month': month_str,
-            'operation': operation,
-            'data': data_records
-        }
+        payload = {"month": month_str, "operation": operation, "data": data_records}
 
         return payload
 
@@ -196,15 +219,15 @@ class CloudZeroStreamer:
                         # Format floats to avoid scientific notation
                         if isinstance(value, float):
                             # Use a reasonable precision that avoids scientific notation
-                            api_record[key] = f"{value:.10f}".rstrip('0').rstrip('.')
+                            api_record[key] = f"{value:.10f}".rstrip("0").rstrip(".")
                         else:
                             api_record[key] = str(value)
                     else:
                         api_record[key] = value
 
             # Ensure timestamp is in UTC format
-            if 'time/usage_start' in api_record:
-                api_record['time/usage_start'] = self._ensure_utc_timestamp(api_record['time/usage_start'])
+            if "time/usage_start" in api_record:
+                api_record["time/usage_start"] = self._ensure_utc_timestamp(api_record["time/usage_start"])
 
             return api_record
 
@@ -219,9 +242,7 @@ class CloudZeroStreamer:
 
         try:
             dt = self._parse_and_convert_timestamp(timestamp_str)
-            return dt.isoformat().replace('+00:00', 'Z')
+            return dt.isoformat().replace("+00:00", "Z")
         except Exception:
             # Fallback to current time in UTC
-            return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
-
-
+            return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

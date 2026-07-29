@@ -74,9 +74,7 @@ def get_output_content_by_type(
     if isinstance(response_obj, BaseModel):
         return response_obj.model_dump_json()
 
-    if response_obj and (
-        isinstance(response_obj, dict) or isinstance(response_obj, list)
-    ):
+    if response_obj and (isinstance(response_obj, dict) or isinstance(response_obj, list)):
         return json.dumps(response_obj)
     else:
         return ""

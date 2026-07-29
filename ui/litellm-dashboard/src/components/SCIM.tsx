@@ -96,7 +96,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
               Use this URL in your identity provider SCIM integration settings.
             </Text>
             <div className="flex items-center">
-              <TextInput value={scimBaseUrl} disabled={true} className="flex-grow" />
+              <TextInput value={scimBaseUrl} disabled={true} className="grow" />
               <CopyToClipboard
                 text={scimBaseUrl}
                 onCopy={() => NotificationsManager.success("URL copied to clipboard")}
@@ -159,12 +159,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
                   Make sure to copy this token now. You will not be able to see it again.
                 </Text>
                 <div className="flex items-center">
-                  <TextInput
-                    value={tokenData.key}
-                    className="flex-grow mr-2 bg-white"
-                    type="password"
-                    disabled={true}
-                  />
+                  <TextInput value={tokenData.key} className="grow mr-2 bg-white" type="password" disabled={true} />
                   <CopyToClipboard
                     text={tokenData.key}
                     onCopy={() => NotificationsManager.success("Token copied to clipboard")}

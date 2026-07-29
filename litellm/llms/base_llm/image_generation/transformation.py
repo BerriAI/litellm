@@ -20,11 +20,9 @@ else:
 
 class BaseImageGenerationConfig(ABC):
     @abstractmethod
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         pass
-    
+
     @abstractmethod
     def map_openai_params(
         self,
@@ -34,7 +32,6 @@ class BaseImageGenerationConfig(ABC):
         drop_params: bool,
     ) -> dict:
         pass
-
 
     def get_complete_url(
         self,

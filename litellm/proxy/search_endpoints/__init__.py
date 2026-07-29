@@ -5,4 +5,3 @@ from .search_tool_registry import SearchToolRegistry
 __all__ = [
     "SearchToolRegistry",
 ]
-

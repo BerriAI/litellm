@@ -16,8 +16,7 @@ def is_tokens_or_list_of_tokens(value: List):
         return True
     # Check if it's a list of lists of integers (list of tokens)
     if isinstance(value, list) and all(
-        isinstance(item, list) and all(isinstance(i, int) for i in item)
-        for item in value
+        isinstance(item, list) and all(isinstance(i, int) for i in item) for item in value
     ):
         return True
     return False
@@ -28,11 +27,7 @@ def _transform_prompt(
 ) -> AllPromptValues:
     if len(messages) == 1:  # base case
         message_content = messages[0].get("content")
-        if (
-            message_content
-            and isinstance(message_content, list)
-            and is_tokens_or_list_of_tokens(message_content)
-        ):
+        if message_content and isinstance(message_content, list) and is_tokens_or_list_of_tokens(message_content):
             openai_prompt: AllPromptValues = cast(AllPromptValues, message_content)
         else:
             openai_prompt = ""

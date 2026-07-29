@@ -39,7 +39,8 @@ async def test_vertex_ai_anthropic_streaming_cost_injection_enabled():
     try:
         # Mock response with Anthropic SSE format chunks
         response = AsyncMock(spec=httpx.Response)
-        
+        response.status_code = 200
+
         # Create chunks with message_delta event containing usage
         chunks_with_usage = [
             b'data: {"type": "content_block_delta", "delta": {"text": "Hello"}}\n\n',
@@ -56,12 +57,13 @@ async def test_vertex_ai_anthropic_streaming_cost_injection_enabled():
         # Setup logging object with model info
         litellm_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
         litellm_logging_obj.model_call_details = {"model": "claude-sonnet-4@20250514"}
+        litellm_logging_obj.completion_start_time = None
         litellm_logging_obj.async_success_handler = AsyncMock()
 
         request_body = {"model": "claude-sonnet-4@20250514"}
         start_time = datetime.now()
         passthrough_success_handler_obj = MagicMock(spec=PassThroughEndpointLogging)
-        
+
         url_route = "v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict"
 
         # Mock completion_cost to return a test cost value
@@ -120,7 +122,8 @@ async def test_vertex_ai_anthropic_streaming_cost_injection_disabled():
     try:
         # Mock response with Anthropic SSE format chunks
         response = AsyncMock(spec=httpx.Response)
-        
+        response.status_code = 200
+
         chunks_with_usage = [
             b'data: {"type": "message_delta", "usage": {"input_tokens": 10, "output_tokens": 5}}\n\n',
         ]
@@ -133,12 +136,13 @@ async def test_vertex_ai_anthropic_streaming_cost_injection_disabled():
 
         litellm_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
         litellm_logging_obj.model_call_details = {"model": "claude-sonnet-4@20250514"}
+        litellm_logging_obj.completion_start_time = None
         litellm_logging_obj.async_success_handler = AsyncMock()
 
         request_body = {"model": "claude-sonnet-4@20250514"}
         start_time = datetime.now()
         passthrough_success_handler_obj = MagicMock(spec=PassThroughEndpointLogging)
-        
+
         url_route = "v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict"
 
         received_chunks = []
@@ -178,7 +182,8 @@ async def test_vertex_ai_anthropic_streaming_cost_injection_no_usage_chunk():
 
     try:
         response = AsyncMock(spec=httpx.Response)
-        
+        response.status_code = 200
+
         # Chunks without usage (should not be modified)
         chunks_without_usage = [
             b'data: {"type": "content_block_delta", "delta": {"text": "Hello"}}\n\n',
@@ -193,12 +198,13 @@ async def test_vertex_ai_anthropic_streaming_cost_injection_no_usage_chunk():
 
         litellm_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
         litellm_logging_obj.model_call_details = {"model": "claude-sonnet-4@20250514"}
+        litellm_logging_obj.completion_start_time = None
         litellm_logging_obj.async_success_handler = AsyncMock()
 
         request_body = {"model": "claude-sonnet-4@20250514"}
         start_time = datetime.now()
         passthrough_success_handler_obj = MagicMock(spec=PassThroughEndpointLogging)
-        
+
         url_route = "v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict"
 
         received_chunks = []
@@ -233,7 +239,8 @@ async def test_vertex_ai_anthropic_streaming_model_extraction():
 
     try:
         response = AsyncMock(spec=httpx.Response)
-        
+        response.status_code = 200
+
         chunks = [
             b'data: {"type": "message_delta", "usage": {"input_tokens": 10, "output_tokens": 5}}\n\n',
         ]
@@ -246,13 +253,14 @@ async def test_vertex_ai_anthropic_streaming_model_extraction():
 
         litellm_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
         litellm_logging_obj.model_call_details = {}
+        litellm_logging_obj.completion_start_time = None
         litellm_logging_obj.async_success_handler = AsyncMock()
 
         # Test model extraction from request body
         request_body = {"model": "claude-sonnet-4@20250514"}
         start_time = datetime.now()
         passthrough_success_handler_obj = MagicMock(spec=PassThroughEndpointLogging)
-        
+
         url_route = "v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict"
 
         with patch("litellm.completion_cost") as mock_cost:
@@ -276,4 +284,3 @@ async def test_vertex_ai_anthropic_streaming_model_extraction():
 
     finally:
         litellm.include_cost_in_streaming_usage = original_value
-

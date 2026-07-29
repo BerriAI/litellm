@@ -2,7 +2,6 @@ import io
 import os
 import sys
 
-
 sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
@@ -59,7 +58,38 @@ async def test_log_db_metrics_success():
         assert isinstance(call_args["duration"], float)
         assert isinstance(call_args["start_time"], datetime)
         assert isinstance(call_args["end_time"], datetime)
-        assert "function_name" in call_args["event_metadata"]
+        assert call_args["event_metadata"] is None
+
+
+@pytest.mark.asyncio
+async def test_log_db_metrics_event_metadata_is_safe():
+    """event_metadata must surface only the table name, never the raw
+    kwargs/args which carry live clients (Prisma, OTel spans) and secrets.
+
+    Regression guard for #28909: a previous version dumped function_kwargs and
+    function_args onto the span.
+    """
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.service_logging_obj.async_service_success_hook = AsyncMock()
+
+        @log_db_metrics
+        async def db_call(**kwargs):
+            return "success"
+
+        await db_call(
+            parent_otel_span="test_span",
+            table_name="LiteLLM_SpendLogs",
+            token="sk-secret-should-not-leak",
+            prisma_client=object(),
+        )
+        await asyncio.sleep(0)
+
+        call_args = (
+            mock_proxy_logging.service_logging_obj.async_service_success_hook.call_args[
+                1
+            ]
+        )
+        assert call_args["event_metadata"] == {"table_name": "LiteLLM_SpendLogs"}
 
 
 @pytest.mark.asyncio

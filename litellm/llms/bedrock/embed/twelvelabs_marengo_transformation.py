@@ -43,9 +43,7 @@ class TwelveLabsMarengoEmbeddingConfig:
             "input_type",
         ]
 
-    def map_openai_params(
-        self, non_default_params: dict, optional_params: dict
-    ) -> dict:
+    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
         for k, v in non_default_params.items():
             if k == "encoding_format":
                 # TwelveLabs doesn't have encoding_format, but we can map it to embeddingOption
@@ -93,7 +91,7 @@ class TwelveLabsMarengoEmbeddingConfig:
         # Get input_type or default to "text"
         input_type = cast(
             TWELVELABS_EMBEDDING_INPUT_TYPES,
-            inference_params.get("inputType") or inference_params.get("input_type") or "text"
+            inference_params.get("inputType") or inference_params.get("input_type") or "text",
         )
 
         # Validate that async-invoke is used for video/audio
@@ -103,9 +101,7 @@ class TwelveLabsMarengoEmbeddingConfig:
                 f"Use model format: 'bedrock/async_invoke/model_id'"
             )
 
-        transformed_request: TwelveLabsMarengoEmbeddingRequest = {
-            "inputType": input_type
-        }
+        transformed_request: TwelveLabsMarengoEmbeddingRequest = {"inputType": input_type}
 
         if input_type == "text":
             transformed_request["inputText"] = input
@@ -130,6 +126,7 @@ class TwelveLabsMarengoEmbeddingConfig:
                 else:
                     # Direct base64 string
                     from litellm.utils import get_base64_str
+
                     b64_str = get_base64_str(input)
 
                 transformed_request["mediaSource"] = {"base64String": b64_str}
@@ -191,9 +188,7 @@ class TwelveLabsMarengoEmbeddingConfig:
             ),
         )
 
-    def _transform_response(
-        self, response_list: List[dict], model: str
-    ) -> EmbeddingResponse:
+    def _transform_response(self, response_list: List[dict], model: str) -> EmbeddingResponse:
         """
         Transform TwelveLabs response to OpenAI format.
         Handles the actual TwelveLabs response format: {"data": [{"embedding": [...]}]}
@@ -250,9 +245,7 @@ class TwelveLabsMarengoEmbeddingConfig:
 
         return EmbeddingResponse(data=embeddings, model=model, usage=usage)
 
-    def _transform_async_invoke_response(
-        self, response: dict, model: str
-    ) -> EmbeddingResponse:
+    def _transform_async_invoke_response(self, response: dict, model: str) -> EmbeddingResponse:
         """
         Transform async invoke response (invocation ARN) to OpenAI format.
 

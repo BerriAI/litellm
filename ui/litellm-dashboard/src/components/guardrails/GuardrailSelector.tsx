@@ -22,9 +22,7 @@ const GuardrailSelector: React.FC<GuardrailSelectorProps> = ({ onChange, value, 
       setLoading(true);
       try {
         const response = await getGuardrailsList(accessToken);
-        console.log("Guardrails response:", response);
         if (response.guardrails) {
-          console.log("Guardrails data:", response.guardrails);
           setGuardrails(response.guardrails);
         }
       } catch (error) {
@@ -38,7 +36,6 @@ const GuardrailSelector: React.FC<GuardrailSelectorProps> = ({ onChange, value, 
   }, [accessToken]);
 
   const handleGuardrailChange = (selectedValues: string[]) => {
-    console.log("Selected guardrails:", selectedValues);
     onChange(selectedValues);
   };
 
@@ -52,8 +49,8 @@ const GuardrailSelector: React.FC<GuardrailSelectorProps> = ({ onChange, value, 
         value={value}
         loading={loading}
         className={className}
+        allowClear
         options={guardrails.map((guardrail) => {
-          console.log("Mapping guardrail:", guardrail);
           return {
             label: `${guardrail.guardrail_name}`,
             value: guardrail.guardrail_name,

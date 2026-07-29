@@ -19,6 +19,10 @@ class RerankRequest(BaseModel):
     return_documents: Optional[bool] = None
     max_chunks_per_doc: Optional[int] = None
     max_tokens_per_doc: Optional[int] = None
+    # Optional task/query instruction passed through to providers that support it
+    # (e.g. hosted vLLM / Qwen3-Reranker, DeepInfra). Omitted from the outgoing
+    # request when None, so this is fully backward-compatible.
+    instruction: Optional[str] = None
 
 
 class OptionalRerankParams(TypedDict, total=False):
@@ -29,6 +33,7 @@ class OptionalRerankParams(TypedDict, total=False):
     return_documents: Optional[bool]
     max_chunks_per_doc: Optional[int]
     max_tokens_per_doc: Optional[int]
+    instruction: Optional[str]
 
 
 class RerankBilledUnits(TypedDict, total=False):
@@ -59,9 +64,7 @@ class RerankResponseResult(TypedDict, total=False):
 
 class RerankResponse(BaseModel):
     id: Optional[str] = None
-    results: Optional[
-        List[RerankResponseResult]
-    ] = None  # Contains index and relevance_score
+    results: Optional[List[RerankResponseResult]] = None  # Contains index and relevance_score
     meta: Optional[RerankResponseMeta] = None  # Contains api_version and billed_units
 
     # Define private attributes using PrivateAttr

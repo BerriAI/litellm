@@ -79,6 +79,9 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
         Transform the generate content request for Vertex AI.
         Since Vertex AI natively supports Google GenAI format, we can pass most fields directly.
         """
+        if generate_content_config_dict:
+            self._normalize_response_schema(generate_content_config_dict, model)
+
         # Build the request in Google GenAI format that Vertex AI expects
         result = {
             "model": model,

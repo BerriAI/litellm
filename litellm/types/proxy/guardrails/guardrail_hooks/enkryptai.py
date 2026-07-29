@@ -23,7 +23,7 @@ class EnkryptAIPIIDetail(TypedDict, total=False):
 
 class EnkryptAIToxicityDetail(TypedDict, total=False):
     """Details for toxicity detection.
-    
+
     Contains scores for different types of toxicity:
     - toxic
     - severe_toxic
@@ -55,7 +55,7 @@ class EnkryptAIBiasDetail(TypedDict, total=False):
 
 class EnkryptAIResponseSummary(TypedDict, total=False):
     """Summary of detected violations in EnkryptAI response.
-    
+
     Each key represents a type of violation:
     - toxicity: List (non-empty if detected)
     - policy_violation: 0 or 1
@@ -98,12 +98,23 @@ class EnkryptAIProcessedResult(TypedDict):
     """Processed result from EnkryptAI guardrail response."""
 
     attacks_detected: List[str]
-    attack_details: Dict[str, Union[EnkryptAIPolicyViolationDetail, EnkryptAIPIIDetail, EnkryptAIToxicityDetail, EnkryptAIKeywordDetail, EnkryptAIBiasDetail, Dict[str, Any]]]
+    attack_details: Dict[
+        str,
+        Union[
+            EnkryptAIPolicyViolationDetail,
+            EnkryptAIPIIDetail,
+            EnkryptAIToxicityDetail,
+            EnkryptAIKeywordDetail,
+            EnkryptAIBiasDetail,
+            Dict[str, Any],
+        ],
+    ]
 
 
 # Pydantic Config Model
 class EnkryptAIGuardrailConfigs(BaseModel):
     """Configuration parameters for the EnkryptAI guardrail"""
+
     api_key: Optional[str] = Field(
         default=None,
         description="The EnkryptAI API key. Reads from ENKRYPTAI_API_KEY env var if None.",
@@ -129,8 +140,8 @@ class EnkryptAIGuardrailConfigs(BaseModel):
         description="Whether to block requests when violations are detected. Defaults to True.",
     )
 
+
 class EnkryptAIGuardrailConfigModel(GuardrailConfigModel, EnkryptAIGuardrailConfigs):
     @staticmethod
     def ui_friendly_name() -> str:
         return "EnkryptAI"
-

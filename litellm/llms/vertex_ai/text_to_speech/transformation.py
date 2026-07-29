@@ -164,12 +164,14 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             voice_str = voice.get("name") if voice else None
 
         # Store credentials in litellm_params for use in transform methods
-        litellm_params_dict.update({
-            "vertex_credentials": vertex_credentials,
-            "vertex_project": vertex_project,
-            "vertex_location": vertex_location,
-            "api_base": api_base,
-        })
+        litellm_params_dict.update(
+            {
+                "vertex_credentials": vertex_credentials,
+                "vertex_project": vertex_project,
+                "vertex_location": vertex_location,
+                "api_base": api_base,
+            }
+        )
 
         # Call the text_to_speech_handler
         response = base_llm_http_handler.text_to_speech_handler(
@@ -353,9 +355,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             TextToSpeechRequestData: Contains dict_body and headers
         """
         # Get Vertex AI credentials from litellm_params
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = litellm_params.get(
-            "vertex_credentials"
-        )
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = litellm_params.get("vertex_credentials")
         vertex_project: Optional[str] = litellm_params.get("vertex_project")
 
         ####### Authenticate with Vertex AI ########
@@ -389,10 +389,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         # Check for voice dict stored in:
         # 1. litellm_params by dispatch method
         # 2. optional_params by map_openai_params
-        voice_dict = (
-            litellm_params.get("vertex_voice_dict")
-            or optional_params.get("vertex_voice_dict")
-        )
+        voice_dict = litellm_params.get("vertex_voice_dict") or optional_params.get("vertex_voice_dict")
         if voice_dict is not None and isinstance(voice_dict, dict):
             vertex_voice = VertexTextToSpeechVoice(**voice_dict)
         elif voice is not None and isinstance(voice, str):

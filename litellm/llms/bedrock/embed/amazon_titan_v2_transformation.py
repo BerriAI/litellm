@@ -88,12 +88,10 @@ class AmazonTitanV2Config:
             # Otherwise, use float data from embeddingsByType or fallback to embedding field
             embedding_data: Union[List[float], List[int]]
 
-            if ("embeddingsByType" in _parsed_response and
-                "binary" in _parsed_response["embeddingsByType"]):
+            if "embeddingsByType" in _parsed_response and "binary" in _parsed_response["embeddingsByType"]:
                 # Use binary data if available (for encoding_format="base64")
                 embedding_data = _parsed_response["embeddingsByType"]["binary"]
-            elif ("embeddingsByType" in _parsed_response and
-                  "float" in _parsed_response["embeddingsByType"]):
+            elif "embeddingsByType" in _parsed_response and "float" in _parsed_response["embeddingsByType"]:
                 # Use float data from embeddingsByType
                 embedding_data = _parsed_response["embeddingsByType"]["float"]
             elif "embedding" in _parsed_response:

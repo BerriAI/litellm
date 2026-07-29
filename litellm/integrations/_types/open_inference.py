@@ -396,7 +396,7 @@ class OpenInferenceLLMProviderValues(Enum):
 class ErrorAttributes:
     """
     Attributes for error information in spans.
-    
+
     These attributes follow OpenTelemetry semantic conventions for exceptions
     and are used to record error information from StandardLoggingPayloadErrorInformation.
     """

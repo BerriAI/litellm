@@ -1,7 +1,22 @@
-lint.ignore = ["F405", "E402", "E501", "F403"]
-lint.extend-select = ["E501", "PLR0915", "T20"]
+lint.ignore = ["F405", "E402", "F403"]
+lint.extend-select = ["T20", "PGH004", "RUF008", "RUF009", "RUF100"]
+# RUF100 (unused-noqa) only knows the rules enabled in THIS config, so it would strip
+# `# noqa` directives that protect rules enforced elsewhere. List those codes as external
+# so RUF100 leaves their directives alone: the strict gate (ruff-strict.toml) and upstream
+# litellm's own ruff config both rely on suppressions this config can't see.
+lint.external = [
+    # Enforced by the strict-rule gate (scripts/ruff_strict_gate.py + ruff-strict.toml)
+    "C901",
+    # Enforced by upstream litellm's ruff config, but not run in this repo's CI
+    "PLC0415", "E402", "BLE001", "ARG002", "S102", "S324", "S606", "D401", "F403", "F405",
+]
 line-length = 120
-exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "tests/*"]
+
+format.exclude = ["**/enterprise/**"]
+
+# Was the top-level `exclude`. Scoped to lint so `ruff format` still formats these paths
+# (Black did) while `ruff check` keeps skipping them.
+lint.exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "tests/*"]
 
 
 [lint.per-file-ignores]
@@ -13,3 +28,4 @@ exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_conf
 "litellm/llms/azure_ai/embed/__init__.py" = ["F401"]
 "litellm/llms/azure_ai/rerank/__init__.py" = ["F401"]
 "litellm/llms/bedrock/chat/__init__.py" = ["F401"]
+"litellm/proxy/utils.py" = ["F401"]

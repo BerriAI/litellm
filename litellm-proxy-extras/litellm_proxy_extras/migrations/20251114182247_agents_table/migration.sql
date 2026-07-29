@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_AgentsTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_AgentsTable" (
     "agent_id" TEXT NOT NULL,
     "agent_name" TEXT NOT NULL,
     "litellm_params" JSONB,
@@ -13,5 +13,5 @@ CREATE TABLE "LiteLLM_AgentsTable" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_AgentsTable_agent_name_key" ON "LiteLLM_AgentsTable"("agent_name");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_AgentsTable_agent_name_key" ON "LiteLLM_AgentsTable"("agent_name");
 

@@ -71,13 +71,19 @@ def test_bitbucket_client_initialization():
 
 def test_bitbucket_client_missing_required_fields():
     """Test BitBucketClient initialization with missing required fields."""
-    with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
+    with pytest.raises(
+        ValueError, match="workspace, repository, and access_token are required"
+    ):
         BitBucketClient({"workspace": "test"})
 
-    with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
+    with pytest.raises(
+        ValueError, match="workspace, repository, and access_token are required"
+    ):
         BitBucketClient({"repository": "test"})
 
-    with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
+    with pytest.raises(
+        ValueError, match="workspace, repository, and access_token are required"
+    ):
         BitBucketClient({"access_token": "test"})
 
 
@@ -109,8 +115,11 @@ def test_bitbucket_client_get_file_content_not_found(mock_get):
     """Test file content retrieval when file doesn't exist."""
     # Mock 404 response
     import httpx
+
     mock_response = MagicMock()
-    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError("404 Not Found", request=MagicMock(), response=mock_response)
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "404 Not Found", request=MagicMock(), response=mock_response
+    )
     mock_response.status_code = 404
     mock_response.response = mock_response
     mock_get.return_value = mock_response
@@ -132,8 +141,11 @@ def test_bitbucket_client_get_file_content_access_denied(mock_get):
     """Test file content retrieval with access denied error."""
     # Mock 403 response
     import httpx
+
     mock_response = MagicMock()
-    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError("403 Forbidden", request=MagicMock(), response=mock_response)
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "403 Forbidden", request=MagicMock(), response=mock_response
+    )
     mock_response.status_code = 403
     mock_response.response = mock_response
     mock_get.return_value = mock_response
@@ -155,8 +167,11 @@ def test_bitbucket_client_get_file_content_auth_failed(mock_get):
     """Test file content retrieval with authentication failure."""
     # Mock 401 response
     import httpx
+
     mock_response = MagicMock()
-    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError("401 Unauthorized", request=MagicMock(), response=mock_response)
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "401 Unauthorized", request=MagicMock(), response=mock_response
+    )
     mock_response.status_code = 401
     mock_response.response = mock_response
     mock_get.return_value = mock_response
@@ -231,7 +246,10 @@ input:
     assert template.model == "gpt-4"
     assert template.temperature == 0.7
     assert template.max_tokens == 150
-    assert template.input_schema == {"user_message": "string", "system_context?": "string"}
+    assert template.input_schema == {
+        "user_message": "string",
+        "system_context?": "string",
+    }
     assert "{% if system_context %}" in template.content
 
 
@@ -246,7 +264,9 @@ def test_bitbucket_prompt_manager_parse_prompt_file_no_frontmatter():
     }
 
     manager = BitBucketPromptManager(config)
-    template = manager.prompt_manager._parse_prompt_file(prompt_content, "simple_prompt")
+    template = manager.prompt_manager._parse_prompt_file(
+        prompt_content, "simple_prompt"
+    )
 
     assert template.template_id == "simple_prompt"
     assert template.content == "Simple prompt: {{message}}"
@@ -262,7 +282,7 @@ def test_bitbucket_prompt_manager_render_template():
     }
 
     manager = BitBucketPromptManager(config)
-    
+
     # Add a test template
     template = BitBucketPromptTemplate(
         template_id="test_template",
@@ -271,7 +291,9 @@ def test_bitbucket_prompt_manager_render_template():
     )
     manager.prompt_manager.prompts["test_template"] = template
 
-    rendered = manager.prompt_manager.render_template("test_template", {"name": "World", "place": "Earth"})
+    rendered = manager.prompt_manager.render_template(
+        "test_template", {"name": "World", "place": "Earth"}
+    )
     assert rendered == "Hello World! Welcome to Earth."
 
 
@@ -343,7 +365,7 @@ def test_bitbucket_prompt_manager_parse_prompt_to_messages():
 User: What is the capital of France?
 
 Assistant: The capital of France is Paris."""
-    
+
     messages = manager._parse_prompt_to_messages(multi_role_prompt)
     assert len(messages) == 3
     assert messages[0]["role"] == "system"
@@ -363,7 +385,7 @@ def test_bitbucket_prompt_manager_pre_call_hook():
     }
 
     manager = BitBucketPromptManager(config)
-    
+
     # Add a test template
     template = BitBucketPromptTemplate(
         template_id="test_prompt",
@@ -375,13 +397,13 @@ def test_bitbucket_prompt_manager_pre_call_hook():
     # Test pre_call_hook
     messages = [{"role": "user", "content": "This will be ignored"}]
     litellm_params = {}
-    
+
     result_messages, result_params = manager.pre_call_hook(
         user_id="test_user",
         messages=messages,
         litellm_params=litellm_params,
         prompt_id="test_prompt",
-        prompt_variables={"user_message": "Hello!"}
+        prompt_variables={"user_message": "Hello!"},
     )
 
     # Should have parsed the prompt into messages
@@ -405,10 +427,10 @@ def test_bitbucket_prompt_manager_pre_call_hook_no_prompt_id():
     }
 
     manager = BitBucketPromptManager(config)
-    
+
     messages = [{"role": "user", "content": "Hello"}]
     litellm_params = {}
-    
+
     result_messages, result_params = manager.pre_call_hook(
         user_id="test_user",
         messages=messages,
@@ -430,7 +452,7 @@ def test_bitbucket_prompt_manager_get_available_prompts():
     }
 
     manager = BitBucketPromptManager(config)
-    
+
     # Add some test templates
     template1 = BitBucketPromptTemplate("prompt1", "content1", {})
     template2 = BitBucketPromptTemplate("prompt2", "content2", {})
@@ -460,9 +482,9 @@ Hello {{name}}!"""
     }
 
     manager = BitBucketPromptManager(config, prompt_id="test_prompt")
-    
+
     # Mock the prompt manager to test reload
-    with patch.object(manager, '_prompt_manager', None):
+    with patch.object(manager, "_prompt_manager", None):
         manager.reload_prompts()
         # Should trigger reload by accessing prompt_manager property
         _ = manager.prompt_manager
@@ -477,12 +499,12 @@ def test_bitbucket_prompt_manager_yaml_parsing_fallback():
     }
 
     manager = BitBucketPromptManager(config)
-    
+
     # Test basic YAML parsing fallback
     yaml_content = """model: gpt-4
 temperature: 0.7
 max_tokens: 150"""
-    
+
     parsed = manager.prompt_manager._parse_yaml_basic(yaml_content)
     assert parsed["model"] == "gpt-4"
     assert parsed["temperature"] == 0.7
@@ -498,7 +520,7 @@ def test_bitbucket_prompt_manager_yaml_parsing_with_types():
     }
 
     manager = BitBucketPromptManager(config)
-    
+
     yaml_content = """model: gpt-4
 temperature: 0.7
 max_tokens: 150
@@ -506,7 +528,7 @@ enabled: true
 disabled: false
 count: 42
 rate: 0.5"""
-    
+
     parsed = manager.prompt_manager._parse_yaml_basic(yaml_content)
     assert parsed["model"] == "gpt-4"
     assert parsed["temperature"] == 0.7
