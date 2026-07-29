@@ -286,6 +286,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     rpm: Optional[int]
     provider_specific_entry: Optional[Dict[str, float]]
     uses_embed_content: Optional[bool]
+    cost_discount: Optional[float]
 
 
 class ModelInfo(ModelInfoBase, total=False):
@@ -3148,6 +3149,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     annotation_cost_per_page: Optional[float] = None
     regional_processing_uplift_multiplier_eu: Optional[float] = None
     regional_processing_uplift_multiplier_us: Optional[float] = None
+    cost_discount: Optional[float] = None
 
     @classmethod
     def strip_custom_pricing_fields(cls, model_info: Dict[str, Any]) -> Dict[str, Any]:

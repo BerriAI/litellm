@@ -978,6 +978,67 @@ def _apply_cost_discount(
     return base_cost, discount_percent, discount_amount
 
 
+def _get_deployment_cost_discount(
+    litellm_logging_obj: "LitellmLoggingObject | None",
+) -> "float | None":
+    """
+    Read a deployment-level ``cost_discount`` from the request's ``litellm_params``.
+
+    The router stores per-deployment ``model_info`` under ``metadata`` (and, for
+    generic_api_call routes like /responses and /messages, ``litellm_metadata``).
+    Returns the discount when it is a float in [0, 1], otherwise None. Out-of-range
+    or non-numeric values are ignored with a warning so a misconfigured deployment
+    never crashes cost tracking (config-time validation lives on ``ModelInfo``).
+    """
+    if litellm_logging_obj is None:
+        return None
+
+    raw_params = getattr(litellm_logging_obj, "litellm_params", None)
+    if not isinstance(raw_params, dict):
+        return None
+
+    for metadata_key in ("metadata", "litellm_metadata"):
+        metadata = raw_params.get(metadata_key)
+        if not isinstance(metadata, dict):
+            continue
+        model_info = metadata.get("model_info")
+        if not isinstance(model_info, dict):
+            continue
+        cost_discount = model_info.get("cost_discount")
+        if cost_discount is None:
+            continue
+        if isinstance(cost_discount, bool) or not isinstance(cost_discount, (int, float)):
+            verbose_logger.warning("Ignoring non-numeric deployment cost_discount: %r", cost_discount)
+            return None
+        if not (0 <= cost_discount <= 1):
+            verbose_logger.warning(
+                "Ignoring out-of-range deployment cost_discount (must be in [0, 1]): %r", cost_discount
+            )
+            return None
+        return float(cost_discount)
+
+    return None
+
+
+def _apply_deployment_cost_discount(
+    base_cost: float,
+    cost_discount: float,
+) -> "tuple[float, float, float]":
+    """
+    Apply a deployment-level discount. Returns (final_cost, discount_percent, discount_amount).
+    """
+    discount_amount = base_cost * cost_discount
+    final_cost = base_cost - discount_amount
+
+    if verbose_logger.isEnabledFor(logging.DEBUG):
+        verbose_logger.debug(
+            f"Applied {cost_discount * 100}% deployment discount: "
+            f"${base_cost:.6f} -> ${final_cost:.6f} (saved ${discount_amount:.6f})"
+        )
+
+    return final_cost, cost_discount, discount_amount
+
+
 def _apply_cost_margin(
     base_cost: float,
     custom_llm_provider: Optional[str],
@@ -1608,7 +1669,17 @@ def completion_cost(
                     _final_cost += sum(additional_costs.values())
 
                 original_cost = _final_cost
-                if litellm.cost_discount_config:
+                _deployment_cost_discount = _get_deployment_cost_discount(litellm_logging_obj)
+                if _deployment_cost_discount is not None:
+                    (
+                        _final_cost,
+                        discount_percent,
+                        discount_amount,
+                    ) = _apply_deployment_cost_discount(
+                        base_cost=_final_cost,
+                        cost_discount=_deployment_cost_discount,
+                    )
+                elif litellm.cost_discount_config:
                     (
                         _final_cost,
                         discount_percent,
