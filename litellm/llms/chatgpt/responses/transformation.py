@@ -218,10 +218,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             clean_items = []
             for _, item in sorted(streamed_output_items.items()):
                 ci = {k: v for k, v in item.items() if k not in _EXTRA_FIELDS}
-                ci["content"] = [
-                    {k2: v2 for k2, v2 in c.items() if k2 not in _EXTRA_FIELDS}
-                    for c in ci.get("content", [])
-                ]
+                content_parts: object = ci.get("content", [])
+                if isinstance(content_parts, list):
+                    ci["content"] = [{k2: v2 for k2, v2 in c.items() if k2 not in _EXTRA_FIELDS} for c in content_parts]
                 clean_items.append(ci)
             response_payload["output"] = clean_items
         if "created_at" in response_payload:
