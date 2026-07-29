@@ -29,14 +29,12 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from opentelemetry.trace import Span, SpanKind, Tracer
+from opentelemetry.util.re import parse_env_headers
 
 from litellm._version import version as litellm_version
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.model.semconv import LiteLLM
 from litellm.integrations.otel.model.spans import LiteLLMSpanKind
-
-# Re-exported so ``providers.parse_headers`` remains a stable entry point.
-from litellm.integrations.otel.model.utils import parse_headers as parse_headers
 
 if TYPE_CHECKING:
     from opentelemetry.metrics import Meter
@@ -119,6 +117,23 @@ def _otlp_traces_endpoint(endpoint: str | None) -> str | None:
     return endpoint + "/v1/traces"
 
 
+def parse_headers(raw: str | None) -> dict[str, str]:
+    """Parse an OTLP ``"k=v,k=v"`` header string into a dict.
+
+    ``OTEL_EXPORTER_OTLP_HEADERS`` is W3C Baggage encoded per the OTLP spec, so
+    values are percent-decoded: a vendor that documents
+    ``Authorization=Basic%20<token>`` (Grafana Cloud does, because a bare space
+    is not representable there) has to reach the exporter as ``Basic <token>``,
+    not with a literal ``%20`` that the backend rejects as malformed. The SDK's
+    own parser is used so litellm decodes exactly what the OTLP exporters do
+    when they read the env var themselves; ``liberal`` keeps values that are not
+    percent-encoded (``Authorization=Bearer <token>``) working unchanged.
+    """
+    if not raw:
+        return {}
+    return dict(parse_env_headers(raw, liberal=True))
+
+
 def _exporter_from_spec(spec: ExporterSpec) -> SpanExporter:
     kind = (spec.kind or "console").lower()
     factory = _EXPORTER_FACTORIES.get(kind)
@@ -191,6 +206,13 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
     ``console`` (and any unrecognized kind) exports to the console; ``otlp_http``
     and ``otlp_grpc`` export over OTLP with the configured endpoint/headers. The
     reader exports on a 5s period, matching v1.
+
+    Histograms keep the SDK's default cumulative temporality. Prometheus-backed
+    OTLP receivers (Grafana Cloud / Mimir, and the Prometheus OTLP endpoint)
+    reject delta histograms outright with ``invalid temporality and type
+    combination``, which drops the whole metric batch, while backends that
+    prefer delta still accept cumulative. The enterprise billing exporter
+    already relies on the same default.
     """
     from opentelemetry.sdk.metrics.export import (
         ConsoleMetricExporter,
@@ -202,18 +224,12 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
         from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
             OTLPMetricExporter as HTTPMetricExporter,
         )
-        from opentelemetry.sdk.metrics import Histogram
-        from opentelemetry.sdk.metrics.export import AggregationTemporality
 
         exporter: Any = HTTPMetricExporter(
             endpoint=_otlp_metrics_endpoint(config.endpoint),
             headers=parse_headers(config.headers),
-            preferred_temporality={Histogram: AggregationTemporality.DELTA},
         )
     elif kind in ("otlp_grpc", "grpc"):
-        from opentelemetry.sdk.metrics import Histogram
-        from opentelemetry.sdk.metrics.export import AggregationTemporality
-
         try:
             from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
                 OTLPMetricExporter as GRPCMetricExporter,
@@ -227,7 +243,6 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
         exporter = GRPCMetricExporter(
             endpoint=config.endpoint,
             headers=parse_headers(config.headers),
-            preferred_temporality={Histogram: AggregationTemporality.DELTA},
         )
     else:
         exporter = ConsoleMetricExporter()

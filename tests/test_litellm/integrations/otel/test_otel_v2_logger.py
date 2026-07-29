@@ -2120,9 +2120,9 @@ def test_valid_metric_filter_records_six_metrics(monkeypatch):
     assert _emitted_metric_names(reader) == {
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
-        "gen_ai.client.token.cost",
-        "gen_ai.client.response.time_to_first_token",
-        "gen_ai.client.response.time_per_output_token",
+        "gen_ai.usage.cost",
+        "gen_ai.server.time_to_first_token",
+        "gen_ai.server.time_per_output_token",
         "gen_ai.client.response.duration",
     }
 
