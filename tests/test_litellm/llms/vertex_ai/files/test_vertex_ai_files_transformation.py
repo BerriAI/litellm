@@ -1359,7 +1359,11 @@ class TestVertexEmbeddingsBatchInputTranslation:
 
         assert "key" not in row
 
-    def test_should_map_openai_params_to_embed_content_config_sibling(self):
+    def test_should_map_openai_params_into_the_embed_content_request(self):
+        """
+        The docs put these in an `embed_content_config` sibling of `request`, but Vertex
+        rejects that key and fails the whole job, so they belong inside the request.
+        """
         (row,) = _wrap_entries(
             [
                 _embeddings_entry(
@@ -1374,17 +1378,20 @@ class TestVertexEmbeddingsBatchInputTranslation:
             ]
         )
 
-        assert row["embed_content_config"] == {
-            "output_dimensionality": 768,
-            "task_type": "RETRIEVAL_DOCUMENT",
-            "title": "some_title",
+        assert row == {
+            "key": "request-1",
+            "request": {
+                "content": {"parts": [{"text": "hello world"}]},
+                "output_dimensionality": 768,
+                "task_type": "RETRIEVAL_DOCUMENT",
+                "title": "some_title",
+            },
         }
-        assert "output_dimensionality" not in row["request"]
 
-    def test_should_omit_embed_content_config_when_no_params_given(self):
+    def test_should_omit_config_fields_when_no_params_given(self):
         (row,) = _wrap_entries([_embeddings_entry()])
 
-        assert "embed_content_config" not in row
+        assert set(row["request"]) == {"content"}
 
     def test_should_translate_multimodal_gcs_input(self):
         (row,) = _wrap_entries(
@@ -1465,8 +1472,8 @@ class TestVertexEmbeddingsBatchOutputTranslation:
             "key": "request-1",
             "request": {"content": {"parts": [{"text": "hello world"}]}},
             "response": {
-                "tokenCount": "2",
                 "embedding": {"values": [-0.015, 0.024]},
+                "usageMetadata": {"promptTokenCount": 2},
             },
         }
         row.update(overrides)
@@ -1502,6 +1509,21 @@ class TestVertexEmbeddingsBatchOutputTranslation:
         ]
         assert body["usage"]["prompt_tokens"] == 2
         assert body["usage"]["total_tokens"] == 2
+
+    def test_should_fall_back_to_documented_token_count_field(self, config):
+        (result,) = self._transform(
+            config,
+            [
+                self._vertex_embeddings_output_row(
+                    response={
+                        "embedding": {"values": [-0.015, 0.024]},
+                        "tokenCount": "2",
+                    }
+                )
+            ],
+        )
+
+        assert result["response"]["body"]["usage"]["prompt_tokens"] == 2
 
     def test_should_resolve_model_from_managed_gcs_object_path(self, config):
         object_path = urllib.parse.quote(
@@ -1569,8 +1591,8 @@ class TestVertexEmbeddingsBatchOutputTranslation:
                     "status": "",
                     "processed_time": "2026-07-29T05:55:52.379528Z",
                     "response": {
-                        "tokenCount": "2",
                         "embedding": {"values": [-0.015, 0.024]},
+                        "usageMetadata": {"promptTokenCount": 2},
                     },
                 }
             ],
