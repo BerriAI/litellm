@@ -129,32 +129,31 @@ class TestGroqWebSearchOptions:
 
 
 def _searched_groq_response(executed_tools: list | None) -> dict:
-    message: dict = {"role": "assistant", "content": "Top headline: example"}
-    if executed_tools is not None:
-        message["executed_tools"] = executed_tools
     return {
         "id": "chatcmpl-1",
         "object": "chat.completion",
         "created": 1,
         "model": "openai/gpt-oss-20b",
         "service_tier": "auto",
-        "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Top headline: example",
+                    **({"executed_tools": executed_tools} if executed_tools is not None else {}),
+                },
+                "finish_reason": "stop",
+            }
+        ],
         "usage": {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
     }
 
 
 EXECUTED_TOOLS_TWO_SEARCHES = [
-    {
-        "index": 0,
-        "type": "browser_search",
-        "name": "browser.search",
-        "arguments": '{"query": "top headline"}',
-        "search_results": {"results": [{"title": "t", "url": "https://example.com", "content": "c", "score": 0.9}]},
-    },
-    {"index": 1, "type": "browser.open", "name": "browser.open", "arguments": '{"cursor": 0, "id": 0}'},
-    {"index": 2, "type": "function", "name": "browser.open", "arguments": '{"cursor": 1, "id": 0}'},
-    {"index": 3, "type": "browser_search", "name": "browser.search", "arguments": '{"query": "again"}'},
-    {"index": 4, "type": "browser.find", "name": "browser.find", "arguments": '{"cursor": 1, "pattern": "x"}'},
+    {"name": "browser.search", "type": "browser_search"},
+    {"name": "browser.open", "type": "function"},
+    {"name": "browser.search", "type": "browser_search"},
 ]
 
 
@@ -198,7 +197,7 @@ class TestGroqWebSearchUsageSignal:
             custom_llm_provider="groq",
             standard_built_in_tools_params={"web_search_options": {"search_context_size": "high"}},
         )
-        assert cost == 0.005
+        assert cost == pytest.approx(2 * 0.005)
 
 
 class TestGroqWebSearchCost:

@@ -57,6 +57,12 @@ def get_cost_for_web_search_request(
         from .xai.cost_calculator import cost_per_web_search_request
 
         return cost_per_web_search_request(usage=usage, model_info=model_info)
+    elif custom_llm_provider == "groq":
+        from .groq.cost_calculator import (
+            cost_per_web_search_request as groq_cost_per_web_search_request,
+        )
+
+        return groq_cost_per_web_search_request(usage=usage, model_info=model_info)
     else:
         return None
 
