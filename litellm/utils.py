@@ -8010,6 +8010,8 @@ class ProviderConfigManager:
             )
 
             return DashScopeRerankConfig()
+        elif litellm.LlmProviders.CLOUDFLARE == provider:
+            return litellm.CloudflareRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
