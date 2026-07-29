@@ -400,6 +400,26 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
   return { logo, displayName };
 };
 
+const modelFamilyLogoMap: ReadonlyArray<readonly [RegExp, string]> = [
+  [/[/.:](mistral|ministral|codestral|pixtral|devstral|voxtral|magistral)/i, mistralLogo.src],
+  [/[/.:](qwen|qwq)/i, qwenLogo.src],
+  [/[/.:](gemma|gemini)/i, googleLogo.src],
+  [/[/.:](llama)/i, metaLlamaLogo.src],
+  [/[/.:](deepseek)/i, deepseekLogo.src],
+  [/[/.:](claude)/i, anthropicLogo.src],
+  [/[/.:](gpt|whisper|o[134](-|$))/i, openaiSmallLogo.src],
+  [/[/.:](command)/i, cohereLogo.src],
+  [/[/.:](grok)/i, xaiLogo.src],
+  [/[/.:](kimi|moonshot)/i, moonshotLogo.src],
+  [/[/.:](minimax)/i, minimaxLogo.src],
+  [/[/.:](nova-)/i, bedrockLogo.src],
+];
+
+export const getModelLogo = (model: string | undefined, provider: string): string => {
+  const familyLogo = model ? modelFamilyLogoMap.find(([motif]) => motif.test(model))?.[1] : undefined;
+  return resolveLogoSrc(familyLogo) ?? getProviderLogoAndName(provider).logo;
+};
+
 export const getPlaceholder = (selectedProvider: string): string => {
   if (selectedProvider === Providers.AIML) {
     return "aiml/flux-pro/v1.1";

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   Providers,
+  getModelLogo,
   getPlaceholder,
   getProviderLogoAndName,
   getProviderModels,
@@ -149,6 +150,45 @@ describe("provider_info_helpers", () => {
     it("should resolve a provider to its own bundled logo via getProviderLogoAndName", () => {
       const { logo } = getProviderLogoAndName("openai");
       expect(logo).toContain("openai_small");
+    });
+  });
+
+  describe("getModelLogo", () => {
+    it.each([
+      ["scaleway/mistral-small-3.2-24b-instruct-2506", "mistral"],
+      ["scaleway/qwen3-235b-a22b-instruct-2507", "qwen"],
+      ["scaleway/gemma-3-27b-it", "google"],
+      ["scaleway/llama-3.3-70b-instruct", "meta_llama"],
+      ["scaleway/gpt-oss-120b", "openai_small"],
+      ["scaleway/whisper-large-v3", "openai_small"],
+      ["scaleway/deepseek-r1-distill-llama-70b", "deepseek"],
+      ["openrouter/anthropic/claude-sonnet-4.5", "anthropic"],
+      ["openrouter/moonshotai/kimi-k2", "moonshot"],
+      ["bedrock/mistral.mistral-large-2407-v1:0", "mistral"],
+      ["bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0", "anthropic"],
+      ["bedrock/meta.llama3-3-70b-instruct-v1:0", "meta_llama"],
+      ["together_ai/deepseek-ai/DeepSeek-V3", "deepseek"],
+      ["groq/openai/gpt-oss-20b", "openai_small"],
+    ])("resolves %s to the %s family logo", (model, expectedLogoFragment) => {
+      expect(getModelLogo(model, "openrouter")).toContain(expectedLogoFragment);
+    });
+
+    it("falls back to the provider logo when the model names no known family", () => {
+      expect(getModelLogo("scaleway/some-unknown-model", "openrouter")).toBe(getProviderLogoAndName("openrouter").logo);
+    });
+
+    it("falls back to the provider logo when there is no model", () => {
+      expect(getModelLogo(undefined, "bedrock")).toBe(getProviderLogoAndName("bedrock").logo);
+    });
+
+    it("keeps the provider logo for a bare deployment id, so azure deployments stay on the azure mark", () => {
+      const azureLogo = getProviderLogoAndName("azure").logo;
+      expect(getModelLogo("gpt-4o", "azure")).toBe(azureLogo);
+      expect(getModelLogo("my-deployment", "azure")).toBe(azureLogo);
+    });
+
+    it("keeps the provider logo for first-party providers whose models are unprefixed", () => {
+      expect(getModelLogo("claude-sonnet-4-5", "anthropic")).toBe(getProviderLogoAndName("anthropic").logo);
     });
   });
 
