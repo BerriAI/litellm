@@ -2778,3 +2778,37 @@ def test_provider_scoped_credentials_never_use_other_teams_deployment():
 
     assert credentials is not None
     assert credentials["vertex_project"] == "shared-project"
+
+
+def test_provider_scoped_credentials_resolve_team_wildcard_deployment():
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        resolve_provider_scoped_credentials,
+    )
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "team-vertex-wildcard",
+                "litellm_params": {
+                    "model": "vertex_ai/*",
+                    "vertex_project": "team-wildcard-project",
+                },
+                "model_info": {
+                    "id": "team-wildcard-dep",
+                    "team_id": "team-caller",
+                    "team_public_model_name": "vertex_ai/*",
+                },
+            }
+        ]
+    )
+
+    credentials = resolve_provider_scoped_credentials(
+        llm_router=router,
+        custom_llm_provider="vertex_ai",
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test", team_id="team-caller", team_models=["vertex_ai/*"]
+        ),
+    )
+
+    assert credentials is not None
+    assert credentials["vertex_project"] == "team-wildcard-project"
