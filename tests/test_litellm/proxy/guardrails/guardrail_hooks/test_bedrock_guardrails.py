@@ -3282,17 +3282,6 @@ async def test_chat_completion_modify_response_exception_streaming_logging_obj_n
     assert response is not None
 
 
-###############################################################################
-# AIKMG-278: chunk oversized ApplyGuardrail requests instead of failing.
-#
-# AWS rejects an ApplyGuardrail call whose content exceeds the account's
-# "maximum input size in text units" quota with a 400 ValidationException.
-# Rather than surfacing that 400 to the caller, split the content in half and
-# retry each half; merge the per-half responses back into one. Grounded
-# (contextual-grounding) requests are never chunked -- grounding scores the
-# response holistically against the whole source, so fragmenting it would
-# produce misleading scores.
-###############################################################################
 
 
 def _too_large_validation_httpx_response() -> MagicMock:
@@ -3399,7 +3388,6 @@ async def test_apply_guardrail_chunks_on_too_large_validation_error():
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            # Whole-content call: too large.
             return _too_large_validation_httpx_response()
         if call_count == 2:
             return _passing_bedrock_httpx_response("chunk-1")
@@ -3419,13 +3407,9 @@ async def test_apply_guardrail_chunks_on_too_large_validation_error():
                 request_data={"model": "bedrock-nova-micro"},
             )
 
-    # 1 whole-content attempt + 2 chunk attempts.
     assert call_count == 3
     detail = exc_info.value.detail
     assert exc_info.value.status_code == 400
-    # The merged response must retain the block signal from chunk-2 even
-    # though chunk-1 passed clean -- losing it would silently bypass a
-    # guardrail hit.
     assert "chunk-2" in detail["bedrock_guardrail_response"]
     assert detail["assessments"][0]["matches"][0]["name"] == "chunk-2"
 
@@ -3499,9 +3483,6 @@ async def test_apply_guardrail_recurses_past_first_bisection_into_four_chunks():
     mock_credentials.secret_key = "s"
     mock_credentials.token = None
 
-    # Depth-first recursion order for 4 items bisected down to single items:
-    # whole -> [1,2] -> [1] -> [2] -> [3,4] -> [3] -> [4]. Only single-item
-    # calls (positions 3, 4, 6, 7) fit; every multi-item call is too large.
     responses = [
         _too_large_validation_httpx_response(),  # whole content: [1,2,3,4]
         _too_large_validation_httpx_response(),  # first half: [1,2]
@@ -3528,7 +3509,6 @@ async def test_apply_guardrail_recurses_past_first_bisection_into_four_chunks():
             request_data={"model": "bedrock-nova-micro"},
         )
 
-    # 1 whole-content + 2 first-level halves + 4 second-level quarters = 7.
     assert mock_post.await_count == 7
     assert not responses
     assert result.get("action") == "NONE"
@@ -3576,7 +3556,6 @@ async def test_apply_guardrail_does_not_chunk_when_grounding_present():
                 request_data={"model": "bedrock-nova-micro"},
             )
 
-    # Exactly one call: no bisect-and-retry for a grounded request.
     assert mock_post.await_count == 1
     assert exc_info.value.status_code == 400
 
@@ -3769,8 +3748,6 @@ async def test_apply_guardrail_unrecoverable_failure_still_logs_once_when_client
     exactly one `guardrail_failed_to_respond` entry, not zero."""
     guardrail = _bedrock_guardrail_for_chunk_tests()
 
-    # Single character: `_split_bedrock_content` cannot halve this into two non-empty
-    # pieces, so chunking gives up and the original error propagates.
     messages = [{"role": "user", "content": "x"}]
 
     mock_credentials = MagicMock()
@@ -3824,8 +3801,6 @@ async def test_apply_guardrail_single_item_split_twice_still_yields_one_output_p
     mock_credentials.secret_key = "s"
     mock_credentials.token = None
 
-    # whole item -> [first half] -> [q1] [q2] -> [second half] -> [q3] [q4].
-    # Only the four quarters fit; the whole item and both halves are too large.
     responses = [
         _too_large_validation_httpx_response(),  # whole single item
         _too_large_validation_httpx_response(),  # first half
@@ -3856,8 +3831,6 @@ async def test_apply_guardrail_single_item_split_twice_still_yields_one_output_p
     assert not responses
     assert result.get("action") == "NONE"
     output_texts = [o.get("text") for o in result.get("outputs") or []]
-    # One original content item in, so exactly one output entry out, carrying all
-    # four fragments' text in order.
     assert output_texts == ["q1q2q3q4"]
 
 
@@ -3885,7 +3858,6 @@ async def test_apply_guardrail_chunk_retries_after_throttling_then_succeeds():
         if call_count == 1:
             return _too_large_validation_httpx_response()
         if call_count == 2:
-            # First chunk throttled once, then succeeds on retry.
             return _throttling_httpx_response()
         if call_count == 3:
             return _passing_bedrock_httpx_response("chunk-1")
@@ -4105,9 +4077,6 @@ async def test_apply_guardrail_bin_packs_under_budget_content_with_no_probe_call
     attempt."""
     guardrail = _bedrock_guardrail_for_chunk_tests()
 
-    # Five items, individually tiny, whose combined length exceeds the budget
-    # only when summed -- proves this triggers packing into multiple batches
-    # by SIZE, not by falling back to per-item chunking.
     item_text = "x" * (_BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS // 2)
     messages = [{"role": "user", "content": item_text} for _ in range(3)]
 
@@ -4136,8 +4105,6 @@ async def test_apply_guardrail_bin_packs_under_budget_content_with_no_probe_call
             request_data={"model": "bedrock-nova-micro"},
         )
 
-    # Three items at budget/2 each pack two-per-batch (2 + 1), never a single
-    # oversized call and never a wasted whole-content probe: exactly 2 calls.
     assert call_count == 2
     assert result.get("action") == "NONE"
 
@@ -4202,12 +4169,8 @@ async def test_apply_guardrail_batch_under_budget_still_rejected_falls_back_to_b
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            # First pre-packed batch (items 1+2): accepted immediately.
             return _passing_bedrock_httpx_response("batch-1")
         if call_count == 2:
-            # Second pre-packed batch (item 3 alone): rejected as too large
-            # despite fitting the fixed budget guess -- simulates a lower
-            # real-world per-account cap.
             return _too_large_validation_httpx_response()
         return _passing_bedrock_httpx_response(f"batch-2-bisected-{call_count}")
 
@@ -4224,12 +4187,9 @@ async def test_apply_guardrail_batch_under_budget_still_rejected_falls_back_to_b
             request_data={"model": "bedrock-nova-micro"},
         )
 
-    # batch-1 (1 call, accepted) + batch-2 (1 rejected + 2 bisected halves) = 4.
     assert call_count == 4
     assert result.get("action") == "NONE"
     output_texts = [o.get("text") for o in result.get("outputs") or []]
-    # batch-2's two bisected text fragments came from the same original
-    # content item, so they are merged back into one combined output entry.
     assert output_texts == ["batch-1", "batch-2-bisected-3batch-2-bisected-4"]
 
 
@@ -4240,8 +4200,6 @@ def test_split_bedrock_content_single_item_splits_on_whitespace_not_mid_word():
     denied word/PII pattern straddling a raw character-midpoint cut could be
     truncated on both fragments and scan clean on each, then reassemble into
     the original unmasked text -- a detection bypass."""
-    # 20 'a's + space + 30 'b's: the raw character midpoint (25) falls inside
-    # the run of 'b's, proving the split must move off it to the nearest space.
     text = ("a" * 20) + " " + ("b" * 30)
     raw_midpoint = len(text) // 2
     assert text[raw_midpoint] == "b"
@@ -4254,10 +4212,7 @@ def test_split_bedrock_content_single_item_splits_on_whitespace_not_mid_word():
     first_text = first_half[0]["text"]["text"]
     second_text = second_half[0]["text"]["text"]
 
-    # Lossless: concatenating the two fragments reproduces the original exactly.
     assert first_text + second_text == text
-    # Word-safe: the split lands exactly on the whitespace boundary, not
-    # inside either the "a" or "b" run.
     assert first_text == ("a" * 20) + " "
     assert second_text == "b" * 30
 
@@ -4291,8 +4246,6 @@ def test_bin_pack_bedrock_content_packs_minimal_batches_within_budget():
     for batch in batches:
         combined_len = sum(len(item["text"]["text"]) for item in batch)
         assert combined_len <= 100
-    # 10 items * 30 chars = 300 chars at a 100-char budget packs into 3 batches
-    # of 3 items (90 chars) plus 1 batch of 1 item -- never one batch per item.
     assert len(batches) == 4
 
 
@@ -4367,9 +4320,7 @@ async def test_apply_guardrail_too_large_reported_as_429_bisects_without_burning
             request_data={"model": "bedrock-nova-micro"},
         )
 
-    # One rejected whole-content call, then exactly one call per bisected half.
     assert call_count == 3
-    # No backoff sleep: a size error must not be treated as a transient throttle.
     mock_sleep.assert_not_awaited()
     assert result.get("action") == "NONE"
     output_texts = [o.get("text") for o in result.get("outputs") or []]

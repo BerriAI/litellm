@@ -84,22 +84,7 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME = "bedrock"
-# KNOWN LIMITATION (chunking, below): splitting an oversized message's text on
-# a whitespace boundary (see `_nearest_whitespace_split_index`) prevents
-# accidentally severing a single token -- one denied word, one PII pattern --
-# across a chunk boundary. It does not stop a multi-word denied phrase
-# deliberately positioned to straddle that boundary, since each fragment can
-# scan clean independently. AWS's own guidance for this API acknowledges the
-# same gap for input chunking with no documented resolution; closing it would
-# require an overlap window reconciled against masked output, which AWS does
-# not guarantee to be length-preserving. Accepted as out of scope.
 _BEDROCK_DYNAMIC_BODY_DENYLIST = frozenset({"content", "source"})
-# ApplyGuardrail's per-request "maximum input size in text units" quota is
-# region/account/policy-dependent and cannot be predicted from config, so it is
-# only ever discovered reactively: AWS rejects an over-quota call with a 400
-# ValidationException whose message contains one of these substrings (matched
-# case-insensitively against the parsed AWS error message). On a match the
-# content is bisected and each half retried, rather than surfacing the 400.
 _BEDROCK_TOO_LARGE_ERROR_SUBSTRINGS = (
     "text unit",
     "maximum input size",
@@ -108,21 +93,7 @@ _BEDROCK_TOO_LARGE_ERROR_SUBSTRINGS = (
     "too large",
     "exceeds the maximum",
 )
-# Conservative starting guess for how much content (by character count) to send
-# in one ApplyGuardrail call, used to pre-bin-pack content instead of always
-# starting from the whole payload. This is NOT a correctness dependency: it only
-# sets how many calls the common case takes. Any bin AWS still rejects as too
-# large (because the real per-request text-unit cap for this account/region/
-# policy is lower than this guess -- that cap is not knowable ahead of time and
-# is not a fixed character count) falls back to the recursive bisection below,
-# which self-corrects regardless of how wrong this guess was. So a too-generous
-# guess here costs the same one extra probe-and-bisect round trip that pure
-# reactive bisection would have paid anyway, while a well-tuned guess makes the
-# common case a single pass instead of O(log n) round trips per request.
 _BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS = 20_000
-# Exponential backoff for a chunk call throttled with ThrottlingException (429).
-# Kept small: chunking already trades one oversized call for several smaller
-# ones, so retries must not multiply per-request latency by an order of magnitude.
 _BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES = 3
 _BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS = 0.5
 # Resource-less, detect-only InvokeGuardrailChecks API (no guardrail resource required).
@@ -826,6 +797,30 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request_data: dict | None = None,
         logging_event_type: GuardrailEventHooks | None = None,
     ) -> BedrockGuardrailResponse:
+        """Scan `messages`/`response` with ApplyGuardrail, chunking if it is too large.
+
+        Content is bin-packed into budget-sized batches and each batch posted
+        sequentially, every batch independently falling back to bisection if AWS
+        rejects it. The per-batch responses are merged so callers cannot tell whether
+        chunking happened.
+
+        Content using contextual grounding opts out of chunking entirely: grounding is
+        scored holistically against the whole reference source, so bisecting it would
+        fragment that evaluation and yield misleading scores. Such a request keeps the
+        old behavior of surfacing a too-large error rather than being split.
+
+        `logging_event_type` drives what UI and spend logs report. It is distinct from
+        Bedrock's `source`, which is INPUT vs OUTPUT for the API body and must not be
+        confused with the proxy hook (pre_call / during_call / post_call); when omitted,
+        the legacy source-derived mapping is kept for backward compatibility.
+
+        A guardrail *block* is logged where it happens, in
+        `_post_apply_guardrail_content`, because chunking stops immediately and there is
+        no later merged response to log instead. Everything else that fails out of the
+        chunking flow (an unrecoverable too-large error, a non-size validation error,
+        exhausted throttle retries) is a genuine end-to-end failure of this one logical
+        guardrail call and is logged exactly once here.
+        """
         start_time = datetime.now(timezone.utc)
         credentials, aws_region_name = self._load_credentials()
         bedrock_request_data: dict = dict(
@@ -844,18 +839,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if request_data.get("api_key") is not None:
                 api_key = request_data["api_key"]
 
-        # UI / spend logs use event_type. Bedrock's `source` is INPUT vs OUTPUT for the API
-        # body, which must not be confused with the proxy hook (pre_call / during_call /
-        # post_call). When omitted, keep legacy mapping for backward compatibility.
         if logging_event_type is not None:
             event_type = logging_event_type
         else:
             event_type = GuardrailEventHooks.pre_call if source == "INPUT" else GuardrailEventHooks.post_call
 
         content: list[BedrockContentItem] = bedrock_request_data.get("content") or []
-        # Contextual grounding scores the response holistically against the whole
-        # reference source; bisecting it would fragment that evaluation and produce
-        # misleading grounding scores, so a too-large error is never chunked here.
         allow_chunking = not self._content_uses_contextual_grounding(content)
         batches = (
             self._bin_pack_bedrock_content(content, budget=_BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS)
@@ -880,11 +869,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
             ]
         except HTTPException as exc:
-            # A block is logged where it happens, inside _post_apply_guardrail_content,
-            # since chunking stops immediately and there is no later merged response to
-            # log instead. Anything else reaching here (unrecoverable too-large error,
-            # a non-size validation error, exhausted throttle retries) is a genuine
-            # end-to-end failure of this logical guardrail call and is logged once here.
             if not isinstance(exc.detail, dict):
                 self._log_apply_guardrail_failure(
                     detail=exc.detail,
@@ -930,7 +914,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         step can recombine them into the one content item they came from, rather
         than treating each fragment as its own item when reconstructing positions
         for masking. That count covers however many fragments the item ended up
-        split into, not just two, since it can be bisected repeatedly. A real
+        split into, not just two, since it can be bisected repeatedly: the
+        outermost single-item split stamps the total leaf count on every leaf
+        below it, overwriting any smaller count an inner split had set. A real
         guardrail block on any (sub-)chunk raises immediately
         -- callers must not lose that signal by continuing to post the remaining
         chunks.
@@ -991,11 +977,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
                 combined_results = first_results + second_results
                 if is_single_item_text_split:
-                    # Every leaf below this point came from one content item's own
-                    # text, however many levels deep the splitting went. Stamping
-                    # the total count on all of them (overwriting any smaller count
-                    # an inner split set) is what lets the merge step regroup them
-                    # into exactly one output entry for that one item.
                     return [result._replace(fragment_group_size=len(combined_results)) for result in combined_results]
                 return combined_results
             raise
@@ -1064,6 +1045,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """Make exactly one signed ApplyGuardrail HTTP call for `content` and
         parse the result. Raises HTTPException on a guardrail block or any
         non-200 response (including 429, handled by the retry wrapper above).
+
+        A block is logged here rather than by the caller: it ends the whole chunking
+        flow immediately, with no further chunks attempted, so there is no later
+        merged response for the caller to log instead.
         """
         bedrock_request_data = {**base_request_data, "content": content}
         prepared_request = self._prepare_request(
@@ -1097,9 +1082,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
             bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
             if self._should_raise_guardrail_blocked_exception(bedrock_guardrail_response):
-                # A block ends the whole chunking flow immediately (no further
-                # chunks are attempted), so it is logged here rather than by the
-                # caller -- there is no later "final merged response" to log instead.
                 self._log_apply_guardrail_attempt(
                     httpx_response=httpx_response,
                     json_response=_json_response,
@@ -1216,6 +1198,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         (still oversized) batch and is sent as-is; if AWS rejects that batch as
         too large, `_apply_guardrail_content_with_chunking`'s existing
         recursive-bisection fallback takes over for that batch only.
+
+        `budget` (`_BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS` at the call site)
+        is a conservative starting guess, not a correctness dependency. It only
+        sets how many calls the common case takes. AWS's real per-request
+        text-unit cap depends on account, region, and policy, is not a fixed
+        character count, and cannot be read from config, so any batch it still
+        rejects falls back to bisection, which self-corrects however wrong the
+        guess was. A too-generous guess therefore costs one extra probe-and-bisect
+        round trip, the same one pure reactive bisection would have paid anyway.
         """
         if not content:
             return [content]
@@ -1457,12 +1448,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         not equal to its item count is passed through as-is instead of guessed
         at, since AWS's docs don't cover partial masking within one multi-item
         call.
+
+        A unit holding more than one result is a fragment group: every result in it
+        is one fragment of a single content item's text, so the group collapses to
+        one entry built from each fragment's masked text (or that fragment's own
+        original text where it came back unmasked), concatenated in order. This
+        holds for any group size, not only two.
         """
         if len(unit) > 1:
-            # Every result here is one fragment of a single content item's text, so
-            # the whole group collapses to one entry: each fragment's masked text
-            # (or its own original text when that fragment came back unmasked),
-            # concatenated in order. Holds for any group size, not just two.
+
             def fragment_outputs(result: BedrockContentChunkResult) -> list[BedrockGuardrailOutput]:
                 return list(result.response.get("outputs") or result.response.get("output") or [])
 
