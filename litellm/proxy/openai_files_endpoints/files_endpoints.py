@@ -43,10 +43,10 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    apply_team_provider_credentials,
     encode_file_id_with_model,
     extract_file_creation_params,
     get_credentials_for_model,
-    get_team_provider_credentials,
     handle_model_based_routing,
     prepare_data_with_credentials,
     validate_managed_files_requirement,
@@ -253,6 +253,12 @@ async def route_create_file(
             _create_file_request=_create_file_request,
         )
     else:
+        apply_team_provider_credentials(
+            data=cast(dict, _create_file_request),  # cast-ok: TypedDict is a plain dict at runtime; merged in place
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+            custom_llm_provider=custom_llm_provider,
+        )
         # get configs for custom_llm_provider
         llm_provider_config = get_files_provider_config(custom_llm_provider=custom_llm_provider)
         if llm_provider_config is not None:
@@ -735,6 +741,14 @@ async def get_file_content(
                 check_file_id_encoding=True,
             )
 
+            if not should_route:
+                apply_team_provider_credentials(
+                    data=data,
+                    llm_router=llm_router,
+                    user_api_key_dict=user_api_key_dict,
+                    custom_llm_provider=custom_llm_provider,
+                )
+
             from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
                 FileContentStreamingHandler,
             )
@@ -983,6 +997,12 @@ async def get_file(
             # Remove file_id from data to avoid "multiple values for keyword argument" error
             # data was initialized with {"file_id": file_id}
             data.pop("file_id", None)
+            apply_team_provider_credentials(
+                data=data,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+                custom_llm_provider=custom_llm_provider,
+            )
             response = await litellm.afile_retrieve(
                 custom_llm_provider=custom_llm_provider,
                 file_id=file_id,
@@ -1183,6 +1203,12 @@ async def delete_file(
             )
         else:
             data.pop("file_id", None)
+            apply_team_provider_credentials(
+                data=data,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+                custom_llm_provider=custom_llm_provider,
+            )
             response = await litellm.afile_delete(
                 custom_llm_provider=custom_llm_provider,
                 file_id=file_id,
@@ -1354,14 +1380,12 @@ async def list_files(
             # No model/target_model_names pinned: resolve upstream credentials from
             # the team's deployment for this provider so the call is authenticated
             # against the team's own account (e.g. the team's openai deployment).
-            team_credentials = get_team_provider_credentials(
+            apply_team_provider_credentials(
+                data=data,
                 llm_router=llm_router,
-                team_models=user_api_key_dict.team_models or [],
+                user_api_key_dict=user_api_key_dict,
                 custom_llm_provider=custom_llm_provider,
-                team_id=user_api_key_dict.team_id,
             )
-            if team_credentials is not None:
-                prepare_data_with_credentials(data=data, credentials=team_credentials)
 
             response = await litellm.afile_list(
                 custom_llm_provider=custom_llm_provider,

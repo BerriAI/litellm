@@ -14,6 +14,7 @@ from litellm.types.utils import SpecialEnums
 if TYPE_CHECKING:
     from fastapi import Request
 
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
 
 
@@ -371,6 +372,29 @@ def get_team_provider_credentials(
             return credentials
 
     return None
+
+
+def apply_team_provider_credentials(
+    data: dict,  # mutable-ok: credentials are merged into the request payload in place, same contract as prepare_data_with_credentials
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+    custom_llm_provider: str,
+) -> None:
+    """
+    Resolve credentials for a provider-only request (no model pinned) via
+    ``get_team_provider_credentials`` and merge them into ``data`` in-place.
+    Leaves ``data`` untouched when no authorized deployment matches, so the
+    caller falls back to environment-variable credentials exactly as before.
+    """
+    credentials = get_team_provider_credentials(
+        llm_router=llm_router,
+        team_models=user_api_key_dict.team_models or [],
+        custom_llm_provider=custom_llm_provider,
+        team_id=user_api_key_dict.team_id,
+    )
+    if credentials is None:
+        return
+    prepare_data_with_credentials(data=data, credentials=credentials)
 
 
 def prepare_data_with_credentials(

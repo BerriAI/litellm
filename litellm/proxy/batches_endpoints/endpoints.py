@@ -23,6 +23,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    apply_team_provider_credentials,
     decode_model_from_file_id,
     encode_batch_response_ids,
     encode_file_id_with_model,
@@ -295,6 +296,12 @@ async def create_batch(
                 verbose_proxy_logger.debug(f"Created batch using model: {model_param}")
             else:
                 # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
+                apply_team_provider_credentials(
+                    data=cast(dict, _create_batch_data),  # cast-ok: TypedDict is a dict at runtime
+                    llm_router=llm_router,
+                    user_api_key_dict=user_api_key_dict,
+                    custom_llm_provider=custom_llm_provider,
+                )
                 response = await litellm.acreate_batch(
                     custom_llm_provider=custom_llm_provider,
                     **_create_batch_data,  # type: ignore
@@ -525,6 +532,12 @@ async def retrieve_batch(
                 or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"
             )
+            apply_team_provider_credentials(
+                data=data,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+                custom_llm_provider=custom_llm_provider,
+            )
             response = await litellm.aretrieve_batch(
                 custom_llm_provider=custom_llm_provider,
                 **data,  # type: ignore
@@ -718,6 +731,12 @@ async def list_batches(
                 or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"
             )
+            apply_team_provider_credentials(
+                data=data,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+                custom_llm_provider=custom_llm_provider,
+            )
             response = await litellm.alist_batches(
                 custom_llm_provider=custom_llm_provider,  # type: ignore
                 after=after,
@@ -908,6 +927,12 @@ async def cancel_batch(
             # Extract batch_id from data to avoid "multiple values for keyword argument" error
             # data was cast from CancelBatchRequest which already contains batch_id
             data.pop("batch_id", None)
+            apply_team_provider_credentials(
+                data=data,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+                custom_llm_provider=custom_llm_provider,
+            )
             _cancel_batch_data = CancelBatchRequest(batch_id=batch_id, **data)
             response = await litellm.acancel_batch(
                 custom_llm_provider=custom_llm_provider,  # type: ignore
