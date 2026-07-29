@@ -1000,6 +1000,7 @@
     },
     "anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -1033,6 +1034,7 @@
     },
     "global.anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -1066,6 +1068,7 @@
     },
     "us.anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1099,6 +1102,7 @@
     },
     "eu.anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1132,6 +1136,7 @@
     },
     "au.anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -2192,6 +2197,7 @@
     },
     "anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -2224,6 +2230,7 @@
     },
     "global.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -2256,6 +2263,7 @@
     },
     "us.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -2288,6 +2296,7 @@
     },
     "eu.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -2320,6 +2329,7 @@
     },
     "au.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -2352,6 +2362,7 @@
     },
     "jp.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -2884,6 +2895,7 @@
     },
     "azure_ai/claude-opus-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "input_cost_per_token": 5e-06,
         "output_cost_per_token": 2.5e-05,
         "litellm_provider": "azure_ai",
@@ -3110,6 +3122,7 @@
     },
     "azure_ai/claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -11726,6 +11739,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -11928,6 +11942,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -11964,6 +11979,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -20903,6 +20919,7 @@
     },
     "github_copilot/claude-opus-4.6-fast": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 128000,
         "max_output_tokens": 16000,
@@ -30455,6 +30472,7 @@
     },
     "openrouter/anthropic/claude-sonnet-4.6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -30499,6 +30517,7 @@
     },
     "openrouter/anthropic/claude-opus-4.6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
@@ -32489,6 +32508,7 @@
     },
     "perplexity/anthropic/claude-opus-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
@@ -35754,6 +35774,7 @@
     },
     "vercel_ai_gateway/anthropic/claude-opus-4.6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
@@ -37000,6 +37021,7 @@
     },
     "vertex_ai/claude-opus-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -37030,6 +37052,7 @@
     },
     "vertex_ai/claude-opus-4-6@default": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -37372,6 +37395,7 @@
     },
     "vertex_ai/claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -44961,6 +44985,7 @@
     },
     "vertex_ai/claude-sonnet-4-6@default": {
         "supports_adaptive_thinking": true,
+        "supports_legacy_thinking_budget": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -46183,6 +46208,14 @@
                 "description": "Claude at version 4.6 or higher, in any id shape that contains claude-<family>-: minors 4.6 through 4.99, any later major-minor, and bare 5+ majors so a new family shaped like claude-fable-5 matches. Requiring the claude- prefix keeps non-Claude names such as team-sonnet-5-1 out. The minor is capped at two digits so an 8-digit date suffix such as claude-opus-4-20250514 is never read as a >= 4.6 minor. Turns on adaptive thinking for new versions and new families with no code change.",
                 "model_info": {
                     "supports_adaptive_thinking": true
+                }
+            },
+            {
+                "name": "claude-legacy-thinking-budget",
+                "pattern": "claude-[a-z]+-4[-._]6(?![0-9])",
+                "description": "Claude 4.6, in any id shape that contains claude-<family>-. The 4.6 generation is the only one that accepts both interfaces: adaptive thinking (output_config.effort) and the legacy thinking.type=enabled with an explicit budget_tokens ceiling. Anthropic rejects the legacy shape from 4.7 onwards, so only 4.6 requests can be forwarded with the caller's budget intact instead of being translated to an effort bucket.",
+                "model_info": {
+                    "supports_legacy_thinking_budget": true
                 }
             },
             {

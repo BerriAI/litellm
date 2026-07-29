@@ -313,7 +313,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def _translate_legacy_thinking_for_adaptive_model(
         model: str, optional_params: Dict, custom_llm_provider: str
     ) -> None:
-        """Translate legacy ``thinking.type=enabled`` to adaptive for 4.6/4.7.
+        """Translate legacy ``thinking.type=enabled`` to adaptive on models that only
+        accept the adaptive interface (4.7 and up).
+
+        An explicit ``budget_tokens`` is a hard ceiling on reasoning that
+        ``output_config.effort`` cannot express, so bucketing it into an effort lets the
+        model reason past the ceiling the caller asked for. Models flagged
+        ``supports_legacy_thinking_budget`` in the cost map (the 4.6 generation) honour the
+        legacy shape natively, so their requests are forwarded with the budget intact.
         Caller-provided ``output_config.effort`` is never overridden.
         """
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -325,6 +332,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return
 
         budget = int(thinking.get("budget_tokens") or 0)
+        if budget > 0 and AnthropicModelInfo._supports_model_capability(
+            model, "supports_legacy_thinking_budget", custom_llm_provider
+        ):
+            return
+
         if budget >= DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET and (
             AnthropicConfig._supports_effort_level(model, "xhigh", custom_llm_provider)
         ):

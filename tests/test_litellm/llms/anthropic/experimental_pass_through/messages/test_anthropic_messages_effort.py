@@ -294,3 +294,48 @@ def test_non_adaptive_request_without_effort_is_untouched():
 
     assert "thinking" not in result
     assert "output_config" not in result
+
+def test_legacy_thinking_budget_preserved_for_adaptive_model():
+    """Regression: a caller-supplied ``budget_tokens`` is a hard reasoning ceiling that
+    adaptive thinking cannot express. Rewriting it to ``thinking={type: adaptive}`` plus
+    an effort bucket removed the ceiling, so a request bounded at 8000 thinking tokens
+    started reasoning past it and burning the whole max_tokens. 4.6/4.7 accept the legacy
+    shape, so it must be forwarded unchanged."""
+    result = _transform(
+        "claude-sonnet-4-6",
+        {"max_tokens": 32768, "thinking": {"type": "enabled", "budget_tokens": 8000}},
+    )
+
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 8000}
+    assert "output_config" not in result
+
+
+def test_budget_less_legacy_thinking_translated_to_adaptive_for_4_6():
+    """``thinking={type: enabled}`` without a budget is not a valid Anthropic request, so
+    the legacy claude-code shape still has to be translated to the adaptive interface."""
+    result = _transform("claude-sonnet-4-6", {"max_tokens": 32768, "thinking": {"type": "enabled"}})
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"] == {"effort": "low"}
+
+
+def test_legacy_thinking_budget_preserved_for_azure_ai_adaptive_model():
+    """The Azure AI Foundry subclass resolves capabilities under its own provider
+    namespace; the budget must survive there too, since that is where this surfaced."""
+    from litellm.llms.azure_ai.anthropic.messages_transformation import (
+        AzureAnthropicMessagesConfig,
+    )
+
+    result = AzureAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 32768,
+            "thinking": {"type": "enabled", "budget_tokens": 8000},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 8000}
+    assert "output_config" not in result
