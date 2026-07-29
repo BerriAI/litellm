@@ -9298,6 +9298,7 @@ async def embeddings(
 """
     global proxy_logging_obj
     data: Any = {}
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data, failure_call_type="aembedding")
     try:
         # Use shared request body reading helper (same as chat/completions)
         data = await _read_request_body(request=request)
@@ -9371,7 +9372,6 @@ async def embeddings(
         return response
     except Exception as e:
         # Use unified error handler
-        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
         raise await base_llm_response_processor._handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
