@@ -1851,5 +1851,126 @@ async def test_itpm_otpm_refunded_on_stream_disconnect(rate_limiter):
     )
 
 
+@pytest.mark.asyncio
+async def test_responses_api_otpm_output_cap_applied_not_skipped_as_embedding(rate_limiter):
+    """
+    Regression for a Greptile P1 finding: _reserve_project_io_tokens_or_raise
+    classified any request with data["input"] set as an embedding (no output
+    tokens), which also misclassifies the Responses API -- it puts its prompt
+    in "input" too, but does generate output. That skipped the output-cap
+    (data["max_tokens"]) applied whenever the configured OTPM limit is small
+    enough to need it, letting an unbounded Responses generation blow past
+    OTPM before post-call reconciliation catches up.
+    """
+    handler, cache = rate_limiter
+
+    api_key = hash_token("sk-responses-otpm-cap")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=api_key,
+        project_id="proj-responses-otpm",
+        project_metadata={
+            "model_otpm_limit": {"bedrock_mantle/claude-opus": 40},
+        },
+    )
+
+    data: Dict[str, Any] = {
+        "model": "bedrock_mantle/claude-opus",
+        "input": "describe this image in detail",
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="aresponses",
+    )
+
+    assert data.get("max_tokens") is not None, (
+        "Responses call was misclassified as an embedding and skipped the OTPM output cap"
+    )
+    assert data["max_tokens"] <= 10, f"expected the OTPM-derived floor (<=10), got {data['max_tokens']}"
+
+
+@pytest.mark.asyncio
+async def test_responses_api_combined_tpm_output_cap_applied_not_skipped_as_embedding(rate_limiter):
+    """
+    Regression for the same misclassification bug in the combined-TPM
+    output-cap block of async_pre_call_hook (a second, independent
+    `is_embedding = data.get("input") is not None` check). A project with
+    only a combined model_tpm_limit (no split itpm/otpm) configured small
+    enough to need the output cap must still apply it to a Responses call.
+    """
+    handler, cache = rate_limiter
+
+    api_key = hash_token("sk-responses-tpm-cap")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=api_key,
+        project_id="proj-responses-tpm",
+        project_metadata={
+            "model_tpm_limit": {"bedrock_mantle/claude-opus": 40},
+        },
+    )
+
+    data: Dict[str, Any] = {
+        "model": "bedrock_mantle/claude-opus",
+        "input": "describe this image in detail",
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="aresponses",
+    )
+
+    assert data.get("max_tokens") is not None, (
+        "Responses call was misclassified as an embedding and skipped the combined-TPM output cap"
+    )
+    assert data["max_tokens"] <= 10, f"expected the TPM-derived floor (<=10), got {data['max_tokens']}"
+
+
+@pytest.mark.asyncio
+async def test_responses_api_multimodal_input_counts_image_content(rate_limiter):
+    """
+    Regression for a Low-severity veria-ai finding: the Responses API's
+    `input` is commonly a list of message/content-block dicts, but
+    litellm.token_counter's `text` argument only joins plain string entries
+    in a list and silently drops everything else -- so an `input_image`
+    block contributed ~0 tokens to the ITPM estimate instead of the real
+    image token count. _estimate_precise_input_tokens now converts Responses
+    `input` to chat messages first (via the standard
+    transform_responses_api_input_to_messages helper) so image content is
+    counted the same way a chat completion's image content already is.
+    """
+    handler, _cache = rate_limiter
+
+    text_only_estimate = handler._estimate_precise_input_tokens(
+        data={"input": "hi"},
+        model="bedrock_mantle/claude-opus",
+        call_type="aresponses",
+    )
+
+    multimodal_estimate = handler._estimate_precise_input_tokens(
+        data={
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "hi"},
+                        {"type": "input_image", "image_url": "https://example.com/some-image.png"},
+                    ],
+                }
+            ],
+        },
+        model="bedrock_mantle/claude-opus",
+        call_type="aresponses",
+    )
+
+    assert multimodal_estimate > text_only_estimate + 100, (
+        "Responses API input_image content block was not counted; got "
+        f"text_only={text_only_estimate}, multimodal={multimodal_estimate}"
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

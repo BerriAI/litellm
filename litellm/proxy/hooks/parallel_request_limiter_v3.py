@@ -290,6 +290,11 @@ DEFAULT_CHARS_PER_TOKEN = 4
 # (baseline floor) and to the smallest configured TPM limit (capped floor for
 # small per-tenant TPM caps).
 _TPM_FLOOR_FRACTION = 4
+# Both embeddings and the Responses API put their prompt in data["input"],
+# but only embeddings have no output tokens. Every "is this an embedding"
+# check on data["input"] must exclude these call types, or a Responses call
+# gets misclassified as an embedding and skips output-token reservation/caps.
+RESPONSES_API_CALL_TYPES = ("aresponses", "responses")
 # litellm.token_counter has no per-type handling for "input_audio" content
 # blocks (unlike images, which use use_default_image_token_count) -- it
 # silently contributes 0 tokens for them. This is a conservative flat
@@ -590,7 +595,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         explicit_max_tokens = (
             data.get("max_tokens") or data.get("max_completion_tokens") or data.get("max_output_tokens")
         )
-        is_responses_call = call_type in ("aresponses", "responses")
+        is_responses_call = call_type in RESPONSES_API_CALL_TYPES
 
         match (explicit_max_tokens, input_text):
             case (mt, _) if mt is not None:
@@ -2613,7 +2618,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             sanitized.append({**message, "content": filtered_content})
         return sanitized
 
-    def _estimate_precise_input_tokens(self, data: dict, model: str | None) -> int:
+    @staticmethod
+    def _responses_input_to_chat_messages(data: dict) -> list:
+        """
+        Convert a Responses API ``input`` (string or list of input items) into
+        chat-completion-style messages via the standard LiteLLM transformation
+        (the same one guardrails use, e.g. ``purview_dlp.py``), so multimodal
+        ``input_image``/``input_text`` content blocks get counted by
+        ``token_counter``'s ``messages`` path instead of silently contributing
+        zero tokens via its ``text`` path, which only joins plain strings.
+        """
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            LiteLLMCompletionResponsesConfig,
+        )
+
+        return LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=data.get("input") or "",
+            responses_api_request=data,
+        )
+
+    def _estimate_precise_input_tokens(self, data: dict, model: str | None, call_type: str | None = None) -> int:
         """
         Model-aware input token estimate for the project ITPM reservation,
         using ``litellm.token_counter`` -- the same approach the
@@ -2626,6 +2650,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         one-token floor and blow past ITPM before post-call reconciliation
         catches up.
 
+        For the Responses API, ``input`` is converted to chat messages first
+        (via ``_responses_input_to_chat_messages``) so its own multimodal
+        content blocks are counted the same way; ``token_counter``'s ``text``
+        argument can only see plain strings in a list, not content blocks.
+
         Falls back to the cheap char-count estimate if ``token_counter``
         can't resolve a tokenizer for this model (e.g. an unrecognized
         custom model name) or otherwise raises -- the audio add-on still
@@ -2634,6 +2663,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         from litellm import token_counter
 
         messages = data.get("messages")
+        if messages is None and call_type in RESPONSES_API_CALL_TYPES and data.get("input") is not None:
+            messages = self._responses_input_to_chat_messages(data)
+
         audio_blocks = self._count_audio_content_blocks(messages)
         audio_token_estimate = audio_blocks * DEFAULT_AUDIO_TOKEN_ESTIMATE
         countable_messages = self._strip_audio_content_blocks(messages) if audio_blocks else messages
@@ -2645,7 +2677,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     token_counter(
                         model=model or "",
                         messages=countable_messages,
-                        text=data.get("prompt") or data.get("input"),
+                        text=None if countable_messages is not None else (data.get("prompt") or data.get("input")),
                         tools=data.get("tools"),
                         tool_choice=data.get("tool_choice"),
                         use_default_image_token_count=True,
@@ -2653,8 +2685,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 ),
             )
             return estimate + audio_token_estimate
-        except Exception:  # noqa: BLE001 - any tokenizer/model-resolution failure degrades to the cheap estimate, never a 500
-            estimated_input_tokens, _ = self._estimate_input_and_output_tokens(data=data)
+        except Exception:  # noqa: BLE001 - any tokenizer/model-resolution/transform failure degrades to the cheap estimate, never a 500
+            estimated_input_tokens, _ = self._estimate_input_and_output_tokens(data=data, call_type=call_type)
             return estimated_input_tokens + audio_token_estimate
 
     async def _reserve_project_io_tokens_or_raise(
@@ -2696,7 +2728,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             min_configured_tpm_limit=min_configured_otpm_limit,
             call_type=call_type,
         )
-        estimated_input_tokens = self._estimate_precise_input_tokens(data=data, model=requested_model)
+        estimated_input_tokens = self._estimate_precise_input_tokens(
+            data=data, model=requested_model, call_type=call_type
+        )
         estimated_input_tokens = max(estimated_input_tokens, 1)
         estimated_output_tokens = max(estimated_output_tokens, 1)
 
@@ -2707,7 +2741,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         capped_output_floor = self._no_max_tokens_output_floor(min_configured_otpm_limit)
         baseline_floor = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
         has_explicit_max_tokens = data.get("max_tokens") is not None or data.get("max_completion_tokens") is not None
-        is_embedding = data.get("input") is not None
+        is_embedding = data.get("input") is not None and call_type not in RESPONSES_API_CALL_TYPES
         if capped_output_floor < baseline_floor and not has_explicit_max_tokens and not is_embedding:
             existing_cap = data.get("max_tokens")
             if existing_cap is None or capped_output_floor < existing_cap:
@@ -2963,7 +2997,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 has_explicit_max_tokens = (
                     data.get("max_tokens") is not None or data.get("max_completion_tokens") is not None
                 )
-                is_embedding = data.get("input") is not None
+                is_embedding = data.get("input") is not None and call_type not in RESPONSES_API_CALL_TYPES
                 if capped_floor < baseline_floor and not has_explicit_max_tokens and not is_embedding:
                     data["max_tokens"] = capped_floor
 
@@ -4112,7 +4146,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
             self._mark_reservation_released(request_data)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - disconnect cleanup must never raise into the caller
             verbose_proxy_logger.exception(f"Error refunding IO token reservations on disconnect: {str(e)}")
 
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
