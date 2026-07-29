@@ -349,6 +349,34 @@ ERROR_TYPE = "error.type"
 ERROR_CLASS = "RateLimitError"
 FAILURE_DURATION_S = 1.0
 
+# Attributes a failure datapoint must never carry. Each is either supplied by the
+# caller (so a caller could mint a fresh series per request, and a failure costs
+# them no provider spend) or varies per request, or is PII duplicating an id that
+# is already on the series.
+UNBOUNDED_FAILURE_KEYS = (
+    "hidden_params",
+    "metadata.requester_metadata",
+    "metadata.requester_ip_address",
+    "metadata.spend_logs_metadata",
+    "metadata.user_api_key_end_user_id",
+    "metadata.user_api_key_user_email",
+)
+
+# The exact set a failure datapoint may carry: the operation, plus
+# operator-provisioned identity.
+BOUNDED_FAILURE_KEYS = (
+    "gen_ai.operation.name",
+    "gen_ai.system",
+    "gen_ai.request.model",
+    "gen_ai.framework",
+    "metadata.user_api_key_hash",
+    "metadata.user_api_key_alias",
+    "metadata.user_api_key_team_id",
+    "metadata.user_api_key_team_alias",
+    "metadata.user_api_key_org_id",
+    "metadata.user_api_key_user_id",
+)
+
 
 def _build_failure(
     *,
@@ -362,7 +390,9 @@ def _build_failure(
     ``response_obj`` at all, but the streaming timings and the recovered
     ``response_cost`` a mid-stream failure still carries -- so routing the failure
     path through the full success recorder would show up here as extra series
-    rather than passing unnoticed.
+    rather than passing unnoticed. The metadata carries both the bounded identity
+    keys and every caller-supplied / per-request key, so the allowlist test below
+    proves a real removal rather than a key that was never there.
     """
     start = datetime(2026, 6, 12, 12, 0, 0)
     api_call_start = start + timedelta(seconds=0.1)
@@ -370,7 +400,19 @@ def _build_failure(
     end = start + timedelta(seconds=FAILURE_DURATION_S)
     standard_logging_object = {
         "status": "failure",
-        "metadata": {"user_api_key_hash": "hash-abc123"},
+        "metadata": {
+            "user_api_key_hash": "hash-abc123",
+            "user_api_key_alias": "alias-abc",
+            "user_api_key_team_id": "team-1",
+            "user_api_key_team_alias": "team-alpha",
+            "user_api_key_org_id": "org-1",
+            "user_api_key_user_id": "user-1",
+            "user_api_key_user_email": "user@example.com",
+            "user_api_key_end_user_id": "end-user-42",
+            "requester_ip_address": "10.0.0.7",
+            "requester_metadata": {"trace": "caller-supplied-unique-value"},
+            "spend_logs_metadata": {"ticket": "caller-supplied-unique-value"},
+        },
         "hidden_params": {"litellm_call_id": "abc"},
     }
     if error_information is not None:
@@ -455,6 +497,47 @@ def test_success_and_failure_are_separable_and_success_attributes_unchanged():
     failed = [dp for dp in points if dp.attributes.get(ERROR_TYPE) == ERROR_CLASS]
     assert len(succeeded) == 1 and len(failed) == 1
     assert dict(succeeded[0].attributes) == baseline_attributes
+
+
+def test_failure_attributes_are_a_bounded_allowlist():
+    """A failure datapoint carries exactly the bounded allowlist plus error.type.
+
+    A failed request needs no provider spend, so nothing rate-limits a caller who
+    puts a unique value into an attribute they control and mints one histogram
+    series per request. The same payload is driven through the success path first,
+    which does carry those keys, so this asserts a real removal on the failure path
+    rather than keys that were never present. The exact-set assertion is the guard
+    against the natural refactor of "just reuse _common_attributes"."""
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    kwargs, start, end = _build_failure(error_information={"error_class": ERROR_CLASS})
+    usage = {"usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+    asyncio.run(logger.async_log_success_event(kwargs, usage, start, end))
+    asyncio.run(logger.async_log_failure_event(kwargs, None, start, end))
+
+    points = _metrics_by_name(reader)[OPERATION_DURATION]
+    succeeded = next(dp for dp in points if ERROR_TYPE not in dp.attributes)
+    failed = next(dp for dp in points if ERROR_TYPE in dp.attributes)
+
+    missing = set(UNBOUNDED_FAILURE_KEYS) - set(succeeded.attributes)
+    assert not missing, f"fixture never carried {missing}, so the exclusion below proves nothing"
+    leaked = set(UNBOUNDED_FAILURE_KEYS) & set(failed.attributes)
+    assert not leaked, f"failure datapoint leaked unbounded attributes: {leaked}"
+    assert set(failed.attributes) == set(BOUNDED_FAILURE_KEYS) | {ERROR_TYPE}
+
+
+def test_operator_filter_can_still_narrow_the_failure_allowlist():
+    """The allowlist is a ceiling, not a floor: an exclude_list an operator sets
+    still removes a listed key from the failure series."""
+    metrics = _drive_failure(
+        InMemoryMetricReader(),
+        callback_settings_attributes={"exclude_list": ["metadata.user_api_key_hash"]},
+        error_information={"error_class": ERROR_CLASS},
+    )
+    attributes = metrics[OPERATION_DURATION][0].attributes
+    assert "metadata.user_api_key_hash" not in attributes
+    assert attributes[ERROR_TYPE] == ERROR_CLASS
+    assert attributes[MODEL_KEY] == "gpt-4o-mini"
 
 
 @pytest.mark.parametrize(

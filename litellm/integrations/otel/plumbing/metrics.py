@@ -74,6 +74,32 @@ def create_genai_metrics(meter: Meter) -> GenAIMetrics:
 
 ERROR_TYPE_FALLBACK: Final = "_OTHER"
 
+# The attributes a failure datapoint may carry: what operation failed, and whose
+# key/team/user it was. Every one is either a fixed enum or an operator-provisioned
+# identifier, so the failure series count is bounded by the deployment's own
+# key/team/user count. Deliberately excluded is everything the *client* supplies or
+# that varies per request -- ``metadata.requester_metadata``,
+# ``metadata.spend_logs_metadata``, ``metadata.user_api_key_end_user_id``,
+# ``metadata.requester_ip_address`` and the ``hidden_params`` blob (which carries the
+# provider's per-request response headers). A failed request costs the caller no
+# provider spend, so nothing would rate-limit a caller who minted a fresh series per
+# request out of a field they control. ``metadata.user_api_key_user_email`` is left
+# out too: it is bounded, but it is PII duplicating the user id already here.
+FAILURE_ATTRIBUTE_KEYS: Final[frozenset[str]] = frozenset(
+    (
+        "gen_ai.operation.name",
+        "gen_ai.system",
+        "gen_ai.request.model",
+        "gen_ai.framework",
+        "metadata.user_api_key_hash",
+        "metadata.user_api_key_alias",
+        "metadata.user_api_key_team_id",
+        "metadata.user_api_key_team_alias",
+        "metadata.user_api_key_org_id",
+        "metadata.user_api_key_user_id",
+    )
+)
+
 
 def resolve_error_type(kwargs: Mapping[str, Any]) -> str:
     """The ``error.type`` value for a failed request.
@@ -151,12 +177,19 @@ class GenAIMetricRecorder:
         zeroes ``response_cost`` on failure. Recording them anyway would put a
         fabricated zero into series that dashboards average.
 
-        ``error.type`` is stamped after the cardinality filter, exactly like
+        The attribute set is the bounded ``FAILURE_ATTRIBUTE_KEYS`` allowlist, not
+        the success path's full set: a failure needs no provider spend, so a caller
+        who can put a unique value into a client-supplied attribute could mint one
+        histogram series per request for free. The operator's own filter still
+        applies on top, so it can narrow this further but never widen it.
+
+        ``error.type`` is stamped after both filters, exactly like
         ``gen_ai.token.type``, so an operator's include/exclude list cannot strip
         the discriminator and silently merge failures back into the success series.
         """
+        bounded = {k: v for k, v in self._common_attributes(kwargs).items() if k in FAILURE_ATTRIBUTE_KEYS}
         attributes = {
-            **self._filter_attributes(self._common_attributes(kwargs)),
+            **self._filter_attributes(bounded),
             Error.TYPE: resolve_error_type(kwargs),
         }
         self._metrics.operation_duration.record((end_time - start_time).total_seconds(), attributes=attributes)
