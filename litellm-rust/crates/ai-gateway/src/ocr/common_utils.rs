@@ -20,18 +20,9 @@ use litellm_core::providers::vertex_ai::ocr::transformation::{
 
 use crate::client::http_client;
 
-const ERROR_BODY_MAX_CHARS: usize = 256;
 const AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: f64 = 50.0;
 const MAX_SAFE_FETCH_REDIRECTS: usize = 10;
-
-pub(super) fn truncate_error_body(body: &str) -> String {
-    if body.chars().count() <= ERROR_BODY_MAX_CHARS {
-        return body.to_string();
-    }
-    let truncated: String = body.chars().take(ERROR_BODY_MAX_CHARS).collect();
-    format!("{truncated}... (truncated)")
-}
 
 pub(super) fn ocr_provider_config(
     provider: &str,
@@ -269,7 +260,7 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreRes
         let body = response.text().await.unwrap_or_default();
         return Err(CoreError::Http {
             status: status.as_u16(),
-            body: truncate_error_body(&body),
+            body: litellm_core::utils::truncate_error_body(&body),
         });
     }
     let content_type = response
@@ -383,7 +374,7 @@ pub(super) async fn poll_document_intelligence(
         if !status.is_success() {
             return Err(CoreError::Http {
                 status: status.as_u16(),
-                body: truncate_error_body(&text),
+                body: litellm_core::utils::truncate_error_body(&text),
             });
         }
         let response_json: Value = serde_json::from_str(&text).map_err(|err| {

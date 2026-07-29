@@ -4,7 +4,7 @@ use litellm_core::logging::http::{JsonRequest, execute_json};
 use litellm_core::ocr::transformation::OcrResponseHandling;
 use serde_json::Value;
 
-use super::common_utils::{poll_document_intelligence, truncate_error_body};
+use super::common_utils::poll_document_intelligence;
 use super::types::ProviderOcrRequest;
 use crate::client::http_client;
 
@@ -78,7 +78,7 @@ pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Co
     if !status.is_success() {
         return Err(CoreError::Http {
             status: status.as_u16(),
-            body: truncate_error_body(&text),
+            body: litellm_core::utils::truncate_error_body(&text),
         });
     }
 

@@ -117,3 +117,51 @@ fn is_secret_key(key: &str) -> bool {
             | "x-amz-security-token"
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{PROVIDER_DEBUG_BODY_MAX_BYTES, redact_headers, redact_url, snapshot_json};
+
+    #[test]
+    fn redacts_sensitive_headers() {
+        let headers = redact_headers(&[
+            ("authorization".to_string(), "Bearer secret".to_string()),
+            ("content-type".to_string(), "application/json".to_string()),
+        ]);
+        assert_eq!(headers["authorization"], "[REDACTED]");
+        assert_eq!(headers["content-type"], "application/json");
+    }
+
+    #[test]
+    fn redacts_sensitive_query_parameters() {
+        let url = redact_url(
+            "https://example.test/v1%3A0/invoke?X-Amz-Signature=secret&keep=value&key=hidden",
+        );
+        assert!(url.contains("X-Amz-Signature=%5BREDACTED%5D"));
+        assert!(url.contains("key=%5BREDACTED%5D"));
+        assert!(url.contains("keep=value"));
+        assert!(url.contains("/v1%3A0/invoke"));
+    }
+
+    #[test]
+    fn redacts_nested_body_keys() {
+        let snapshot = snapshot_json(json!({
+            "outer": {"token": "secret", "visible": "keep"},
+            "items": [{"password": "hidden"}]
+        }));
+        assert_eq!(snapshot.body["outer"]["token"], "[REDACTED]");
+        assert_eq!(snapshot.body["outer"]["visible"], "keep");
+        assert_eq!(snapshot.body["items"][0]["password"], "[REDACTED]");
+    }
+
+    #[test]
+    fn records_body_truncation_metadata() {
+        let snapshot = snapshot_json(json!({"content": "x".repeat(PROVIDER_DEBUG_BODY_MAX_BYTES)}));
+        assert_eq!(snapshot.body_truncated, Some(true));
+        assert!(
+            snapshot.body_original_bytes.expect("original bytes") > PROVIDER_DEBUG_BODY_MAX_BYTES
+        );
+    }
+}

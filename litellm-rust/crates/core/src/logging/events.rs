@@ -7,7 +7,7 @@ use super::redaction::{redact_headers, redact_url, snapshot_json};
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "event")]
-pub enum ProviderDebugEvent {
+pub enum LogEvent {
     #[serde(rename = "provider.request")]
     Request(ProviderRequestEvent),
     #[serde(rename = "provider.response")]
@@ -114,9 +114,9 @@ pub struct ProviderErrorEvent {
     pub body: Option<Value>,
 }
 
-pub fn request_event(input: RequestEventInput) -> ProviderDebugEvent {
+pub(crate) fn request_event(input: RequestEventInput) -> LogEvent {
     let snapshot = snapshot_json(input.body);
-    ProviderDebugEvent::Request(ProviderRequestEvent {
+    LogEvent::Request(ProviderRequestEvent {
         source: "litellm-rust",
         call_id: input.call_id,
         provider: input.provider,
@@ -131,9 +131,9 @@ pub fn request_event(input: RequestEventInput) -> ProviderDebugEvent {
     })
 }
 
-pub fn response_event(input: ResponseEventInput) -> ProviderDebugEvent {
+pub(crate) fn response_event(input: ResponseEventInput) -> LogEvent {
     let snapshot = input.body.snapshot();
-    ProviderDebugEvent::Response(ProviderResponseEvent {
+    LogEvent::Response(ProviderResponseEvent {
         source: "litellm-rust",
         call_id: input.call_id,
         provider: input.provider,
@@ -146,8 +146,8 @@ pub fn response_event(input: ResponseEventInput) -> ProviderDebugEvent {
     })
 }
 
-pub fn error_event(input: ErrorEventInput) -> ProviderDebugEvent {
-    ProviderDebugEvent::Error(ProviderErrorEvent {
+pub(crate) fn error_event(input: ErrorEventInput) -> LogEvent {
+    LogEvent::Error(ProviderErrorEvent {
         source: "litellm-rust",
         call_id: input.call_id,
         provider: input.provider,
@@ -159,13 +159,13 @@ pub fn error_event(input: ErrorEventInput) -> ProviderDebugEvent {
     })
 }
 
-pub fn stream_started(
+pub(crate) fn stream_started(
     call_id: String,
     provider: String,
     status: u16,
     content_type: Option<String>,
-) -> ProviderDebugEvent {
-    ProviderDebugEvent::StreamStarted(ProviderStreamStartedEvent {
+) -> LogEvent {
+    LogEvent::StreamStarted(ProviderStreamStartedEvent {
         source: "litellm-rust",
         call_id,
         provider,
@@ -174,15 +174,15 @@ pub fn stream_started(
     })
 }
 
-pub fn stream_completed(
+pub(crate) fn stream_completed(
     call_id: String,
     provider: String,
     duration_ms: u128,
     bytes_received: usize,
     frames_received: usize,
     events_decoded: usize,
-) -> ProviderDebugEvent {
-    ProviderDebugEvent::StreamCompleted(ProviderStreamCompletedEvent {
+) -> LogEvent {
+    LogEvent::StreamCompleted(ProviderStreamCompletedEvent {
         source: "litellm-rust",
         call_id,
         provider,

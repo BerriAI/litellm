@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use colored_json::{ColorMode, ColoredFormatter, Output, PrettyFormatter};
 
-use super::{LogSink, ProviderDebugEvent};
+use super::{LogEvent, LogSink};
 
 #[derive(Clone, Copy)]
 enum RenderMode {
@@ -66,24 +66,24 @@ fn render_mode() -> &'static RenderMode {
     })
 }
 
-fn header(event: &ProviderDebugEvent) -> String {
+fn header(event: &LogEvent) -> String {
     match event {
-        ProviderDebugEvent::Request(value) => {
+        LogEvent::Request(value) => {
             format!("provider.request {} {}", value.call_id, value.provider)
         }
-        ProviderDebugEvent::Response(value) => format!(
+        LogEvent::Response(value) => format!(
             "provider.response {} {} status={} duration_ms={}",
             value.call_id, value.provider, value.status, value.duration_ms
         ),
-        ProviderDebugEvent::StreamStarted(value) => format!(
+        LogEvent::StreamStarted(value) => format!(
             "provider.stream.started {} {} status={}",
             value.call_id, value.provider, value.status
         ),
-        ProviderDebugEvent::StreamCompleted(value) => format!(
+        LogEvent::StreamCompleted(value) => format!(
             "provider.stream.completed {} {} duration_ms={}",
             value.call_id, value.provider, value.duration_ms
         ),
-        ProviderDebugEvent::Error(value) => format!(
+        LogEvent::Error(value) => format!(
             "provider.error {} {}{} duration_ms={}",
             value.call_id,
             value.provider,
@@ -104,7 +104,7 @@ fn decorate(value: &str, color_mode: ColorMode, code: &str) -> String {
 }
 
 impl LogSink for ConsoleDebugHook {
-    fn emit(&self, event: &ProviderDebugEvent) {
+    fn emit(&self, event: &LogEvent) {
         let Ok(mut output) = self.output.lock() else {
             return;
         };
@@ -151,7 +151,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use litellm_core::logging::{RequestEventInput, request_event};
+    use litellm_core::logging::{LogEvent, ProviderRequestEvent};
 
     struct Buffer(Arc<Mutex<Vec<u8>>>);
 
@@ -170,14 +170,18 @@ mod tests {
     fn compact_output_is_canonical_json() {
         let buffer = Arc::new(Mutex::new(Vec::new()));
         let hook = ConsoleDebugHook::with_writer_and_mode(Box::new(Buffer(buffer.clone())), false);
-        let event = request_event(RequestEventInput {
+        let event = LogEvent::Request(ProviderRequestEvent {
+            source: "litellm-rust",
             call_id: "call_01".to_string(),
             provider: "anthropic".to_string(),
             model: "claude".to_string(),
             stream: false,
+            method: "POST",
             url: "https://example.test".to_string(),
-            headers: Vec::new(),
+            headers: Default::default(),
             body: json!({"prompt": "visible"}),
+            body_truncated: None,
+            body_original_bytes: None,
         });
         let expected = serde_json::to_value(&event).expect("event serializes");
         hook.emit(&event);
@@ -193,14 +197,18 @@ mod tests {
     fn pretty_output_has_header_separator_and_indented_payload() {
         let buffer = Arc::new(Mutex::new(Vec::new()));
         let hook = ConsoleDebugHook::with_writer_and_mode(Box::new(Buffer(buffer.clone())), true);
-        let event = request_event(RequestEventInput {
+        let event = LogEvent::Request(ProviderRequestEvent {
+            source: "litellm-rust",
             call_id: "call_01".to_string(),
             provider: "anthropic".to_string(),
             model: "claude".to_string(),
             stream: false,
+            method: "POST",
             url: "https://example.test".to_string(),
-            headers: Vec::new(),
+            headers: Default::default(),
             body: json!({"prompt": "visible"}),
+            body_truncated: None,
+            body_original_bytes: None,
         });
         hook.emit(&event);
         let output =

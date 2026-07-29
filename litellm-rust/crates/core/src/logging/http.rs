@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
@@ -9,7 +10,7 @@ use crate::error::CoreError;
 use super::{CallLogger, ResponseBody};
 
 pub struct JsonRequest {
-    pub logger: std::sync::Arc<CallLogger>,
+    pub logger: Arc<CallLogger>,
     pub model: String,
     pub stream: bool,
     pub url: String,
@@ -24,13 +25,17 @@ pub async fn execute_json<T: DeserializeOwned>(
 ) -> CoreResult<T> {
     let body_bytes = serde_json::to_vec(&request.body)
         .map_err(|error| CoreError::InvalidRequest(error.to_string()))?;
-    request.logger.request_about_to_be_sent(
-        request.model,
-        request.stream,
-        request.url.clone(),
-        request.headers.clone(),
-        request.body,
-    );
+    request
+        .logger
+        .request_about_to_be_sent(super::RequestEventInput {
+            call_id: request.logger.call_id().to_string(),
+            provider: request.logger.provider().to_string(),
+            model: request.model,
+            stream: request.stream,
+            url: request.url.clone(),
+            headers: request.headers.clone(),
+            body: request.body,
+        });
     let builder = request.headers.iter().fold(
         client.post(&request.url).body(body_bytes),
         |builder, (name, value)| builder.header(name, value),
@@ -73,7 +78,7 @@ pub async fn execute_json<T: DeserializeOwned>(
         let body = serde_json::from_str(&text)
             .map(ResponseBody::Json)
             .unwrap_or(ResponseBody::Binary {
-                media_type,
+                media_type: media_type.clone(),
                 bytes: text.len(),
             });
         request.logger.failure(
@@ -84,24 +89,8 @@ pub async fn execute_json<T: DeserializeOwned>(
         );
         return Err(CoreError::Http {
             status: status.as_u16(),
-            body: crate::messages::common_utils::truncate_error_body(&text),
+            body: crate::utils::truncate_error_body(&text),
         });
-    }
-    if !media_type
-        .as_deref()
-        .is_some_and(|value| value.to_ascii_lowercase().contains("json"))
-    {
-        request.logger.response_received(
-            status.as_u16(),
-            headers,
-            ResponseBody::Binary {
-                media_type,
-                bytes: text.len(),
-            },
-        );
-        return Err(CoreError::InvalidResponse(
-            "provider response was not JSON".to_string(),
-        ));
     }
     let value = serde_json::from_str::<Value>(&text).map_err(|error| {
         request.logger.failure(
@@ -109,18 +98,36 @@ pub async fn execute_json<T: DeserializeOwned>(
             "invalid_json",
             error.to_string(),
             Some(ResponseBody::Binary {
-                media_type,
+                media_type: media_type.clone(),
                 bytes: text.len(),
             }),
         );
         CoreError::InvalidResponse(format!("invalid provider response JSON: {error}"))
     })?;
-    let typed = T::deserialize(&value).map_err(|error| {
-        CoreError::InvalidResponse(format!("invalid provider response: {error}"))
-    })?;
+    let typed = T::deserialize(&value);
+    let response_body = if media_type
+        .as_deref()
+        .is_some_and(|value| value.to_ascii_lowercase().contains("json"))
+    {
+        ResponseBody::Json(value)
+    } else {
+        ResponseBody::Binary {
+            media_type,
+            bytes: text.len(),
+        }
+    };
     request
         .logger
-        .response_received(status.as_u16(), headers, ResponseBody::Json(value));
+        .response_received(status.as_u16(), headers, response_body);
+    let typed = typed.map_err(|error| {
+        request.logger.failure(
+            Some(status.as_u16()),
+            "invalid_json",
+            error.to_string(),
+            None,
+        );
+        CoreError::InvalidResponse(format!("invalid provider response: {error}"))
+    })?;
     Ok(typed)
 }
 
@@ -130,13 +137,17 @@ pub async fn execute_stream(
 ) -> CoreResult<reqwest::Response> {
     let body_bytes = serde_json::to_vec(&request.body)
         .map_err(|error| CoreError::InvalidRequest(error.to_string()))?;
-    request.logger.request_about_to_be_sent(
-        request.model,
-        true,
-        request.url.clone(),
-        request.headers.clone(),
-        request.body,
-    );
+    request
+        .logger
+        .request_about_to_be_sent(super::RequestEventInput {
+            call_id: request.logger.call_id().to_string(),
+            provider: request.logger.provider().to_string(),
+            model: request.model,
+            stream: true,
+            url: request.url.clone(),
+            headers: request.headers.clone(),
+            body: request.body,
+        });
     let builder = request.headers.iter().fold(
         client.post(&request.url).body(body_bytes),
         |builder, (name, value)| builder.header(name, value),
@@ -189,7 +200,7 @@ pub async fn execute_stream(
         );
         return Err(CoreError::Http {
             status: status.as_u16(),
-            body: crate::messages::common_utils::truncate_error_body(&text),
+            body: crate::utils::truncate_error_body(&text),
         });
     }
     let content_type = response

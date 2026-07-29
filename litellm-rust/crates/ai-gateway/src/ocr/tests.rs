@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use super::common_utils::{has_header, ocr_provider_config, string_headers, truncate_error_body};
+use super::common_utils::{has_header, ocr_provider_config, string_headers};
 use super::{OcrRequest, ocr};
 use crate::integrations::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailError, GuardrailEventHook,
@@ -17,6 +17,7 @@ use crate::integrations::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogFuture, ModelCallDetails,
 };
 use crate::integrations::types::RequestMetadata;
+use litellm_core::utils::truncate_error_body;
 
 async fn read_http_headers(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();
