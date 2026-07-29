@@ -9,6 +9,39 @@ from litellm import verbose_logger
 from litellm._uuid import uuid
 
 
+def _coerce_int(value: object) -> int:
+    return value if isinstance(value, int) else 0
+
+
+def _extract_cache_tokens(usage: object) -> tuple[int, int]:
+    """Return (cache_read_tokens, cache_creation_tokens) from a Responses usage object.
+
+    Anthropic-native names (cache_read_input_tokens / cache_creation_input_tokens) win when
+    present. Otherwise fall back to the OpenAI Responses shape, where the split lives under
+    input_tokens_details as cached_tokens and cache_write_tokens (a pydantic extra, so it is
+    read via model_dump() rather than a fixed getattr list).
+    """
+    cache_read = _coerce_int(getattr(usage, "cache_read_input_tokens", 0))
+    cache_creation = _coerce_int(getattr(usage, "cache_creation_input_tokens", 0))
+    if cache_read and cache_creation:
+        return cache_read, cache_creation
+
+    details = getattr(usage, "input_tokens_details", None)
+    if isinstance(details, dict):
+        details_dict = details
+    else:
+        dump = getattr(details, "model_dump", None)
+        details_dict = dump() if callable(dump) else {}
+
+    if not cache_read:
+        cache_read = _coerce_int(details_dict.get("cached_tokens"))
+    if not cache_creation:
+        cache_creation = _coerce_int(
+            details_dict.get("cache_write_tokens") or details_dict.get("cache_creation_tokens")
+        )
+    return cache_read, cache_creation
+
+
 class AnthropicResponsesStreamWrapper:
     """
     Wraps a Responses API streaming iterator and re-emits events in Anthropic SSE format.
@@ -239,11 +272,7 @@ class AnthropicResponsesStreamWrapper:
                 if usage is not None:
                     input_tokens = getattr(usage, "input_tokens", 0) or 0
                     output_tokens = getattr(usage, "output_tokens", 0) or 0
-                    cache_creation_tokens = getattr(usage, "input_tokens_details", None)  # type: ignore[assignment]
-                    cache_read_tokens = getattr(usage, "output_tokens_details", None)  # type: ignore[assignment]
-                    # Prefer direct cache fields if present
-                    cache_creation_tokens = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
-                    cache_read_tokens = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+                    cache_read_tokens, cache_creation_tokens = _extract_cache_tokens(usage)
 
             # Check if tool_use was in the output to override stop_reason
             if response_obj is not None:

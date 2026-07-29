@@ -31,6 +31,8 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 
+from .streaming_iterator import _extract_cache_tokens
+
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
     """
@@ -467,11 +469,16 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         raw_usage: Optional[ResponseAPIUsage] = response.usage
         input_tokens = int(getattr(raw_usage, "input_tokens", 0) or 0)
         output_tokens = int(getattr(raw_usage, "output_tokens", 0) or 0)
+        cache_read_tokens, cache_creation_tokens = _extract_cache_tokens(raw_usage)
 
         anthropic_usage = AnthropicUsage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
+        if cache_read_tokens:
+            anthropic_usage["cache_read_input_tokens"] = cache_read_tokens
+        if cache_creation_tokens:
+            anthropic_usage["cache_creation_input_tokens"] = cache_creation_tokens
 
         return AnthropicMessagesResponse(
             id=response.id,

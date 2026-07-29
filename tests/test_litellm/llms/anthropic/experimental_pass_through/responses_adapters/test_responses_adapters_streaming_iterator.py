@@ -7,11 +7,42 @@ import asyncio
 import os
 import sys
 
+from pydantic import BaseModel, ConfigDict
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.streaming_iterator import (
     AnthropicResponsesStreamWrapper,
 )
+
+
+class _Details(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    cached_tokens: int = 0
+
+
+class _Usage(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    input_tokens: int
+    output_tokens: int
+    input_tokens_details: _Details
+
+
+class _Response(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    status: str = "completed"
+    usage: _Usage
+    output: list = []
+
+
+class _Event(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    type: str = "response.completed"
+    response: _Response
+
+
+def _completed_usage(events: list) -> dict:
+    return next(c for c in _process_all(events) if c.get("type") == "message_delta")["usage"]
 
 
 def _process_all(events: list) -> list:
@@ -130,3 +161,105 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
             ("content_block_start", 0),
             ("content_block_delta", 0),
         ]
+
+
+class TestResponseCompletedCacheTokens:
+    """message_delta must surface OpenAI Responses cache-read/write counts. OpenAI reports
+    them under input_tokens_details (cached_tokens / cache_write_tokens), not as the
+    Anthropic-native cache_*_input_tokens names the adapter previously read, so cache reads
+    were always billed at the full input rate. See issue #35127."""
+
+    def test_openai_cached_tokens_from_model_details(self):
+        event = _Event(
+            response=_Response(
+                usage=_Usage(
+                    input_tokens=12000,
+                    output_tokens=40,
+                    input_tokens_details=_Details(cached_tokens=11008),
+                )
+            )
+        )
+        assert _completed_usage([event]) == {
+            "input_tokens": 12000,
+            "output_tokens": 40,
+            "cache_read_input_tokens": 11008,
+        }
+
+    def test_openai_cached_tokens_from_dict_details(self):
+        class _DictDetailsUsage(BaseModel):
+            model_config = ConfigDict(extra="allow")
+            input_tokens: int
+            output_tokens: int
+            input_tokens_details: dict
+
+        event = _Event.model_construct(
+            response=_Response.model_construct(
+                status="completed",
+                output=[],
+                usage=_DictDetailsUsage(
+                    input_tokens=12000,
+                    output_tokens=40,
+                    input_tokens_details={"cached_tokens": 11008},
+                ),
+            )
+        )
+        assert _completed_usage([event]) == {
+            "input_tokens": 12000,
+            "output_tokens": 40,
+            "cache_read_input_tokens": 11008,
+        }
+
+    def test_cache_write_tokens_pydantic_extra_becomes_cache_creation(self):
+        event = _Event(
+            response=_Response(
+                usage=_Usage(
+                    input_tokens=172000,
+                    output_tokens=40,
+                    input_tokens_details=_Details(cached_tokens=155000, cache_write_tokens=3000),
+                )
+            )
+        )
+        assert _completed_usage([event]) == {
+            "input_tokens": 172000,
+            "output_tokens": 40,
+            "cache_read_input_tokens": 155000,
+            "cache_creation_input_tokens": 3000,
+        }
+
+    def test_anthropic_native_fields_take_precedence(self):
+        class _AnthropicUsage(BaseModel):
+            model_config = ConfigDict(extra="allow")
+            input_tokens: int
+            output_tokens: int
+            cache_read_input_tokens: int
+            cache_creation_input_tokens: int
+            input_tokens_details: _Details
+
+        event = _Event.model_construct(
+            response=_Response.model_construct(
+                status="completed",
+                output=[],
+                usage=_AnthropicUsage(
+                    input_tokens=500,
+                    output_tokens=40,
+                    cache_read_input_tokens=100,
+                    cache_creation_input_tokens=25,
+                    input_tokens_details=_Details(cached_tokens=999),
+                ),
+            )
+        )
+        usage = _completed_usage([event])
+        assert usage["cache_read_input_tokens"] == 100
+        assert usage["cache_creation_input_tokens"] == 25
+
+    def test_absent_cache_fields_omit_keys(self):
+        event = _Event(
+            response=_Response(
+                usage=_Usage(
+                    input_tokens=500,
+                    output_tokens=40,
+                    input_tokens_details=_Details(cached_tokens=0),
+                )
+            )
+        )
+        assert _completed_usage([event]) == {"input_tokens": 500, "output_tokens": 40}
