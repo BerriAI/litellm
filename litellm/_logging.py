@@ -3,6 +3,8 @@ import contextvars
 import logging
 import os
 import sys
+
+import litellm
 from datetime import datetime
 from logging import Formatter
 from typing import Any, Final
@@ -113,8 +115,6 @@ class CorrelationContextFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        import litellm
-
         if not litellm.request_correlation_in_logs:
             return True
         trace_id = trace_id_var.get()
