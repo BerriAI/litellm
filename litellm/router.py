@@ -4497,7 +4497,6 @@ class Router:
         """
 
         passthrough_on_no_deployment = kwargs.pop("passthrough_on_no_deployment", False)
-        function_name = "_ageneric_api_call_with_fallbacks"
         try:
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             try:
@@ -4513,65 +4512,73 @@ class Router:
                     return await original_generic_function(model=model, **kwargs)
                 raise e
 
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
-
-            data = deployment["litellm_params"].copy()
-            model_name = data["model"]
-            self.total_calls[model_name] += 1
-
-            self._add_deployment_model_to_endpoint_for_llm_passthrough_route(
-                kwargs=kwargs, model=model, model_name=model_name
-            )
-
-            # Get custom_llm_provider from deployment params
             try:
-                custom_llm_provider = data.get("custom_llm_provider")
-                _, inferred_custom_llm_provider, _, _ = get_llm_provider(
-                    model=data["model"],
-                    custom_llm_provider=custom_llm_provider,
+                function_name = "_ageneric_api_call_with_fallbacks"
+                self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
+
+                data = deployment["litellm_params"].copy()
+                model_name = data["model"]
+                self.total_calls[model_name] += 1
+
+                self._add_deployment_model_to_endpoint_for_llm_passthrough_route(
+                    kwargs=kwargs, model=model, model_name=model_name
                 )
-                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
-            except Exception:
-                custom_llm_provider = None
 
-            response_kwargs = {
-                **data,
-                "caching": self.cache_responses,
-                **kwargs,
-                "model": model_name,
-            }
-            # Only set custom_llm_provider if it's not None
-            if custom_llm_provider is not None:
-                response_kwargs["custom_llm_provider"] = custom_llm_provider
+                # Get custom_llm_provider from deployment params
+                try:
+                    custom_llm_provider = data.get("custom_llm_provider")
+                    _, inferred_custom_llm_provider, _, _ = get_llm_provider(
+                        model=data["model"],
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                    custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
+                except Exception:
+                    custom_llm_provider = None
 
-            response = original_generic_function(**response_kwargs)
+                response_kwargs = {
+                    **data,
+                    "caching": self.cache_responses,
+                    **kwargs,
+                    "model": model_name,
+                }
+                # Only set custom_llm_provider if it's not None
+                if custom_llm_provider is not None:
+                    response_kwargs["custom_llm_provider"] = custom_llm_provider
 
-            rpm_semaphore = self._get_client(
-                deployment=deployment,
-                kwargs=kwargs,
-                client_type="max_parallel_requests",
-            )
+                response = original_generic_function(**response_kwargs)
 
-            if rpm_semaphore is not None and isinstance(rpm_semaphore, asyncio.Semaphore):
-                async with rpm_semaphore:
-                    """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
-                    """
+                rpm_semaphore = self._get_client(
+                    deployment=deployment,
+                    kwargs=kwargs,
+                    client_type="max_parallel_requests",
+                )
+
+                if rpm_semaphore is not None and isinstance(rpm_semaphore, asyncio.Semaphore):
+                    async with rpm_semaphore:
+                        """
+                        - Check rpm limits before making the call
+                        - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                        """
+                        await self.async_routing_strategy_pre_call_checks(
+                            deployment=deployment, parent_otel_span=parent_otel_span
+                        )
+                        response = await response  # type: ignore
+                else:
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment, parent_otel_span=parent_otel_span
                     )
                     response = await response  # type: ignore
-            else:
-                await self.async_routing_strategy_pre_call_checks(
-                    deployment=deployment, parent_otel_span=parent_otel_span
+
+                self.success_calls[model_name] += 1
+                verbose_router_logger.info(
+                    f"ageneric_api_call_with_fallbacks(model={model_name})\033[32m 200 OK\033[0m"
                 )
-                response = await response  # type: ignore
 
-            self.success_calls[model_name] += 1
-            verbose_router_logger.info(f"ageneric_api_call_with_fallbacks(model={model_name})\033[32m 200 OK\033[0m")
-
-            return response
+                return response
+            except Exception as e:
+                self._set_deployment_num_retries_on_exception(e, deployment)
+                self._set_failed_deployment_id_on_exception(e, deployment)
+                raise e
         except Exception as e:
             verbose_router_logger.info(
                 f"ageneric_api_call_with_fallbacks(model={model})\033[31m Exception {str(e)}\033[0m"
