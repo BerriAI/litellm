@@ -4762,3 +4762,254 @@ async def test_skip_user_budget_on_team_key_flag_restores_old_behavior():
             request=MagicMock(spec=Request),
         )
     assert result is True
+
+
+@pytest.mark.asyncio
+async def test_get_default_end_user_budget_db_fetch_returns_validated_budget(monkeypatch):
+    from litellm.proxy.auth.auth_checks import get_default_end_user_budget
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", "budget-default-1")
+
+    budget_row = MagicMock()
+    budget_row.dict = lambda: {"budget_id": "budget-default-1", "max_budget": 12.5, "tpm_limit": 100}
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    result = await get_default_end_user_budget(
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+    )
+
+    assert isinstance(result, LiteLLM_BudgetTable)
+    assert result.max_budget == 12.5
+    assert result.tpm_limit == 100
+    mock_cache.async_set_cache.assert_awaited_once()
+    assert mock_cache.async_set_cache.call_args.kwargs["value"] is result
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_db_fetch_returns_validated_end_user():
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    end_user_row = MagicMock()
+    end_user_row.dict = lambda: {"user_id": "eu-1", "blocked": False, "spend": 3.0}
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    result = await get_end_user_object(
+        end_user_id="eu-1",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+    )
+
+    assert isinstance(result, LiteLLM_EndUserTable)
+    assert result.user_id == "eu-1"
+    assert result.blocked is False
+    assert result.spend == 3.0
+
+
+@pytest.mark.asyncio
+async def test_get_team_membership_db_fetch_returns_validated_membership():
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.auth.auth_checks import get_team_membership
+
+    membership_row = MagicMock()
+    membership_row.dict = lambda: {"user_id": "u-1", "team_id": "t-1", "spend": 1.5}
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=membership_row)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    result = await get_team_membership(
+        user_id="u-1",
+        team_id="t-1",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+    )
+
+    assert isinstance(result, LiteLLM_TeamMembership)
+    assert result.user_id == "u-1"
+    assert result.team_id == "t-1"
+    assert result.spend == 1.5
+
+
+@pytest.mark.asyncio
+async def test_get_access_object_db_fetch_returns_validated_access_group():
+    from litellm.proxy._types import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import get_access_object
+
+    access_row = MagicMock()
+    access_row.dict = lambda: {
+        "access_group_id": "ag-1",
+        "access_group_name": "group one",
+        "access_model_names": ["gpt-4"],
+    }
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=access_row)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    result = await get_access_object(
+        access_group_id="ag-1",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+        proxy_logging_obj=None,
+    )
+
+    assert isinstance(result, LiteLLM_AccessGroupTable)
+    assert result.access_group_id == "ag-1"
+    assert result.access_model_names == ["gpt-4"]
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_by_alias_db_fetch_returns_cached_obj():
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth.auth_checks import get_team_object_by_alias
+
+    team_row = MagicMock()
+    team_row.model_dump = lambda: {"team_id": "t-9", "team_alias": "alias-9", "models": ["gpt-4"]}
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_row])
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    result = await get_team_object_by_alias(
+        team_alias="alias-9",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+    )
+
+    assert isinstance(result, LiteLLM_TeamTableCachedObj)
+    assert result.team_id == "t-9"
+    assert result.team_alias == "alias-9"
+    assert result.models == ["gpt-4"]
+
+
+@pytest.mark.asyncio
+async def test_get_org_object_by_alias_db_fetch_returns_validated_org():
+    from litellm.proxy._types import LiteLLM_OrganizationTable
+    from litellm.proxy.auth.auth_checks import get_org_object_by_alias
+
+    org_row = MagicMock()
+    org_row.model_dump = lambda: {
+        "organization_id": "org-1",
+        "organization_alias": "org-alias",
+        "budget_id": "b-1",
+        "created_by": "admin",
+        "updated_by": "admin",
+        "models": [],
+    }
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(return_value=[org_row])
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    result = await get_org_object_by_alias(
+        org_alias="org-alias",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+    )
+
+    assert isinstance(result, LiteLLM_OrganizationTable)
+    assert result.organization_id == "org-1"
+    assert result.budget_id == "b-1"
+
+
+@pytest.mark.asyncio
+async def test_get_object_permission_db_fetch_returns_validated_permission():
+    from litellm.proxy.auth.auth_checks import get_object_permission
+
+    perm_row = MagicMock()
+    perm_row.dict = lambda: {"object_permission_id": "op-1", "vector_stores": ["vs-1"]}
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=perm_row)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    result = await get_object_permission(
+        object_permission_id="op-1",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+    )
+
+    assert isinstance(result, LiteLLM_ObjectPermissionTable)
+    assert result.object_permission_id == "op-1"
+    assert result.vector_stores == ["vs-1"]
+
+
+@pytest.mark.asyncio
+async def test_get_managed_vector_store_rows_by_uuids_db_fetch_validates_rows():
+    from litellm.proxy._types import LiteLLM_ManagedVectorStoresTable
+    from litellm.proxy.auth.auth_checks import get_managed_vector_store_rows_by_uuids
+
+    vs_row = MagicMock()
+    vs_row.model_dump = lambda: {"vector_store_id": "vs-7", "custom_llm_provider": "openai"}
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[vs_row])
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    result = await get_managed_vector_store_rows_by_uuids(
+        uuids=["vs-7"],
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+    )
+
+    assert len(result) == 1
+    assert isinstance(result[0], LiteLLM_ManagedVectorStoresTable)
+    assert result[0].vector_store_id == "vs-7"
+    assert result[0].custom_llm_provider == "openai"
+
+
+@pytest.mark.asyncio
+async def test_get_project_object_db_fetch_returns_cached_obj():
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
+    from litellm.proxy.auth.auth_checks import get_project_object
+
+    project_row = MagicMock()
+    project_row.model_dump = lambda: {"project_id": "p-1", "project_alias": "proj", "team_id": "t-1"}
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_projecttable.find_unique = AsyncMock(return_value=project_row)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    result = await get_project_object(
+        project_id="p-1",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+    )
+
+    assert isinstance(result, LiteLLM_ProjectTableCachedObj)
+    assert result.project_id == "p-1"
+    assert result.project_alias == "proj"

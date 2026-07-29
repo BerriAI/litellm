@@ -3548,7 +3548,7 @@ async def _can_team_member_view_log(
     team_row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
     if team_row is None:
         return False
-    team_obj = LiteLLM_TeamTable(**team_row.model_dump())
+    team_obj = LiteLLM_TeamTable.model_validate(team_row.model_dump())
     if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
         return True
     return _team_member_has_permission(
@@ -3640,7 +3640,7 @@ async def _get_permitted_team_ids_for_spend_logs(
 
     permitted: List[str] = []
     for team_row in team_rows:
-        team_obj = LiteLLM_TeamTable(**team_row.model_dump())
+        team_obj = LiteLLM_TeamTable.model_validate(team_row.model_dump())
         if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
             permitted.append(team_obj.team_id)
         elif _team_member_has_permission(

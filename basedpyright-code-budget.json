@@ -1,9 +1,9 @@
 {
   "reportAny": {
-    "limit": 34906
+    "limit": 33216
   },
   "reportArgumentType": {
-    "limit": 2701
+    "limit": 2648
   },
   "reportAssignmentType": {
     "limit": 330
@@ -24,7 +24,7 @@
     "limit": 42
   },
   "reportExplicitAny": {
-    "limit": 10230
+    "limit": 10228
   },
   "reportFunctionMemberAccess": {
     "limit": 11
@@ -99,7 +99,7 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 45870
+    "limit": 45567
   },
   "reportUnknownLambdaType": {
     "limit": 113
