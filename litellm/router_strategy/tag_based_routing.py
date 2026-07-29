@@ -118,13 +118,7 @@ def _match_deployment(
 
 
 def _split_tags(tags: Sequence[str]) -> tuple[Sequence[str], Sequence[str], Sequence[str]]:
-    """
-    Split request tags into (required, positive, excluded) by prefix.
-
-    `&tag` is required-AND (deployment must carry every one of them), `!tag` is
-    negation and a bare tag keeps the existing inclusion semantics. A lone "&" or
-    "!" carries no value, so it is dropped.
-    """
+    """Split tags by prefix: `&` requires all, `!` negates, bare keeps inclusion. A lone `&`/`!` is dropped."""
     required = [tag[1:] for tag in tags if tag.startswith("&") and len(tag) > 1]
     excluded = [tag[1:] for tag in tags if tag.startswith("!") and len(tag) > 1]
     positive = [t for t in tags if not t.startswith(("&", "!"))]
@@ -132,9 +126,9 @@ def _split_tags(tags: Sequence[str]) -> tuple[Sequence[str], Sequence[str], Sequ
 
 
 def _exclude_deployments(
-    deployments: Union[Sequence[Any], Mapping[Any, Any]],
+    deployments: Union[list[Any], dict[Any, Any]],
     excluded_set: frozenset[str],
-) -> Sequence[Any]:
+) -> list[Any]:
     if not excluded_set:
         return list(deployments)
     return [d for d in deployments if not excluded_set.intersection(d.get("litellm_params", {}).get("tags") or [])]
@@ -143,29 +137,25 @@ def _exclude_deployments(
 def _require_all_tags(
     deployments: Sequence[Any],
     required_set: frozenset[str],
-) -> Sequence[Any]:
+) -> list[Any]:
     if not required_set:
-        return deployments
+        return list(deployments)
     return [d for d in deployments if required_set.issubset(d.get("litellm_params", {}).get("tags") or [])]
 
 
-def _default_pool(deployments: Sequence[Any]) -> Sequence[Any]:
+def _default_pool(deployments: Sequence[Any]) -> list[Any]:
     return [d for d in deployments if "default" in (d.get("litellm_params", {}).get("tags") or [])]
 
 
 def _tag_routing_metadata(
-    deployment: Mapping[str, Any],
-    matched_via: str,
-    matched_value: str,
-    request_tags: Sequence[str] | None,
-    user_agent: str,
+    metadata: Mapping[str, Any], deployment: Mapping[str, Any], match: Mapping[str, str]
 ) -> Mapping[str, Any]:
     return {
         "matched_deployment": deployment.get("model_name"),
-        "matched_via": matched_via,
-        "matched_value": matched_value,
-        "request_tags": request_tags or [],
-        "user_agent": user_agent,
+        "matched_via": match["matched_via"],
+        "matched_value": match["matched_value"],
+        "request_tags": metadata.get("tags") or [],
+        "user_agent": metadata.get("user_agent", ""),
     }
 
 
@@ -182,8 +172,8 @@ def _require_candidates(
 
 
 def _ban_only_base_pool(
-    deployments: Union[Sequence[Any], Mapping[Any, Any]],
-) -> Sequence[Any]:
+    deployments: Union[list[Any], dict[Any, Any]],
+) -> list[Any]:
     # Mirrors untagged-request semantics so callers can't use !tags to escape the default pool.
     defaults = [d for d in deployments if "default" in (d.get("litellm_params", {}).get("tags") or [])]
     return defaults if defaults else list(deployments)
@@ -251,14 +241,8 @@ async def get_deployments_for_tag(
 
         if required_set and not has_tag_filter:
             if candidates:
-                if "tag_routing" not in metadata:
-                    metadata["tag_routing"] = _tag_routing_metadata(
-                        deployment=candidates[0],
-                        matched_via="required_tags",
-                        matched_value=",".join(required_tags),
-                        request_tags=request_tags,
-                        user_agent=user_agent,
-                    )
+                match = {"matched_via": "required_tags", "matched_value": ",".join(required_tags)}
+                metadata.setdefault("tag_routing", _tag_routing_metadata(metadata, candidates[0], match))
                 return candidates
             return _require_candidates(default_deployments, model, request_tags)
 
@@ -285,14 +269,7 @@ async def get_deployments_for_tag(
                         match_result["matched_via"],
                         match_result["matched_value"],
                     )
-                    if "tag_routing" not in metadata:
-                        metadata["tag_routing"] = _tag_routing_metadata(
-                            deployment=deployment,
-                            matched_via=match_result["matched_via"],
-                            matched_value=match_result["matched_value"],
-                            request_tags=request_tags,
-                            user_agent=user_agent,
-                        )
+                    metadata.setdefault("tag_routing", _tag_routing_metadata(metadata, deployment, match_result))
                     new_healthy_deployments.append(deployment)
 
             if len(new_healthy_deployments) == 0 and len(default_deployments) == 0:
