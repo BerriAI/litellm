@@ -8,8 +8,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
-    get_metadata_variable_name_from_kwargs,
     get_litellm_metadata_from_kwargs,
+    get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
@@ -207,8 +207,6 @@ class _ProxyDBLogger(CustomLogger):
     ) -> dict:
         merged_metadata: dict = {}
         existing_litellm_params = request_data.get("litellm_params", {}) or {}
-        trusted_metadata_key = _ProxyDBLogger._get_failure_metadata_variable_name(request_data=request_data)
-
         def merge_metadata(
             metadata: Any,
             *,
@@ -229,7 +227,11 @@ class _ProxyDBLogger(CustomLogger):
                 merged_metadata[key] = value
 
         merge_metadata(
-            request_data.get(trusted_metadata_key, {}),
+            request_data.get("litellm_metadata", {}),
+            skip_user_api_key_fields=True,
+        )
+        merge_metadata(
+            request_data.get("metadata", {}),
             overwrite=True,
             skip_user_api_key_fields=True,
         )

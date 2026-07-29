@@ -96,6 +96,36 @@ def embedding_body_read_raises(monkeypatch):
     yield
 
 
+@pytest.fixture
+def embedding_token_decode_raises(monkeypatch):
+    router = MagicMock()
+    router.model_names = ["text-embedding-ada-002"]
+    router.get_deployment_by_model_group_name = MagicMock(
+        return_value={"litellm_params": {"model": "custom/provider-model"}}
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock()))
+
+    from litellm.proxy._types import ProxyException
+
+    def _raise_decode(*args, **kwargs):
+        raise ValueError("token-decode")
+
+    async def _handler(self, *, e, user_api_key_dict, proxy_logging_obj, version=None):
+        assert self._failure_call_type == "aembedding"
+        assert self.data["model"] == "text-embedding-ada-002"
+        assert self.data["input"] == [[1, 2, 3]]
+        return ProxyException(message="token-decode", type="bad_request_error", param="input", code=400)
+
+    monkeypatch.setattr(proxy_server.litellm, "decode", _raise_decode)
+    monkeypatch.setattr(
+        common_request_processing.ProxyBaseLLMRequestProcessing,
+        "_handle_llm_api_exception",
+        _handler,
+    )
+    yield
+
+
 _EMBED_PATHS = [
     "/v1/embeddings",
     "/embeddings",
@@ -142,6 +172,17 @@ def test_embeddings_pipeline_error(client, auth_as, embedding_pipeline_raises, p
 @pytest.mark.parametrize("path", _EMBED_PATHS)
 def test_embeddings_body_read_error_preserves_call_type(client, auth_as, embedding_body_read_raises, path):
     payload = {"model": "text-embedding-ada-002", "input": "boom"}
+    with auth_as():
+        response = client.post(path, json=payload)
+    assert response.status_code == 400
+    assert response.content
+
+
+@pytest.mark.parametrize("path", _EMBED_PATHS)
+def test_embeddings_preprocessing_error_preserves_parsed_data(
+    client, auth_as, embedding_token_decode_raises, path
+):
+    payload = {"model": "text-embedding-ada-002", "input": [[1, 2, 3]]}
     with auth_as():
         response = client.post(path, json=payload)
     assert response.status_code == 400
