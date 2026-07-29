@@ -8,11 +8,8 @@ use crate::audio_transcription::types::{
 };
 use crate::error::{CoreError, CoreResult, json_type_name};
 
-use super::aws_base::AwsAuthConfig;
-use super::constants::{
-    AWS_REGION, AWS_REGION_NAME, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE,
-    DEFAULT_BEDROCK_REGION,
-};
+use super::common_utils::{bedrock_model_id_and_region, resolve_bedrock_region};
+use super::constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE};
 
 const SUPPORTED_PARAMS: &[&str] = &["language", "prompt", "temperature", "response_format"];
 
@@ -20,64 +17,6 @@ pub static BEDROCK_AUDIO_TRANSCRIPTION_CONFIG: BedrockAudioTranscriptionConfig =
     BedrockAudioTranscriptionConfig;
 
 pub struct BedrockAudioTranscriptionConfig;
-
-pub fn bedrock_model_id_and_region(model: &str) -> (String, Option<String>) {
-    let mut stripped = model;
-    for prefix in ["bedrock/converse/", "bedrock/", "converse/"] {
-        if let Some(value) = stripped.strip_prefix(prefix) {
-            stripped = value;
-            break;
-        }
-    }
-    let mut region = None;
-    if let Some((candidate, remainder)) = stripped.split_once('/')
-        && is_bedrock_region(candidate)
-    {
-        region = Some(candidate.to_string());
-        stripped = remainder;
-    }
-    for prefix in ["nova-2/", "nova/"] {
-        if let Some(value) = stripped.strip_prefix(prefix) {
-            stripped = value;
-            break;
-        }
-    }
-    if region.is_none() {
-        region = stripped
-            .strip_prefix("arn:")
-            .and_then(|value| value.split(':').nth(3))
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
-    }
-    (stripped.to_string(), region)
-}
-
-fn is_bedrock_region(value: &str) -> bool {
-    value.len() > 3
-        && value.contains('-')
-        && value
-            .chars()
-            .all(|char| char.is_ascii_alphanumeric() || char == '-')
-}
-
-pub fn resolve_bedrock_region(
-    model_region: Option<&str>,
-    optional_params: &Map<String, Value>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> String {
-    if let Some(region) = optional_params
-        .get("aws_region_name")
-        .and_then(Value::as_str)
-    {
-        return region.to_string();
-    }
-    if let Some(region) = model_region {
-        return region.to_string();
-    }
-    env_lookup(AWS_REGION_NAME)
-        .or_else(|| env_lookup(AWS_REGION))
-        .unwrap_or_else(|| DEFAULT_BEDROCK_REGION.to_string())
-}
 
 fn audio_fields(audio: Value) -> CoreResult<(String, String)> {
     let object = audio.as_object().ok_or_else(|| CoreError::InvalidType {
@@ -200,32 +139,6 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
             region: resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup),
             service: BEDROCK_SERVICE,
         })
-    }
-}
-
-pub fn aws_auth_config(
-    optional_params: &Map<String, Value>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> AwsAuthConfig {
-    let value = |key: &str| {
-        optional_params
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    };
-    let env = |key: &str| env_lookup(key);
-    AwsAuthConfig {
-        access_key_id: value("aws_access_key_id").or_else(|| env("AWS_ACCESS_KEY_ID")),
-        secret_access_key: value("aws_secret_access_key").or_else(|| env("AWS_SECRET_ACCESS_KEY")),
-        session_token: value("aws_session_token").or_else(|| env("AWS_SESSION_TOKEN")),
-        region_name: value("aws_region_name").or_else(|| env(AWS_REGION_NAME)),
-        session_name: value("aws_session_name").or_else(|| env("AWS_SESSION_NAME")),
-        profile_name: value("aws_profile_name").or_else(|| env("AWS_PROFILE_NAME")),
-        role_name: value("aws_role_name").or_else(|| env("AWS_ROLE_NAME")),
-        web_identity_token: value("aws_web_identity_token")
-            .or_else(|| env("AWS_WEB_IDENTITY_TOKEN")),
-        sts_endpoint: value("aws_sts_endpoint").or_else(|| env("AWS_STS_ENDPOINT")),
-        external_id: value("aws_external_id").or_else(|| env("AWS_EXTERNAL_ID")),
     }
 }
 

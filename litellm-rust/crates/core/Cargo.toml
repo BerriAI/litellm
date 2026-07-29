@@ -9,6 +9,8 @@ repository.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+base64.workspace = true
+bytes = "1"
 thiserror.workspace = true
 sha2.workspace = true
 aws-config = { version = "1.9.0", default-features = false, features = ["rustls", "rt-tokio"], optional = true }
@@ -17,6 +19,8 @@ aws-sdk-sts = { version = "1.108.0", default-features = false, features = ["rust
 aws-sigv4 = { version = "1.5.1", optional = true }
 aws-types = { version = "1.4.0", optional = true }
 aws-smithy-runtime-api = { version = "1.13.0", optional = true }
+aws-smithy-eventstream = { workspace = true, optional = true }
+aws-smithy-types = { version = "1.6.1", optional = true }
 
 [features]
 default = []
@@ -27,6 +31,8 @@ bedrock-auth = [
     "dep:aws-sigv4",
     "dep:aws-types",
     "dep:aws-smithy-runtime-api",
+    "dep:aws-smithy-eventstream",
+    "dep:aws-smithy-types",
 ]
 
 [dev-dependencies]

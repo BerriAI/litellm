@@ -5,11 +5,12 @@ use litellm_core::{CoreError, CoreResult};
 use serde_json::{Map, Value};
 
 use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
+use crate::messages::MessagesStream;
 use crate::messages::{MessagesRequest, execute_messages};
 
 pub(crate) enum MessagesResponse {
     Json(Value),
-    Stream(reqwest::Response),
+    Stream(MessagesStream),
 }
 
 pub async fn run(

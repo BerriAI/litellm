@@ -9,6 +9,7 @@ mod types;
 
 pub use types::MessagesRequest;
 
+pub(crate) use handler::MessagesStream;
 use handler::{execute_messages_provider_call, execute_messages_provider_stream};
 use prepare::prepare_messages_call;
 
@@ -16,6 +17,7 @@ pub async fn messages(request: MessagesRequest<'_>) -> CoreResult<Value> {
     match execute_messages(request, false).await? {
         MessagesResponse::Json(body) => Ok(body),
         MessagesResponse::Stream(response) => {
+            let _ = response;
             drop(response);
             Err(litellm_core::CoreError::InvalidResponse(
                 "non-streaming messages execution returned a stream".to_string(),
@@ -26,7 +28,7 @@ pub async fn messages(request: MessagesRequest<'_>) -> CoreResult<Value> {
 
 pub(crate) enum MessagesResponse {
     Json(Value),
-    Stream(reqwest::Response),
+    Stream(MessagesStream),
 }
 
 pub(crate) async fn execute_messages(
