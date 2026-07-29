@@ -96,7 +96,6 @@ async def test_request_without_matching_tag_is_unaffected():
     assert await _filter(check, deployments, ["team_id:team-a"]) == deployments
     assert await _filter(check, deployments, ["end_user_id"]) == deployments
 
-    # untagged usage never lands in a counter, so the deployment stays available
     await check.async_log_success_event(_success_kwargs(_limits(limit=1), ["team_id:team-a"]), None, None, None)
     assert await _filter(check, deployments, ["team_id:team-a"]) == deployments
 
@@ -138,7 +137,6 @@ async def test_limit_blocks_with_429_once_exceeded(unit: str, field: str, usage_
     }
     assert json.loads(exc_info.value.message.split("litellm.RateLimitError: ")[1]) == exc_info.value.detail
 
-    # a different tag value has its own counter
     assert await _filter(check, deployments, ["end_user_id:user-456"]) == deployments
 
 
@@ -159,12 +157,10 @@ async def test_usage_is_counted_per_limit_entry_tag_id():
     for _ in range(2):
         await check.async_log_success_event(_success_kwargs(model_info, tags, total_tokens=6), None, None, None)
 
-    # end_user_id daily limit (10) is exceeded by 12 tokens; team_id weekly (100) is not
     with pytest.raises(litellm.RateLimitError) as exc_info:
         await _filter(check, deployments, tags)
     assert exc_info.value.detail["error"]["tag_id"] == "end_user_id"
 
-    # another end user on the same team is still under both limits
     assert await _filter(check, deployments, ["end_user_id:user-999", "team_id:team-a"]) == deployments
 
 
@@ -229,7 +225,6 @@ async def test_router_registers_and_enforces_tag_limits():
         await router.acompletion(**request)
     assert exc_info.value.detail["error"]["message"] == "tag_rate_limit_exceeded"
 
-    # a request without the configured tag id is unaffected
     assert (
         await router.acompletion(
             model="gpt-4o",
@@ -250,3 +245,41 @@ async def _counter_keys(check: TagLimitCheck, tags: List[str]) -> List[str]:
         for unit, limit in limits.limits_by_unit()
         if limit.tag_id in tag_values
     ]
+
+
+@pytest.mark.asyncio
+async def test_success_event_without_tags_records_nothing():
+    check = TagLimitCheck(dual_cache=DualCache(), now=lambda: 1_000_000.0)
+    model_info = _limits(limit=1)
+
+    await check.async_log_success_event(
+        kwargs=_success_kwargs(model_info, tags=["no-identity"]),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert await _filter(check, [_deployment(model_info)], ["end_user_id:user-123"]) != []
+
+
+@pytest.mark.asyncio
+async def test_success_event_without_logging_payload_records_nothing():
+    check = TagLimitCheck(dual_cache=DualCache(), now=lambda: 1_000_000.0)
+    model_info = _limits(limit=1)
+    kwargs = _success_kwargs(model_info, tags=["end_user_id:user-123"])
+    del kwargs["standard_logging_object"]
+
+    await check.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
+
+    assert await _filter(check, [_deployment(model_info)], ["end_user_id:user-123"]) != []
+
+
+@pytest.mark.asyncio
+async def test_no_deployments_is_passed_through():
+    check = TagLimitCheck(dual_cache=DualCache(), now=lambda: 1_000_000.0)
+
+    assert await _filter(check, [], ["end_user_id:user-123"]) == []
+
+
+def test_has_tag_limits_without_model_list():
+    assert has_tag_limits(None) is False
