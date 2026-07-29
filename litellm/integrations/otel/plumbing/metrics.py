@@ -1,6 +1,6 @@
 """GenAI client metrics: the six ``gen_ai.client.*`` histograms plus the
 recorder that builds attributes, applies the shared cardinality filter, and
-records a request's metrics in the success path.
+records a request's metrics on both the success and the failure path.
 
 The instrument names/units/descriptions and the recording + timing math mirror
 the v1 :mod:`litellm.integrations.opentelemetry` integration so both engines emit
@@ -10,7 +10,7 @@ identical metrics. The attribute cardinality filter is reused from v1 by import
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, FrozenSet, Mapping, Optional
+from typing import Any, Final, FrozenSet, Mapping, Optional
 
 from opentelemetry.metrics import Histogram, Meter
 
@@ -22,7 +22,7 @@ from litellm.integrations.opentelemetry import (
     _resolve_metric_attribute_filter,
 )
 from litellm.integrations.otel.model.metadata import time_to_first_chunk_seconds
-from litellm.integrations.otel.model.semconv import Metric, resolve_operation
+from litellm.integrations.otel.model.semconv import Error, Metric, resolve_operation
 from litellm.integrations.otel.model.utils import to_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -72,8 +72,33 @@ def create_genai_metrics(meter: Meter) -> GenAIMetrics:
     )
 
 
+ERROR_TYPE_FALLBACK: Final = "_OTHER"
+
+
+def resolve_error_type(kwargs: Mapping[str, Any]) -> str:
+    """The ``error.type`` value for a failed request.
+
+    Bounded by construction: the mapped provider exception's class name (the same
+    ``error_information.error_class`` the failure span stamps), else the provider
+    status code, else the raw exception's class name, else ``_OTHER`` — the value
+    the convention reserves for a failure the instrumentation cannot classify. The
+    exception *message* is unbounded and never becomes a label; it stays on the
+    span and its exception event, where high cardinality is free.
+    """
+    std_log = kwargs.get("standard_logging_object")
+    info = getattr(std_log, "error_information", None) or (std_log or {}).get("error_information") or {}
+    error_class = info.get("error_class") or info.get("error_code")
+    if error_class:
+        return str(error_class)
+    exception = kwargs.get("exception")
+    if exception is not None:
+        return type(exception).__name__
+    return ERROR_TYPE_FALLBACK
+
+
 class GenAIMetricRecorder:
-    """Records the six GenAI histograms for one successful LLM call.
+    """Records the six GenAI histograms for one successful LLM call, and the
+    duration histogram alone for one failed LLM call (see :meth:`record_failure`).
 
     The cardinality filter is resolved lazily on the first record: the proxy
     populates ``callback_settings.otel.attributes`` after the logger is built, so
@@ -109,6 +134,32 @@ class GenAIMetricRecorder:
         self._record_time_to_first_token(kwargs, common_attrs)
         self._record_time_per_output_token(kwargs, response_obj, end_time, duration_s, common_attrs)
         self._record_response_duration(kwargs, end_time, common_attrs)
+
+    def record_failure(
+        self,
+        kwargs: Mapping[str, Any],
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
+        """Record the one metric a failed request can honestly report: the
+        operation's duration, tagged with ``error.type``.
+
+        The other five instruments all describe a completed generation and have
+        nothing to measure here. litellm hands the failure callback no
+        ``response_obj`` at all, so there is no usage to split into input/output
+        tokens and no completion-token count to divide generation time by; it also
+        zeroes ``response_cost`` on failure. Recording them anyway would put a
+        fabricated zero into series that dashboards average.
+
+        ``error.type`` is stamped after the cardinality filter, exactly like
+        ``gen_ai.token.type``, so an operator's include/exclude list cannot strip
+        the discriminator and silently merge failures back into the success series.
+        """
+        attributes = {
+            **self._filter_attributes(self._common_attributes(kwargs)),
+            Error.TYPE: resolve_error_type(kwargs),
+        }
+        self._metrics.operation_duration.record((end_time - start_time).total_seconds(), attributes=attributes)
 
     # ------------------------------------------------------------------ #
     #  Attribute building + cardinality filter

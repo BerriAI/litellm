@@ -222,7 +222,14 @@ lives in [`plumbing/`](./plumbing):
   otherwise the operator's globally configured `MeterProvider` is reused so its
   readers/exporters receive them alongside the server metrics, and one is built
   and registered as the global only when none is set (mirroring how V2 owns trace
-  export).
+  export). A **failed** call records `gen_ai.client.operation.duration` too,
+  carrying the semconv `error.type` (the mapped provider exception's class name),
+  so the histogram covers the whole traffic and failure-rate panels are buildable;
+  the other five instruments describe a completed generation and are skipped
+  rather than filled with a fabricated zero. `error.type` is stamped after the
+  cardinality filter, so an `otel.attributes` list cannot merge the failure series
+  back into the success series. A proxy-gate rejection (auth / rate limit) records
+  nothing, for the same reason it gets no span: no upstream call happened.
 - [`events.py`](./plumbing/events.py) — GenAI client events. Gated on
   `enable_events` (`LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS`), a failed LLM call
   records the semconv `gen_ai.client.operation.exception` log event at severity

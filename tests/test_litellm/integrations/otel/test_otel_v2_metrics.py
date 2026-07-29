@@ -12,6 +12,13 @@ raises out of ``GenAIMetricRecorder.record`` -- asserted directly at the recorde
 layer -- and the logger turns that raise into a single ERROR ("metrics disabled")
 plus a quiet no-op for the rest of the process, asserted at the logger layer so
 the misconfig never breaks a request nor spams a log line per request.
+
+The failure path is driven the same way, through the real
+``OpenTelemetryV2.async_log_failure_event``: a failed call records
+``gen_ai.client.operation.duration`` and nothing else, tagged with ``error.type``,
+and a success driven through the same reader keeps a datapoint whose attributes are
+byte-for-byte what it had before the failure path existed -- the guard for every
+dashboard already querying that histogram.
 """
 
 import asyncio
@@ -25,6 +32,9 @@ from opentelemetry.sdk.metrics import MeterProvider  # noqa: E402
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader  # noqa: E402
 
 import litellm  # noqa: E402
+from litellm.constants import (  # noqa: E402
+    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
+)
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.config import (  # noqa: E402
     OpenTelemetryV2Config,
@@ -331,3 +341,172 @@ def test_token_type_rejected_from_either_list(attributes, monkeypatch):
     # the specific reason so dropping that guard (and falling through to "unknown
     # attribute name") is caught.
     assert "discriminator" in str(exc_info.value)
+
+
+# --- failure path ------------------------------------------------------------ #
+
+ERROR_TYPE = "error.type"
+ERROR_CLASS = "RateLimitError"
+FAILURE_DURATION_S = 1.0
+
+
+def _build_failure(
+    *,
+    error_information=None,
+    exception=None,
+    no_upstream_call=False,
+):
+    """A captured failure-call ``(kwargs, start, end)``.
+
+    Mirrors what litellm actually hands ``async_log_failure_event``: no
+    ``response_obj`` at all, but the streaming timings and the recovered
+    ``response_cost`` a mid-stream failure still carries -- so routing the failure
+    path through the full success recorder would show up here as extra series
+    rather than passing unnoticed.
+    """
+    start = datetime(2026, 6, 12, 12, 0, 0)
+    api_call_start = start + timedelta(seconds=0.1)
+    completion_start = start + timedelta(seconds=0.5)
+    end = start + timedelta(seconds=FAILURE_DURATION_S)
+    standard_logging_object = {
+        "status": "failure",
+        "metadata": {"user_api_key_hash": "hash-abc123"},
+        "hidden_params": {"litellm_call_id": "abc"},
+    }
+    if error_information is not None:
+        standard_logging_object["error_information"] = error_information
+    kwargs = {
+        "model": "gpt-4o-mini",
+        "call_type": "completion",
+        "litellm_params": {"custom_llm_provider": "openai"},
+        "optional_params": {"stream": True},
+        "response_cost": RESPONSE_COST,
+        "api_call_start_time": api_call_start,
+        "completion_start_time": completion_start,
+        "end_time": end,
+        "standard_logging_object": standard_logging_object,
+    }
+    if exception is not None:
+        kwargs["exception"] = exception
+    if no_upstream_call:
+        kwargs[LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL] = True
+    return kwargs, start, end
+
+
+def _drive_failure(reader, callback_settings_attributes=None, **failure_kwargs):
+    logger = _logger(reader, enable_metrics=True)
+    previous = litellm.callback_settings
+    if callback_settings_attributes is not None:
+        litellm.callback_settings = {"otel": {"attributes": callback_settings_attributes}}
+    try:
+        kwargs, start, end = _build_failure(**failure_kwargs)
+        asyncio.run(logger.async_log_failure_event(kwargs, None, start, end))
+    finally:
+        litellm.callback_settings = previous
+    return _metrics_by_name(reader)
+
+
+def test_failure_records_only_the_duration_histogram():
+    """A failed call contributes to gen_ai.client.operation.duration -- before this
+    existed a failure recorded nothing at all, so the histogram measured only the
+    traffic that survived. It contributes to nothing else: the other five
+    instruments describe a completed generation, and the call carries a streaming
+    timing pair and a recovered response_cost that would light four of them up if
+    the failure were routed through the success recorder."""
+    metrics = _drive_failure(
+        InMemoryMetricReader(),
+        error_information={"error_class": ERROR_CLASS, "error_code": "429"},
+    )
+
+    assert set(metrics.keys()) == {OPERATION_DURATION}
+    points = metrics[OPERATION_DURATION]
+    assert len(points) == 1
+    assert points[0].count == 1
+    assert points[0].sum == pytest.approx(FAILURE_DURATION_S)
+    assert points[0].attributes[ERROR_TYPE] == ERROR_CLASS
+
+
+def test_success_and_failure_are_separable_and_success_attributes_unchanged():
+    """The pooled histogram stays queryable per outcome, and the existing
+    dashboards keep working.
+
+    A success and a failure through one reader must land on two distinct series --
+    one with error.type, one without -- so a failure-rate panel is expressible and
+    an operator can still get success-only latency by filtering error.type="". The
+    success datapoint's attribute map must be byte-for-byte the map a success-only
+    run produces, which is what stops the new attribute from leaking onto the
+    series every current query reads."""
+    baseline_reader = InMemoryMetricReader()
+    baseline = _drive_success(baseline_reader)
+    baseline_points = baseline[OPERATION_DURATION]
+    assert len(baseline_points) == 1
+    baseline_attributes = dict(baseline_points[0].attributes)
+
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    ok_kwargs, response_obj, ok_start, ok_end = _build_call()
+    asyncio.run(logger.async_log_success_event(ok_kwargs, response_obj, ok_start, ok_end))
+    bad_kwargs, bad_start, bad_end = _build_failure(error_information={"error_class": ERROR_CLASS})
+    asyncio.run(logger.async_log_failure_event(bad_kwargs, None, bad_start, bad_end))
+
+    points = metrics = _metrics_by_name(reader)[OPERATION_DURATION]
+    assert len(points) == 2, f"success and failure collapsed into {len(points)} series: {metrics}"
+    succeeded = [dp for dp in points if ERROR_TYPE not in dp.attributes]
+    failed = [dp for dp in points if dp.attributes.get(ERROR_TYPE) == ERROR_CLASS]
+    assert len(succeeded) == 1 and len(failed) == 1
+    assert dict(succeeded[0].attributes) == baseline_attributes
+
+
+@pytest.mark.parametrize(
+    "failure_kwargs, expected",
+    [
+        ({"error_information": {"error_class": ERROR_CLASS, "error_code": "429"}}, ERROR_CLASS),
+        ({"error_information": {"error_code": "429"}}, "429"),
+        ({"exception": ValueError("boom")}, "ValueError"),
+        ({}, "_OTHER"),
+    ],
+    ids=["error_class", "error_code_only", "exception_fallback", "unclassifiable"],
+)
+def test_error_type_is_bounded_and_falls_back(failure_kwargs, expected):
+    """error.type is always a bounded value: the mapped exception's class name, the
+    provider status code, the raw exception's class name, or the semconv _OTHER
+    fallback. Never the exception message, which is unbounded."""
+    metrics = _drive_failure(InMemoryMetricReader(), **failure_kwargs)
+    assert metrics[OPERATION_DURATION][0].attributes[ERROR_TYPE] == expected
+
+
+def test_include_list_cannot_strip_error_type():
+    """error.type is a structural discriminator like gen_ai.token.type: an
+    include_list that does not mention it must not merge the failure series back
+    into the success series, so it is stamped after the filter runs."""
+    metrics = _drive_failure(
+        InMemoryMetricReader(),
+        callback_settings_attributes={"include_list": [MODEL_KEY]},
+        error_information={"error_class": ERROR_CLASS},
+    )
+    attributes = metrics[OPERATION_DURATION][0].attributes
+    assert dict(attributes) == {MODEL_KEY: "gpt-4o-mini", ERROR_TYPE: ERROR_CLASS}
+
+
+def test_proxy_gate_rejection_records_no_duration():
+    """A synthetic proxy-gate failure log (auth / rate-limit rejection) never made
+    an upstream call, so its wall time is not a GenAI operation's duration; it is
+    skipped for the same reason it gets no span. Recording it would pull the
+    histogram toward the proxy's own latency.
+
+    Both failures go through one reader so the assertion is that exactly the
+    upstream one landed, rather than the vacuous "nothing was recorded" a
+    failure path that records nothing at all would also satisfy."""
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    gate_kwargs, gate_start, gate_end = _build_failure(
+        error_information={"error_class": "AuthenticationError"},
+        no_upstream_call=True,
+    )
+    asyncio.run(logger.async_log_failure_event(gate_kwargs, None, gate_start, gate_end))
+    upstream_kwargs, upstream_start, upstream_end = _build_failure(error_information={"error_class": ERROR_CLASS})
+    asyncio.run(logger.async_log_failure_event(upstream_kwargs, None, upstream_start, upstream_end))
+
+    points = _metrics_by_name(reader)[OPERATION_DURATION]
+    assert [dp.attributes[ERROR_TYPE] for dp in points] == [ERROR_CLASS]
+    assert points[0].count == 1
