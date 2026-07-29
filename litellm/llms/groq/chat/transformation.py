@@ -35,7 +35,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
-from litellm.types.utils import ModelResponse, ModelResponseStream
+from litellm.types.utils import ModelResponse, ModelResponseStream, PromptTokensDetailsWrapper
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
@@ -308,7 +308,22 @@ class GroqChatConfig(OpenAILikeChatConfig):
             original_service_tier=getattr(model_response, "service_tier")
         )
         setattr(model_response, "service_tier", mapped_service_tier)
+        self._add_web_search_usage(model_response=model_response, raw_response=raw_response)
         return model_response
+
+    def _add_web_search_usage(self, model_response: ModelResponse, raw_response: httpx.Response) -> None:
+        searches = sum(
+            1
+            for choice in raw_response.json().get("choices") or []
+            for tool in (choice.get("message") or {}).get("executed_tools") or []
+            if tool.get("name") == "browser.search" or tool.get("type") == "browser_search"
+        )
+        usage = getattr(model_response, "usage", None)
+        if searches == 0 or usage is None:
+            return
+        if usage.prompt_tokens_details is None:
+            usage.prompt_tokens_details = PromptTokensDetailsWrapper()
+        usage.prompt_tokens_details.web_search_requests = searches
 
     def _map_groq_service_tier(self, original_service_tier: Optional[str]) -> Literal["auto", "default", "flex"]:
         """

@@ -1,11 +1,14 @@
 import logging
+from unittest.mock import patch
 
+import httpx
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.groq.chat.transformation import GroqChatConfig
 from litellm.utils import get_optional_params
 
@@ -123,6 +126,79 @@ class TestGroqWebSearchOptions:
                 web_search_options={},
             )
         assert not [record for record in caplog.records if "web_search_options" in record.message]
+
+
+def _searched_groq_response(executed_tools: list | None) -> dict:
+    message: dict = {"role": "assistant", "content": "Top headline: example"}
+    if executed_tools is not None:
+        message["executed_tools"] = executed_tools
+    return {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "openai/gpt-oss-20b",
+        "service_tier": "auto",
+        "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
+    }
+
+
+EXECUTED_TOOLS_TWO_SEARCHES = [
+    {
+        "index": 0,
+        "type": "browser_search",
+        "name": "browser.search",
+        "arguments": '{"query": "top headline"}',
+        "search_results": {"results": [{"title": "t", "url": "https://example.com", "content": "c", "score": 0.9}]},
+    },
+    {"index": 1, "type": "browser.open", "name": "browser.open", "arguments": '{"cursor": 0, "id": 0}'},
+    {"index": 2, "type": "function", "name": "browser.open", "arguments": '{"cursor": 1, "id": 0}'},
+    {"index": 3, "type": "browser_search", "name": "browser.search", "arguments": '{"query": "again"}'},
+    {"index": 4, "type": "browser.find", "name": "browser.find", "arguments": '{"cursor": 1, "pattern": "x"}'},
+]
+
+
+def _groq_completion_with_mocked_response(response_json: dict) -> litellm.ModelResponse:
+    client = HTTPHandler()
+    fake_response = httpx.Response(
+        status_code=200,
+        json=response_json,
+        request=httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions"),
+    )
+    with patch.object(client, "post", return_value=fake_response):
+        return litellm.completion(
+            model="groq/openai/gpt-oss-20b",
+            messages=[{"role": "user", "content": "hi"}],
+            web_search_options={"search_context_size": "high"},
+            api_key="fake-key",
+            client=client,
+        )
+
+
+class TestGroqWebSearchUsageSignal:
+    def test_counts_browser_searches_into_usage(self):
+        response = _groq_completion_with_mocked_response(_searched_groq_response(EXECUTED_TOOLS_TWO_SEARCHES))
+        assert response.usage.prompt_tokens_details.web_search_requests == 2
+
+    def test_no_signal_without_executed_tools(self):
+        response = _groq_completion_with_mocked_response(_searched_groq_response(None))
+        details = response.usage.prompt_tokens_details
+        assert details is None or details.web_search_requests is None
+
+    @pytest.mark.usefixtures("local_model_cost_map")
+    def test_searched_response_billed(self):
+        response = _groq_completion_with_mocked_response(_searched_groq_response(EXECUTED_TOOLS_TWO_SEARCHES))
+        assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+            response_object=response, usage=response.usage
+        )
+        cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model="groq/openai/gpt-oss-20b",
+            response_object=response,
+            usage=response.usage,
+            custom_llm_provider="groq",
+            standard_built_in_tools_params={"web_search_options": {"search_context_size": "high"}},
+        )
+        assert cost == 0.005
 
 
 class TestGroqWebSearchCost:
