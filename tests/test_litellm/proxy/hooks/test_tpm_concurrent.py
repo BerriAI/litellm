@@ -576,6 +576,47 @@ async def test_estimate_tokens_uses_max_tokens_when_explicit(rate_limiter):
 
 
 @pytest.mark.asyncio
+async def test_estimate_tokens_honors_explicit_zero_max_tokens(rate_limiter):
+    """
+    Regression for a Greptile finding: explicit_max_tokens was resolved via
+    `data.get("max_tokens") or data.get("max_completion_tokens") or
+    data.get("max_output_tokens")`, so an explicit 0 in the first field was
+    falsy and fell through to the next field (or the no-max_tokens floor),
+    silently discarding a caller's explicit zero-output request.
+    """
+    handler, _cache = rate_limiter
+
+    estimate = handler._estimate_tokens_for_request(
+        data={
+            "messages": [{"role": "user", "content": "abcd" * 4}],  # 16 chars ~ 4 tokens
+            "max_tokens": 0,
+        }
+    )
+    assert estimate == 4, f"expected input-only reservation (4) for an explicit max_tokens=0, got {estimate}"
+
+
+@pytest.mark.asyncio
+async def test_estimate_tokens_honors_explicit_zero_max_output_tokens_for_responses(rate_limiter):
+    """
+    Same regression as above, for the Responses API's max_output_tokens
+    field specifically: a project with a small OTPM limit configured must
+    not reject (or over-reserve for) a Responses call that explicitly asks
+    for zero output tokens.
+    """
+    handler, _cache = rate_limiter
+
+    estimate = handler._estimate_tokens_for_request(
+        data={
+            "input": "describe this image in detail",  # 29 chars ~ 7 tokens
+            "max_output_tokens": 0,
+        },
+        min_configured_tpm_limit=40,
+        call_type="aresponses",
+    )
+    assert estimate == 7, f"expected input-only reservation (7) for an explicit max_output_tokens=0, got {estimate}"
+
+
+@pytest.mark.asyncio
 async def test_estimate_tokens_zero_for_empty_embeddings(rate_limiter):
     """Embeddings have no output budget — reservation should equal input only."""
     handler, _cache = rate_limiter
@@ -1994,6 +2035,49 @@ async def test_responses_api_otpm_output_cap_applied_not_skipped_as_embedding(ra
     assert data["max_output_tokens"] <= 10, f"expected the OTPM-derived floor (<=10), got {data['max_output_tokens']}"
     assert data.get("max_tokens") is None, (
         "OTPM output cap was written to max_tokens, which the Responses transformation ignores"
+    )
+
+
+@pytest.mark.asyncio
+async def test_explicit_zero_output_responses_call_not_rejected_when_otpm_exhausted(rate_limiter):
+    """
+    Regression for a Greptile finding: estimated_output_tokens was
+    unconditionally floored to max(estimated_output_tokens, 1), overriding
+    an explicit max_output_tokens=0 with an implicit reservation of 1. A
+    Responses call that explicitly asks for zero output tokens must not be
+    rejected just because the project's OTPM bucket is already exhausted --
+    it reserves nothing on the output side.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-responses-zero-output"),
+        project_id="proj-responses-zero-output",
+        project_metadata={
+            "model_otpm_limit": {"bedrock_mantle/claude-opus": 5},
+        },
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data={
+            "model": "bedrock_mantle/claude-opus",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 5,
+        },
+        call_type="",
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data={
+            "model": "bedrock_mantle/claude-opus",
+            "input": "describe this image in detail",
+            "max_output_tokens": 0,
+        },
+        call_type="aresponses",
     )
 
 

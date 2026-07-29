@@ -521,6 +521,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return min(baseline, max(1, min_configured_tpm_limit // _TPM_FLOOR_FRACTION))
 
     @staticmethod
+    def _has_explicit_output_cap(data: dict) -> bool:
+        """Whether the caller explicitly set an output-token cap.
+
+        Checked via ``is not None`` (not truthiness) so an explicit 0 --
+        a legitimate zero-output request -- counts as explicit.
+        """
+        return (
+            data.get("max_tokens") is not None
+            or data.get("max_completion_tokens") is not None
+            or data.get("max_output_tokens") is not None
+        )
+
+    @staticmethod
     def _apply_implicit_output_cap(
         data: dict,
         min_configured_limit: int | None,
@@ -537,13 +550,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         capped_floor = _PROXY_MaxParallelRequestsHandler_v3._no_max_tokens_output_floor(min_configured_limit)
         baseline_floor = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
-        has_explicit_max_tokens = (
-            data.get("max_tokens") is not None
-            or data.get("max_completion_tokens") is not None
-            or data.get("max_output_tokens") is not None
-        )
         is_embedding = data.get("input") is not None and call_type not in RESPONSES_API_CALL_TYPES
-        if capped_floor >= baseline_floor or has_explicit_max_tokens or is_embedding:
+        if (
+            capped_floor >= baseline_floor
+            or _PROXY_MaxParallelRequestsHandler_v3._has_explicit_output_cap(data)
+            or is_embedding
+        ):
             return
         cap_field = "max_output_tokens" if call_type in RESPONSES_API_CALL_TYPES else "max_tokens"
         existing_cap = data.get(cap_field)
@@ -629,8 +641,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         estimated_input_tokens = max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
 
-        explicit_max_tokens = (
-            data.get("max_tokens") or data.get("max_completion_tokens") or data.get("max_output_tokens")
+        explicit_max_tokens = next(
+            (
+                value
+                for value in (data.get("max_tokens"), data.get("max_completion_tokens"), data.get("max_output_tokens"))
+                if value is not None
+            ),
+            None,
         )
         is_responses_call = call_type in RESPONSES_API_CALL_TYPES
 
@@ -2794,7 +2811,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             data=data, model=requested_model, call_type=call_type
         )
         estimated_input_tokens = max(estimated_input_tokens, 1)
-        estimated_output_tokens = max(estimated_output_tokens, 1)
+        if not self._has_explicit_output_cap(data):
+            estimated_output_tokens = max(estimated_output_tokens, 1)
 
         # Hard-cap generation length so an unbounded response can't overshoot
         # the OTPM budget before post-call reconciliation runs, mirroring the
