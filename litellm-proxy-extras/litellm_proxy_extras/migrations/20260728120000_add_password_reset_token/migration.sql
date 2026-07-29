@@ -11,7 +11,12 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_PasswordResetToken" (
 );
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_PasswordResetToken_user_id_idx" ON "LiteLLM_PasswordResetToken"("user_id");
+CREATE INDEX IF NOT EXISTS "LiteLLM_PasswordResetToken_user_id_idx" ON "LiteLLM_PasswordResetToken"("user_id");
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_PasswordResetToken" ADD CONSTRAINT "LiteLLM_PasswordResetToken_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "LiteLLM_UserTable"("user_id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_PasswordResetToken_user_id_fkey') THEN
+        ALTER TABLE "LiteLLM_PasswordResetToken" ADD CONSTRAINT "LiteLLM_PasswordResetToken_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "LiteLLM_UserTable"("user_id") ON DELETE CASCADE ON UPDATE CASCADE;
+    END IF;
+END $$;
