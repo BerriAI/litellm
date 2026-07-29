@@ -95,6 +95,23 @@ async def _admitted_user_context(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKe
         return None
 
 
+async def acting_user_auth(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKeyAuth:
+    """The principal acting-as-user MCP routes resolve permissions with. A non-admin dashboard
+    session acts as the admitted subject, the same identity a gateway session resolves with, so
+    server reachability, per-source tool ceilings, rate limits, and billing bind identically on
+    both surfaces. An admin session keeps its operator view and any caller-passed credential is
+    returned unchanged, never widened."""
+
+    if not is_ui_session_credential(user_api_key_auth):
+        return user_api_key_auth
+    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+
+    if _user_has_admin_view(user_api_key_auth):
+        return user_api_key_auth
+    admitted = await _admitted_user_context(user_api_key_auth)
+    return admitted if admitted is not None else user_api_key_auth
+
+
 async def build_effective_auth_contexts(
     user_api_key_auth: UserAPIKeyAuth,
 ) -> List[UserAPIKeyAuth]:

@@ -769,6 +769,84 @@ class TestListToolsRestAPI:
         assert captured["server"] is stub_server
         assert result["tools"] == ["tool-1"]
         assert result["error"] is None
+
+    async def test_non_admin_ui_session_resolves_as_admitted_subject(self, monkeypatch):
+        """LIT-4861: a non-admin dashboard session must act as the admitted subject on this
+        route, so server reachability AND tool ceilings bind to the user's grants exactly as
+        they do for a gateway session, never to the bare session key."""
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+        session_auth = UserAPIKeyAuth(
+            team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="grant-user", user_role="internal_user"
+        )
+        admitted_auth = UserAPIKeyAuth(user_id="grant-user")
+
+        async def fake_reload(user_id):
+            assert user_id == "grant-user"
+            return admitted_auth
+
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+            fake_reload,
+        )
+
+        seen_server_resolution_auths = []
+
+        async def fake_get_allowed_mcp_servers(user_api_key_auth=None, **kwargs):
+            seen_server_resolution_auths.append(user_api_key_auth)
+            return ["server-1"]
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+        captured = {}
+
+        async def fake_get_tools(
+            server,
+            server_auth_header,
+            raw_headers=None,
+            user_api_key_auth=None,
+            extra_headers=None,
+            apply_tool_filters=True,
+        ):
+            captured["user_api_key_auth"] = user_api_key_auth
+            return ["tool-1"]
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="server-1",
+            user_api_key_dict=session_auth,
+        )
+
+        assert result["tools"] == ["tool-1"]
+        assert seen_server_resolution_auths and all(a is admitted_auth for a in seen_server_resolution_auths)
+        assert captured["user_api_key_auth"] is admitted_auth
         assert result["message"] == "Successfully retrieved tools"
 
     async def test_include_disabled_tools_is_admin_only(self, monkeypatch):
