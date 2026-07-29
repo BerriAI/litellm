@@ -192,3 +192,55 @@ class TestStandardCallbackDynamicParamsIncludesDatadog:
         assert "dd_site" in annotations
         assert "dd_agent_host" in annotations
         assert "dd_agent_port" in annotations
+
+
+class TestTeamCallbackFlowPassesDDCredentials:
+    """
+    Integration test for the full team callback flow.
+
+    Verifies that DD credentials configured via team callback_vars
+    actually reach DataDogHandler when a request is processed.
+    The dd_* params are in _request_blocked_callback_params (to prevent
+    request-level injection), but team callback_vars are admin-configured
+    and must pass through.
+    """
+
+    def test_process_dynamic_callbacks_passes_dd_params_from_kwargs(self):
+        """
+        Simulates the Logging.__init__ flow where team callback_vars
+        (dd_api_key, dd_site) are unpacked into kwargs. Verifies that
+        _process_dynamic_callback_list picks them up and passes them
+        to DataDogHandler despite _request_blocked_callback_params.
+        """
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        kwargs = {
+            "dd_api_key": "team-dd-key-123",
+            "dd_site": "us5.datadoghq.com",
+            "model": "gpt-4",
+            "litellm_params": {"metadata": {}},
+        }
+
+        with patch("asyncio.create_task"):
+            logging_obj = Logging(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=False,
+                call_type="completion",
+                start_time="2026-01-01",
+                litellm_call_id="test-call-id",
+                function_id="test-func",
+                dynamic_success_callbacks=["datadog"],
+                kwargs=kwargs,
+            )
+
+        dd_loggers = [
+            cb
+            for cb in (logging_obj.dynamic_success_callbacks or [])
+            if isinstance(cb, DataDogLogger)
+        ]
+        assert (
+            len(dd_loggers) == 1
+        ), "DataDogLogger should be initialized from team callback_vars"
+        assert dd_loggers[0].DD_API_KEY == "team-dd-key-123"
+        assert "us5.datadoghq.com" in dd_loggers[0].intake_url
