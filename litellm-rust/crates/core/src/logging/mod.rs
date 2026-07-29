@@ -35,18 +35,12 @@ impl CallLogger {
         }
     }
 
-    pub(crate) fn call_id(&self) -> &str {
-        &self.context.litellm_call_id
-    }
-
-    pub(crate) fn provider(&self) -> &str {
-        &self.context.custom_llm_provider
-    }
-
-    pub fn request_about_to_be_sent(&self, mut input: events::RequestEventInput) {
-        input.call_id = self.context.litellm_call_id.clone();
-        input.provider = self.context.custom_llm_provider.clone();
-        self.emit(events::request_event(input));
+    pub fn request_about_to_be_sent(&self, input: events::RequestEventInput) {
+        self.emit(events::request_event(
+            self.context.litellm_call_id.clone(),
+            self.context.custom_llm_provider.clone(),
+            input,
+        ));
     }
 
     pub fn response_received(
@@ -143,8 +137,6 @@ mod tests {
         let context = CallLifecycleContext::new("messages", "claude", "anthropic", "req_123");
         let logger = CallLogger::new(&context, Some(Arc::new(sink.clone())));
         logger.request_about_to_be_sent(events::RequestEventInput {
-            call_id: String::new(),
-            provider: String::new(),
             model: "claude".to_string(),
             stream: false,
             url: "https://example.test/v1/messages".to_string(),

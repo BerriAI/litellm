@@ -28,8 +28,6 @@ pub async fn execute_json<T: DeserializeOwned>(
     request
         .logger
         .request_about_to_be_sent(super::RequestEventInput {
-            call_id: request.logger.call_id().to_string(),
-            provider: request.logger.provider().to_string(),
             model: request.model,
             stream: request.stream,
             url: request.url.clone(),
@@ -105,20 +103,9 @@ pub async fn execute_json<T: DeserializeOwned>(
         CoreError::InvalidResponse(format!("invalid provider response JSON: {error}"))
     })?;
     let typed = T::deserialize(&value);
-    let response_body = if media_type
-        .as_deref()
-        .is_some_and(|value| value.to_ascii_lowercase().contains("json"))
-    {
-        ResponseBody::Json(value)
-    } else {
-        ResponseBody::Binary {
-            media_type,
-            bytes: text.len(),
-        }
-    };
     request
         .logger
-        .response_received(status.as_u16(), headers, response_body);
+        .response_received(status.as_u16(), headers, ResponseBody::Json(value));
     let typed = typed.map_err(|error| {
         request.logger.failure(
             Some(status.as_u16()),
@@ -140,8 +127,6 @@ pub async fn execute_stream(
     request
         .logger
         .request_about_to_be_sent(super::RequestEventInput {
-            call_id: request.logger.call_id().to_string(),
-            provider: request.logger.provider().to_string(),
             model: request.model,
             stream: true,
             url: request.url.clone(),

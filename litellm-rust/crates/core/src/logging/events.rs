@@ -21,8 +21,6 @@ pub enum LogEvent {
 }
 
 pub struct RequestEventInput {
-    pub call_id: String,
-    pub provider: String,
     pub model: String,
     pub stream: bool,
     pub url: String,
@@ -114,12 +112,16 @@ pub struct ProviderErrorEvent {
     pub body: Option<Value>,
 }
 
-pub(crate) fn request_event(input: RequestEventInput) -> LogEvent {
+pub(crate) fn request_event(
+    call_id: String,
+    provider: String,
+    input: RequestEventInput,
+) -> LogEvent {
     let snapshot = snapshot_json(input.body);
     LogEvent::Request(ProviderRequestEvent {
         source: "litellm-rust",
-        call_id: input.call_id,
-        provider: input.provider,
+        call_id,
+        provider,
         model: input.model,
         stream: input.stream,
         method: "POST",
@@ -221,15 +223,17 @@ mod tests {
 
     #[test]
     fn redacts_credentials_recursively() {
-        let event = request_event(RequestEventInput {
-            call_id: "call_01".to_string(),
-            provider: "anthropic".to_string(),
-            model: "claude".to_string(),
-            stream: false,
-            url: "https://example.test?signature=secret&x=ok".to_string(),
-            headers: vec![("Authorization".to_string(), "Bearer secret".to_string())],
-            body: serde_json::json!({"nested": {"token": "secret"}, "prompt": "visible"}),
-        });
+        let event = request_event(
+            "call_01".to_string(),
+            "anthropic".to_string(),
+            RequestEventInput {
+                model: "claude".to_string(),
+                stream: false,
+                url: "https://example.test?signature=secret&x=ok".to_string(),
+                headers: vec![("Authorization".to_string(), "Bearer secret".to_string())],
+                body: serde_json::json!({"nested": {"token": "secret"}, "prompt": "visible"}),
+            },
+        );
         let json = serde_json::to_string(&event).expect("serializes");
         assert!(!json.contains("secret"));
         assert!(json.contains("visible"));
