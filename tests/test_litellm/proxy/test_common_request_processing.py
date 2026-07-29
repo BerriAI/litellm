@@ -5111,3 +5111,190 @@ class TestStreamingClientDisconnectBilling:
         )
 
         proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+
+
+class TestInjectCostIntoUsageDict:
+    """Regression tests for streaming cost injection on the Anthropic Messages API.
+
+    Anthropic ``message_delta`` reports ``input_tokens`` excluding cache read and
+    cache creation tokens, whereas ``generic_cost_per_token`` expects
+    ``Usage.prompt_tokens`` to be the full input total. If the injected cost
+    seeds ``prompt_tokens`` from the bare ``input_tokens``, the cache read tokens
+    get subtracted again, the non-cached input is clamped to 0, and the streamed
+    ``usage.cost`` under-reports vs the logging callback.
+    Ref: LIT-4902.
+    """
+
+    def _reference_cost(self, model: str, prompt_tokens: int, output_tokens: int, cache_read: int) -> float:
+        from litellm.types.utils import ModelResponse, Usage
+
+        return litellm.completion_cost(
+            completion_response=ModelResponse(
+                usage=Usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=output_tokens,
+                    total_tokens=prompt_tokens + output_tokens,
+                    cache_read_input_tokens=cache_read,
+                )
+            ),
+            model=model,
+        )
+
+    def test_message_delta_cost_includes_cached_input_tokens(self):
+        model = "bedrock/us.anthropic.claude-sonnet-4-6"
+        input_tokens = 10058
+        cache_read = 10076
+        output_tokens = 1124
+
+        obj = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_read_input_tokens": cache_read,
+                "cache_creation_input_tokens": 0,
+            },
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(obj, model)
+        assert result is not None
+        injected = result["usage"]["cost"]
+
+        correct = self._reference_cost(model, input_tokens + cache_read, output_tokens, cache_read)
+        dropped_input = self._reference_cost(model, input_tokens, output_tokens, cache_read)
+
+        assert correct != pytest.approx(dropped_input)
+        assert injected == pytest.approx(correct)
+        assert injected > dropped_input
+
+    def test_message_delta_prices_1h_cache_creation_above_5m_rate(self):
+        """A ``cache_creation`` split with 1h tokens must be priced at the 1h write
+        rate, not the cheaper 5m rate. The old injection dropped the
+        ``cache_creation.{ephemeral_5m,ephemeral_1h}`` breakdown and lumped every
+        cache-creation token at the flat 5m rate; rebuilding the Usage via
+        ``AnthropicConfig.calculate_usage`` carries the split into pricing.
+        """
+        model = "bedrock/us.anthropic.claude-sonnet-4-6"
+        entry = litellm.model_cost["us.anthropic.claude-sonnet-4-6"]
+        input_tokens = 14
+        cache_creation_1h = 2000
+        output_tokens = 8
+
+        obj = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": cache_creation_1h,
+                "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": cache_creation_1h,
+                },
+            },
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(obj, model)
+        assert result is not None
+        injected = result["usage"]["cost"]
+
+        base = input_tokens * entry["input_cost_per_token"] + output_tokens * entry["output_cost_per_token"]
+        expected_1h = base + cache_creation_1h * entry["cache_creation_input_token_cost_above_1hr"]
+        flat_5m = base + cache_creation_1h * entry["cache_creation_input_token_cost"]
+
+        assert expected_1h != pytest.approx(flat_5m)
+        assert injected == pytest.approx(expected_1h)
+        assert injected != pytest.approx(flat_5m)
+
+    def test_message_delta_costs_through_logging_obj_when_available(self):
+        """When the call's logging object is present, cost must be computed through
+        it so the streamed cost inherits the same custom/deployment pricing as the
+        logging callback, and the Usage it receives must carry the reconstructed
+        cache split.
+        """
+
+        class _StubLoggingObj:
+            def __init__(self, cost: float) -> None:
+                self._cost = cost
+                self.captured_result = None
+
+            def _response_cost_calculator(self, result):
+                self.captured_result = result
+                return self._cost
+
+        model = "bedrock/us.anthropic.claude-sonnet-4-6"
+        discounted_cost = 0.00099
+        stub = _StubLoggingObj(discounted_cost)
+
+        obj = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {
+                "input_tokens": 14,
+                "output_tokens": 8,
+                "cache_read_input_tokens": 3202,
+                "cache_creation_input_tokens": 500,
+                "cache_creation": {
+                    "ephemeral_5m_input_tokens": 100,
+                    "ephemeral_1h_input_tokens": 400,
+                },
+            },
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(obj, model, stub)
+        assert result is not None
+        assert result["usage"]["cost"] == discounted_cost
+
+        usage = stub.captured_result.usage
+        assert usage.prompt_tokens == 14 + 500 + 3202
+        details = usage.prompt_tokens_details.cache_creation_token_details
+        assert details.ephemeral_5m_input_tokens == 100
+        assert details.ephemeral_1h_input_tokens == 400
+
+    def test_process_chunk_injects_cost_for_dict_and_sse_frame(self):
+        """``_process_chunk_with_cost_injection`` must thread the logging object
+        through both the dict-chunk and the SSE-string-frame paths so a streamed
+        ``message_delta`` gets the logging-obj cost, and must return the chunk
+        untouched when ``include_cost_in_streaming_usage`` is off.
+        """
+        import json as _json
+
+        class _StubLoggingObj:
+            def __init__(self, cost: float) -> None:
+                self._cost = cost
+
+            def _response_cost_calculator(self, result):
+                return self._cost
+
+        model = "bedrock/us.anthropic.claude-sonnet-4-6"
+        discounted_cost = 0.00042
+        stub = _StubLoggingObj(discounted_cost)
+        usage = {
+            "input_tokens": 14,
+            "output_tokens": 8,
+            "cache_read_input_tokens": 3202,
+            "cache_creation_input_tokens": 0,
+        }
+
+        def _dict_chunk() -> dict:
+            return {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": dict(usage)}
+
+        with patch.object(litellm, "include_cost_in_streaming_usage", False, create=True):
+            untouched = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(_dict_chunk(), model, stub)
+        assert "cost" not in untouched["usage"]
+
+        with patch.object(litellm, "include_cost_in_streaming_usage", True, create=True):
+            dict_result = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(_dict_chunk(), model, stub)
+            frame = f"event: message_delta\ndata: {_json.dumps(_dict_chunk())}\n\n"
+            sse_result = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(frame, model, stub)
+
+        assert dict_result["usage"]["cost"] == discounted_cost
+
+        assert isinstance(sse_result, str)
+        assert sse_result.endswith("\n\n")
+        data_line = next(ln for ln in sse_result.splitlines() if ln.strip().startswith("data:"))
+        injected = _json.loads(data_line.split("data:", 1)[1].strip())
+        assert injected["usage"]["cost"] == discounted_cost
+        assert injected["usage"]["cache_read_input_tokens"] == 3202
