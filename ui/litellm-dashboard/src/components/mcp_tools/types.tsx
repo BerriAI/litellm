@@ -52,6 +52,28 @@ export const AUTH_TYPE = {
 export const isClientForwardedTokenMode = (authType?: string | null): boolean =>
   authType === AUTH_TYPE.TRUE_PASSTHROUGH || authType === AUTH_TYPE.OAUTH_DELEGATE;
 
+/**
+ * Whether the gateway acquires the OAuth client itself during /authorize (so the browser must NOT
+ * pre-register one). This MUST mirror the backend `resolve_ephemeral_dcr_client` mint condition
+ * exactly, cell for cell, or a mode where the two disagree either dead-ends (browser skips a
+ * register the gateway never performs) or double-registers. The gateway mints for every
+ * `true_passthrough` server, and for `oauth_delegate` only when it is NOT a dcr_bridge server: the
+ * interactive oauth_delegate dcr_bridge sign-in captures the SSO user through the browser's own
+ * front-door registration, which the mint must not preempt.
+ */
+export const gatewayMintsClientFor = (server: { auth_type?: string | null; dcr_bridge?: boolean | null }): boolean =>
+  server.auth_type === AUTH_TYPE.TRUE_PASSTHROUGH ||
+  (server.auth_type === AUTH_TYPE.OAUTH_DELEGATE && !server.dcr_bridge);
+
+// Auth modes that cannot be used through the gateway aggregate connect flow, where the client holds
+// only an identity-only session bearer and upstream credentials are resolved server-side from the
+// per-user vault. The vault is only populated by interactive authorization_code (oauth2). The
+// client-forwarded modes need the caller to present the upstream Authorization per call, and
+// oauth2_token_exchange (OBO) needs the caller's own IdP token as the subject to exchange; the
+// session bearer is neither, so none of these can complete a tool call on this connection.
+export const isUnsupportedOnGatewayConnect = (authType?: string | null): boolean =>
+  isClientForwardedTokenMode(authType) || authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
+
 export const OAUTH_FLOW = {
   INTERACTIVE: "interactive",
   M2M: "m2m",
@@ -81,6 +103,8 @@ export const getOAuthAuthorizationIdentity = (values: Record<string, unknown>): 
     client_id: credentials.client_id ?? null,
     client_secret: credentials.client_secret ?? null,
     scopes: credentials.scopes ?? null,
+    upstream_resource: credentials.upstream_resource ?? null,
+    issuer: values.issuer ?? null,
     authorization_url: values.authorization_url ?? null,
     token_url: values.token_url ?? null,
     registration_url: values.registration_url ?? null,
@@ -106,22 +130,45 @@ export const CLEARED_ON_INVALIDATION = ["credentials"] as const;
 // token-shaped keys so a preserve can never carry minted material through. Shared by both forms.
 const DECLARED_APP_CREDENTIAL_KEYS = ["client_id", "client_secret"] as const;
 
+// Admin-typed credential config that is NOT part of the declared OAuth app. It is preserved across an
+// invalidation for the same reason the client keys are (nothing programmatic writes it, so a reset
+// would destroy admin input), but it must stay OUT of the declared-app set: whether an app exists is
+// a distinct question that gates the "app may not match upstream" warning, and a server using dynamic
+// client registration can set a resource indicator while having no app at all.
+export const ADMIN_CONFIG_CREDENTIAL_KEYS = ["upstream_resource"] as const;
+
 // Minted token material the oauth2 authorize path writes beside the app keys; stripped from restored
 // snapshots and from any credentials that transit to the temp-session preview so a stale token never
 // reaches the backend or a client-forwarded server row.
 export const MINTED_TOKEN_CREDENTIAL_KEYS = ["access_token", "refresh_token", "expires_in", "scope"] as const;
 
-export const preservedDeclaredAppCredentials = (
+const pickStringCredentials = (
   credentials: Record<string, unknown> | null | undefined,
+  keys: readonly string[],
 ): Record<string, string> | undefined => {
   if (!credentials) return undefined;
   const kept = Object.fromEntries(
-    DECLARED_APP_CREDENTIAL_KEYS.filter((key) => typeof credentials[key] === "string" && credentials[key] !== "").map(
-      (key) => [key, credentials[key] as string],
-    ),
+    keys
+      .filter((key) => typeof credentials[key] === "string" && credentials[key] !== "")
+      .map((key) => [key, credentials[key] as string]),
   );
   return Object.keys(kept).length > 0 ? kept : undefined;
 };
+
+// Does the admin have a declared OAuth client app? Answers only that question; use
+// preservedAdminCredentials for anything deciding what survives a reset or reaches the backend, or a
+// server that only carries admin config would read as having an app it never declared.
+export const preservedDeclaredAppCredentials = (
+  credentials: Record<string, unknown> | null | undefined,
+): Record<string, string> | undefined => pickStringCredentials(credentials, DECLARED_APP_CREDENTIAL_KEYS);
+
+// Everything the admin typed into `credentials` and nothing minted: the declared app plus the config
+// keys. This is what must survive the invalidation reset and what a client-forwarded row may persist,
+// so dropping a key from here silently discards admin input on an unrelated edit.
+export const preservedAdminCredentials = (
+  credentials: Record<string, unknown> | null | undefined,
+): Record<string, string> | undefined =>
+  pickStringCredentials(credentials, [...DECLARED_APP_CREDENTIAL_KEYS, ...ADMIN_CONFIG_CREDENTIAL_KEYS]);
 
 // Drop minted token keys, keeping everything else (the declared app plus any non-token config).
 export const withoutMintedTokenCredentials = (
@@ -316,6 +363,12 @@ export interface MCPToolsViewerProps {
   /** When true (interactive OAuth2), the server uses PKCE passthrough. */
   delegate_auth_to_upstream?: boolean | null;
   /**
+   * Read together with auth_type by gatewayMintsClientFor: an oauth_delegate dcr_bridge server is
+   * NOT gateway-minted (its interactive sign-in registers through the browser front door), so the
+   * tools-page Authorize must know the flag to decide whether to pre-register a client.
+   */
+  dcr_bridge?: boolean | null;
+  /**
    * Connection field present on every OAuth2 flow (interactive and M2M alike),
    * so it does not indicate the mode. Retained for callers/other uses; not read
    * for mode detection — see getMcpOAuthMode.
@@ -341,6 +394,7 @@ export interface MCPServer {
   transport?: string | null;
   auth_type?: string | null;
   oauth2_flow?: string | null;
+  issuer?: string | null;
   authorization_url?: string | null;
   token_url?: string | null;
   registration_url?: string | null;

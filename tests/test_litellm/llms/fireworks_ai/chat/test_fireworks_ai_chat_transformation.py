@@ -13,6 +13,7 @@ sys.path.insert(
 
 from litellm import get_model_info, supports_reasoning, supports_vision
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
+from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Function,
@@ -30,6 +31,189 @@ def force_local_model_cost(monkeypatch):
     from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 
     litellm.model_cost = get_model_cost_map(url=litellm.model_cost_map_url)
+
+
+def test_validate_environment_sets_session_affinity_from_litellm_session_id():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={"litellm_session_id": "session-123"},
+        api_key="test-key",
+    )
+
+    assert headers["x-session-affinity"] == "session-123"
+
+
+def test_validate_environment_sets_session_affinity_from_metadata_session_id():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={"metadata": {"session_id": "metadata-session-123"}},
+        api_key="test-key",
+    )
+
+    assert headers["x-session-affinity"] == "metadata-session-123"
+
+
+def test_validate_environment_sets_session_affinity_from_session_id():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={"session_id": "session-id-123"},
+        api_key="test-key",
+    )
+
+    assert headers["x-session-affinity"] == "session-id-123"
+
+
+def test_validate_environment_sets_session_affinity_from_trace_id():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={"litellm_trace_id": "trace-id-123"},
+        api_key="test-key",
+    )
+
+    assert headers["x-session-affinity"] == "trace-id-123"
+
+
+def test_validate_environment_does_not_set_session_affinity_without_session_id():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="test-key",
+    )
+
+    assert "x-session-affinity" not in headers
+
+
+def test_validate_environment_preserves_explicit_session_affinity_header():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={"x-session-affinity": "explicit-session"},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={"litellm_session_id": "session-123"},
+        api_key="test-key",
+    )
+
+    assert headers["x-session-affinity"] == "explicit-session"
+
+
+def test_validate_environment_sets_json_content_type():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="test-key",
+    )
+
+    assert headers["Content-Type"] == "application/json"
+
+
+def test_validate_environment_preserves_explicit_content_type():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={"content-type": "multipart/form-data"},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="test-key",
+    )
+
+    assert headers["content-type"] == "multipart/form-data"
+    assert "Content-Type" not in headers
+
+
+def test_validate_environment_sets_json_content_type_with_session_affinity():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={"litellm_session_id": "session-123"},
+        api_key="test-key",
+    )
+
+    assert headers["Content-Type"] == "application/json"
+    assert headers["Authorization"] == "Bearer test-key"
+    assert headers["x-session-affinity"] == "session-123"
+
+
+def test_validate_environment_resolves_api_key_from_env_and_sets_content_type(monkeypatch):
+    monkeypatch.setenv("FIREWORKS_API_KEY", "fw-env-key")
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert headers["Authorization"] == "Bearer fw-env-key"
+    assert headers["Content-Type"] == "application/json"
+
+
+def test_validate_environment_raises_without_api_key(monkeypatch):
+    for env_var in (
+        "FIREWORKS_API_KEY",
+        "FIREWORKS_AI_API_KEY",
+        "FIREWORKSAI_API_KEY",
+        "FIREWORKS_AI_TOKEN",
+    ):
+        monkeypatch.delenv(env_var, raising=False)
+    config = FireworksAIConfig()
+
+    with pytest.raises(ValueError, match="FIREWORKS_API_KEY is not set"):
+        config.validate_environment(
+            headers={},
+            model="accounts/fireworks/models/test-model",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+        )
+
+
+def test_get_fireworks_session_id_prefers_litellm_session_id_over_trace_id():
+    assert (
+        get_fireworks_session_id(
+            {"litellm_session_id": "session-123", "litellm_trace_id": "trace-123"}
+        )
+        == "session-123"
+    )
 
 
 def test_handle_message_content_with_tool_calls():

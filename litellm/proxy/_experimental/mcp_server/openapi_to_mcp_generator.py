@@ -62,6 +62,14 @@ _request_extra_headers: contextvars.ContextVar[Optional[Dict[str, str]]] = conte
     "_request_extra_headers", default=None
 )
 
+# Per-request headers carrying the gateway-resolved upstream credential
+# (stored per-user OAuth token, minted M2M token, exchanged OBO token).
+# Set from MCPServerManager.resolve_openapi_upstream_auth; authoritative
+# over every other Authorization source in _merge_openapi_tool_request_headers.
+_request_resolved_auth_headers: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "_request_resolved_auth_headers", default=None
+)
+
 
 def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
     """Ensure path params cannot introduce directory traversal."""
@@ -294,10 +302,15 @@ def _merge_openapi_tool_request_headers(
     """Merge static closure headers with per-request ContextVar overrides.
 
     Precedence (highest to lowest):
-        1. ``_request_auth_header`` — BYOK override of ``Authorization``
-        2. ``static_headers`` — operator-configured headers baked into the
+        1. ``_request_resolved_auth_headers`` — the gateway-resolved upstream
+           credential (stored per-user OAuth token, minted M2M token,
+           exchanged OBO token). The resolver is authoritative: a BYOK or
+           forwarded ``Authorization`` must not shadow it, mirroring
+           ``_resolve_v2_auth`` on the MCPClient path
+        2. ``_request_auth_header`` — BYOK override of ``Authorization``
+        3. ``static_headers`` — operator-configured headers baked into the
            tool closure at registration time
-        3. ``_request_extra_headers`` — per-request headers forwarded from
+        4. ``_request_extra_headers`` — per-request headers forwarded from
            the MCP caller (allowlisted by ``MCPServer.extra_headers``)
 
     This matches the existing MCP invariant in
@@ -322,6 +335,12 @@ def _merge_openapi_tool_request_headers(
         for existing in [k for k in effective_headers if k.lower() == "authorization"]:
             del effective_headers[existing]
         effective_headers["Authorization"] = override_auth
+
+    resolved_auth_headers = _request_resolved_auth_headers.get() or {}
+    for name, value in resolved_auth_headers.items():
+        for existing in [k for k in effective_headers if k.lower() == name.lower()]:
+            del effective_headers[existing]
+        effective_headers[name] = value
 
     return effective_headers
 

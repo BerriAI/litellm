@@ -1,6 +1,9 @@
 import socket
 from unittest.mock import MagicMock, patch
 
+import aiohttp
+import pytest
+
 
 def _invoke_connector_factory(http_handler_module):
     """
@@ -159,3 +162,32 @@ def test_socket_factory_uses_tcp_keepalive_when_keepidle_unavailable(monkeypatch
         setsockopt_calls[(socket.IPPROTO_TCP, fake_socket_module.TCP_KEEPALIVE)] == 60
     )
     assert (socket.IPPROTO_TCP, getattr(socket, "TCP_KEEPIDLE", -1)) not in setsockopt_calls
+
+
+@pytest.mark.asyncio
+async def test_shared_session_transport_rebuilds_with_socket_factory(monkeypatch):
+    """
+    The proxy hands _create_aiohttp_transport an already-built shared session.
+    When that session is rebuilt (closed session, or a session from another
+    event loop) the replacement must still carry the keep-alive socket factory
+    and the configured keepalive timeout, otherwise AIOHTTP_SO_KEEPALIVE stops
+    protecting every later request served by that transport.
+    """
+    from litellm.llms.custom_httpx import http_handler as http_handler_module
+
+    monkeypatch.setattr(http_handler_module, "AIOHTTP_SO_KEEPALIVE", True)
+    monkeypatch.setattr(http_handler_module, "_AIOHTTP_SUPPORTS_SOCKET_FACTORY", True)
+
+    shared_session = aiohttp.ClientSession()
+    transport = http_handler_module.AsyncHTTPHandler._create_aiohttp_transport(shared_session=shared_session)
+    await shared_session.close()
+
+    rebuilt_session = MagicMock(name="rebuilt_session")
+
+    with patch.object(http_handler_module, "TCPConnector", return_value=MagicMock(name="connector")) as mock_tcp_connector:
+        with patch.object(http_handler_module, "ClientSession", return_value=rebuilt_session):
+            assert transport._get_valid_client_session() is rebuilt_session
+
+    assert mock_tcp_connector.call_count == 1
+    assert callable(mock_tcp_connector.call_args.kwargs.get("socket_factory"))
+    assert mock_tcp_connector.call_args.kwargs["keepalive_timeout"] == http_handler_module.AIOHTTP_KEEPALIVE_TIMEOUT

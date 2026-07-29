@@ -1,14 +1,35 @@
 import React, { useState, useEffect } from "react";
 
-import { Button } from "@tremor/react";
-import { Modal, Select } from "antd";
+import { Plus, Upload } from "lucide-react";
 import { getPromptsList, PromptSpec, ListPromptsResponse, deletePromptCall } from "@/components/networking";
-import PromptTable from "./prompt_table";
+import PromptTable from "./PromptTable";
 import PromptInfoView from "./prompt_info";
 import AddPromptForm from "./add_prompt_form";
 import PromptEditorView from "./prompt_editor_view";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+const ALL_ENVIRONMENTS_LABEL = "All Environments";
+
+const ENVIRONMENT_OPTIONS = [
+  { label: "Development", value: "development" },
+  { label: "Staging", value: "staging" },
+  { label: "Production", value: "production" },
+];
+
+// SelectValue falls back to the raw value unless the root can map it to a label.
+const ENVIRONMENT_ITEMS = [{ label: ALL_ENVIRONMENTS_LABEL, value: null }, ...ENVIRONMENT_OPTIONS];
 
 interface PromptsProps {
   accessToken: string | null;
@@ -17,7 +38,7 @@ interface PromptsProps {
 
 const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   const [promptsList, setPromptsList] = useState<PromptSpec[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [selectedEnvironment, setSelectedEnvironment] = useState<string | undefined>(undefined);
   const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
@@ -32,6 +53,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
 
   const fetchPrompts = async () => {
     if (!accessToken) {
+      setIsLoading(false);
       return;
     }
 
@@ -140,26 +162,33 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
               {canModify && (
                 <>
                   <Button onClick={handleAddPrompt} disabled={!accessToken}>
-                    + Add New Prompt
+                    <Plus />
+                    Add New Prompt
                   </Button>
                   <Button onClick={handleAddPromptFromFile} disabled={!accessToken} variant="secondary">
+                    <Upload />
                     Upload .prompt File
                   </Button>
                 </>
               )}
             </div>
             <Select
-              placeholder="All Environments"
-              allowClear
-              value={selectedEnvironment}
-              onChange={(value) => setSelectedEnvironment(value)}
-              style={{ width: 180 }}
-              options={[
-                { label: "Development", value: "development" },
-                { label: "Staging", value: "staging" },
-                { label: "Production", value: "production" },
-              ]}
-            />
+              items={ENVIRONMENT_ITEMS}
+              value={selectedEnvironment ?? null}
+              onValueChange={(value) => setSelectedEnvironment((value as string | null) ?? undefined)}
+            >
+              <SelectTrigger className="w-[180px]">
+                <SelectValue placeholder={ALL_ENVIRONMENTS_LABEL} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={null}>{ALL_ENVIRONMENTS_LABEL}</SelectItem>
+                {ENVIRONMENT_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <PromptTable
@@ -181,18 +210,27 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
       />
 
       {promptToDelete && (
-        <Modal
-          title="Delete Prompt"
-          open={promptToDelete !== null}
-          onOk={handleDeleteConfirm}
-          onCancel={handleDeleteCancel}
-          confirmLoading={isDeleting}
-          okText="Delete"
-          okButtonProps={{ danger: true }}
+        <AlertDialog
+          open
+          onOpenChange={(open) => {
+            if (!open && !isDeleting) handleDeleteCancel();
+          }}
         >
-          <p>Are you sure you want to delete prompt: {promptToDelete.name} ?</p>
-          <p>This action cannot be undone.</p>
-        </Modal>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Prompt</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete prompt: {promptToDelete.name} ? This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+              <Button variant="destructive" onClick={handleDeleteConfirm} disabled={isDeleting}>
+                Delete
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       )}
     </div>
   );

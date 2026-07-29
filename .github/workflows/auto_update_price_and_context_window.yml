@@ -24,9 +24,12 @@ jobs:
       - name: Update JSON Data
         run: |
           uv run --frozen --with 'aiohttp==3.13.3' python ".github/workflows/auto_update_price_and_context_window_file.py"
+      - name: Regenerate JSON Schema
+        run: |
+          uv run --frozen python ci_cd/generate_model_prices_schema.py
       - name: Create Pull Request
         run: |
-          git add model_prices_and_context_window.json 
+          git add model_prices_and_context_window.json model_prices_and_context_window.schema.json
           git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')" 
           gh pr create --title "Update model_prices_and_context_window.json file" \
             --body "Automated update for model_prices_and_context_window.json" \

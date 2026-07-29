@@ -2,16 +2,15 @@ import { AgentHubData, getAgentHubTableColumns } from "@/components/AIHub/AgentH
 import MakeAgentPublicForm from "@/components/AIHub/forms/MakeAgentPublicForm";
 import MakeMCPPublicForm from "@/components/AIHub/forms/MakeMCPPublicForm";
 import MakeModelPublicForm from "@/components/AIHub/forms/MakeModelPublicForm";
-import { mcpHubColumns, MCPServerData } from "@/components/mcp_hub_table_columns";
-import { modelHubColumns } from "@/components/model_hub_table_columns";
+import { getMCPHubTableColumns, MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
+import { getModelHubTableColumns, ModelHubData } from "@/components/AIHub/ModelHubTableColumns";
 import UsefulLinksManagement from "@/components/AIHub/UsefulLinksManagement";
 import { getClaudeCodePluginsList } from "@/components/networking";
 import { Plugin } from "@/components/claude_code_plugins/types";
 import SkillHubDashboard from "@/components/AIHub/SkillHubDashboard";
 import MakeSkillPublicForm from "@/components/claude_code_plugins/MakeSkillPublicForm";
-import { ModelDataTable } from "@/components/model_dashboard/table";
+import { DataTable } from "@/components/shared/DataTable";
 import ModelFilters from "@/components/model_filters";
-import NotificationsManager from "@/components/molecules/notifications_manager";
 import {
   fetchMCPServers,
   getAgentsList,
@@ -22,17 +21,20 @@ import {
   modelHubPublicModelsCall,
 } from "@/components/networking";
 import PublicModelHub from "@/components/public_model_hub";
+import { copyToClipboard } from "@/utils/dataUtils";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { CopyOutlined } from "@ant-design/icons";
+import { SortingState } from "@tanstack/react-table";
 import { Badge, Button, Card, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import { Modal } from "antd";
-import { Copy } from "lucide-react";
+import { Copy, Inbox } from "lucide-react";
 import { useRouter } from "next/navigation";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { checkTokenValidity } from "@/utils/jwtUtils";
 import { getCookie } from "@/utils/cookieUtils";
+import { getLoginUrl } from "@/utils/returnUrlUtils";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -41,23 +43,16 @@ interface ModelHubTableProps {
   userRole: string | null;
 }
 
-interface ModelGroupInfo {
-  model_group: string;
-  providers: string[];
-  max_input_tokens?: number;
-  max_output_tokens?: number;
-  input_cost_per_token?: number;
-  output_cost_per_token?: number;
-  mode?: string;
-  tpm?: number;
-  rpm?: number;
-  supports_parallel_function_calling: boolean;
-  supports_vision: boolean;
-  supports_function_calling: boolean;
-  supported_openai_params?: string[];
-  is_public_model_group: boolean;
-  // Allow any additional properties for flexibility
-  [key: string]: any;
+function HubEmptyState({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="flex flex-col items-center gap-1 py-6">
+      <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
+        <Inbox className="size-5 text-muted-foreground" />
+      </div>
+      <div className="text-sm font-medium text-foreground">{title}</div>
+      <div className="text-sm text-muted-foreground">{body}</div>
+    </div>
+  );
 }
 
 const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, premiumUser, userRole }) => {
@@ -66,12 +61,12 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const canModify = isProxyAdminRole(userRole || "");
 
   const [publicPageAllowed, setPublicPageAllowed] = useState<boolean>(false);
-  const [modelHubData, setModelHubData] = useState<ModelGroupInfo[] | null>(null);
+  const [modelHubData, setModelHubData] = useState<ModelHubData[] | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isPublicPageModalVisible, setIsPublicPageModalVisible] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<null | ModelGroupInfo>(null);
-  const [filteredData, setFilteredData] = useState<ModelGroupInfo[]>([]);
+  const [selectedModel, setSelectedModel] = useState<null | ModelHubData>(null);
+  const [filteredData, setFilteredData] = useState<ModelHubData[]>([]);
   const [isMakePublicModalVisible, setIsMakePublicModalVisible] = useState(false);
   // Agent Hub state
   const [agentHubData, setAgentHubData] = useState<AgentHubData[] | null>(null);
@@ -108,12 +103,12 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
       // If token is invalid, redirect to login
       if (!isTokenValid) {
-        router.replace(`${getProxyBaseUrl()}/ui/login`);
+        window.location.replace(getLoginUrl(getProxyBaseUrl()));
         return;
       }
     }
     // If require_auth_for_public_ai_hub is false, allow public access (no change)
-  }, [isUISettingsLoading, publicPage, uiSettings, router]);
+  }, [isUISettingsLoading, publicPage, uiSettings]);
 
   useEffect(() => {
     const fetchData = async (accessToken: string) => {
@@ -152,17 +147,23 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       }
     };
 
-    if (accessToken) {
-      fetchData(accessToken);
-    } else if (publicPage) {
-      fetchPublicData();
-    }
+    const fetchModelData = async () => {
+      if (accessToken) {
+        await fetchData(accessToken);
+      } else if (publicPage) {
+        await fetchPublicData();
+      } else {
+        setLoading(false);
+      }
+    };
+    fetchModelData();
   }, [accessToken, publicPage]);
 
   // Fetch Agent Hub data
   useEffect(() => {
     const fetchAgentData = async () => {
       if (!accessToken) {
+        setAgentLoading(false);
         return;
       }
 
@@ -192,6 +193,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   useEffect(() => {
     const fetchMcpData = async () => {
       if (!accessToken) {
+        setMcpLoading(false);
         return;
       }
 
@@ -230,20 +232,20 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     fetchSkillData();
   }, [accessToken, publicPage]);
 
-  const showModal = (model: ModelGroupInfo) => {
+  const showModal = useCallback((model: ModelHubData) => {
     setSelectedModel(model);
     setIsModalVisible(true);
-  };
+  }, []);
 
-  const showAgentModal = (agent: AgentHubData) => {
+  const showAgentModal = useCallback((agent: AgentHubData) => {
     setSelectedAgent(agent);
     setIsAgentModalVisible(true);
-  };
+  }, []);
 
-  const showMcpModal = (server: MCPServerData) => {
+  const showMcpModal = useCallback((server: MCPServerData) => {
     setSelectedMcpServer(server);
     setIsMcpModalVisible(true);
-  };
+  }, []);
 
   const goToPublicModelPage = () => {
     router.replace(`/model_hub_table?key=${accessToken}`);
@@ -296,11 +298,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     setSelectedMcpServer(null);
   };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    NotificationsManager.success("Copied to clipboard!");
-  };
-
   const formatCapabilityName = (key: string) => {
     // Remove 'supports_' prefix and convert snake_case to Title Case
     return key
@@ -310,7 +307,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       .join(" ");
   };
 
-  const getModelCapabilities = (model: ModelGroupInfo) => {
+  const getModelCapabilities = (model: ModelHubData) => {
     // Find all properties that start with 'supports_' and are true
     return Object.entries(model)
       .filter(([key, value]) => key.startsWith("supports_") && value === true)
@@ -372,9 +369,17 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     }
   };
 
-  const handleFilteredDataChange = useCallback((newFilteredData: ModelGroupInfo[]) => {
+  const handleFilteredDataChange = useCallback((newFilteredData: ModelHubData[]) => {
     setFilteredData(newFilteredData);
   }, []);
+
+  const [modelSorting, setModelSorting] = useState<SortingState>([{ id: "model_group", desc: false }]);
+  const [agentSorting, setAgentSorting] = useState<SortingState>([{ id: "name", desc: false }]);
+  const [mcpSorting, setMcpSorting] = useState<SortingState>([{ id: "server_name", desc: false }]);
+
+  const modelColumns = useMemo(() => getModelHubTableColumns({ onModelClick: showModal }), [showModal]);
+  const agentColumns = useMemo(() => getAgentHubTableColumns({ onAgentClick: showAgentModal }), [showAgentModal]);
+  const mcpColumns = useMemo(() => getMCPHubTableColumns({ onServerClick: showMcpModal }), [showMcpModal]);
 
   // If this is a public page, use the dedicated PublicModelHub component
   if (publicPage && publicPageAllowed) {
@@ -402,7 +407,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               <div className="flex items-center bg-gray-200 px-2 py-1 rounded-sm">
                 <Text className="mr-2">{`${getProxyBaseUrl()}/ui/model_hub_table`}</Text>
                 <button
-                  onClick={() => copyToClipboard(`${getProxyBaseUrl()}/ui/model_hub_table`)}
+                  onClick={() => void copyToClipboard(`${getProxyBaseUrl()}/ui/model_hub_table`)}
                   className="p-1 hover:bg-gray-300 rounded-sm transition-colors"
                   title="Copy URL"
                 >
@@ -444,11 +449,26 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   <ModelFilters modelHubData={modelHubData || []} onFilteredDataChange={handleFilteredDataChange} />
 
                   {/* Model Table */}
-                  <ModelDataTable
-                    columns={modelHubColumns(showModal, copyToClipboard, publicPage)}
+                  <DataTable
                     data={filteredData}
+                    columns={modelColumns}
+                    getRowId={(model, index) => model.model_group || String(index)}
+                    sortingMode="client"
+                    sorting={modelSorting}
+                    onSortingChange={setModelSorting}
                     isLoading={loading}
-                    defaultSorting={[{ id: "model_group", desc: false }]}
+                    loadingMessage="Loading models…"
+                    noDataMessage={
+                      <HubEmptyState
+                        title={modelHubData?.length ? "No matching models" : "No models yet"}
+                        body={
+                          modelHubData?.length
+                            ? "Adjust the filters to see more models."
+                            : "Models added to this proxy will appear here."
+                        }
+                      />
+                    }
+                    size="compact"
                   />
                 </Card>
 
@@ -470,11 +490,19 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   )}
 
                   {/* Agent Table */}
-                  <ModelDataTable
-                    columns={getAgentHubTableColumns(showAgentModal, copyToClipboard, publicPage)}
+                  <DataTable
                     data={agentHubData || []}
+                    columns={agentColumns}
+                    getRowId={(agent, index) => agent.agent_id || agent.name || String(index)}
+                    sortingMode="client"
+                    sorting={agentSorting}
+                    onSortingChange={setAgentSorting}
                     isLoading={agentLoading}
-                    defaultSorting={[{ id: "name", desc: false }]}
+                    loadingMessage="Loading agents…"
+                    noDataMessage={
+                      <HubEmptyState title="No agents yet" body="Agents added to this proxy will appear here." />
+                    }
+                    size="compact"
                   />
                 </Card>
 
@@ -496,11 +524,22 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   )}
 
                   {/* MCP Server Table */}
-                  <ModelDataTable
-                    columns={mcpHubColumns(showMcpModal, copyToClipboard, publicPage)}
+                  <DataTable
                     data={mcpHubData || []}
+                    columns={mcpColumns}
+                    getRowId={(server, index) => server.server_id || String(index)}
+                    sortingMode="client"
+                    sorting={mcpSorting}
+                    onSortingChange={setMcpSorting}
                     isLoading={mcpLoading}
-                    defaultSorting={[{ id: "server_name", desc: false }]}
+                    loadingMessage="Loading MCP servers…"
+                    noDataMessage={
+                      <HubEmptyState
+                        title="No MCP servers yet"
+                        body="MCP servers added to this proxy will appear here."
+                      />
+                    }
+                    size="compact"
                   />
                 </Card>
 
@@ -745,7 +784,7 @@ print(response.choices[0].message.content)`}
                   <div className="flex items-center space-x-2">
                     <Text className="truncate">{selectedAgent.url}</Text>
                     <CopyOutlined
-                      onClick={() => copyToClipboard(selectedAgent.url)}
+                      onClick={() => void copyToClipboard(selectedAgent.url)}
                       className="cursor-pointer text-gray-500 hover:text-blue-500"
                     />
                   </div>
@@ -876,7 +915,7 @@ print(response.choices[0].message.content)`}
                   <div className="flex items-center space-x-2">
                     <Text className="text-xs truncate">{selectedMcpServer.server_id}</Text>
                     <CopyOutlined
-                      onClick={() => copyToClipboard(selectedMcpServer.server_id)}
+                      onClick={() => void copyToClipboard(selectedMcpServer.server_id)}
                       className="cursor-pointer text-gray-500 hover:text-blue-500"
                     />
                   </div>

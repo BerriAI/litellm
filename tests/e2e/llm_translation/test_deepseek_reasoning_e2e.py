@@ -5,7 +5,7 @@ DeepSeek's reasoner defaults thinking ON and surfaces the chain as
 ``reasoning_effort="none"`` and ``thinking={"type": "disabled"}``. The DeepSeek
 param mapper (``litellm/llms/deepseek/chat/transformation.py``
 ``map_openai_params``) forwards both as ``thinking={"type": "disabled"}`` so the
-outbound body carries a real disable signal and ``deepseek-reasoner`` returns no
+outbound body carries a real disable signal and the reasoning model returns no
 ``reasoning_content``. This is the behavior tracked by LIT-3686 / GH #27453.
 
 The control case proves the model and path work (reasoning is returned when
@@ -27,17 +27,17 @@ from passthrough_client import PassthroughClient
 
 pytestmark = pytest.mark.e2e
 
-REASONER = "deepseek/deepseek-reasoner"
+REASONER = "deepseek/deepseek-v4-pro"
 PROMPT = "What is 17 + 26? Answer with just the number."
 
 
 def _register_reasoner(client: PassthroughClient, resources: ResourceManager) -> str:
     model = f"e2e-deepseek-reasoner-{unique_marker()}"
-    model_id = client.gateway.create_model(
+    model_id = client.proxy.create_model(
         model,
         LiteLLMParamsBody(model=REASONER, api_key="os.environ/DEEPSEEK_API_KEY"),
     )
-    resources.defer(lambda: client.gateway.delete_model(model_id))
+    resources.defer(lambda: client.proxy.delete_model(model_id))
     return model
 
 
@@ -56,7 +56,7 @@ class TestDeepSeekReasoningDisable:
         key = resources.key()
 
         response = unwrap(
-            client.gateway.chat(
+            client.proxy.chat(
                 key,
                 ChatBody(
                     model=model,
@@ -67,7 +67,7 @@ class TestDeepSeekReasoningDisable:
         )
         reasoning = _reasoning_content(response)
         assert reasoning, (
-            "control case: deepseek-reasoner returned no reasoning_content with no "
+            "control case: the reasoning model returned no reasoning_content with no "
             f"disable param, so the disable assertions below can't be trusted: {response}"
         )
 
@@ -78,7 +78,7 @@ class TestDeepSeekReasoningDisable:
         key = resources.key()
 
         response = unwrap(
-            client.gateway.chat(
+            client.proxy.chat(
                 key,
                 ChatBody(
                     model=model,
@@ -100,7 +100,7 @@ class TestDeepSeekReasoningDisable:
         key = resources.key()
 
         response = unwrap(
-            client.gateway.chat(
+            client.proxy.chat(
                 key,
                 ChatBody(
                     model=model,

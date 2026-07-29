@@ -459,6 +459,118 @@ async def test_auth_builder_non_proxy_admin_user_role():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "row_email,expected_email",
+    [
+        ("row@example.com", "row@example.com"),
+        (None, "claim@example.com"),
+        ("", "claim@example.com"),
+    ],
+)
+async def test_auth_builder_result_includes_user_email(row_email, expected_email):
+    """LIT-4238: auth_builder must return user_email (user row wins, JWT claim
+    is the fallback) so the auth object and metrics get the email."""
+    api_key = "test_jwt_token"
+    request_data = {"model": "gpt-4"}
+    general_settings = {"enforce_rbac": False}
+    route = "/chat/completions"
+
+    user_object = LiteLLM_UserTable(
+        user_id="test_user_1",
+        user_email=row_email,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    with (
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
+        patch.object(jwt_handler, "get_rbac_role", return_value=None),
+        patch.object(jwt_handler, "get_scopes", return_value=[]),
+        patch.object(jwt_handler, "get_object_id", return_value=None),
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=("test_user_1", "claim@example.com", True),
+        ),
+        patch.object(jwt_handler, "get_org_id", return_value=None),
+        patch.object(jwt_handler, "get_end_user_id", return_value=None),
+        patch.object(
+            JWTAuthManager,
+            "check_admin_access",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_check_admin,
+        patch.object(
+            JWTAuthManager,
+            "find_and_validate_specific_team_id",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
+        patch.object(JWTAuthManager, "get_all_team_ids", return_value=set()),
+        patch.object(
+            JWTAuthManager,
+            "find_team_with_model_access",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None, user_object.user_id),
+        ),
+        patch.object(JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock),
+        patch.object(JWTAuthManager, "validate_object_id", return_value=True),
+    ):
+        mock_auth_jwt.return_value = {"sub": "test_user_1", "scope": ""}
+
+        result = await JWTAuthManager.auth_builder(
+            api_key=api_key,
+            jwt_handler=jwt_handler,
+            request_data=request_data,
+            general_settings=general_settings,
+            route=route,
+            prisma_client=None,
+            user_api_key_cache=None,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+        assert result["user_email"] == expected_email
+        assert mock_check_admin.call_args.kwargs["user_email"] == "claim@example.com"
+
+
+@pytest.mark.asyncio
+async def test_check_admin_access_result_includes_user_email():
+    """LIT-4238: the scope-based admin path has no user row, so the JWT claim
+    email must ride the JWTAuthBuilderResult."""
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        admin_jwt_scope="litellm_proxy_admin",
+        admin_allowed_routes=["/chat/completions"],
+    )
+
+    result = await JWTAuthManager.check_admin_access(
+        jwt_handler=jwt_handler,
+        scopes=["litellm_proxy_admin"],
+        route="/chat/completions",
+        user_id="admin-user",
+        user_email="admin@example.com",
+        org_id=None,
+        api_key="test_jwt_token",
+        jwt_valid_token={"sub": "admin-user"},
+    )
+
+    assert result is not None
+    assert result["is_proxy_admin"] is True
+    assert result["user_email"] == "admin@example.com"
+
+
+@pytest.mark.asyncio
 async def test_sync_user_role_and_teams():
     from unittest.mock import MagicMock
 
@@ -1126,6 +1238,87 @@ async def test_find_team_with_model_access_model_group(monkeypatch):
 
     assert team_id == "team-1"
     assert team_obj.team_id == "team-1"
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_v1_messages_default_routes(monkeypatch):
+    """Regression for #31189: a single-team JWT that grants the requested model
+    through an access group must resolve on /v1/messages without an explicit
+    x-litellm-team-id header. /v1/messages lives in `anthropic_routes`, so when a
+    team has no `team_allowed_routes` configured the default allowlist must cover
+    it just like /chat/completions and /v1/responses; otherwise the internal route
+    check fails and surfaces a misleading "No team has access to the requested
+    model" 403."""
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-4-6",
+                "litellm_params": {"model": "claude-sonnet-4-6"},
+                "model_info": {"access_groups": ["coding_only_models"]},
+            }
+        ]
+    )
+    import sys
+    import types
+
+    proxy_server_module = types.ModuleType("proxy_server")
+    proxy_server_module.llm_router = router
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    team = LiteLLM_TeamTable(team_id="coding-team", models=["coding_only_models"])
+
+    async def mock_get_team_object(*args, **kwargs):  # type: ignore
+        return team
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.handle_jwt.get_team_object", mock_get_team_object
+    )
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+
+    team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+        team_ids={"coding-team"},
+        requested_model="claude-sonnet-4-6",
+        route="/v1/messages",
+        jwt_handler=jwt_handler,
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    assert team_id == "coding-team"
+    assert team_obj.team_id == "coding-team"
+
+
+@pytest.mark.parametrize(
+    "route,expected",
+    [
+        ("/v1/messages", True),
+        ("/v1/messages/count_tokens", True),
+        ("/v1/skills", False),
+        ("/v1/skills/skill_abc123", False),
+    ],
+)
+def test_default_team_allowed_routes_cover_messages_but_not_skills(route, expected):
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    assert (
+        allowed_routes_check(
+            user_role=LitellmUserRoles.TEAM,
+            user_route=route,
+            litellm_proxy_roles=LiteLLM_JWTAuth(),
+        )
+        is expected
+    )
 
 
 @pytest.mark.asyncio

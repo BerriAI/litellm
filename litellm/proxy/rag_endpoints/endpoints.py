@@ -11,14 +11,16 @@ from typing import Any, Dict, Optional, Tuple
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from fastapi.responses import ORJSONResponse
+from fastapi.responses import ORJSONResponse, StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -604,6 +606,7 @@ async def rag_query(
         general_settings,
         llm_router,
         proxy_config,
+        select_data_generator,
         version,
     )
 
@@ -673,6 +676,31 @@ async def rag_query(
             **request_data,
         )
 
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            call_id=hidden_params.get("litellm_call_id", None) or "",
+            model_id=hidden_params.get("model_id", None) or "",
+            cache_key=hidden_params.get("cache_key", None) or "",
+            api_base=hidden_params.get("api_base", None) or "",
+            version=version,
+            response_cost=hidden_params.get("response_cost", None),
+            request_data=request_data,
+        )
+
+        if isinstance(response, CustomStreamWrapper):
+            return StreamingResponse(
+                select_data_generator(
+                    response=response,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                    request=request,
+                ),
+                media_type="text/event-stream",
+                headers=custom_headers,
+            )
+
+        fastapi_response.headers.update(custom_headers)
         return response
 
     except HTTPException:

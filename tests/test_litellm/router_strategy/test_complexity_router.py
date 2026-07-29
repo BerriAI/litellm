@@ -20,6 +20,7 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.router_strategy.complexity_router.complexity_router import (
     ComplexityRouter,
     DimensionScore,
@@ -29,6 +30,11 @@ from litellm.router_strategy.complexity_router.config import (
     DEFAULT_TECHNICAL_KEYWORDS,
     ComplexityRouterConfig,
     ComplexityTier,
+)
+from litellm.types.router import (
+    Deployment,
+    LiteLLM_Params,
+    TaggedPreRoutingStrategy,
 )
 
 
@@ -119,6 +125,29 @@ class TestComplexityRouterInit:
             default_model="fallback-model",
         )
         assert router.config.default_model == "fallback-model"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("return_raw_model_name", [False, True])
+    async def test_pre_routing_hook_propagates_raw_model_response_setting(
+        self, mock_router_instance, basic_config, return_raw_model_name
+    ):
+        config = {**basic_config, "return_raw_model_name": return_raw_model_name}
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+        request_kwargs = {}
+
+        result = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+        assert result is not None
+        metadata = request_kwargs.get("metadata", {})
+        assert metadata.get(RETURN_RAW_MODEL_NAME_METADATA_KEY, False) is return_raw_model_name
 
 
 class TestTokenScoring:
@@ -953,13 +982,145 @@ class TestRouterComplexityDeploymentMethods:
             ]
         )
 
-        adaptive = router.adaptive_routers["hybrid"]
+        adaptive = router.adaptive_routers["hybrid"][0].strategy
         assert adaptive.model_to_cost == {
             "cheap": pytest.approx(0.00000015),
             "premium": pytest.approx(0.000005),
         }
         assert adaptive.model_to_prefs["cheap"].quality_tier == 1
         assert adaptive.model_to_prefs["premium"].quality_tier == 3
+
+
+class TestComplexityRouterTagBasedRouting:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/33655.
+
+    Two complexity-router deployments can share a public model_name while
+    carrying different tags. Both must register, and the request's tags must
+    pick the matching config before classification (previously the second
+    deployment was rejected and every request used the first config)."""
+
+    @staticmethod
+    def _tagged_config(routed_model: str, tags: list) -> dict:
+        return {
+            "model_name": "smart",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_default_model": routed_model,
+                "complexity_router_config": {
+                    "tiers": {
+                        "SIMPLE": [routed_model],
+                        "MEDIUM": [routed_model],
+                        "COMPLEX": [routed_model],
+                        "REASONING": [routed_model],
+                    }
+                },
+                "tags": tags,
+            },
+        }
+
+    def _router(self) -> Router:
+        return Router(
+            model_list=[
+                self._tagged_config("gpt-cn", ["cn"]),
+                self._tagged_config("gpt-us", ["us"]),
+            ]
+        )
+
+    def test_both_tagged_configs_register_under_same_model_name(self):
+        router = self._router()
+        registered = router.complexity_routers["smart"]
+        assert len(registered) == 2
+        assert {entry.tags for entry in registered} == {("cn",), ("us",)}
+
+    def test_duplicate_model_name_with_same_tags_still_rejected(self):
+        with pytest.raises(ValueError, match="already exists"):
+            Router(
+                model_list=[
+                    self._tagged_config("gpt-cn", ["cn"]),
+                    self._tagged_config("gpt-cn-2", ["cn"]),
+                ]
+            )
+
+    @pytest.mark.asyncio
+    async def test_request_tags_select_matching_complexity_config(self):
+        router = self._router()
+        cn = await router.async_pre_routing_hook(
+            model="smart",
+            request_kwargs={"metadata": {"tags": ["cn"]}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        us = await router.async_pre_routing_hook(
+            model="smart",
+            request_kwargs={"metadata": {"tags": ["us"]}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert cn is not None and cn.model == "gpt-cn"
+        assert us is not None and us.model == "gpt-us"
+
+
+class TestPreRoutingStrategyRegistry:
+    """Directly exercise the tag-scoped registry/selection helpers behind #33655."""
+
+    def _router(self) -> Router:
+        return Router(model_list=[{"model_name": "x", "litellm_params": {"model": "openai/gpt-4o-mini"}}])
+
+    @staticmethod
+    def _deployment(tags: list) -> Deployment:
+        return Deployment(
+            model_name="smart",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini", tags=tags),
+        )
+
+    def test_deployment_tags_normalizes_to_tuple(self):
+        router = self._router()
+        assert router._deployment_tags(self._deployment(["cn", "row"])) == ("cn", "row")
+        untagged = Deployment(model_name="smart", litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini"))
+        assert router._deployment_tags(untagged) == ()
+
+    def test_register_scopes_by_tags_and_rejects_exact_duplicate(self):
+        router = self._router()
+        registry: dict = {}
+        router._register_pre_routing_strategy(
+            registry=registry, deployment=self._deployment(["cn"]), strategy="CN", strategy_label="Test"
+        )
+        router._register_pre_routing_strategy(
+            registry=registry, deployment=self._deployment(["us"]), strategy="US", strategy_label="Test"
+        )
+        assert [entry.tags for entry in registry["smart"]] == [("cn",), ("us",)]
+        assert router._has_registered_strategy(registry, "smart", ("cn",)) is True
+        assert router._has_registered_strategy(registry, "smart", ("row",)) is False
+        with pytest.raises(ValueError, match="already exists"):
+            router._register_pre_routing_strategy(
+                registry=registry, deployment=self._deployment(["cn"]), strategy="CN2", strategy_label="Test"
+            )
+
+    def test_select_prefers_request_tag_then_default_then_first(self):
+        router = self._router()
+        cn, us, fallback = object(), object(), object()
+        router.complexity_routers = {
+            "smart": [
+                TaggedPreRoutingStrategy(tags=("cn",), strategy=cn),
+                TaggedPreRoutingStrategy(tags=("us",), strategy=us),
+            ]
+        }
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["us"]}}) is us
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["cn"]}}) is cn
+        assert router._select_pre_routing_strategy("missing", {"metadata": {"tags": ["cn"]}}) is None
+
+        router.complexity_routers = {
+            "smart": [
+                TaggedPreRoutingStrategy(tags=("cn",), strategy=cn),
+                TaggedPreRoutingStrategy(tags=("default",), strategy=fallback),
+            ]
+        }
+        assert router._select_pre_routing_strategy("smart", {}) is fallback
+        router.complexity_routers = {
+            "smart": [
+                TaggedPreRoutingStrategy(tags=("cn",), strategy=cn),
+                TaggedPreRoutingStrategy(tags=("us",), strategy=us),
+            ]
+        }
+        assert router._select_pre_routing_strategy("smart", {}) is cn
 
 
 class TestAsyncPreRoutingHookMultiFormat:
@@ -2387,6 +2548,16 @@ class TestSubCallMetadataSanitization:
             assert sanitized["user_api_key_auth"] is not None
             assert _get_budget_reservation_from_metadata(sanitized) is None
 
+    def test_returns_empty_dict_for_missing_metadata(self):
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            _classifier_call_metadata,
+        )
+
+        for absent in (None, {}):
+            result = _classifier_call_metadata(absent)
+            assert result == {}
+            assert isinstance(result, dict)
+
     def test_sanitized_auth_keeps_access_group_fields_and_leaves_original_untouched(self):
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.router_strategy.complexity_router.complexity_router import (
@@ -2489,7 +2660,7 @@ class TestRoutingDecisionCauseLogging:
 
 
 class TestSessionAffinity:
-    """Test the opt-in session_affinity sticky-routing behavior."""
+    """Test the session_affinity sticky-routing behavior (on by default)."""
 
     REASONING_MESSAGE = [
         {
@@ -2503,19 +2674,46 @@ class TestSessionAffinity:
     def session_affinity_config(self, basic_config) -> Dict:
         return {**basic_config, "session_affinity": True}
 
+    @pytest.fixture
+    def session_affinity_disabled_config(self, basic_config) -> Dict:
+        return {**basic_config, "session_affinity": False}
+
     @staticmethod
     def _request_kwargs(session_id: str) -> Dict:
         return {"metadata": {"session_id": session_id}}
 
     @pytest.mark.asyncio
-    async def test_disabled_by_default_reclassifies_every_turn(self, mock_router_instance, basic_config):
-        """Regression: session_affinity defaults to False, so a shared session_id must
-        not pin the model -- each turn is still classified independently."""
+    async def test_enabled_by_default_pins_model(self, mock_router_instance, basic_config):
+        """Regression: session_affinity defaults to True, so a shared session_id pins the
+        first turn's model and later turns reuse it instead of reclassifying."""
+        assert "session_affinity" not in basic_config
         mock_router_instance.cache = DualCache()
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config=basic_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert first.model == "o1-preview"
+        assert second.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_can_be_disabled_reclassifies_every_turn(
+        self, mock_router_instance, session_affinity_disabled_config
+    ):
+        """Regression: session_affinity=False must still reclassify every turn even when a
+        shared session_id is present, so the opt-out keeps working."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_disabled_config,
         )
         request_kwargs = self._request_kwargs("session-1")
         first = await router.async_pre_routing_hook(
@@ -2868,9 +3066,7 @@ class TestRoutingPlugins:
         assert result.model == "gpt-4o-nano"
 
     @pytest.mark.asyncio
-    async def test_no_user_message_prefers_default_model_over_medium_tier_without_plugins(
-        self, mock_router_instance
-    ):
+    async def test_no_user_message_prefers_default_model_over_medium_tier_without_plugins(self, mock_router_instance):
         """Regression: without plugins configured, the no-user-message path must keep its
         pre-existing default_model-first priority over the MEDIUM tier exactly as before --
         closing the plugin-bypass gap must not silently flip model selection for the (much
@@ -2947,3 +3143,260 @@ class TestRoutingPlugins:
         assert first.model == "gpt-4o-mini"
         assert second.model == "gpt-4o-mini"
         assert spy.call_count == 2
+
+
+class TestEscalationKeywords:
+    """Test user-triggered escalation: a keyword in the prompt bumps the resolved tier
+    one step higher so a user can force a stronger model when unhappy with results."""
+
+    @staticmethod
+    def _request_kwargs(session_id: str) -> Dict:
+        return {"metadata": {"session_id": session_id}}
+
+    def test_default_escalation_keyword(self, complexity_router):
+        assert complexity_router.escalation_keywords == ["LITELLM ESCALATE"]
+
+    def test_escalation_triggered_is_case_sensitive(self, complexity_router):
+        assert complexity_router._escalation_triggered("please LITELLM ESCALATE now") is True
+        assert complexity_router._escalation_triggered("please litellm escalate now") is False
+        assert complexity_router._escalation_triggered("how do I escalate this ticket") is False
+
+    def test_escalate_tier_bumps_one_step(self, complexity_router):
+        assert complexity_router._escalate_tier(ComplexityTier.SIMPLE) == ComplexityTier.MEDIUM
+        assert complexity_router._escalate_tier(ComplexityTier.MEDIUM) == ComplexityTier.COMPLEX
+        assert complexity_router._escalate_tier(ComplexityTier.COMPLEX) == ComplexityTier.REASONING
+
+    def test_escalate_tier_caps_at_highest_configured(self, complexity_router):
+        assert complexity_router._escalate_tier(ComplexityTier.REASONING) == ComplexityTier.REASONING
+
+    def test_escalate_tier_skips_unconfigured_intermediate(self, mock_router_instance):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": "o1-preview"}},
+        )
+        assert router._escalate_tier(ComplexityTier.SIMPLE) == ComplexityTier.REASONING
+
+    def test_tier_for_model_returns_most_severe(self, mock_router_instance):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "shared", "COMPLEX": "shared", "REASONING": "top"}
+            },
+        )
+        assert router._tier_for_model("shared") == ComplexityTier.COMPLEX
+        assert router._tier_for_model("top") == ComplexityTier.REASONING
+        assert router._tier_for_model("unknown") is None
+
+    @pytest.mark.asyncio
+    async def test_escalation_bumps_classified_tier(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=basic_config,
+        )
+        # Baseline: this prompt classifies SIMPLE.
+        baseline = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=[{"role": "user", "content": "Hello there!"}]
+        )
+        assert baseline.model == "gpt-4o-mini"
+
+        escalated = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "LITELLM ESCALATE Hello there!"}],
+        )
+        assert escalated.model == "gpt-4o"  # SIMPLE bumped to MEDIUM
+
+    @pytest.mark.asyncio
+    async def test_lowercase_keyword_does_not_escalate(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=basic_config,
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "litellm escalate Hello there!"}],
+        )
+        assert result.model == "gpt-4o-mini"  # not escalated
+
+    @pytest.mark.asyncio
+    async def test_custom_escalation_keyword(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "escalation_keywords": ["MAKE IT BETTER"]},
+        )
+        # The default keyword no longer triggers once a custom list is supplied.
+        default = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "LITELLM ESCALATE Hello there!"}],
+        )
+        assert default.model == "gpt-4o-mini"
+
+        custom = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "MAKE IT BETTER Hello there!"}],
+        )
+        assert custom.model == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_empty_keyword_list_disables_escalation(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "escalation_keywords": []},
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "LITELLM ESCALATE Hello there!"}],
+        )
+        assert result.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_escalation_caps_at_highest_tier(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=basic_config,
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[
+                {
+                    "role": "user",
+                    "content": "LITELLM ESCALATE Let's think step by step and reason through this carefully.",
+                }
+            ],
+        )
+        assert result.model == "o1-preview"  # already REASONING, stays there
+
+    @pytest.mark.asyncio
+    async def test_escalation_bumps_keyword_tier_override(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "keyword_tier_rules": [{"keywords": ["billing"], "tier": "SIMPLE"}],
+            },
+        )
+        baseline = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=[{"role": "user", "content": "a billing question"}]
+        )
+        assert baseline.model == "gpt-4o-mini"
+
+        escalated = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "LITELLM ESCALATE a billing question"}],
+        )
+        assert escalated.model == "gpt-4o"  # override SIMPLE bumped to MEDIUM
+
+    @pytest.mark.asyncio
+    async def test_escalation_overrides_session_pin_and_persists(self, mock_router_instance, basic_config):
+        """Mid-session escalation bumps relative to the pinned model (never below it) and
+        the bumped model persists for later turns."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "session_affinity": True},
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "Hello!"}]
+        )
+        assert first.model == "gpt-4o-mini"  # pinned SIMPLE
+
+        with patch.object(router, "aclassify", wraps=router.aclassify) as spy_aclassify:
+            escalated = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs=request_kwargs,
+                messages=[{"role": "user", "content": "LITELLM ESCALATE"}],
+            )
+            spy_aclassify.assert_not_called()
+        assert escalated.model == "gpt-4o"  # bumped relative to the SIMPLE pin, not reclassified
+
+        # The bump persists: a later ordinary turn stays on the escalated model.
+        later = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "thanks"}]
+        )
+        assert later.model == "gpt-4o"
+
+        # Escalating again climbs one more tier.
+        again = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "LITELLM ESCALATE still not good"}],
+        )
+        assert again.model == "claude-sonnet-4-20250514"  # MEDIUM bumped to COMPLEX
+
+    def test_blank_escalation_keywords_are_stripped(self):
+        """Blank/whitespace-only phrases are dropped so `"" in message` can't escalate
+        every request; surrounding whitespace on real phrases is trimmed."""
+        assert ComplexityRouterConfig(
+            tiers={"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+            escalation_keywords=["", "  "],
+        ).escalation_keywords == []
+        assert ComplexityRouterConfig(
+            tiers={"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+            escalation_keywords=["  LITELLM ESCALATE  ", ""],
+        ).escalation_keywords == ["LITELLM ESCALATE"]
+
+    @pytest.mark.asyncio
+    async def test_blank_escalation_keyword_does_not_escalate_everything(
+        self, mock_router_instance, basic_config
+    ):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "escalation_keywords": [""]},
+        )
+        assert router.escalation_keywords == []
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Hello there!"}],
+        )
+        assert result.model == "gpt-4o-mini"  # not escalated
+
+    def test_escalated_pin_stays_on_same_model_at_ceiling(self, mock_router_instance):
+        """At the highest configured tier escalation keeps the exact pinned model, even
+        when that tier's pool has peers `get_model_for_tier` could randomly pick instead."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": ["o1-a", "o1-b", "o1-c"]}
+            },
+        )
+        for pinned in ("o1-a", "o1-b", "o1-c"):
+            assert router._escalated_pin(pinned) == pinned
+
+    @pytest.mark.asyncio
+    async def test_session_escalation_at_ceiling_keeps_multi_model_pin(self, mock_router_instance):
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": ["o1-a", "o1-b", "o1-c"]},
+                "session_affinity": True,
+            },
+        )
+        cache_key = router._get_session_affinity_cache_key("session-top", {})
+        await mock_router_instance.cache.async_set_cache(key=cache_key, value="o1-b")
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._request_kwargs("session-top"),
+            messages=[{"role": "user", "content": "LITELLM ESCALATE do better"}],
+        )
+        assert result.model == "o1-b"  # unchanged: no random hop to o1-a / o1-c

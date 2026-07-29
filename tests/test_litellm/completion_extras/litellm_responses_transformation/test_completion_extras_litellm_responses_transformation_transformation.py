@@ -2853,3 +2853,112 @@ def test_streaming_function_call_tool_id_for_degenerate_call_id():
 
     assert stream_tool_id("fc_unique_abc123", "call_0") == "fc_unique_abc123"
     assert stream_tool_id("fc_2", "call_tokyo") == "call_tokyo"
+
+
+def test_streaming_chunks_share_one_chat_completion_id():
+    """Every chunk of one streamed chat completion must carry the same ``id``, per the
+    OpenAI spec. The bridge builds a fresh ``ModelResponseStream`` per Responses event,
+    so without a stream-scoped id each chunk got a new ``chatcmpl-<uuid>`` and clients
+    that validate id consistency (openai-go's ChatCompletionAccumulator) silently
+    dropped every chunk after the first. Regression for #32854."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+    events = [
+        {"type": "response.created", "response": {"id": "resp_abc", "output": []}},
+        {"type": "response.output_text.delta", "delta": "Hel"},
+        {"type": "response.output_text.delta", "delta": "lo"},
+        {
+            "type": "response.completed",
+            "response": {"id": "resp_abc", "output": [{"type": "message"}]},
+        },
+    ]
+
+    ids = [iterator.chunk_parser(event).id for event in events]
+
+    assert len(set(ids)) == 1, f"streamed chunks carried different ids: {ids}"
+    assert ids[0], "streamed chunks carried an empty id"
+
+    other_stream = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+    assert (
+        other_stream.chunk_parser(events[1]).id != ids[0]
+    ), "a separate stream must get its own id, not a process-wide one"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stream_options,expected_wire_stream_options",
+    [
+        ({"include_usage": True, "include_obfuscation": False}, {"include_obfuscation": False}),
+        ({"include_usage": True}, None),
+    ],
+)
+async def test_acompletion_bridge_normalizes_stream_options_on_the_wire(
+    stream_options, expected_wire_stream_options
+):
+    """include_usage must be stripped from the /v1/responses body; include_obfuscation must survive as a dict."""
+    from unittest.mock import AsyncMock
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    responses_payload = {
+        "id": "resp_bridge_stream_options",
+        "object": "response",
+        "created_at": 1734366691,
+        "status": "completed",
+        "model": "gpt-5.5",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": None,
+        "temperature": None,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": None,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": None,
+        "truncation": None,
+        "user": None,
+    }
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = json.dumps(responses_payload)
+    mock_response.headers = httpx.Headers({})
+    mock_response.json.return_value = responses_payload
+
+    with patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_response
+
+        await litellm.acompletion(
+            model="openai/responses/gpt-5.5",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="fake-api-key",
+            stream_options=stream_options,
+        )
+
+    mock_post.assert_called_once()
+    post_kwargs = mock_post.call_args.kwargs
+    request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
+    if expected_wire_stream_options is None:
+        assert "stream_options" not in request_body
+    else:
+        assert request_body["stream_options"] == expected_wire_stream_options

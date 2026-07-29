@@ -1,7 +1,7 @@
 import React from "react";
-import { Alert, Tag, Typography } from "antd";
-
-const { Text } = Typography;
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { Badge } from "@/components/ui/badge";
+import { AlertTriangle, Info } from "lucide-react";
 
 interface ImpactResult {
   affected_keys_count: number;
@@ -14,21 +14,39 @@ interface ImpactPreviewAlertProps {
   impactResult: ImpactResult;
 }
 
+interface SampleListProps {
+  label: string;
+  samples: string[];
+  totalCount: number;
+}
+
+const SampleList: React.FC<SampleListProps> = ({ label, samples, totalCount }) => (
+  <div className="mt-1 flex flex-wrap items-center gap-1">
+    <span className="text-xs text-muted-foreground">{label}: </span>
+    {samples.slice(0, 5).map((sample) => (
+      <Badge key={sample} variant="outline">
+        {sample}
+      </Badge>
+    ))}
+    {totalCount > 5 && <span className="text-xs text-muted-foreground">and {totalCount - 5} more...</span>}
+  </div>
+);
+
 const ImpactPreviewAlert: React.FC<ImpactPreviewAlertProps> = ({ impactResult }) => {
+  const isGlobal = impactResult.affected_keys_count === -1;
+
   return (
-    <Alert
-      type={impactResult.affected_keys_count === -1 ? "warning" : "info"}
-      showIcon
-      className="mb-4"
-      message="Impact Preview"
-      description={
-        impactResult.affected_keys_count === -1 ? (
-          <Text>
+    <Alert className="mb-4">
+      {isGlobal ? <AlertTriangle /> : <Info />}
+      <AlertTitle>Impact Preview</AlertTitle>
+      <AlertDescription>
+        {isGlobal ? (
+          <span>
             Global scope — this will affect <strong>all keys and teams</strong>.
-          </Text>
+          </span>
         ) : (
           <div>
-            <Text>
+            <span>
               This attachment would affect{" "}
               <strong>
                 {impactResult.affected_keys_count} key{impactResult.affected_keys_count !== 1 ? "s" : ""}
@@ -38,45 +56,25 @@ const ImpactPreviewAlert: React.FC<ImpactPreviewAlertProps> = ({ impactResult })
                 {impactResult.affected_teams_count} team{impactResult.affected_teams_count !== 1 ? "s" : ""}
               </strong>
               .
-            </Text>
+            </span>
             {impactResult.sample_keys.length > 0 && (
-              <div className="mt-1">
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  Keys:{" "}
-                </Text>
-                {impactResult.sample_keys.slice(0, 5).map((k: string) => (
-                  <Tag key={k} style={{ fontSize: 11 }}>
-                    {k}
-                  </Tag>
-                ))}
-                {impactResult.affected_keys_count > 5 && (
-                  <Text type="secondary" style={{ fontSize: 11 }}>
-                    and {impactResult.affected_keys_count - 5} more...
-                  </Text>
-                )}
-              </div>
+              <SampleList
+                label="Keys"
+                samples={impactResult.sample_keys}
+                totalCount={impactResult.affected_keys_count}
+              />
             )}
             {impactResult.sample_teams.length > 0 && (
-              <div className="mt-1">
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  Teams:{" "}
-                </Text>
-                {impactResult.sample_teams.slice(0, 5).map((t: string) => (
-                  <Tag key={t} style={{ fontSize: 11 }}>
-                    {t}
-                  </Tag>
-                ))}
-                {impactResult.affected_teams_count > 5 && (
-                  <Text type="secondary" style={{ fontSize: 11 }}>
-                    and {impactResult.affected_teams_count - 5} more...
-                  </Text>
-                )}
-              </div>
+              <SampleList
+                label="Teams"
+                samples={impactResult.sample_teams}
+                totalCount={impactResult.affected_teams_count}
+              />
             )}
           </div>
-        )
-      }
-    />
+        )}
+      </AlertDescription>
+    </Alert>
   );
 };
 

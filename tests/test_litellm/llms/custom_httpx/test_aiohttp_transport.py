@@ -81,7 +81,7 @@ class MockContent:
     def __init__(self, chunks=None, exception_to_raise=None, exception_at_chunk=None):
         self.chunks = chunks or [b"chunk1", b"chunk2", b"chunk3"]
         self.exception_to_raise = exception_to_raise
-        self.exception_at_chunk = exception_at_chunk or (len(self.chunks) - 1)
+        self.exception_at_chunk = exception_at_chunk if exception_at_chunk is not None else (len(self.chunks) - 1)
         self.chunk_index = 0
 
     async def iter_chunked(self, chunk_size):
@@ -107,15 +107,11 @@ async def test_aiohttp_response_stream_normal_flow():
 
 
 @pytest.mark.asyncio
-async def test_transfer_encoding_error_no_httpx_read_error():
-    """Test that TransferEncodingError doesn't get converted to httpx.ReadError"""
-
-    # Create a TransferEncodingError wrapped in ClientPayloadError (like in real scenarios)
+async def test_client_payload_error_mid_stream_raises_read_error():
+    """A connection reset mid-body must surface as httpx.ReadError, not truncate silently"""
     transfer_error = aiohttp.http_exceptions.TransferEncodingError(
         message="400, message: Not enough data for satisfy transfer length header."
     )
-
-    # Wrap it in ClientPayloadError as aiohttp does
     client_payload_error = aiohttp.ClientPayloadError(
         "Response payload is not completed"
     )
@@ -124,47 +120,100 @@ async def test_transfer_encoding_error_no_httpx_read_error():
     mock_response = MockAiohttpResponse(
         content_chunks=[b"chunk1", b"chunk2", b"chunk3"],
         exception_to_raise=client_payload_error,
-        exception_at_chunk=1,  # Error occurs at chunk 1
+        exception_at_chunk=1,
     )
 
     stream = AiohttpResponseStream(mock_response)  # type: ignore
     received_chunks = []
 
-    # This should NOT raise httpx.ReadError or any other exception
-    # It should handle the error gracefully and just return what was received
-    async for chunk in stream:
-        received_chunks.append(chunk)
-    print(f"received_chunks: {received_chunks}")
+    with pytest.raises(httpx.ReadError):
+        async for chunk in stream:
+            received_chunks.append(chunk)
 
-    # Should have received the first chunk before the error
     assert received_chunks == [b"chunk1"]
-    assert len(received_chunks) == 1
+    assert mock_response.closed is True
 
 
 @pytest.mark.asyncio
-async def test_client_payload_error_graceful_handling():
-    """Test that ClientPayloadError is handled gracefully without stacktrace"""
-    # Create a ClientPayloadError directly
+async def test_client_payload_error_before_first_chunk_raises_read_error():
+    """A connection reset before any body byte must surface, not yield an empty 200 body"""
     client_error = aiohttp.client_exceptions.ClientPayloadError(
         "Response payload is not completed"
     )
 
     mock_response = MockAiohttpResponse(
-        content_chunks=[b"data1", b"data2", b"data3"],
+        content_chunks=[b"data1", b"data2"],
         exception_to_raise=client_error,
-        exception_at_chunk=2,  # Error occurs at chunk 2
+        exception_at_chunk=0,
     )
 
     stream = AiohttpResponseStream(mock_response)  # type: ignore
     received_chunks = []
 
-    # This should handle the error gracefully without raising
-    async for chunk in stream:
-        received_chunks.append(chunk)
+    with pytest.raises(httpx.ReadError):
+        async for chunk in stream:
+            received_chunks.append(chunk)
 
-    # Should have received chunks before the error
-    assert received_chunks == [b"data1", b"data2"]
-    assert len(received_chunks) == 2
+    assert received_chunks == []
+    assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_connection_closed_runtime_error_raises_read_error():
+    """aiohttp's bare RuntimeError('Connection closed.') must surface as httpx.ReadError"""
+    mock_response = MockAiohttpResponse(
+        content_chunks=[b"data1", b"data2"],
+        exception_to_raise=RuntimeError("Connection closed."),
+        exception_at_chunk=1,
+    )
+
+    stream = AiohttpResponseStream(mock_response)  # type: ignore
+    received_chunks = []
+
+    with pytest.raises(httpx.ReadError):
+        async for chunk in stream:
+            received_chunks.append(chunk)
+
+    assert received_chunks == [b"data1"]
+    assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_unrelated_runtime_error_propagates_unmapped():
+    """RuntimeErrors other than 'Connection closed' must propagate untouched"""
+    mock_response = MockAiohttpResponse(
+        content_chunks=[b"data1"],
+        exception_to_raise=RuntimeError("something else broke"),
+        exception_at_chunk=0,
+    )
+
+    stream = AiohttpResponseStream(mock_response)  # type: ignore
+
+    with pytest.raises(RuntimeError, match="something else broke"):
+        async for _ in stream:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_transfer_encoding_error_raises_read_error():
+    """A raw TransferEncodingError mid-body must surface as httpx.ReadError"""
+    mock_response = MockAiohttpResponse(
+        content_chunks=[b"data1", b"data2"],
+        exception_to_raise=aiohttp.http_exceptions.TransferEncodingError(
+            message="Not enough data to satisfy transfer length header."
+        ),
+        exception_at_chunk=1,
+    )
+
+    stream = AiohttpResponseStream(mock_response)  # type: ignore
+    received_chunks = []
+
+    with pytest.raises(httpx.ReadError):
+        async for chunk in stream:
+            received_chunks.append(chunk)
+
+    assert received_chunks == [b"data1"]
+    assert mock_response.closed is True
 
 
 @pytest.mark.asyncio
@@ -678,3 +727,103 @@ async def test_response_stream_closes_response_on_generator_exit():
     await iterator.aclose()
 
     assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_closed_shared_session_rebuild_uses_injected_session_factory():
+    """
+    A transport handed an already-built session (the proxy's shared session)
+    must rebuild through the injected factory. Rebuilding with a bare
+    ClientSession drops the connector's keep-alive socket options, pool limits
+    and DNS cache for every later request on that transport.
+    """
+    shared_session = aiohttp.ClientSession()
+    await shared_session.close()
+
+    rebuilt = []
+
+    def session_factory():
+        session = _make_mock_session()
+        rebuilt.append(session)
+        return session
+
+    transport = LiteLLMAiohttpTransport(
+        client=shared_session,
+        owns_session=False,
+        session_factory=session_factory,  # type: ignore
+    )
+
+    assert transport._get_valid_client_session() in rebuilt
+
+
+def test_rebuild_without_running_loop_uses_injected_session_factory():
+    """
+    The loop-validity fallback must also go through the injected factory, so a
+    transport recovering outside a running event loop does not silently swap in
+    an unconfigured session.
+    """
+    rebuilt = []
+
+    def session_factory():
+        session = _make_mock_session()
+        rebuilt.append(session)
+        return session
+
+    transport = LiteLLMAiohttpTransport(
+        client=object(),  # type: ignore
+        session_factory=session_factory,  # type: ignore
+    )
+
+    assert transport._get_valid_client_session() in rebuilt
+
+
+@pytest.mark.asyncio
+async def test_rebuilt_session_becomes_transport_owned():
+    """
+    A rebuilt session is reachable only from the transport, so aclose() must
+    close it even when the transport was handed a session it did not own.
+    """
+    shared_session = aiohttp.ClientSession()
+    await shared_session.close()
+
+    replacement = aiohttp.ClientSession()
+    transport = LiteLLMAiohttpTransport(
+        client=shared_session,
+        owns_session=False,
+        session_factory=lambda: replacement,
+    )
+
+    assert transport._get_valid_client_session() is replacement
+
+    await transport.aclose()
+
+    assert replacement.closed
+
+
+@pytest.mark.asyncio
+async def test_stale_loop_rebuild_does_not_close_unowned_session():
+    """
+    A session the transport does not own (the proxy's shared session) is used by
+    other transports too, so a rebuild must leave it open for them.
+    """
+    shared_session = aiohttp.ClientSession()
+    running_loop = asyncio.get_running_loop()
+    other_loop = asyncio.new_event_loop()
+
+    replacement = _make_mock_session()
+    transport = LiteLLMAiohttpTransport(
+        client=shared_session,
+        owns_session=False,
+        session_factory=lambda: replacement,  # type: ignore
+    )
+
+    try:
+        shared_session._loop = other_loop
+        assert transport._get_valid_client_session() is replacement
+        shared_session._loop = running_loop
+        await asyncio.sleep(0.05)
+        assert not shared_session.closed
+    finally:
+        shared_session._loop = running_loop
+        other_loop.close()
+        await shared_session.close()

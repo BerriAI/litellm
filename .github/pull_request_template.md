@@ -1,3 +1,18 @@
+## TLDR
+
+<!-- Fill in the bullets below and keep each one short and concrete: one line per bullet, roughly 10 words max
+     This section must be extremely human parsable, comprehensible, and readable: its target audience is humans, not AI agents -->
+
+Problem this solves:
+
+- <blah>
+- ...
+
+How it solves it:
+
+- <blah>
+- ...
+
 ## Relevant issues
 
 <!-- e.g., "Fixes #000" -->

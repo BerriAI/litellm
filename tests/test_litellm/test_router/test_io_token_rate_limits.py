@@ -977,3 +977,65 @@ class TestRouterIOTokenIntegration:
         assert info is not None
         assert info.itpm == 100
         assert info.otpm == 20
+
+
+class TestContextSlotRetention:
+    def test_setter_stores_kwargs_only_for_io_limited_deployments(self):
+        """
+        The context slot pins the entire request kwargs (messages included)
+        for the lifetime of the surrounding asyncio context, and pooled
+        resources created mid-request (e.g. redis connections) capture that
+        context, extending the pin far past the request. Only ITPM/OTPM
+        pre-call checks read the slot, so the setter must store None for
+        deployments without io token limits and still clear reservation
+        sentinels from kwargs either way.
+        """
+        kwargs = {
+            "messages": [{"role": "user", "content": "x" * 1000}],
+            "metadata": {ITPM_RESERVED_KEY: 999, ITPM_CACHE_KEY: "forged"},
+        }
+        set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=False)
+        assert get_io_token_rate_limit_request_kwargs() is None
+        assert ITPM_RESERVED_KEY not in kwargs["metadata"]
+        assert ITPM_CACHE_KEY not in kwargs["metadata"]
+
+        set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=True)
+        assert get_io_token_rate_limit_request_kwargs() is kwargs
+
+        set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=False)
+        assert get_io_token_rate_limit_request_kwargs() is None
+
+    @pytest.mark.asyncio
+    async def test_router_does_not_pin_kwargs_without_io_limits(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "plain",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                }
+            ]
+        )
+        set_io_token_rate_limit_request_kwargs(None)
+        kwargs = {"messages": [{"role": "user", "content": "hello"}], "metadata": {}}
+        deployment = router.get_deployment_by_model_group_name("plain")
+        assert deployment is not None
+        router._update_kwargs_with_deployment(deployment=deployment.model_dump(), kwargs=kwargs)
+        assert get_io_token_rate_limit_request_kwargs() is None
+
+    @pytest.mark.asyncio
+    async def test_router_pins_kwargs_for_io_limited_deployment(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "limited",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", "itpm": 100},
+                }
+            ],
+            optional_pre_call_checks=["enforce_model_rate_limits"],
+        )
+        set_io_token_rate_limit_request_kwargs(None)
+        kwargs = {"messages": [{"role": "user", "content": "hello"}], "metadata": {}}
+        deployment = router.get_deployment_by_model_group_name("limited")
+        assert deployment is not None
+        router._update_kwargs_with_deployment(deployment=deployment.model_dump(), kwargs=kwargs)
+        assert get_io_token_rate_limit_request_kwargs() is kwargs

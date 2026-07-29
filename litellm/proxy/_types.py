@@ -20,6 +20,9 @@ from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_no_callback_env_reference,
 )
+from litellm.types.integrations.compression_interception import (
+    CompressionSavingsMetadata,
+)
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -626,6 +629,10 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/logs/v2",
         "/spend/logs/ui",
         "/spend/logs/session/ui",
+        # Reads end users out of spend logs, scoped to the caller's own rows and
+        # permitted teams exactly like /spend/logs/ui — it belongs to the same
+        # access tier, not to customer management.
+        "/management/v1/spend_logs/end_users",
         "/cost/estimate",
     ]
 
@@ -816,10 +823,12 @@ class LiteLLMRoutes(enum.Enum):
             # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
             "/customer/list",
             "/customer/info",
-            # UI Logs page detail drawer (single + session). The list endpoint
-            # `/spend/logs/ui` is covered via spend_tracking_routes below.
+            # UI Logs page detail drawer (single + session) and the end-user filter
+            # facet. The list endpoint `/spend/logs/ui` is covered via
+            # spend_tracking_routes below.
             "/spend/logs/ui/{logId}",
             "/spend/logs/session/ui",
+            "/management/v1/spend_logs/end_users",
             # Settings / observability read endpoints exposed in admin-only
             # sidebar groups (Logging & Alerts, Admin Settings, Budgets,
             # Invitations).
@@ -1011,10 +1020,10 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_tool_search_enabled: Optional[bool] = None
 
 
+from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
 from litellm.types.object_permission import (  # noqa: E402
     ObjectPermissionDict as ObjectPermissionDict,
 )
-from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
 
 
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
@@ -1160,7 +1169,6 @@ class GenerateKeyResponse(KeyRequestBase):
 class UpdateKeyRequest(KeyRequestBase):
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
-    key: str  # type: ignore
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
@@ -1175,6 +1183,12 @@ class UpdateKeyRequest(KeyRequestBase):
         if self.temp_budget_increase is not None or self.temp_budget_expiry is not None:
             if self.temp_budget_increase is None or self.temp_budget_expiry is None:
                 raise ValueError("temp_budget_increase and temp_budget_expiry must be set together")
+        return self
+
+    @model_validator(mode="after")
+    def validate_key_identifier(self) -> "UpdateKeyRequest":
+        if self.key is None and self.key_alias is None:
+            raise ValueError("either key or key_alias must be provided")
         return self
 
 
@@ -1263,6 +1277,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+    issuer: Optional[str] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
@@ -1368,6 +1383,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+    issuer: Optional[str] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
@@ -1851,6 +1867,17 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     default_team_member_models: Optional[List[str]] = None  # default allowed_models seeded onto new team members
 
 
+class PatchTeamRequest(UpdateTeamRequest):
+    """
+    Body of PATCH /team/{team_id}.
+
+    Identical to UpdateTeamRequest except team_id is optional, because PATCH takes it
+    from the path. A team_id in the body is still accepted when it matches the path.
+    """
+
+    team_id: str | None = None
+
+
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
     """
     internal type used to reset the budget on a team
@@ -2120,6 +2147,8 @@ class ConfigList(LiteLLMPydanticObjectBase):
     field_default_value: Any
     premium_field: bool = False
     nested_fields: Optional[List[FieldDetail]] = None  # For nested dictionary or Pydantic fields
+    field_options: Optional[list[str]] = None  # Allowed values, for field_type == "Select"
+    field_tab: Optional[str] = None  # Admin UI sub-tab this field renders under; None groups it with the rest
 
 
 class UserHeaderMapping(LiteLLMPydanticObjectBase):
@@ -2290,6 +2319,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="max response size in MB, if a response is larger than this size it will be rejected",
     )
+    proxy_config_reload_interval_seconds: int = Field(
+        30,
+        gt=0,
+        description="how often (in seconds) each pod reloads config-in-DB objects (models, credentials, guardrails, etc.) when store_model_in_db is enabled; lower values speed up multi-pod convergence at the cost of more DB load. Applied on proxy startup",
+    )
     cancel_on_disconnect: Optional[bool] = Field(
         None,
         description="cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure",
@@ -2366,6 +2400,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     store_prompts_in_spend_logs: Optional[bool] = Field(
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
+    )
+    disable_auto_add_proxy_admin_to_teams: bool | None = Field(
+        None,
+        description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
     )
     maximum_spend_logs_retention_period: Optional[str] = Field(
         None,
@@ -2578,6 +2616,28 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     user_max_budget: Optional[float] = None
     request_route: Optional[str] = None
     is_session_token: bool = False
+    # Server-only marker set exclusively by the MCP gateway admission path
+    # (_reload_admitted_user) for a keyless user-subject admitted via a gateway DCR session
+    # bearer or bridge envelope. Not a DB column and never populated from caller-controlled key
+    # metadata or JWT claims, so it cannot be forged to gain the team-inherited MCP grant union
+    # or to escape the caller-Authorization egress scrub. exclude=True keeps it out of serialization.
+    mcp_admitted_user_subject: bool = Field(default=False, exclude=True)
+    # team_id -> that team's mcp_rpm_limit map, for a keyless admitted subject that reaches MCP
+    # servers through several teams at once and therefore has no single team_id for the limiter to
+    # key off. Server-only and stripped from validated input for the same reason as the marker
+    # above: a forged entry would let a caller pick which team's rpm bucket it is charged against.
+    mcp_source_team_rpm_limits: dict[str, dict[str, int]] | None = Field(default=None, exclude=True)
+    via_virtual_key: bool = Field(
+        default=False,
+        exclude=True,
+        description=(
+            "Server-only marker set exclusively by the DB virtual-key and master-key auth paths via "
+            "post-construction assignment. Stripped from validated input so custom auth handlers, JWT "
+            "claims, or key metadata cannot forge it. Gates overwrite_user_with_key_hash stamping: only "
+            "a credential the proxy itself validated as a key may be forwarded as the provider-facing "
+            "user id."
+        ),
+    )
     budget_reservation: Optional[Dict[str, Any]] = Field(default=None, exclude=True)
     budget_throttle_pct: Optional[float] = Field(default=None, exclude=True)
     user: Optional[Any] = None  # Expanded user object when expand=user is used
@@ -2598,6 +2658,12 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         # If values is already an instance (not a dict), return it as-is
         if not isinstance(values, dict):
             return values
+        # mcp_admitted_user_subject is a server-only marker, set ONLY by the MCP gateway admission
+        # path via post-construction assignment. Strip it from any validated input (constructor
+        # kwargs, model_validate, a JWT/key claim splat) so it can never be forged from caller data.
+        values.pop("mcp_admitted_user_subject", None)
+        values.pop("mcp_source_team_rpm_limits", None)
+        values.pop("via_virtual_key", None)
         if values.get("api_key") is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
             if isinstance(values.get("api_key"), str):
@@ -2749,6 +2815,30 @@ class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
                 values["metadata"][field] = values.get(field)
                 values.pop(field)
         return values
+
+
+class OrganizationUpdateRequestV2(LiteLLMPydanticObjectBase):
+    """
+    Typed PATCH body for ``/v2/organization/{organization_id}`` (RFC 7396 merge-patch).
+
+    Presence is read from ``model_fields_set``, so a sent field is written and an omitted one is
+    left untouched. ``extra="forbid"`` makes an unknown key a 422 rather than a silent no-op, since
+    the contract hinges on which keys are present. See the endpoint for the per-field clear tokens.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_alias: str | None = None
+    models: list[str] | None = None
+    metadata: dict | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    max_budget: float | None = None
+    soft_budget: float | None = None
+    max_parallel_requests: int | None = None
+    model_max_budget: dict | None = None
+    budget_duration: str | None = None
+    object_permission: LiteLLM_ObjectPermissionBase | None = None
 
 
 from litellm.models.organization import (  # noqa: E402
@@ -3234,6 +3324,7 @@ class SpendLogsMetadata(TypedDict):
     attempted_retries: Optional[int]  # Number of retries attempted (0 = first attempt succeeded)
     max_retries: Optional[int]  # Max retries configured for this request
     cost_breakdown: Optional[CostBreakdown]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
+    compression_savings: CompressionSavingsMetadata | None
 
 
 class SpendLogsPayload(TypedDict):
@@ -3552,6 +3643,13 @@ DB_CONNECTION_ERROR_TYPES = (
     httpx.ReadError,
     httpx.ReadTimeout,
 )
+
+# What a NON-IDEMPOTENT write (increment upsert) may retry: only ConnectError
+# proves the statements never reached the database. Post-send errors are
+# ambiguous; a stalled statement can leave its transaction open on the pooled
+# connection, where a retry stacks a second increment set into the same commit.
+# Idempotent writes (create_many with skip_duplicates) may retry the full tuple.
+DB_RETRY_SAFE_ERROR_TYPES = (httpx.ConnectError,)
 
 
 class SSOUserDefinedValues(TypedDict):
@@ -4035,6 +4133,7 @@ class JWTAuthBuilderResult(TypedDict):
     token: str
     team_id: Optional[str]
     user_id: Optional[str]
+    user_email: str | None
     end_user_id: Optional[str]
     org_id: Optional[str]
     team_membership: Optional[LiteLLM_TeamMembership]
@@ -4236,7 +4335,13 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     team_id_upsert: bool = False
     team_ids_jwt_field: Optional[str] = None
     upsert_sso_user_to_team: bool = False
-    team_allowed_routes: List[str] = ["openai_routes", "info_routes", "mcp_routes"]
+    team_allowed_routes: List[str] = [
+        "openai_routes",
+        "info_routes",
+        "mcp_routes",
+        "/v1/messages",
+        "/v1/messages/count_tokens",
+    ]
     team_id_default: Optional[str] = Field(
         default=None,
         description="If no team_id given, default permissions/spend-tracking to this team.s",
@@ -4453,6 +4558,11 @@ class BaseDailySpendTransaction(TypedDict):
     completion_tokens: int
     cache_read_input_tokens: int
     cache_creation_input_tokens: int
+    compression_saved_tokens: int
+
+    # cost-savings metrics (dollars, priced per request before aggregation)
+    compression_savings_spend: float
+    prompt_caching_savings_spend: float
 
     # request level metrics
     spend: float

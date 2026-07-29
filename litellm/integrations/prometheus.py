@@ -16,6 +16,7 @@ from typing import (
     Dict,
     List,
     Literal,
+    Mapping,
     Optional,
     Sequence,
     Tuple,
@@ -67,6 +68,15 @@ else:
     AsyncIOScheduler = Any
 
 _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT = 5.0
+
+# Tiers a caller may name in a request, across the providers that accept the
+# parameter: OpenAI ("auto", "default", "flex", "priority", "scale"), Bedrock and
+# Groq (subsets of those), Anthropic ("auto", "standard_only") and Vertex, which
+# maps "default" to "standard". Used to bound the caller-controlled fallback in
+# ``get_service_tier_from_standard_logging_payload``.
+KNOWN_REQUEST_SERVICE_TIERS = frozenset(
+    {"auto", "batch", "default", "flex", "priority", "scale", "standard", "standard_only"}
+)
 
 
 def _get_budget_metrics_per_request_timeout() -> float:
@@ -1244,6 +1254,7 @@ class PrometheusLogger(CustomLogger):
             client_ip=standard_logging_payload["metadata"].get("requester_ip_address"),
             user_agent=standard_logging_payload["metadata"].get("user_agent"),
             stream=(str(standard_logging_payload.get("stream")) if litellm.prometheus_emit_stream_label else None),
+            service_tier=get_service_tier_from_standard_logging_payload(standard_logging_payload),
         )
 
         if user_api_key is not None and isinstance(user_api_key, str) and user_api_key.startswith("sk-"):
@@ -1449,6 +1460,8 @@ class PrometheusLogger(CustomLogger):
         prompt_details = usage_object.get("prompt_tokens_details") or {}
         completion_details = usage_object.get("completion_tokens_details") or {}
 
+        cache_creation_detail_tokens = PrometheusLogger._resolve_cache_write_tokens(prompt_details)
+
         detail_metrics: List[Tuple[Any, DEFINED_PROMETHEUS_METRICS, Any]] = [
             (
                 self.litellm_input_cached_tokens_metric,
@@ -1458,7 +1471,7 @@ class PrometheusLogger(CustomLogger):
             (
                 self.litellm_input_cache_creation_tokens_metric,
                 "litellm_input_cache_creation_tokens_metric",
-                (prompt_details.get("cache_creation_tokens") if isinstance(prompt_details, dict) else None),
+                cache_creation_detail_tokens,
             ),
             (
                 self.litellm_input_audio_tokens_metric,
@@ -1597,27 +1610,12 @@ class PrometheusLogger(CustomLogger):
             )
 
         # Provider prompt caching metrics are independent of LiteLLM cache_hit.
-        provider_cache_read_tokens = 0
-        provider_cache_creation_tokens = 0
         usage_obj = (standard_logging_payload.get("metadata", {}) or {}).get("usage_object")
         if isinstance(usage_obj, dict):
-            # Prefer explicit provider cache fields when available.
-            _read = usage_obj.get("cache_read_input_tokens")
-            _write = usage_obj.get("cache_creation_input_tokens")
-
-            if isinstance(_read, int):
-                provider_cache_read_tokens = _read
-            if isinstance(_write, int):
-                provider_cache_creation_tokens = _write
-
-            # Fallback to prompt_tokens_details.cached_tokens (common normalization point).
-            # Only fallback when the explicit field is genuinely absent (None).
-            if _read is None:
-                prompt_details = usage_obj.get("prompt_tokens_details")
-                if isinstance(prompt_details, dict):
-                    cached_tokens = prompt_details.get("cached_tokens")
-                    if isinstance(cached_tokens, int):
-                        provider_cache_read_tokens = cached_tokens
+            (
+                provider_cache_read_tokens,
+                provider_cache_creation_tokens,
+            ) = PrometheusLogger._resolve_provider_cache_tokens(usage_obj)
 
             if provider_cache_read_tokens > 0:
                 PrometheusLogger._inc_labeled_counter(
@@ -1638,6 +1636,40 @@ class PrometheusLogger(CustomLogger):
                     label_context=label_context,
                     amount=float(provider_cache_creation_tokens),
                 )
+
+    @staticmethod
+    def _resolve_provider_cache_tokens(usage_obj: Mapping[str, object]) -> tuple[int, int]:
+        # Prefer explicit provider cache fields when available.
+        _read = usage_obj.get("cache_read_input_tokens")
+        _write = usage_obj.get("cache_creation_input_tokens")
+
+        provider_cache_read_tokens = _read if isinstance(_read, int) else 0
+        provider_cache_creation_tokens = _write if isinstance(_write, int) else 0
+
+        # Fallback to prompt_tokens_details (common normalization point).
+        # Only fallback when the explicit field is genuinely absent (None).
+        prompt_details = usage_obj.get("prompt_tokens_details")
+        if _read is None and isinstance(prompt_details, dict):
+            cached_tokens = prompt_details.get("cached_tokens")
+            if isinstance(cached_tokens, int):
+                provider_cache_read_tokens = cached_tokens
+
+        if _write is None:
+            write_tokens = PrometheusLogger._resolve_cache_write_tokens(prompt_details)
+            if write_tokens is not None:
+                provider_cache_creation_tokens = write_tokens
+
+        return provider_cache_read_tokens, provider_cache_creation_tokens
+
+    @staticmethod
+    def _resolve_cache_write_tokens(prompt_details: object) -> int | None:
+        if not isinstance(prompt_details, dict):
+            return None
+        for key in ("cache_write_tokens", "cache_creation_tokens"):
+            value = prompt_details.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+        return None
 
     def _increment_mcp_tool_call_metrics(
         self,
@@ -4074,6 +4106,44 @@ def get_custom_labels_from_metadata(metadata: dict) -> Dict[str, str]:
             result[original_key.replace(".", "_")] = value
 
     return result
+
+
+def get_service_tier_from_standard_logging_payload(
+    standard_logging_payload: StandardLoggingPayload,
+) -> str | None:
+    """
+    Resolve the service tier a request ran on, for the ``service_tier`` label.
+
+    The tier the provider actually served wins over the tier the caller asked for,
+    so latency and spend stay segmentable when the request said ``auto`` and the
+    provider picked the concrete tier. Providers report the served tier either at
+    the top level of the response (OpenAI, Bedrock, Groq) or on the usage object
+    (Anthropic).
+
+    Streaming responses carry no served tier, so the requested tier is the
+    fallback. That value is caller-controlled and survives param mapping even
+    where the provider then ignores it (Bedrock and Groq accept the request and
+    drop an unrecognized tier), so it is only labelled when it names a known
+    tier; otherwise one caller could mint a Prometheus series per string. Values
+    the provider itself reports are not caller-controlled and stay unrestricted,
+    so a tier a provider adds later is still labelled correctly.
+    """
+    response = standard_logging_payload.get("response")
+    usage_object = standard_logging_payload.get("metadata", {}).get("usage_object")
+
+    served_candidates: tuple[object, ...] = (
+        response.get("service_tier") if isinstance(response, dict) else None,
+        usage_object.get("service_tier") if isinstance(usage_object, dict) else None,
+    )
+    served_tier = next((tier for tier in served_candidates if isinstance(tier, str) and tier), None)
+    if served_tier is not None:
+        return served_tier
+
+    model_parameters = standard_logging_payload.get("model_parameters")
+    requested_tier = model_parameters.get("service_tier") if isinstance(model_parameters, dict) else None
+    if isinstance(requested_tier, str) and requested_tier in KNOWN_REQUEST_SERVICE_TIERS:
+        return requested_tier
+    return None
 
 
 def _get_combined_custom_metadata_from_standard_logging_payload(

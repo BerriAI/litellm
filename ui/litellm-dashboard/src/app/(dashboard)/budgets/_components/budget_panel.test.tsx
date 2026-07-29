@@ -1,5 +1,6 @@
 import { fireEvent, render, waitFor, screen } from "@testing-library/react";
 import { act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import BudgetPanel from "./budget_panel";
@@ -57,7 +58,8 @@ describe("Budget Panel", () => {
     });
   });
 
-  it("should open delete modal when clicking delete icon", async () => {
+  it("should open delete modal from the actions menu", async () => {
+    const user = userEvent.setup();
     vi.mocked(useBudgets).mockReturnValue({
       data: [
         {
@@ -77,11 +79,8 @@ describe("Budget Panel", () => {
       expect(screen.getByText("budget-to-delete")).toBeInTheDocument();
     });
 
-    const deleteButton = screen.getByTestId("delete-budget-button");
-
-    act(() => {
-      fireEvent.click(deleteButton);
-    });
+    await user.click(screen.getByTestId("budget-actions-budget-to-delete"));
+    await user.click(await screen.findByTestId("budget-action-delete"));
 
     await waitFor(() => {
       expect(screen.getByText("Delete Budget?")).toBeInTheDocument();
@@ -89,6 +88,7 @@ describe("Budget Panel", () => {
   });
 
   it("should successfully delete a budget", async () => {
+    const user = userEvent.setup();
     const deleteMutateAsync = vi.fn().mockResolvedValue(undefined);
     vi.mocked(useBudgets).mockReturnValue({
       data: [
@@ -113,17 +113,13 @@ describe("Budget Panel", () => {
       expect(screen.getByText("budget-to-delete")).toBeInTheDocument();
     });
 
-    // Open delete modal
-    const deleteButton = screen.getByTestId("delete-budget-button");
-    act(() => {
-      fireEvent.click(deleteButton);
-    });
+    await user.click(screen.getByTestId("budget-actions-budget-to-delete"));
+    await user.click(await screen.findByTestId("budget-action-delete"));
 
     await waitFor(() => {
       expect(screen.getByText("Delete Budget?")).toBeInTheDocument();
     });
 
-    // Confirm delete
     const confirmButton = screen.getByRole("button", { name: /delete/i });
     act(() => {
       fireEvent.click(confirmButton);
@@ -148,6 +144,7 @@ describe("Budget Panel", () => {
   });
 
   it("should handle delete error", async () => {
+    const user = userEvent.setup();
     const deleteMutateAsync = vi.fn().mockRejectedValue(new Error("Delete failed"));
     vi.mocked(useBudgets).mockReturnValue({
       data: [
@@ -172,17 +169,13 @@ describe("Budget Panel", () => {
       expect(screen.getByText("budget-to-delete")).toBeInTheDocument();
     });
 
-    // Open delete modal
-    const deleteButton = screen.getByTestId("delete-budget-button");
-    act(() => {
-      fireEvent.click(deleteButton);
-    });
+    await user.click(screen.getByTestId("budget-actions-budget-to-delete"));
+    await user.click(await screen.findByTestId("budget-action-delete"));
 
     await waitFor(() => {
       expect(screen.getByText("Delete Budget?")).toBeInTheDocument();
     });
 
-    // Confirm delete
     const confirmButton = screen.getByRole("button", { name: /delete/i });
     act(() => {
       fireEvent.click(confirmButton);
@@ -193,7 +186,8 @@ describe("Budget Panel", () => {
     });
   });
 
-  it("should open edit modal when clicking edit icon", async () => {
+  it("should open edit modal from the actions menu", async () => {
+    const user = userEvent.setup();
     vi.mocked(useBudgets).mockReturnValue({
       data: [
         {
@@ -213,11 +207,8 @@ describe("Budget Panel", () => {
       expect(screen.getByText("budget-to-edit")).toBeInTheDocument();
     });
 
-    const editButton = screen.getByTestId("edit-budget-button");
-
-    act(() => {
-      fireEvent.click(editButton);
-    });
+    await user.click(screen.getByTestId("budget-actions-budget-to-edit"));
+    await user.click(await screen.findByTestId("budget-action-edit"));
 
     await waitFor(() => {
       expect(screen.getByText("Edit Budget")).toBeInTheDocument();

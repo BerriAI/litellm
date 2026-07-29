@@ -68,12 +68,12 @@ async def test_update_end_user_spend_upserts_each_end_user(
 
 
 @pytest.mark.asyncio
-async def test_update_end_user_spend_retries_on_connection_error(
+async def test_update_end_user_spend_retries_on_connect_error(
     mock_prisma_client: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``DB_CONNECTION_ERROR_TYPES`` failures should be retried with backoff;
-    once retries are exhausted, ``_raise_failed_update_spend_exception`` is
-    invoked and the original exception bubbles up.
+    """``DB_RETRY_SAFE_ERROR_TYPES`` (ConnectError, statements provably never
+    sent) retries with backoff; once retries are exhausted the original
+    exception bubbles up via ``_raise_failed_update_spend_exception``.
     """
     import httpx
     import litellm.proxy.utils as utils_mod
@@ -85,11 +85,11 @@ async def test_update_end_user_spend_retries_on_connection_error(
 
     monkeypatch.setattr(utils_mod.asyncio, "sleep", _fake_sleep)
 
-    err = httpx.ReadError("conn reset")
+    err = httpx.ConnectError("down")
     mock_prisma_client.db.tx = MagicMock(side_effect=err)
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
-    with pytest.raises(httpx.ReadError):
+    with pytest.raises(httpx.ConnectError):
         await ProxyUpdateSpend.update_end_user_spend(
             n_retry_times=1,
             prisma_client=mock_prisma_client,
@@ -97,6 +97,29 @@ async def test_update_end_user_spend_retries_on_connection_error(
             end_user_list_transactions={"u": 1.0},
         )
     assert sleeps == [1.0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ambiguous_error_name", ["ReadTimeout", "ReadError"])
+async def test_update_end_user_spend_does_not_retry_post_send_ambiguous_errors(
+    mock_prisma_client: Any, ambiguous_error_name: str
+) -> None:
+    """Post-send errors are ambiguous and retrying can double-apply increments
+    (see DB_RETRY_SAFE_ERROR_TYPES); they must raise on the first attempt."""
+    import httpx
+
+    err = getattr(httpx, ambiguous_error_name)("ambiguous")
+    mock_prisma_client.db.tx = MagicMock(side_effect=err)
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    with pytest.raises((httpx.ReadTimeout, httpx.ReadError)):
+        await ProxyUpdateSpend.update_end_user_spend(
+            n_retry_times=3,
+            prisma_client=mock_prisma_client,
+            proxy_logging_obj=proxy_logging,
+            end_user_list_transactions={"u": 1.0},
+        )
+    mock_prisma_client.db.tx.assert_called_once()
 
 
 @pytest.mark.asyncio

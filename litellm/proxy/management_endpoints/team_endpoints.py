@@ -14,7 +14,7 @@ import json
 import math
 import traceback
 from datetime import datetime, timezone
-from typing import Annotated, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Annotated, Any, Dict, List, Mapping, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -47,6 +47,7 @@ from litellm.proxy._types import (
     Member,
     NewTeamRequest,
     OrgMember,
+    PatchTeamRequest,
     ProxyErrorTypes,
     ProxyException,
     SpecialManagementEndpointEnums,
@@ -143,7 +144,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
 router = APIRouter()
 
 
-def _sanitize_for_log(value: Any) -> str:
+def _sanitize_for_log(value: object) -> str:
     """Strip CR/LF from user-controlled values to prevent log injection."""
     try:
         text = str(value)
@@ -173,7 +174,7 @@ async def _refresh_cached_team(
     """
     await _cache_team_object(
         team_id=team_row.team_id,
-        team_table=LiteLLM_TeamTableCachedObj(**team_row.model_dump()),
+        team_table=LiteLLM_TeamTableCachedObj.model_validate(team_row.model_dump()),
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
@@ -512,7 +513,7 @@ async def get_all_team_memberships(
 
     returned_tm: List[LiteLLM_TeamMembership] = []
     for tm in team_memberships:
-        returned_tm.append(LiteLLM_TeamMembership(**tm.model_dump()))
+        returned_tm.append(LiteLLM_TeamMembership.model_validate(tm.model_dump()))
 
     return returned_tm
 
@@ -774,7 +775,7 @@ async def _check_org_team_limits(
     # Convert teams to LiteLLM_TeamTable objects
     team_objs: List[LiteLLM_TeamTable] = []
     for team in teams:
-        team_objs.append(LiteLLM_TeamTable(**team.model_dump()))
+        team_objs.append(LiteLLM_TeamTable.model_validate(team.model_dump()))
 
     check_org_team_model_specific_limits(
         teams=team_objs,
@@ -897,6 +898,17 @@ def _check_team_budget_update_authority(
         )
 
 
+def _should_auto_add_team_creator(
+    user_api_key_dict: UserAPIKeyAuth,
+    general_settings: Mapping[str, object],
+) -> bool:
+    if user_api_key_dict.user_id is None:
+        return False
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        return True
+    return general_settings.get("disable_auto_add_proxy_admin_to_teams") is not True
+
+
 #### TEAM MANAGEMENT ####
 @router.post(
     "/team/new",
@@ -1000,6 +1012,7 @@ async def new_team(
         from litellm.proxy.proxy_server import (
             _license_check,
             create_audit_log_for_update,
+            general_settings,
             litellm_proxy_admin_name,
             prisma_client,
             user_api_key_cache,
@@ -1126,13 +1139,11 @@ async def new_team(
                     user_api_key_cache=user_api_key_cache,
                 )
 
-        if user_api_key_dict.user_id is not None:
-            creating_user_in_list = False
-            for member in data.members_with_roles:
-                if member.user_id == user_api_key_dict.user_id:
-                    creating_user_in_list = True
-
-            if creating_user_in_list is False:
+        if _should_auto_add_team_creator(user_api_key_dict, general_settings):
+            creating_user_in_list = any(
+                member.user_id == user_api_key_dict.user_id for member in data.members_with_roles
+            )
+            if not creating_user_in_list:
                 data.members_with_roles.append(Member(role="admin", user_id=user_api_key_dict.user_id))
 
         _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
@@ -1468,9 +1479,9 @@ async def fetch_and_validate_organization(
         )
 
     is_proxy_admin = user_api_key_dict is not None and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-    organization = LiteLLM_OrganizationTableWithMembers(**organization_row.model_dump())
+    organization = LiteLLM_OrganizationTableWithMembers.model_validate(organization_row.model_dump())
     validate_team_org_change(
-        team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
+        team=LiteLLM_TeamTable.model_validate(existing_team_row.model_dump()),
         organization=organization,
         llm_router=llm_router,
         is_proxy_admin=is_proxy_admin,
@@ -1478,7 +1489,7 @@ async def fetch_and_validate_organization(
 
     if is_proxy_admin:
         await _auto_add_team_members_to_organization(
-            team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
+            team=LiteLLM_TeamTable.model_validate(existing_team_row.model_dump()),
             organization=organization,
             prisma_client=prisma_client,
         )
@@ -1633,6 +1644,7 @@ async def update_team(
     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+    - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
     Example - update team TPM Limit
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
@@ -1714,7 +1726,7 @@ async def update_team(
 
         # Verify caller has access to manage this team
         await _verify_team_access(
-            team_obj=LiteLLM_TeamTable(**existing_team_row.model_dump()),
+            team_obj=LiteLLM_TeamTable.model_validate(existing_team_row.model_dump()),
             user_api_key_dict=user_api_key_dict,
         )
 
@@ -1969,6 +1981,7 @@ async def update_team(
 )
 async def patch_team(
     team_id: str,
+    data: PatchTeamRequest,
     http_request: Request,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     litellm_changed_by: Annotated[
@@ -1981,11 +1994,12 @@ async def patch_team(
     """
     Partially update a team using RFC 7386 JSON Merge Patch semantics.
 
-    `team_id` is taken from the path. `metadata` is merged with the team's stored
-    metadata rather than replacing it: an omitted key is preserved, `key: null`
-    deletes it, and any other value overwrites (recursing into nested objects).
-    Every other field behaves exactly like `POST /team/update` (omitted preserves,
-    a value overwrites). Returns the full updated team.
+    `team_id` is taken from the path; a `team_id` in the body is accepted only when it
+    matches. `metadata` is merged with the team's stored metadata rather than replacing
+    it: an omitted key is preserved, `key: null` deletes it, and any other value
+    overwrites (recursing into nested objects). Every other field behaves exactly like
+    `POST /team/update` (omitted preserves, a value overwrites). Returns the full
+    updated team.
 
     ```
     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5' \
@@ -2005,21 +2019,15 @@ async def patch_team(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
 
-        try:
-            body = await http_request.json()
-        except (json.JSONDecodeError, ValueError):
-            raise HTTPException(status_code=400, detail={"error": "Request body must be a JSON object"})
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail={"error": "Request body must be a JSON object"})
-
-        body_team_id = body.pop("team_id", None)
-        if body_team_id is not None and body_team_id != team_id:
+        if data.team_id is not None and data.team_id != team_id:
             raise HTTPException(
                 status_code=400,
-                detail={"error": f"team_id in body ({body_team_id}) does not match team_id in path ({team_id})"},
+                detail={"error": f"team_id in body ({data.team_id}) does not match team_id in path ({team_id})"},
             )
 
-        if "metadata" in body:
+        patch_fields = data.model_dump(exclude_unset=True, exclude={"team_id"})
+
+        if "metadata" in patch_fields:
             existing_team_row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
             if existing_team_row is None:
                 raise HTTPException(
@@ -2027,9 +2035,9 @@ async def patch_team(
                     detail={"error": f"Team not found, passed team_id={team_id}"},
                 )
             existing_metadata = existing_team_row.metadata if isinstance(existing_team_row.metadata, dict) else {}
-            body["metadata"] = apply_json_merge_patch(existing_metadata, body["metadata"])
+            patch_fields["metadata"] = apply_json_merge_patch(existing_metadata, patch_fields["metadata"])
 
-        update_request = UpdateTeamRequest(team_id=team_id, **body)
+        update_request = UpdateTeamRequest.model_validate({"team_id": team_id, **patch_fields})
 
         result = await update_team(
             data=update_request,
@@ -2388,7 +2396,15 @@ async def _add_team_members_to_team(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
 ) -> Tuple[LiteLLM_TeamTable, List[LiteLLM_UserTable], List[LiteLLM_TeamMembership]]:
-    """Add team members to the team."""
+    """Add team members to the team.
+
+    The members_with_roles reconciliation runs inside a transaction that locks
+    the team row with ``SELECT ... FOR UPDATE`` before reading the current
+    membership. Concurrent /team/member_add calls for the same team therefore
+    serialize on the row lock and each appends onto the other's committed
+    result, instead of both rewriting the whole JSON array from a stale
+    snapshot (which silently drops one member on the losing write).
+    """
     # Process and add new members
     updated_users, updated_team_memberships = await _process_team_members(
         data=data,
@@ -2398,19 +2414,22 @@ async def _add_team_members_to_team(
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
-    # Update team members list
-    await _update_team_members_list(
-        data=data,
-        complete_team_data=complete_team_data,
-        updated_users=updated_users,
-    )
+    async with prisma_client.tx() as tx:
+        complete_team_data.members_with_roles = await TeamRepository(prisma_client).get_members_with_roles_locked(
+            tx, data.team_id
+        )
 
-    # ADD MEMBER TO TEAM
-    _db_team_members = [m.model_dump() for m in complete_team_data.members_with_roles]
-    updated_team = await TeamRepository(prisma_client).table.update(
-        where={"team_id": data.team_id},
-        data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
-    )
+        await _update_team_members_list(
+            data=data,
+            complete_team_data=complete_team_data,
+            updated_users=updated_users,
+        )
+
+        _db_team_members = [m.model_dump() for m in complete_team_data.members_with_roles]
+        updated_team = await tx.litellm_teamtable.update(
+            where={"team_id": data.team_id},
+            data={"members_with_roles": json.dumps(_db_team_members)},
+        )
 
     return updated_team, updated_users, updated_team_memberships
 
@@ -2596,7 +2615,7 @@ async def team_member_add(
             detail={"error": f"Team not found for team_id={getattr(data, 'team_id', None)}"},
         )
 
-    complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
+    complete_team_data = LiteLLM_TeamTable.model_validate(existing_team_row.model_dump())
 
     team_member_add_duplication_check(
         data=data,
@@ -2641,10 +2660,12 @@ async def team_member_add(
 
     _emit_team_members_metric(complete_team_data)
 
-    return TeamAddMemberResponse(
-        **updated_team.model_dump(),
-        updated_users=updated_users,
-        updated_team_memberships=updated_team_memberships,
+    return TeamAddMemberResponse.model_validate(
+        {
+            **updated_team.model_dump(),
+            "updated_users": updated_users,
+            "updated_team_memberships": updated_team_memberships,
+        }
     )
 
 
@@ -2716,7 +2737,7 @@ async def team_member_delete(
             status_code=400,
             detail={"error": "Team id={} does not exist in db".format(data.team_id)},
         )
-    existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
+    existing_team_row = LiteLLM_TeamTable.model_validate(_existing_team_row.model_dump())
 
     ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN OR ORG ADMIN
 
@@ -2920,7 +2941,7 @@ async def team_member_update(
             status_code=400,
             detail={"error": "Team id={} does not exist in db".format(data.team_id)},
         )
-    existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
+    existing_team_row = LiteLLM_TeamTable.model_validate(_existing_team_row.model_dump())
 
     ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN OR ORG ADMIN
 
@@ -3266,7 +3287,7 @@ async def delete_team(
                 status_code=404,
                 detail={"error": f"Team not found, passed team_id={team_id}"},
             )
-        team_row_pydantic = LiteLLM_TeamTable(**team_row_base.model_dump())
+        team_row_pydantic = LiteLLM_TeamTable.model_validate(team_row_base.model_dump())
 
         # Verify caller has access to manage this team
         await _verify_team_access(
@@ -3390,12 +3411,14 @@ def _transform_teams_to_deleted_records(
     records = []
     for team in teams:
         team_payload = team.model_dump()
-        deleted_record = LiteLLM_DeletedTeamTable(
-            **team_payload,
-            deleted_at=deleted_at,
-            deleted_by=user_api_key_dict.user_id,
-            deleted_by_api_key=user_api_key_dict.api_key,
-            litellm_changed_by=litellm_changed_by,
+        deleted_record = LiteLLM_DeletedTeamTable.model_validate(
+            {
+                **team_payload,
+                "deleted_at": deleted_at,
+                "deleted_by": user_api_key_dict.user_id,
+                "deleted_by_api_key": user_api_key_dict.api_key,
+                "litellm_changed_by": litellm_changed_by,
+            }
         )
         record = deleted_record.model_dump()
 
@@ -3585,7 +3608,7 @@ async def team_info(
             )
         await validate_membership(
             user_api_key_dict=user_api_key_dict,
-            team_table=LiteLLM_TeamTable(**team_info.model_dump()),
+            team_table=LiteLLM_TeamTable.model_validate(team_info.model_dump()),
         )
 
         ## GET ALL KEYS ##
@@ -3620,9 +3643,9 @@ async def team_info(
         returned_tm = await get_all_team_memberships(prisma_client, [team_id], user_id=None)
 
         if isinstance(team_info, dict):
-            _team_info = TeamInfoResponseObjectTeamTable(**team_info)
+            _team_info = TeamInfoResponseObjectTeamTable.model_validate(team_info)
         elif isinstance(team_info, BaseModel):
-            _team_info = TeamInfoResponseObjectTeamTable(**team_info.model_dump())
+            _team_info = TeamInfoResponseObjectTeamTable.model_validate(team_info.model_dump())
         else:
             _team_info = TeamInfoResponseObjectTeamTable()
 
@@ -3828,7 +3851,7 @@ async def block_team(
 
     # Verify caller has access to manage this team
     await _verify_team_access(
-        team_obj=LiteLLM_TeamTable(**existing_team.model_dump()),
+        team_obj=LiteLLM_TeamTable.model_validate(existing_team.model_dump()),
         user_api_key_dict=user_api_key_dict,
     )
 
@@ -3877,7 +3900,7 @@ async def unblock_team(
 
     # Verify caller has access to manage this team
     await _verify_team_access(
-        team_obj=LiteLLM_TeamTable(**existing_team.model_dump()),
+        team_obj=LiteLLM_TeamTable.model_validate(existing_team.model_dump()),
         user_api_key_dict=user_api_key_dict,
     )
 
@@ -3921,13 +3944,13 @@ async def list_available_teams(
             status_code=404,
             detail={"error": "User not found"},
         )
-    user_info_correct_type = LiteLLM_UserTable(**user_info.model_dump())
+    user_info_correct_type = LiteLLM_UserTable.model_validate(user_info.model_dump())
 
     available_teams = [team for team in available_teams if team not in user_info_correct_type.teams]
 
     available_teams_db = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": available_teams}})
 
-    available_teams_correct_type = [LiteLLM_TeamTable(**team.model_dump()) for team in available_teams_db]
+    available_teams_correct_type = [LiteLLM_TeamTable.model_validate(team.model_dump()) for team in available_teams_db]
 
     return available_teams_correct_type
 
@@ -4095,7 +4118,7 @@ def _convert_teams_to_response_models(
             team_dict = team.dict()
 
         if use_deleted_table:
-            team_list.append(LiteLLM_DeletedTeamTable(**team_dict))
+            team_list.append(LiteLLM_DeletedTeamTable.model_validate(team_dict))
         else:
             members_with_roles = team_dict.get("members_with_roles")
             if not isinstance(members_with_roles, list):
@@ -4710,7 +4733,7 @@ async def team_model_add(
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 
-    team_obj = LiteLLM_TeamTable(**team_row.model_dump())
+    team_obj = LiteLLM_TeamTable.model_validate(team_row.model_dump())
 
     # Authorization check - only proxy admin, team admin, or org admin can add models
     if (
@@ -4810,7 +4833,7 @@ async def team_model_delete(
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 
-    team_obj = LiteLLM_TeamTable(**team_row.model_dump())
+    team_obj = LiteLLM_TeamTable.model_validate(team_row.model_dump())
 
     # Authorization check - only proxy admin, team admin, or org admin can remove models
     if (
@@ -4878,7 +4901,7 @@ async def team_member_permissions(
         check_db_only=True,
     )
 
-    complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
+    complete_team_data = LiteLLM_TeamTable.model_validate(existing_team_row.model_dump())
 
     # Admin Viewer follows the read-parity rule: see team permissions like
     # a Proxy Admin would. Team / org admins keep their existing scope.
@@ -4945,7 +4968,7 @@ async def update_team_member_permissions(
         check_db_only=True,
     )
 
-    complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
+    complete_team_data = LiteLLM_TeamTable.model_validate(existing_team_row.model_dump())
 
     # Available-team self-join must NOT grant write access to team-wide
     # permission policies; only proxy/team/org admins can update them.
@@ -5206,7 +5229,7 @@ async def get_team_daily_activity(
     if not _user_has_admin_view(user_api_key_dict) and team_ids_list and team_aliases:
         has_full_team_view = True
         for team_alias in team_aliases:
-            team_obj = LiteLLM_TeamTable(**team_alias.model_dump())
+            team_obj = LiteLLM_TeamTable.model_validate(team_alias.model_dump())
             is_admin = _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
             has_perm = _team_member_has_permission(
                 user_api_key_dict=user_api_key_dict,
