@@ -548,6 +548,101 @@ class TestExtractFileDataBareStr:
         assert extracted.get("content") == b"raw bytes content"
 
 
+class TestUnpackDefsCallerBudgets:
+    """
+    Regression tests for: https://github.com/BerriAI/litellm/issues/34328
+
+    unpack_defs() (the $defs-style sibling of unpack_legacy_defs) already had
+    a max_inlined_bytes budget guard, but neither the Bedrock nor Vertex/Gemini
+    caller passed it, so it defaulted to None (unbounded). The existing
+    ref_chain cycle guard only catches path cycles, not diamond fan-out --
+    the same def reused across sibling branches, which recursive high-fan-in
+    Pydantic-style schemas produce. Each caller must arm the budget so this
+    fails fast instead of hanging until gateway timeout.
+    """
+
+    def test_unpack_defs_rejects_diamond_fan_out_bomb(self):
+        """Recursive, high-fan-in $defs schema (fan-out 3, depth 14) --
+        mirrors what Pydantic emits for recursive models. Must trip the
+        byte budget instead of expanding unboundedly."""
+        import copy
+
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_defs,
+        )
+
+        defs = {
+            f"N{i}": {
+                "type": "object",
+                "properties": {
+                    f"c{j}": {"$ref": f"#/$defs/N{i + 1}"} for j in range(3)
+                },
+            }
+            for i in range(14)
+        }
+        defs["N14"] = {"type": "object"}
+        schema = {"type": "object", "properties": {"root": {"$ref": "#/$defs/N0"}}}
+
+        with pytest.raises(ValueError, match="byte budget"):
+            unpack_defs(schema, copy.deepcopy(defs), max_inlined_bytes=100_000)
+
+    def test_bedrock_tools_pt_arms_max_inlined_bytes_budget(self):
+        """_bedrock_tools_pt must pass a real max_inlined_bytes to unpack_defs,
+        not rely on the (unbounded) default, for a recursive high-fan-in tool
+        schema."""
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _bedrock_tools_pt,
+        )
+
+        depth, fanout = 12, 3
+        defs = {
+            f"N{i}": {
+                "type": "object",
+                "properties": {
+                    f"c{j}": {"$ref": f"#/$defs/N{i + 1}"} for j in range(fanout)
+                },
+            }
+            for i in range(depth)
+        }
+        defs["N{}".format(depth)] = {"type": "object"}
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "recursive_tool",
+                    "description": "test",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"root": {"$ref": "#/$defs/N0"}},
+                        "$defs": defs,
+                    },
+                },
+            }
+        ]
+
+        with pytest.raises(ValueError, match="byte budget"):
+            _bedrock_tools_pt(tools, model="anthropic.claude-3-5-sonnet-20241022-v2:0")
+
+    def test_unpack_defs_allows_legitimate_moderate_schema(self):
+        """A normal, non-recursive tool schema with several $defs must still
+        inline cleanly under the armed budget -- the fix must not regress
+        ordinary tool calls."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_defs,
+        )
+
+        defs = {f"T{i}": {"type": "string"} for i in range(20)}
+        schema = {
+            "type": "object",
+            "properties": {f"f{i}": {"$ref": f"#/$defs/T{i}"} for i in range(20)},
+        }
+
+        unpack_defs(schema, defs, max_inlined_bytes=1_000_000)
+        for i in range(20):
+            assert schema["properties"][f"f{i}"] == {"type": "string"}
+
+
 class TestUnpackLegacyDefs:
     """Cover the public ``unpack_legacy_defs`` helper directly so the no-op
     branches (non-dict input, schema with no legacy/OpenAPI defs) are exercised
