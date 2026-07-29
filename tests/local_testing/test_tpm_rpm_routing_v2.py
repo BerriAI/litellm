@@ -725,6 +725,94 @@ def test_return_potential_deployments():
     assert len(potential_deployments) == 1
 
 
+def test_return_potential_deployments_one_request_before_rpm_limit():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/33032
+
+    A deployment whose current rpm usage is one below its rpm cap must NOT be
+    filtered out. Routing there makes usage reach (not exceed) the limit
+    """
+
+    test_cache = DualCache()
+    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+
+    deployment_id = "dd8e67fce56963bae6a60206b48d3f03faeb43be20cf0fd96a5f39b1a2bbd11d"
+    args: Dict = {
+        "healthy_deployments": [
+            {
+                "model_name": "model-test",
+                "litellm_params": {
+                    "rpm": 10,
+                    "api_key": "sk-1234",
+                    "model": "openai/gpt-3.5-turbo",
+                    "mock_response": "Hello, world!",
+                },
+                "model_info": {
+                    "id": deployment_id,
+                    "db_model": False,
+                },
+            },
+        ],
+        "all_deployments": {
+            deployment_id: None,
+            f"{deployment_id}:tpm:02-17": 0,
+        },
+        "input_tokens": 98,
+        "rpm_dict": {
+            deployment_id: 9,
+        },
+    }
+
+    potential_deployments = lowest_tpm_logger._return_potential_deployments(
+        healthy_deployments=args["healthy_deployments"],
+        all_deployments=args["all_deployments"],
+        input_tokens=args["input_tokens"],
+        rpm_dict=args["rpm_dict"],
+    )
+
+    assert len(potential_deployments) == 1
+
+
+def test_get_available_deployment_one_request_before_rpm_limit():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/33032 on the
+    sync usage-based-routing (v1) handler
+    """
+    from litellm.router_strategy.lowest_tpm_rpm import (
+        LowestTPMLoggingHandler as LowestTPMLoggingHandlerV1,
+    )
+
+    model_group = "model-test"
+    deployment_id = "abc-123"
+    test_cache = DualCache()
+    handler = LowestTPMLoggingHandlerV1(router_cache=test_cache)
+
+    current_minute = datetime.now().strftime("%H-%M")
+    test_cache.set_cache(
+        key=f"{model_group}:tpm:{current_minute}", value={deployment_id: 0}
+    )
+    test_cache.set_cache(
+        key=f"{model_group}:rpm:{current_minute}", value={deployment_id: 9}
+    )
+
+    healthy_deployments = [
+        {
+            "model_name": model_group,
+            "litellm_params": {"rpm": 10, "model": "openai/gpt-3.5-turbo"},
+            "model_info": {"id": deployment_id},
+        }
+    ]
+
+    deployment = handler.get_available_deployments(
+        model_group=model_group,
+        healthy_deployments=healthy_deployments,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert deployment is not None
+    assert deployment["model_info"]["id"] == deployment_id
+
+
 @pytest.mark.asyncio
 async def test_tpm_rpm_routing_model_name_checks():
     deployment = {
