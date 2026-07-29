@@ -46,6 +46,10 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     prepare_metadata_fields,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.management_helpers.object_permission_utils import (
+    _set_object_permission,
+    handle_update_object_permission_common,
+)
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import (
@@ -466,6 +470,7 @@ async def new_user(
 
         data_json = data.json()  # type: ignore
         data_json = _update_internal_new_user_params(data_json, data)
+        data_json = await _set_object_permission(data_json, prisma_client)
         _hash_password_in_dict(data_json)
         teams = data.teams
         if teams is None:
@@ -1249,6 +1254,16 @@ async def _update_single_user_helper(
 
     if existing_user_row is not None:
         existing_user_row = LiteLLM_UserTable(**existing_user_row.model_dump(exclude_none=True))
+
+    object_permission_id = await handle_update_object_permission_common(
+        data_json=non_default_values,
+        existing_object_permission_id=(
+            existing_user_row.object_permission_id if existing_user_row is not None else None
+        ),
+        prisma_client=prisma_client,
+    )
+    if object_permission_id is not None:
+        non_default_values["object_permission_id"] = object_permission_id
 
     # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
     # must not be able to raise their own budget/spend fields.
