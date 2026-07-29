@@ -1,37 +1,18 @@
 """The single translation layer between a request's metadata and the spans.
 
-Every relevant field litellm exposes about a request — the user-facing model,
-the model actually dispatched to the provider, the deployment, and the caller's
-identity (team, key, end-user) — is parsed **once**, here, out of the
-``StandardLoggingPayload`` (or a ``UserAPIKeyAuth`` at the auth boundary). Span
-data, baggage promotion, and the mappers then read these typed fields instead of
-each digging into the raw ``metadata`` / ``hidden_params`` dicts.
+Every field is parsed **once**, here, out of the ``StandardLoggingPayload`` (or a
+``UserAPIKeyAuth`` at the auth boundary), so span data, baggage, and the mappers
+read typed fields instead of the raw ``metadata`` / ``hidden_params`` dicts.
 
-Two models live here because a request's identity is known *before* its model
-resolution is:
+:class:`RequestIdentity` holds caller identity (team/key/end-user), seeded into
+Baggage at the auth boundary before routing has picked a deployment; its
+``provider_model`` is absent from that early seed and filled only from the payload
+at close. :class:`RequestContext` is the fully-resolved view at close, wrapping it.
 
-* :class:`RequestIdentity` — team / key / end-user, seeded into Baggage at the
-  auth boundary (``from_user_api_key_auth``), before routing has picked a
-  deployment. ``provider_model`` is therefore absent from that early seed and is
-  only filled in from the payload once the call closes.
-* :class:`RequestContext` — the full picture available at close: the resolved
-  request vs. provider model split, plus the response model, model group, model
-  id, and api base, wrapping the :class:`RequestIdentity`.
-
-The request-vs-provider model split is the subtle part. On the proxy a caller
-asks for a *model group* (e.g. ``gpt-4o``) that routes to a concrete deployment
-(e.g. ``azure/my-deployment``); the two are distinct and both worth recording.
-``StandardLoggingPayload`` exposes them as:
-
-* ``model_group`` — the user-facing name the caller requested.
-* ``model`` — already reconstructed (see ``reconstruct_model_name``) to the name
-  litellm dispatched to the provider (the deployment, provider-prefixed).
-* ``hidden_params.litellm_model_name`` — a secondary source for the dispatched
-  model (populated only on some call paths, e.g. files).
-
-So ``gen_ai.request.model`` is the *group* (falling back to the call model on the
-SDK path, which has no group), and ``litellm.provider.model`` is the *dispatched*
-model. They coincide on the SDK path, which is correct.
+The request-vs-provider model split: a caller asks for a *model group* (``gpt-4o``)
+that routes to a concrete deployment (``azure/my-deployment``). ``gen_ai.request.model``
+records the group and ``litellm.provider.model`` the dispatched model; they coincide
+on the SDK path, which has no group.
 """
 
 from __future__ import annotations
@@ -55,33 +36,22 @@ class RequestIdentity:
     call_id: str | None = None
     team_id: str | None = None
     team_alias: str | None = None
-    # The team's free-form metadata, carried raw (empty/missing -> None) and
-    # filtered to an operator allowlist only at Baggage-promotion time, so an
-    # unconfigured deployment never promotes any of it.
+    # The team's free-form metadata, carried raw; filtered to an operator allowlist at Baggage-promotion time.
     team_metadata: Mapping[str, Any] | None = None
     key_hash: str | None = None
     end_user: str | None = None
-    # The model litellm dispatched to the provider. Only known once the call
-    # completes (routing has picked a deployment), so it's absent from the
-    # auth-time seed and filled only from the payload.
+    # The model litellm dispatched to the provider; known only at close, so absent from the auth-time seed.
     provider_model: str | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_payload(cls, payload: "StandardLoggingPayload") -> "RequestIdentity":
-        """Parse caller identity out of a closed request's payload metadata.
-
-        ``provider_model`` is resolved here too (see :func:`resolve_provider_model`)
-        so the identity carried into Baggage labels every span with the dispatched
-        model, not just the user-facing one.
-        """
+        """Parse caller identity (incl. resolved ``provider_model``) from a closed request's payload."""
         raw_meta = cast(Mapping[str, object], payload.get("metadata") or {})
         metadata = {key: str(value) for key, value in raw_meta.items() if isinstance(value, (str, bool, int, float))}
         return cls(
             call_id=as_str(payload.get("litellm_call_id")) or as_str(payload.get("id")),
-            # StandardLoggingMetadata's canonical key is ``user_api_key_team_id``;
-            # the bare ``team_id`` is a legacy alias and is often empty, so prefer
-            # the canonical key and fall back to the alias.
+            # Prefer the canonical ``user_api_key_team_id``; the bare ``team_id`` is a legacy alias.
             team_id=as_str(raw_meta.get("user_api_key_team_id")) or as_str(raw_meta.get("team_id")),
             team_alias=as_str(raw_meta.get("user_api_key_team_alias")) or as_str(raw_meta.get("team_alias")),
             team_metadata=_team_metadata_dict(raw_meta.get("user_api_key_team_metadata")),
@@ -93,14 +63,10 @@ class RequestIdentity:
 
     @classmethod
     def from_user_api_key_auth(cls, auth: object) -> "RequestIdentity":
-        """Identity from a ``UserAPIKeyAuth`` (duck-typed to keep this module
-        free of a proxy import).
+        """Identity from a ``UserAPIKeyAuth`` (duck-typed to avoid a proxy import).
 
-        Used in the pre-call hook to seed Baggage early — before any LLM,
-        guardrail, or service span is created — so the whole request's spans
-        inherit identity, not just the LLM-call span. Metadata sub-keys use the
-        ``user_api_key_*`` names that ``baggage.DEFAULT_BAGGAGE_METADATA_KEYS``
-        promotes.
+        Seeds Baggage at the pre-call hook so every span inherits identity. Metadata
+        sub-keys use the ``user_api_key_*`` names Baggage promotion expects.
         """
         get = lambda name: getattr(auth, name, None)  # noqa: E731
         metadata = {
@@ -119,20 +85,14 @@ class RequestIdentity:
             team_metadata=_team_metadata_dict(get("team_metadata")),
             key_hash=as_str(get("api_key")),
             end_user=as_str(get("end_user_id")),
-            # ``provider_model`` is unknown at the auth boundary — routing hasn't
-            # picked a deployment yet — so it's only populated from the payload.
+            # ``provider_model`` is unknown at the auth boundary (routing hasn't picked a deployment yet).
             metadata=metadata,
         )
 
 
 @dataclass(frozen=True)
 class RequestContext:
-    """The fully-resolved view of a closed request, parsed once from the payload.
-
-    ``request_model`` is the user-facing requested model and ``provider_model``
-    (on :attr:`identity`) is the model litellm dispatched to the provider; the two
-    differ on the proxy (group vs. deployment) and coincide on the SDK path.
-    """
+    """The fully-resolved view of a closed request, parsed once from the payload."""
 
     request_model: str
     response_model: str | None
@@ -167,40 +127,23 @@ class RequestContext:
 
 
 # --- live-callback kwargs parsing ------------------------------------------- #
-#
-# The model and helpers below parse the *live* callback ``kwargs`` god object (and
-# the raw pre/post-call ``data`` dicts) — the untyped request state that reaches a
-# ``CustomLogger`` before, or instead of, a ``StandardLoggingPayload``. They live
-# here, with the payload/auth parsers, so every read out of a request's raw dicts
-# is in one place rather than scattered across the ``CustomLogger``.
+# Parse the live callback ``kwargs`` god object and raw pre/post-call ``data`` dicts —
+# the untyped request state reaching a ``CustomLogger`` before a ``StandardLoggingPayload``.
 
 
 @dataclass(frozen=True)
 class LLMCallEvent:
-    """The typed view of the live callback ``kwargs`` (``model_call_details``).
+    """The typed view of the live callback ``kwargs`` (``model_call_details``), parsed once."""
 
-    litellm hands every callback an untyped ``kwargs`` god object. The fields the
-    OTel logger needs out of it are parsed **once**, here, so the ``CustomLogger``
-    reads typed attributes instead of digging into the dict at each boundary.
-    """
-
-    # The ``litellm_call_id`` correlating ``pre_call`` with the close callback.
-    # Present in ``model_call_details`` at ``pre_call`` and in both the kwargs and
-    # the ``standard_logging_object`` at success/failure, so it's a stable key for
-    # the open-call carrier — no back-reference to the logging object required (the
-    # object isn't reachable from the callback kwargs at ``pre_call`` time).
+    # The ``litellm_call_id`` correlating ``pre_call`` with the close callback; the stable
+    # key for the open-call carrier.
     call_id: str | None
-    # The ``StandardLoggingPayload`` carried on a success/failure callback; ``None``
-    # at ``pre_call``, or when the call closed before any payload materialized (so
-    # there is nothing to stamp on the span).
+    # The success/failure payload; ``None`` at ``pre_call`` or if the call closed with no payload.
     payload: "StandardLoggingPayload | None"
     otel_destinations: tuple[OtelDestination, ...]
-    # True for synthetic proxy-gate logs (auth / rate-limit rejections): they fire
-    # the ``pre_call`` hook but never made an upstream call, so they get no span.
+    # True for synthetic proxy-gate logs (auth/rate-limit rejections): no upstream call, so no span.
     is_no_upstream_call: bool
-    # A best-effort ``"{operation} {model}"`` name known at ``pre_call`` time. The
-    # span is renamed from the typed payload at close (``finish_span``); this only
-    # needs to be reasonable for a span that never gets closed (a leak).
+    # Best-effort ``"{operation} {model}"`` name at ``pre_call``; only matters for a leaked span (renamed at close).
     provisional_span_name: str
     time_to_first_chunk_seconds: float | None
 
@@ -221,10 +164,8 @@ class LLMCallEvent:
 
 
 def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
-    """Seconds from the upstream request being issued (``api_call_start_time``)
-    to the first streamed chunk (``completion_start_time``); ``None`` for
-    non-streaming calls, where ``completion_start_time`` is backfilled with the
-    end time and would not measure first-chunk latency."""
+    """Seconds from upstream request (``api_call_start_time``) to first streamed chunk
+    (``completion_start_time``); ``None`` for non-streaming calls."""
     optional_params = cast(Mapping[str, Any], kwargs.get("optional_params") or {})
     if not optional_params.get("stream"):
         return None
@@ -245,11 +186,7 @@ def _call_id(payload: "StandardLoggingPayload | None", kwargs: Mapping[str, Any]
 
 
 def model_from_request_data(data: object) -> str | None:
-    """The user-facing ``model`` from a pre-call ``data`` dict (``None`` if absent).
-
-    Read at the auth boundary to label early Baggage before routing has resolved
-    a deployment; ``data`` is duck-typed since it arrives untyped from the proxy.
-    """
+    """The user-facing ``model`` from a pre-call ``data`` dict (``None`` if absent)."""
     if isinstance(data, Mapping):
         return as_str(data.get("model"))
     return None
@@ -258,16 +195,13 @@ def model_from_request_data(data: object) -> str | None:
 def resolve_provider_model(payload: "StandardLoggingPayload") -> str | None:
     """The model litellm dispatched to the provider, from the payload.
 
-    Prefers the explicit ``hidden_params.litellm_model_name`` (set on call paths
-    that know it, e.g. files), then the top-level ``model`` — which
-    ``reconstruct_model_name`` has already resolved to the deployment's
-    provider-prefixed name. Returns ``None`` only when neither is present.
+    Prefers ``metadata.deployment``, then ``hidden_params.litellm_model_name``, then the
+    top-level ``model`` (already resolved to the provider-prefixed deployment name).
     """
     raw_meta = cast(Mapping[str, object], payload.get("metadata") or {})
     hidden = cast(Mapping[str, object], payload.get("hidden_params") or {})
     return (
-        # ``deployment`` survives only on paths that don't strip it from metadata;
-        # harmless (and most precise) to prefer it when present.
+        # ``deployment`` (most precise) survives only on paths that don't strip it from metadata.
         as_str(raw_meta.get("deployment")) or as_str(hidden.get("litellm_model_name")) or as_str(payload.get("model"))
     )
 
@@ -280,13 +214,7 @@ def _model_info_id(model_info: object) -> str | None:
 
 
 def _team_metadata_dict(value: object) -> Mapping[str, Any] | None:
-    """The team's free-form metadata as a raw mapping, or ``None`` when missing
-    or empty.
-
-    Carried raw on the identity and filtered to an operator allowlist only at
-    Baggage-promotion time (see ``baggage.promoted_baggage``), so an empty case
-    is dropped rather than carrying a useless ``{}``.
-    """
+    """The team's free-form metadata as a raw mapping, or ``None`` when missing or empty."""
     if isinstance(value, Mapping) and value:
         return dict(value)
     return None
