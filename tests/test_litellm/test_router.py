@@ -3838,6 +3838,63 @@ def test_get_deployment_credentials_with_provider_no_fallback_to_other_team_only
     )
 
 
+def test_deployment_usable_by_team_helpers():
+    """
+    Direct coverage of the team-ownership filter: a team-scoped deployment is
+    usable only by its owning team, shared deployments by anyone, and the
+    model-group picker returns the first usable deployment or None.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "vertex_project": "team-b-project",
+                },
+                "model_info": {
+                    "id": "team-b-vertex",
+                    "team_id": "team-b",
+                    "team_public_model_name": "gemini-2.5-pro",
+                },
+            },
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "vertex_project": "shared-project",
+                },
+            },
+        ],
+    )
+
+    team_owned, shared = router.model_list
+    assert router._deployment_usable_by_team(team_owned, "team-b") is True
+    assert router._deployment_usable_by_team(team_owned, "team-a") is False
+    assert router._deployment_usable_by_team(team_owned, None) is False
+    assert router._deployment_usable_by_team(shared, "team-a") is True
+    assert router._deployment_usable_by_team(shared, None) is True
+
+    picked = router._get_model_group_deployment_usable_by_team(
+        model_group_name="gemini-2.5-pro", team_id="team-a"
+    )
+    assert picked is not None
+    assert picked.litellm_params.vertex_project == "shared-project"
+
+    owner_picked = router._get_model_group_deployment_usable_by_team(
+        model_group_name="gemini-2.5-pro", team_id="team-b"
+    )
+    assert owner_picked is not None
+    assert owner_picked.litellm_params.vertex_project == "team-b-project"
+
+    assert (
+        router._get_model_group_deployment_usable_by_team(
+            model_group_name="unknown-model", team_id="team-a"
+        )
+        is None
+    )
+
+
 def test_get_deployment_credentials_with_provider_skips_other_team_wildcard():
     """
     Global wildcard resolution must skip a team-scoped wildcard deployment for
