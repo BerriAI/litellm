@@ -1078,7 +1078,7 @@ async def _common_key_generation_helper(
 
     response["soft_budget"] = data.soft_budget  # include the user-input soft budget in the response
 
-    response = GenerateKeyResponse(**response)
+    response = GenerateKeyResponse.model_validate(response)
 
     response.token = response.token_id  # remap token to use the hash, and leave the key in the `key` field [TODO]: clean up generate_key_helper_fn to do this
 
@@ -3047,10 +3047,12 @@ async def bulk_update_team_keys(
                 )
 
             # team_id from validated scope, never user payload — drives _check_team_key_limits.
-            update_key_request = UpdateKeyRequest(
-                key=token,
-                team_id=data.team_id,
-                **update_field_dict,
+            update_key_request = UpdateKeyRequest.model_validate(
+                {
+                    "key": token,
+                    "team_id": data.team_id,
+                    **update_field_dict,
+                }
             )
             updated_key_info = await _process_single_key_update(
                 update_key_request=update_key_request,
@@ -4048,12 +4050,14 @@ def _transform_verification_tokens_to_deleted_records(
     records = []
     for key in keys:
         key_payload = key.model_dump()
-        deleted_record = LiteLLM_DeletedVerificationToken(
-            **key_payload,
-            deleted_at=deleted_at,
-            deleted_by=user_api_key_dict.user_id,
-            deleted_by_api_key=user_api_key_dict.api_key,
-            litellm_changed_by=litellm_changed_by,
+        deleted_record = LiteLLM_DeletedVerificationToken.model_validate(
+            {
+                **key_payload,
+                "deleted_at": deleted_at,
+                "deleted_by": user_api_key_dict.user_id,
+                "deleted_by_api_key": user_api_key_dict.api_key,
+                "litellm_changed_by": litellm_changed_by,
+            }
         )
         record = deleted_record.model_dump()
 
@@ -4535,7 +4539,7 @@ async def _execute_virtual_key_regeneration(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    response = GenerateKeyResponse(**updated_token_dict)
+    response = GenerateKeyResponse.model_validate(updated_token_dict)
     asyncio.create_task(
         KeyManagementEventHooks.async_key_rotated_hook(
             data=data,
@@ -4853,7 +4857,7 @@ async def _check_proxy_or_team_admin_for_key(
     )
 
 
-def _validate_reset_spend_value(reset_to: Any, key_in_db: LiteLLM_VerificationToken) -> float:
+def _validate_reset_spend_value(reset_to: object, key_in_db: LiteLLM_VerificationToken) -> float:
     if not isinstance(reset_to, (int, float)):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -5029,7 +5033,7 @@ async def validate_key_list_check(
             code=status.HTTP_403_FORBIDDEN,
         )
 
-    complete_user_info = LiteLLM_UserTable(**complete_user_info_db_obj.model_dump())
+    complete_user_info = LiteLLM_UserTable.model_validate(complete_user_info_db_obj.model_dump())
 
     # internal user can only see their own keys
     if user_id:
@@ -5102,7 +5106,7 @@ async def _fetch_user_team_objects(
     if teams is None:
         return []
 
-    return [LiteLLM_TeamTable(**team.model_dump()) for team in teams]
+    return [LiteLLM_TeamTable.model_validate(team.model_dump()) for team in teams]
 
 
 def _get_admin_team_ids_from_objects(
@@ -5851,7 +5855,7 @@ async def _list_key_helper(
         if return_full_object is True or (expand and "user" in expand):
             if use_deleted_table:
                 # Use deleted key type to preserve deleted_at, deleted_by, etc.
-                key_list.append(LiteLLM_DeletedVerificationToken(**key_dict))
+                key_list.append(LiteLLM_DeletedVerificationToken.model_validate(key_dict))
             else:
                 key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
         else:

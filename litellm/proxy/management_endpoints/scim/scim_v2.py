@@ -1317,7 +1317,7 @@ async def delete_user(
                     where={"team_id": team.team_id}, data={"members": new_members}
                 )
 
-            team_row = LiteLLM_TeamTable(**team.model_dump())
+            team_row = LiteLLM_TeamTable.model_validate(team.model_dump())
             if any(member.user_id == user_id for member in team_row.members_with_roles or []):
                 await team_member_delete(
                     data=TeamMemberDeleteRequest(team_id=team_row.team_id, user_id=user_id),
@@ -2145,7 +2145,9 @@ async def patch_group(
 
         refreshed_team = await TeamRepository(prisma_client).table.find_unique(where={"team_id": group_id})
         refreshed_current = (
-            set(await _get_team_member_user_ids_from_team(LiteLLM_TeamTable(**refreshed_team.model_dump())))
+            set(
+                await _get_team_member_user_ids_from_team(LiteLLM_TeamTable.model_validate(refreshed_team.model_dump()))
+            )
             if refreshed_team
             else snapshot_members
         )
@@ -2173,7 +2175,7 @@ async def patch_group(
 
         # Convert to SCIM format and return
         scim_group = await ScimTransformations.transform_litellm_team_to_scim_group(
-            LiteLLM_TeamTable(**updated_team.model_dump())
+            LiteLLM_TeamTable.model_validate(updated_team.model_dump())
         )
         return scim_group
 
