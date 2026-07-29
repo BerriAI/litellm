@@ -1051,7 +1051,7 @@ class ModelManagementAuthChecks:
                 status_code=400,
                 detail={"error": "Team id={} does not exist in db".format(model_params.model_info.team_id)},
             )
-        existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
+        existing_team_row = LiteLLM_TeamTable.model_validate(_existing_team_row.model_dump())
 
         ModelManagementAuthChecks.can_user_make_team_model_call(
             team_id=model_params.model_info.team_id,
@@ -1089,7 +1089,7 @@ class ModelManagementAuthChecks:
                     status_code=400,
                     detail={"error": "Team id={} does not exist in db".format(model_params.model_info.team_id)},
                 )
-            team_obj = LiteLLM_TeamTable(**team_obj_row.model_dump())
+            team_obj = LiteLLM_TeamTable.model_validate(team_obj_row.model_dump())
 
             return ModelManagementAuthChecks.can_user_make_team_model_call(
                 team_id=model_params.model_info.team_id,
