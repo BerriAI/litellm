@@ -17,7 +17,7 @@ from typing import (
     Tuple,
     Union,
 )
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 import httpx
 from httpx import Headers, Response
@@ -87,7 +87,7 @@ _EMBED_REQUEST_FIELD_BY_GEMINI_PARAM = {
     "taskType": "task_type",
     "title": "title",
 }
-_VERTEX_BATCH_FANNED_OUT_KEY_PATTERN = re.compile(r"(?P<custom_id>.*)#(?P<index>\d+)/(?P<total>\d+)")
+_VERTEX_BATCH_FANNED_OUT_KEY_PATTERN = re.compile(r"(?P<custom_id>[^#]*)#(?P<index>\d+)/(?P<total>\d+)")
 
 
 def _sanitize_gcp_label_value(value: str) -> str:
@@ -160,7 +160,7 @@ def _get_litellm_batch_custom_id(vertex_output_row: Mapping[str, Any]) -> str:
     """
     key = vertex_output_row.get(_VERTEX_BATCH_KEY_FIELD)
     if key is not None:
-        return str(key)
+        return unquote(str(key))
     request_data = vertex_output_row.get("request") or {}
     return _get_litellm_batch_custom_id_from_labels(request_data.get("labels") or {})
 
@@ -228,14 +228,17 @@ def _split_vertex_batch_key(vertex_output_row: Mapping[str, Any]) -> tuple[str, 
     Resolve `(custom_id, index within that custom_id)` for a Vertex batch output row.
 
     A `/v1/embeddings` entry whose `input` is an array fans out into one Vertex row per
-    element, tagged `<custom_id>#<index>/<total>` (see `_vertex_batch_embeddings_key`),
-    so the rows can be reassembled into a single OpenAI response.
+    element, tagged `<percent-encoded custom_id>#<index>/<total>` (see
+    `_vertex_batch_embeddings_key`), so the rows can be reassembled into a single OpenAI
+    response.
     """
-    key = _get_litellm_batch_custom_id(vertex_output_row)
-    match = _VERTEX_BATCH_FANNED_OUT_KEY_PATTERN.fullmatch(key)
-    if match is None or int(match["total"]) < 2:
-        return key, 0
-    return match["custom_id"], int(match["index"])
+    key = vertex_output_row.get(_VERTEX_BATCH_KEY_FIELD)
+    if key is None:
+        return _get_litellm_batch_custom_id(vertex_output_row), 0
+    match = _VERTEX_BATCH_FANNED_OUT_KEY_PATTERN.fullmatch(str(key))
+    if match is None:
+        return unquote(str(key)), 0
+    return unquote(match["custom_id"]), int(match["index"])
 
 
 def _vertex_embeddings_rows_to_openai_batch_output_row(
@@ -359,9 +362,11 @@ def _vertex_batch_embeddings_key(custom_id: str, index: int, total: int) -> str:
 
     An entry asking for several embeddings needs several Vertex rows, so its key also
     carries the element index and the group size; `_split_vertex_batch_key` reads them
-    back out. Entries asking for a single embedding keep their bare `custom_id`.
+    back out. The `custom_id` is percent-encoded so that a customer one ending in
+    `#<index>/<total>` cannot be mistaken for that tag, which would merge two entries.
     """
-    return custom_id if total < 2 else f"{custom_id}#{index}/{total}"
+    encoded_custom_id = quote(custom_id, safe="")
+    return encoded_custom_id if total < 2 else f"{encoded_custom_id}#{index}/{total}"
 
 
 def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
