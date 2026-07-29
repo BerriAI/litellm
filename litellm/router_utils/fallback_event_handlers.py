@@ -11,6 +11,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_error_info,
 )
 from litellm.router_utils.cooldown_handlers import (
+    _first_present,
     _set_cooldown_deployments,
     is_advisor_orchestration_failure,
 )
@@ -85,7 +86,11 @@ def _trigger_cooldown_for_failed_deployment(
         # Router.deployment_callback_on_failure's precedence for the primary path.
         deployment_dict = litellm_router.get_model_info(id=deployment_id)
         deployment_cooldown = (
-            (deployment_dict.get("model_info") or {}).get("cooldown_time") if deployment_dict is not None else None
+            _first_present(
+                deployment_dict.get("model_info"), deployment_dict.get("litellm_params"), key="cooldown_time"
+            )
+            if deployment_dict is not None
+            else None
         )
         exception_headers = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
             original_exception=exception

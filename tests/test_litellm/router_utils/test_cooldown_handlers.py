@@ -225,9 +225,10 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
         call_kwargs = mock_sc.call_args[1]
         assert call_kwargs["cooldown_time_override"] == 120.0
 
-    def test_cooldown_time_from_litellm_params_is_ignored(self):
-        """litellm_params gets copied into the actual provider call kwargs, so a
-        cooldown_time placed there (instead of model_info) must not be read."""
+    def test_cooldown_time_from_litellm_params_used_as_fallback(self):
+        """cooldown_time has pre-existing litellm_params support on the primary
+        failure path, so it must still be honored here when model_info doesn't
+        set it."""
         exc = litellm.RateLimitError("429", "openai", "gpt-4")
         router = self._make_router({"litellm_params": {"cooldown_time": 120.0}, "model_info": {}})
 
@@ -238,7 +239,20 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
             )
 
         call_kwargs = mock_sc.call_args[1]
-        assert call_kwargs["cooldown_time_override"] is None
+        assert call_kwargs["cooldown_time_override"] == 120.0
+
+    def test_cooldown_time_from_model_info_takes_priority_over_litellm_params(self):
+        exc = litellm.RateLimitError("429", "openai", "gpt-4")
+        router = self._make_router({"litellm_params": {"cooldown_time": 120.0}, "model_info": {"cooldown_time": 15.0}})
+
+        with patch("litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy") as mock_sc:
+            mock_sc.return_value = True
+            _should_cooldown_based_on_deployment_policy(
+                router, "dep-1", exc, None, None, is_single_deployment_model_group=False
+            )
+
+        call_kwargs = mock_sc.call_args[1]
+        assert call_kwargs["cooldown_time_override"] == 15.0
 
     def test_model_info_none_passes_none_cooldown_time(self):
         exc = litellm.RateLimitError("429", "openai", "gpt-4")

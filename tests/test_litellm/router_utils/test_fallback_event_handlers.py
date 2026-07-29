@@ -207,9 +207,10 @@ def test_trigger_cooldown_uses_deployment_cooldown_time_when_present():
     assert call_kwargs["time_to_cooldown"] == 30
 
 
-def test_trigger_cooldown_ignores_litellm_params_cooldown_time():
-    """litellm_params gets copied into the actual provider call kwargs, so a
-    cooldown_time placed there (instead of model_info) must not be read."""
+def test_trigger_cooldown_falls_back_to_litellm_params_cooldown_time():
+    """cooldown_time has pre-existing litellm_params support on the primary
+    failure path, so it must still be honored here when model_info doesn't set
+    it, unlike the new allowed_fails/allowed_fails_policy fields."""
     router = MagicMock()
     router.cooldown_time = 60
     router.get_model_info.return_value = {"litellm_params": {"cooldown_time": 30}}
@@ -229,7 +230,7 @@ def test_trigger_cooldown_ignores_litellm_params_cooldown_time():
         )
 
     _, call_kwargs = mock_set.call_args
-    assert call_kwargs["time_to_cooldown"] == 60
+    assert call_kwargs["time_to_cooldown"] == 30
 
 
 def test_trigger_cooldown_uses_response_header_when_no_deployment_config():

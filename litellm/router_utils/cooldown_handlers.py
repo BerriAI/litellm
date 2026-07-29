@@ -73,17 +73,31 @@ _EXCEPTION_POLICY_FIELDS: tuple[tuple[type, str], ...] = (
 )
 
 
+def _first_present(*sources: Mapping[str, Any] | None, key: str) -> int | float | None:
+    """Return *key* from the first source mapping where it's set, so callers can
+    support a setting living in more than one deployment config location. Sources
+    are checked in order from most to least specific to that setting."""
+    for source in sources:
+        if source is None:
+            continue
+        value = source.get(key)
+        if value is not None:
+            return value
+    return None
+
+
 def _get_deployment_cooldown_policy(
     litellm_router_instance: LitellmRouter,
     deployment: str,
 ) -> tuple[Mapping[str, int] | None, int | None]:
     """Return (allowed_fails_policy, allowed_fails) from deployment model_info, or (None, None).
 
-    `model_info` (not `litellm_params`) is the only supported location for these
-    fields: `litellm_params` gets copied wholesale into the actual provider call
-    kwargs (see e.g. Router._image_generation's `data = deployment["litellm_params"].copy()`),
-    so anything placed there would leak into the outgoing LLM request instead of
-    staying router-internal.
+    `model_info` is the only supported location for these two fields (unlike
+    `cooldown_time`, they have no pre-existing `litellm_params` precedent): `litellm_params`
+    gets copied wholesale into the actual provider call kwargs (see e.g.
+    Router._image_generation's `data = deployment["litellm_params"].copy()`), so a new
+    field placed there would leak into the outgoing LLM request instead of staying
+    router-internal.
     """
     dep = litellm_router_instance.get_model_info(id=deployment)
     if dep is None:
@@ -147,7 +161,7 @@ def _should_cooldown_based_on_deployment_policy(
     dep = litellm_router_instance.get_model_info(id=deployment)
     cooldown_time_override: float | None = None
     if dep is not None:
-        cooldown_time_override = (dep.get("model_info") or {}).get("cooldown_time")
+        cooldown_time_override = _first_present(dep.get("model_info"), dep.get("litellm_params"), key="cooldown_time")
 
     return should_cooldown_based_on_allowed_fails_policy(
         litellm_router_instance=litellm_router_instance,

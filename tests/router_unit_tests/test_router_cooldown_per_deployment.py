@@ -429,12 +429,12 @@ class TestFallbackDeploymentCooldown:
 
             mock_set_cooldown.assert_not_called()
 
-    def test_trigger_cooldown_ignores_litellm_params_cooldown_time(self):
+    def test_trigger_cooldown_falls_back_to_litellm_params_cooldown_time(self):
         """
-        litellm_params.cooldown_time must not be read: that dict is copied wholesale
-        into the actual provider call kwargs elsewhere in the router, so router-only
-        settings must live in model_info instead to avoid leaking into the outgoing
-        LLM request.
+        cooldown_time has pre-existing litellm_params support on the primary
+        failure path (Router.deployment_callback_on_failure), so it must still be
+        honored as a fallback when model_info doesn't set it, unlike the new
+        allowed_fails/allowed_fails_policy fields which are model_info-only.
         """
         mock_router = MagicMock()
         mock_router.cooldown_time = 300.0
@@ -456,9 +456,35 @@ class TestFallbackDeploymentCooldown:
             )
 
             call_kwargs = mock_set_cooldown.call_args[1]
-            assert call_kwargs["time_to_cooldown"] == 300.0, (
-                "litellm_params.cooldown_time must be ignored; router-level default should apply"
+            assert call_kwargs["time_to_cooldown"] == 30.0, (
+                "litellm_params.cooldown_time must still be honored as a fallback"
             )
+
+    def test_trigger_cooldown_prefers_model_info_cooldown_time_over_litellm_params(self):
+        mock_router = MagicMock()
+        mock_router.cooldown_time = 300.0
+        mock_router.get_model_info.return_value = {
+            "model_info": {"cooldown_time": 15.0},
+            "litellm_params": {"cooldown_time": 30.0},
+        }
+
+        kwargs = {
+            "litellm_metadata": {
+                "model_info": {"id": "fallback-deployment"},
+                "deployment_model_name": "gpt-4",
+            }
+        }
+        exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
+
+        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+            _trigger_cooldown_for_failed_deployment(
+                litellm_router=mock_router,
+                kwargs=kwargs,
+                exception=exc,
+            )
+
+            call_kwargs = mock_set_cooldown.call_args[1]
+            assert call_kwargs["time_to_cooldown"] == 15.0, "model_info.cooldown_time must take priority"
 
 
 class TestSingleDeploymentModelGroupProtection:
@@ -603,6 +629,39 @@ class TestDeploymentCallbackOnFailureCooldownTimePrecedence:
             assert call_kwargs["time_to_cooldown"] == 15.0, (
                 "model_info.cooldown_time must be honored in the primary sync failure-callback path"
             )
+
+    def test_litellm_params_cooldown_time_still_honored_as_fallback(self):
+        """cooldown_time has pre-existing litellm_params support on this primary
+        path; it must keep working when model_info doesn't set it."""
+        router = _make_router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {"model": "openai/gpt-4", "cooldown_time": 20.0},
+                    "model_info": {"id": "primary"},
+                },
+            ],
+        )
+
+        exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
+        kwargs = {
+            "exception": exc,
+            "litellm_params": {
+                "model_info": {"id": "primary"},
+                "cooldown_time": 20.0,
+            },
+        }
+
+        with patch("litellm.router._set_cooldown_deployments") as mock_set_cooldown:
+            router.deployment_callback_on_failure(
+                kwargs=kwargs,
+                completion_response=None,
+                start_time=0,
+                end_time=1,
+            )
+
+            call_kwargs = mock_set_cooldown.call_args[1]
+            assert call_kwargs["time_to_cooldown"] == 20.0, "litellm_params.cooldown_time must still be honored"
 
 
 class TestNewAllowedFailsPolicyFields:
