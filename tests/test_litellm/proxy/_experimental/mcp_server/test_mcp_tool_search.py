@@ -92,24 +92,14 @@ class TestMcpToolSearchDefaultTopK:
         assert get_mcp_tool_search_default_top_k(uak) == 10
 
     def test_global_litellm_settings_override(self) -> None:
-        assert (
-            get_mcp_tool_search_default_top_k(
-                litellm_settings={"mcp_tool_search_default_top_k": 12}
-            )
-            == 12
-        )
+        assert get_mcp_tool_search_default_top_k(litellm_settings={"mcp_tool_search_default_top_k": 12}) == 12
 
     def test_per_key_beats_global(self) -> None:
         uak = UserAPIKeyAuth(
             api_key="k",
             object_permission=_make_perm(mcp_tool_search_top_k=8),
         )
-        assert (
-            get_mcp_tool_search_default_top_k(
-                uak, {"mcp_tool_search_default_top_k": 12}
-            )
-            == 8
-        )
+        assert get_mcp_tool_search_default_top_k(uak, {"mcp_tool_search_default_top_k": 12}) == 8
 
     def test_resolve_uses_explicit_top_k(self) -> None:
         uak = UserAPIKeyAuth(

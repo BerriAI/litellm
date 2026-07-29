@@ -143,8 +143,6 @@ if MCP_AVAILABLE:
         )
         from litellm.proxy._experimental.mcp_server.tool_search import (
             MCP_TOOL_SEARCH_TOOL_NAME,
-            get_mcp_tool_search_default_top_k,
-            get_virtual_tool_definitions,
             handle_mcp_tool_call,
             handle_mcp_tool_search,
             resolve_mcp_tool_search_top_k,
@@ -746,8 +744,7 @@ if MCP_AVAILABLE:
                     "tools": get_virtual_tool_definitions(
                         default_top_k=get_mcp_tool_search_default_top_k(
                             user_api_key_dict,
-                            proxy_config.get_config_state().get("litellm_settings")
-                            or {},
+                            proxy_config.get_config_state().get("litellm_settings") or {},
                         )
                     ),
                     "error": None,

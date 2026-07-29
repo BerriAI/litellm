@@ -39,9 +39,7 @@ def resolve_mcp_tool_search_top_k(
     user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
     litellm_settings: Optional[dict[str, Any]] = None,
 ) -> int:
-    default_top_k = get_mcp_tool_search_default_top_k(
-        user_api_key_dict, litellm_settings
-    )
+    default_top_k = get_mcp_tool_search_default_top_k(user_api_key_dict, litellm_settings)
     if explicit_top_k is None:
         return default_top_k
     return coerce_top_k(explicit_top_k, default=default_top_k)
@@ -55,7 +53,9 @@ def coerce_top_k(value: Any, default: int = DEFAULT_MCP_TOOL_SEARCH_TOP_K) -> in
     return result if result > 0 else default
 
 
-def search_tools(query: str, tools: list[dict[str, Any]], top_k: int = DEFAULT_MCP_TOOL_SEARCH_TOP_K) -> list[dict[str, Any]]:
+def search_tools(
+    query: str, tools: list[dict[str, Any]], top_k: int = DEFAULT_MCP_TOOL_SEARCH_TOP_K
+) -> list[dict[str, Any]]:
     if not query:
         return []
     tokens = query.lower().split()

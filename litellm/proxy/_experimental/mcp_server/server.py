@@ -785,8 +785,7 @@ if MCP_AVAILABLE:
                     for d in get_virtual_tool_definitions(
                         default_top_k=get_mcp_tool_search_default_top_k(
                             user_api_key_auth,
-                            proxy_config.get_config_state().get("litellm_settings")
-                            or {},
+                            proxy_config.get_config_state().get("litellm_settings") or {},
                         )
                     )
                 ]
