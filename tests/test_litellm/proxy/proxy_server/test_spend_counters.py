@@ -1179,6 +1179,28 @@ async def test_increment_spend_counter_cache_redis_error_raises_and_invalidates(
     assert fake_cache.redis_cache.async_delete_cache.called is True
 
 
+@pytest.mark.asyncio
+async def test_increment_spend_counter_cache_no_redis_uses_in_memory_increment(
+    monkeypatch,
+):
+    fake_cache = _make_spend_counter_cache(
+        redis_increment_value=44.0,
+        with_redis=False,
+    )
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+
+    result = await ps._increment_spend_counter_cache(
+        counter_key="spend:key:k", increment=4.0
+    )
+
+    assert result == 44.0
+    fake_cache.async_increment_cache.assert_awaited_once_with(
+        key="spend:key:k",
+        value=4.0,
+        refresh_ttl=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # _invalidate_spend_counter
 # ---------------------------------------------------------------------------

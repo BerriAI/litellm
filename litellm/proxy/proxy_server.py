@@ -2132,8 +2132,7 @@ async def _repair_stale_spend_counter(counter_key: str, db_spend: float) -> None
     in-memory copy is guarded by a read-compare-write with no await in between,
     so it is atomic within the worker.
     """
-    lock = await SpendCounterReseed._get_lock(counter_key)
-    async with lock:
+    async with SpendCounterReseed._counter_lock(counter_key):
         cached = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
         needs_update = True
         if cached is not None:
@@ -2524,8 +2523,6 @@ async def _init_and_increment_spend_counter(
     2. If not found, reseed from the DB via `SpendCounterReseed.coalesced`.
        Falls back to the cached object's `.spend` via user_api_key_cache
        only if prisma is unavailable, since that value can lag the flusher.
-    3. Seed the counter through `SpendCounterReseed.coalesced`, which safely
-       initializes a cold counter without clobbering concurrent writes.
     4. Increment atomically (both in-memory + Redis)
     """
     await _ensure_spend_counter_initialized(
@@ -2661,8 +2658,7 @@ async def _increment_spend_counter_cache(counter_key: str, increment: float):
         )
         return current_value
 
-    lock = await SpendCounterReseed._get_lock(counter_key)
-    async with lock:
+    async with SpendCounterReseed._counter_lock(counter_key):
         return await spend_counter_cache.async_increment_cache(
             key=counter_key,
             value=increment,

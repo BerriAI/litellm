@@ -7809,6 +7809,91 @@ async def test_reseed_locks_dict_is_bounded():
 
 
 @pytest.mark.asyncio
+async def test_active_reseed_lock_survives_registry_pressure(monkeypatch):
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+    import litellm.proxy.db.spend_counter_reseed as scr
+
+    target_key = "spend:key:active-lock"
+    original_locks = SpendCounterReseed._locks.copy()
+    SpendCounterReseed._locks.clear()
+    monkeypatch.setattr(scr, "SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 2)
+    holder_entered = asyncio.Event()
+    release_holder = asyncio.Event()
+    second_entered = asyncio.Event()
+
+    async def hold_target_lock():
+        async with SpendCounterReseed._counter_lock(target_key):
+            holder_entered.set()
+            await release_holder.wait()
+
+    async def acquire_target_lock():
+        async with SpendCounterReseed._counter_lock(target_key):
+            second_entered.set()
+
+    holder = asyncio.create_task(hold_target_lock())
+    second = None
+    try:
+        await holder_entered.wait()
+        first_lock = await SpendCounterReseed._get_lock(target_key)
+        for index in range(3):
+            await SpendCounterReseed._get_lock(f"spend:key:pressure-{index}")
+        second_lock = await SpendCounterReseed._get_lock(target_key)
+
+        assert second_lock is first_lock
+        second = asyncio.create_task(acquire_target_lock())
+        await asyncio.sleep(0)
+        assert second_entered.is_set() is False
+    finally:
+        release_holder.set()
+        await holder
+        if second is not None:
+            await second
+        SpendCounterReseed._locks.clear()
+        SpendCounterReseed._locks.update(original_locks)
+
+    assert second_entered.is_set() is True
+
+
+@pytest.mark.asyncio
+async def test_reseed_registry_exceeds_limit_only_while_locks_are_active(monkeypatch):
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+    import litellm.proxy.db.spend_counter_reseed as scr
+
+    original_locks = SpendCounterReseed._locks.copy()
+    SpendCounterReseed._locks.clear()
+    monkeypatch.setattr(scr, "SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 1)
+    first_entered = asyncio.Event()
+    second_entered = asyncio.Event()
+    release_locks = asyncio.Event()
+    remaining_lock_count: int | None = None
+
+    async def hold_lock(counter_key: str, entered: asyncio.Event):
+        async with SpendCounterReseed._counter_lock(counter_key):
+            entered.set()
+            await release_locks.wait()
+
+    first = asyncio.create_task(hold_lock("spend:key:first", first_entered))
+    second = None
+    try:
+        await first_entered.wait()
+        second = asyncio.create_task(hold_lock("spend:key:second", second_entered))
+        await second_entered.wait()
+
+        assert len(SpendCounterReseed._locks) == 2
+    finally:
+        release_locks.set()
+        await first
+        if second is not None:
+            await second
+        remaining_lock_count = len(SpendCounterReseed._locks)
+        SpendCounterReseed._locks.clear()
+        SpendCounterReseed._locks.update(original_locks)
+
+    assert remaining_lock_count is not None
+    assert remaining_lock_count <= 1
+
+
+@pytest.mark.asyncio
 async def test_reseed_warms_cache_even_on_zero_db_spend():
     """
     When DB returns 0.0 (fresh entity / just after reset), the cache must
