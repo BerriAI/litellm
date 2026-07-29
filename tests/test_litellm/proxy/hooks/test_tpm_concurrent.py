@@ -1784,6 +1784,101 @@ async def test_itpm_reservation_accounts_for_audio_content_not_just_text(rate_li
     )
 
 
+def test_audio_token_estimate_scales_with_payload_size():
+    """
+    Regression for veria-ai Low finding: audio token reservation was flat
+    300 per block regardless of duration. A short clip and a long clip both
+    reserved the same amount, letting a caller hide long audio in one block
+    to exhaust ITPM quota while reserving almost nothing.
+
+    The estimate must now grow proportionally with the base64 payload size
+    (len(b64) * 3 // 4 // _AUDIO_BYTES_PER_TOKEN), floored at
+    DEFAULT_AUDIO_TOKEN_ESTIMATE so reference-only blocks and genuinely
+    short clips still get a non-trivial reservation.
+
+    To exceed the floor the decoded payload must be > 300 * 1600 = 480 000
+    bytes. We synthesise a fake b64-length string of 650 000 chars
+    (decoded ≈ 487 500 bytes → 304 tokens) to avoid actually allocating
+    and encoding ~480 kB of audio in every test run.
+    """
+    large_b64 = "A" * 650_000
+    small_b64 = "A" * 1_000
+
+    large_block = {"type": "input_audio", "input_audio": {"data": large_b64, "format": "wav"}}
+    small_block = {"type": "input_audio", "input_audio": {"data": small_b64, "format": "wav"}}
+    no_data_block = {"type": "input_audio", "input_audio": {"format": "wav"}}
+
+    large_estimate = RateLimitHandler._estimate_audio_block_tokens(large_block)
+    small_estimate = RateLimitHandler._estimate_audio_block_tokens(small_block)
+    no_data_estimate = RateLimitHandler._estimate_audio_block_tokens(no_data_block)
+
+    assert large_estimate > small_estimate, (
+        f"Large payload ({large_estimate}) must reserve more than small payload "
+        f"({small_estimate}); flat-rate bug is back"
+    )
+    assert no_data_estimate >= 300, (
+        f"Reference-only block (no data) must use the DEFAULT_AUDIO_TOKEN_ESTIMATE floor; "
+        f"got {no_data_estimate}"
+    )
+    assert small_estimate >= 300, (
+        f"Small payload must be floored at DEFAULT_AUDIO_TOKEN_ESTIMATE=300; "
+        f"got {small_estimate}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_itpm_rejects_large_audio_payload_that_would_pass_flat_estimate(rate_limiter):
+    """
+    Regression: a caller placing a long audio clip in one block previously
+    reserved only 300 tokens (the flat estimate). With the size-proportional
+    estimate, the same clip now reserves proportionally more and must trip
+    the ITPM limit when the limit is tuned to exactly expose the difference.
+
+    1 100 000 b64 chars → decoded ≈ 825 000 bytes → 825 000 // 1600 ≈ 515
+    tokens > the 400-token limit. The flat estimate (300) would have passed.
+    """
+    handler, cache = rate_limiter
+
+    large_b64 = "A" * 1_100_000
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-large-audio"),
+        project_id="proj-large-audio",
+        project_metadata={
+            "model_itpm_limit": {"bedrock_mantle/claude-opus": 400},
+        },
+    )
+
+    data = {
+        "model": "bedrock_mantle/claude-opus",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "transcribe this"},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": large_b64, "format": "wav"},
+                    },
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(Exception) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data=data,
+            call_type="",
+        )
+    assert getattr(exc_info.value, "status_code", None) == 429, (
+        "Large audio payload must exceed the 400-token ITPM limit under the "
+        "size-proportional estimate; the old flat-rate estimate (300 tokens) "
+        "would have passed this limit silently"
+    )
+
+
 @pytest.mark.asyncio
 async def test_itpm_otpm_refunded_on_stream_disconnect(rate_limiter):
     """

@@ -297,12 +297,19 @@ _TPM_FLOOR_FRACTION = 4
 RESPONSES_API_CALL_TYPES = ("aresponses", "responses")
 # litellm.token_counter has no per-type handling for "input_audio" content
 # blocks (unlike images, which use use_default_image_token_count) -- it
-# silently contributes 0 tokens for them. This is a conservative flat
-# estimate added per audio block on top of token_counter's result for the
-# project ITPM reservation, so an audio-heavy burst can't reserve close to
-# nothing. Not a billing-accurate count, just enough to avoid grossly
-# under-reserving.
+# silently contributes 0 tokens for them. When the block carries a base64
+# payload, the estimate is derived from the decoded byte count; when the
+# block is a reference without a payload (or the payload is missing), this
+# flat per-block floor is used instead.
 DEFAULT_AUDIO_TOKEN_ESTIMATE = int(os.getenv("LITELLM_DEFAULT_AUDIO_TOKEN_ESTIMATE", 300))
+# Conservative bytes-per-token assumption for size-based audio estimation:
+# equivalent to 8 kHz mono PCM-16 (16 000 bytes/s) at 10 tokens/s. Choosing
+# the lowest reasonable bitrate means we never under-reserve for higher-
+# quality audio recorded at the same wall-clock duration.
+_AUDIO_BYTES_PER_TOKEN = 1600
+# Per-block cap so a pathologically large or corrupt payload can't claim an
+# unbounded reservation (~10 minutes of audio at 10 tokens/s).
+_MAX_AUDIO_TOKENS_PER_BLOCK = 6_000
 # Stash for the reserved-token count on the request data dict so success/
 # failure callbacks can reconcile against the upfront reservation.
 TPM_RESERVED_TOKENS_KEY = "_litellm_tpm_reserved_tokens"
@@ -2572,24 +2579,49 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
 
     @staticmethod
-    def _count_audio_content_blocks(messages: Any) -> int:
+    def _estimate_audio_block_tokens(block: dict) -> int:
         """
-        Number of ``input_audio`` content blocks across ``messages``.
-        ``litellm.token_counter`` has no per-type handling for these (unlike
-        images) -- it raises ``ValueError`` on them -- so
-        ``_estimate_precise_input_tokens`` strips them before counting and
-        adds a flat estimate per block back on top; see
-        ``DEFAULT_AUDIO_TOKEN_ESTIMATE``.
+        Token estimate for one ``input_audio`` content block.
+
+        When the block carries a base64 ``data`` payload, the estimate comes
+        from the decoded byte count (``len(b64) * 3 // 4 // _AUDIO_BYTES_PER_TOKEN``),
+        assuming the lowest reasonable audio bitrate so we never under-reserve
+        for higher-quality recordings of the same duration. The result is
+        capped at ``_MAX_AUDIO_TOKENS_PER_BLOCK`` to prevent a pathologically
+        large payload from claiming an unbounded reservation.
+
+        When no payload is present (reference-only block or missing ``data``),
+        falls back to ``DEFAULT_AUDIO_TOKEN_ESTIMATE``.
+        """
+        b64_data = (block.get("input_audio") or {}).get("data")
+        if b64_data and isinstance(b64_data, str):
+            decoded_bytes = len(b64_data) * 3 // 4
+            return min(
+                max(decoded_bytes // _AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE),
+                _MAX_AUDIO_TOKENS_PER_BLOCK,
+            )
+        return DEFAULT_AUDIO_TOKEN_ESTIMATE
+
+    @classmethod
+    def _estimate_audio_content_tokens(cls, messages: Any) -> int:
+        """
+        Sum of per-block audio token estimates across all ``messages``.
+        Returns 0 when there are no ``input_audio`` blocks, which the caller
+        uses to skip the (relatively expensive) strip pass.
         """
         if not isinstance(messages, list):
             return 0
-        count = 0
+        total = 0
         for message in messages:
             content = message.get("content") if isinstance(message, dict) else None
             if not isinstance(content, list):
                 continue
-            count += sum(1 for block in content if isinstance(block, dict) and block.get("type") == "input_audio")
-        return count
+            total += sum(
+                cls._estimate_audio_block_tokens(block)
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "input_audio"
+            )
+        return total
 
     @staticmethod
     def _strip_audio_content_blocks(messages: Any) -> Any:
@@ -2644,11 +2676,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         deployment-level itpm/otpm check uses in
         ``io_token_rate_limit_check.py``. Unlike the cheap char-count
         estimate the combined-TPM path uses, this accounts for image/tool
-        content (plus a conservative flat add-on per audio block, which
-        ``token_counter`` can't count at all) so a burst of multimodal,
-        tool-heavy, or audio-heavy requests can't each reserve only the
-        one-token floor and blow past ITPM before post-call reconciliation
-        catches up.
+        content and derives per-``input_audio``-block estimates from the
+        base64 payload size (assuming the lowest reasonable bitrate so
+        longer recordings always reserve proportionally more), so a burst
+        of multimodal, tool-heavy, or audio-heavy requests can't each
+        reserve only the one-token floor and blow past ITPM before
+        post-call reconciliation catches up.
 
         For the Responses API, ``input`` is converted to chat messages first
         (via ``_responses_input_to_chat_messages``) so its own multimodal
@@ -2666,9 +2699,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if messages is None and call_type in RESPONSES_API_CALL_TYPES and data.get("input") is not None:
             messages = self._responses_input_to_chat_messages(data)
 
-        audio_blocks = self._count_audio_content_blocks(messages)
-        audio_token_estimate = audio_blocks * DEFAULT_AUDIO_TOKEN_ESTIMATE
-        countable_messages = self._strip_audio_content_blocks(messages) if audio_blocks else messages
+        audio_token_estimate = self._estimate_audio_content_tokens(messages)
+        countable_messages = self._strip_audio_content_blocks(messages) if audio_token_estimate > 0 else messages
 
         try:
             estimate = max(
