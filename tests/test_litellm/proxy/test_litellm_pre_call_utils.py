@@ -5518,3 +5518,33 @@ def test_team_alias_targeting_live_team_deployment_still_rewrites(monkeypatch):
         )
 
     assert test_data.get("model") == "model_name_team-1_live-uuid"
+
+
+def test_warn_stale_team_alias_once_logs_once_per_key(monkeypatch):
+    from collections import OrderedDict
+
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+
+    monkeypatch.setattr(pre_call_utils, "_STALE_TEAM_ALIAS_WARNING_KEYS", OrderedDict())
+
+    with patch.object(pre_call_utils.verbose_proxy_logger, "warning") as mock_warning:
+        pre_call_utils._warn_stale_team_alias_once("team-1:gpt-4", "stale alias %s", "gpt-4")
+        pre_call_utils._warn_stale_team_alias_once("team-1:gpt-4", "stale alias %s", "gpt-4")
+
+    assert mock_warning.call_count == 1
+
+
+def test_warn_stale_team_alias_once_evicts_oldest_key_beyond_cap(monkeypatch):
+    from collections import OrderedDict
+
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+
+    monkeypatch.setattr(pre_call_utils, "_STALE_TEAM_ALIAS_WARNING_KEYS", OrderedDict())
+    monkeypatch.setattr(pre_call_utils, "_MAX_STALE_ALIAS_WARNING_KEYS", 2)
+
+    with patch.object(pre_call_utils.verbose_proxy_logger, "warning"):
+        pre_call_utils._warn_stale_team_alias_once("key-1", "stale alias")
+        pre_call_utils._warn_stale_team_alias_once("key-2", "stale alias")
+        pre_call_utils._warn_stale_team_alias_once("key-3", "stale alias")
+
+    assert list(pre_call_utils._STALE_TEAM_ALIAS_WARNING_KEYS) == ["key-2", "key-3"]
