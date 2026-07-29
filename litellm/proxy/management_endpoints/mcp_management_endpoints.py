@@ -147,6 +147,9 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
+    from litellm.proxy._experimental.mcp_server.list_change_notifications import (
+        mcp_list_change_notifier,
+    )
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
         build_effective_auth_contexts,
     )
@@ -1239,6 +1242,7 @@ if MCP_AVAILABLE:
         )
         await global_mcp_server_manager.invalidate_byom_submitted_servers_cache(approved.submitted_by)
         await global_mcp_server_manager.reload_servers_from_database()
+        await mcp_list_change_notifier.notify_lists_changed()
 
         return _redact_mcp_credentials(approved)
 
@@ -1287,6 +1291,7 @@ if MCP_AVAILABLE:
         # Only evict from the runtime registry if the server was previously active
         if was_active:
             await global_mcp_server_manager.reload_servers_from_database()
+            await mcp_list_change_notifier.notify_lists_changed()
         return _redact_mcp_credentials(rejected)
 
     @router.get(
@@ -1470,13 +1475,17 @@ if MCP_AVAILABLE:
         # failure here (e.g. an unrelated malformed row in the table) must not
         # surface as a 500 and orphan the created server, which would push the
         # caller to retry and create duplicates.
+        registry_changed = False
         try:
             await global_mcp_server_manager.add_server(new_mcp_server)
+            registry_changed = True
             await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"MCP server {new_mcp_server.server_id} created but in-memory registry refresh failed: {str(e)}"
             )
+        if registry_changed:
+            await mcp_list_change_notifier.notify_lists_changed()
 
         return _redact_mcp_credentials(new_mcp_server)
 
@@ -1887,6 +1896,7 @@ if MCP_AVAILABLE:
 
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()
+        await mcp_list_change_notifier.notify_lists_changed()
 
         # TODO: Enterprise: Finish audit log trail
         if litellm.store_audit_logs:
@@ -2458,6 +2468,7 @@ if MCP_AVAILABLE:
 
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()
+        await mcp_list_change_notifier.notify_lists_changed()
 
         # If a field that determines which upstream OAuth token gets minted changed (url/audience, OAuth
         # mode/grant, authorization-server endpoints, or the OAuth client + scopes), every stored per-user

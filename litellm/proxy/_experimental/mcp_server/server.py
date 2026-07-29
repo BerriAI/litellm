@@ -431,6 +431,9 @@ if MCP_AVAILABLE:
         _without_authorization,
         global_mcp_server_manager,
     )
+    from litellm.proxy._experimental.mcp_server.list_change_notifications import (
+        mcp_list_change_notifier,
+    )
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
         _request_auth_header,
         _request_extra_headers,
@@ -494,9 +497,14 @@ if MCP_AVAILABLE:
         notification_options: NotificationOptions | None = None,
         experimental_capabilities: dict[str, dict[str, Any]] | None = None,
     ) -> InitializationOptions:
+        supplied_notification_options = notification_options or NotificationOptions()
         opts = Server.create_initialization_options(
             self,
-            notification_options=notification_options,
+            notification_options=NotificationOptions(
+                prompts_changed=supplied_notification_options.prompts_changed,
+                resources_changed=True,
+                tools_changed=True,
+            ),
             experimental_capabilities=experimental_capabilities or {},
         )
         updates: dict[str, Any] = {}
@@ -746,6 +754,7 @@ if MCP_AVAILABLE:
         _session_reset_token = None
         if req_ctx:
             _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+            mcp_list_change_notifier.remember_tool_list_session(req_ctx.session)
         _trace_token = None
         _transport_token = None
 
@@ -1234,6 +1243,7 @@ if MCP_AVAILABLE:
         _session_reset_token = None
         if req_ctx:
             _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+            mcp_list_change_notifier.remember_resource_list_session(req_ctx.session)
 
         try:
             (
@@ -1277,6 +1287,7 @@ if MCP_AVAILABLE:
         _session_reset_token = None
         if req_ctx:
             _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+            mcp_list_change_notifier.remember_resource_list_session(req_ctx.session)
 
         try:
             (
