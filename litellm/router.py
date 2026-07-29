@@ -307,47 +307,8 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
 
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 
-_HTTP_FRAMING_HEADERS: frozenset[str] = frozenset(
-    {
-        "content-length",
-        "transfer-encoding",
-        "content-encoding",
-        "content-type",
-        "set-cookie",
-        "cookie",
-        "proxy-authenticate",
-        "proxy-authorization",
-    }
-)
 
-_BROWSER_SECURITY_HEADERS: frozenset[str] = frozenset(
-    {
-        "access-control-allow-origin",
-        "access-control-allow-credentials",
-        "access-control-allow-methods",
-        "access-control-allow-headers",
-        "access-control-expose-headers",
-        "content-security-policy",
-        "content-security-policy-report-only",
-        "clear-site-data",
-        "strict-transport-security",
-        "x-frame-options",
-        "cross-origin-opener-policy",
-        "cross-origin-embedder-policy",
-        "cross-origin-resource-policy",
-    }
-)
-
-_UNSAFE_PROXY_RESPONSE_HEADERS: frozenset[str] = _HTTP_FRAMING_HEADERS | _BROWSER_SECURITY_HEADERS
-
-
-def _strip_http_framing_headers(exc: BaseException) -> None:
-    headers = getattr(exc, "headers", None)
-    if headers is not None and hasattr(headers, "items"):
-        setattr(exc, "headers", {k: v for k, v in headers.items() if k.lower() not in _HTTP_FRAMING_HEADERS})
-
-
-def _stream_chunks_have_generated_content(chunks: List[ModelResponseStream]) -> bool:
+def _stream_chunks_have_generated_content(chunks: list[ModelResponseStream]) -> bool:
     for chunk in chunks:
         if not chunk.choices:
             continue
@@ -2915,6 +2876,13 @@ class Router:
                         llm_provider="",
                     )
 
+            if (
+                isinstance(response, CustomStreamWrapper)
+                and response.completion_stream is None
+                and response.make_call is not None
+            ):
+                await response.fetch_stream()
+
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.acompletion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
             # debug how often this deployment picked
@@ -2925,13 +2893,6 @@ class Router:
             )
 
             if isinstance(response, CustomStreamWrapper):
-                if response.completion_stream is None and response.make_call is not None:
-                    try:
-                        await response.fetch_stream()
-                    except Exception:
-                        if model_name is not None:
-                            self.success_calls[model_name] -= 1
-                        raise
                 return await self._acompletion_streaming_iterator(
                     model_response=response,
                     messages=messages,

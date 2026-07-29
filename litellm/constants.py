@@ -1676,3 +1676,40 @@ ADVISOR_TOOL_DESCRIPTION: str = (
     "want to verify your reasoning, or face a complex decision. "
     "Describe your question or challenge clearly in the 'question' field."
 )
+
+# Headers that must be stripped from a provider exception before it's forwarded as
+# the proxy's own HTTP response, or they conflict with the framing the proxy sets.
+HTTP_FRAMING_HEADERS: frozenset[str] = frozenset(
+    {
+        "content-length",
+        "transfer-encoding",
+        "content-encoding",
+        "content-type",
+        "set-cookie",
+        "cookie",
+        "proxy-authenticate",
+        "proxy-authorization",
+    }
+)
+
+# Browser-facing security headers that a malicious or misconfigured upstream
+# provider must not be able to set on the proxy's own response.
+BROWSER_SECURITY_HEADERS: frozenset[str] = frozenset(
+    {
+        "access-control-allow-origin",
+        "access-control-allow-credentials",
+        "access-control-allow-methods",
+        "access-control-allow-headers",
+        "access-control-expose-headers",
+        "content-security-policy",
+        "content-security-policy-report-only",
+        "clear-site-data",
+        "strict-transport-security",
+        "x-frame-options",
+        "cross-origin-opener-policy",
+        "cross-origin-embedder-policy",
+        "cross-origin-resource-policy",
+    }
+)
+
+UNSAFE_PROXY_RESPONSE_HEADERS: frozenset[str] = HTTP_FRAMING_HEADERS | BROWSER_SECURITY_HEADERS

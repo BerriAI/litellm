@@ -4924,7 +4924,7 @@ async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_f
                 collected.append(chunk)
 
     assert len(collected) == 1, "only the partial chunk before the error"
-    mock_fallback.assert_not_called(), "fallback must not be called when content already generated"
+    mock_fallback.assert_not_called()
     logging_obj.dispatch_success_handlers.assert_not_called()
 
 
@@ -6303,52 +6303,6 @@ class TestAdvisorSubCallCooldown:
             is False
         )
         assert "dep-1" not in self._cooled_down_ids(router)
-
-
-def test_strip_http_framing_headers_removes_framing_and_preserves_rest():
-    from litellm.router import _strip_http_framing_headers
-
-    class _FakeErr(Exception):
-        pass
-
-    exc = _FakeErr("boom")
-    exc.headers = {
-        "content-length": "99",
-        "transfer-encoding": "chunked",
-        "content-encoding": "gzip",
-        "content-type": "application/json",
-        "set-cookie": "session=abc",
-        "cookie": "token=xyz",
-        "proxy-authenticate": "Basic realm=test",
-        "proxy-authorization": "Basic dXNlcjpwYXNz",
-        "x-request-id": "req-1",
-        "retry-after": "30",
-    }
-    _strip_http_framing_headers(exc)
-    headers = exc.headers
-    for stripped in (
-        "content-length", "transfer-encoding", "content-encoding", "content-type",
-        "set-cookie", "cookie", "proxy-authenticate", "proxy-authorization",
-    ):
-        assert stripped not in headers, f"{stripped} must be stripped"
-    assert headers.get("x-request-id") == "req-1"
-    assert headers.get("retry-after") == "30"
-
-
-def test_strip_http_framing_headers_no_headers_attr():
-    from litellm.router import _strip_http_framing_headers
-
-    exc = ValueError("no headers attr")
-    _strip_http_framing_headers(exc)
-
-
-def test_strip_http_framing_headers_non_dict_headers():
-    from litellm.router import _strip_http_framing_headers
-
-    exc = ValueError("non-mappable headers")
-    exc.headers = "not-a-mapping"
-    _strip_http_framing_headers(exc)
-    assert exc.headers == "not-a-mapping"
 
 
 def test_stream_chunks_have_generated_content_detects_text_and_non_text():
