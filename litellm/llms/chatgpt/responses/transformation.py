@@ -214,8 +214,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             for _, item in sorted(streamed_output_items.items()):
                 ci = {k: v for k, v in item.items() if k not in _EXTRA_FIELDS}
                 ci["content"] = [
-                    {k2: v2 for k2, v2 in c.items() if k2 not in _EXTRA_FIELDS}
-                    for c in ci.get("content", [])
+                    {k2: v2 for k2, v2 in c.items() if k2 not in _EXTRA_FIELDS} for c in ci.get("content", [])
                 ]
                 clean_items.append(ci)
             response_payload["output"] = clean_items
