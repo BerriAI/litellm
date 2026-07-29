@@ -1,6 +1,8 @@
 import asyncio
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -17,41 +19,26 @@ else:
 
 GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ = PassThroughEndpointLogging()
 
-
-def _encode_google_genai_sse_event(event_lines: List[str]) -> bytes:
-    return ("\n".join(event_lines) + "\n\n").encode("utf-8")
-
-
-def _next_google_genai_sse_chunk(line_iter) -> bytes:
-    event_lines: List[str] = []
-    while True:
-        try:
-            line = next(line_iter)
-        except StopIteration:
-            if event_lines:
-                return _encode_google_genai_sse_event(event_lines)
-            raise
-        if line == "":
-            if event_lines:
-                return _encode_google_genai_sse_event(event_lines)
-            continue
-        event_lines.append(line)
+# Buffer raw bytes and split only on real SSE frame delimiters. httpx
+# ``aiter_lines`` splits on ``str.splitlines`` boundaries (U+2028, U+2029,
+# U+0085, form feed, ...) which Gemini emits raw inside ``data:`` JSON, so it
+# would slice an event mid-payload and corrupt the JSON the SDK then parses.
+_SSE_FRAME_DELIMITERS: Tuple[bytes, ...] = (b"\r\n\r\n", b"\n\n", b"\r\r")
 
 
-async def _anext_google_genai_sse_chunk(line_iter) -> bytes:
-    event_lines: List[str] = []
-    while True:
-        try:
-            line = await line_iter.__anext__()
-        except StopAsyncIteration:
-            if event_lines:
-                return _encode_google_genai_sse_event(event_lines)
-            raise
-        if line == "":
-            if event_lines:
-                return _encode_google_genai_sse_event(event_lines)
-            continue
-        event_lines.append(line)
+def _split_sse_frame(buffer: bytes) -> Tuple[Optional[bytes], bytes]:
+    """Pop the first complete SSE frame (delimiter included) from ``buffer``."""
+    frame_starts = (
+        (position, delimiter)
+        for delimiter in _SSE_FRAME_DELIMITERS
+        if (position := buffer.find(delimiter)) != -1
+    )
+    first = min(frame_starts, key=lambda item: item[0], default=None)
+    if first is None:
+        return None, buffer
+    position, delimiter = first
+    frame_end = position + len(delimiter)
+    return buffer[:frame_end], buffer[frame_end:]
 
 
 class BaseGoogleGenAIGenerateContentStreamingIterator:
@@ -105,7 +92,7 @@ class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContent
 
     def __init__(
         self,
-        response,
+        response: httpx.Response,
         model: str,
         logging_obj: LiteLLMLoggingObj,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
@@ -125,20 +112,26 @@ class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContent
         self.generate_content_provider_config = generate_content_provider_config
         self.litellm_metadata = litellm_metadata
         self.custom_llm_provider = custom_llm_provider
-        # Gemini streamGenerateContent uses SSE line framing; iter_lines keeps
-        # large inlineData payloads (e.g. image/jpeg) intact within one event.
-        self.stream_iterator = response.iter_lines()
+        self.stream_iterator = response.iter_bytes()
+        self._buffer: bytes = b""
 
     def __iter__(self):
         return self
 
-    def __next__(self):
-        try:
-            chunk = _next_google_genai_sse_chunk(self.stream_iterator)
-            self.collected_chunks.append(chunk)
-            return chunk
-        except StopIteration:
-            raise StopIteration
+    def __next__(self) -> bytes:
+        while True:
+            frame, self._buffer = _split_sse_frame(self._buffer)
+            if frame is not None:
+                self.collected_chunks.append(frame)
+                return frame
+            try:
+                self._buffer += next(self.stream_iterator)
+            except StopIteration:
+                if self._buffer:
+                    frame, self._buffer = self._buffer, b""
+                    self.collected_chunks.append(frame)
+                    return frame
+                raise
 
     def __aiter__(self):
         return self
@@ -156,7 +149,7 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
 
     def __init__(
         self,
-        response,
+        response: httpx.Response,
         model: str,
         logging_obj: LiteLLMLoggingObj,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
@@ -176,18 +169,24 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
         self.generate_content_provider_config = generate_content_provider_config
         self.litellm_metadata = litellm_metadata
         self.custom_llm_provider = custom_llm_provider
-        # Gemini streamGenerateContent uses SSE line framing; aiter_lines keeps
-        # large inlineData payloads (e.g. image/jpeg) intact within one event.
-        self.stream_iterator = response.aiter_lines()
+        self.stream_iterator = response.aiter_bytes()
+        self._buffer: bytes = b""
 
     def __aiter__(self):
         return self
 
-    async def __anext__(self):
-        try:
-            chunk = await _anext_google_genai_sse_chunk(self.stream_iterator)
-            self.collected_chunks.append(chunk)
-            return chunk
-        except StopAsyncIteration:
-            await self._handle_async_streaming_logging()
-            raise StopAsyncIteration
+    async def __anext__(self) -> bytes:
+        while True:
+            frame, self._buffer = _split_sse_frame(self._buffer)
+            if frame is not None:
+                self.collected_chunks.append(frame)
+                return frame
+            try:
+                self._buffer += await self.stream_iterator.__anext__()
+            except StopAsyncIteration:
+                if self._buffer:
+                    frame, self._buffer = self._buffer, b""
+                    self.collected_chunks.append(frame)
+                    return frame
+                await self._handle_async_streaming_logging()
+                raise
