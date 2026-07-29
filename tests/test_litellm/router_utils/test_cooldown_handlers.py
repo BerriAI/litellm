@@ -119,7 +119,9 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
 
         with patch("litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy") as mock_sc:
             mock_sc.return_value = True
-            result = _should_cooldown_based_on_deployment_policy(router, "dep-1", exc, policy, None)
+            result = _should_cooldown_based_on_deployment_policy(
+                router, "dep-1", exc, policy, None, is_single_deployment_model_group=False
+            )
 
         assert result is True
         call_kwargs = mock_sc.call_args[1]
@@ -133,12 +135,46 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
 
         with patch("litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy") as mock_sc:
             mock_sc.return_value = False
-            result = _should_cooldown_based_on_deployment_policy(router, "dep-1", exc, policy, dep_allowed_fails=3)
+            result = _should_cooldown_based_on_deployment_policy(
+                router, "dep-1", exc, policy, dep_allowed_fails=3, is_single_deployment_model_group=False
+            )
 
         assert result is False
         call_kwargs = mock_sc.call_args[1]
         assert call_kwargs["allowed_fails_override"] == 3
         assert call_kwargs["cache_key_suffix"] == "generic"
+
+    def test_dep_allowed_fails_on_single_deployment_group_does_not_cooldown(self):
+        """A generic, deployment-wide allowed_fails predates the per-exception-type
+        policy and is a less deliberate opt-in, so on a single-deployment model group
+        it must not silently disable the "avoid cooldowns on single deployment model
+        groups" safety net."""
+        exc = litellm.InternalServerError("500", "openai", "gpt-4")
+        router = self._make_router({"litellm_params": {}, "model_info": {}})
+
+        with patch("litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy") as mock_sc:
+            result = _should_cooldown_based_on_deployment_policy(
+                router, "dep-1", exc, None, dep_allowed_fails=3, is_single_deployment_model_group=True
+            )
+
+        assert result is False
+        mock_sc.assert_not_called()
+
+    def test_named_policy_on_single_deployment_group_still_cools_down(self):
+        """Unlike a generic allowed_fails, an explicit per-exception-type policy entry
+        is a deliberate opt-in and must still apply on a single-deployment group."""
+        policy = {"RateLimitErrorAllowedFails": 0}
+        exc = litellm.RateLimitError("429", "openai", "gpt-4")
+        router = self._make_router({"litellm_params": {}, "model_info": {}})
+
+        with patch("litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy") as mock_sc:
+            mock_sc.return_value = True
+            result = _should_cooldown_based_on_deployment_policy(
+                router, "dep-1", exc, policy, None, is_single_deployment_model_group=True
+            )
+
+        assert result is True
+        mock_sc.assert_called_once()
 
     def test_no_policy_and_no_dep_allowed_fails_defers_to_router_level(self):
         """When neither a deployment policy nor a deployment-wide allowed_fails covers
@@ -150,7 +186,9 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
 
         with patch("litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy") as mock_sc:
             mock_sc.return_value = True
-            _should_cooldown_based_on_deployment_policy(router, "dep-1", exc, None, None)
+            _should_cooldown_based_on_deployment_policy(
+                router, "dep-1", exc, None, None, is_single_deployment_model_group=False
+            )
 
         call_kwargs = mock_sc.call_args[1]
         assert call_kwargs["allowed_fails_override"] is None
@@ -166,22 +204,41 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
 
         with patch("litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy") as mock_sc:
             mock_sc.return_value = False
-            _should_cooldown_based_on_deployment_policy(router, "dep-1", exc, policy, dep_allowed_fails=None)
+            _should_cooldown_based_on_deployment_policy(
+                router, "dep-1", exc, policy, dep_allowed_fails=None, is_single_deployment_model_group=False
+            )
 
         call_kwargs = mock_sc.call_args[1]
         assert call_kwargs["allowed_fails_override"] is None
         assert call_kwargs["cache_key_suffix"] is None
 
-    def test_cooldown_time_from_litellm_params_passed_through(self):
+    def test_cooldown_time_from_model_info_passed_through(self):
+        exc = litellm.RateLimitError("429", "openai", "gpt-4")
+        router = self._make_router({"litellm_params": {}, "model_info": {"cooldown_time": 120.0}})
+
+        with patch("litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy") as mock_sc:
+            mock_sc.return_value = True
+            _should_cooldown_based_on_deployment_policy(
+                router, "dep-1", exc, None, None, is_single_deployment_model_group=False
+            )
+
+        call_kwargs = mock_sc.call_args[1]
+        assert call_kwargs["cooldown_time_override"] == 120.0
+
+    def test_cooldown_time_from_litellm_params_is_ignored(self):
+        """litellm_params gets copied into the actual provider call kwargs, so a
+        cooldown_time placed there (instead of model_info) must not be read."""
         exc = litellm.RateLimitError("429", "openai", "gpt-4")
         router = self._make_router({"litellm_params": {"cooldown_time": 120.0}, "model_info": {}})
 
         with patch("litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy") as mock_sc:
             mock_sc.return_value = True
-            _should_cooldown_based_on_deployment_policy(router, "dep-1", exc, None, None)
+            _should_cooldown_based_on_deployment_policy(
+                router, "dep-1", exc, None, None, is_single_deployment_model_group=False
+            )
 
         call_kwargs = mock_sc.call_args[1]
-        assert call_kwargs["cooldown_time_override"] == 120.0
+        assert call_kwargs["cooldown_time_override"] is None
 
     def test_model_info_none_passes_none_cooldown_time(self):
         exc = litellm.RateLimitError("429", "openai", "gpt-4")
@@ -189,7 +246,9 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
 
         with patch("litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy") as mock_sc:
             mock_sc.return_value = False
-            _should_cooldown_based_on_deployment_policy(router, "dep-1", exc, None, None)
+            _should_cooldown_based_on_deployment_policy(
+                router, "dep-1", exc, None, None, is_single_deployment_model_group=False
+            )
 
         call_kwargs = mock_sc.call_args[1]
         assert call_kwargs["cooldown_time_override"] is None
