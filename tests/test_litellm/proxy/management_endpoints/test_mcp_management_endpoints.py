@@ -6222,6 +6222,48 @@ class TestConnectedAppViewAnnotation:
         assert flags == {"server-1": False, "server-2": True}
 
     @pytest.mark.asyncio
+    async def test_connected_app_view_appends_session_reachable_servers_missing_from_page_list(self):
+        """A server the session is served must appear on the connect view even when the
+        dashboard resolver did not list it (internal-user path, non-admin sanitizer)."""
+        caller_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.INTERNAL_USER)
+        admitted_auth = UserAPIKeyAuth(user_id="test_user_id")
+        mock_manager = MagicMock()
+        mock_manager.get_all_allowed_mcp_servers = AsyncMock(
+            return_value=[generate_mock_mcp_server_db_record(server_id="server-1", alias="Listed")]
+        )
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server-1", "server-2"])
+        mock_manager.get_mcp_server_by_id = MagicMock(
+            return_value=generate_mock_mcp_server_config_record(server_id="server-2", name="SessionOnly")
+        )
+        mock_manager._build_mcp_server_table = MagicMock(
+            return_value=generate_mock_mcp_server_db_record(server_id="server-2", alias="SessionOnly")
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[caller_auth]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+                AsyncMock(return_value=admitted_auth),
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(user_api_key_dict=caller_auth, connected_app_view=True)
+
+        flags = {server.server_id: server.connected_app_reachable for server in result}
+        assert flags == {"server-1": True, "server-2": True}
+        mock_manager.get_mcp_server_by_id.assert_called_once_with("server-2")
+
+    @pytest.mark.asyncio
     async def test_connected_app_view_fails_closed_when_admitted_reload_fails(self):
         caller_auth = generate_mock_user_api_key_auth()
         mock_manager = self._mock_manager(self._servers(), ["server-1"])
