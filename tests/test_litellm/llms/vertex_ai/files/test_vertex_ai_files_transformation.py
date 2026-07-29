@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
     _get_litellm_batch_custom_id_from_labels,
-    _openai_batch_jsonl_entry_to_vertex_wrapped_request,
+    _openai_batch_jsonl_entry_to_vertex_rows,
     _sanitize_gcp_label_value,
 )
 from litellm.types.llms.openai import OpenAIFileObject, HttpxBinaryResponseContent
@@ -1054,14 +1054,15 @@ class TestTryTransformDoesNotMutateCallerLoggingObj:
 
 
 def _wrap_entries(openai_jsonl_content):
-    """Vertex-wrapped requests for a list of OpenAI batch entries, built via the
-    live single-entry transform that the streaming upload path uses."""
+    """Vertex rows for a list of OpenAI batch entries, built via the live
+    single-entry transform that the streaming upload path uses."""
     cfg = VertexAIFilesConfig()
     return [
-        _openai_batch_jsonl_entry_to_vertex_wrapped_request(
+        row
+        for entry in openai_jsonl_content
+        for row in _openai_batch_jsonl_entry_to_vertex_rows(
             entry, cfg._map_openai_to_vertex_params
         )
-        for entry in openai_jsonl_content
     ]
 
 
@@ -1424,6 +1425,86 @@ class TestVertexEmbeddingsBatchInputTranslation:
         with pytest.raises(ValueError, match="`input` is required"):
             _wrap_entries([_embeddings_entry(body={"model": "gemini-embedding-2"})])
 
+    def test_should_raise_when_input_empty(self):
+        with pytest.raises(ValueError, match="must not be empty"):
+            _wrap_entries(
+                [_embeddings_entry(body={"model": "gemini-embedding-2", "input": []})]
+            )
+
+    def test_should_fan_an_input_array_out_into_one_row_per_element(self):
+        """
+        An `EmbedContentRequest` returns exactly one vector, so an OpenAI entry asking
+        for several embeddings needs several Vertex rows.
+        """
+        rows = _wrap_entries(
+            [
+                _embeddings_entry(
+                    body={
+                        "model": "gemini-embedding-001",
+                        "input": ["first", "second"],
+                        "dimensions": 768,
+                    }
+                )
+            ]
+        )
+
+        assert rows == [
+            {
+                "key": "request-1#0/2",
+                "request": {
+                    "content": {"parts": [{"text": "first"}]},
+                    "output_dimensionality": 768,
+                },
+            },
+            {
+                "key": "request-1#1/2",
+                "request": {
+                    "content": {"parts": [{"text": "second"}]},
+                    "output_dimensionality": 768,
+                },
+            },
+        ]
+
+    def test_should_keep_the_bare_custom_id_for_single_element_arrays(self):
+        (row,) = _wrap_entries(
+            [
+                _embeddings_entry(
+                    body={"model": "gemini-embedding-2", "input": ["only one"]}
+                )
+            ]
+        )
+
+        assert row["key"] == "request-1"
+
+    def test_should_combine_a_nested_input_into_one_multipart_row(self):
+        """Nested arrays are the combined-embedding shape, as on the online path."""
+        (row,) = _wrap_entries(
+            [
+                _embeddings_entry(
+                    body={
+                        "model": "gemini-embedding-2",
+                        "input": [
+                            [
+                                "a caption",
+                                "gs://cloud-samples-data/generative-ai/image/benchmark.jpeg",
+                            ]
+                        ],
+                    }
+                )
+            ]
+        )
+
+        assert row["key"] == "request-1"
+        assert row["request"]["content"]["parts"] == [
+            {"text": "a caption"},
+            {
+                "file_data": {
+                    "mime_type": "image/jpeg",
+                    "file_uri": "gs://cloud-samples-data/generative-ai/image/benchmark.jpeg",
+                }
+            },
+        ]
+
     def test_should_keep_chat_completions_lines_on_generate_content_path(self):
         (row,) = _wrap_entries(
             [
@@ -1568,6 +1649,95 @@ class TestVertexEmbeddingsBatchOutputTranslation:
             "request-1",
             "request-2",
         ]
+
+    def test_should_reassemble_a_fanned_out_input_array_into_one_row(self, config):
+        """Vertex returns the rows of one entry in arbitrary order."""
+        (result,) = self._transform(
+            config,
+            [
+                self._vertex_embeddings_output_row(
+                    key="request-1#1/2",
+                    response={
+                        "embedding": {"values": [0.3, 0.4]},
+                        "usageMetadata": {"promptTokenCount": 5},
+                    },
+                ),
+                self._vertex_embeddings_output_row(
+                    key="request-1#0/2",
+                    response={
+                        "embedding": {"values": [0.1, 0.2]},
+                        "usageMetadata": {"promptTokenCount": 3},
+                    },
+                ),
+            ],
+        )
+
+        assert result["custom_id"] == "request-1"
+        assert result["response"]["body"]["data"] == [
+            {"embedding": [0.1, 0.2], "index": 0, "object": "embedding"},
+            {"embedding": [0.3, 0.4], "index": 1, "object": "embedding"},
+        ]
+        assert result["response"]["body"]["usage"]["prompt_tokens"] == 8
+
+    def test_should_keep_fanned_out_entries_apart_and_in_file_order(self, config):
+        results = self._transform(
+            config,
+            [
+                self._vertex_embeddings_output_row(key="request-2#0/2"),
+                self._vertex_embeddings_output_row(key="request-1"),
+                self._vertex_embeddings_output_row(key="request-2#1/2"),
+            ],
+        )
+
+        assert [result["custom_id"] for result in results] == ["request-2", "request-1"]
+        assert len(results[0]["response"]["body"]["data"]) == 2
+        assert len(results[1]["response"]["body"]["data"]) == 1
+
+    def test_should_fail_the_whole_entry_when_one_of_its_rows_failed(self, config):
+        """An OpenAI batch row is either a response or an error, never both."""
+        (result,) = self._transform(
+            config,
+            [
+                self._vertex_embeddings_output_row(key="request-1#0/2"),
+                self._vertex_embeddings_output_row(
+                    key="request-1#1/2", status="Quota exceeded", response={}
+                ),
+            ],
+        )
+
+        assert result["custom_id"] == "request-1"
+        assert result["response"] is None
+        assert result["error"]["message"] == "Quota exceeded"
+
+    def test_should_end_to_end_round_trip_a_fanned_out_embeddings_batch(self, config):
+        first_row, second_row = _wrap_entries(
+            [
+                _embeddings_entry(
+                    custom_id="MyRequest-1",
+                    body={
+                        "model": "gemini-embedding-2",
+                        "input": ["hello world", "goodbye world"],
+                    },
+                )
+            ]
+        )
+
+        (result,) = self._transform(
+            config,
+            [
+                {
+                    **row,
+                    "status": "",
+                    "response": {"embedding": {"values": values}},
+                }
+                for row, values in ((second_row, [0.3]), (first_row, [0.1]))
+            ],
+        )
+
+        assert result["custom_id"] == "MyRequest-1"
+        assert [
+            embedding["embedding"] for embedding in result["response"]["body"]["data"]
+        ] == [[0.1], [0.3]]
 
     def test_should_end_to_end_round_trip_openai_embeddings_batch(self, config):
         (vertex_row,) = _wrap_entries(
