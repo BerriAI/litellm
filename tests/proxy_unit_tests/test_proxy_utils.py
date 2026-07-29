@@ -2482,8 +2482,6 @@ async def test_post_call_failure_hook_auth_error_llm_api_route():
             "/v1/embeddings",
             "aembedding",
         ),
-        # #35068: a Responses request also carries "input"; the route decides the
-        # call type, so it must not be attributed to embeddings
         (
             {"model": "bad-model", "input": ["hello"]},
             "/v1/responses",

@@ -131,28 +131,18 @@ class _ProxyDBLogger(CustomLogger):
 
         existing_litellm_params = request_data.get("litellm_params", {})
 
-        # Routes like /v1/responses, /v1/messages and the batch/file endpoints keep
-        # proxy-internal metadata (model_group, model_info, tags, retries) in
-        # ``litellm_metadata`` so the provider-facing ``metadata`` field stays clean.
-        # Collapse every bucket into one dict, then write it back to all of them so the
-        # bucket ``get_litellm_metadata_from_kwargs`` picks for the spend log carries the
-        # router attribution *and* this failure's status/error information.
         metadata_key, internal_metadata = get_or_create_metadata_bucket(request_data)
         merged_metadata = {
             **(existing_litellm_params.get("metadata") or {}),
             **(existing_litellm_params.get("litellm_metadata") or {}),
             **internal_metadata,
         }
-        # Identity comes from the authenticated key alone; a caller-supplied
-        # user_api_key* field in the request body must never attribute spend.
         spend_metadata = {key: value for key, value in merged_metadata.items() if not key.startswith("user_api_key")}
         spend_metadata.update(_metadata)
 
         request_data["litellm_params"]["proxy_server_request"] = (
             request_data.get("proxy_server_request") or existing_litellm_params.get("proxy_server_request") or {}
         )
-        # Failures that never reached the SDK carry no call_type, so the row lands
-        # without one and can't be attributed to the route the caller used.
         route_call_type = get_primary_call_type_for_route(request_route)
         if not request_data.get("call_type") and route_call_type is not None:
             request_data["call_type"] = route_call_type.value

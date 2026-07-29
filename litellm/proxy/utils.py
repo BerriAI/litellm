@@ -2254,10 +2254,6 @@ class ProxyLogging:
             )
 
             input: Union[list, str, dict] = ""
-            # The Logging object above was built from the raw HTTP route, so its call_type
-            # is not a CallTypes value yet. The route is authoritative; the request body
-            # shape is only a fallback for routes outside the mapping (guessing from the
-            # body mislabels e.g. a /v1/responses request with a list input as embeddings).
             route_call_type = get_primary_call_type_for_route(route)
             normalized_call_type: str | None = route_call_type.value if route_call_type is not None else None
             if "messages" in request_data and isinstance(request_data["messages"], list):
