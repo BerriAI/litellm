@@ -44,18 +44,14 @@ _OUTPUT_TOKEN_LIMIT_ERROR_MARKER = "max_tokens or model output limit was reached
 
 
 def _is_output_token_limit_error(exc: Exception) -> bool:
-    """True for the provider 400 raised when the output-token budget is too
-    small to finish even one token (e.g. OpenAI GPT-5.x with ``max_tokens=1``)."""
+    """True for the provider 400 raised when the output-token budget cannot finish even one token (e.g. OpenAI GPT-5.x with ``max_tokens=1``)."""
     if not isinstance(exc, litellm.BadRequestError):
         return False
-    message = getattr(exc, "message", None) or str(exc)
-    return _OUTPUT_TOKEN_LIMIT_ERROR_MARKER in message.lower()
+    return _OUTPUT_TOKEN_LIMIT_ERROR_MARKER in exc.message.lower()
 
 
 def _build_max_tokens_truncation_response(model: str) -> ModelResponse:
-    """Synthesize an empty ``finish_reason="length"`` response so the empty,
-    ``max_tokens``-truncated turn flows through the same translation path as a
-    real completion (mapping to Anthropic ``stop_reason="max_tokens"``)."""
+    """Synthesize an empty ``finish_reason="length"`` response so the truncated turn reuses the existing translation path (mapping to Anthropic ``stop_reason="max_tokens"``)."""
     return ModelResponse(
         model=model,
         choices=[
