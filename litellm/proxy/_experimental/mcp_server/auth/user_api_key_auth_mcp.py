@@ -794,6 +794,7 @@ class MCPRequestHandler:
             case SessionBearerAdmitted():
                 try:
                     admitted = await MCPRequestHandler._reload_admitted_user(result.principal.user_id)
+                    admitted.mcp_session_resource_server_id = result.principal.resource_server_id
                     await MCPRequestHandler._enforce_admitted_live_policy(
                         admitted=admitted, request=request, route=route
                     )
