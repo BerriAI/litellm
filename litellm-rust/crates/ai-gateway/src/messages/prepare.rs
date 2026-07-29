@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use super::common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers};
 use super::types::{MessagesRequest, ProviderMessagesRequest};
+use crate::constants::BEDROCK_MESSAGES_PROVIDER;
 
 pub(super) fn prepare_messages_call(
     request: MessagesRequest<'_>,
@@ -33,8 +34,13 @@ pub(super) fn prepare_messages_call(
 
     let mut headers = string_headers(request.extra_headers)?;
 
-    let auth_strategy = config.auth_strategy();
-    let bearer_token = if matches!(auth_strategy, MessagesAuthStrategy::AwsSigV4) {
+    let is_bedrock = provider == BEDROCK_MESSAGES_PROVIDER;
+    let auth_strategy = if is_bedrock {
+        MessagesAuthStrategy::Header("authorization")
+    } else {
+        config.auth_strategy()
+    };
+    let bearer_token = if is_bedrock {
         request
             .api_key
             .map(str::to_string)
@@ -44,7 +50,6 @@ pub(super) fn prepare_messages_call(
         None
     };
     let auth_header = match auth_strategy {
-        MessagesAuthStrategy::AwsSigV4 => None,
         MessagesAuthStrategy::Bearer
             if has_header(&headers, "authorization")
                 || (config.accepts_bearer_auth() && has_bearer_auth(&headers)) =>
@@ -76,8 +81,8 @@ pub(super) fn prepare_messages_call(
         }
     }
 
-    let stream = request.body.get("stream").and_then(Value::as_bool) == Some(true);
-    let url = config.complete_url(request.api_base, &model, stream, &env_lookup)?;
+    let _stream = request.body.get("stream").and_then(Value::as_bool) == Some(true);
+    let url = config.complete_url(request.api_base, &model, &env_lookup)?;
     let signing_region = config.signing_region(request.api_base, &env_lookup);
     let typed_request = serde_json::from_value(request.body).map_err(|err| {
         CoreError::InvalidRequest(format!("invalid Anthropic messages request: {err}"))

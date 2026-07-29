@@ -3,7 +3,6 @@ use std::time::SystemTime;
 
 use litellm_core::CoreResult;
 use litellm_core::error::CoreError;
-use litellm_core::messages::transformation::MessagesAuthStrategy;
 use litellm_core::providers::bedrock::aws_base::{
     AwsAuthConfig, resolve_credentials, sign_bedrock_post,
 };
@@ -24,10 +23,7 @@ async fn signed_request(
     request: &ProviderMessagesRequest,
     body: &[u8],
 ) -> CoreResult<Vec<(String, String)>> {
-    if !matches!(
-        request.config.auth_strategy(),
-        MessagesAuthStrategy::AwsSigV4
-    ) {
+    if request.provider != BEDROCK_MESSAGES_PROVIDER {
         return Ok(request.upstream_headers.clone());
     }
     if let Some(token) = &request.bearer_token {

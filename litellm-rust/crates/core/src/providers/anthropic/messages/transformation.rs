@@ -51,7 +51,6 @@ impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
         &self,
         api_base: Option<&str>,
         _model: &str,
-        _stream: bool,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> CoreResult<String> {
         Ok(complete_anthropic_url(api_base, env_lookup))

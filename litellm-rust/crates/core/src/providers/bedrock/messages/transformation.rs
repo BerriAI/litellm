@@ -1,80 +1,9 @@
-use crate::error::{CoreError, CoreResult};
+use crate::error::CoreResult;
 use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
 use crate::messages::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
-use crate::providers::anthropic::messages::transformation::non_empty;
-use crate::providers::bedrock::constants::{
-    AWS_REGION, AWS_REGION_NAME, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, DEFAULT_BEDROCK_REGION,
-};
-use serde_json::Value;
-
-const AWS_DEFAULT_REGION: &str = "AWS_DEFAULT_REGION";
-const API_BASE_SCHEME: &str = "https://";
-const MODEL_PATH_PREFIX: &str = "/model/";
-const INVOKE_PATH: &str = "/invoke";
-const STREAM_PATH: &str = "/invoke-with-response-stream";
-const ANTHROPIC_VERSION_FIELD: &str = "anthropic_version";
-const ANTHROPIC_VERSION: &str = "bedrock-2023-05-31";
-const UNSUPPORTED_FIELDS: &[&str] = &[
-    "metadata",
-    "service_tier",
-    "container",
-    "mcp_servers",
-    "context_management",
-    "output_format",
-    "output_config",
-    "speed",
-    "inference_geo",
-];
-
 pub struct BedrockMessagesConfig;
 
 pub const BEDROCK_MESSAGES_CONFIG: BedrockMessagesConfig = BedrockMessagesConfig;
-
-fn resolve_region(api_base: Option<&str>, env_lookup: &dyn Fn(&str) -> Option<String>) -> String {
-    api_base
-        .and_then(bedrock_region_from_api_base)
-        .or_else(|| env_lookup(AWS_REGION_NAME))
-        .or_else(|| env_lookup(AWS_REGION))
-        .or_else(|| env_lookup(AWS_DEFAULT_REGION))
-        .unwrap_or_else(|| DEFAULT_BEDROCK_REGION.to_string())
-}
-
-fn bedrock_region_from_api_base(api_base: &str) -> Option<String> {
-    let host = api_base
-        .trim()
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .split('/')
-        .next()?
-        .split(':')
-        .next()?;
-    let region = host
-        .strip_prefix("bedrock-runtime.")?
-        .strip_suffix(".amazonaws.com")?;
-    (!region.is_empty()).then(|| region.to_string())
-}
-
-fn encode_path_segment(value: &str) -> String {
-    value.bytes().fold(String::new(), |mut encoded, byte| {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-            encoded.push(byte as char);
-        } else {
-            encoded.push('%');
-            encoded.push_str(&format!("{byte:02X}"));
-        }
-        encoded
-    })
-}
-
-fn endpoint_base(api_base: Option<&str>, env_lookup: &dyn Fn(&str) -> Option<String>) -> String {
-    non_empty(api_base)
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            BEDROCK_RUNTIME_ENDPOINT_TEMPLATE.replace("{region}", &resolve_region(None, env_lookup))
-        })
-        .trim_end_matches('/')
-        .to_string()
-}
 
 pub fn complete_bedrock_url(
     api_base: Option<&str>,
@@ -82,19 +11,8 @@ pub fn complete_bedrock_url(
     stream: bool,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> CoreResult<String> {
-    let model = non_empty(Some(model))
-        .ok_or_else(|| CoreError::InvalidRequest("Bedrock model cannot be empty".to_string()))?;
-    let suffix = if stream { STREAM_PATH } else { INVOKE_PATH };
-    let base = endpoint_base(api_base, env_lookup);
-    let base = if base.starts_with(API_BASE_SCHEME) || base.starts_with("http://") {
-        base
-    } else {
-        format!("{API_BASE_SCHEME}{base}")
-    };
-    Ok(format!(
-        "{base}{MODEL_PATH_PREFIX}{}{suffix}",
-        encode_path_segment(model)
-    ))
+    let _ = (api_base, model, stream, env_lookup);
+    todo!("implement Bedrock InvokeModel URL construction and model path encoding")
 }
 
 impl AnthropicMessagesProviderConfig for BedrockMessagesConfig {
@@ -102,10 +20,10 @@ impl AnthropicMessagesProviderConfig for BedrockMessagesConfig {
         &self,
         api_base: Option<&str>,
         model: &str,
-        stream: bool,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> CoreResult<String> {
-        complete_bedrock_url(api_base, model, stream, env_lookup)
+        let _ = (api_base, model, env_lookup);
+        todo!("extend the shared URL contract for streaming, then implement Bedrock URLs")
     }
 
     fn signing_region(
@@ -113,7 +31,8 @@ impl AnthropicMessagesProviderConfig for BedrockMessagesConfig {
         api_base: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Option<String> {
-        Some(resolve_region(api_base, env_lookup))
+        let _ = (api_base, env_lookup);
+        todo!("implement Bedrock region precedence and endpoint parsing")
     }
 
     fn resolve_api_key(
@@ -125,50 +44,34 @@ impl AnthropicMessagesProviderConfig for BedrockMessagesConfig {
     }
 
     fn auth_strategy(&self) -> MessagesAuthStrategy {
-        MessagesAuthStrategy::AwsSigV4
+        todo!("extend MessagesAuthStrategy for Bedrock bearer and SigV4 authentication")
     }
 
     fn transform_request(
         &self,
-        mut request: AnthropicMessagesRequest,
+        request: AnthropicMessagesRequest,
     ) -> CoreResult<AnthropicMessagesRequest> {
-        request.model.clear();
-        request.stream = None;
-        request.metadata = None;
-        request.service_tier = None;
-        request.container = None;
-        request.mcp_servers = None;
-        request.context_management = None;
-        request.output_format = None;
-        request.output_config = None;
-        request.speed = None;
-        request.inference_geo = None;
-        request
-            .extra
-            .retain(|key, _| !UNSUPPORTED_FIELDS.contains(&key.as_str()));
-        request.extra.insert(
-            ANTHROPIC_VERSION_FIELD.to_string(),
-            Value::String(ANTHROPIC_VERSION.to_string()),
-        );
-        Ok(request)
+        let _ = request;
+        todo!("implement Bedrock request body filtering and anthropic_version injection")
     }
 
     fn transform_response(
         &self,
         model: &str,
-        mut response: AnthropicMessagesResponse,
+        response: AnthropicMessagesResponse,
     ) -> CoreResult<AnthropicMessagesResponse> {
-        if response.model.trim().is_empty() {
-            response.model = model.to_string();
-        }
-        Ok(response)
+        let _ = (model, response);
+        todo!("restamp the requested model when Bedrock omits it")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::providers::bedrock::constants::{AWS_REGION, AWS_REGION_NAME};
+    use serde_json::{Value, json};
+
+    const ANTHROPIC_VERSION: &str = "bedrock-2023-05-31";
 
     fn request(value: Value) -> AnthropicMessagesRequest {
         serde_json::from_value(value).expect("valid request")

@@ -6,7 +6,6 @@ use super::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
 pub enum MessagesAuthStrategy {
     Bearer,
     Header(&'static str),
-    AwsSigV4,
 }
 
 impl MessagesAuthStrategy {
@@ -14,7 +13,6 @@ impl MessagesAuthStrategy {
         match self {
             Self::Bearer => "authorization",
             Self::Header(header_name) => header_name,
-            Self::AwsSigV4 => "",
         }
     }
 }
@@ -24,7 +22,6 @@ pub trait AnthropicMessagesProviderConfig: Sync {
         &self,
         api_base: Option<&str>,
         model: &str,
-        stream: bool,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> CoreResult<String>;
 

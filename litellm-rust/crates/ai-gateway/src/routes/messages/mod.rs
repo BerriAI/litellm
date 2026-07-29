@@ -2,7 +2,7 @@
 
 mod service;
 
-use aws_smithy_eventstream::frame::{DecodedFrame, MessageFrameDecoder};
+use aws_smithy_eventstream::frame::MessageFrameDecoder;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Json, State};
@@ -88,6 +88,7 @@ fn stream_response(
         })
 }
 
+#[allow(dead_code)]
 struct EventStreamState {
     upstream: BoxStream<'static, Result<Bytes, reqwest::Error>>,
     buffer: bytes::BytesMut,
@@ -105,63 +106,14 @@ fn bedrock_sse_stream(
             decoder: MessageFrameDecoder::new(),
             terminated: false,
         },
-        |mut state| async move {
-            if state.terminated {
-                return None;
-            }
-            loop {
-                match state.decoder.decode_frame(&mut state.buffer) {
-                    Ok(DecodedFrame::Complete(message)) => {
-                        let bytes = message
-                            .headers()
-                            .iter()
-                            .find(|header| header.name().as_str() == ":message-type")
-                            .and_then(|header| header.value().as_string().ok())
-                            .map_or_else(
-                                || sse_data(message.payload()),
-                                |message_type| {
-                                    if message_type.as_str() == "exception"
-                                        || message_type.as_str() == "error"
-                                    {
-                                        sse_error(message.payload())
-                                    } else {
-                                        sse_data(message.payload())
-                                    }
-                                },
-                            );
-                        return Some((Ok(Bytes::from(bytes)), state));
-                    }
-                    Ok(DecodedFrame::Incomplete) => {}
-                    Err(error) => {
-                        state.terminated = true;
-                        return Some((
-                            Ok(Bytes::from(sse_error(error.to_string().as_bytes()))),
-                            state,
-                        ));
-                    }
-                }
-                match state.upstream.next().await {
-                    Some(Ok(chunk)) => state.buffer.extend_from_slice(&chunk),
-                    Some(Err(error)) => {
-                        return Some((Err(std::io::Error::other(error.to_string())), state));
-                    }
-                    None if state.buffer.is_empty() => return None,
-                    None => {
-                        state.terminated = true;
-                        return Some((
-                            Ok(Bytes::from(sse_error(
-                                b"incomplete Bedrock event stream frame",
-                            ))),
-                            state,
-                        ));
-                    }
-                }
-            }
+        |_state| async move {
+            todo!("decode Bedrock EventStream frames and emit normalized Anthropic SSE")
         },
     )
     .boxed()
 }
 
+#[allow(dead_code)]
 fn sse_data(payload: &[u8]) -> String {
     let value = serde_json::from_slice::<serde_json::Value>(payload)
         .ok()
@@ -178,6 +130,7 @@ fn sse_data(payload: &[u8]) -> String {
     format!("event: {event}\ndata: {value}\n\n")
 }
 
+#[allow(dead_code)]
 fn sse_error(payload: &[u8]) -> String {
     let message = String::from_utf8_lossy(payload);
     format!(
