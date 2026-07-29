@@ -105,6 +105,9 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
+from litellm.litellm_core_utils.api_route_to_call_types import (
+    get_primary_call_type_for_route,
+)
 from litellm.litellm_core_utils.core_helpers import coerce_token_limit
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -2251,22 +2254,26 @@ class ProxyLogging:
             )
 
             input: Union[list, str, dict] = ""
-            normalized_call_type: Optional[str] = None
+            # The Logging object above was built from the raw HTTP route, so its call_type
+            # is not a CallTypes value yet. The route is authoritative; the request body
+            # shape is only a fallback for routes outside the mapping (guessing from the
+            # body mislabels e.g. a /v1/responses request with a list input as embeddings).
+            route_call_type = get_primary_call_type_for_route(route)
+            normalized_call_type: str | None = route_call_type.value if route_call_type is not None else None
             if "messages" in request_data and isinstance(request_data["messages"], list):
                 input = request_data["messages"]
                 litellm_logging_obj.model_call_details["messages"] = input
-                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
-                    normalized_call_type = CallTypes.acompletion.value
+                normalized_call_type = normalized_call_type or CallTypes.acompletion.value
             elif "prompt" in request_data and isinstance(request_data["prompt"], str):
                 input = request_data["prompt"]
                 litellm_logging_obj.model_call_details["prompt"] = input
-                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
-                    normalized_call_type = CallTypes.atext_completion.value
+                normalized_call_type = normalized_call_type or CallTypes.atext_completion.value
             elif "input" in request_data and isinstance(request_data["input"], list):
                 input = request_data["input"]
                 litellm_logging_obj.model_call_details["input"] = input
-                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
-                    normalized_call_type = CallTypes.aembedding.value
+                normalized_call_type = normalized_call_type or CallTypes.aembedding.value
+            if litellm_logging_obj.call_type == CallTypes.pass_through.value:
+                normalized_call_type = None
             if normalized_call_type is not None:
                 litellm_logging_obj.call_type = normalized_call_type
                 litellm_logging_obj.model_call_details["call_type"] = normalized_call_type

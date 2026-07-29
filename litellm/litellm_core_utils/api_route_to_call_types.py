@@ -52,6 +52,22 @@ def get_call_types_for_route(route: str) -> Optional[List[CallTypes]]:
     return None
 
 
+def get_primary_call_type_for_route(route: str | None) -> CallTypes | None:
+    """
+    Get the primary (async) CallType for a given API route, or None if unknown.
+
+    Every route in the mapping lists its async call type first, so callers that need a
+    single call type for a route (e.g. attributing a failed request that never reached
+    the SDK) get the async variant.
+    """
+    if route is None:
+        return None
+    call_types = get_call_types_for_route(route)
+    if not call_types:
+        return None
+    return call_types[0]
+
+
 def get_routes_for_call_type(call_type: CallTypes) -> list:
     """
     Get all routes that use a specific CallType.

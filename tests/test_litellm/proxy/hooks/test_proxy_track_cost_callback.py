@@ -1263,3 +1263,165 @@ async def test_track_cost_callback_logs_unauthenticated_pass_through_request(
         assert mock_proxy_logging.db_spend_update_writer.update_database.await_count == (
             1 if expect_spend_log else 0
         )
+
+
+class _StubLoggingObj:
+    """Minimal stand-in for the request's Logging object."""
+
+    def __init__(self, call_type: str):
+        self.call_type = call_type
+        self.model_call_details: dict = {}
+        self.litellm_trace_id = "trace-123"
+        self.start_time = datetime.now()
+
+
+async def _failure_spend_log_payload(request_data: dict, user_api_key_dict: UserAPIKeyAuth):
+    """Run the failure hook and build the spend log row it would write."""
+    import json
+
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await _ProxyDBLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("upstream exploded"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    mock_update_database.assert_called_once()
+    payload = get_logging_payload(
+        kwargs=mock_update_database.call_args[1]["kwargs"],
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    return payload, json.loads(payload["metadata"])
+
+
+@pytest.mark.asyncio
+async def test_failure_spend_log_preserves_router_metadata_from_litellm_metadata_bucket():
+    """Regression for #35068: /v1/responses, /v1/messages, batches and files keep
+    proxy-internal metadata in ``litellm_metadata``. A failure on those routes was
+    logged with no model_group/model_id/tags, so the row couldn't be attributed to a
+    model group or deployment."""
+    payload, metadata = await _failure_spend_log_payload(
+        request_data={
+            "model": "test-model",
+            "litellm_metadata": {
+                "user_api_key_team_id": "real-team",
+                "model_group": "test-model-group",
+                "model_info": {"id": "test-deployment-id"},
+                "attempted_retries": 2,
+                "max_retries": 2,
+                "tags": ["failure-test"],
+                "spend_logs_metadata": {"ticket": "abc"},
+            },
+            "proxy_server_request": {"url": "/v1/responses"},
+        },
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="real-user",
+            team_id="real-team",
+            request_route="/v1/responses",
+        ),
+    )
+
+    assert payload["model_group"] == "test-model-group"
+    assert payload["model_id"] == "test-deployment-id"
+    assert payload["request_tags"] == '["failure-test"]'
+    assert metadata["attempted_retries"] == 2
+    assert metadata["max_retries"] == 2
+    assert metadata["spend_logs_metadata"] == {"ticket": "abc"}
+    assert metadata["status"] == "failure"
+    assert metadata["error_information"]["error_class"] == "Exception"
+
+
+@pytest.mark.asyncio
+async def test_failure_spend_log_keeps_status_when_both_metadata_buckets_are_present():
+    """Regression for #35068: with ``metadata`` and ``litellm_metadata`` both set on
+    litellm_params, spend tracking reads only the latter, so the failure status and
+    error information written by this hook never reached the row."""
+    payload, metadata = await _failure_spend_log_payload(
+        request_data={
+            "model": "test-model",
+            "metadata": {},
+            "litellm_metadata": {
+                "model_group": "test-model-group",
+                "model_info": {"id": "test-deployment-id"},
+            },
+            "litellm_params": {
+                "metadata": {"tags": ["failure-test"]},
+                "litellm_metadata": {"api_base": "https://example.test/v1"},
+            },
+            "call_type": "aresponses",
+        },
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="real-user", team_id="real-team"),
+    )
+
+    assert metadata["status"] == "failure"
+    assert metadata["error_information"]["error_message"] == "upstream exploded"
+    assert payload["model_group"] == "test-model-group"
+    assert payload["request_tags"] == '["failure-test"]'
+
+
+@pytest.mark.asyncio
+async def test_failure_spend_log_drops_caller_supplied_key_identity():
+    """A caller can put ``user_api_key_*`` fields in the request body. Every identity
+    field on the failure row must come from the authenticated key, including ones the
+    sanitized key information doesn't happen to overwrite."""
+    request_data = {
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {
+            "user_api_key_team_id": "spoofed-team",
+            "user_api_key_user_id": "spoofed-user",
+            "user_api_key_budget_ignored_by_sanitizer": "spoofed",
+        },
+    }
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="real-user", team_id="real-team")
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await _ProxyDBLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("upstream exploded"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    spend_metadata = mock_update_database.call_args[1]["kwargs"]["litellm_params"]["metadata"]
+    assert spend_metadata["user_api_key_team_id"] == "real-team"
+    assert spend_metadata["user_api_key_user_id"] == "real-user"
+    assert "user_api_key_budget_ignored_by_sanitizer" not in spend_metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "logged_call_type, expected_call_type",
+    [
+        ("aresponses", "aresponses"),
+        ("anthropic_messages", "anthropic_messages"),
+        ("/v1/responses", ""),
+    ],
+)
+async def test_failure_spend_log_call_type_comes_from_logging_object(
+    logged_call_type, expected_call_type
+):
+    """Regression for #35068: failure rows were written with a blank call_type, so a
+    failed Responses request was indistinguishable from a failed chat completion. Route
+    strings left on the Logging object by proxy-only errors must not leak into the
+    column."""
+    payload, _ = await _failure_spend_log_payload(
+        request_data={
+            "model": "test-model",
+            "litellm_metadata": {},
+            "litellm_logging_obj": _StubLoggingObj(call_type=logged_call_type),
+        },
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="real-user", team_id="real-team"),
+    )
+
+    assert payload["call_type"] == expected_call_type
