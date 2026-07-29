@@ -82,7 +82,7 @@ _GCP_LABEL_VALUE_MAX_LEN = 63
 _CUSTOM_ID_RAW_LABEL_PREFIX = "b32_"
 _VERTEX_BATCH_KEY_FIELD = "key"
 _MANAGED_GCS_MODEL_PATH_PATTERN = re.compile(r"publishers/[^/]+/models/([^/?]+)")
-_EMBED_CONTENT_CONFIG_FIELD_BY_GEMINI_PARAM = {
+_EMBED_REQUEST_FIELD_BY_GEMINI_PARAM = {
     "outputDimensionality": "output_dimensionality",
     "taskType": "task_type",
     "title": "title",
@@ -231,10 +231,11 @@ def _transform_vertex_embeddings_batch_output_row_to_openai(
     output row holding an `/v1/embeddings` response body.
 
     Example Vertex jsonl
-    {"key": "id_1", "request": {...}, "response": {"tokenCount": "2", "embedding": {"values": [-0.015, 0.024]}}}
+    {"key": "id_1", "request": {...}, "response": {"embedding": {"values": [-0.015, 0.024]}, "usageMetadata": {"promptTokenCount": 2}}}
 
-    `tokenCount` is serialized as a string by Vertex (int64 proto field), and the row
-    carries no `modelVersion`, so the model comes from the batch the row belongs to.
+    Live rows report usage under `usageMetadata`; the documented `tokenCount` is kept as
+    a fallback. The row carries no `modelVersion`, so the model comes from the batch it
+    belongs to.
     """
     custom_id = _get_litellm_batch_custom_id(vertex_output_row)
     status = vertex_output_row.get("status", "")
@@ -245,7 +246,8 @@ def _transform_vertex_embeddings_batch_output_row_to_openai(
         )
 
     vertex_response = vertex_output_row.get("response") or {}
-    token_count = int(vertex_response.get("tokenCount") or 0)
+    usage_metadata = vertex_response.get("usageMetadata") or {}
+    token_count = int(usage_metadata.get("promptTokenCount") or vertex_response.get("tokenCount") or 0)
     body = EmbeddingResponse(
         model=model or "",
         data=[
@@ -296,11 +298,13 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_row(
     Embedding batch row.
 
     Example Vertex jsonl
-    {"key": "id_1", "request": {"content": {"parts": [{"text": "Hello World"}]}}, "embed_content_config": {"output_dimensionality": 768, "task_type": "RETRIEVAL_DOCUMENT"}}
+    {"key": "id_1", "request": {"content": {"parts": [{"text": "Hello World"}]}, "output_dimensionality": 768, "task_type": "RETRIEVAL_DOCUMENT"}}
 
     Note that `content` is singular (an `EmbedContentRequest`, not a
-    `GenerateContentRequest`), the per-row config is a sibling of `request` rather than
-    part of it, and the `custom_id` round-trips through the top-level `key`.
+    `GenerateContentRequest`) and that the `custom_id` round-trips through the top-level
+    `key`. The docs put the per-row config in an `embed_content_config` sibling of
+    `request`, but the API rejects that key outright and fails the whole batch job, so
+    the config fields go inside the `EmbedContentRequest` itself.
 
     API Ref: https://cloud.google.com/vertex-ai/generative-ai/docs/embeddings/batch-prediction-genai-embeddings
     """
@@ -314,17 +318,16 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_row(
         model=openai_request_body.get("model", ""),
         optional_params=openai_request_body,
     )
-    embed_content_config = {
-        config_field: embed_content_request[gemini_param]
-        for gemini_param, config_field in _EMBED_CONTENT_CONFIG_FIELD_BY_GEMINI_PARAM.items()
+    embed_request_fields = {
+        request_field: embed_content_request[gemini_param]
+        for gemini_param, request_field in _EMBED_REQUEST_FIELD_BY_GEMINI_PARAM.items()
         if gemini_param in embed_content_request
     }
 
     custom_id = openai_entry.get("custom_id")
     return {
         **({_VERTEX_BATCH_KEY_FIELD: str(custom_id)} if custom_id is not None else {}),
-        "request": {"content": embed_content_request["content"]},
-        **({"embed_content_config": embed_content_config} if embed_content_config else {}),
+        "request": {"content": embed_content_request["content"], **embed_request_fields},
     }
 
 
