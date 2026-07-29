@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    _get_thought_signature_from_tool,
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
@@ -635,6 +636,52 @@ def check_if_part_exists_in_parts(parts: List[PartType], part: PartType, exclude
     return False
 
 
+def _collect_tool_call_thought_signatures(
+    assistant_msg: ChatCompletionAssistantMessage,
+) -> frozenset[str]:
+    """Thought signatures already carried by this message's tool-call parts.
+
+    Gemini returns each thoughtSignature on exactly one part. When the signed
+    part is a function call, the signature is replayed on that tool-call part
+    by convert_to_gemini_tool_call_invoke, so attaching the same signature to
+    the text part as well would send two copies and double-bill the previous
+    turn's reasoning tokens on gemini-3 and newer models.
+
+    Detection deliberately calls _get_thought_signature_from_tool without the
+    model argument: with a gemini-3 model that helper synthesizes a dummy
+    signature for unsigned tool calls, which must not suppress a real
+    text-part signature (e.g. replaying gemini-2.5 history to a newer model).
+    """
+    signatures: tuple[str, ...] = ()
+
+    tool_calls = assistant_msg.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for tool in tool_calls:
+            if isinstance(tool, dict):
+                signature = _get_thought_signature_from_tool(tool)
+                if signature:
+                    signatures += (signature,)
+
+    function_call = assistant_msg.get("function_call")
+    if isinstance(function_call, dict):
+        signature = _get_thought_signature_from_tool({"function": function_call})
+        if signature:
+            signatures += (signature,)
+
+    provider_specific_fields = assistant_msg.get("provider_specific_fields")
+    if isinstance(provider_specific_fields, dict):
+        invocations = provider_specific_fields.get("server_side_tool_invocations")
+        if isinstance(invocations, list):
+            for invocation in invocations:
+                if isinstance(invocation, dict):
+                    for key in ("thought_signature", "response_thought_signature"):
+                        invocation_signature = invocation.get(key)
+                        if isinstance(invocation_signature, str) and invocation_signature:
+                            signatures += (invocation_signature,)
+
+    return frozenset(signatures)
+
+
 def _gemini_convert_messages_with_history(
     messages: List[AllMessageValues],
     model: Optional[str] = None,
@@ -864,8 +911,18 @@ def _gemini_convert_messages_with_history(
                     if provider_specific_fields and isinstance(provider_specific_fields, dict):
                         thought_signatures = provider_specific_fields.get("thought_signatures")
 
-                    # If we have thought signatures, add them to the part
-                    if thought_signatures and isinstance(thought_signatures, list) and len(thought_signatures) > 0:
+                    # A signature that is already carried by one of this message's
+                    # tool-call parts must not be attached to the text part too:
+                    # Gemini bills every replayed copy as the previous turn's full
+                    # reasoning token count on gemini-3 and newer models
+                    tool_call_signatures = _collect_tool_call_thought_signatures(assistant_msg)
+
+                    if (
+                        thought_signatures
+                        and isinstance(thought_signatures, list)
+                        and len(thought_signatures) > 0
+                        and thought_signatures[0] not in tool_call_signatures
+                    ):
                         # Use the first signature for the text part (Gemini expects one signature per part)
                         assistant_content.append(
                             PartType(
