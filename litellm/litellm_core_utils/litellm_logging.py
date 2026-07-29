@@ -15,6 +15,8 @@ from datetime import datetime as dt_object
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
 
+from collections.abc import Mapping
+
 from httpx import Response
 from pydantic import BaseModel
 
@@ -5164,7 +5166,7 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def _get_standard_logging_payload_trace_id(
         logging_obj: Logging,
-        litellm_params: dict,
+        litellm_params: Mapping[str, Any],
     ) -> str:
         """
         Returns the `litellm_trace_id` for this request
@@ -5206,7 +5208,7 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def _get_standard_logging_payload_session_id(
         logging_obj: Logging,
-        litellm_params: dict,
+        litellm_params: Mapping[str, Any],
     ) -> str:
         """
         Returns the end-user/conversation `litellm_session_id` for this request, independent of trace_id.
