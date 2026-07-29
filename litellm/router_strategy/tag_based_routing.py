@@ -7,6 +7,7 @@ Use this to route requests between Teams
 """
 
 import re
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 from litellm._logging import verbose_logger
@@ -21,8 +22,8 @@ else:
 
 
 def _is_valid_deployment_tag_regex(
-    tag_regexes: list[str],
-    header_strings: list[str],
+    tag_regexes: Sequence[str],
+    header_strings: Sequence[str],
 ) -> Optional[str]:
     """
     Test compiled regex patterns against "Header-Name: value" strings.
@@ -43,7 +44,9 @@ def _is_valid_deployment_tag_regex(
     return None
 
 
-def is_valid_deployment_tag(deployment_tags: list[str], request_tags: list[str], match_any: bool = True) -> bool:
+def is_valid_deployment_tag(
+    deployment_tags: Sequence[str], request_tags: Sequence[str], match_any: bool = True
+) -> bool:
     """
     Check if a tag is valid, the matching can be either any or all based on `match_any` flag
     """
@@ -71,10 +74,10 @@ def is_valid_deployment_tag(deployment_tags: list[str], request_tags: list[str],
 
 def _match_deployment(
     deployment: Any,
-    request_tags: Optional[list[str]],
-    header_strings: list[str],
+    request_tags: Sequence[str] | None,
+    header_strings: Sequence[str],
     match_any: bool,
-) -> Optional[dict[str, str]]:
+) -> Mapping[str, str] | None:
     """
     Determine whether *deployment* matches the current request.
 
@@ -87,8 +90,8 @@ def _match_deployment(
          ran and failed, so the regex cannot override strict-tag policy.
     """
     litellm_params = deployment.get("litellm_params", {})
-    deployment_tags: Optional[list[str]] = litellm_params.get("tags")
-    deployment_tag_regex: Optional[list[str]] = litellm_params.get("tag_regex")
+    deployment_tags: Sequence[str] | None = litellm_params.get("tags")
+    deployment_tag_regex: Sequence[str] | None = litellm_params.get("tag_regex")
 
     # 1. Exact tag match (existing behaviour).
     if deployment_tags and request_tags:
@@ -114,26 +117,63 @@ def _match_deployment(
     return None
 
 
-def _split_tags(tags: list[str]) -> tuple[list[str], list[str]]:
-    positive = [t for t in tags if not t.startswith("!")]
+def _split_tags(tags: Sequence[str]) -> tuple[Sequence[str], Sequence[str], Sequence[str]]:
+    """
+    Split request tags into (required, positive, excluded) by prefix.
+
+    `&tag` is required-AND (deployment must carry every one of them), `!tag` is
+    negation and a bare tag keeps the existing inclusion semantics. A lone "&" or
+    "!" carries no value, so it is dropped.
+    """
+    required = [tag[1:] for tag in tags if tag.startswith("&") and len(tag) > 1]
     excluded = [tag[1:] for tag in tags if tag.startswith("!") and len(tag) > 1]
-    return positive, excluded
+    positive = [t for t in tags if not t.startswith(("&", "!"))]
+    return required, positive, excluded
 
 
 def _exclude_deployments(
-    deployments: Union[list[Any], dict[Any, Any]],
+    deployments: Union[Sequence[Any], Mapping[Any, Any]],
     excluded_set: frozenset[str],
-) -> list[Any]:
+) -> Sequence[Any]:
     if not excluded_set:
         return list(deployments)
     return [d for d in deployments if not excluded_set.intersection(d.get("litellm_params", {}).get("tags") or [])]
 
 
+def _require_all_tags(
+    deployments: Sequence[Any],
+    required_set: frozenset[str],
+) -> Sequence[Any]:
+    if not required_set:
+        return deployments
+    return [d for d in deployments if required_set.issubset(d.get("litellm_params", {}).get("tags") or [])]
+
+
+def _default_pool(deployments: Sequence[Any]) -> Sequence[Any]:
+    return [d for d in deployments if "default" in (d.get("litellm_params", {}).get("tags") or [])]
+
+
+def _tag_routing_metadata(
+    deployment: Mapping[str, Any],
+    matched_via: str,
+    matched_value: str,
+    request_tags: Sequence[str] | None,
+    user_agent: str,
+) -> Mapping[str, Any]:
+    return {
+        "matched_deployment": deployment.get("model_name"),
+        "matched_via": matched_via,
+        "matched_value": matched_value,
+        "request_tags": request_tags or [],
+        "user_agent": user_agent,
+    }
+
+
 def _require_candidates(
-    candidates: list[Any],
+    candidates: Sequence[Any],
     model: str,
     request_tags: Any,
-) -> list[Any]:
+) -> Sequence[Any]:
     if not candidates:
         raise ValueError(
             f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
@@ -142,8 +182,8 @@ def _require_candidates(
 
 
 def _ban_only_base_pool(
-    deployments: Union[list[Any], dict[Any, Any]],
-) -> list[Any]:
+    deployments: Union[Sequence[Any], Mapping[Any, Any]],
+) -> Sequence[Any]:
     # Mirrors untagged-request semantics so callers can't use !tags to escape the default pool.
     defaults = [d for d in deployments if "default" in (d.get("litellm_params", {}).get("tags") or [])]
     return defaults if defaults else list(deployments)
@@ -190,23 +230,39 @@ async def get_deployments_for_tag(
         # Build header strings for regex matching from what the proxy already stores.
         # Currently we match against User-Agent; format matches "^User-Agent: claude-code/..."
         user_agent = metadata.get("user_agent", "")
-        header_strings: list[str] = [f"User-Agent: {user_agent}"] if user_agent else []
+        header_strings: Sequence[str] = [f"User-Agent: {user_agent}"] if user_agent else []
 
-        positive_tags, excluded_patterns = _split_tags(request_tags or [])
+        required_tags, positive_tags, excluded_patterns = _split_tags(request_tags or [])
 
         excluded_set = frozenset(excluded_patterns)
-        candidates = _exclude_deployments(healthy_deployments, excluded_set)
+        required_set = frozenset(required_tags)
+        allowed_deployments = _exclude_deployments(healthy_deployments, excluded_set)
+        candidates = _require_all_tags(allowed_deployments, required_set)
+
+        default_deployments = _default_pool(allowed_deployments)
 
         has_regex_deployments = any(d.get("litellm_params", {}).get("tag_regex") for d in candidates)
         has_tag_filter = bool(positive_tags) or (bool(header_strings) and has_regex_deployments)
-        ban_only = bool(excluded_set) and not has_tag_filter
+        ban_only = bool(excluded_set) and not required_set and not has_tag_filter
 
         if ban_only:
             pool = _exclude_deployments(_ban_only_base_pool(healthy_deployments), excluded_set)
             return _require_candidates(pool, model, request_tags)
 
+        if required_set and not has_tag_filter:
+            if candidates:
+                if "tag_routing" not in metadata:
+                    metadata["tag_routing"] = _tag_routing_metadata(
+                        deployment=candidates[0],
+                        matched_via="required_tags",
+                        matched_value=",".join(required_tags),
+                        request_tags=request_tags,
+                        user_agent=user_agent,
+                    )
+                return candidates
+            return _require_candidates(default_deployments, model, request_tags)
+
         new_healthy_deployments: list[Any] = []
-        default_deployments: list[Any] = []
 
         if has_tag_filter:
             verbose_logger.debug(
@@ -215,8 +271,6 @@ async def get_deployments_for_tag(
                 user_agent,
             )
             for deployment in candidates:
-                deployment_tags = deployment.get("litellm_params", {}).get("tags")
-
                 match_result = _match_deployment(
                     deployment=deployment,
                     request_tags=positive_tags,
@@ -232,17 +286,14 @@ async def get_deployments_for_tag(
                         match_result["matched_value"],
                     )
                     if "tag_routing" not in metadata:
-                        metadata["tag_routing"] = {
-                            "matched_deployment": deployment.get("model_name"),
-                            "matched_via": match_result["matched_via"],
-                            "matched_value": match_result["matched_value"],
-                            "request_tags": request_tags or [],
-                            "user_agent": user_agent,
-                        }
+                        metadata["tag_routing"] = _tag_routing_metadata(
+                            deployment=deployment,
+                            matched_via=match_result["matched_via"],
+                            matched_value=match_result["matched_value"],
+                            request_tags=request_tags,
+                            user_agent=user_agent,
+                        )
                     new_healthy_deployments.append(deployment)
-
-                if deployment_tags and "default" in deployment_tags:
-                    default_deployments.append(deployment)
 
             if len(new_healthy_deployments) == 0 and len(default_deployments) == 0:
                 raise ValueError(

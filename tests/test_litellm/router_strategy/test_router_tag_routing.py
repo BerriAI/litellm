@@ -429,7 +429,8 @@ def test_get_tags_from_request_kwargs_various_inputs():
 def test_split_tags_positive_only():
     from litellm.router_strategy.tag_based_routing import _split_tags
 
-    positive, excluded = _split_tags(["paid", "teamA"])
+    required, positive, excluded = _split_tags(["paid", "teamA"])
+    assert required == []
     assert positive == ["paid", "teamA"]
     assert excluded == []
 
@@ -437,7 +438,8 @@ def test_split_tags_positive_only():
 def test_split_tags_negation_only():
     from litellm.router_strategy.tag_based_routing import _split_tags
 
-    positive, excluded = _split_tags(["!provider:anthropic"])
+    required, positive, excluded = _split_tags(["!provider:anthropic"])
+    assert required == []
     assert positive == []
     assert excluded == ["provider:anthropic"]
 
@@ -445,7 +447,10 @@ def test_split_tags_negation_only():
 def test_split_tags_mixed():
     from litellm.router_strategy.tag_based_routing import _split_tags
 
-    positive, excluded = _split_tags(["paid", "!provider:anthropic", "!inference:cerebras"])
+    required, positive, excluded = _split_tags(
+        ["&reasoning_type:high", "paid", "!provider:anthropic", "!inference:cerebras"]
+    )
+    assert required == ["reasoning_type:high"]
     assert positive == ["paid"]
     assert len(excluded) == 2
 
@@ -454,7 +459,26 @@ def test_split_tags_bare_bang_skipped():
     from litellm.router_strategy.tag_based_routing import _split_tags
 
     # A bare "!" with nothing after it is not a valid negation tag; skip it
-    positive, excluded = _split_tags(["paid", "!"])
+    required, positive, excluded = _split_tags(["paid", "!"])
+    assert required == []
+    assert positive == ["paid"]
+    assert excluded == []
+
+
+def test_split_tags_required_only():
+    from litellm.router_strategy.tag_based_routing import _split_tags
+
+    required, positive, excluded = _split_tags(["&reasoning_type:high", "&provider:anthropic"])
+    assert required == ["reasoning_type:high", "provider:anthropic"]
+    assert positive == []
+    assert excluded == []
+
+
+def test_split_tags_bare_ampersand_skipped():
+    from litellm.router_strategy.tag_based_routing import _split_tags
+
+    required, positive, excluded = _split_tags(["paid", "&"])
+    assert required == []
     assert positive == ["paid"]
     assert excluded == []
 
@@ -462,7 +486,8 @@ def test_split_tags_bare_bang_skipped():
 def test_split_tags_empty():
     from litellm.router_strategy.tag_based_routing import _split_tags
 
-    positive, excluded = _split_tags([])
+    required, positive, excluded = _split_tags([])
+    assert required == []
     assert positive == []
     assert excluded == []
 
@@ -1115,3 +1140,186 @@ async def test_request_level_enable_tag_filtering_false_cannot_disable_global():
             mock_response="hi",
         )
         assert response._hidden_params["model_id"] == "team-a-deployment"
+
+
+# --- get_deployments_for_tag required-AND (& prefix) integration tests ---
+
+
+def _deployment(deployment_id: str, tags=None, tag_regex=None):
+    litellm_params = {
+        "model": "gpt-4o",
+        "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+    }
+    if tags is not None:
+        litellm_params["tags"] = tags
+    if tag_regex is not None:
+        litellm_params["tag_regex"] = tag_regex
+    return {
+        "model_name": "gpt-4",
+        "litellm_params": litellm_params,
+        "model_info": {"id": deployment_id},
+    }
+
+
+def _tag_router(deployments, match_any: bool = True):
+    return litellm.Router(
+        model_list=deployments,
+        enable_tag_filtering=True,
+        tag_filtering_match_any=match_any,
+    )
+
+
+async def _route(deployments, tags, user_agent=None, match_any: bool = True, metadata=None):
+    from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+
+    request_metadata = metadata if metadata is not None else {}
+    request_metadata["tags"] = tags
+    if user_agent is not None:
+        request_metadata["user_agent"] = user_agent
+    result = await get_deployments_for_tag(
+        llm_router_instance=_tag_router(deployments, match_any=match_any),
+        model="gpt-4",
+        healthy_deployments=deployments,
+        request_kwargs={"metadata": request_metadata},
+    )
+    return [d["model_info"]["id"] for d in result]
+
+
+ANTHROPIC_HIGH = _deployment("anthropic-high", tags=["provider:anthropic", "reasoning_type:high"])
+ANTHROPIC_LOW = _deployment("anthropic-low", tags=["provider:anthropic", "reasoning_type:low"])
+OPENAI_HIGH = _deployment("openai-high", tags=["provider:openai", "reasoning_type:high"])
+
+
+@pytest.mark.asyncio()
+async def test_required_and_requires_every_ampersand_tag():
+    """
+    "&reasoning_type:high,&provider:anthropic" must return only the deployment carrying
+    both tags; under the existing OR semantics all three deployments would survive.
+    """
+    deployments = [ANTHROPIC_HIGH, ANTHROPIC_LOW, OPENAI_HIGH]
+
+    assert await _route(deployments, ["&reasoning_type:high", "&provider:anthropic"]) == ["anthropic-high"]
+    assert sorted(await _route(deployments, ["reasoning_type:high", "provider:anthropic"])) == [
+        "anthropic-high",
+        "anthropic-low",
+        "openai-high",
+    ]
+
+
+@pytest.mark.asyncio()
+async def test_required_and_keeps_all_deployments_carrying_the_required_tag():
+    deployments = [ANTHROPIC_HIGH, ANTHROPIC_LOW, OPENAI_HIGH]
+
+    assert sorted(await _route(deployments, ["&reasoning_type:high"])) == ["anthropic-high", "openai-high"]
+
+
+@pytest.mark.asyncio()
+async def test_required_and_composes_with_positive_or_and_negation():
+    """
+    The composed example from the feature request: must be high-reasoning, AND
+    (anthropic OR openai), AND not cerebras-hosted.
+    """
+    deployments = [
+        _deployment("anthropic-high", tags=["reasoning_type:high", "provider:anthropic"]),
+        _deployment("openai-high-cerebras", tags=["reasoning_type:high", "provider:openai", "inference:cerebras"]),
+        _deployment("openai-high", tags=["reasoning_type:high", "provider:openai"]),
+        _deployment("anthropic-low", tags=["reasoning_type:low", "provider:anthropic"]),
+        _deployment("vertex-high", tags=["reasoning_type:high", "provider:vertex"]),
+    ]
+
+    selected = await _route(
+        deployments,
+        ["&reasoning_type:high", "provider:anthropic", "provider:openai", "!inference:cerebras"],
+    )
+
+    assert sorted(selected) == ["anthropic-high", "openai-high"]
+
+
+@pytest.mark.asyncio()
+async def test_required_and_narrows_before_positive_or():
+    """A deployment matching a positive tag but missing a required tag must be dropped."""
+    deployments = [ANTHROPIC_HIGH, ANTHROPIC_LOW]
+
+    assert await _route(deployments, ["&reasoning_type:high", "provider:anthropic"]) == ["anthropic-high"]
+
+
+@pytest.mark.asyncio()
+async def test_required_and_falls_back_to_default_pool_when_nothing_matches():
+    deployments = [ANTHROPIC_HIGH, _deployment("default-model", tags=["default"])]
+
+    assert await _route(deployments, ["&provider:vertex"]) == ["default-model"]
+
+
+@pytest.mark.asyncio()
+async def test_required_and_raises_when_nothing_matches_and_no_default_pool():
+    from litellm.types.router import RouterErrors
+
+    with pytest.raises(ValueError) as exc_info:
+        await _route([ANTHROPIC_HIGH, OPENAI_HIGH], ["&provider:vertex"])
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_required_and_blocks_tag_regex_deployment_missing_required_tag():
+    """A matching User-Agent must not resurrect a deployment that lacks a required tag."""
+    deployments = [
+        _deployment("claude-code-openai", tags=["provider:openai"], tag_regex=[r"^User-Agent: claude-code\/"]),
+        ANTHROPIC_HIGH,
+    ]
+
+    selected = await _route(deployments, ["&reasoning_type:high"], user_agent="claude-code/1.2.3")
+
+    assert selected == ["anthropic-high"]
+
+
+@pytest.mark.asyncio()
+async def test_required_and_matches_tag_regex_deployment_carrying_required_tag():
+    deployments = [
+        _deployment(
+            "claude-code-high",
+            tags=["reasoning_type:high"],
+            tag_regex=[r"^User-Agent: claude-code\/"],
+        ),
+        ANTHROPIC_LOW,
+    ]
+
+    selected = await _route(deployments, ["&reasoning_type:high"], user_agent="claude-code/1.2.3")
+
+    assert selected == ["claude-code-high"]
+
+
+@pytest.mark.asyncio()
+async def test_required_and_records_tag_routing_metadata():
+    metadata: dict = {}
+
+    await _route([ANTHROPIC_HIGH, ANTHROPIC_LOW], ["&reasoning_type:high"], metadata=metadata)
+
+    assert metadata["tag_routing"] == {
+        "matched_deployment": "gpt-4",
+        "matched_via": "required_tags",
+        "matched_value": "reasoning_type:high",
+        "request_tags": ["&reasoning_type:high"],
+        "user_agent": "",
+    }
+
+
+@pytest.mark.asyncio()
+async def test_required_and_end_to_end_routing():
+    router = _tag_router([ANTHROPIC_HIGH, ANTHROPIC_LOW, OPENAI_HIGH])
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["&provider:anthropic", "&reasoning_type:high"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "anthropic-high"
+
+
+@pytest.mark.asyncio()
+async def test_bare_ampersand_tag_does_not_constrain_routing():
+    deployments = [ANTHROPIC_HIGH, ANTHROPIC_LOW]
+
+    assert await _route(deployments, ["&", "reasoning_type:low"]) == ["anthropic-low"]
