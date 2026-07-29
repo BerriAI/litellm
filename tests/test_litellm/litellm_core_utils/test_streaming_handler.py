@@ -14,6 +14,7 @@ import traceback
 from typing import Optional
 
 import litellm
+from litellm._logging import session_id_var, trace_id_var
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import (
     AUDIO_ATTRIBUTE,
@@ -3551,3 +3552,466 @@ def test_openai_custom_tool_call_stream_deltas_survive_conversion(logging_obj: L
     assert combined_input == "*** Begin Patch\n*** End Patch\n"
     finish_reasons = [chunk.choices[0].finish_reason for chunk in emitted if chunk.choices]
     assert "tool_calls" in finish_reasons
+
+
+def test_sync_streaming_completion_restores_context_immediately_on_return(monkeypatch):
+    """wrapper() (the sync entry point) must restore the originating thread's
+    correlation context the instant a streaming completion() call returns,
+    before the caller ever starts iterating - unlike wrapper_async(), it
+    cannot safely leave the contextvars "open" across the caller's own,
+    unboundedly long iteration.
+
+    A plain OS thread has no per-call isolation the way an asyncio Task does:
+    if a sync stream is abandoned mid-iteration (client disconnect, an early
+    break, an exception), nothing ever restores it, and a thread pool can hand
+    that same, now-poisoned thread to a completely unrelated future call,
+    which then inherits the wrong ids as its own "pre-call" baseline and
+    propagates them forward indefinitely. Restoring unconditionally in
+    wrapper()'s own finally, before the stream is ever handed to the caller,
+    closes that hole entirely for the sync path."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    trace_id_var.set("outer-trace-stream")
+    session_id_var.set("outer-session-stream")
+    try:
+        response = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+            stream=True,
+            litellm_session_id="streaming-call-session",
+            num_retries=0,
+        )
+        # Already restored - before the caller has iterated a single chunk.
+        assert session_id_var.get() == "outer-session-stream"
+        assert trace_id_var.get() == "outer-trace-stream"
+
+        for _ in response:
+            pass
+
+        # Consuming the stream afterward must not disturb the already-restored
+        # outer context either.
+        assert session_id_var.get() == "outer-session-stream"
+        assert trace_id_var.get() == "outer-trace-stream"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_abandoned_sync_stream_does_not_contaminate_a_later_call_on_the_same_thread(monkeypatch):
+    """Reproduces the maintainer-reported blocking bug: request A starts a sync
+    stream, consumes one chunk, and abandons it (client disconnect / early
+    break / uncaught exception - never exhausts, never calls aclose()).
+    Request B is a completely separate, non-streaming call that later runs on
+    the *same* worker thread (a real ThreadPoolExecutor with a single worker,
+    forcing thread reuse, exactly like a WSGI/thread-pool-backed sync server).
+
+    Before the fix, A's contextvars stayed "open" (wrapper() skipped restoring
+    for streams) with no deterministic point that ever closed them, so B
+    inherited A's ids as its own pre-call baseline and then "restored" back to
+    that poison when it finished - permanently wrong-attributing every log
+    line on this thread to request A from then on, including B's own and any
+    unrelated future work. Restoring unconditionally in wrapper()'s own
+    finally, before a sync stream is ever handed to the caller, closes this:
+    B never sees A's ids in the first place."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+
+        def call_a_abandon_stream():
+            response = litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "call A"}],
+                mock_response="call A response",
+                stream=True,
+                litellm_session_id="SESSION-AAA",
+                litellm_trace_id="TRACE-AAA",
+                num_retries=0,
+            )
+            next(response)  # consume exactly one chunk, then abandon it
+
+        def call_b_non_streaming():
+            litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "call B"}],
+                mock_response="call B response",
+                litellm_session_id="SESSION-BBB",
+                litellm_trace_id="TRACE-BBB",
+                num_retries=0,
+            )
+            # wrapper() has already restored to B's own pre-call snapshot by the
+            # time completion() returns - read it here, right after, to see
+            # exactly what B (wrongly, if the bug is present) inherited as its
+            # own baseline and just restored the thread back to.
+            return trace_id_var.get(), session_id_var.get()
+
+        pool.submit(call_a_abandon_stream).result()
+        ids_after_b = pool.submit(call_b_non_streaming).result()
+
+        # The critical assertion: B must not have inherited request A's ids as
+        # its own pre-call baseline and restored the thread back to them - it
+        # must see whatever this thread started with before any of this (the
+        # ContextVar default), not request A's abandoned trace/session id.
+        assert ids_after_b == ("", "")
+    finally:
+        pool.shutdown(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_completion_does_not_reset_context_before_iteration(monkeypatch):
+    """Same as above for wrapper_async()/acompletion()."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    trace_id_var.set("outer-trace-async-stream")
+    session_id_var.set("outer-session-async-stream")
+    try:
+        response = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+            stream=True,
+            litellm_session_id="async-streaming-call-session",
+            num_retries=0,
+        )
+        assert session_id_var.get() == "async-streaming-call-session"
+
+        async for _ in response:
+            pass
+
+        # Once the stream is genuinely exhausted, the *consuming* task's own
+        # context must be restored - async_success_handler's own dispatch (via
+        # asyncio.create_task) only fixes up its own detached task, not this one.
+        assert session_id_var.get() == "outer-session-async-stream"
+        assert trace_id_var.get() == "outer-trace-async-stream"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_stream_wrapper_del_restores_correlation_context():
+    """CustomStreamWrapper.__del__ is the best-effort fallback for an abandoned
+    stream (caller never exhausts it, so the normal terminal-handler restore
+    never fires). Testing this via real garbage collection is unreliable in
+    practice - CPython's per-chunk logging submits work to a thread pool
+    executor whose worker thread transiently holds its own reference to the
+    wrapper (a bound method argument) until that task completes, so refcount
+    doesn't reliably hit zero on a deterministic schedule even with polling.
+    Call __del__ directly instead: it's a plain method, calling it early
+    doesn't run actual finalization, and this exercises exactly the logic that
+    real garbage collection would eventually trigger.
+    """
+    trace_id_var.set("outer-trace-abandoned")
+    session_id_var.set("outer-session-abandoned")
+    try:
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="abandoned-stream-call",
+            function_id="fn-abandoned-stream",
+            kwargs={"litellm_session_id": "abandoned-stream-session"},
+        )
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gpt-3.5-turbo",
+            logging_obj=log_obj,
+        )
+        wrapper.__del__()
+
+        assert trace_id_var.get() == "outer-trace-abandoned"
+        assert session_id_var.get() == "outer-session-abandoned"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_stream_wrapper_del_never_raises_with_broken_logging_obj():
+    """__del__ runs during garbage collection, possibly at interpreter
+    shutdown - it must never raise regardless of what's wrong with logging_obj,
+    or Python prints an ignored "exception in __del__" warning and, worse,
+    could mask the real error a caller is in the middle of handling."""
+
+    class ExplodingLogging:
+        model_call_details: dict = {}
+
+        def _restore_correlation_context(self):
+            raise RuntimeError("logging_obj is in a bad state")
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-3.5-turbo",
+        logging_obj=ExplodingLogging(),
+    )
+    wrapper.__del__()  # must not raise
+
+
+def test_stream_wrapper_del_does_not_clobber_a_newer_active_call():
+    """A delayed finalizer must never stomp a different, still-active call's
+    context. If an abandoned stream's __del__ fires late - after a new call
+    has already started in the same Task/thread and claimed the contextvars -
+    unconditionally restoring the abandoned stream's own pre-call snapshot
+    would corrupt the active call's subsequent log lines with stale ids."""
+    trace_id_var.set("outer-trace-before-abandoned-call")
+    session_id_var.set("outer-session-before-abandoned-call")
+    try:
+        abandoned_log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="abandoned-stream-call",
+            function_id="fn-abandoned-stream",
+            kwargs={"litellm_session_id": "abandoned-stream-session"},
+        )
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gpt-3.5-turbo",
+            logging_obj=abandoned_log_obj,
+        )
+
+        # A new, unrelated call starts in this same Task/thread before the
+        # abandoned stream's __del__ ever fires, and claims the contextvars.
+        Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="newer-active-call",
+            function_id="fn-newer-active-call",
+            kwargs={"litellm_session_id": "newer-active-session"},
+        )
+        assert trace_id_var.get() != abandoned_log_obj.litellm_trace_id
+        assert session_id_var.get() == "newer-active-session"
+
+        # The delayed finalizer for the abandoned stream must not clobber
+        # the newer call's still-active ids.
+        wrapper.__del__()
+
+        assert trace_id_var.get() != abandoned_log_obj.litellm_trace_id
+        assert session_id_var.get() == "newer-active-session"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_stream_wrapper_del_restores_when_own_session_id_needed_sanitizing():
+    """The __del__ guard must compare against the *sanitized* id actually
+    stored in the contextvar, not the raw litellm_session_id/litellm_trace_id
+    - set_session_id()/set_trace_id() strip control characters before
+    storing, so a caller-supplied id containing e.g. a newline would never
+    equal the raw attribute, and the guard would wrongly conclude some other
+    call has claimed the context and skip cleanup forever."""
+    trace_id_var.set("outer-trace-needs-sanitizing")
+    session_id_var.set("outer-session-needs-sanitizing")
+    try:
+        raw_session_id = "abandoned\nsession\rwith-control-chars"
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="abandoned-stream-needs-sanitizing",
+            function_id="fn-abandoned-stream-needs-sanitizing",
+            kwargs={"litellm_session_id": raw_session_id},
+        )
+        # Sanity: the contextvar holds the sanitized value, which differs
+        # from the raw litellm_session_id this test constructed it with.
+        assert session_id_var.get() != raw_session_id
+        assert log_obj.litellm_session_id == raw_session_id
+
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gpt-3.5-turbo",
+            logging_obj=log_obj,
+        )
+        wrapper.__del__()
+
+        assert trace_id_var.get() == "outer-trace-needs-sanitizing"
+        assert session_id_var.get() == "outer-session-needs-sanitizing"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_stream_wrapper_next_keeps_context_active_through_synthesized_finish_reason_chunk():
+    """When the underlying stream ends without ever emitting an explicit
+    finish_reason chunk, __next__ synthesizes one via finish_reason_handler()
+    and returns it. That chunk is still this call's own data - the caller's
+    own (application-level) log statements processing it run immediately
+    after this return, in the same synchronous frame, so context must NOT be
+    restored yet or those log lines would carry the wrong ids. A caller that
+    keeps iterating (the common, non-early-break pattern) still gets a
+    correct, deterministic restore on the very next __next__() call, since
+    completion_stream is already exhausted and immediately re-raises
+    StopIteration."""
+    trace_id_var.set("outer-trace-finish-reason")
+    session_id_var.set("outer-session-finish-reason")
+    try:
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="finish-reason-call",
+            function_id="fn-finish-reason",
+            kwargs={"litellm_session_id": "finish-reason-session"},
+        )
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gpt-3.5-turbo",
+            logging_obj=log_obj,
+        )
+        assert trace_id_var.get() == log_obj.litellm_trace_id
+        assert session_id_var.get() == "finish-reason-session"
+
+        chunk = next(wrapper)
+
+        assert chunk.choices[0].finish_reason is not None
+        # Still this call's own ids - not restored yet.
+        assert trace_id_var.get() == log_obj.litellm_trace_id
+        assert session_id_var.get() == "finish-reason-session"
+
+        # A caller that keeps iterating (doesn't break early) still gets a
+        # deterministic restore right here, on the next real StopIteration.
+        with pytest.raises(StopIteration):
+            next(wrapper)
+        assert trace_id_var.get() == "outer-trace-finish-reason"
+        assert session_id_var.get() == "outer-session-finish-reason"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_stream_wrapper_del_cleans_up_after_synthesized_finish_reason_chunk():
+    """A caller that breaks immediately after seeing finish_reason (the
+    early-break pattern) never triggers the next()-driven restore above - it
+    relies on the best-effort __del__ guard instead, same as any other
+    abandoned stream. The guard must still recognize this call's own
+    (unrestored) ids as unclaimed and clean them up."""
+    trace_id_var.set("outer-trace-finish-reason-del")
+    session_id_var.set("outer-session-finish-reason-del")
+    try:
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="finish-reason-del-call",
+            function_id="fn-finish-reason-del",
+            kwargs={"litellm_session_id": "finish-reason-del-session"},
+        )
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gpt-3.5-turbo",
+            logging_obj=log_obj,
+        )
+
+        chunk = next(wrapper)
+        assert chunk.choices[0].finish_reason is not None
+
+        wrapper.__del__()
+
+        assert trace_id_var.get() == "outer-trace-finish-reason-del"
+        assert session_id_var.get() == "outer-session-finish-reason-del"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+@pytest.mark.asyncio
+async def test_stream_wrapper_anext_keeps_context_active_through_synthesized_finish_reason_chunk():
+    """Async sibling of test_stream_wrapper_next_keeps_context_active_through_synthesized_finish_reason_chunk -
+    _finalize_completed_stream()'s else branch must not restore before
+    returning the synthesized chunk either."""
+    trace_id_var.set("outer-trace-anext-finish-reason")
+    session_id_var.set("outer-session-anext-finish-reason")
+    try:
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="anext-finish-reason-call",
+            function_id="fn-anext-finish-reason",
+            kwargs={"litellm_session_id": "anext-finish-reason-session"},
+        )
+
+        async def _empty_aiter():
+            return
+            yield  # pragma: no cover - makes this an async generator
+
+        wrapper = CustomStreamWrapper(
+            completion_stream=_empty_aiter(),
+            model="gpt-3.5-turbo",
+            logging_obj=log_obj,
+        )
+        assert trace_id_var.get() == log_obj.litellm_trace_id
+        assert session_id_var.get() == "anext-finish-reason-session"
+
+        chunk = await wrapper.__anext__()
+
+        assert chunk.choices[0].finish_reason is not None
+        # Still this call's own ids - not restored yet.
+        assert trace_id_var.get() == log_obj.litellm_trace_id
+        assert session_id_var.get() == "anext-finish-reason-session"
+
+        # A caller that keeps iterating still gets a deterministic restore
+        # right here, on the next real StopAsyncIteration.
+        with pytest.raises(StopAsyncIteration):
+            await wrapper.__anext__()
+        assert trace_id_var.get() == "outer-trace-anext-finish-reason"
+        assert session_id_var.get() == "outer-session-anext-finish-reason"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+@pytest.mark.asyncio
+async def test_stream_wrapper_aclose_restores_consumer_correlation_context():
+    """Explicit early termination (aclose(), e.g. on client disconnect or a
+    router fallback aborting an in-progress stream) must restore the caller's
+    correlation context too - not just __del__'s best-effort GC-timed fallback,
+    since aclose() is normally called deterministically by the consumer/
+    framework, unlike __del__."""
+    trace_id_var.set("outer-trace-aclose")
+    session_id_var.set("outer-session-aclose")
+    try:
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="aclose-call",
+            function_id="fn-aclose",
+            kwargs={"litellm_session_id": "aclose-session"},
+        )
+
+        async def _empty_aiter():
+            return
+            yield  # pragma: no cover - makes this an async generator
+
+        wrapper = CustomStreamWrapper(
+            completion_stream=_empty_aiter(),
+            model="gpt-3.5-turbo",
+            logging_obj=log_obj,
+        )
+        assert trace_id_var.get() == log_obj.litellm_trace_id
+        assert session_id_var.get() == "aclose-session"
+
+        await wrapper.aclose()
+
+        assert trace_id_var.get() == "outer-trace-aclose"
+        assert session_id_var.get() == "outer-session-aclose"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")

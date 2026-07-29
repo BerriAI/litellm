@@ -241,21 +241,32 @@ class CustomStreamWrapper:
             restore = getattr(logging_obj, method_name, None)
             if restore is not None:
                 restore()
-        except Exception:
+        except Exception:  # noqa: BLE001  # best-effort cleanup; must never raise into the caller's actual stream handling regardless of what's wrong with logging_obj
             pass
 
     def __del__(self) -> None:
-        """Best-effort correlation-context cleanup for an abandoned stream.
+        """Best-effort correlation-context cleanup for an abandoned async stream.
 
-        If the caller never fully consumes the stream - stops early, drops the
+        Only meaningfully applies to streams created by wrapper_async(): it
+        leaves contextvars "open" across the caller's iteration, so if the
+        caller never fully consumes the stream - stops early, drops the
         reference, cancels it - none of the exit points
-        _restore_consumer_correlation_context() is called from ever run. This
-        is a best-effort fallback, not a guarantee: __del__ timing is
+        _restore_consumer_correlation_context() is called from ever run. For a
+        sync stream (wrapper()), this is a no-op in practice: wrapper() already
+        restores unconditionally before ever handing the stream back, so there
+        is nothing left to clean up here.
+
+        This is a best-effort fallback, not a guarantee: __del__ timing is
         unpredictable (delayed by cyclic GC, not guaranteed at interpreter
         shutdown, and may run on a different thread), so this can only reduce
-        how long the leak persists, not eliminate it. guarded=True additionally
-        ensures it never clobbers a different, still-active call's context if
-        this fires late.
+        how long the leak persists, not eliminate it. That's an acceptable
+        trade specifically because its blast radius is bounded to the one
+        asyncio Task this stream's own call ran in - each async call has its
+        own copy of the contextvars, and Tasks (unlike a thread pool's worker
+        threads) are never recycled across requests, so a delayed or missed
+        cleanup here can never misattribute a *different* request's logs.
+        guarded=True additionally ensures it never clobbers a different,
+        still-active call's context within that same Task if this fires late.
         """
         self._restore_consumer_correlation_context(guarded=True)
 
