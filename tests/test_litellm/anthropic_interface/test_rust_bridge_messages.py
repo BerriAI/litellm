@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm import _logging
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -86,6 +87,44 @@ class RecordingAsyncMessages:
                 "timeout_seconds": timeout_seconds,
             }
         )
+        return dict(FAKE_MESSAGES_RESPONSE)
+
+
+class DebugRecordingMessages:
+    def __init__(self) -> None:
+        self.debug: bool | None = None
+
+    def __call__(
+        self,
+        model: str,
+        body: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str | None,
+        extra_headers: dict[str, object] | None,
+        timeout_seconds: float | None,
+        debug: bool,
+    ) -> dict[str, object]:
+        self.debug = debug
+        return dict(FAKE_MESSAGES_RESPONSE)
+
+
+class DebugRecordingAsyncMessages:
+    def __init__(self) -> None:
+        self.debug: bool | None = None
+
+    async def __call__(
+        self,
+        model: str,
+        body: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str | None,
+        extra_headers: dict[str, object] | None,
+        timeout_seconds: float | None,
+        debug: bool,
+    ) -> dict[str, object]:
+        self.debug = debug
         return dict(FAKE_MESSAGES_RESPONSE)
 
 
@@ -195,6 +234,26 @@ def test_messages_wrapper_forwards_args_and_converts_timeout():
     }
 
 
+def test_messages_wrapper_forwards_debug_to_new_bridge():
+    bridge = DebugRecordingMessages()
+    litellm.use_litellm_rust(True, messages=bridge)
+    litellm._turn_on_debug()
+    try:
+        response = rust_messages.messages(
+            model="claude-sonnet-4-5",
+            body=REQUEST_BODY,
+            api_key="sk-azure",
+            api_base="https://resource.services.ai.azure.com/anthropic",
+            custom_llm_provider="azure_ai",
+            extra_headers=None,
+            timeout=12.5,
+        )
+    finally:
+        _logging._disable_debugging()
+    assert response == FAKE_MESSAGES_RESPONSE
+    assert bridge.debug is True
+
+
 @pytest.mark.asyncio
 async def test_amessages_wrapper_forwards_args():
     bridge = RecordingAsyncMessages()
@@ -213,6 +272,27 @@ async def test_amessages_wrapper_forwards_args():
     assert response == FAKE_MESSAGES_RESPONSE
     assert bridge.calls[0]["model"] == "claude-sonnet-4-5"
     assert bridge.calls[0]["timeout_seconds"] == 12.5
+
+
+@pytest.mark.asyncio
+async def test_amessages_wrapper_forwards_debug_to_new_bridge():
+    bridge = DebugRecordingAsyncMessages()
+    litellm.use_litellm_rust(True, amessages=bridge)
+    litellm._turn_on_debug()
+    try:
+        response = await rust_messages.amessages(
+            model="claude-sonnet-4-5",
+            body=REQUEST_BODY,
+            api_key="sk-azure",
+            api_base="https://resource.services.ai.azure.com/anthropic",
+            custom_llm_provider="azure_ai",
+            extra_headers=None,
+            timeout=12.5,
+        )
+    finally:
+        _logging._disable_debugging()
+    assert response == FAKE_MESSAGES_RESPONSE
+    assert bridge.debug is True
 
 
 def _gate(**overrides):
