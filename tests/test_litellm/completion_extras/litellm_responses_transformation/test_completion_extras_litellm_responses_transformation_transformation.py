@@ -9,9 +9,7 @@ from unittest.mock import ANY, MagicMock, Mock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system-path
 import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
@@ -122,9 +120,7 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_imag
             function_call_output = item
             break
 
-    assert (
-        function_call_output is not None
-    ), "function_call_output not found in response"
+    assert function_call_output is not None, "function_call_output not found in response"
     assert function_call_output["call_id"] == "call_abc123"
 
     # Check that the output is correctly transformed
@@ -134,12 +130,8 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_imag
 
     image_item = output[0]
     # Should be transformed to Responses API format
-    assert (
-        image_item["type"] == "input_image"
-    ), f"Expected type 'input_image', got '{image_item.get('type')}'"
-    assert (
-        image_item["image_url"] == test_image_base64
-    ), "image_url should be a flat string, not a nested object"
+    assert image_item["type"] == "input_image", f"Expected type 'input_image', got '{image_item.get('type')}'"
+    assert image_item["image_url"] == test_image_base64, "image_url should be a flat string, not a nested object"
     assert "detail" in image_item, "detail field should be present"
 
     print("✓ Tool result with image correctly transformed to Responses API format")
@@ -201,9 +193,7 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text
             function_call_output = item
             break
 
-    assert (
-        function_call_output is not None
-    ), "function_call_output not found in response"
+    assert function_call_output is not None, "function_call_output not found in response"
     assert function_call_output["call_id"] == "call_abc123"
 
     # Check that the output is correctly transformed to use input_text, not output_text
@@ -213,16 +203,12 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text
 
     text_item = output[0]
     # Should be transformed to use input_text for tool results in Responses API format
-    assert (
-        text_item["type"] == "input_text"
-    ), f"Expected type 'input_text' for tool result, got '{text_item.get('type')}'"
-    assert (
-        text_item["text"] == "15 degrees"
-    ), f"Expected text '15 degrees', got '{text_item.get('text')}'"
-
-    print(
-        "✓ Tool result with text correctly transformed to use input_text for Responses API format"
+    assert text_item["type"] == "input_text", (
+        f"Expected type 'input_text' for tool result, got '{text_item.get('type')}'"
     )
+    assert text_item["text"] == "15 degrees", f"Expected text '15 degrees', got '{text_item.get('text')}'"
+
+    print("✓ Tool result with text correctly transformed to use input_text for Responses API format")
 
 
 def test_openai_responses_chunk_parser_reasoning_summary():
@@ -231,9 +217,7 @@ def test_openai_responses_chunk_parser_reasoning_summary():
     )
     from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "delta": "**Compar",
@@ -265,9 +249,7 @@ def test_chunk_parser_string_output_text_delta_produces_text():
     )
     from litellm.types.utils import ModelResponseStream
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {"type": "response.output_text.delta", "delta": "literal text"}
 
@@ -288,9 +270,7 @@ def test_chunk_parser_enum_output_text_delta_produces_text():
     from litellm.types.llms.openai import ResponsesAPIStreamEvents
     from litellm.types.utils import ModelResponseStream
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {"type": ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, "delta": "enum text"}
 
@@ -311,9 +291,7 @@ def test_chunk_parser_function_call_added_produces_tool_use():
     from litellm.types.llms.openai import ResponsesAPIStreamEvents
     from litellm.types.utils import ModelResponseStream
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -398,9 +376,7 @@ Tomorrow will bring its petitions and promises,
 but for now the city breathes slow and wide,
 and I learn to carry this small calm home."""
 
-    output_text = ResponseOutputText(
-        annotations=[], text=poem_text, type="output_text", logprobs=[]
-    )
+    output_text = ResponseOutputText(annotations=[], text=poem_text, type="output_text", logprobs=[])
     output_message = ResponseOutputMessage(
         id="msg_04c8021b8b3188a00068e9ae0b92f4819dac64d85b4abb67ec",
         content=[output_text],
@@ -412,9 +388,7 @@ and I learn to carry this small calm home."""
     # Create usage information
     usage = ResponseAPIUsage(
         input_tokens=16,
-        input_tokens_details=InputTokensDetails(
-            audio_tokens=None, cached_tokens=0, text_tokens=None
-        ),
+        input_tokens_details=InputTokensDetails(audio_tokens=None, cached_tokens=0, text_tokens=None),
         output_tokens=195,
         output_tokens_details=OutputTokensDetails(reasoning_tokens=0, text_tokens=None),
         total_tokens=211,
@@ -763,11 +737,7 @@ def test_recover_output_items_merges_text_only_items_at_distinct_indices():
         ]
     )
 
-    recovered = (
-        LiteLLMResponsesTransformationHandler._recover_output_items_from_raw_sse(
-            raw_sse
-        )
-    )
+    recovered = LiteLLMResponsesTransformationHandler._recover_output_items_from_raw_sse(raw_sse)
 
     assert len(recovered) == 2
     assert recovered[0]["id"] == "msg_item_0"
@@ -887,9 +857,7 @@ def test_transform_request_system_only_message_maps_to_system_input_item():
         {
             "type": "message",
             "role": "system",
-            "content": [
-                {"type": "input_text", "text": "You are a helpful assistant."}
-            ],
+            "content": [{"type": "input_text", "text": "You are a helpful assistant."}],
         }
     ]
     # System content lives in input only; not duplicated into instructions.
@@ -961,9 +929,7 @@ def test_transform_request_single_char_keys_not_matched():
     assert result_correct.get("metadata") == {"user_id": "123"}
     assert result_correct.get("previous_response_id") == "resp_abc"
 
-    print(
-        "✓ Single-character keys are not incorrectly matched to metadata/previous_response_id"
-    )
+    print("✓ Single-character keys are not incorrectly matched to metadata/previous_response_id")
 
 
 # =============================================================================
@@ -983,9 +949,7 @@ def test_message_done_does_not_emit_is_finished():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "type": "response.output_item.done",
@@ -997,9 +961,9 @@ def test_message_done_does_not_emit_is_finished():
     # After the fix, message completion should NOT set finish_reason
     # ModelResponseStream doesn't have is_finished - check finish_reason instead
     assert len(result.choices) > 0, "result should have choices"
-    assert (
-        result.choices[0].finish_reason is None or result.choices[0].finish_reason == ""
-    ), "message completion should not emit finish_reason"
+    assert result.choices[0].finish_reason is None or result.choices[0].finish_reason == "", (
+        "message completion should not emit finish_reason"
+    )
 
 
 def test_response_completed_emits_is_finished():
@@ -1011,9 +975,7 @@ def test_response_completed_emits_is_finished():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {"type": "response.completed"}
 
@@ -1021,9 +983,7 @@ def test_response_completed_emits_is_finished():
 
     # response.completed should emit finish_reason='stop'
     assert len(result.choices) > 0, "result should have choices"
-    assert (
-        result.choices[0].finish_reason == "stop"
-    ), "response.completed should emit finish_reason='stop'"
+    assert result.choices[0].finish_reason == "stop", "response.completed should emit finish_reason='stop'"
 
 
 def test_response_completed_with_function_calls_emits_tool_calls_finish_reason():
@@ -1042,9 +1002,7 @@ def test_response_completed_with_function_calls_emits_tool_calls_finish_reason()
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     # Simulate a response.completed event with function_call in output
     # This matches what Azure/OpenAI sends for gpt-5.1-codex-mini and similar models
@@ -1070,9 +1028,9 @@ def test_response_completed_with_function_calls_emits_tool_calls_finish_reason()
 
     # response.completed with function_call should emit finish_reason='tool_calls'
     assert len(result.choices) > 0, "result should have choices"
-    assert (
-        result.choices[0].finish_reason == "tool_calls"
-    ), "response.completed with function_call output should emit finish_reason='tool_calls'"
+    assert result.choices[0].finish_reason == "tool_calls", (
+        "response.completed with function_call output should emit finish_reason='tool_calls'"
+    )
 
 
 def test_response_completed_with_message_only_emits_stop_finish_reason():
@@ -1083,9 +1041,7 @@ def test_response_completed_with_message_only_emits_stop_finish_reason():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     # Simulate a response.completed event with only message output
     chunk = {
@@ -1109,9 +1065,9 @@ def test_response_completed_with_message_only_emits_stop_finish_reason():
 
     # response.completed with only message should emit finish_reason='stop'
     assert len(result.choices) > 0, "result should have choices"
-    assert (
-        result.choices[0].finish_reason == "stop"
-    ), "response.completed with only message output should emit finish_reason='stop'"
+    assert result.choices[0].finish_reason == "stop", (
+        "response.completed with only message output should emit finish_reason='stop'"
+    )
 
 
 def test_response_completed_preserves_usage_with_cached_tokens():
@@ -1127,9 +1083,7 @@ def test_response_completed_preserves_usage_with_cached_tokens():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "type": "response.completed",
@@ -1158,18 +1112,12 @@ def test_response_completed_preserves_usage_with_cached_tokens():
     result = iterator.chunk_parser(chunk)
 
     assert result.usage is not None, "usage should be set on response.completed chunk"
-    assert (
-        result.usage.prompt_tokens == 1226
-    ), "prompt_tokens should map from input_tokens"
-    assert (
-        result.usage.completion_tokens == 5
-    ), "completion_tokens should map from output_tokens"
-    assert (
-        result.usage.prompt_tokens_details is not None
-    ), "prompt_tokens_details should be set"
-    assert (
-        result.usage.prompt_tokens_details.cached_tokens == 1024
-    ), "cached_tokens should be preserved from input_tokens_details"
+    assert result.usage.prompt_tokens == 1226, "prompt_tokens should map from input_tokens"
+    assert result.usage.completion_tokens == 5, "completion_tokens should map from output_tokens"
+    assert result.usage.prompt_tokens_details is not None, "prompt_tokens_details should be set"
+    assert result.usage.prompt_tokens_details.cached_tokens == 1024, (
+        "cached_tokens should be preserved from input_tokens_details"
+    )
 
 
 def test_function_call_done_emits_is_finished():
@@ -1183,9 +1131,7 @@ def test_function_call_done_emits_is_finished():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunk = {
         "type": "response.output_item.done",
@@ -1205,9 +1151,9 @@ def test_function_call_done_emits_is_finished():
         "output_item.done for function_call must not emit finish_reason; "
         "response.completed is responsible for the terminal finish_reason"
     )
-    assert not result.choices[
-        0
-    ].delta.tool_calls, "output_item.done for function_call must not include a duplicate tool_calls delta"
+    assert not result.choices[0].delta.tool_calls, (
+        "output_item.done for function_call must not include a duplicate tool_calls delta"
+    )
 
 
 def test_text_plus_tool_calls_sequence():
@@ -1222,9 +1168,7 @@ def test_text_plus_tool_calls_sequence():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     # Simulate the sequence from OpenAI Responses API
     chunks = [
@@ -1263,28 +1207,23 @@ def test_text_plus_tool_calls_sequence():
     # Check message done (index 2) does NOT have finish_reason set
     message_done_result = results[2]
     assert len(message_done_result.choices) > 0, "message done should have choices"
-    assert (
-        message_done_result.choices[0].finish_reason is None
-        or message_done_result.choices[0].finish_reason == ""
-    ), "message done should not have finish_reason"
+    assert message_done_result.choices[0].finish_reason is None or message_done_result.choices[0].finish_reason == "", (
+        "message done should not have finish_reason"
+    )
 
     # Check function_call done (index 5) does NOT have finish_reason set
     # (response.completed is responsible for the terminal finish_reason)
     function_done_result = results[5]
-    assert (
-        len(function_done_result.choices) > 0
-    ), "function_call done should have choices"
-    assert (
-        function_done_result.choices[0].finish_reason is None
-    ), "output_item.done for function_call must not emit finish_reason"
+    assert len(function_done_result.choices) > 0, "function_call done should have choices"
+    assert function_done_result.choices[0].finish_reason is None, (
+        "output_item.done for function_call must not emit finish_reason"
+    )
 
     # Check response.completed (index 6) has finish_reason='stop'
     # (the mock chunk has no nested 'response' data, so has_function_calls is False → 'stop')
     completed_result = results[6]
     assert len(completed_result.choices) > 0, "response.completed should have choices"
-    assert (
-        completed_result.choices[0].finish_reason == "stop"
-    ), "response.completed should have finish_reason='stop'"
+    assert completed_result.choices[0].finish_reason == "stop", "response.completed should have finish_reason='stop'"
 
 
 # =============================================================================
@@ -1350,9 +1289,7 @@ def test_tool_message_output_uses_input_text_not_output_text():
     output = function_call_output["output"]
     assert isinstance(output, list), f"output should be a list, got {type(output)}"
     assert len(output) == 1
-    assert (
-        output[0]["type"] == "input_text"
-    ), f"Expected input_text, got {output[0].get('type')}"
+    assert output[0]["type"] == "input_text", f"Expected input_text, got {output[0].get('type')}"
     assert output[0]["text"] == '{"temperature": 15, "condition": "sunny"}'
 
     print("✓ Tool message output correctly uses input_text type")
@@ -1538,13 +1475,9 @@ def test_map_reasoning_effort_adds_summary_detailed():
 
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
-            assert (
-                "summary" not in result
-            ), f"Summary should NOT be present by default for effort={effort}"
+            assert "summary" not in result, f"Summary should NOT be present by default for effort={effort}"
 
-            print(
-                f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}' (no summary by default)"
-            )
+            print(f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}' (no summary by default)")
 
         # Test 2: With flag enabled - summary IS added
         litellm.reasoning_auto_summary = True
@@ -1554,9 +1487,9 @@ def test_map_reasoning_effort_adds_summary_detailed():
 
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
-            assert (
-                result["summary"] == "detailed"
-            ), f"Summary should be 'detailed' when flag is enabled for effort={effort}"
+            assert result["summary"] == "detailed", (
+                f"Summary should be 'detailed' when flag is enabled for effort={effort}"
+            )
 
             print(
                 f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}', summary='detailed' (flag enabled)"
@@ -1567,9 +1500,7 @@ def test_map_reasoning_effort_adds_summary_detailed():
         os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
 
         result = handler._map_reasoning_effort("high")
-        assert (
-            result["summary"] == "detailed"
-        ), "Summary should be 'detailed' when env var is enabled"
+        assert result["summary"] == "detailed", "Summary should be 'detailed' when env var is enabled"
         print("✓ LITELLM_REASONING_AUTO_SUMMARY env var works correctly")
 
         # Test 4: Dict input is passed through as-is (no modification)
@@ -1588,9 +1519,7 @@ def test_map_reasoning_effort_adds_summary_detailed():
         assert result_unknown is None
         print("✓ Unknown reasoning_effort values return None")
 
-        print(
-            "✓ All reasoning_effort behaviors work correctly with flag/env var control"
-        )
+        print("✓ All reasoning_effort behaviors work correctly with flag/env var control")
 
     finally:
         # Restore original values
@@ -1666,9 +1595,7 @@ def test_transform_response_preserves_annotations():
     # Create usage information
     usage = ResponseAPIUsage(
         input_tokens=10,
-        input_tokens_details=InputTokensDetails(
-            audio_tokens=None, cached_tokens=0, text_tokens=None
-        ),
+        input_tokens_details=InputTokensDetails(audio_tokens=None, cached_tokens=0, text_tokens=None),
         output_tokens=20,
         output_tokens_details=OutputTokensDetails(reasoning_tokens=0, text_tokens=None),
         total_tokens=30,
@@ -1755,13 +1682,9 @@ def test_transform_response_preserves_annotations():
     assert choice.message.content == "Here is some information with citations."
 
     # Check that annotations are preserved
-    assert hasattr(
-        choice.message, "annotations"
-    ), "Message should have annotations attribute"
+    assert hasattr(choice.message, "annotations"), "Message should have annotations attribute"
     assert choice.message.annotations is not None, "Annotations should not be None"
-    assert (
-        len(choice.message.annotations) == 2
-    ), f"Expected 2 annotations, got {len(choice.message.annotations)}"
+    assert len(choice.message.annotations) == 2, f"Expected 2 annotations, got {len(choice.message.annotations)}"
 
     # Verify annotation content
     annotation1 = choice.message.annotations[0]
@@ -1783,9 +1706,7 @@ def test_transform_response_preserves_annotations():
     assert result.usage.completion_tokens == 20
     assert result.usage.total_tokens == 30
 
-    print(
-        "✓ Annotations from Responses API are correctly preserved in Chat Completions format"
-    )
+    print("✓ Annotations from Responses API are correctly preserved in Chat Completions format")
 
 
 def test_apply_patch_tool_call_converted_to_chat_completion_tool_call():
@@ -1950,9 +1871,7 @@ def test_multi_tool_call_stream_no_premature_finish():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     chunks = [
         # 0: response created
@@ -2028,12 +1947,10 @@ def test_multi_tool_call_stream_no_premature_finish():
         r = results[done_idx]
         assert r is not None, f"{label}: chunk_parser must return a result"
         assert len(r.choices) > 0, f"{label}: result must have choices"
-        assert (
-            r.choices[0].finish_reason is None
-        ), f"{label}: output_item.done must not emit finish_reason (stream would terminate prematurely)"
-        assert not r.choices[
-            0
-        ].delta.tool_calls, (
+        assert r.choices[0].finish_reason is None, (
+            f"{label}: output_item.done must not emit finish_reason (stream would terminate prematurely)"
+        )
+        assert not r.choices[0].delta.tool_calls, (
             f"{label}: output_item.done must not include a duplicate tool_calls delta"
         )
 
@@ -2045,12 +1962,8 @@ def test_multi_tool_call_stream_no_premature_finish():
         r = results[added_idx]
         if r is not None and r.choices and r.choices[0].delta.tool_calls:
             tc = r.choices[0].delta.tool_calls[0]
-            assert (
-                tc.function.name == expected_name
-            ), f"output_item.added for {expected_name}: tool_call name mismatch"
-            assert (
-                tc.id == expected_call_id
-            ), f"output_item.added for {expected_name}: call_id mismatch"
+            assert tc.function.name == expected_name, f"output_item.added for {expected_name}: tool_call name mismatch"
+            assert tc.id == expected_call_id, f"output_item.added for {expected_name}: call_id mismatch"
 
     # 3. argument delta events (indices 2 and 5) should carry arguments
     for delta_idx, expected_args, label in [
@@ -2060,17 +1973,15 @@ def test_multi_tool_call_stream_no_premature_finish():
         r = results[delta_idx]
         if r is not None and r.choices and r.choices[0].delta.tool_calls:
             tc = r.choices[0].delta.tool_calls[0]
-            assert (
-                tc.function.arguments == expected_args
-            ), f"{label}: argument delta mismatch"
+            assert tc.function.arguments == expected_args, f"{label}: argument delta mismatch"
 
     # 4. Only response.completed (index 7) emits the terminal finish_reason
     completed_result = results[7]
     assert completed_result is not None, "response.completed must return a result"
     assert len(completed_result.choices) > 0, "response.completed must have choices"
-    assert (
-        completed_result.choices[0].finish_reason == "tool_calls"
-    ), "response.completed with function_call outputs must emit finish_reason='tool_calls'"
+    assert completed_result.choices[0].finish_reason == "tool_calls", (
+        "response.completed with function_call outputs must emit finish_reason='tool_calls'"
+    )
 
     # 5. No chunk before the last one should have finish_reason set
     for idx, r in enumerate(results[:-1]):
@@ -2080,9 +1991,7 @@ def test_multi_tool_call_stream_no_premature_finish():
                 f"— only response.completed should terminate the stream"
             )
 
-    print(
-        "✓ Multi-tool-call stream completes without premature finish_reason termination"
-    )
+    print("✓ Multi-tool-call stream completes without premature finish_reason termination")
 
 
 # =============================================================================
@@ -2163,16 +2072,13 @@ def test_streaming_parallel_tool_calls_have_distinct_indices():
     ]
 
     for chunk in chunks:
-        result = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
-            chunk
-        )
+        result = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(chunk)
         expected_index = chunk["output_index"]
         for choice in result.choices:
             if choice.delta.tool_calls:
                 for tc in choice.delta.tool_calls:
                     assert tc.index == expected_index, (
-                        f"Event {chunk['type']}: expected tool_call.index={expected_index}, "
-                        f"got {tc.index}"
+                        f"Event {chunk['type']}: expected tool_call.index={expected_index}, got {tc.index}"
                     )
 
 
@@ -2300,9 +2206,7 @@ def test_parallel_tool_calls_comprehensive_streaming_integration():
         },
     ]
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
     results = [iterator.chunk_parser(chunk) for chunk in chunks]
 
     # 1. output_item.done events (indices 4 and 8) must NOT emit finish_reason
@@ -2314,9 +2218,7 @@ def test_parallel_tool_calls_comprehensive_streaming_integration():
             f"{label}: output_item.done must not emit finish_reason "
             f"(would prematurely terminate stream before subsequent tool calls arrive)"
         )
-        assert not r.choices[
-            0
-        ].delta.tool_calls, (
+        assert not r.choices[0].delta.tool_calls, (
             f"{label}: output_item.done must not emit a duplicate tool_calls delta"
         )
 
@@ -2350,19 +2252,15 @@ def test_parallel_tool_calls_comprehensive_streaming_integration():
         for tc in tool_calls:
             if tc.function and tc.function.arguments:
                 idx = tc.index
-                assembled_args[idx] = (
-                    assembled_args.get(idx, "") + tc.function.arguments
-                )
+                assembled_args[idx] = assembled_args.get(idx, "") + tc.function.arguments
 
     # delta 1 = '{"path":' + delta 2 = '"/etc/foo"}' → '{"path":"/etc/foo"}'
     assert assembled_args.get(0) == '{"path":"/etc/foo"}', (
-        f"Assembled args for index 0 (read_file): "
-        f"expected '{{\"path\":\"/etc/foo\"}}', got '{assembled_args.get(0)}'"
+        f"Assembled args for index 0 (read_file): expected '{{\"path\":\"/etc/foo\"}}', got '{assembled_args.get(0)}'"
     )
     # delta 1 = '{"path":' + delta 2 = '"/tmp"}' → '{"path":"/tmp"}'
     assert assembled_args.get(1) == '{"path":"/tmp"}', (
-        f"Assembled args for index 1 (list_dir): "
-        f"expected '{{\"path\":\"/tmp\"}}', got '{assembled_args.get(1)}'"
+        f"Assembled args for index 1 (list_dir): expected '{{\"path\":\"/tmp\"}}', got '{assembled_args.get(1)}'"
     )
 
     # 4. Stream terminates with exactly one finish event, at the final response.completed chunk
@@ -2371,16 +2269,13 @@ def test_parallel_tool_calls_comprehensive_streaming_integration():
         for i, r in enumerate(results)
         if r is not None and r.choices and r.choices[0].finish_reason
     ]
-    assert (
-        len(finish_events) == 1
-    ), f"Expected exactly 1 finish event, got {len(finish_events)}: {finish_events}"
+    assert len(finish_events) == 1, f"Expected exactly 1 finish event, got {len(finish_events)}: {finish_events}"
     assert finish_events[0][0] == len(chunks) - 1, (
-        f"Finish event must be at the last chunk (index {len(chunks) - 1}), "
-        f"but was at index {finish_events[0][0]}"
+        f"Finish event must be at the last chunk (index {len(chunks) - 1}), but was at index {finish_events[0][0]}"
     )
-    assert (
-        finish_events[0][1] == "tool_calls"
-    ), f"Terminal finish_reason must be 'tool_calls', got '{finish_events[0][1]}'"
+    assert finish_events[0][1] == "tool_calls", (
+        f"Terminal finish_reason must be 'tool_calls', got '{finish_events[0][1]}'"
+    )
 
     # 5. Parallel tool calls have distinct indices matching output_index (0 and 1)
     # Collect indices from output_item.added chunks only (they carry the call id)
@@ -2396,9 +2291,7 @@ def test_parallel_tool_calls_comprehensive_streaming_integration():
         1,
     }, f"Parallel tool calls must have distinct indices {{0, 1}}, got: {set(added_tool_call_indices)}"
 
-    print(
-        "✓ Parallel tool calls with split argument deltas stream correctly end-to-end"
-    )
+    print("✓ Parallel tool calls with split argument deltas stream correctly end-to-end")
 
 
 def test_map_optional_params_preserves_reasoning_summary():
@@ -2422,9 +2315,7 @@ def test_map_optional_params_preserves_reasoning_summary():
     }
 
     responses_api_request = ResponsesAPIOptionalRequestParams()
-    handler._map_optional_params_to_responses_api_request(
-        optional_params, responses_api_request
-    )
+    handler._map_optional_params_to_responses_api_request(optional_params, responses_api_request)
 
     # Verify reasoning_effort dict with summary was fully preserved
     assert "reasoning" in responses_api_request
@@ -2636,9 +2527,7 @@ def test_reasoning_items_non_streaming_round_trip():
     )
     usage = ResponseAPIUsage(
         input_tokens=10,
-        input_tokens_details=InputTokensDetails(
-            audio_tokens=None, cached_tokens=0, text_tokens=None
-        ),
+        input_tokens_details=InputTokensDetails(audio_tokens=None, cached_tokens=0, text_tokens=None),
         output_tokens=20,
         output_tokens_details=OutputTokensDetails(reasoning_tokens=0, text_tokens=None),
         total_tokens=30,
@@ -2702,9 +2591,7 @@ def test_reasoning_items_non_streaming_round_trip():
     assert len(result.choices) == 1
     msg = result.choices[0].message
 
-    assert (
-        msg.reasoning_content == summary_text
-    ), "reasoning_content should equal summary text"
+    assert msg.reasoning_content == summary_text, "reasoning_content should equal summary text"
 
     assert msg.reasoning_items is not None, "reasoning_items should be set"
     assert len(msg.reasoning_items) == 1
@@ -2729,13 +2616,9 @@ def test_reasoning_items_non_streaming_round_trip():
 
     # The reasoning input item must appear before the assistant message item
     types = [item.get("type") for item in input_items]
-    assert (
-        "reasoning" in types
-    ), "reasoning input item must be emitted for the assistant turn"
+    assert "reasoning" in types, "reasoning input item must be emitted for the assistant turn"
 
-    reasoning_input = next(
-        item for item in input_items if item.get("type") == "reasoning"
-    )
+    reasoning_input = next(item for item in input_items if item.get("type") == "reasoning")
     assert reasoning_input["id"] == "rs_test001"
     assert reasoning_input["encrypted_content"] == encrypted
     assert reasoning_input["summary"][0]["text"] == summary_text
@@ -2743,13 +2626,9 @@ def test_reasoning_items_non_streaming_round_trip():
     # reasoning item must come before the assistant message item
     reasoning_idx = types.index("reasoning")
     assistant_msg_idx = next(
-        i
-        for i, item in enumerate(input_items)
-        if item.get("type") == "message" and item.get("role") == "assistant"
+        i for i, item in enumerate(input_items) if item.get("type") == "message" and item.get("role") == "assistant"
     )
-    assert (
-        reasoning_idx < assistant_msg_idx
-    ), "reasoning input item must precede the assistant message item"
+    assert reasoning_idx < assistant_msg_idx, "reasoning input item must precede the assistant message item"
 
 
 def test_reasoning_items_streaming_emitted_on_response_completed():
@@ -2762,9 +2641,7 @@ def test_reasoning_items_streaming_emitted_on_response_completed():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
 
     encrypted = "gAAAAABpw5xyz987FAKE=="
     summary_text = "**Reasoning summary**\n\nModel thought about this carefully."
@@ -2808,16 +2685,14 @@ def test_reasoning_items_streaming_emitted_on_response_completed():
     assert result.choices[0].finish_reason == "stop"
 
     # reasoning_items must be on the delta
-    assert (
-        getattr(delta, "reasoning_items", None) is not None
-    ), "reasoning_items must be present on the response.completed delta"
+    assert getattr(delta, "reasoning_items", None) is not None, (
+        "reasoning_items must be present on the response.completed delta"
+    )
     assert len(delta.reasoning_items) == 1
     ri = delta.reasoning_items[0]
     assert ri["type"] == "reasoning"
     assert ri["id"] == "rs_stream001"
-    assert (
-        ri["encrypted_content"] == encrypted
-    ), "encrypted_content must be preserved in streaming"
+    assert ri["encrypted_content"] == encrypted, "encrypted_content must be preserved in streaming"
     assert ri["summary"][0]["text"] == summary_text
 
 
@@ -2844,15 +2719,46 @@ def test_streaming_function_call_tool_id_for_degenerate_call_id():
                 "arguments": "",
             },
         }
-        out = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
-            chunk
-        )
+        out = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(chunk)
         tool_calls = out.model_dump()["choices"][0]["delta"]["tool_calls"]
         assert tool_calls, "expected a tool_call chunk in the streaming delta"
         return tool_calls[0]["id"]
 
     assert stream_tool_id("fc_unique_abc123", "call_0") == "fc_unique_abc123"
     assert stream_tool_id("fc_2", "call_tokyo") == "call_tokyo"
+
+
+def test_convert_response_output_to_choices_none_output_items():
+    """Regression #34754: output_items can be None when a client calls
+    /chat/completions but upstream only supports /responses. The guard
+    should treat None as an empty list instead of raising TypeError."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    result = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        output_items=None,  # type: ignore[arg-type]
+    )
+    assert result == []
+
+
+def test_translate_responses_chunk_handles_none_output_items():
+    """Regression #34754: when response.output is None in a response.completed
+    chunk, the reasoning-items loop should skip gracefully via the or [] guard
+    instead of raising TypeError."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    chunk = {
+        "type": "response.completed",
+        "response": {
+            "status": "completed",
+            "output": None,
+        },
+    }
+    result = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(chunk)
+    assert result is not None
 
 
 def test_streaming_chunks_share_one_chat_completion_id():
@@ -2865,9 +2771,7 @@ def test_streaming_chunks_share_one_chat_completion_id():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
-    )
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
     events = [
         {"type": "response.created", "response": {"id": "resp_abc", "output": []}},
         {"type": "response.output_text.delta", "delta": "Hel"},
@@ -2883,12 +2787,10 @@ def test_streaming_chunks_share_one_chat_completion_id():
     assert len(set(ids)) == 1, f"streamed chunks carried different ids: {ids}"
     assert ids[0], "streamed chunks carried an empty id"
 
-    other_stream = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
+    other_stream = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    assert other_stream.chunk_parser(events[1]).id != ids[0], (
+        "a separate stream must get its own id, not a process-wide one"
     )
-    assert (
-        other_stream.chunk_parser(events[1]).id != ids[0]
-    ), "a separate stream must get its own id, not a process-wide one"
 
 
 @pytest.mark.asyncio
@@ -2899,9 +2801,7 @@ def test_streaming_chunks_share_one_chat_completion_id():
         ({"include_usage": True}, None),
     ],
 )
-async def test_acompletion_bridge_normalizes_stream_options_on_the_wire(
-    stream_options, expected_wire_stream_options
-):
+async def test_acompletion_bridge_normalizes_stream_options_on_the_wire(stream_options, expected_wire_stream_options):
     """include_usage must be stripped from the /v1/responses body; include_obfuscation must survive as a dict."""
     from unittest.mock import AsyncMock
 
