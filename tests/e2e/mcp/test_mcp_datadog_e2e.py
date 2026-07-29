@@ -60,6 +60,7 @@ class TestDatadogMcpRoundTrip:
         _assert_datadog_logger_active(client.proxy)
 
         server_id = register_datadog_mcp(client, resources)
+        client.await_registered(server_id)
         marker = f"{MARKER_PREFIX}{unique_marker()}"
 
         key = client.generate_key(
@@ -77,28 +78,20 @@ class TestDatadogMcpRoundTrip:
             "within the poll deadline; MCP search would have nothing to find"
         )
 
-        tools = unwrap(client.list_tools(key))
-        tool_name = tools.tool_name_containing(server_id, SEARCH_LOGS_TOOL)
-        assert tool_name is not None, (
-            f"granted key never saw {SEARCH_LOGS_TOOL} on server {server_id}; "
-            f"tools={tools.tool_names_for_server(server_id)}"
-        )
-
-        call = unwrap(
-            client.call_tool(
-                key,
-                server_id=server_id,
-                name=tool_name,
-                arguments={
-                    "query": marker,
-                    "from": DD_SEARCH_FROM,
-                    "to": "now",
-                    "max_tokens": 5000,
-                    "telemetry": {
-                        "intent": "e2e assert seeded litellm completion log is searchable via MCP"
-                    },
+        tool_name = client.await_tool(key, server_id, SEARCH_LOGS_TOOL)
+        call = client.await_call_tool(
+            key,
+            server_id=server_id,
+            name=tool_name,
+            arguments={
+                "query": marker,
+                "from": DD_SEARCH_FROM,
+                "to": "now",
+                "max_tokens": 5000,
+                "telemetry": {
+                    "intent": "e2e assert seeded litellm completion log is searchable via MCP"
                 },
-            )
+            },
         )
         assert call.is_error is not True, f"search_datadog_logs errored: {call}"
         body = call.all_text

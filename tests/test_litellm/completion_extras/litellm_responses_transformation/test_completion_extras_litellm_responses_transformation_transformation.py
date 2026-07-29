@@ -2855,6 +2855,41 @@ def test_streaming_function_call_tool_id_for_degenerate_call_id():
     assert stream_tool_id("fc_2", "call_tokyo") == "call_tokyo"
 
 
+def test_streaming_chunks_share_one_chat_completion_id():
+    """Every chunk of one streamed chat completion must carry the same ``id``, per the
+    OpenAI spec. The bridge builds a fresh ``ModelResponseStream`` per Responses event,
+    so without a stream-scoped id each chunk got a new ``chatcmpl-<uuid>`` and clients
+    that validate id consistency (openai-go's ChatCompletionAccumulator) silently
+    dropped every chunk after the first. Regression for #32854."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+    events = [
+        {"type": "response.created", "response": {"id": "resp_abc", "output": []}},
+        {"type": "response.output_text.delta", "delta": "Hel"},
+        {"type": "response.output_text.delta", "delta": "lo"},
+        {
+            "type": "response.completed",
+            "response": {"id": "resp_abc", "output": [{"type": "message"}]},
+        },
+    ]
+
+    ids = [iterator.chunk_parser(event).id for event in events]
+
+    assert len(set(ids)) == 1, f"streamed chunks carried different ids: {ids}"
+    assert ids[0], "streamed chunks carried an empty id"
+
+    other_stream = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+    assert (
+        other_stream.chunk_parser(events[1]).id != ids[0]
+    ), "a separate stream must get its own id, not a process-wide one"
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(

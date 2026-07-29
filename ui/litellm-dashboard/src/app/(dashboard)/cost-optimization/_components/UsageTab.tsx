@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Info } from "lucide-react";
 
-import { AreaChart, BarChart, CustomLegend, DonutChart, DEFAULT_COLOR_CYCLE } from "@/components/shared/charts";
+import { AreaChart, BarChart, CustomLegend, DonutChart, SEQUENTIAL_COLOR_RAMP } from "@/components/shared/charts";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -34,7 +34,6 @@ interface UsageTabProps {
 const EMPTY_TOOL_SPEND: ToolSpendResponse = {
   by_tool: [],
   daily: [],
-  total_spend: 0,
   start_date: null,
   end_date: null,
 };
@@ -103,7 +102,6 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
 
   const toolSpend = toolSpendState?.key === rangeKey ? toolSpendState.data : null;
   const toolSpendLoading = toolSpendEnabled && toolSpend === null;
-  const toolSpendWindowClamped = !!toolSpend?.start_date && !!startTime && toolSpend.start_date > isoDay(startTime);
 
   const compressionTotal = useMemo(() => results.reduce((sum, d) => sum + compressionOf(d.metrics), 0), [results]);
   const cachingTotal = useMemo(() => results.reduce((sum, d) => sum + cachingOf(d.metrics), 0), [results]);
@@ -168,7 +166,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
       })),
     [toolSpend, topToolNames],
   );
-  const toolColors = useMemo(() => DEFAULT_COLOR_CYCLE.slice(0, Math.max(topToolNames.length, 1)), [topToolNames]);
+  const toolColors = useMemo(() => SEQUENTIAL_COLOR_RAMP.slice(0, Math.max(topToolNames.length, 1)), [topToolNames]);
 
   return (
     <div className="w-full space-y-6">
@@ -262,15 +260,10 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
         <CardHeader>
           <CardTitle>Spend by tool</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Spend on requests that called each tool (MCP and client-side tools). A request that used multiple tools
-            counts its full spend toward each, so this attributes rather than partitions spend.
+            Spend on requests that invoked each tool (MCP and client-side tools); declaring a tool without invoking it
+            does not count. A request that invoked multiple tools counts its full spend toward each, so this attributes
+            rather than partitions spend.
           </p>
-          {toolSpendWindowClamped && (
-            <p className="text-xs text-muted-foreground">
-              Tool spend is capped at 30 days before the end of the selected range; showing spend since{" "}
-              {toolSpend?.start_date}.
-            </p>
-          )}
         </CardHeader>
         <CardContent>
           {topTools.length === 0 ? (
@@ -285,22 +278,27 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
                   data={topToolsChart}
                   index="tool_name"
                   categories={["spend"]}
-                  colors={["emerald"]}
+                  colors={toolColors}
+                  colorByDatum
                   layout="vertical"
                   yAxisWidth={140}
+                  maxBarSize={64}
                   showLegend={false}
                   valueFormatter={usd}
                 />
               </div>
               <div>
                 <p className="mb-2 text-sm font-medium text-muted-foreground">Daily spend by tool</p>
+                <CustomLegend categories={topToolNames} colors={toolColors} />
                 <BarChart
                   data={dailyToolSeries}
                   index="date"
                   categories={topToolNames}
                   colors={toolColors}
                   stack
+                  maxBarSize={64}
                   valueFormatter={usd}
+                  showLegend={false}
                 />
               </div>
             </div>
