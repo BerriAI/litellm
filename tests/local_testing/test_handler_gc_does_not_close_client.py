@@ -18,12 +18,11 @@ Each test below is one shape the finalizers broke; all of them fail if either
 ``__del__`` comes back. Async cases run on both transports, because litellm
 defaults to aiohttp and only uses httpcore when aiohttp is disabled.
 
-Unlike the rest of ``tests/test_litellm/``, these tests need a real connection
-pool rather than a mock: a mocked transport goes on yielding chunks after its
+These live here rather than under ``tests/test_litellm/`` because they need a
+real connection pool: a mocked transport goes on yielding chunks after its
 client is closed, so the very teardown under test is what a mock cannot
-reproduce. The server here is the hermetic, credential-free
-``ThreadingHTTPServer`` on an ephemeral loopback port already used by
-``tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_handler.py``.
+reproduce. The server is a hermetic, credential-free ``ThreadingHTTPServer``
+on an ephemeral loopback port, and needs no network access beyond it.
 
 Related: https://github.com/BerriAI/litellm/issues/24929
 """
@@ -40,7 +39,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
+sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
