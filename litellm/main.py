@@ -6355,6 +6355,29 @@ def embedding(
                 litellm_params=litellm_params_dict,
                 headers=headers,
             )
+        elif custom_llm_provider == "cloudflare":
+            api_key = api_key or litellm.cloudflare_api_key or litellm.api_key or get_secret_str("CLOUDFLARE_API_KEY")
+            if api_key is None:
+                raise ValueError(
+                    "Missing Cloudflare API Key - A call is being made to cloudflare but no key is set either in the "
+                    "environment variables or via params"
+                )
+            api_base = api_base or litellm.api_base or get_secret_str("CLOUDFLARE_API_BASE")
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+                headers=headers,
+            )
         elif custom_llm_provider == "huggingface":
             api_key = api_key or litellm.huggingface_key or get_secret("HUGGINGFACE_API_KEY") or litellm.api_key  # type: ignore
             response = huggingface_embed.embedding(
