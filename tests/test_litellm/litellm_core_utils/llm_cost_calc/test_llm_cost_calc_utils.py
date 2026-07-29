@@ -2799,11 +2799,14 @@ def test_generic_cost_per_token_azure_gpt_5_6_cache_write_tokens(
         (300000 - 800) * info["input_cost_per_token_above_272k_tokens"] + 800 * write_cost_above_272k
     )
 
-    if write_cost_above_272k_priority is None:
-        return
     long_priority_cost, _ = generic_cost_per_token(
         model=model, usage=long_usage, custom_llm_provider="azure", service_tier="priority"
     )
+    if write_cost_above_272k_priority is None:
+        assert long_priority_cost == pytest.approx(
+            (300000 - 800) * info["input_cost_per_token_above_272k_tokens"] + 800 * write_cost_above_272k
+        )
+        return
     assert long_priority_cost == pytest.approx(
         (300000 - 800) * info["input_cost_per_token_above_272k_tokens_priority"]
         + 800 * write_cost_above_272k_priority
