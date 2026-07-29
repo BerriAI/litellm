@@ -1,0 +1,71 @@
+name: Nightly Basedpyright Budget Tighten
+
+on:
+  schedule:
+    - cron: "47 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  tighten:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: litellm_internal_staging
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Install dependencies
+        run: |
+          uv sync --frozen --group proxy-dev --group e2e-dev
+
+      - name: Generate Prisma client
+        env:
+          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
+        run: |
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Tighten basedpyright budget
+        env:
+          NODE_OPTIONS: --max-old-space-size=12288
+        run: |
+          (uv run --no-sync basedpyright --outputjson || true) | uv run --no-sync python scripts/type_check_gate.py --tighten
+
+      - name: Create pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git diff --quiet basedpyright-code-budget.json; then
+            echo "No stale headroom to remove; skipping PR."
+            exit 0
+          fi
+          BRANCH_NAME="litellm_tighten_basedpyright_budget_$(date +'%m_%d_%Y')"
+          if git ls-remote --exit-code --heads origin "$BRANCH_NAME" > /dev/null; then
+            echo "Branch $BRANCH_NAME already exists; skipping PR."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH_NAME"
+          git add basedpyright-code-budget.json
+          git commit -m "chore(typing): tighten basedpyright budget to staging head counts"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:refs/heads/$BRANCH_NAME"
+          gh pr create --base litellm_internal_staging --head "$BRANCH_NAME" \
+            --title "chore(typing): tighten basedpyright budget to staging head counts" \
+            --body "Automated nightly run of scripts/type_check_gate.py --tighten. Every limit in basedpyright-code-budget.json falls to the current staging head count for its rule plus 50 slack; limits that are already at or below that stay put, so limits only ever fall. The delta-vs-base gate still spares any PR that does not grow a rule past its base, so this only stops new errors from hiding under stale headroom"
