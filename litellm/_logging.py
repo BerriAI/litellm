@@ -494,16 +494,19 @@ def _get_uvicorn_json_log_config():
         "loggers": {
             "uvicorn": {
                 "handlers": ["default"],
+                "filters": [_secret_filter],
                 "level": uvicorn_log_level,
                 "propagate": False,
             },
             "uvicorn.error": {
                 "handlers": ["default"],
+                "filters": [_secret_filter],
                 "level": uvicorn_log_level,
                 "propagate": False,
             },
             "uvicorn.access": {
                 "handlers": ["access"],
+                "filters": [_secret_filter],
                 "level": uvicorn_log_level,
                 "propagate": False,
             },
