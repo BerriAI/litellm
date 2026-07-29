@@ -149,6 +149,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
         build_effective_auth_contexts,
+        is_ui_session_credential,
     )
     from litellm.proxy._types import (
         LiteLLM_MCPServerTable,
@@ -1031,7 +1032,7 @@ if MCP_AVAILABLE:
             servers = await _resolve_accessible_mcp_servers(user_api_key_dict)
             redacted_mcp_servers = _redact_mcp_credentials_list(servers)
 
-        if connected_app_view is True:
+        if connected_app_view is True and is_ui_session_credential(user_api_key_dict):
             reachable_ids = await _connected_app_reachable_server_ids(user_api_key_dict.user_id)
             listed_ids = {server.server_id for server in redacted_mcp_servers}
             missing_tables = [

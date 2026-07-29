@@ -6142,7 +6142,14 @@ def test_bundled_openapi_registry_parses_and_entries_are_well_formed():
 
 class TestConnectedAppViewAnnotation:
     """LIT-4861: GET /v1/mcp/server?connected_app_view=true must annotate each server with
-    whether the caller's gateway OAuth sessions (connected apps) are served it on /mcp."""
+    whether the caller's gateway OAuth sessions (connected apps) are served it on /mcp.
+    The view is honored only for the dashboard's UI session credential; a caller-passed
+    virtual key must never be widened to its owning user's identity."""
+
+    def _ui_session_auth(self, user_role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN) -> UserAPIKeyAuth:
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+        return generate_mock_user_api_key_auth(user_role=user_role, team_id=UI_SESSION_TOKEN_TEAM_ID)
 
     def _mock_manager(self, servers, reachable_ids):
         mock_manager = MagicMock()
@@ -6159,7 +6166,7 @@ class TestConnectedAppViewAnnotation:
 
     @pytest.mark.asyncio
     async def test_connected_app_view_annotates_reachability_via_admitted_resolver(self):
-        caller_auth = generate_mock_user_api_key_auth()
+        caller_auth = self._ui_session_auth()
         admitted_auth = UserAPIKeyAuth(user_id="test_user_id")
         admitted_auth.mcp_admitted_user_subject = True
         mock_manager = self._mock_manager(self._servers(), ["server-1"])
@@ -6194,7 +6201,7 @@ class TestConnectedAppViewAnnotation:
     async def test_connected_app_view_stamps_view_all_list_and_survives_non_admin_sanitizer(self):
         """view_all preempts the manager's admin shortcut with a second whole-registry
         shortcut; the annotation must still land, and must survive the non-admin sanitizer."""
-        caller_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.INTERNAL_USER)
+        caller_auth = self._ui_session_auth(user_role=LitellmUserRoles.INTERNAL_USER)
         mock_manager = self._mock_manager(self._servers(), ["server-2"])
 
         with (
@@ -6225,7 +6232,7 @@ class TestConnectedAppViewAnnotation:
     async def test_connected_app_view_appends_session_reachable_servers_missing_from_page_list(self):
         """A server the session is served must appear on the connect view even when the
         dashboard resolver did not list it (internal-user path, non-admin sanitizer)."""
-        caller_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.INTERNAL_USER)
+        caller_auth = self._ui_session_auth(user_role=LitellmUserRoles.INTERNAL_USER)
         admitted_auth = UserAPIKeyAuth(user_id="test_user_id")
         mock_manager = MagicMock()
         mock_manager.get_all_allowed_mcp_servers = AsyncMock(
@@ -6265,7 +6272,7 @@ class TestConnectedAppViewAnnotation:
 
     @pytest.mark.asyncio
     async def test_connected_app_view_fails_closed_when_admitted_reload_fails(self):
-        caller_auth = generate_mock_user_api_key_auth()
+        caller_auth = self._ui_session_auth()
         mock_manager = self._mock_manager(self._servers(), ["server-1"])
 
         with (
@@ -6320,8 +6327,12 @@ class TestConnectedAppViewAnnotation:
         reload_mock.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_connected_app_view_userless_caller_marks_all_unreachable(self):
-        caller_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="test_api_key")
+    async def test_connected_app_view_userless_ui_credential_leaves_field_unset(self):
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+        caller_auth = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="test_api_key", team_id=UI_SESSION_TOKEN_TEAM_ID
+        )
         caller_auth.user_id = None
         mock_manager = self._mock_manager(self._servers(), ["server-1"])
         reload_mock = AsyncMock(return_value=UserAPIKeyAuth(user_id="test_user_id"))
@@ -6346,5 +6357,36 @@ class TestConnectedAppViewAnnotation:
 
             result = await fetch_all_mcp_servers(user_api_key_dict=caller_auth, connected_app_view=True)
 
-        assert all(server.connected_app_reachable is False for server in result)
+        assert all(server.connected_app_reachable is None for server in result)
+        reload_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_connected_app_view_ignored_for_caller_passed_virtual_keys(self):
+        """A virtual key the user passes themselves is never widened to the owning user's
+        identity: the view param is a no-op and the admitted resolver is never consulted."""
+        caller_auth = generate_mock_user_api_key_auth(team_id="some-real-team")
+        mock_manager = self._mock_manager(self._servers(), ["server-1"])
+        reload_mock = AsyncMock(return_value=UserAPIKeyAuth(user_id="test_user_id"))
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[caller_auth]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+                reload_mock,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(user_api_key_dict=caller_auth, connected_app_view=True)
+
+        assert all(server.connected_app_reachable is None for server in result)
         reload_mock.assert_not_awaited()

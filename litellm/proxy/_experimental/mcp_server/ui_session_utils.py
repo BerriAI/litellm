@@ -23,12 +23,19 @@ def clone_user_api_key_auth_with_team(
     return cloned_auth
 
 
+def is_ui_session_credential(user_api_key_auth: UserAPIKeyAuth) -> bool:
+    """Whether the caller is the dashboard's SSO-minted session token acting as its user,
+    the only credential shape allowed to widen a request to the owning user's identity."""
+
+    return user_api_key_auth.team_id == UI_SESSION_TOKEN_TEAM_ID and bool(user_api_key_auth.user_id)
+
+
 async def resolve_ui_session_team_ids(
     user_api_key_auth: UserAPIKeyAuth,
 ) -> List[str]:
     """Resolve the real team ids backing a UI session token."""
 
-    if user_api_key_auth.team_id != UI_SESSION_TOKEN_TEAM_ID or not user_api_key_auth.user_id:
+    if not is_ui_session_credential(user_api_key_auth):
         return []
 
     from litellm.proxy.auth.auth_checks import get_user_object
