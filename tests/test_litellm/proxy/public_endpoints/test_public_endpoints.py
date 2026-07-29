@@ -455,6 +455,156 @@ def test_public_model_hub_without_health_check():
     app.dependency_overrides.clear()
 
 
+def test_public_model_hub_reflects_live_health_cache_over_stale_db():
+    """
+    Regression test for #31851: when background_health_checks +
+    use_shared_health_check mark a model as unhealthy in the live cache
+    (the same in-memory `health_check_results` the authenticated /health
+    endpoint reads, backed by the Redis shared health check cache), the
+    public model hub must reflect that even though the last DB snapshot
+    still says healthy.
+    """
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    client = TestClient(app)
+
+    mock_model_group = ModelGroupInfoProxy(
+        model_group="bad-model",
+        providers=["openai"],
+        is_public_model_group=True,
+    )
+
+    # Stale DB row still says healthy (hasn't been refreshed since the
+    # deployment started failing).
+    mock_health_check = MagicMock()
+    mock_health_check.model_id = "bad-model-id"
+    mock_health_check.model_name = "bad-model"
+    mock_health_check.status = "healthy"
+    mock_health_check.response_time_ms = 100.0
+    mock_health_check.checked_at = datetime.now(timezone.utc)
+
+    mock_llm_router = MagicMock()
+    mock_prisma = MagicMock()
+    mock_prisma.get_all_latest_health_checks = AsyncMock(return_value=[mock_health_check])
+
+    live_llm_model_list = [
+        {
+            "model_name": "bad-model",
+            "litellm_params": {"model": "openai/gpt-4"},
+            "model_info": {"id": "bad-model-id"},
+        }
+    ]
+    live_health_check_results = {
+        "healthy_endpoints": [],
+        "unhealthy_endpoints": [
+            {
+                "model": "openai/gpt-4",
+                "model_id": "bad-model-id",
+                "error": "connection refused",
+            }
+        ],
+    }
+
+    with (
+        patch("litellm.public_model_groups", ["bad-model"]),
+        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.llm_model_list", live_llm_model_list),
+        patch(
+            "litellm.proxy.proxy_server.health_check_results",
+            live_health_check_results,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict"
+        ) as mock_convert,
+    ):
+        mock_get_info.return_value = [mock_model_group]
+        mock_convert.return_value = {
+            "status": "healthy",
+            "response_time_ms": 100.0,
+            "checked_at": mock_health_check.checked_at.isoformat(),
+        }
+
+        response = client.get(
+            "/public/model_hub",
+            headers={"Authorization": "Bearer test-key"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]["model_group"] == "bad-model"
+        assert data[0]["health_status"] == "unhealthy"
+    app.dependency_overrides.clear()
+
+
+def test_public_model_hub_live_cache_unhealthy_deployment_marks_group_unhealthy():
+    """
+    A model group backed by multiple deployments (load balancing/fallbacks)
+    should show unhealthy if any one of its deployments is unhealthy in the
+    live health check cache, rather than an arbitrary deployment's status
+    winning based on dict iteration order.
+    """
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    client = TestClient(app)
+
+    mock_model_group = ModelGroupInfoProxy(
+        model_group="multi-deployment-model",
+        providers=["openai"],
+        is_public_model_group=True,
+    )
+
+    live_llm_model_list = [
+        {
+            "model_name": "multi-deployment-model",
+            "litellm_params": {"model": "openai/gpt-4"},
+            "model_info": {"id": "deployment-1"},
+        },
+        {
+            "model_name": "multi-deployment-model",
+            "litellm_params": {"model": "azure/gpt-4"},
+            "model_info": {"id": "deployment-2"},
+        },
+    ]
+    live_health_check_results = {
+        "healthy_endpoints": [{"model": "openai/gpt-4", "model_id": "deployment-1"}],
+        "unhealthy_endpoints": [
+            {"model": "azure/gpt-4", "model_id": "deployment-2", "error": "timeout"}
+        ],
+    }
+
+    mock_llm_router = MagicMock()
+
+    with (
+        patch("litellm.public_model_groups", ["multi-deployment-model"]),
+        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.llm_model_list", live_llm_model_list),
+        patch(
+            "litellm.proxy.proxy_server.health_check_results",
+            live_health_check_results,
+        ),
+    ):
+        mock_get_info.return_value = [mock_model_group]
+
+        response = client.get(
+            "/public/model_hub",
+            headers={"Authorization": "Bearer test-key"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]["model_group"] == "multi-deployment-model"
+        assert data[0]["health_status"] == "unhealthy"
+    app.dependency_overrides.clear()
+
+
 def test_public_model_hub_mixed_health_statuses():
     """Test multiple models with different health statuses"""
     app = FastAPI()
