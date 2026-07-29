@@ -5252,3 +5252,49 @@ class TestInjectCostIntoUsageDict:
         details = usage.prompt_tokens_details.cache_creation_token_details
         assert details.ephemeral_5m_input_tokens == 100
         assert details.ephemeral_1h_input_tokens == 400
+
+    def test_process_chunk_injects_cost_for_dict_and_sse_frame(self):
+        """``_process_chunk_with_cost_injection`` must thread the logging object
+        through both the dict-chunk and the SSE-string-frame paths so a streamed
+        ``message_delta`` gets the logging-obj cost, and must return the chunk
+        untouched when ``include_cost_in_streaming_usage`` is off.
+        """
+        import json as _json
+
+        class _StubLoggingObj:
+            def __init__(self, cost: float) -> None:
+                self._cost = cost
+
+            def _response_cost_calculator(self, result):
+                return self._cost
+
+        model = "bedrock/us.anthropic.claude-sonnet-4-6"
+        discounted_cost = 0.00042
+        stub = _StubLoggingObj(discounted_cost)
+        usage = {
+            "input_tokens": 14,
+            "output_tokens": 8,
+            "cache_read_input_tokens": 3202,
+            "cache_creation_input_tokens": 0,
+        }
+
+        def _dict_chunk() -> dict:
+            return {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": dict(usage)}
+
+        with patch.object(litellm, "include_cost_in_streaming_usage", False, create=True):
+            untouched = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(_dict_chunk(), model, stub)
+        assert "cost" not in untouched["usage"]
+
+        with patch.object(litellm, "include_cost_in_streaming_usage", True, create=True):
+            dict_result = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(_dict_chunk(), model, stub)
+            frame = f"event: message_delta\ndata: {_json.dumps(_dict_chunk())}\n\n"
+            sse_result = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(frame, model, stub)
+
+        assert dict_result["usage"]["cost"] == discounted_cost
+
+        assert isinstance(sse_result, str)
+        assert sse_result.endswith("\n\n")
+        data_line = next(ln for ln in sse_result.splitlines() if ln.strip().startswith("data:"))
+        injected = _json.loads(data_line.split("data:", 1)[1].strip())
+        assert injected["usage"]["cost"] == discounted_cost
+        assert injected["usage"]["cache_read_input_tokens"] == 3202
