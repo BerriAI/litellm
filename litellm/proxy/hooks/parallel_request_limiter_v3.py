@@ -2780,7 +2780,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 descriptors=descriptors,
                 requested_model=requested_model,
             )
-            return
 
         if itpm_reserved > 0:
             itpm_scopes = [

@@ -25,8 +25,11 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     ITPM_RESERVED_SCOPES_KEY,
     ITPM_RESERVED_TOKENS_KEY,
+    MAX_PARALLEL_SLOT_ACQUIRED_KEY,
     OTPM_RESERVED_SCOPES_KEY,
     OTPM_RESERVED_TOKENS_KEY,
+    PROJECT_ITPM_DESCRIPTOR_KEY,
+    PROJECT_OTPM_DESCRIPTOR_KEY,
     RATE_LIMIT_DESCRIPTORS_KEY,
     TPM_RESERVATION_RELEASED_KEY,
     TPM_RESERVED_MODEL_KEY,
@@ -35,7 +38,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
-from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 
 
@@ -1969,6 +1972,469 @@ async def test_responses_api_multimodal_input_counts_image_content(rate_limiter)
     assert multimodal_estimate > text_only_estimate + 100, (
         "Responses API input_image content block was not counted; got "
         f"text_only={text_only_estimate}, multimodal={multimodal_estimate}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_refund_reserved_tokens_noop_when_amount_zero(rate_limiter):
+    """_refund_reserved_tokens returns immediately without calling Redis when amount=0."""
+    handler, _cache = rate_limiter
+
+    calls = []
+
+    async def mock_increment(pipeline_operations, **kwargs):
+        calls.extend(pipeline_operations)
+
+    handler.async_increment_tokens_with_ttl_preservation = mock_increment
+
+    await handler._refund_reserved_tokens(
+        scopes=[("api_key", "sk-test")],
+        amount=0,
+    )
+
+    assert not calls, "No Redis ops expected when amount is zero"
+
+
+@pytest.mark.asyncio
+async def test_reserve_io_tokens_noop_when_no_itpm_otpm_descriptors(rate_limiter):
+    """reserve_io_tokens returns OK immediately when no ITPM/OTPM descriptors present."""
+    handler, _cache = rate_limiter
+
+    non_io_descriptor = {
+        "key": "api_key",
+        "value": "sk-test",
+        "rate_limit": {"tokens_per_unit": 1000, "window_size": 60},
+    }
+    response, itpm_reserved, otpm_reserved = await handler.reserve_io_tokens(
+        descriptors=[non_io_descriptor],
+        estimated_input_tokens=50,
+        estimated_output_tokens=50,
+    )
+
+    assert response["overall_code"] == "OK"
+    assert itpm_reserved == 0
+    assert otpm_reserved == 0
+
+
+@pytest.mark.asyncio
+async def test_reserve_io_tokens_itpm_only_no_otpm(rate_limiter):
+    """When only ITPM descriptors are present (no OTPM), returns itpm_reserved with otpm=0."""
+    handler, cache = rate_limiter
+
+    itpm_descriptor = {
+        "key": PROJECT_ITPM_DESCRIPTOR_KEY,
+        "value": "proj-a:model",
+        "rate_limit": {"tokens_per_unit": 10000, "window_size": 60},
+    }
+    response, itpm_reserved, otpm_reserved = await handler.reserve_io_tokens(
+        descriptors=[itpm_descriptor],
+        estimated_input_tokens=100,
+        estimated_output_tokens=50,
+    )
+
+    assert response["overall_code"] == "OK"
+    assert itpm_reserved == 100
+    assert otpm_reserved == 0
+
+
+@pytest.mark.asyncio
+async def test_warn_project_io_token_conflict_suppressed_after_first(rate_limiter):
+    """_warn_project_io_token_and_tpm_coexist_once logs only once per project:model pair."""
+    handler, _cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-warn"),
+        project_id="proj-warn",
+        project_metadata={"model_tpm_limit": {"gpt-4o": 1000}},
+    )
+    model = "gpt-4o"
+
+    warnings = []
+
+    import logging
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            warnings.append(record.getMessage())
+
+    import litellm.proxy.hooks.parallel_request_limiter_v3 as _mod
+
+    handler_log = _mod.verbose_proxy_logger
+    cap = _Capture()
+    handler_log.addHandler(cap)
+    try:
+        handler._warn_project_io_token_and_tpm_coexist_once(user_api_key_dict, model)
+        first_count = len(warnings)
+        handler._warn_project_io_token_and_tpm_coexist_once(user_api_key_dict, model)
+        assert len(warnings) == first_count, (
+            "Second call for the same key should be suppressed (already-warned guard not hit)"
+        )
+    finally:
+        handler_log.removeHandler(cap)
+
+
+def test_strip_audio_content_blocks_passthrough_non_list_messages():
+    """Non-list input is returned unchanged (early return on line 2605)."""
+    result = RateLimitHandler._strip_audio_content_blocks("not a list")
+    assert result == "not a list"
+
+
+def test_strip_audio_content_blocks_passthrough_non_dict_message():
+    """Non-dict entries in the message list are appended unchanged."""
+    messages = ["plain string message"]
+    result = RateLimitHandler._strip_audio_content_blocks(messages)
+    assert result == ["plain string message"]
+
+
+def test_strip_audio_content_blocks_passthrough_non_list_content():
+    """Messages with non-list content (e.g. plain string) pass through unchanged."""
+    messages = [{"role": "user", "content": "hello"}]
+    result = RateLimitHandler._strip_audio_content_blocks(messages)
+    assert result == [{"role": "user", "content": "hello"}]
+
+
+@pytest.mark.asyncio
+async def test_otpm_rejection_releases_stashed_parallel_slot(rate_limiter):
+    """
+    When OTPM is over limit and a parallel slot was already acquired, the
+    disconnect cleanup path in _reserve_project_io_tokens_or_raise must
+    release that slot. Exercises lines 2773-2777.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-otpm-slot"),
+        project_id="proj-slot",
+        project_metadata={"model_otpm_limit": {"m": 5}},
+    )
+
+    data: Dict[str, Any] = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 50,
+    }
+
+    slot_released = []
+
+    async def mock_release(acquisition, parent_otel_span=None):
+        slot_released.append(acquisition)
+
+    handler._release_parallel_request_slots = mock_release
+
+    data.setdefault("metadata", {})[MAX_PARALLEL_SLOT_ACQUIRED_KEY] = {
+        "slot_id": "test-slot-id",
+        "counter_keys": ["some-key"],
+    }
+
+    otpm_descriptor = {
+        "key": PROJECT_OTPM_DESCRIPTOR_KEY,
+        "value": "proj-slot:m",
+        "rate_limit": {"tokens_per_unit": 5, "window_size": 60},
+    }
+
+    with pytest.raises(Exception) as exc_info:
+        await handler._reserve_project_io_tokens_or_raise(
+            descriptors=[otpm_descriptor],
+            data=data,
+            requested_model="m",
+            user_api_key_dict=user_api_key_dict,
+            tpm_reservation_scopes=[],
+            tpm_reservation_amount=0,
+        )
+    assert getattr(exc_info.value, "status_code", None) == 429
+    assert slot_released, "Parallel slot must be released when OTPM rejects"
+
+
+@pytest.mark.asyncio
+async def test_itpm_only_status_stored_when_no_prior_rate_limit_response(rate_limiter):
+    """
+    When only ITPM is configured (no combined TPM/RPM to pre-populate
+    litellm_proxy_rate_limit_response), a successful ITPM reservation must
+    store its status in data so post-call headers can read it.
+    Covers the elif branch at lines 2809-2811.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-itpm-only-store"),
+        project_id="proj-store",
+    )
+
+    data: Dict[str, Any] = {"model": "m", "messages": []}
+
+    itpm_descriptor = {
+        "key": PROJECT_ITPM_DESCRIPTOR_KEY,
+        "value": "proj-store:m",
+        "rate_limit": {"tokens_per_unit": 100000, "window_size": 60},
+    }
+
+    await handler._reserve_project_io_tokens_or_raise(
+        descriptors=[itpm_descriptor],
+        data=data,
+        requested_model="m",
+        user_api_key_dict=user_api_key_dict,
+        tpm_reservation_scopes=[],
+        tpm_reservation_amount=0,
+    )
+
+    stored = data.get("litellm_proxy_rate_limit_response")
+    assert stored is not None, "ITPM status must be stored in litellm_proxy_rate_limit_response"
+    assert stored.get("statuses"), "Stored response must contain statuses"
+
+
+def test_get_reserved_itpm_tokens_returns_zero_for_non_numeric(rate_limiter):
+    """Corrupted ITPM stash (non-numeric string) returns 0, not ValueError."""
+    handler, _cache = rate_limiter
+
+    kwargs = {"metadata": {ITPM_RESERVED_TOKENS_KEY: "not-a-number"}}
+    result = handler._get_reserved_itpm_tokens_from_kwargs(kwargs)
+    assert result == 0
+
+
+def test_get_reserved_otpm_tokens_returns_zero_for_non_numeric(rate_limiter):
+    """Corrupted OTPM stash (non-numeric string) returns 0, not ValueError."""
+    handler, _cache = rate_limiter
+
+    kwargs = {"metadata": {OTPM_RESERVED_TOKENS_KEY: "bad"}}
+    result = handler._get_reserved_otpm_tokens_from_kwargs(kwargs)
+    assert result == 0
+
+
+def test_narrow_reserved_scopes_returns_empty_for_non_list():
+    """Non-list candidate (None, int, str) returns an empty set."""
+    assert RateLimitHandler._narrow_reserved_scopes(None) == set()
+    assert RateLimitHandler._narrow_reserved_scopes(42) == set()
+    assert RateLimitHandler._narrow_reserved_scopes("oops") == set()
+
+
+def test_resolve_io_token_usage_responses_api_with_cached_tokens(rate_limiter):
+    """
+    ResponsesAPIResponse whose usage.input_tokens_details.cached_tokens is set
+    subtracts the cached portion from billable input. Covers line 3501.
+    """
+    handler, _cache = rate_limiter
+
+    response_obj = ResponsesAPIResponse(
+        id="resp_cached",
+        created_at=int(datetime.now().timestamp()),
+        output=[],
+        usage=ResponseAPIUsage(
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+            input_tokens_details=InputTokensDetails(cached_tokens=25),
+        ),
+    )
+    billable_input, completion_tokens, resolved = handler._resolve_io_token_reconcile_usage(response_obj)
+
+    assert resolved is True
+    assert billable_input == 75, f"Expected 100 - 25 cached = 75, got {billable_input}"
+    assert completion_tokens == 50
+
+
+def test_resolve_io_token_usage_dict_format(rate_limiter):
+    """
+    Dict-shaped usage on a ModelResponse (older SDK versions or raw dicts in
+    the usage field) is parsed correctly. Covers lines 3502-3506.
+    """
+    handler, _cache = rate_limiter
+
+    response_obj = ModelResponse.model_construct(
+        usage={
+            "prompt_tokens": 80,
+            "completion_tokens": 40,
+            "prompt_tokens_details": {"cached_tokens": 20},
+        }
+    )
+    billable_input, completion_tokens, resolved = handler._resolve_io_token_reconcile_usage(response_obj)
+
+    assert resolved is True
+    assert billable_input == 60, f"Expected 80 - 20 cached = 60, got {billable_input}"
+    assert completion_tokens == 40
+
+
+def test_resolve_io_token_usage_unknown_type_returns_unresolved(rate_limiter):
+    """
+    A ModelResponse whose usage attribute is not a Usage, ResponseAPIUsage,
+    or dict (e.g. a plain int) returns (0, 0, False) so the reservation is
+    kept rather than guessed. Covers lines 3507-3508.
+    """
+    handler, _cache = rate_limiter
+
+    response_obj = ModelResponse.model_construct(usage=42)
+    billable_input, completion_tokens, resolved = handler._resolve_io_token_reconcile_usage(response_obj)
+
+    assert resolved is False
+    assert billable_input == 0
+    assert completion_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_build_io_token_reservation_ops_skips_unresolvable_usage(rate_limiter):
+    """
+    When response_obj has no parseable usage, _build_io_token_reservation_ops
+    returns [] to keep the reservation as-is rather than zeroing it out on a
+    bad guess. Covers line 3538.
+    """
+    handler, _cache = rate_limiter
+
+    itpm_scope = ("model_per_project_itpm", "proj-b:model")
+    mock_kwargs = {
+        "standard_logging_object": {
+            "metadata": {
+                ITPM_RESERVED_TOKENS_KEY: 50,
+                ITPM_RESERVED_SCOPES_KEY: [list(itpm_scope)],
+            }
+        },
+    }
+
+    ops = handler._build_io_token_reservation_ops(
+        kwargs=mock_kwargs,
+        response_obj=object(),
+    )
+
+    assert ops == [], f"Expected empty ops for unresolvable usage, got {ops}"
+
+
+@pytest.mark.asyncio
+async def test_disconnect_cleanup_noop_when_reservation_already_released(rate_limiter):
+    """
+    async_release_max_parallel_requests_on_disconnect returns immediately
+    without touching the IO reservation when the released marker is set.
+    Covers the early-return guard at line 4113.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-already-released"),
+        project_id="proj-released",
+        project_metadata={"model_itpm_limit": {"m": 1000}},
+    )
+
+    data: Dict[str, Any] = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 10,
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    RateLimitHandler._mark_reservation_released(data)
+
+    increments = []
+
+    async def mock_increment(increment_list, **kwargs):
+        increments.extend(increment_list)
+
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_increment
+
+    await handler.async_release_max_parallel_requests_on_disconnect(
+        user_api_key_dict=user_api_key_dict,
+        request_data=data,
+    )
+
+    itpm_refunds = [i for i in increments if "model_per_project_itpm" in i["key"]]
+    assert not itpm_refunds, (
+        "Disconnect cleanup must be a no-op when reservation is already released"
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_skips_rpm_only_descriptor_in_tpm_refund(rate_limiter):
+    """
+    async_post_call_failure_hook skips descriptors without tokens_per_unit
+    (e.g. an RPM-only api_key scope) when building the combined-TPM refund ops,
+    so a key with rpm_limit but no tpm_limit doesn't receive a spurious refund
+    that would drive its counter negative. Covers the continue guard at line 4250.
+    """
+    handler, cache = rate_limiter
+
+    api_key = hash_token("sk-rpm-only-desc")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=api_key,
+        rpm_limit=100,
+        project_id="proj-rpm-only-desc",
+        project_metadata={"model_tpm_limit": {"gpt-3.5-turbo": 100000}},
+    )
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 20,
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    rpm_counter_key = handler.create_rate_limit_keys(
+        key="api_key", value=api_key, rate_limit_type="requests"
+    )
+    rpm_tokens_key = handler.create_rate_limit_keys(
+        key="api_key", value=api_key, rate_limit_type="tokens"
+    )
+
+    await handler.async_post_call_failure_hook(
+        request_data=data,
+        original_exception=Exception("rejected"),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    api_key_tokens_after = int(
+        await cache.async_get_cache(key=rpm_tokens_key, local_only=True) or 0
+    )
+    assert api_key_tokens_after >= 0, (
+        f"RPM-only api_key scope must not receive a negative TPM refund; "
+        f"got {api_key_tokens_after}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_itpm_otpm_refund_exception_swallowed_on_disconnect(rate_limiter):
+    """
+    If the Redis pipeline raises during the ITPM/OTPM refund on disconnect,
+    the exception must not propagate out of
+    async_release_max_parallel_requests_on_disconnect. Covers lines 4149-4150.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-exc"),
+        project_id="proj-exc",
+        project_metadata={
+            "model_itpm_limit": {"m": 1000},
+        },
+    )
+
+    data: Dict[str, Any] = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 10,
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    async def raise_on_pipeline(**kwargs):
+        raise RuntimeError("Redis exploded")
+
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = raise_on_pipeline
+
+    await handler.async_release_max_parallel_requests_on_disconnect(
+        user_api_key_dict=user_api_key_dict,
+        request_data=data,
     )
 
 
