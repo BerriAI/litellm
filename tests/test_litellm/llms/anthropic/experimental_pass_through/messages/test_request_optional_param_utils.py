@@ -88,3 +88,89 @@ def test_drop_params_keeps_speed_for_supporting_model():
         litellm.drop_params = original
 
     assert result == {"speed": "fast"}
+
+
+def test_drop_params_strips_sampling_params_for_unsupported_model():
+    # claude-opus-4-7 removed sampling params (supports_sampling_params: false
+    # in the model map) — with drop_params they must be stripped instead of
+    # forwarded raw (the API 400s on them).
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = (
+            AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+                params={"temperature": 0.3, "top_p": 0.9, "top_k": 40, "stream": True},
+                model="claude-opus-4-7",
+            )
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result == {"stream": True}
+
+
+def test_drop_params_strips_sampling_params_for_provider_prefixed_model():
+    # Vertex-routed ids must resolve the same capability flag.
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = (
+            AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+                params={"temperature": 0.3, "top_p": 0.9, "top_k": 40},
+                model="vertex_ai/claude-opus-4-7",
+            )
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result == {}
+
+
+def test_sampling_params_kept_for_supporting_model():
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = (
+            AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+                params={"temperature": 0.3, "top_p": 0.9, "top_k": 40},
+                model="claude-sonnet-4-6",
+            )
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result == {"temperature": 0.3, "top_p": 0.9, "top_k": 40}
+
+
+def test_temperature_1_kept_for_unsupported_model():
+    # temperature=1 stays the one allowed value on models that removed
+    # sampling params.
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = (
+            AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+                params={"temperature": 1},
+                model="claude-opus-4-7",
+            )
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result == {"temperature": 1}
+
+
+def test_sampling_param_raises_clean_400_without_drop_params():
+    import pytest
+
+    original = litellm.drop_params
+    litellm.drop_params = False
+    try:
+        with pytest.raises(litellm.utils.UnsupportedParamsError):
+            AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+                params={"temperature": 0.3},
+                model="claude-opus-4-7",
+                drop_params=False,
+            )
+    finally:
+        litellm.drop_params = original
