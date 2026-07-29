@@ -3825,6 +3825,31 @@ def _init_custom_logger_compatible_class(
             _levo_otel_logger = LevoLogger(config=otel_config, callback_name="levo")
             _in_memory_loggers.append(_levo_otel_logger)
             return _levo_otel_logger  # type: ignore
+        elif logging_integration == "telemetry_dev":
+            from litellm.integrations.opentelemetry import OpenTelemetryConfig
+            from litellm.integrations.telemetry_dev.telemetry_dev import (
+                TelemetryDevLogger,
+            )
+
+            telemetry_dev_config = TelemetryDevLogger.get_telemetry_dev_config()
+            otel_config = OpenTelemetryConfig(
+                exporter=telemetry_dev_config.protocol,
+                endpoint=telemetry_dev_config.endpoint,
+                headers=telemetry_dev_config.otlp_auth_headers,
+            )
+
+            for callback in _in_memory_loggers:
+                if (
+                    isinstance(callback, TelemetryDevLogger)
+                    and callback.callback_name == "telemetry_dev"
+                ):
+                    return callback  # type: ignore
+
+            telemetry_dev_logger = TelemetryDevLogger(
+                config=otel_config, callback_name="telemetry_dev"
+            )
+            _in_memory_loggers.append(telemetry_dev_logger)
+            return telemetry_dev_logger  # type: ignore
         elif logging_integration == "otel":
             # Gate the new typed V2 adapter behind LITELLM_OTEL_V2. When off,
             # the legacy 3,227-line god-class is used unchanged. The two are

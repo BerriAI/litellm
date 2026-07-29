@@ -42,6 +42,7 @@ expected_env_vars = {
     "GOOGLE_APPLICATION_CREDENTIALS": "gcs_credentials",
     "OPIK_API_KEY": "opik_api_key",
     "LANGTRACE_API_KEY": "langtrace_api_key",
+    "TELEMETRY_DEV_API_KEY": "td_live_test",
     "LOGFIRE_TOKEN": "logfire_token",
     "ARIZE_SPACE_KEY": "arize_space_key",
     "ARIZE_API_KEY": "arize_api_key",
