@@ -6,8 +6,10 @@ import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cva.config";
 
+const ENTITY_BADGE_SIZE = "px-2.5 py-1 text-sm";
+
 interface BadgeLinkProps {
-  href: string;
+  href?: string;
   variant?: React.ComponentProps<typeof Badge>["variant"];
   className?: string;
   children: React.ReactNode;
@@ -15,6 +17,14 @@ interface BadgeLinkProps {
 
 export function BadgeLink({ href, variant = "secondary", className, children }: BadgeLinkProps) {
   const router = useRouter();
+
+  if (!href) {
+    return (
+      <Badge variant={variant} className={cn(ENTITY_BADGE_SIZE, className)}>
+        {children}
+      </Badge>
+    );
+  }
 
   const handleClick = (e: React.MouseEvent) => {
     const hasModifierKey = e.metaKey || e.ctrlKey || e.shiftKey;
@@ -27,7 +37,7 @@ export function BadgeLink({ href, variant = "secondary", className, children }: 
   return (
     <Badge
       variant={variant}
-      className={cn("cursor-pointer px-2.5 py-1 text-sm", className)}
+      className={cn("cursor-pointer", ENTITY_BADGE_SIZE, className)}
       render={<a href={href} onClick={handleClick} />}
     >
       {children}

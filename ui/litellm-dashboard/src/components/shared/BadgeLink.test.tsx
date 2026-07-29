@@ -33,4 +33,10 @@ describe("BadgeLink", () => {
     await user.keyboard("{/Meta}");
     expect(push).not.toHaveBeenCalled();
   });
+
+  it("renders a plain same-sized badge when no href is given", () => {
+    render(<BadgeLink>all-proxy-models</BadgeLink>);
+    expect(screen.getByText("all-proxy-models")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "all-proxy-models" })).not.toBeInTheDocument();
+  });
 });

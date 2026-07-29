@@ -4,7 +4,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import { MoneyCell } from "@/components/shared/table_cells";
 import CopyButton from "@/components/shared/CopyButton";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -222,13 +221,9 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 <p className="text-sm text-muted-foreground">Models</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {orgData.models.length === 0 ? (
-                    <Badge variant="secondary">All proxy models</Badge>
+                    <BadgeLink>All proxy models</BadgeLink>
                   ) : (
-                    orgData.models.map((model, index) => (
-                      <Badge key={index} variant="secondary">
-                        {model}
-                      </Badge>
-                    ))
+                    orgData.models.map((model, index) => <BadgeLink key={index}>{model}</BadgeLink>)
                   )}
                 </div>
               </CardContent>
@@ -311,9 +306,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     <p className="font-medium text-foreground">Models</p>
                     <div className="mt-1 flex flex-wrap gap-2">
                       {orgData.models.map((model, index) => (
-                        <Badge key={index} variant="secondary">
-                          {model}
-                        </Badge>
+                        <BadgeLink key={index}>{model}</BadgeLink>
                       ))}
                     </div>
                   </div>
