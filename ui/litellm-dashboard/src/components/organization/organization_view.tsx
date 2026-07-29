@@ -9,7 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { teamDetailHref } from "@/utils/entityLinks";
 import { createTeamAliasMap } from "@/utils/teamUtils";
+import { BadgeLink } from "@/components/shared/BadgeLink";
 import type { ColumnsType } from "antd/es/table";
 import { ArrowLeft } from "lucide-react";
 import React, { useMemo, useState } from "react";
@@ -237,9 +239,9 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 <p className="text-sm text-muted-foreground">Teams</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {orgData.teams?.map((team, index) => (
-                    <Badge key={index} variant="secondary">
+                    <BadgeLink key={index} href={teamDetailHref(team.team_id)}>
                       {teamAliasMap[team.team_id] || team.team_id}
-                    </Badge>
+                    </BadgeLink>
                   ))}
                 </div>
               </CardContent>
