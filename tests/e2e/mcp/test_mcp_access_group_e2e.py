@@ -27,6 +27,7 @@ class TestMcpAccessGroupToolSelection:
     def test_access_group_scopes_tool_selection(self, client: McpClient, resources: ResourceManager) -> None:
         group = f"e2e-mcp-grp-{unique_marker()}"
         server_id = register_datadog_mcp(client, resources, mcp_access_groups=[group])
+        client.await_registered(server_id)
 
         granted = client.generate_key(
             user_id=f"e2e-mcp-ag-granted-{unique_marker()}",

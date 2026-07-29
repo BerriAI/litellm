@@ -59,6 +59,7 @@ class TestDatadogMcpRoundTrip:
         _assert_datadog_logger_active(client.proxy)
 
         server_id = register_datadog_mcp(client, resources)
+        client.await_registered(server_id)
         marker = f"{MARKER_PREFIX}{unique_marker()}"
 
         key = client.generate_key(
@@ -77,20 +78,19 @@ class TestDatadogMcpRoundTrip:
         )
 
         tool_name = client.await_tool(key, server_id, SEARCH_LOGS_TOOL)
-
-        call = unwrap(
-            client.call_tool(
-                key,
-                server_id=server_id,
-                name=tool_name,
-                arguments={
-                    "query": marker,
-                    "from": DD_SEARCH_FROM,
-                    "to": "now",
-                    "max_tokens": 5000,
-                    "telemetry": {"intent": "e2e assert seeded litellm completion log is searchable via MCP"},
+        call = client.await_call_tool(
+            key,
+            server_id=server_id,
+            name=tool_name,
+            arguments={
+                "query": marker,
+                "from": DD_SEARCH_FROM,
+                "to": "now",
+                "max_tokens": 5000,
+                "telemetry": {
+                    "intent": "e2e assert seeded litellm completion log is searchable via MCP"
                 },
-            )
+            },
         )
         assert call.is_error is not True, f"search_datadog_logs errored: {call}"
         body = call.all_text

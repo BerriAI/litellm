@@ -2064,7 +2064,8 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
     class _MockRouter:
-        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [0]}
+        model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
+        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
 
     test_data = {"model": "gpt-4o"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -2087,7 +2088,8 @@ def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
     class _MockRouter:
-        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [0]}
+        model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
+        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
 
     test_data = {"model": "gpt-4o"}
     user_api_key_dict = UserAPIKeyAuth(

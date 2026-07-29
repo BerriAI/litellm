@@ -630,6 +630,26 @@ class TestThinkingSummaryPreservation:
         )
         assert result == {"reasoning_effort": {"effort": "high", "summary": "concise"}}
 
+    def test_translate_thinking_for_model_disabled_stays_plain_string_when_auto_summary_enabled(self):
+        """Disabled thinking must stay a plain string even when reasoning_auto_summary is on."""
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+
+        original = litellm.reasoning_auto_summary
+        try:
+            litellm.reasoning_auto_summary = True
+            thinking = {"type": "disabled"}
+            result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
+                thinking=thinking,
+                model="openai/gpt-5.2",
+            )
+        finally:
+            litellm.reasoning_auto_summary = original
+
+        assert result == {"reasoning_effort": "none"}
+
 
 # ---------------------------------------------------------------------------
 # Parity tests: redundant empty-text-block sanitization scan removal.

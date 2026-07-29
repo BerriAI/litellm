@@ -6068,3 +6068,22 @@ class TestPreRoutingStrategyRegistryLifecycle:
         for params, expected in cases:
             actual = router._deployment_participates_in_adaptive_routing(litellm_params=LiteLLM_Params(**params))
             assert actual is expected, params["model"]
+
+
+def test_model_info_is_active_for_environment_matrix(monkeypatch):
+    """The model-write endpoints consult this predicate to tell a deliberately
+    environment-inactive model from one dropped by a failed reload; the Router's own
+    deployment gate delegates to it, so the two can never diverge."""
+    from litellm.router import model_info_is_active_for_environment
+
+    assert model_info_is_active_for_environment(model_info=None) is True
+    assert model_info_is_active_for_environment(model_info={"id": "m1"}) is True
+    assert model_info_is_active_for_environment(model_info={"supported_environments": None}) is True
+
+    monkeypatch.setenv("LITELLM_ENVIRONMENT", "development")
+    assert model_info_is_active_for_environment(model_info={"supported_environments": ["development"]}) is True
+    assert model_info_is_active_for_environment(model_info={"supported_environments": ["production"]}) is False
+
+    monkeypatch.delenv("LITELLM_ENVIRONMENT")
+    with pytest.raises(ValueError, match="LITELLM_ENVIRONMENT"):
+        model_info_is_active_for_environment(model_info={"supported_environments": ["production"]})

@@ -34,9 +34,9 @@ def _setup_model_block_mocks(monkeypatch, *, updated_blocked: bool):
     mock_prisma_client.db.litellm_proxymodeltable = model_table
 
     mock_router = MagicMock()
-    mock_router.get_deployment.return_value = None
+    mock_router.get_model_ids.return_value = [model_id]
 
-    mock_clear_cache = AsyncMock(return_value=None)
+    mock_clear_cache = AsyncMock(return_value=True)
     mock_audit_log = AsyncMock(return_value=None)
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -193,3 +193,51 @@ async def test_route_request_returns_403_when_model_is_fully_blocked(monkeypatch
 
     assert exc_info.value.status_code == 403
     assert "Model is blocked" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_model_block_surfaces_wholesale_reload_failure(monkeypatch):
+    """The write endpoints owe the caller an error when the pod failed to reload at all;
+    the DB row is saved but this pod is not serving the change."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.model_management_endpoints import block_model
+
+    model_id, model_table, updated_row, mock_clear_cache, mock_audit_log = _setup_model_block_mocks(
+        monkeypatch, updated_blocked=True
+    )
+    wiped_router = MagicMock()
+    wiped_router.get_model_ids.side_effect = [[model_id], []]
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", wiped_router)
+
+    with pytest.raises(ProxyException, match=model_id):
+        await block_model(
+            data=BlockModelRequest(model_id=model_id),
+            http_request=MagicMock(),
+            user_api_key_dict=_proxy_admin(),
+            litellm_changed_by="operator@example.com",
+        )
+
+    assert mock_audit_log.call_args.kwargs["object_id"] == model_id
+
+
+@pytest.mark.asyncio
+async def test_model_block_surfaces_model_dropped_by_reload(monkeypatch):
+    """A reload that completes but drops the written model (ignore_invalid_deployments
+    swallowed its re-add) must not produce an unqualified success."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.model_management_endpoints import block_model
+
+    model_id, model_table, updated_row, mock_clear_cache, _ = _setup_model_block_mocks(
+        monkeypatch, updated_blocked=True
+    )
+    dropped_router = MagicMock()
+    dropped_router.get_model_ids.return_value = []
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", dropped_router)
+
+    with pytest.raises(ProxyException, match=model_id):
+        await block_model(
+            data=BlockModelRequest(model_id=model_id),
+            http_request=MagicMock(),
+            user_api_key_dict=_proxy_admin(),
+            litellm_changed_by="operator@example.com",
+        )
