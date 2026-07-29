@@ -73,6 +73,21 @@ describe("provider_info_helpers", () => {
       expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.SCX_AI]);
     });
 
+    it("should map the scaleway slug and Scaleway enum key to the Scaleway display name and logo", () => {
+      // The models table passes the litellm_provider slug the backend emits
+      // ("scaleway"), while the Add Model dropdown passes the provider_map key
+      // ("Scaleway"). Both must resolve, or Scaleway models fall back to the
+      // grey letter placeholder.
+      const fromSlug = getProviderLogoAndName("scaleway");
+      expect(fromSlug.displayName).toBe(Providers.Scaleway);
+      expect(fromSlug.logo).toBe(providerLogoMap[Providers.Scaleway]);
+      expect(fromSlug.logo).toBeTruthy();
+
+      const fromEnumKey = getProviderLogoAndName("Scaleway");
+      expect(fromEnumKey.displayName).toBe(Providers.Scaleway);
+      expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.Scaleway]);
+    });
+
     it("should map bedrock_mantle slug to Bedrock Mantle display name and logo", () => {
       const result = getProviderLogoAndName("bedrock_mantle");
       expect(result.displayName).toBe(Providers.BedrockMantle);
