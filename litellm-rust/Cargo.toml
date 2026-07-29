@@ -31,3 +31,4 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 base64 = "0.22"
 bytes = "1"
 aws-smithy-eventstream = "0.60.3"
+aws-smithy-types = "1.6.1"

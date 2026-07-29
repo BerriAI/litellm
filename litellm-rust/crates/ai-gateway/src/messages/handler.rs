@@ -12,7 +12,9 @@ use serde_json::Value;
 use super::client::http_client;
 use super::common_utils::truncate_error_body;
 use super::types::ProviderMessagesRequest;
-use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
+use crate::constants::{
+    ANTHROPIC_MESSAGES_PROVIDER, AZURE_ANTHROPIC_MESSAGES_PROVIDER, BEDROCK_MESSAGES_PROVIDER,
+};
 
 fn environment_lookup(key: &str) -> Option<String> {
     std::env::var(key).ok()
@@ -122,7 +124,10 @@ pub(super) async fn execute_messages_provider_call(
 pub(super) async fn execute_messages_provider_stream(
     request: ProviderMessagesRequest,
 ) -> CoreResult<reqwest::Response> {
-    if request.provider != ANTHROPIC_MESSAGES_PROVIDER && request.signing_region.is_none() {
+    if !matches!(
+        request.provider.as_str(),
+        ANTHROPIC_MESSAGES_PROVIDER | AZURE_ANTHROPIC_MESSAGES_PROVIDER | BEDROCK_MESSAGES_PROVIDER
+    ) {
         return Err(CoreError::InvalidRequest(
             "streaming messages is not supported for this provider".to_string(),
         ));
