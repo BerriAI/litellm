@@ -128,7 +128,6 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
     (s: MCPServer): string | null => {
       if (!connectMode) return null;
       if (isUnsupportedOnGatewayConnect(s.auth_type)) return "Not supported on this connection";
-      if (s.connected_app_reachable === false) return "Not available to connected apps";
       return null;
     },
     [connectMode],
@@ -182,7 +181,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         const list: MCPServer[] = Array.isArray(serverData) ? serverData : serverData?.data ?? [];
         const reachable = connectMode ? list.filter((s) => s.connected_app_reachable !== false) : list;
         const oauthServers = reachable.filter((s) => s.auth_type === AUTH_TYPE.OAUTH2);
-        setServers(list);
+        setServers(reachable);
         setOauthChecking(new Set(oauthServers.map((s) => s.server_id)));
         setLoading(false);
 
@@ -310,6 +309,15 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
   const connectedCount = servers.filter(
     (s) => selectedServers.includes(nameOf(s)) && connectUnavailabilityLabel(s) === null,
   ).length;
+
+  const emptyStateText = () => {
+    if (servers.length === 0) {
+      return connectMode
+        ? "No MCP servers are available to this connection yet. Ask an admin to grant your user or team access."
+        : "No MCP servers configured. Add servers in Tools -> MCP Servers.";
+    }
+    return activeTab === "connected" ? "No servers connected yet." : "No servers match your search.";
+  };
   const totalTools = Object.values(toolCounts).reduce((sum, n) => sum + n, 0);
 
   if (detailServer) {
@@ -526,13 +534,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
           ))}
         </div>
       ) : filtered.length === 0 ? (
-        <div className="text-center text-muted-foreground text-[13px] py-12 px-3">
-          {servers.length === 0
-            ? "No MCP servers configured. Add servers in Tools -> MCP Servers."
-            : activeTab === "connected"
-              ? "No servers connected yet."
-              : "No servers match your search."}
-        </div>
+        <div className="text-center text-muted-foreground text-[13px] py-12 px-3">{emptyStateText()}</div>
       ) : (
         <div className="grid grid-cols-2 border rounded-lg overflow-hidden">
           {filtered.map((server, idx) => {

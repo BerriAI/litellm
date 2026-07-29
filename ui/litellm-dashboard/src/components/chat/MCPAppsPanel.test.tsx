@@ -114,22 +114,22 @@ describe("MCPAppsPanel connected-app reachability (LIT-4861)", () => {
     vi.clearAllMocks();
   });
 
-  it("requests the connected-app view and labels unreachable servers in connect mode", async () => {
+  it("requests the connected-app view and hides unreachable servers in connect mode", async () => {
     vi.mocked(fetchMCPServers).mockResolvedValue(connectServers);
     vi.mocked(listMCPTools).mockResolvedValue({ tools: [] });
 
     renderConnectPanel(true, ["reachable_srv", "unreachable_srv"]);
 
-    expect(await screen.findByText("unreachable_srv")).toBeInTheDocument();
+    expect(await screen.findByText("reachable_srv")).toBeInTheDocument();
     expect(vi.mocked(fetchMCPServers)).toHaveBeenCalledWith("tok", undefined, true);
-    expect(screen.getByText("Not available to connected apps")).toBeInTheDocument();
+    expect(screen.queryByText("unreachable_srv")).not.toBeInTheDocument();
     expect(screen.getByText("Connected (1)")).toBeInTheDocument();
     const toolCountFetchedIds = vi.mocked(listMCPTools).mock.calls.map((call) => call[1]);
     expect(toolCountFetchedIds).toContain("s-reach");
     expect(toolCountFetchedIds).not.toContain("s-unreach");
   });
 
-  it("blocks connecting an unavailable server from the detail view in connect mode", async () => {
+  it("blocks connecting an unsupported server from the detail view in connect mode", async () => {
     const detailServers = [
       ...connectServers,
       {
@@ -144,12 +144,6 @@ describe("MCPAppsPanel connected-app reachability (LIT-4861)", () => {
 
     renderConnectPanel(true);
 
-    fireEvent.click(await screen.findByText("unreachable_srv"));
-    expect(await screen.findByRole("heading", { name: "unreachable_srv" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Connect" })).not.toBeInTheDocument();
-    expect(screen.getByText("Not available to connected apps")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /Back/ }));
     fireEvent.click(await screen.findByText("unsupported_srv"));
     expect(await screen.findByRole("heading", { name: "unsupported_srv" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Connect" })).not.toBeInTheDocument();
