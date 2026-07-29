@@ -30,6 +30,7 @@ from typing import (
     Generator,
     List,
     Literal,
+    Mapping,
     Optional,
     Set,
     Tuple,
@@ -8630,6 +8631,33 @@ class Router:
                     raise Exception("Model Name invalid - {}".format(type(model)))
         return None
 
+    @staticmethod
+    def _deployment_usable_by_team(model: Union[Mapping, Deployment], team_id: str | None) -> bool:
+        """
+        A team-scoped deployment (``model_info.team_id`` set) is only usable by
+        callers from that same team; deployments without a team owner are shared.
+        """
+        model_info = model.get("model_info") if isinstance(model, dict) else model.model_info
+        owner_team_id = model_info.get("team_id") if model_info is not None else None
+        return owner_team_id is None or owner_team_id == team_id
+
+    def _get_model_group_deployment_usable_by_team(
+        self, model_group_name: str, team_id: str | None
+    ) -> Deployment | None:
+        """
+        Like ``get_deployment_by_model_group_name``, but skips deployments owned
+        by other teams so a shared model name never resolves another team's
+        credentials.
+        """
+        indices = self.model_name_to_deployment_indices.get(model_group_name) or ()
+        usable = (
+            self.model_list[idx] for idx in indices if self._deployment_usable_by_team(self.model_list[idx], team_id)
+        )
+        first_usable = next(usable, None)
+        if first_usable is None:
+            return None
+        return Deployment(**first_usable) if isinstance(first_usable, dict) else first_usable
+
     def get_configured_token_limits(self, model_name: str) -> "tuple[int | None, int | None]":
         """
         Return (max_input_tokens, max_output_tokens) explicitly configured in a concrete
@@ -8664,7 +8692,10 @@ class Router:
             model_id: Model ID or model name from model_list (e.g., "gpt-4o-litellm")
             team_id: Optional team id of the caller. When set, team-scoped
                 deployments (indexed by team public model name, including team
-                wildcard models like "openai/*") are also considered.
+                wildcard models like "openai/*") are also considered. Name and
+                wildcard lookups never resolve a deployment owned by a
+                different team, so shared model names can't leak another
+                team's credentials.
 
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
@@ -8681,7 +8712,7 @@ class Router:
 
         # If not found, try by model_group_name
         if deployment is None:
-            deployment = self.get_deployment_by_model_group_name(model_group_name=model_id)
+            deployment = self._get_model_group_deployment_usable_by_team(model_group_name=model_id, team_id=team_id)
 
         # If not found, check team-scoped deployments whose team public model
         # name exactly matches model_id (wildcard team names are matched via
@@ -8698,7 +8729,12 @@ class Router:
         if deployment is None:
             team_pattern_router = self.team_pattern_routers.get(team_id) if team_id is not None else None
             team_wildcard_models = (team_pattern_router.route(model_id) or []) if team_pattern_router else []
-            potential_wildcard_models = team_wildcard_models or self.pattern_router.route(model_id) or []
+            global_wildcard_models = [
+                wildcard_model
+                for wildcard_model in (self.pattern_router.route(model_id) or [])
+                if self._deployment_usable_by_team(wildcard_model, team_id)
+            ]
+            potential_wildcard_models = team_wildcard_models or global_wildcard_models
             if potential_wildcard_models:
                 # Use the first matching wildcard deployment
                 deployment_dict = potential_wildcard_models[0]

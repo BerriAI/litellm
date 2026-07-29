@@ -3755,6 +3755,125 @@ def test_get_deployment_credentials_with_provider_team_wildcard_priority():
     assert global_credentials["api_key"] == "global-key"
 
 
+def test_get_deployment_credentials_with_provider_skips_other_team_deployment():
+    """
+    Regression: a team-scoped deployment sharing a model_name with a global
+    deployment must never resolve for another team's (or an unscoped) caller,
+    even when it is indexed first; the shared global deployment wins instead.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "vertex_project": "team-b-project",
+                },
+                "model_info": {
+                    "id": "team-b-vertex",
+                    "team_id": "team-b",
+                    "team_public_model_name": "gemini-2.5-pro",
+                },
+            },
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "vertex_project": "shared-project",
+                },
+            },
+        ],
+    )
+
+    other_team_credentials = router.get_deployment_credentials_with_provider(
+        model_id="gemini-2.5-pro", team_id="team-a"
+    )
+    assert other_team_credentials is not None
+    assert other_team_credentials["vertex_project"] == "shared-project"
+
+    unscoped_credentials = router.get_deployment_credentials_with_provider(
+        model_id="gemini-2.5-pro"
+    )
+    assert unscoped_credentials is not None
+    assert unscoped_credentials["vertex_project"] == "shared-project"
+
+    owner_credentials = router.get_deployment_credentials_with_provider(
+        model_id="gemini-2.5-pro", team_id="team-b"
+    )
+    assert owner_credentials is not None
+    assert owner_credentials["vertex_project"] == "team-b-project"
+
+
+def test_get_deployment_credentials_with_provider_no_fallback_to_other_team_only_name():
+    """
+    When the only deployments under a model name belong to another team, other
+    callers must get None (env fallback) instead of that team's credentials.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "vertex_project": "team-b-project",
+                },
+                "model_info": {
+                    "id": "team-b-vertex",
+                    "team_id": "team-b",
+                    "team_public_model_name": "gemini-2.5-pro",
+                },
+            },
+        ],
+    )
+
+    assert (
+        router.get_deployment_credentials_with_provider(
+            model_id="gemini-2.5-pro", team_id="team-a"
+        )
+        is None
+    )
+    assert (
+        router.get_deployment_credentials_with_provider(model_id="gemini-2.5-pro")
+        is None
+    )
+
+
+def test_get_deployment_credentials_with_provider_skips_other_team_wildcard():
+    """
+    Global wildcard resolution must skip a team-scoped wildcard deployment for
+    callers outside that team, falling through to the shared wildcard entry.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "team-b-key"},
+                "model_info": {
+                    "id": "team-b-wildcard",
+                    "team_id": "team-b",
+                    "team_public_model_name": "openai/*",
+                },
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "global-key"},
+            },
+        ],
+    )
+
+    other_team_credentials = router.get_deployment_credentials_with_provider(
+        model_id="openai/gpt-5.2", team_id="team-a"
+    )
+    assert other_team_credentials is not None
+    assert other_team_credentials["api_key"] == "global-key"
+
+    owner_credentials = router.get_deployment_credentials_with_provider(
+        model_id="openai/gpt-5.2", team_id="team-b"
+    )
+    assert owner_credentials is not None
+    assert owner_credentials["api_key"] == "team-b-key"
+
+
 def test_team_wildcard_credentials_not_usable_after_delete_deployment():
     """
     Regression: team_pattern_routers retained deleted deployments, so a team
