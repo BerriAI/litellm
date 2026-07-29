@@ -17,6 +17,7 @@ import traceback
 import warnings
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -698,6 +699,58 @@ _EXTRA_SECRET_GENERAL_SETTINGS_FIELDS = frozenset(
         "database_extra_connection_params",
         "pass_through_endpoints",
         "alert_to_webhook_url",
+    }
+)
+
+
+# general_settings fields the Admin UI can read and write (GET /config/list,
+# POST /config/field/update). Kept in one place so the DB->runtime propagation
+# in ProxyConfig._update_general_settings stays in sync with what the UI offers
+_GENERAL_SETTINGS_UI_EDITABLE_FIELDS: Mapping[str, str] = MappingProxyType(
+    {
+        "max_parallel_requests": "Integer",
+        "global_max_parallel_requests": "Integer",
+        "max_request_size_mb": "Integer",
+        "max_response_size_mb": "Integer",
+        "proxy_config_reload_interval_seconds": "Integer",
+        "pass_through_endpoints": "PydanticModel",
+        "store_model_in_db": "Boolean",
+        "store_prompts_in_spend_logs": "Boolean",
+        "maximum_spend_logs_retention_period": "String",
+        "mcp_internal_ip_ranges": "List",
+        "mcp_trusted_proxy_ranges": "List",
+        "mcp_xff_num_trusted_hops": "Integer",
+        "always_include_stream_usage": "Boolean",
+        "forward_client_headers_to_llm_api": "Boolean",
+        "mcp_required_fields": "List",
+        "cancel_on_disconnect": "Boolean",
+        "skip_user_budget_on_team_key": "Boolean",
+        "disable_auto_add_proxy_admin_to_teams": "Boolean",
+    }
+)
+
+# UI-editable fields whose DB value needs custom handling (normalization, a
+# global other than general_settings, or a side effect such as rescheduling a
+# job); _update_general_settings applies these itself
+_GENERAL_SETTINGS_DB_SIDE_EFFECT_FIELDS = frozenset(
+    {
+        "pass_through_endpoints",
+        "store_model_in_db",
+        "store_prompts_in_spend_logs",
+        "maximum_spend_logs_retention_period",
+        "disable_auto_add_proxy_admin_to_teams",
+    }
+)
+
+# Every other UI-editable field is read straight out of general_settings at
+# request time, so copying the DB value across is all the propagation needed
+_GENERAL_SETTINGS_DB_PASSTHROUGH_FIELDS = (
+    frozenset(_GENERAL_SETTINGS_UI_EDITABLE_FIELDS) - _GENERAL_SETTINGS_DB_SIDE_EFFECT_FIELDS
+) | frozenset(
+    {
+        "user_url_allowed_hosts",
+        "user_url_validation",
+        "provider_url_destination_allowed_hosts",
     }
 )
 
@@ -5970,11 +6023,7 @@ class ProxyConfig:
             if old_value != new_value:
                 await self._reschedule_spend_log_cleanup_job()
 
-        for key in (
-            "user_url_allowed_hosts",
-            "user_url_validation",
-            "provider_url_destination_allowed_hosts",
-        ):
+        for key in _GENERAL_SETTINGS_DB_PASSTHROUGH_FIELDS:
             if key in _general_settings:
                 general_settings[key] = _general_settings[key]
         _apply_ssrf_general_settings(_general_settings)
@@ -15153,26 +15202,7 @@ async def get_config_list(
     else:
         db_general_settings_dict = {}
 
-    allowed_args = {
-        "max_parallel_requests": {"type": "Integer"},
-        "global_max_parallel_requests": {"type": "Integer"},
-        "max_request_size_mb": {"type": "Integer"},
-        "max_response_size_mb": {"type": "Integer"},
-        "proxy_config_reload_interval_seconds": {"type": "Integer"},
-        "pass_through_endpoints": {"type": "PydanticModel"},
-        "store_model_in_db": {"type": "Boolean"},
-        "store_prompts_in_spend_logs": {"type": "Boolean"},
-        "maximum_spend_logs_retention_period": {"type": "String"},
-        "mcp_internal_ip_ranges": {"type": "List"},
-        "mcp_trusted_proxy_ranges": {"type": "List"},
-        "mcp_xff_num_trusted_hops": {"type": "Integer"},
-        "always_include_stream_usage": {"type": "Boolean"},
-        "forward_client_headers_to_llm_api": {"type": "Boolean"},
-        "mcp_required_fields": {"type": "List"},
-        "cancel_on_disconnect": {"type": "Boolean"},
-        "skip_user_budget_on_team_key": {"type": "Boolean"},
-        "disable_auto_add_proxy_admin_to_teams": {"type": "Boolean"},
-    }
+    allowed_args = _GENERAL_SETTINGS_UI_EDITABLE_FIELDS
 
     return_val = []
 
@@ -15180,7 +15210,7 @@ async def get_config_list(
         if field_name in allowed_args:
             ## HANDLE TYPED DICT
 
-            typed_dict_type = allowed_args[field_name]["type"]
+            typed_dict_type = allowed_args[field_name]
 
             if typed_dict_type == "PydanticModel":
                 if field_name == "pass_through_endpoints":
@@ -15222,7 +15252,7 @@ async def get_config_list(
 
                     _response_obj = ConfigList(
                         field_name=field_name,
-                        field_type=allowed_args[field_name]["type"],
+                        field_type=allowed_args[field_name],
                         field_description=field_info.description or "",
                         field_value=_redact_general_setting_value(
                             field_name,
@@ -15250,7 +15280,7 @@ async def get_config_list(
 
                 _response_obj = ConfigList(
                     field_name=field_name,
-                    field_type=allowed_args[field_name]["type"],
+                    field_type=allowed_args[field_name],
                     field_description=field_info.description or "",
                     field_value=_redact_general_setting_value(field_name, _field_value, is_full_admin),
                     stored_in_db=_stored_in_db,

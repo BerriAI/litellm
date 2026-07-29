@@ -6740,6 +6740,35 @@ async def test_update_general_settings_disable_auto_add_proxy_admin_to_teams(db_
 
 
 @pytest.mark.asyncio
+async def test_update_general_settings_propagates_ui_editable_fields():
+    """
+    Every general setting the Admin UI can write must reach the live
+    general_settings dict on the next config poll. Regression for
+    skip_user_budget_on_team_key (issue #35076): the UI wrote it to the DB and
+    /config/list rendered it as enabled while auth kept enforcing the user
+    budget, because DB->runtime propagation had its own hardcoded allowlist.
+    """
+    from litellm.proxy.proxy_server import (
+        _GENERAL_SETTINGS_DB_SIDE_EFFECT_FIELDS,
+        _GENERAL_SETTINGS_UI_EDITABLE_FIELDS,
+        ProxyConfig,
+    )
+
+    proxy_config = ProxyConfig()
+    db_general_settings = {
+        field: True for field in _GENERAL_SETTINGS_UI_EDITABLE_FIELDS if field not in _GENERAL_SETTINGS_DB_SIDE_EFFECT_FIELDS
+    }
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(db_general_settings=db_general_settings)
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["skip_user_budget_on_team_key"] is True
+        assert {field: ps.general_settings.get(field) for field in db_general_settings} == db_general_settings
+
+
+@pytest.mark.asyncio
 async def test_update_general_settings_store_model_in_db_string_normalization():
     """
     Verify _update_general_settings normalizes string values for store_model_in_db.
