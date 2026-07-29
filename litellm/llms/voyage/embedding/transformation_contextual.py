@@ -2,7 +2,7 @@
 This module is used to transform the request and response for the Voyage contextualized embeddings API. 
 This would be used for all the contextualized embeddings models in Voyage. 
 """
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
@@ -98,6 +98,11 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
             "Authorization": f"Bearer {api_key}",
         }
 
+    # Chunk size (in tokens) used when the API auto-chunks a flat ``list[str]``.
+    # Matches the voyage-context-4 context window so each string stays a single
+    # chunk instead of being split.
+    AUTO_CHUNK_SIZE = 32000
+
     def transform_embedding_request(
         self,
         model: str,
@@ -105,42 +110,74 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
+        inputs, extra_params = self._transform_contextual_inputs(input, optional_params)
         return {
-            "inputs": self._transform_contextual_inputs(input, optional_params),
+            "inputs": inputs,
             "model": model,
             **optional_params,
+            **extra_params,
         }
 
-    @staticmethod
+    @classmethod
     def _transform_contextual_inputs(
+        cls,
         input: Union[AllEmbeddingInputValues, List[List[str]]],
         optional_params: dict,
-    ) -> List[List[str]]:
+    ) -> Tuple[Union[List[str], List[List[str]]], dict]:
         """
-        Voyage's contextualized embeddings API expects ``inputs`` to be a
-        ``list[list[str]]`` (each inner list is a document made of chunks that
-        share context).
+        Normalize ``input`` for Voyage's contextualized embeddings API and
+        return ``(inputs, extra_params)`` where ``extra_params`` carries any
+        request fields (e.g. auto-chunking) needed for the chosen shape.
 
-        It also accepts a flat ``list[str]`` - but only when
-        ``input_type == "query"``. In every other case a flat list must be
-        wrapped so each string becomes its own single-chunk document, otherwise
-        the API rejects the request with a 400.
+        The API contract (verified against the live endpoint) is:
+
+        - A flat ``list[str]`` is only accepted with ``input_type="query"`` or
+          with ``enable_auto_chunking=True`` (which itself requires
+          ``input_type="document"``).
+        - A ``list[list[str]]`` (each inner list = one document's chunks) is
+          always accepted.
+
+        So we prefer to send a flat ``list[str]`` and let the API auto-chunk,
+        instead of pre-wrapping into ``list[list[str]]``:
+
+        - ``str`` -> ``[str]`` + ``enable_auto_chunking`` (input_type=document)
+        - flat ``list[str]`` + ``input_type="query"`` -> kept flat, as-is
+        - flat ``list[str]`` otherwise -> kept flat + ``enable_auto_chunking``
+          (input_type=document)
+        - ``list[list[str]]`` -> passed through unchanged
 
         Reference: https://docs.voyageai.com/reference/contextualized-embeddings-api
         """
-        # Single string -> one document with a single chunk.
+        # Single string -> a one-element flat list, auto-chunked.
         if isinstance(input, str):
-            return [[input]]
+            return [input], cls._auto_chunk_params(optional_params)
 
-        # Flat list[str]: keep as list[str] when the API allows it
-        # (input_type="query"), otherwise wrap each string as its own document.
+        # Flat list[str].
         if isinstance(input, list) and all(isinstance(i, str) for i in input):
             if optional_params.get("input_type") == "query":
-                return input  # type: ignore[return-value]
-            return [[i] for i in input]
+                # The API accepts a flat query list as-is.
+                return input, {}  # type: ignore[return-value]
+            # Otherwise let the API auto-chunk the flat list.
+            return input, cls._auto_chunk_params(optional_params)  # type: ignore[return-value]
 
         # Already list[list[str]] (or another shape) -> pass through unchanged.
-        return input  # type: ignore[return-value]
+        return input, {}  # type: ignore[return-value]
+
+    @classmethod
+    def _auto_chunk_params(cls, optional_params: dict) -> dict:
+        """
+        Params required to send a flat ``list[str]`` to the contextualized API.
+
+        ``enable_auto_chunking=True`` requires ``input_type="document"``, so set
+        it unless the caller already provided an ``input_type``.
+        """
+        params: Dict[str, Any] = {
+            "enable_auto_chunking": True,
+            "chunk_size": cls.AUTO_CHUNK_SIZE,
+        }
+        if not optional_params.get("input_type"):
+            params["input_type"] = "document"
+        return params
 
     def transform_embedding_response(
         self,
