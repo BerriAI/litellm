@@ -295,12 +295,13 @@ def test_non_adaptive_request_without_effort_is_untouched():
     assert "thinking" not in result
     assert "output_config" not in result
 
+
 def test_legacy_thinking_budget_preserved_for_adaptive_model():
     """Regression: a caller-supplied ``budget_tokens`` is a hard reasoning ceiling that
-    adaptive thinking cannot express. Rewriting it to ``thinking={type: adaptive}`` plus
-    an effort bucket removed the ceiling, so a request bounded at 8000 thinking tokens
-    started reasoning past it and burning the whole max_tokens. 4.6/4.7 accept the legacy
-    shape, so it must be forwarded unchanged."""
+    ``output_config.effort`` cannot express. Rewriting it to ``thinking={type: adaptive}``
+    plus an effort bucket removed the ceiling, so a request bounded at 8000 thinking tokens
+    reasoned past it and burned the whole max_tokens. Sonnet 4.6 accepts the legacy shape,
+    so it must be forwarded unchanged."""
     result = _transform(
         "claude-sonnet-4-6",
         {"max_tokens": 32768, "thinking": {"type": "enabled", "budget_tokens": 8000}},
@@ -312,7 +313,7 @@ def test_legacy_thinking_budget_preserved_for_adaptive_model():
 
 def test_budget_less_legacy_thinking_translated_to_adaptive_for_4_6():
     """``thinking={type: enabled}`` without a budget is not a valid Anthropic request, so
-    the legacy claude-code shape still has to be translated to the adaptive interface."""
+    the legacy shape still has to be translated to the adaptive interface."""
     result = _transform("claude-sonnet-4-6", {"max_tokens": 32768, "thinking": {"type": "enabled"}})
 
     assert result["thinking"] == {"type": "adaptive"}
