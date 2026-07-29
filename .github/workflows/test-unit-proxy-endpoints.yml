@@ -7,6 +7,7 @@ on:
       - litellm_internal_staging
       - litellm_oss_staging
       - "litellm_**"
+      - "release/v*.do.*"
   workflow_dispatch:
 
 permissions:

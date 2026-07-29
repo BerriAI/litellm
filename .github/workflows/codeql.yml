@@ -4,7 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - "release/v*.do.*"
   schedule:
     # Run daily at 04:00 UTC
     - cron: "0 4 * * *"
