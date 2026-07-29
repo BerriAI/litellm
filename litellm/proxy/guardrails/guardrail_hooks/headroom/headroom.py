@@ -4,6 +4,7 @@ import json
 import re
 import time
 import uuid
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, List, Literal, Optional
 
 import httpx
@@ -35,8 +36,12 @@ from litellm.proxy.guardrails.guardrail_hooks.content_text import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
-from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.integrations.custom_logger import (
+    HEADROOM_CONVERTED_STREAM_KEY,
+    AgenticLoopPlan,
+    AgenticLoopRequestPatch,
+)
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -605,6 +610,19 @@ class HeadroomGuardrail(CustomGuardrail):
             merged_tools = list(existing_tools) if isinstance(existing_tools, list) else [retrieve_tool]
 
         return {**inputs, "structured_messages": compressed, "tools": merged_tools}  # pyright: ignore[reportReturnType]
+
+    async def async_pre_call_deployment_hook(
+        self,
+        kwargs: Mapping[str, Any],
+        call_type: CallTypes | None,
+    ) -> dict[str, Any] | None:  # mutable-ok: overrides CustomLogger hook whose contract is a plain dict
+        if call_type not in (CallTypes.completion, CallTypes.acompletion):
+            return None
+        if not kwargs.get("stream"):
+            return None
+        if not has_headroom_retrieve_tool(kwargs.get("tools")):
+            return None
+        return {**kwargs, "stream": False, HEADROOM_CONVERTED_STREAM_KEY: True}
 
     async def async_should_run_agentic_loop(
         self,

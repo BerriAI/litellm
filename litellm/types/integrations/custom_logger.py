@@ -5,8 +5,14 @@ from pydantic import BaseModel, Field
 CHAT_COMPLETION_AGENTIC_SURFACE = "chat_completions"
 RESPONSES_AGENTIC_SURFACE = "responses"
 CODE_INTERPRETER_INTERCEPTION_PREFIX = "_code_interpreter_interception"
+HEADROOM_INTERCEPTION_PREFIX = "_headroom_interception"
+HEADROOM_CONVERTED_STREAM_KEY = f"{HEADROOM_INTERCEPTION_PREFIX}_converted_stream"
 NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES = frozenset(
-    ("_websearch_interception", "_compression_interception")
+    (
+        "_websearch_interception",
+        "_compression_interception",
+        HEADROOM_INTERCEPTION_PREFIX,
+    )
 )
 INTERCEPTION_INTERNAL_PREFIXES = frozenset(
     (
