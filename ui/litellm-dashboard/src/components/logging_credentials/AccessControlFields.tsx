@@ -28,16 +28,10 @@ const AccessControlFields: React.FC<AccessControlFieldsProps> = ({ value = {}, o
 
   return (
     <>
-      <Form.Item
-        label="Global"
-        tooltip="Routing scope: traces from every team and org export to this destination."
-      >
+      <Form.Item label="Global" tooltip="Routing scope: traces from every team and org export to this destination.">
         <Switch checked={isGlobal} onChange={(global) => onChange({ ...value, global })} />
       </Form.Item>
-      <Form.Item
-        label="Teams"
-        tooltip="Routing scope: only these teams' traffic exports to this destination."
-      >
+      <Form.Item label="Teams" tooltip="Routing scope: only these teams' traffic exports to this destination.">
         <Select
           mode="multiple"
           allowClear
@@ -50,10 +44,7 @@ const AccessControlFields: React.FC<AccessControlFieldsProps> = ({ value = {}, o
           style={{ width: "100%" }}
         />
       </Form.Item>
-      <Form.Item
-        label="Organizations"
-        tooltip="Routing scope: only these orgs' traffic exports to this destination."
-      >
+      <Form.Item label="Organizations" tooltip="Routing scope: only these orgs' traffic exports to this destination.">
         <Select
           mode="multiple"
           allowClear

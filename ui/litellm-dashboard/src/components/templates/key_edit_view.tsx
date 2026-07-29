@@ -239,7 +239,7 @@ export function KeyEditView({
       mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
       throttle_on_budget_exceeded: keyData.metadata?.throttle_on_budget_exceeded || false,
       logging_settings: extractLoggingSettings(keyData.metadata),
-        disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
+      disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
         ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
         : [],
       access_group_ids: keyData.access_group_ids || [],

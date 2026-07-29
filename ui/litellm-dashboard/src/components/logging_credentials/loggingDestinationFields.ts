@@ -27,7 +27,7 @@ export interface LoggingDestinationBackend {
 export const LOGGING_DESTINATION_BACKENDS: LoggingDestinationBackend[] = [
   {
     id: "langfuse_otel",
-    label: "Langfuse",
+    label: "Langfuse OTEL",
     fields: [
       {
         name: "langfuse_host",

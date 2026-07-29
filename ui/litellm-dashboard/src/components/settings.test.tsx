@@ -137,8 +137,8 @@ describe("Settings", () => {
   });
 
   it("should display edit modal with fields when edit is clicked", async () => {
-    // Use a config callback that is NOT a logging-destination backend (langfuse,
-    // arize, etc. are filtered from the table via NON_CALLBACK_LOGGING_IDS and
+    // Use a config callback that is NOT a logging-destination backend (arize,
+    // langfuse_otel, etc. are filtered from the table via LOGGING_BACKEND_IDS and
     // edited through the destination flow instead). Datadog is a plain config
     // callback, so it still renders a row with the legacy Test/Edit/Delete actions.
     const mockCallback = {

@@ -47,12 +47,7 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import EditLoggingCredentialModal from "./logging_credentials/EditLoggingCredentialModal";
 import AccessControlFields from "./logging_credentials/AccessControlFields";
-import {
-  backendLabel,
-  createLoggingCredential,
-  LOGGING_BACKEND_IDS,
-  NON_CALLBACK_LOGGING_IDS,
-} from "./logging_credentials/loggingCredentialApi";
+import { backendLabel, createLoggingCredential, LOGGING_BACKEND_IDS } from "./logging_credentials/loggingCredentialApi";
 import { LOGGING_DESTINATION_BACKENDS } from "./logging_credentials/loggingDestinationFields";
 import { parseErrorMessage } from "./shared/errorUtils";
 interface SettingsPageProps {
@@ -675,7 +670,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           <TabPanels>
             <TabPanel>
               <LoggingCallbacksTable
-                callbacks={[...callbacks.filter((c) => !NON_CALLBACK_LOGGING_IDS.has(c.name)), ...destinationRows]}
+                callbacks={[...callbacks.filter((c) => !LOGGING_BACKEND_IDS.has(c.name)), ...destinationRows]}
                 availableCallbacks={allCallbacks}
                 isLoading={isLoadingCallbacks}
                 readOnly={!isProxyAdmin}
@@ -840,7 +835,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         >
           <CallbackSelector
             callbackConfigs={[
-              ...callbackConfigs.filter((c: { id: string }) => !NON_CALLBACK_LOGGING_IDS.has(c.id)),
+              ...callbackConfigs.filter((c: { id: string }) => !LOGGING_BACKEND_IDS.has(c.id)),
               ...LOGGING_DESTINATION_BACKENDS.map((b) => ({ id: b.id, displayName: b.label, logo: "" })),
             ]}
             selectedCallback={selectedCallback}
