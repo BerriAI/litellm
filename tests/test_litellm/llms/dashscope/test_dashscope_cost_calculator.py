@@ -196,6 +196,52 @@ class TestDashscopeCostCalculator:
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
+    def test_dashscope_qwen3_7_plus_published_rates(self):
+        """
+        Pins the published Model Studio (international) rates for qwen3.7-plus, including
+        the switch from the <=256K tier to the 256K-1M tier and the cache-hit rate.
+        """
+        usage = Usage(
+            prompt_tokens=300000,
+            completion_tokens=1000,
+            total_tokens=301000,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=20000),
+        )
+
+        prompt_cost, completion_cost = dashscope_cost_per_token(
+            model="qwen3.7-plus", usage=usage
+        )
+
+        expected_prompt_cost = (
+            (20000 * 8e-08) + (256000 * 4e-07) + (24000 * 1.2e-06)
+        )
+        expected_completion_cost = 1000 * 1.6e-06
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+    def test_dashscope_qwen3_7_max_published_rates(self):
+        """
+        Pins the published Model Studio (international) flat rates for qwen3.7-max, which
+        has a single 0-1M pricing band plus a cache-hit rate.
+        """
+        usage = Usage(
+            prompt_tokens=100000,
+            completion_tokens=2000,
+            total_tokens=102000,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=40000),
+        )
+
+        prompt_cost, completion_cost = dashscope_cost_per_token(
+            model="qwen3.7-max", usage=usage
+        )
+
+        expected_prompt_cost = (40000 * 5e-07) + (60000 * 2.5e-06)
+        expected_completion_cost = 2000 * 7.5e-06
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
     def test_dashscope_tiered_pricing_exceeding_highest_tier(self):
         """
         Tests tiered pricing when token count exceeds the highest defined tier range.
