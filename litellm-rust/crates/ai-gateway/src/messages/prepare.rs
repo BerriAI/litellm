@@ -43,20 +43,31 @@ pub(super) fn prepare_messages_call(
     } else {
         None
     };
-    let already_authorized = matches!(auth_strategy, MessagesAuthStrategy::AwsSigV4)
-        || !matches!(auth_strategy, MessagesAuthStrategy::AwsSigV4)
-            && (has_header(&headers, auth_strategy.header_name())
-                || (config.accepts_bearer_auth() && has_bearer_auth(&headers)));
-    if !already_authorized && !matches!(auth_strategy, MessagesAuthStrategy::AwsSigV4) {
-        let api_key = config.resolve_api_key(request.api_key, &env_lookup)?;
-        let auth_header = match auth_strategy {
-            MessagesAuthStrategy::Bearer => {
-                ("authorization".to_string(), format!("Bearer {api_key}"))
-            }
-            MessagesAuthStrategy::Header(name) => (name.to_string(), api_key),
-            MessagesAuthStrategy::AwsSigV4 => unreachable!(),
-        };
-        headers.push(auth_header);
+    let auth_header = match auth_strategy {
+        MessagesAuthStrategy::AwsSigV4 => None,
+        MessagesAuthStrategy::Bearer
+            if has_header(&headers, "authorization")
+                || (config.accepts_bearer_auth() && has_bearer_auth(&headers)) =>
+        {
+            None
+        }
+        MessagesAuthStrategy::Header(name)
+            if has_header(&headers, name)
+                || (config.accepts_bearer_auth() && has_bearer_auth(&headers)) =>
+        {
+            None
+        }
+        MessagesAuthStrategy::Bearer => {
+            let api_key = config.resolve_api_key(request.api_key, &env_lookup)?;
+            Some(("authorization".to_string(), format!("Bearer {api_key}")))
+        }
+        MessagesAuthStrategy::Header(name) => {
+            let api_key = config.resolve_api_key(request.api_key, &env_lookup)?;
+            Some((name.to_string(), api_key))
+        }
+    };
+    if let Some(header) = auth_header {
+        headers.push(header);
     }
 
     for (name, value) in config.default_headers() {

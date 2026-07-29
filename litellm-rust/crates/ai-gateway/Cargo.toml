@@ -26,6 +26,7 @@ serde_json.workspace = true
 base64.workspace = true
 bytes.workspace = true
 aws-smithy-eventstream.workspace = true
+aws-smithy-types.workspace = true
 axum = { workspace = true, features = ["ws"], optional = true }
 serde.workspace = true
 subtle = { workspace = true, optional = true }

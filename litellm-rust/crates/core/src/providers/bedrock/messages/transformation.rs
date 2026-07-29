@@ -32,13 +32,26 @@ pub const BEDROCK_MESSAGES_CONFIG: BedrockMessagesConfig = BedrockMessagesConfig
 
 fn resolve_region(api_base: Option<&str>, env_lookup: &dyn Fn(&str) -> Option<String>) -> String {
     api_base
-        .and_then(|base| base.split('.').nth(1))
-        .filter(|region| !region.is_empty())
-        .map(str::to_string)
+        .and_then(bedrock_region_from_api_base)
         .or_else(|| env_lookup(AWS_REGION_NAME))
         .or_else(|| env_lookup(AWS_REGION))
         .or_else(|| env_lookup(AWS_DEFAULT_REGION))
         .unwrap_or_else(|| DEFAULT_BEDROCK_REGION.to_string())
+}
+
+fn bedrock_region_from_api_base(api_base: &str) -> Option<String> {
+    let host = api_base
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()?
+        .split(':')
+        .next()?;
+    let region = host
+        .strip_prefix("bedrock-runtime.")?
+        .strip_suffix(".amazonaws.com")?;
+    (!region.is_empty()).then(|| region.to_string())
 }
 
 fn encode_path_segment(value: &str) -> String {
@@ -185,6 +198,15 @@ mod tests {
                 &env
             ),
             Some("ap-south-1".to_string())
+        );
+    }
+
+    #[test]
+    fn non_bedrock_api_base_does_not_supply_a_region() {
+        let env = |key: &str| (key == AWS_REGION).then(|| "eu-west-1".to_string());
+        assert_eq!(
+            BEDROCK_MESSAGES_CONFIG.signing_region(Some("http://127.0.0.1:8080"), &env),
+            Some("eu-west-1".to_string())
         );
     }
 

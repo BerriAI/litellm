@@ -15,18 +15,15 @@ use prepare::prepare_messages_call;
 pub async fn messages(request: MessagesRequest<'_>) -> CoreResult<Value> {
     match execute_messages(request, false).await? {
         MessagesResponse::Json(body) => Ok(body),
-        MessagesResponse::Stream { response, provider } => {
-            drop(provider);
-            drop(response);
-            Err(litellm_core::CoreError::InvalidResponse(
-                "non-streaming messages execution returned a stream".to_string(),
-            ))
-        }
+        MessagesResponse::Stream { .. } => Err(litellm_core::CoreError::InvalidResponse(
+            "non-streaming messages execution returned a stream".to_string(),
+        )),
     }
 }
 
 pub(crate) enum MessagesResponse {
     Json(Value),
+    #[allow(dead_code)]
     Stream {
         provider: String,
         response: reqwest::Response,

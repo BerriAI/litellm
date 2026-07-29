@@ -51,6 +51,8 @@ pub(crate) const MESSAGES_ROUTE_PATH: &str = "/v1/messages";
 /// Provider name used by the Anthropic Messages route when a deployment's
 /// provider model does not carry an explicit provider prefix.
 pub(crate) const ANTHROPIC_MESSAGES_PROVIDER: &str = "anthropic";
+pub(crate) const AZURE_ANTHROPIC_MESSAGES_PROVIDER: &str = "azure_ai";
+pub(crate) const BEDROCK_MESSAGES_PROVIDER: &str = "bedrock";
 
 /// Request headers owned by the gateway and never forwarded upstream.
 #[cfg(feature = "server")]
