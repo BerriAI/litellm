@@ -1401,27 +1401,51 @@ async def test_failure_spend_log_drops_caller_supplied_key_identity():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "logged_call_type, expected_call_type",
+    "request_route, expected_call_type",
     [
-        ("aresponses", "aresponses"),
-        ("anthropic_messages", "anthropic_messages"),
-        ("/v1/responses", ""),
+        ("/v1/responses", "aresponses"),
+        ("/v1/messages", "anthropic_messages"),
+        ("/v1/chat/completions", "acompletion"),
     ],
 )
-async def test_failure_spend_log_call_type_comes_from_logging_object(
-    logged_call_type, expected_call_type
-):
-    """Regression for #35068: failure rows were written with a blank call_type, so a
-    failed Responses request was indistinguishable from a failed chat completion. Route
-    strings left on the Logging object by proxy-only errors must not leak into the
-    column."""
+async def test_failure_spend_log_call_type_comes_from_the_requested_route(request_route, expected_call_type):
+    """Regression for #35068: an upstream failure never reaches the SDK, so nothing sets
+    call_type and the row was written blank; a failed Responses request was then
+    indistinguishable from a failed chat completion."""
+    payload, _ = await _failure_spend_log_payload(
+        request_data={"model": "test-model", "litellm_metadata": {}},
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="real-user",
+            team_id="real-team",
+            request_route=request_route,
+        ),
+    )
+
+    assert payload["call_type"] == expected_call_type
+
+
+@pytest.mark.asyncio
+async def test_failure_spend_log_call_type_falls_back_to_logging_object():
+    """Routes outside the route map (e.g. pass-through) still know their call type from
+    the request's Logging object. Route strings left there by proxy-only errors must not
+    leak into the column."""
     payload, _ = await _failure_spend_log_payload(
         request_data={
             "model": "test-model",
             "litellm_metadata": {},
-            "litellm_logging_obj": _StubLoggingObj(call_type=logged_call_type),
+            "litellm_logging_obj": _StubLoggingObj(call_type="aresponses"),
         },
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="real-user", team_id="real-team"),
     )
+    assert payload["call_type"] == "aresponses"
 
-    assert payload["call_type"] == expected_call_type
+    payload, _ = await _failure_spend_log_payload(
+        request_data={
+            "model": "test-model",
+            "litellm_metadata": {},
+            "litellm_logging_obj": _StubLoggingObj(call_type="/v1/responses"),
+        },
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="real-user", team_id="real-team"),
+    )
+    assert payload["call_type"] == ""

@@ -6,6 +6,9 @@ from typing import Any, List, Optional, Union, cast
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.api_route_to_call_types import (
+    get_primary_call_type_for_route,
+)
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
@@ -148,6 +151,12 @@ class _ProxyDBLogger(CustomLogger):
         request_data["litellm_params"]["proxy_server_request"] = (
             request_data.get("proxy_server_request") or existing_litellm_params.get("proxy_server_request") or {}
         )
+        # Failures that never reached the SDK carry no call_type, so the row lands
+        # without one and can't be attributed to the route the caller used.
+        route_call_type = get_primary_call_type_for_route(request_route)
+        if not request_data.get("call_type") and route_call_type is not None:
+            request_data["call_type"] = route_call_type.value
+
         request_data[metadata_key] = spend_metadata
         request_data["litellm_params"]["metadata"] = spend_metadata
         if "litellm_metadata" in existing_litellm_params:
@@ -174,8 +183,6 @@ class _ProxyDBLogger(CustomLogger):
                 )
             if request_data.get("litellm_trace_id") is None:
                 request_data["litellm_trace_id"] = getattr(_litellm_logging_obj, "litellm_trace_id", None)
-            # Without this the spend log for a failure has a blank call_type, so the
-            # row can't be attributed to the route the caller actually used.
             if not request_data.get("call_type"):
                 logged_call_type = _known_call_type(getattr(_litellm_logging_obj, "call_type", None))
                 if logged_call_type is not None:
