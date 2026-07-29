@@ -53,7 +53,7 @@ from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums
 from litellm.utils import get_llm_provider
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockError
+from ..common_utils import BedrockError, resolve_s3_encryption_key_id
 
 # litellm_params key used to hand the SigV4-signed GET headers from
 # `transform_file_content_request` to `validate_environment` (the only hook
@@ -741,6 +741,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             content=file_content,
             api_base=api_base,
             optional_params=optional_params,
+            s3_encryption_key_id=resolve_s3_encryption_key_id(
+                litellm_params=litellm_params,
+                optional_params=optional_params,
+            ),
         )
 
         litellm_params["upload_url"] = api_base
@@ -758,6 +762,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         content: str,
         api_base: str,
         optional_params: dict,
+        s3_encryption_key_id: str | None = None,
     ) -> Tuple[dict, str]:
         """
         Sign S3 PUT request using the same proven logic as S3Logger.
@@ -790,11 +795,20 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
         # Prepare headers with required S3 headers (same as s3_v2.py)
+        sse_headers = (
+            {
+                "x-amz-server-side-encryption": "aws:kms",
+                "x-amz-server-side-encryption-aws-kms-key-id": s3_encryption_key_id,
+            }
+            if s3_encryption_key_id
+            else {}
+        )
         request_headers = {
             "Content-Type": "application/json",  # JSONL files are JSON content
             "x-amz-content-sha256": content_hash,  # REQUIRED by S3
             "Content-Language": "en",
             "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
+            **sse_headers,
         }
 
         # Use requests.Request to prepare the request (same pattern as s3_v2.py)
