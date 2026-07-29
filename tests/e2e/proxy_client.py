@@ -154,6 +154,8 @@ def await_servable(
         if not listed:
             first_seen_at = None
         elif first_seen_at is None:
+            if t > started + timeout:
+                return NotServable(last_result=last_result)
             first_seen_at = t
             if db_sync_seconds <= 0:
                 return Servable()
