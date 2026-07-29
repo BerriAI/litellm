@@ -169,6 +169,8 @@ model LiteLLM_ProjectTable {
   model_spend          Json     @default("{}")
   model_rpm_limit      Json     @default("{}")
   model_tpm_limit      Json     @default("{}")
+  model_itpm_limit     Json     @default("{}")
+  model_otpm_limit     Json     @default("{}")
   blocked              Boolean  @default(false)
   object_permission_id String?
   created_at           DateTime @default(now()) @map("created_at")

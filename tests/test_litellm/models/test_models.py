@@ -189,6 +189,48 @@ class TestProject:
         assert project.project_id == "proj-123"
         assert not project.is_blocked
 
+    def test_merged_metadata_includes_dedicated_rate_limit_columns(self):
+        project = LiteLLM_ProjectTable(
+            project_id="proj-123",
+            metadata={"some_custom_key": "value"},
+            model_itpm_limit={"claude-3": 100_000},
+            model_otpm_limit={"claude-3": 50_000},
+            model_rpm_limit={"claude-3": 10},
+            model_tpm_limit={"claude-3": 200_000},
+        )
+        merged = project.merged_metadata
+        assert merged["some_custom_key"] == "value"
+        assert merged["model_itpm_limit"] == {"claude-3": 100_000}
+        assert merged["model_otpm_limit"] == {"claude-3": 50_000}
+        assert merged["model_rpm_limit"] == {"claude-3": 10}
+        assert merged["model_tpm_limit"] == {"claude-3": 200_000}
+
+    def test_merged_metadata_with_no_base_metadata(self):
+        project = LiteLLM_ProjectTable(
+            project_id="proj-124",
+            model_itpm_limit={"gpt-4o": 5_000},
+        )
+        merged = project.merged_metadata
+        assert merged["model_itpm_limit"] == {"gpt-4o": 5_000}
+        assert "model_otpm_limit" not in merged
+
+    def test_merged_metadata_null_column_falls_back_to_metadata_value(self):
+        project = LiteLLM_ProjectTable(
+            project_id="proj-125",
+            metadata={"model_itpm_limit": {"gpt-4o": 9_999}},
+        )
+        merged = project.merged_metadata
+        assert merged["model_itpm_limit"] == {"gpt-4o": 9_999}
+
+    def test_merged_metadata_dedicated_column_wins_over_metadata_value(self):
+        project = LiteLLM_ProjectTable(
+            project_id="proj-126",
+            metadata={"model_itpm_limit": {"gpt-4o": 9_999}},
+            model_itpm_limit={"gpt-4o": 50_000},
+        )
+        merged = project.merged_metadata
+        assert merged["model_itpm_limit"] == {"gpt-4o": 50_000}
+
 
 class TestTeam:
     def test_team_creation(self):

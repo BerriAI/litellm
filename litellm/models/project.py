@@ -27,6 +27,8 @@ class LiteLLM_ProjectTable(LiteLLMPydanticObjectBase):
     model_spend: Optional[dict] = None
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
+    model_itpm_limit: dict | None = None
+    model_otpm_limit: dict | None = None
     blocked: bool = False
     object_permission_id: Optional[str] = None
     created_by: Optional[str] = None
@@ -39,3 +41,29 @@ class LiteLLM_ProjectTable(LiteLLMPydanticObjectBase):
     @property
     def is_blocked(self) -> bool:
         return self.blocked
+
+    @property
+    def merged_metadata(self) -> dict:
+        """Return metadata dict with dedicated rate-limit columns merged in.
+
+        The ``metadata`` JSONB column holds ad-hoc key/value pairs, while
+        ``model_itpm_limit``, ``model_otpm_limit``, ``model_rpm_limit``, and
+        ``model_tpm_limit`` are dedicated first-class columns. Callers that read
+        rate limits via ``project_metadata.get("model_itpm_limit")`` would
+        silently get ``None`` if we only exposed the raw ``metadata`` field, so
+        we merge the dedicated columns in here. Only non-None column values
+        are included, so a column left at its default None does not shadow any
+        legacy value stored in the ``metadata`` JSON blob.
+        """
+        base: dict = self.metadata or {}
+        dedicated = {
+            k: v
+            for k, v in {
+                "model_itpm_limit": self.model_itpm_limit,
+                "model_otpm_limit": self.model_otpm_limit,
+                "model_rpm_limit": self.model_rpm_limit,
+                "model_tpm_limit": self.model_tpm_limit,
+            }.items()
+            if v is not None
+        }
+        return {**base, **dedicated}

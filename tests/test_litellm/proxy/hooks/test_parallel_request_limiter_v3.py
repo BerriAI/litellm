@@ -3102,6 +3102,140 @@ async def test_project_model_rate_limits_not_triggered_for_other_model_v3():
 
 
 @pytest.mark.asyncio
+async def test_project_model_itpm_otpm_limits_enforced_v3():
+    """
+    Regression test: project-level model_itpm_limit/model_otpm_limit (Bedrock
+    Mantle-style separate input/output token quotas) must produce their own
+    rate limit descriptors, distinct from the combined model_per_project TPM
+    descriptor.
+    """
+    _api_key = hash_token("sk-project-io-test")
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    captured_descriptors = []
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        captured_descriptors.extend(descriptors)
+        return {"overall_code": "OK", "statuses": []}
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        project_id="proj-mantle",
+        project_metadata={
+            "model_itpm_limit": {"bedrock_mantle/claude-opus": 20000000},
+            "model_otpm_limit": {"bedrock_mantle/claude-opus": 4000000},
+        },
+    )
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "bedrock_mantle/claude-opus"},
+        call_type="",
+    )
+
+    descriptor_keys = [d["key"] for d in captured_descriptors]
+    assert "model_per_project_itpm" in descriptor_keys, descriptor_keys
+    assert "model_per_project_otpm" in descriptor_keys, descriptor_keys
+    assert "model_per_project" not in descriptor_keys, descriptor_keys
+
+    itpm_descriptor = next(d for d in captured_descriptors if d["key"] == "model_per_project_itpm")
+    otpm_descriptor = next(d for d in captured_descriptors if d["key"] == "model_per_project_otpm")
+    assert itpm_descriptor["value"] == "proj-mantle:bedrock_mantle/claude-opus"
+    assert itpm_descriptor["rate_limit"]["tokens_per_unit"] == 20000000
+    assert otpm_descriptor["value"] == "proj-mantle:bedrock_mantle/claude-opus"
+    assert otpm_descriptor["rate_limit"]["tokens_per_unit"] == 4000000
+
+
+@pytest.mark.asyncio
+async def test_project_model_itpm_otpm_limits_not_triggered_for_other_model_v3():
+    """model_itpm_limit/model_otpm_limit should not fire for a model not in project_metadata."""
+    _api_key = hash_token("sk-project-io-test-2")
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    captured_descriptors = []
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        captured_descriptors.extend(descriptors)
+        return {"overall_code": "OK", "statuses": []}
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        project_id="proj-mantle",
+        project_metadata={
+            "model_itpm_limit": {"bedrock_mantle/claude-opus": 20000000},
+        },
+    )
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-4"},
+        call_type="",
+    )
+
+    descriptor_keys = [d["key"] for d in captured_descriptors]
+    assert "model_per_project_itpm" not in descriptor_keys, descriptor_keys
+    assert "model_per_project_otpm" not in descriptor_keys, descriptor_keys
+
+
+@pytest.mark.asyncio
+async def test_project_model_itpm_and_tpm_limits_coexist_v3():
+    """
+    When a project configures model_itpm_limit/model_otpm_limit alongside
+    model_tpm_limit for the same model, both limit types are enforced
+    simultaneously (mirrors the deployment-level itpm/otpm + tpm/rpm
+    coexistence behavior) -- the combined TPM descriptor is not suppressed.
+    """
+    _api_key = hash_token("sk-project-io-test-3")
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    captured_descriptors = []
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        captured_descriptors.extend(descriptors)
+        return {"overall_code": "OK", "statuses": []}
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        project_id="proj-mantle",
+        project_metadata={
+            "model_tpm_limit": {"bedrock_mantle/claude-opus": 1000},
+            "model_itpm_limit": {"bedrock_mantle/claude-opus": 20000000},
+            "model_otpm_limit": {"bedrock_mantle/claude-opus": 4000000},
+        },
+    )
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "bedrock_mantle/claude-opus"},
+        call_type="",
+    )
+
+    descriptor_keys = [d["key"] for d in captured_descriptors]
+    assert "model_per_project" in descriptor_keys, descriptor_keys
+    assert "model_per_project_itpm" in descriptor_keys, descriptor_keys
+    assert "model_per_project_otpm" in descriptor_keys, descriptor_keys
+    assert ("proj-mantle:bedrock_mantle/claude-opus") in parallel_request_handler._project_io_token_conflict_warned
+
+
+@pytest.mark.asyncio
 async def test_pre_call_hook_does_not_leak_internal_stash_to_request_body():
     """Regression for #27001: stash keys must stay in metadata, never on
     the top level of ``data`` (which gets forwarded as the provider body)."""

@@ -26089,6 +26089,14 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
+            /** Model Itpm Limit */
+            model_itpm_limit?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Otpm Limit */
+            model_otpm_limit?: {
+                [key: string]: unknown;
+            } | null;
             /** Model Rpm Limit */
             model_rpm_limit?: {
                 [key: string]: unknown;
@@ -28176,8 +28184,16 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
+            /** Model Itpm Limit */
+            model_itpm_limit?: {
+                [key: string]: unknown;
+            } | null;
             /** Model Max Budget */
             model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Otpm Limit */
+            model_otpm_limit?: {
                 [key: string]: unknown;
             } | null;
             /** Model Rpm Limit */
@@ -28235,6 +28251,14 @@ export interface components {
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
             /** Metadata */
             metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Itpm Limit */
+            model_itpm_limit?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Otpm Limit */
+            model_otpm_limit?: {
                 [key: string]: unknown;
             } | null;
             /** Model Rpm Limit */
@@ -32642,8 +32666,16 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
+            /** Model Itpm Limit */
+            model_itpm_limit?: {
+                [key: string]: unknown;
+            } | null;
             /** Model Max Budget */
             model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Otpm Limit */
+            model_otpm_limit?: {
                 [key: string]: unknown;
             } | null;
             /** Model Rpm Limit */
