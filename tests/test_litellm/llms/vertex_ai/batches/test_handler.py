@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 from litellm.llms.vertex_ai.batches.handler import (  # noqa: E402
     VertexAIBatchPrediction,
 )
+from litellm.llms.vertex_ai.common_utils import VertexAIError  # noqa: E402
 from litellm.types.utils import LiteLLMBatch  # noqa: E402
 
 HMOD = "litellm.llms.vertex_ai.batches.handler"
@@ -184,7 +185,7 @@ def test_create_batch_sync_non_200_raises():
     client.post.return_value = _http_response(status_code=500)
 
     with patch(f"{HMOD}._get_httpx_client", return_value=client):
-        with pytest.raises(Exception, match="Error: 500"):
+        with pytest.raises(VertexAIError, match="Error: 500") as exc_info:
             h.create_batch(
                 _is_async=False,
                 create_batch_data=CREATE_DATA,
@@ -195,6 +196,32 @@ def test_create_batch_sync_non_200_raises():
                 timeout=600.0,
                 max_retries=None,
             )
+
+    assert exc_info.value.status_code == 500
+    assert "error text" in str(exc_info.value)
+
+
+def test_create_batch_input_file_id_without_model_raises_400_before_post():
+    """A gs:// uri with no publishers/<publisher>/models/<model> path is a 400, not a bare 500."""
+    h = _make_handler()
+    client = MagicMock()
+
+    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+        with pytest.raises(VertexAIError) as exc_info:
+            h.create_batch(
+                _is_async=False,
+                create_batch_data={"input_file_id": "gs://bucket/batch-input.jsonl"},
+                api_base=None,
+                vertex_credentials=None,
+                vertex_project=PROJECT,
+                vertex_location=LOCATION,
+                timeout=600.0,
+                max_retries=None,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "gs://bucket/batch-input.jsonl" in str(exc_info.value)
+    client.post.assert_not_called()
 
 
 def test_create_batch_async_non_200_raises():
@@ -216,8 +243,11 @@ def test_create_batch_async_non_200_raises():
             timeout=600.0,
             max_retries=None,
         )
-        with pytest.raises(Exception, match="Error: 403"):
+        with pytest.raises(VertexAIError, match="Error: 403") as exc_info:
             _run(coro)
+
+    assert exc_info.value.status_code == 403
+    assert "error text" in str(exc_info.value)
 
 
 # =========================================================================== #
@@ -292,7 +322,7 @@ def test_retrieve_batch_sync_non_200_raises():
         patch(f"{HMOD}._get_httpx_client", return_value=MagicMock()),
         patch(f"{HMOD}.safe_get", return_value=_http_response(status_code=404)),
     ):
-        with pytest.raises(Exception, match="Error: 404"):
+        with pytest.raises(VertexAIError, match="Error: 404"):
             h.retrieve_batch(
                 _is_async=False,
                 batch_id=BATCH_ID,
@@ -438,7 +468,7 @@ def test_list_batches_sync_non_200_raises():
     client.get.return_value = _http_response(status_code=500)
 
     with patch(f"{HMOD}._get_httpx_client", return_value=client):
-        with pytest.raises(Exception, match="Error: 500"):
+        with pytest.raises(VertexAIError, match="Error: 500"):
             h.list_batches(
                 _is_async=False,
                 after=None,
@@ -530,7 +560,7 @@ def test_cancel_batch_sync_cancel_post_non_200_raises():
     client.post.return_value = _http_response(status_code=500)
 
     with patch(f"{HMOD}._get_httpx_client", return_value=client):
-        with pytest.raises(Exception, match="Error: 500"):
+        with pytest.raises(VertexAIError, match="Error: 500"):
             h.cancel_batch(
                 _is_async=False,
                 batch_id=BATCH_ID,
@@ -552,7 +582,7 @@ def test_cancel_batch_sync_retrieve_non_200_raises():
     client.get.return_value = _http_response(status_code=404)
 
     with patch(f"{HMOD}._get_httpx_client", return_value=client):
-        with pytest.raises(Exception, match="Error: 404"):
+        with pytest.raises(VertexAIError, match="Error: 404"):
             h.cancel_batch(
                 _is_async=False,
                 batch_id=BATCH_ID,
@@ -672,7 +702,7 @@ def test_async_retrieve_batch_non_200_raises():
             timeout=600.0,
             max_retries=None,
         )
-        with pytest.raises(Exception, match="Error: 500"):
+        with pytest.raises(VertexAIError, match="Error: 500"):
             _run(coro)
 
 
@@ -726,7 +756,7 @@ def test_async_list_batches_non_200_raises():
             timeout=600.0,
             max_retries=None,
         )
-        with pytest.raises(Exception, match="Error: 500"):
+        with pytest.raises(VertexAIError, match="Error: 500"):
             _run(coro)
 
 
@@ -779,7 +809,7 @@ def test_async_cancel_batch_httpstatuserror_and_retrieve_non_200():
             timeout=600.0,
             max_retries=None,
         )
-        with pytest.raises(Exception, match="Error: 500"):
+        with pytest.raises(VertexAIError, match="Error: 500"):
             _run(coro)
     async_client_post500.get.assert_not_awaited()
 
@@ -801,5 +831,5 @@ def test_async_cancel_batch_httpstatuserror_and_retrieve_non_200():
             timeout=600.0,
             max_retries=None,
         )
-        with pytest.raises(Exception, match="Error: 404"):
+        with pytest.raises(VertexAIError, match="Error: 404"):
             _run(coro)
