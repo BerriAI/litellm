@@ -1335,6 +1335,25 @@
         "interactions": true
       }
     },
+    "inferx": {
+      "display_name": "InferX (`inferx`)",
+      "url": "https://inferx.net",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "rerank": false,
+        "batches": false,
+        "image_edits": false,
+        "vector_stores_create": false,
+        "vector_stores_search": false,
+        "video_generations": false
+      }
+    },
     "infinity": {
       "display_name": "Infinity (`infinity`)",
       "url": "https://docs.litellm.ai/docs/providers/infinity",
