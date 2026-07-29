@@ -1,12 +1,14 @@
 # this is a patch to allow for agentic loops covering llm_http_handler.py and openai sdk based calling flows for the .completion() api
 
 import json
+from collections.abc import Mapping
 from typing import cast
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
+    HEADROOM_CONVERTED_STREAM_KEY,
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
@@ -46,6 +48,12 @@ def _post_hook_overridden(callback: CustomLogger) -> bool:
     return getattr(func, "__func__", func) is not getattr(base, "__func__", base)
 
 
+def _converted_stream_requested(kwargs: Mapping[str, object]) -> bool:
+    return bool(
+        kwargs.get("_code_interpreter_interception_converted_stream") or kwargs.get(HEADROOM_CONVERTED_STREAM_KEY)
+    )
+
+
 def _coerce_int(value: object, default: int) -> int:
     return int(value) if isinstance(value, (int, str)) else default
 
@@ -80,16 +88,25 @@ def _check_agentic_loop_safety(
     return fingerprint
 
 
-def _wrap_response_as_fake_stream(response: object) -> object:
-    if getattr(response, "object", None) == "chat.completion.chunk":
+def _wrap_response_as_fake_stream(
+    response: object,
+    *,
+    model: str,
+    custom_llm_provider: str,
+    logging_obj: object,
+) -> object:
+    if isinstance(response, CustomStreamWrapper):
         return response
-    if not hasattr(response, "choices"):
+    if not isinstance(response, ModelResponse):
         return response
-    from litellm.llms.base_llm.base_model_iterator import (
-        convert_model_response_to_streaming,
-    )
+    from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 
-    return convert_model_response_to_streaming(cast(ModelResponse, response))
+    return CustomStreamWrapper(
+        completion_stream=MockResponseIterator(model_response=response),
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        logging_obj=logging_obj,
+    )
 
 
 def _add_agentic_loop_metadata(kwargs_for_followup: dict[str, object]) -> None:
@@ -170,8 +187,13 @@ async def _execute_chat_completion_agentic_plan(
                     model,
                     str(e),
                 )
-        if kwargs.get("_code_interpreter_interception_converted_stream") and not depth:
-            return _wrap_response_as_fake_stream(response_followup)
+        if _converted_stream_requested(kwargs) and not depth:
+            return _wrap_response_as_fake_stream(
+                response_followup,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+            )
         return response_followup
     finally:
         try:
@@ -295,9 +317,14 @@ async def maybe_run_chat_completion_agentic_loop(
                 str(e),
             )
 
-    if kwargs.get("_code_interpreter_interception_converted_stream") and not depth and hasattr(response, "choices"):
+    if _converted_stream_requested(kwargs) and not depth:
         return cast(
             "ModelResponse | CustomStreamWrapper",
-            _wrap_response_as_fake_stream(response),
+            _wrap_response_as_fake_stream(
+                response,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+            ),
         )
     return None

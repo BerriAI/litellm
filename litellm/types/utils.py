@@ -3192,6 +3192,7 @@ agentic_loop_internal_litellm_params = [
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",
     "_code_interpreter_interception_converted_stream",
+    "_headroom_interception_converted_stream",
 ]
 
 all_litellm_params = (
