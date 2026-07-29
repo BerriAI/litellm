@@ -2710,6 +2710,8 @@ class ProxyBaseLLMRequestProcessing:
         except Exception:
             pass
 
+        headers = {k: v for k, v in headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
+
         self._apply_router_cooldown_retry_after(headers, e)
 
         if isinstance(e, ProxyException):

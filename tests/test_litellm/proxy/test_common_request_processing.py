@@ -2425,14 +2425,14 @@ class TestHandleLLMApiExceptionDictDetail:
     through ProxyException instead of being str()-mangled into a Python repr.
     """
 
-    async def _invoke(self, exc: Exception):
+    async def _invoke(self, exc: Exception, callback_headers: Optional[dict] = None):
         from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 
         processor = ProxyBaseLLMRequestProcessing(data={})
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
-        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=callback_headers or {})
 
         try:
             await processor._handle_llm_api_exception(
@@ -2957,14 +2957,14 @@ class TestHandleLLMApiExceptionFramingHeaders:
     proxy builds its own response, or they conflict with the framing the proxy
     itself sets. Non-framing headers must survive unchanged."""
 
-    async def _invoke(self, exc: Exception):
+    async def _invoke(self, exc: Exception, callback_headers: Optional[dict] = None):
         from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 
         processor = ProxyBaseLLMRequestProcessing(data={})
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
-        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=callback_headers or {})
 
         try:
             await processor._handle_llm_api_exception(
@@ -3035,6 +3035,26 @@ class TestHandleLLMApiExceptionFramingHeaders:
         assert "clear-site-data" not in proxy_exc.headers
         assert "strict-transport-security" not in proxy_exc.headers
         assert "x-frame-options" not in proxy_exc.headers
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
+
+    async def test_strips_unsafe_headers_added_by_response_headers_hook(self):
+        exc = litellm.RateLimitError(
+            message="Resource exhausted",
+            llm_provider="vertex_ai",
+            model="gemini-2.0-flash",
+        )
+        exc.headers = {"x-request-id": "abc-123"}
+        proxy_exc = await self._invoke(
+            exc,
+            callback_headers={
+                "x-frame-options": "ALLOWALL",
+                "content-length": "42",
+                "x-custom-safe": "1",
+            },
+        )
+        assert "x-frame-options" not in proxy_exc.headers
+        assert "content-length" not in proxy_exc.headers
+        assert proxy_exc.headers["x-custom-safe"] == "1"
         assert proxy_exc.headers["x-request-id"] == "abc-123"
 
 
