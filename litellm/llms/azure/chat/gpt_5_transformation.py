@@ -34,6 +34,17 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         return super()._supports_reasoning_effort_level(model, level)
 
     @classmethod
+    def _get_default_reasoning_effort(cls, model: str) -> str:
+        """Mirror ``_supports_reasoning_effort_level``'s prefix handling so the
+        gpt5_series/ route and bare deployment names resolve to the azure/ entry.
+        """
+        if model.startswith(cls.GPT5_SERIES_ROUTE):
+            model = "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
+        elif not model.startswith("azure/"):
+            model = "azure/" + model
+        return super()._get_default_reasoning_effort(model)
+
+    @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
         """Check if the Azure model string refers to a gpt-5 variant.
 
