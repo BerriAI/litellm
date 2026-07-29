@@ -300,6 +300,22 @@ class TestVoyageContextualEmbeddings:
         assert transformed["chunk_size"] == 32000
         assert transformed["input_type"] == "document"
 
+    def test_contextual_single_string_query_no_auto_chunk(self):
+        """A single string with input_type='query' is not auto-chunked."""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", "Hello", {"input_type": "query"}, {}
+        )
+
+        assert transformed["inputs"] == ["Hello"]
+        assert transformed["input_type"] == "query"
+        assert "enable_auto_chunking" not in transformed
+
     def test_contextual_nested_input_passthrough(self):
         """Already-nested list[list[str]] input is passed through unchanged."""
         from litellm.llms.voyage.embedding.transformation_contextual import (
