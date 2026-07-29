@@ -6,7 +6,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import click
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
+
+from .private_json import write_private_json
 
 ALLOWED_CONFIG_KEYS: tuple[str, ...] = ("base_url",)
 
@@ -24,21 +26,21 @@ def load_config() -> Mapping[str, str]:
     """Load CLI config from file; returns {} if missing or unreadable"""
     try:
         config_file = get_config_file_path()
-        if not os.path.exists(config_file):
-            return {}
+    except RuntimeError:
+        return {}
+    if not os.path.exists(config_file):
+        return {}
+    try:
         with open(config_file, "r") as f:
             return _config_adapter.validate_python(json.load(f))
-    except (OSError, RuntimeError, json.JSONDecodeError, ValidationError):
+    except (OSError, ValueError) as e:
+        click.echo(f"Warning: ignoring invalid config file {config_file}: {e}", err=True)
         return {}
 
 
 def save_config(config: Mapping[str, str]) -> None:
     """Save CLI config to file"""
-    config_file = get_config_file_path()
-    Path(config_file).parent.mkdir(parents=True, exist_ok=True)
-    with open(config_file, "w") as f:
-        json.dump(config, f, indent=2)
-    os.chmod(config_file, 0o600)
+    write_private_json(get_config_file_path(), config)
 
 
 def get_config_value(key: str) -> str | None:
@@ -63,6 +65,8 @@ def set_config(key: str, value: str) -> None:
         parsed = urlparse(value)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise click.UsageError("base_url must be a full http:// or https:// URL including a host")
+        if "?" in value or "#" in value:
+            raise click.UsageError("base_url must not include a query string or fragment")
 
     normalized_value = value.rstrip("/")
     save_config({**load_config(), key: normalized_value})

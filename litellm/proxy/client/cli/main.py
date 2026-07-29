@@ -1,4 +1,5 @@
 # stdlib imports
+import os
 from typing import Optional
 
 # third party imports
@@ -53,8 +54,11 @@ def print_version(base_url: str, api_key: Optional[str]):
     callback=lambda ctx, param, value: (
         (
             print_version(
-                ctx.params.get("base_url") or "http://localhost:4000",
-                ctx.params.get("api_key"),
+                ctx.params.get("base_url")
+                or os.environ.get("LITELLM_PROXY_URL")
+                or get_config_value("base_url")
+                or "http://localhost:4000",
+                ctx.params.get("api_key") or os.environ.get("LITELLM_PROXY_API_KEY"),
             )
             or ctx.exit()
         )
@@ -66,7 +70,7 @@ def print_version(base_url: str, api_key: Optional[str]):
     "--base-url",
     envvar="LITELLM_PROXY_URL",
     show_envvar=True,
-    default=lambda: get_config_value("base_url") or "http://localhost:4000",
+    default=None,
     show_default="base_url from `lite config`, else http://localhost:4000",
     help="Base URL of the LiteLLM proxy server",
 )
@@ -77,13 +81,16 @@ def print_version(base_url: str, api_key: Optional[str]):
     help="API key for authentication",
 )
 @click.pass_context
-def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
+def cli(ctx: click.Context, base_url: str | None, api_key: Optional[str]) -> None:
     """LiteLLM Proxy CLI - Manage your LiteLLM proxy server"""
     ctx.ensure_object(dict)
 
+    stored_base_url = get_config_value("base_url")
+    base_url_provided = base_url is not None
+
     # Normalize once here so every downstream command (login, agents, http, ...) can safely
     # do f"{base_url}/some/path" without producing a double slash.
-    base_url = base_url.rstrip("/")
+    base_url = ((stored_base_url or "http://localhost:4000") if base_url is None else base_url).rstrip("/")
 
     # If no API key provided via flag or environment variable, try to load from saved token.
     # Pass base_url so we only use the stored key when it was issued for this server.
@@ -98,9 +105,7 @@ def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
     # "user said localhost:4000 on purpose" so they can fall back to
     # whatever server the stored token was actually issued for. A base_url
     # saved via `lite config set` counts as the user saying it.
-    ctx.obj["base_url_explicit"] = ctx.get_parameter_source("base_url") != click.core.ParameterSource.DEFAULT or bool(
-        get_config_value("base_url")
-    )
+    ctx.obj["base_url_explicit"] = base_url_provided or bool(stored_base_url)
 
     # If no subcommand was invoked, start interactive mode
     if ctx.invoked_subcommand is None:

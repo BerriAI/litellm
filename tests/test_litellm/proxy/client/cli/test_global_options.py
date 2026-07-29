@@ -153,7 +153,8 @@ def test_default_base_url_unchanged_without_config_file(cli_runner, isolated_hom
 
 
 def test_corrupt_config_file_falls_back_to_default(cli_runner, isolated_home):
-    """A corrupt config file must never crash the CLI."""
+    """A corrupt config file must never crash the CLI. Exactly one warning proves
+    the config file is read once per invocation, not once per lookup."""
     config_dir = isolated_home / ".litellm"
     config_dir.mkdir(exist_ok=True)
     (config_dir / "config.json").write_text("{not json")
@@ -162,3 +163,44 @@ def test_corrupt_config_file_falls_back_to_default(cli_runner, isolated_home):
 
     assert result.exit_code == 0
     assert "LiteLLM Proxy Server URL: http://localhost:4000" in result.output
+    assert result.stderr.count("Warning: ignoring invalid config file") == 1
+
+
+def test_empty_base_url_flag_is_not_treated_as_unset(cli_runner, isolated_home):
+    """`--base-url ""` explicitly provided an (empty) value; falling back to the
+    config file or localhost would silently redirect auth-sensitive commands."""
+    _write_config_file(isolated_home, {"base_url": "https://config-proxy.example.com"})
+
+    result = _invoke_version(cli_runner, "--base-url", "")
+
+    assert result.exit_code == 0
+    assert "LiteLLM Proxy Server URL:" not in result.output
+
+
+def test_version_flag_reads_config_file_base_url(cli_runner, isolated_home):
+    """--version is an eager callback that exits before --base-url is parsed, so it
+    must resolve env/config itself instead of seeing only an explicit flag value."""
+    _write_config_file(isolated_home, {"base_url": "https://config-proxy.example.com"})
+
+    with patch(
+        "litellm.proxy.client.health.HealthManagementClient.get_server_version",
+        return_value="1.2.3",
+    ):
+        result = cli_runner.invoke(cli, ["--version"])
+
+    assert result.exit_code == 0
+    assert "LiteLLM Proxy Server URL: https://config-proxy.example.com" in result.output
+
+
+def test_version_flag_prefers_env_var_over_config_file(cli_runner, isolated_home, monkeypatch):
+    _write_config_file(isolated_home, {"base_url": "https://config-proxy.example.com"})
+    monkeypatch.setenv("LITELLM_PROXY_URL", "http://env-proxy.example.com:5000")
+
+    with patch(
+        "litellm.proxy.client.health.HealthManagementClient.get_server_version",
+        return_value="1.2.3",
+    ):
+        result = cli_runner.invoke(cli, ["--version"])
+
+    assert result.exit_code == 0
+    assert "LiteLLM Proxy Server URL: http://env-proxy.example.com:5000" in result.output

@@ -17,6 +17,7 @@ from litellm.proxy.client.cli.commands.config import (
     load_config,
     save_config,
 )
+from litellm.proxy.client.cli.commands.private_json import write_private_json
 
 
 @pytest.fixture
@@ -86,6 +87,44 @@ class TestConfigSet:
 
         assert result.exit_code != 0
         assert not _config_path(isolated_home).exists()
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "https://proxy.example.com?env=prod",
+            "https://proxy.example.com#prod",
+            "https://proxy.example.com/?",
+            "https://proxy.example.com/#",
+        ],
+    )
+    def test_set_base_url_with_query_or_fragment_rejected(self, cli_runner, isolated_home, value):
+        """Downstream commands join paths onto base_url; a stored query string or
+        fragment would silently corrupt every request URL built from it. Bare
+        trailing '?' / '#' parse as EMPTY query/fragment yet still break every
+        joined path, so rejection must key off the raw characters."""
+        result = cli_runner.invoke(cli, ["config", "set", "base_url", value])
+
+        assert result.exit_code != 0
+        assert "query" in result.output or "fragment" in result.output
+        assert not _config_path(isolated_home).exists()
+
+    def test_set_base_url_with_path_prefix_accepted(self, cli_runner, isolated_home):
+        """Proxies are commonly served under a path prefix; the query/fragment
+        rejection must not over-reach into legitimate paths."""
+        result = cli_runner.invoke(cli, ["config", "set", "base_url", "https://proxy.example.com/litellm"])
+
+        assert result.exit_code == 0
+        assert json.loads(_config_path(isolated_home).read_text()) == {"base_url": "https://proxy.example.com/litellm"}
+
+    def test_set_leaves_no_temp_files_behind(self, cli_runner, isolated_home):
+        """The atomic write goes through a .tmp-* sibling; it must be renamed away,
+        never abandoned next to the config."""
+        result = cli_runner.invoke(cli, ["config", "set", "base_url", "https://your-proxy.example.com"])
+
+        assert result.exit_code == 0
+        config_file = _config_path(isolated_home)
+        assert stat.S_IMODE(config_file.stat().st_mode) == 0o600
+        assert list(config_file.parent.glob(".tmp-*")) == []
 
 
 class TestConfigGet:
@@ -178,6 +217,16 @@ class TestConfigHelpers:
 
         assert load_config() == {}
 
+    def test_load_config_invalid_utf8_returns_empty(self, isolated_home):
+        """json.load raises UnicodeDecodeError (a ValueError but not a JSONDecodeError)
+        on undecodable bytes; before catching ValueError this crashed every CLI
+        invocation, including the `config set` needed to repair the file."""
+        config_file = _config_path(isolated_home)
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_bytes(b"\xff\xfe{}")
+
+        assert load_config() == {}
+
     def test_save_config_round_trip_creates_dir_and_restricts_permissions(self, isolated_home):
         save_config({"base_url": "https://your-proxy.example.com"})
 
@@ -190,3 +239,46 @@ class TestConfigHelpers:
         save_config({"base_url": "https://your-proxy.example.com"})
 
         assert get_config_value("base_url") == "https://your-proxy.example.com"
+
+    def test_corrupt_config_file_warns_on_stderr_but_command_succeeds(self, cli_runner, isolated_home):
+        """Silently ignoring a broken config file leaves users debugging why their
+        stored base_url stopped applying; the CLI must keep working but say why."""
+        config_file = _config_path(isolated_home)
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text("{not json")
+
+        result = cli_runner.invoke(cli, ["config", "get"])
+
+        assert result.exit_code == 0
+        assert "Warning: ignoring invalid config file" in result.stderr
+
+
+class TestWritePrivateJson:
+    def test_failed_write_preserves_previous_file_and_removes_temp(self, tmp_path):
+        """json.dump can fail partway through serializing; writing to a temp file
+        and renaming keeps the previous file intact through a crash mid-write."""
+        target = tmp_path / "config.json"
+        original = '{"base_url": "https://original.example.com"}'
+        target.write_text(original)
+
+        with pytest.raises(TypeError):
+            write_private_json(str(target), {"bad": object()})
+
+        assert target.read_text() == original
+        assert list(tmp_path.glob(".tmp-*")) == []
+
+    def test_interrupted_write_removes_temp_file(self, tmp_path, monkeypatch):
+        """Ctrl-C is BaseException, which `except Exception` misses; an interrupt
+        mid-write must not abandon a .tmp-* file next to the config forever."""
+
+        def _interrupt(*args: object, **kwargs: object) -> None:
+            raise KeyboardInterrupt()
+
+        monkeypatch.setattr("litellm.proxy.client.cli.commands.private_json.json.dump", _interrupt)
+        target = tmp_path / "config.json"
+
+        with pytest.raises(KeyboardInterrupt):
+            write_private_json(str(target), {"base_url": "https://your-proxy.example.com"})
+
+        assert not target.exists()
+        assert list(tmp_path.glob(".tmp-*")) == []

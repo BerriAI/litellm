@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 import sys
 import time
 from pathlib import Path
@@ -202,31 +203,22 @@ class TestTokenUtilities:
 
             mock_mkdir.assert_called_once_with(exist_ok=True)
 
-    def test_save_token(self):
+    def test_save_token(self, tmp_path):
         """Test saving token data to file"""
         token_data = {
             "key": "test-key",
             "user_id": "test-user",
             "timestamp": 1234567890,
         }
+        token_file = tmp_path / "token.json"
 
-        with (
-            patch("builtins.open", mock_open()) as mock_file,
-            patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path,
-            patch("os.chmod") as mock_chmod,
-        ):
-            mock_path.return_value = "/test/path/token.json"
+        with patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path:
+            mock_path.return_value = str(token_file)
 
             save_token(token_data)
 
-            mock_file.assert_called_once_with("/test/path/token.json", "w")
-            mock_file().write.assert_called()
-            mock_chmod.assert_called_once_with("/test/path/token.json", 0o600)
-
-            # Verify JSON content was written correctly
-            written_content = "".join(call[0][0] for call in mock_file().write.call_args_list)
-            parsed_content = json.loads(written_content)
-            assert parsed_content == token_data
+        assert json.loads(token_file.read_text()) == token_data
+        assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
 
     def test_load_token_success(self):
         """Test loading token data from file successfully"""
@@ -1006,3 +998,34 @@ class TestPrintTokenWithConfigFile:
 
         assert result.exit_code == 0
         assert result.stdout.strip() == "sk-issued-for-a"
+
+
+class TestSaveTokenPrivateWrite:
+    """token.json holds the real API key: it must never be world-readable at any
+    instant, and a failed write must not destroy the previously stored token."""
+
+    @pytest.fixture
+    def isolated_home(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        monkeypatch.delenv("LITELLM_PROXY_URL", raising=False)
+        monkeypatch.delenv("LITELLM_PROXY_API_KEY", raising=False)
+        return tmp_path
+
+    def test_save_token_owner_only_permissions_and_no_temp_leftovers(self, isolated_home):
+        save_token({"key": "sk-secret", "user_id": "u-1", "timestamp": 1234567890})
+
+        token_file = isolated_home / ".litellm" / "token.json"
+        assert json.loads(token_file.read_text()) == {"key": "sk-secret", "user_id": "u-1", "timestamp": 1234567890}
+        assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
+        assert list(token_file.parent.glob(".tmp-*")) == []
+
+    def test_save_token_failure_mid_write_preserves_existing_token(self, isolated_home):
+        _write_home_json(isolated_home, "token.json", {"key": "sk-original", "timestamp": 1234567890})
+        token_file = isolated_home / ".litellm" / "token.json"
+
+        with pytest.raises(TypeError):
+            save_token({"key": object()})
+
+        assert json.loads(token_file.read_text()) == {"key": "sk-original", "timestamp": 1234567890}
+        assert list(token_file.parent.glob(".tmp-*")) == []
