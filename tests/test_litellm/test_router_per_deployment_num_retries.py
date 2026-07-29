@@ -3,15 +3,17 @@ Unit tests for per-deployment num_retries in litellm_params
 GitHub Issue: #18968 - Per-deployment max_retries/num_retries in litellm_params is not used in retry logic
 """
 
+from unittest.mock import AsyncMock, patch
+
 import httpx
 import pytest
 import pytest_asyncio
-from unittest.mock import patch
 
 import litellm
 from litellm import Router
-from litellm.types.router import RetryPolicy
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.router import RetryPolicy
 
 
 class TestPerDeploymentNumRetries:
@@ -566,6 +568,96 @@ class TestRequestNumRetriesBeatsGlobal:
                     model="mock", messages=[{"role": "user", "content": "hi"}]
                 )
         assert counter.attempts == 3
+
+
+@pytest.mark.asyncio
+async def test_responses_api_uses_deployment_num_retries():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "responses-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                    "num_retries": 1,
+                },
+            }
+        ],
+        num_retries=0,
+        disable_cooldowns=True,
+    )
+    error = litellm.RateLimitError(
+        message="upstream throttled",
+        llm_provider="openai",
+        model="openai/gpt-4o-mini",
+        response=httpx.Response(
+            status_code=429,
+            request=httpx.Request("POST", "https://api.openai.com/v1/responses"),
+        ),
+    )
+    response = ResponsesAPIResponse(
+        id="resp_123",
+        created_at=0,
+        model="gpt-4o-mini",
+        output=[],
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mock_handler = AsyncMock(side_effect=[error, response])
+        mp.setattr(
+            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+            mock_handler,
+        )
+        result = await router.aresponses(
+            model="responses-model",
+            input="hi",
+        )
+
+    assert result == response
+    assert mock_handler.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_uses_deployment_num_retries():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "messages-model",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "api_key": "test-key",
+                    "num_retries": 1,
+                },
+            }
+        ],
+        num_retries=0,
+        disable_cooldowns=True,
+    )
+    error = litellm.RateLimitError(
+        message="upstream throttled",
+        llm_provider="anthropic",
+        model="anthropic/claude-3-5-sonnet-20240620",
+        response=httpx.Response(
+            status_code=429,
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        ),
+    )
+    response = {"id": "msg_123", "content": [{"type": "text", "text": "ok"}]}
+
+    with pytest.MonkeyPatch.context() as mp:
+        mock_handler = AsyncMock(side_effect=[error, response])
+        mp.setattr(
+            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_anthropic_messages_handler",
+            mock_handler,
+        )
+        result = await router.aanthropic_messages(
+            model="messages-model",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=16,
+        )
+
+    assert result == response
+    assert mock_handler.call_count == 2
 
 
 class TestRequestNumRetriesBeatsDeployment:

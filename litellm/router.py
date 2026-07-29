@@ -4743,6 +4743,7 @@ class Router:
                 self.fail_calls[model] += 1
             if deployment is not None:
                 self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
+                self._set_deployment_num_retries_on_exception(e, deployment)
             raise e
 
     async def _aresponses_with_streaming_fallbacks(

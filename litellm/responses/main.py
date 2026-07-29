@@ -1098,6 +1098,7 @@ def responses(
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
                 "model_info": kwargs.get("model_info"),
+                "cooldown_time": kwargs.get("cooldown_time"),
                 "data_residency": infer_openai_data_residency(custom_llm_provider, litellm_params.api_base),
                 "metadata": (kwargs["litellm_metadata"] if "litellm_metadata" in kwargs else kwargs.get("metadata")),
             },

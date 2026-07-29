@@ -796,7 +796,7 @@ async def test_async_anthropic_messages_handler_forwards_router_model_info():
             litellm_params=GenericLiteLLMParams(),
             logging_obj=mock_logging_obj,
             client=mock_client,
-            kwargs={"model_info": deployment_model_info},
+            kwargs={"model_info": deployment_model_info, "cooldown_time": 0},
         )
     except Exception:
         pass
@@ -810,6 +810,7 @@ async def test_async_anthropic_messages_handler_forwards_router_model_info():
     )
 
     assert litellm_params_arg.get("model_info") == deployment_model_info
+    assert litellm_params_arg.get("cooldown_time") == 0
 
 
 @pytest.mark.asyncio
