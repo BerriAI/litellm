@@ -49,6 +49,7 @@ import {
 } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import EndpointUsage from "../EndpointUsage/EndpointUsage";
+import ModelViewToggle, { ModelViewType } from "../ModelViewToggle";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import TopModelView from "./TopModelView";
 
@@ -110,6 +111,7 @@ const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
 const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, entityId, entityList, dateValue }) => {
   const { teams } = useTeams();
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [topAgentsLimit, setTopAgentsLimit] = useState<number>(5);
@@ -153,14 +155,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
 
   const agentSpendData = agentSpendDataRaw as unknown as EntitySpendData;
 
-  const modelMetrics = processActivityData(spendData, "models", teams || []);
+  const modelBreakdownKey = modelViewType === "groups" ? "model_groups" : "models";
+  const modelMetrics = processActivityData(spendData, modelBreakdownKey, teams || []);
   const keyMetrics = processActivityData(spendData, "api_keys", teams || []);
   const agentMetrics = entityType === "team" ? processActivityData(agentSpendData, "entities", teams || []) : {};
 
   const getTopModels = () => {
     const modelSpend: { [key: string]: any } = {};
     spendData.results.forEach((day) => {
-      Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
+      Object.entries(day.breakdown[modelBreakdownKey] || {}).forEach(([model, metrics]) => {
         if (!modelSpend[model]) {
           modelSpend[model] = {
             spend: 0,
@@ -406,6 +409,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
 
   const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
 
+  const modelViewTitle = modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models";
+
   const costPanel = (
     <Grid numItems={2} className="gap-2 w-full">
       {/* Total Spend Card */}
@@ -604,7 +609,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
       {/* Top Models */}
       <Col numColSpan={1}>
         <Card>
-          <Title>{entityType === "agent" ? "Top Agents" : "Top Models"}</Title>
+          <div className="flex justify-between items-center">
+            <Title>{entityType === "agent" ? "Top Agents" : modelViewTitle}</Title>
+            <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
+          </div>
           <TopModelView
             topModels={getTopModels()}
             topModelsLimit={topModelsLimit}
@@ -691,7 +699,14 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
     {
       key: "models",
       label: entityType === "agent" ? "Request / Token Consumption" : "Model Activity",
-      content: <ActivityMetrics modelMetrics={modelMetrics} hidePromptCachingMetrics={entityType === "agent"} />,
+      content: (
+        <>
+          <div className="flex justify-end mt-2 mb-4">
+            <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
+          </div>
+          <ActivityMetrics modelMetrics={modelMetrics} hidePromptCachingMetrics={entityType === "agent"} />
+        </>
+      ),
     },
     ...(entityType === "team"
       ? [{ key: "agents", label: "Agent Activity", content: <ActivityMetrics modelMetrics={agentMetrics} /> }]
