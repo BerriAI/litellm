@@ -1526,6 +1526,24 @@ class TestVertexEmbeddingsBatchInputTranslation:
         assert row["request"]["labels"]["litellm_custom_id"] == "request-1"
         assert "key" not in row
 
+    def test_should_keep_lines_without_a_url_on_generate_content_path(self):
+        """`url` is optional on a batch line, and chat is the shape LiteLLM has always assumed."""
+        (row,) = _wrap_entries(
+            [
+                {
+                    "custom_id": "request-1",
+                    "body": {
+                        "model": "gemini-2.0-flash-001",
+                        "messages": [{"role": "user", "content": "Hello"}],
+                    },
+                }
+            ]
+        )
+
+        assert row["request"]["contents"] == [
+            {"role": "user", "parts": [{"text": "Hello"}]}
+        ]
+
     def test_should_translate_each_line_by_its_own_url(self):
         chat_row, embeddings_row = _wrap_entries(
             [
