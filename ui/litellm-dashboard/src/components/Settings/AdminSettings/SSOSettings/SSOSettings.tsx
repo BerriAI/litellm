@@ -22,10 +22,13 @@ export default function SSOSettings() {
   const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
-  const isSSOConfigured =
-    Boolean(ssoSettings?.values.google_client_id) ||
-    Boolean(ssoSettings?.values.microsoft_client_id) ||
-    Boolean(ssoSettings?.values.generic_client_id);
+  const isSSOConfigured = [
+    ssoSettings?.values.google_client_id,
+    ssoSettings?.values.microsoft_client_id,
+    ssoSettings?.values.generic_client_id,
+    ssoSettings?.values.saml_idp_metadata_url,
+    ssoSettings?.values.saml_idp_metadata_xml,
+  ].some(Boolean);
 
   const selectedProvider = ssoSettings?.values ? detectSSOProvider(ssoSettings.values) : null;
   const isRoleMappingsEnabled = Boolean(ssoSettings?.values.role_mappings);
@@ -152,6 +155,37 @@ export default function SSOSettings() {
               render: (values: SSOSettingsValues) => renderTeamMappingsField(values),
             }
           : null,
+      ],
+    },
+    saml: {
+      providerText: ssoProviderDisplayNames.saml,
+      fields: [
+        {
+          label: "IdP Metadata URL",
+          render: (values: SSOSettingsValues) => renderEndpointValue(values.saml_idp_metadata_url),
+        },
+        {
+          label: "IdP Metadata XML",
+          render: (values: SSOSettingsValues) =>
+            values.saml_idp_metadata_xml ? (
+              <Tag>Provided</Tag>
+            ) : (
+              <span className="text-gray-400 italic">Not configured</span>
+            ),
+        },
+        {
+          label: "SP Entity ID",
+          render: (values: SSOSettingsValues) => renderEndpointValue(values.saml_sp_entity_id),
+        },
+        {
+          label: "Allow IdP-initiated (unsolicited) responses",
+          render: (values: SSOSettingsValues) => (
+            <Tag color={values.saml_allow_unsolicited === "true" ? "green" : "default"}>
+              {values.saml_allow_unsolicited === "true" ? "Enabled" : "Disabled"}
+            </Tag>
+          ),
+        },
+        { label: "Proxy Base URL", render: (values: SSOSettingsValues) => renderSimpleValue(values.proxy_base_url) },
       ],
     },
   };

@@ -30,11 +30,6 @@ def _key(client: McpClient, resources: ResourceManager, *, mcp_servers: list[str
     return key
 
 
-def _assert_registered(client: McpClient, server_id: str) -> None:
-    registered = {row.server_id for row in client.registered_servers()}
-    assert server_id in registered, f"registered server {server_id} absent from /v1/mcp/server: {registered}"
-
-
 class TestMcpKeyWithoutAccessIsDenied:
     @pytest.mark.covers("mcp.list_tools.api_key.denied_without_permission")
     def test_list_tools_denied_without_permission(
@@ -43,17 +38,12 @@ class TestMcpKeyWithoutAccessIsDenied:
         resources: ResourceManager,
     ) -> None:
         server_id = register_datadog_mcp(client, resources)
-        _assert_registered(client, server_id)
+        client.await_registered(server_id)
 
         permitted_key = _key(client, resources, mcp_servers=[server_id])
         denied_key = _key(client, resources, mcp_servers=None)
 
-        permitted = unwrap(client.list_tools(permitted_key))
-        tool_name = permitted.tool_name_containing(server_id, SEARCH_LOGS_TOOL)
-        assert tool_name is not None, (
-            f"granted key did not see {SEARCH_LOGS_TOOL} (upstream dead or grant not applied): "
-            f"{permitted.tool_names_for_server(server_id)}"
-        )
+        _ = client.await_tool(permitted_key, server_id, SEARCH_LOGS_TOOL)
 
         denied_tools = unwrap(client.list_tools(denied_key)).tool_names_for_server(server_id)
         assert denied_tools == frozenset(), (
@@ -68,17 +58,12 @@ class TestMcpKeyWithoutAccessIsDenied:
         resources: ResourceManager,
     ) -> None:
         server_id = register_datadog_mcp(client, resources)
-        _assert_registered(client, server_id)
+        client.await_registered(server_id)
 
         permitted_key = _key(client, resources, mcp_servers=[server_id])
         denied_key = _key(client, resources, mcp_servers=None)
 
-        permitted = unwrap(client.list_tools(permitted_key))
-        tool_name = permitted.tool_name_containing(server_id, SEARCH_LOGS_TOOL)
-        assert tool_name is not None, (
-            f"granted key did not discover {SEARCH_LOGS_TOOL} (upstream dead or grant not applied): "
-            f"{permitted.tool_names_for_server(server_id)}"
-        )
+        tool_name = client.await_tool(permitted_key, server_id, SEARCH_LOGS_TOOL)
 
         search_args = {
             "query": "service:litellm",

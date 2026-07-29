@@ -25,7 +25,7 @@ import {
 } from "@tremor/react";
 import { ExportOutlined, LoadingOutlined } from "@ant-design/icons";
 import { Alert, Button } from "antd";
-import React, { useMemo, useState } from "react";
+import React, { type ReactNode, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import { UsageExportHeader } from "@/components/EntityUsageExport";
@@ -406,6 +406,304 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
 
   const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
 
+  const costPanel = (
+    <Grid numItems={2} className="gap-2 w-full">
+      {/* Total Spend Card */}
+      <Col numColSpan={2}>
+        <Card>
+          <Title>{capitalizedEntityLabel} Spend Overview</Title>
+          <Grid numItems={5} className="gap-4 mt-4">
+            <Card>
+              <Title>Total Spend</Title>
+              <Text className="text-2xl font-bold mt-2">
+                ${formatNumberWithCommas(spendData.metadata.total_spend, 2)}
+              </Text>
+            </Card>
+            <Card>
+              <Title>Total Requests</Title>
+              <Text className="text-2xl font-bold mt-2">{spendData.metadata.total_api_requests.toLocaleString()}</Text>
+            </Card>
+            <Card>
+              <Title>Successful Requests</Title>
+              <Text className="text-2xl font-bold mt-2 text-green-600">
+                {spendData.metadata.total_successful_requests.toLocaleString()}
+              </Text>
+            </Card>
+            <Card>
+              <Title>Failed Requests</Title>
+              <Text className="text-2xl font-bold mt-2 text-red-600">
+                {spendData.metadata.total_failed_requests.toLocaleString()}
+              </Text>
+            </Card>
+            <Card>
+              <Title>Total Tokens</Title>
+              <Text className="text-2xl font-bold mt-2">{spendData.metadata.total_tokens.toLocaleString()}</Text>
+            </Card>
+          </Grid>
+        </Card>
+      </Col>
+
+      {/* Daily Spend Chart */}
+      <Col numColSpan={2}>
+        <ShadcnCard>
+          <CardHeader>
+            <CardTitle className="text-base font-semibold">Daily Spend</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <BarChart
+              data={[...spendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())}
+              index="date"
+              categories={["metrics.spend"]}
+              colors={["cyan"]}
+              valueFormatter={valueFormatterSpend}
+              yAxisWidth={100}
+              showLegend={false}
+              customTooltip={({ payload, active }) => {
+                if (!active || !payload?.[0]) return null;
+                const data = payload[0].payload;
+                const entityCount = Object.keys(data.breakdown.entities || {}).length;
+                return (
+                  <div className="bg-white p-4 shadow-lg rounded-lg border">
+                    <p className="font-bold">{data.date}</p>
+                    <p className="text-cyan-500">Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
+                    <p className="text-gray-600">Total Requests: {data.metrics.api_requests}</p>
+                    <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
+                    <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
+                    <p className="text-gray-600">Total Tokens: {data.metrics.total_tokens}</p>
+                    <p className="text-gray-600">
+                      Total {capitalizedEntityLabel}s: {entityCount}
+                    </p>
+                    <div className="mt-2 border-t pt-2">
+                      <p className="font-semibold">Spend by {capitalizedEntityLabel}:</p>
+                      {Object.entries(data.breakdown.entities || {})
+                        .sort(([, a], [, b]) => {
+                          const spendA = (a as EntityMetrics).metrics.spend;
+                          const spendB = (b as EntityMetrics).metrics.spend;
+                          return spendB - spendA;
+                        })
+                        .slice(0, 5)
+                        .map(([entity, entityData]) => {
+                          const metrics = entityData as EntityMetrics;
+                          return (
+                            <p key={entity} className="text-sm text-gray-600">
+                              {getEntityLabel(entity, metrics.metadata)}: $
+                              {formatNumberWithCommas(metrics.metrics.spend, 2)}
+                            </p>
+                          );
+                        })}
+                      {entityCount > 5 && <p className="text-sm text-gray-500 italic">...and {entityCount - 5} more</p>}
+                    </div>
+                  </div>
+                );
+              }}
+            />
+          </CardContent>
+        </ShadcnCard>
+      </Col>
+
+      {/* Entity Breakdown Section */}
+      <Col numColSpan={2}>
+        <Card>
+          <div className="flex flex-col space-y-4">
+            <div className="flex flex-col space-y-2">
+              <Title>Spend Per {capitalizedEntityLabel}</Title>
+              <Subtitle className="text-xs">Showing Top 5 by Spend</Subtitle>
+              <div className="flex items-center text-sm text-gray-500">
+                <span>Get Started by Tracking cost per {capitalizedEntityLabel} </span>
+                <a
+                  href="https://docs.litellm.ai/docs/proxy/enterprise#spend-tracking"
+                  className="text-blue-500 hover:text-blue-700 ml-1"
+                >
+                  here
+                </a>
+              </div>
+            </div>
+            <Grid numItems={2} className="gap-6">
+              <Col numColSpan={1}>
+                <BarChart
+                  className="mt-4 h-52"
+                  data={getProcessedEntityBreakdownForChart()}
+                  index="metadata.alias_display"
+                  categories={["metrics.spend"]}
+                  colors={["cyan"]}
+                  valueFormatter={valueFormatterSpend}
+                  layout="vertical"
+                  showLegend={false}
+                  yAxisWidth={150}
+                  customTooltip={({ payload, active }) => {
+                    if (!active || !payload?.[0]) return null;
+                    const data = payload[0].payload;
+                    return (
+                      <div className="bg-white p-4 shadow-lg rounded-lg border">
+                        <p className="font-bold">{data.metadata.alias}</p>
+                        <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.metrics.spend, 4)}</p>
+                        <p className="text-gray-600">Requests: {data.metrics.api_requests.toLocaleString()}</p>
+                        <p className="text-green-600">
+                          Successful: {data.metrics.successful_requests.toLocaleString()}
+                        </p>
+                        <p className="text-red-600">Failed: {data.metrics.failed_requests.toLocaleString()}</p>
+                        <p className="text-gray-600">Tokens: {data.metrics.total_tokens.toLocaleString()}</p>
+                      </div>
+                    );
+                  }}
+                />
+              </Col>
+              <Col numColSpan={1}>
+                <div className="h-52 overflow-y-auto">
+                  <Table>
+                    <TableHead>
+                      <TableRow>
+                        <TableHeaderCell>{capitalizedEntityLabel}</TableHeaderCell>
+                        <TableHeaderCell>Spend</TableHeaderCell>
+                        <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
+                        <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
+                        <TableHeaderCell>Tokens</TableHeaderCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {getEntityBreakdown()
+                        .filter((entity) => entity.metrics.spend > 0)
+                        .map((entity) => (
+                          <TableRow key={entity.metadata.id}>
+                            <TableCell>{entity.metadata.alias}</TableCell>
+                            <TableCell>
+                              <MoneyCell value={entity.metrics.spend} decimals={4} />
+                            </TableCell>
+                            <TableCell className="text-green-600">
+                              {entity.metrics.successful_requests.toLocaleString()}
+                            </TableCell>
+                            <TableCell className="text-red-600">
+                              {entity.metrics.failed_requests.toLocaleString()}
+                            </TableCell>
+                            <TableCell>{entity.metrics.total_tokens.toLocaleString()}</TableCell>
+                          </TableRow>
+                        ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </Col>
+            </Grid>
+          </div>
+        </Card>
+      </Col>
+
+      {/* Top API Keys */}
+      <Col numColSpan={1}>
+        <Card>
+          <Title>Top Virtual Keys</Title>
+          <TopKeyView
+            topKeys={getTopAPIKeys()}
+            teams={null}
+            showTags={entityType === "tag"}
+            topKeysLimit={topKeysLimit}
+            setTopKeysLimit={setTopKeysLimit}
+          />
+        </Card>
+      </Col>
+
+      {/* Top Models */}
+      <Col numColSpan={1}>
+        <Card>
+          <Title>{entityType === "agent" ? "Top Agents" : "Top Models"}</Title>
+          <TopModelView
+            topModels={getTopModels()}
+            topModelsLimit={topModelsLimit}
+            setTopModelsLimit={setTopModelsLimit}
+          />
+        </Card>
+      </Col>
+
+      {/* Top Agents - only for team entity type */}
+      {entityType === "team" && (
+        <Col numColSpan={2}>
+          <Card>
+            <Title>Top Agents Driving Spend</Title>
+            <TopModelView
+              topModels={getTopAgents()}
+              topModelsLimit={topAgentsLimit}
+              setTopModelsLimit={setTopAgentsLimit}
+            />
+          </Card>
+        </Col>
+      )}
+
+      {/* Spend by Provider */}
+      <Col numColSpan={2}>
+        <Card>
+          <div className="flex flex-col space-y-4">
+            <Title>Provider Usage</Title>
+            <Grid numItems={2}>
+              <Col numColSpan={1}>
+                <DonutChart
+                  className="mt-4 h-40"
+                  data={getProviderSpend()}
+                  index="provider"
+                  category="spend"
+                  valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
+                  colors={["cyan", "blue", "indigo", "violet", "purple"]}
+                  showLabel
+                  startAngle={90}
+                  endAngle={-270}
+                />
+              </Col>
+              <Col numColSpan={1}>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableHeaderCell>Provider</TableHeaderCell>
+                      <TableHeaderCell>Spend</TableHeaderCell>
+                      <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
+                      <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
+                      <TableHeaderCell>Tokens</TableHeaderCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {getProviderSpend().map((provider) => (
+                      <TableRow key={provider.provider}>
+                        <TableCell>
+                          <div className="flex items-center space-x-2">
+                            {provider.provider && <Logo provider={provider.provider} className="w-4 h-4" />}
+                            <span>{provider.provider}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <MoneyCell value={provider.spend} decimals={2} />
+                        </TableCell>
+                        <TableCell className="text-green-600">
+                          {provider.successful_requests.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-red-600">{provider.failed_requests.toLocaleString()}</TableCell>
+                        <TableCell>{provider.tokens.toLocaleString()}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Col>
+            </Grid>
+          </div>
+        </Card>
+      </Col>
+    </Grid>
+  );
+
+  const tabs: readonly { key: string; label: string; content: ReactNode }[] = [
+    { key: "cost", label: "Cost", content: costPanel },
+    {
+      key: "models",
+      label: entityType === "agent" ? "Request / Token Consumption" : "Model Activity",
+      content: <ActivityMetrics modelMetrics={modelMetrics} hidePromptCachingMetrics={entityType === "agent"} />,
+    },
+    ...(entityType === "team"
+      ? [{ key: "agents", label: "Agent Activity", content: <ActivityMetrics modelMetrics={agentMetrics} /> }]
+      : []),
+    {
+      key: "keys",
+      label: "Key Activity",
+      content: <ActivityMetrics modelMetrics={keyMetrics} hidePromptCachingMetrics={entityType === "agent"} />,
+    },
+    { key: "endpoints", label: "Endpoint Activity", content: <EndpointUsage userSpendData={spendData} /> },
+  ];
+
   return (
     <div style={{ width: "100%" }} className="relative">
       {isFetchingMore && (
@@ -501,320 +799,14 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
       />
       <TabGroup>
         <TabList variant="solid" className="mt-1">
-          <Tab>Cost</Tab>
-          <Tab>{entityType === "agent" ? "Request / Token Consumption" : "Model Activity"}</Tab>
-          {entityType === "team" ? <Tab>Agent Activity</Tab> : <></>}
-          <Tab>Key Activity</Tab>
-          <Tab>Endpoint Activity</Tab>
+          {tabs.map(({ key, label }) => (
+            <Tab key={key}>{label}</Tab>
+          ))}
         </TabList>
         <TabPanels>
-          <TabPanel>
-            <Grid numItems={2} className="gap-2 w-full">
-              {/* Total Spend Card */}
-              <Col numColSpan={2}>
-                <Card>
-                  <Title>{capitalizedEntityLabel} Spend Overview</Title>
-                  <Grid numItems={5} className="gap-4 mt-4">
-                    <Card>
-                      <Title>Total Spend</Title>
-                      <Text className="text-2xl font-bold mt-2">
-                        ${formatNumberWithCommas(spendData.metadata.total_spend, 2)}
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Title>Total Requests</Title>
-                      <Text className="text-2xl font-bold mt-2">
-                        {spendData.metadata.total_api_requests.toLocaleString()}
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Title>Successful Requests</Title>
-                      <Text className="text-2xl font-bold mt-2 text-green-600">
-                        {spendData.metadata.total_successful_requests.toLocaleString()}
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Title>Failed Requests</Title>
-                      <Text className="text-2xl font-bold mt-2 text-red-600">
-                        {spendData.metadata.total_failed_requests.toLocaleString()}
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Title>Total Tokens</Title>
-                      <Text className="text-2xl font-bold mt-2">
-                        {spendData.metadata.total_tokens.toLocaleString()}
-                      </Text>
-                    </Card>
-                  </Grid>
-                </Card>
-              </Col>
-
-              {/* Daily Spend Chart */}
-              <Col numColSpan={2}>
-                <ShadcnCard>
-                  <CardHeader>
-                    <CardTitle className="text-base font-semibold">Daily Spend</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <BarChart
-                      data={[...spendData.results].sort(
-                        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-                      )}
-                      index="date"
-                      categories={["metrics.spend"]}
-                      colors={["cyan"]}
-                      valueFormatter={valueFormatterSpend}
-                      yAxisWidth={100}
-                      showLegend={false}
-                      customTooltip={({ payload, active }) => {
-                        if (!active || !payload?.[0]) return null;
-                        const data = payload[0].payload;
-                        const entityCount = Object.keys(data.breakdown.entities || {}).length;
-                        return (
-                          <div className="bg-white p-4 shadow-lg rounded-lg border">
-                            <p className="font-bold">{data.date}</p>
-                            <p className="text-cyan-500">
-                              Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
-                            </p>
-                            <p className="text-gray-600">Total Requests: {data.metrics.api_requests}</p>
-                            <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
-                            <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
-                            <p className="text-gray-600">Total Tokens: {data.metrics.total_tokens}</p>
-                            <p className="text-gray-600">
-                              Total {capitalizedEntityLabel}s: {entityCount}
-                            </p>
-                            <div className="mt-2 border-t pt-2">
-                              <p className="font-semibold">Spend by {capitalizedEntityLabel}:</p>
-                              {Object.entries(data.breakdown.entities || {})
-                                .sort(([, a], [, b]) => {
-                                  const spendA = (a as EntityMetrics).metrics.spend;
-                                  const spendB = (b as EntityMetrics).metrics.spend;
-                                  return spendB - spendA;
-                                })
-                                .slice(0, 5)
-                                .map(([entity, entityData]) => {
-                                  const metrics = entityData as EntityMetrics;
-                                  return (
-                                    <p key={entity} className="text-sm text-gray-600">
-                                      {getEntityLabel(entity, metrics.metadata)}: $
-                                      {formatNumberWithCommas(metrics.metrics.spend, 2)}
-                                    </p>
-                                  );
-                                })}
-                              {entityCount > 5 && (
-                                <p className="text-sm text-gray-500 italic">...and {entityCount - 5} more</p>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      }}
-                    />
-                  </CardContent>
-                </ShadcnCard>
-              </Col>
-
-              {/* Entity Breakdown Section */}
-              <Col numColSpan={2}>
-                <Card>
-                  <div className="flex flex-col space-y-4">
-                    <div className="flex flex-col space-y-2">
-                      <Title>Spend Per {capitalizedEntityLabel}</Title>
-                      <Subtitle className="text-xs">Showing Top 5 by Spend</Subtitle>
-                      <div className="flex items-center text-sm text-gray-500">
-                        <span>Get Started by Tracking cost per {capitalizedEntityLabel} </span>
-                        <a
-                          href="https://docs.litellm.ai/docs/proxy/enterprise#spend-tracking"
-                          className="text-blue-500 hover:text-blue-700 ml-1"
-                        >
-                          here
-                        </a>
-                      </div>
-                    </div>
-                    <Grid numItems={2} className="gap-6">
-                      <Col numColSpan={1}>
-                        <BarChart
-                          className="mt-4 h-52"
-                          data={getProcessedEntityBreakdownForChart()}
-                          index="metadata.alias_display"
-                          categories={["metrics.spend"]}
-                          colors={["cyan"]}
-                          valueFormatter={valueFormatterSpend}
-                          layout="vertical"
-                          showLegend={false}
-                          yAxisWidth={150}
-                          customTooltip={({ payload, active }) => {
-                            if (!active || !payload?.[0]) return null;
-                            const data = payload[0].payload;
-                            return (
-                              <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                <p className="font-bold">{data.metadata.alias}</p>
-                                <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.metrics.spend, 4)}</p>
-                                <p className="text-gray-600">Requests: {data.metrics.api_requests.toLocaleString()}</p>
-                                <p className="text-green-600">
-                                  Successful: {data.metrics.successful_requests.toLocaleString()}
-                                </p>
-                                <p className="text-red-600">Failed: {data.metrics.failed_requests.toLocaleString()}</p>
-                                <p className="text-gray-600">Tokens: {data.metrics.total_tokens.toLocaleString()}</p>
-                              </div>
-                            );
-                          }}
-                        />
-                      </Col>
-                      <Col numColSpan={1}>
-                        <div className="h-52 overflow-y-auto">
-                          <Table>
-                            <TableHead>
-                              <TableRow>
-                                <TableHeaderCell>{capitalizedEntityLabel}</TableHeaderCell>
-                                <TableHeaderCell>Spend</TableHeaderCell>
-                                <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                                <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                                <TableHeaderCell>Tokens</TableHeaderCell>
-                              </TableRow>
-                            </TableHead>
-                            <TableBody>
-                              {getEntityBreakdown()
-                                .filter((entity) => entity.metrics.spend > 0)
-                                .map((entity) => (
-                                  <TableRow key={entity.metadata.id}>
-                                    <TableCell>{entity.metadata.alias}</TableCell>
-                                    <TableCell>
-                                      <MoneyCell value={entity.metrics.spend} decimals={4} />
-                                    </TableCell>
-                                    <TableCell className="text-green-600">
-                                      {entity.metrics.successful_requests.toLocaleString()}
-                                    </TableCell>
-                                    <TableCell className="text-red-600">
-                                      {entity.metrics.failed_requests.toLocaleString()}
-                                    </TableCell>
-                                    <TableCell>{entity.metrics.total_tokens.toLocaleString()}</TableCell>
-                                  </TableRow>
-                                ))}
-                            </TableBody>
-                          </Table>
-                        </div>
-                      </Col>
-                    </Grid>
-                  </div>
-                </Card>
-              </Col>
-
-              {/* Top API Keys */}
-              <Col numColSpan={1}>
-                <Card>
-                  <Title>Top Virtual Keys</Title>
-                  <TopKeyView
-                    topKeys={getTopAPIKeys()}
-                    teams={null}
-                    showTags={entityType === "tag"}
-                    topKeysLimit={topKeysLimit}
-                    setTopKeysLimit={setTopKeysLimit}
-                  />
-                </Card>
-              </Col>
-
-              {/* Top Models */}
-              <Col numColSpan={1}>
-                <Card>
-                  <Title>{entityType === "agent" ? "Top Agents" : "Top Models"}</Title>
-                  <TopModelView
-                    topModels={getTopModels()}
-                    topModelsLimit={topModelsLimit}
-                    setTopModelsLimit={setTopModelsLimit}
-                  />
-                </Card>
-              </Col>
-
-              {/* Top Agents - only for team entity type */}
-              {entityType === "team" && (
-                <Col numColSpan={2}>
-                  <Card>
-                    <Title>Top Agents Driving Spend</Title>
-                    <TopModelView
-                      topModels={getTopAgents()}
-                      topModelsLimit={topAgentsLimit}
-                      setTopModelsLimit={setTopAgentsLimit}
-                    />
-                  </Card>
-                </Col>
-              )}
-
-              {/* Spend by Provider */}
-              <Col numColSpan={2}>
-                <Card>
-                  <div className="flex flex-col space-y-4">
-                    <Title>Provider Usage</Title>
-                    <Grid numItems={2}>
-                      <Col numColSpan={1}>
-                        <DonutChart
-                          className="mt-4 h-40"
-                          data={getProviderSpend()}
-                          index="provider"
-                          category="spend"
-                          valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
-                          colors={["cyan", "blue", "indigo", "violet", "purple"]}
-                          showLabel
-                          startAngle={90}
-                          endAngle={-270}
-                        />
-                      </Col>
-                      <Col numColSpan={1}>
-                        <Table>
-                          <TableHead>
-                            <TableRow>
-                              <TableHeaderCell>Provider</TableHeaderCell>
-                              <TableHeaderCell>Spend</TableHeaderCell>
-                              <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                              <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                              <TableHeaderCell>Tokens</TableHeaderCell>
-                            </TableRow>
-                          </TableHead>
-                          <TableBody>
-                            {getProviderSpend().map((provider) => (
-                              <TableRow key={provider.provider}>
-                                <TableCell>
-                                  <div className="flex items-center space-x-2">
-                                    {provider.provider && <Logo provider={provider.provider} className="w-4 h-4" />}
-                                    <span>{provider.provider}</span>
-                                  </div>
-                                </TableCell>
-                                <TableCell>
-                                  <MoneyCell value={provider.spend} decimals={2} />
-                                </TableCell>
-                                <TableCell className="text-green-600">
-                                  {provider.successful_requests.toLocaleString()}
-                                </TableCell>
-                                <TableCell className="text-red-600">
-                                  {provider.failed_requests.toLocaleString()}
-                                </TableCell>
-                                <TableCell>{provider.tokens.toLocaleString()}</TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </Col>
-                    </Grid>
-                  </div>
-                </Card>
-              </Col>
-            </Grid>
-          </TabPanel>
-          <TabPanel>
-            <ActivityMetrics modelMetrics={modelMetrics} hidePromptCachingMetrics={entityType === "agent"} />
-          </TabPanel>
-          {entityType === "team" ? (
-            <TabPanel>
-              <ActivityMetrics modelMetrics={agentMetrics} />
-            </TabPanel>
-          ) : (
-            <></>
-          )}
-          <TabPanel>
-            <ActivityMetrics modelMetrics={keyMetrics} hidePromptCachingMetrics={entityType === "agent"} />
-          </TabPanel>
-          <TabPanel>
-            <EndpointUsage userSpendData={spendData} />
-          </TabPanel>
+          {tabs.map(({ key, content }) => (
+            <TabPanel key={key}>{content}</TabPanel>
+          ))}
         </TabPanels>
       </TabGroup>
     </div>

@@ -40,4 +40,12 @@ describe("AreaChart", () => {
       expect(area.getAttribute("fill")).toMatch(/^url\(#fill-/);
     }
   });
+
+  it("marks each reading with a dot only when asked", () => {
+    const withoutDots = render(<AreaChart data={data} index="date" categories={["tokens"]} />);
+    expect(withoutDots.container.querySelectorAll("circle.recharts-dot")).toHaveLength(0);
+
+    const withDots = render(<AreaChart data={data} index="date" categories={["tokens"]} showDots />);
+    expect(withDots.container.querySelectorAll("circle.recharts-dot").length).toBeGreaterThanOrEqual(data.length);
+  });
 });

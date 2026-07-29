@@ -32,10 +32,17 @@ from e2e_config import unique_marker
 from e2e_http import Result, UnknownApiError, unwrap
 from lifecycle import ResourceManager
 
+# No api_key: litellm resolves ANTHROPIC_API_KEY from the proxy's own environment
+# for this provider, which is what the agent-owner flow relies on. Pinning
+# "os.environ/ANTHROPIC_API_KEY" here (#34512) was worse than redundant. The a2a
+# bridge forwards litellm_params to acompletion() without expanding "os.environ/"
+# indirection, so that literal string was sent upstream as x-api-key and every
+# message/send failed with `AnthropicException - invalid x-api-key`. Omitting the
+# key lets the normal provider resolution apply. Verified against a live proxy:
+# omitted -> 200, "os.environ/..." -> 500 invalid x-api-key, literal key -> 200.
 BRIDGE = A2ABridgeParams(
     custom_llm_provider="anthropic",
     model="claude-haiku-4-5",
-    api_key="os.environ/ANTHROPIC_API_KEY",
 )
 
 MOVEHOME_AGENT_CARD_URL = "https://movehome.org/.well-known/agent.json"
@@ -117,6 +124,7 @@ class TestA2AAgentLifecycle:
         agent = unwrap(client.register_agent(body))
         resources.defer(lambda: client.delete_agent(agent.agent_id))
         assert agent.agent_card_params.protocol_version == "0.3"
+        location = "GBLON"
         request = A2AJsonRpcRequest(
             id=f"e2e-{unique_marker()}",
             params=A2AMessageSendParams(
@@ -125,7 +133,7 @@ class TestA2AAgentLifecycle:
                         A2ADataPart(
                             data=A2ASkillInvocation(
                                 skill="search_properties",
-                                params=A2ASearchPropertiesParams(un_locode="USSFO", service_type="sale", asking_price_max=2_000_000, limit=3),
+                                params=A2ASearchPropertiesParams(un_locode=location, service_type="long_term", limit=3),
                             )
                         )
                     ],
@@ -136,7 +144,12 @@ class TestA2AAgentLifecycle:
         response = unwrap(client.send_message(agent.agent_id, scoped_key, request))
         assert response.error is None
         assert response.result is not None
-        assert response.result.text.strip() != ""
+        results = response.result.search_results
+        assert results is not None, "agent returned no search_results artifact; skill did not run"
+        assert results.total > 0
+        assert results.listings, "search_properties matched nothing; agent returned no property cards"
+        assert all(listing.raia_id for listing in results.listings)
+        assert all(listing.location.un_locode == location for listing in results.listings)
 
     @pytest.mark.covers("other.a2a.discovery.proxy_fronted_card")
     def test_discovery_card_is_proxy_fronted(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:

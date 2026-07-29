@@ -1,10 +1,14 @@
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
 
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
-from litellm.types.utils import GuardrailTracingDetail
+from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailTracingDetail
 
 
 class TestCustomGuardrailDeploymentHook:
@@ -652,6 +656,53 @@ class TestGuardrailLoggingAggregation:
         assert isinstance(info, list)
         assert len(info) == 2
         assert info[1]["guardrail_name"] == "test_guardrail"
+
+    def test_caller_metadata_does_not_divert_the_entry_from_the_reader(self):
+        """A caller-supplied `metadata` field must not send the entry to a bucket the
+        spend log never reads. Routes in LITELLM_METADATA_ROUTES (/v1/messages,
+        /v1/responses, batches, files) seed `litellm_metadata`, and Claude Code sends
+        `metadata.user_id`, so both keys are present on the same request."""
+        request_data = {
+            "metadata": {"user_id": "device-account-session"},
+            "litellm_metadata": {"user_api_key_hash": "abc"},
+        }
+
+        self._invoke_add_log(request_data)
+
+        assert (
+            "standard_logging_guardrail_information" not in request_data["metadata"]
+        ), "entry landed in the caller's metadata, where the spend log does not read it"
+        info = request_data["litellm_metadata"][
+            "standard_logging_guardrail_information"
+        ]
+        assert len(info) == 1
+        assert info[0]["guardrail_name"] == "test_guardrail"
+
+    def test_entry_and_applied_guardrails_header_share_one_bucket(self):
+        """The x-litellm-applied-guardrails writer and the guardrail-info writer must
+        resolve the same bucket, otherwise the response header and the spend log
+        disagree about whether the guardrail ran."""
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
+        request_data = {
+            "metadata": {"user_id": "device-account-session"},
+            "litellm_metadata": {},
+        }
+
+        self._invoke_add_log(request_data)
+        add_guardrail_to_applied_guardrails_header(
+            request_data=request_data, guardrail_name="test_guardrail"
+        )
+
+        buckets = {
+            key
+            for key in ("metadata", "litellm_metadata")
+            for field in ("standard_logging_guardrail_information", "applied_guardrails")
+            if field in request_data[key]
+        }
+        assert buckets == {"litellm_metadata"}
 
 
 class TestGuardrailOtelSpanEmission:
@@ -1394,6 +1445,38 @@ class TestEventTypeLogging:
         assert len(logged_info) == 1
         assert logged_info[0]["guardrail_status"] == "guardrail_intervened"
 
+    @pytest.mark.asyncio
+    async def test_log_guardrail_information_records_every_concurrent_guardrail(self):
+        """Guardrails run concurrently (parallel pre_call/post_call, during_call) share one
+        request_data dict. Each must still record its own entry. The previous guard counted
+        entries in that shared dict, so a sibling's append made a guardrail think it had already
+        recorded and skip its own auto-record — silently dropping lifecycle logs the UI shows."""
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class SleeperGuardrail(CustomGuardrail):
+            def __init__(self, name, sleep):
+                super().__init__(guardrail_name=name, event_hook=GuardrailEventHooks.pre_call)
+                self._sleep = sleep
+
+            @log_guardrail_information
+            async def async_pre_call_hook(self, data: dict, **kwargs):
+                await asyncio.sleep(self._sleep)
+                return data
+
+        request_data = {"metadata": {}}
+        # Different sleeps guarantee overlapping execution windows: the faster guardrail
+        # records while the slower one is still awaiting, which is exactly what tripped the
+        # old shared-count guard.
+        await asyncio.gather(
+            SleeperGuardrail("guardrail-a", 0.05).async_pre_call_hook(data=request_data),
+            SleeperGuardrail("guardrail-b", 0.15).async_pre_call_hook(data=request_data),
+        )
+
+        logged = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert {entry["guardrail_name"] for entry in logged} == {"guardrail-a", "guardrail-b"}
+        assert len(logged) == 2
+
     def test_add_standard_logging_falls_back_to_event_hook_when_event_type_is_none(
         self,
     ):
@@ -1584,6 +1667,47 @@ class TestGuardrailInterventionClassification:
             guardrail_name="pii-rail",
         )
         assert CustomGuardrail._is_guardrail_intervention(exc) is True
+
+    @pytest.mark.parametrize("status_code", [400, 403, 422])
+    def test_block_signalling_http_exception_is_intervention(self, status_code):
+        from fastapi.exceptions import HTTPException
+
+        exc = HTTPException(status_code=status_code, detail="blocked by guardrail")
+        assert CustomGuardrail._is_guardrail_intervention(exc) is True
+
+    @pytest.mark.parametrize("status_code", [300, 401, 408, 429, 451, 499, 500, 502, 503])
+    def test_non_block_http_exception_is_not_intervention(self, status_code):
+        from fastapi.exceptions import HTTPException
+
+        exc = HTTPException(status_code=status_code, detail="guardrail api error")
+        assert CustomGuardrail._is_guardrail_intervention(exc) is False
+
+    @pytest.mark.asyncio
+    async def test_non_400_4xx_logged_as_intervened_not_failed(self):
+        from fastapi.exceptions import HTTPException
+
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class BlockingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="block-rail",
+                    event_hook=GuardrailEventHooks.pre_call,
+                )
+
+            @log_guardrail_information
+            async def async_pre_call_hook(self, data, **kwargs):
+                raise HTTPException(status_code=403, detail="blocked by guardrail")
+
+        guardrail = BlockingGuardrail()
+        request_data: dict = {"metadata": {}}
+
+        with pytest.raises(HTTPException):
+            await guardrail.async_pre_call_hook(data=request_data)
+
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_status"] == "guardrail_intervened"
 
     @pytest.mark.asyncio
     async def test_routing_logged_as_intervened_not_failed(self):
@@ -1914,3 +2038,55 @@ class TestOnlyScanNewMessages:
         cache.async_set_cache = AsyncMock(side_effect=RuntimeError("redis down"))
 
         await guardrail.mark_texts_scanned(texts=["a"], request_data={"litellm_session_id": "s1"}, cache=cache)
+
+
+def _guardrail_entries(request_data: dict) -> list:
+    container = request_data.get("metadata") or request_data.get("litellm_metadata") or {}
+    entries = container.get("standard_logging_guardrail_information")
+    return entries if isinstance(entries, list) else []
+
+
+class _NoopGuardrail(CustomGuardrail):
+    """apply_guardrail that returns the inputs untouched and records nothing."""
+
+    @log_guardrail_information
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        return inputs
+
+
+class _NoopSelfLoggingGuardrail(_NoopGuardrail):
+    records_own_guardrail_information = True
+
+
+class TestRecordsOwnGuardrailInformation:
+    """The @log_guardrail_information decorator must not synthesize an "allow"/"success"
+    entry for a no-op apply_guardrail when the guardrail sets
+    records_own_guardrail_information (LIT-4650)."""
+
+    @pytest.mark.asyncio
+    async def test_default_noop_apply_guardrail_is_auto_logged(self):
+        guardrail = _NoopGuardrail(guardrail_name="g1")
+        request_data: dict = {"model": "gpt-4o"}
+
+        await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["x"]),
+            request_data=request_data,
+            input_type="request",
+        )
+
+        entries = _guardrail_entries(request_data)
+        assert len(entries) == 1
+        assert entries[0]["guardrail_status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_self_logging_noop_apply_guardrail_is_not_logged(self):
+        guardrail = _NoopSelfLoggingGuardrail(guardrail_name="g2")
+        request_data: dict = {"model": "gpt-4o"}
+
+        await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["x"]),
+            request_data=request_data,
+            input_type="request",
+        )
+
+        assert _guardrail_entries(request_data) == []

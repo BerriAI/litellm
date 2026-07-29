@@ -636,14 +636,33 @@ class TestDeleteModelClearsRouterRegistry:
     not just from model_list, or a stale (now unbacked) router entry lingers until restart.
     """
 
+    @staticmethod
+    def _complexity_router_deployment(model_id: str, tags: list | None = None) -> dict:
+        return {
+            "model_name": "smart-router",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"}},
+                "complexity_router_default_model": "gpt-4o",
+                **({"tags": tags} if tags else {}),
+            },
+            "model_info": {"id": model_id, "db_model": True},
+        }
+
     @pytest.mark.asyncio
-    async def test_delete_model_pops_router_registries(self):
+    async def test_delete_model_releases_only_the_deleted_routers_slot(self):
+        """Deleting one tagged router must release its own slot and leave a sibling
+        sharing the model_name registered. A blanket pop(model_name) here would take
+        both down, and nothing reloads on the delete path to restore the survivor.
+        """
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
-        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete
 
         model_id = "router-del-1"
+        surviving_id = "router-del-2"
         admin_user = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
         db_row = LiteLLM_ProxyModelTable(
             model_id=model_id,
@@ -660,16 +679,16 @@ class TestDeleteModelClearsRouterRegistry:
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=db_row)
         mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
 
-        mock_router = MagicMock()
-        mock_router.delete_deployment = MagicMock(
-            return_value={
-                "model_name": "smart-router",
-                "litellm_params": {"model": "auto_router/complexity_router"},
-                "model_info": {"id": model_id},
-            }
+        real_router = litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}},
+                self._complexity_router_deployment(model_id, tags=["team-a"]),
+                self._complexity_router_deployment(surviving_id, tags=["team-b"]),
+            ],
+            ignore_invalid_deployments=True,
         )
-        mock_router.auto_routers = {"smart-router": MagicMock()}
-        mock_router.complexity_routers = {"smart-router": MagicMock()}
+        assert len(real_router.complexity_routers["smart-router"]) == 2
 
         _PS = "litellm.proxy.proxy_server"
         with (
@@ -679,16 +698,17 @@ class TestDeleteModelClearsRouterRegistry:
             patch(f"{_PS}.proxy_logging_obj", MagicMock()),
             patch(f"{_PS}.general_settings", {}),
             patch(f"{_PS}.premium_user", True),
-            patch(f"{_PS}.llm_router", mock_router),
+            patch(f"{_PS}.llm_router", real_router),
         ):
             await delete_model_endpoint(
                 model_info=ModelInfoDelete(id=model_id),
                 user_api_key_dict=admin_user,
             )
 
-        mock_router.delete_deployment.assert_called_once_with(id=model_id)
-        assert "smart-router" not in mock_router.auto_routers
-        assert "smart-router" not in mock_router.complexity_routers
+        assert model_id not in [m["model_info"]["id"] for m in real_router.model_list]
+        surviving = real_router.complexity_routers["smart-router"]
+        assert len(surviving) == 1
+        assert surviving[0].tags == ("team-b",)
 
     @pytest.mark.asyncio
     async def test_delete_regular_model_preserves_config_router_sharing_name(self):

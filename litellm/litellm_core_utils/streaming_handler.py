@@ -2008,12 +2008,9 @@ class CustomStreamWrapper:
             if self.logging_obj is not None:
                 self._record_partial_usage_for_failure()
                 ## LOGGING
-                threading.Thread(
-                    target=self.logging_obj.failure_handler,
-                    args=(e, traceback_exception),
-                ).start()  # log response
-                # Handle any exceptions that might occur during streaming
-                asyncio.create_task(self.logging_obj.async_failure_handler(e, traceback_exception))
+                asyncio.create_task(
+                    self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
+                )
             self._handle_stream_fallback_error(e)
         except (httpx.ReadError, httpx.RemoteProtocolError) as e:
             if self.received_finish_reason is None:
@@ -2122,13 +2119,8 @@ class CustomStreamWrapper:
         if self.logging_obj is not None:
             self._record_partial_usage_for_failure()
             ## LOGGING
-            threading.Thread(
-                target=self.logging_obj.failure_handler,
-                args=(e, traceback_exception),
-            ).start()  # log response
-            # Handle any exceptions that might occur during streaming
             asyncio.create_task(
-                self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
+                self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
             )
         self._handle_stream_fallback_error(e)
 
