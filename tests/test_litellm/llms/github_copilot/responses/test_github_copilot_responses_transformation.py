@@ -181,6 +181,18 @@ class TestGithubCopilotResponsesAPITransformation:
         initiator = config._get_initiator("Hello, how are you?")
         assert initiator == "user", "Should return 'user' for string input"
 
+    def test_get_initiator_ignores_non_dict_items(self):
+        """Test _get_initiator skips non-dict items and returns 'user' for user-only input"""
+        config = GithubCopilotResponsesAPIConfig()
+
+        input_with_non_dict = [
+            {"role": "user", "content": "Hello"},
+            "raw string item",  # non-dict item should be skipped, not crash
+        ]
+
+        initiator = config._get_initiator(input_with_non_dict)
+        assert initiator == "user", "Should skip non-dict items and return 'user'"
+
     @pytest.mark.parametrize(
         "prior_item",
         [
