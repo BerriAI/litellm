@@ -4,12 +4,23 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
-from e2e_http import AuthHeaders, NoBody, StreamingResponse, URL, get, send, unwrap
+from e2e_http import (
+    AuthHeaders,
+    NoBody,
+    StreamingResponse,
+    URL,
+    get,
+    send,
+    unwrap,
+    unwrap_status,
+    upload,
+)
 from ocr_capture_proxy import CaptureProxy, capture_proxy
 
 __all__ = ["capture_proxy"]
@@ -167,6 +178,12 @@ class ModelDeleteRequest(BaseModel):
     id: str
 
 
+class OcrUploadForm(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+
+
 TEST_PDF_URL = (
     "https://cdn.jsdelivr.net/gh/BerriAI/litellm"
     "@d769e81c90d453240c61fc572cdb27fae06a89d0"
@@ -176,6 +193,15 @@ TEST_IMAGE_URL = (
     "https://cdn.jsdelivr.net/gh/BerriAI/litellm"
     "@d769e81c90d453240c61fc572cdb27fae06a89d0"
     "/tests/image_gen_tests/test_image.png"
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+FIXTURE_PDF = REPO_ROOT / "tests" / "llm_translation" / "fixtures" / "dummy.pdf"
+FIXTURE_IMAGE = REPO_ROOT / "tests" / "image_gen_tests" / "test_image.png"
+
+RUST_OCR_UPLOAD_CASES = (
+    pytest.param(FIXTURE_PDF, id="pdf_octet_stream"),
+    pytest.param(FIXTURE_IMAGE, id="image_octet_stream"),
 )
 
 CAPTURE_DOCUMENT = OcrDocument(type="document_url", document_url=TEST_PDF_URL)
@@ -332,6 +358,21 @@ class OcrGateway:
             timeout=float(os.getenv("E2E_REQUEST_TIMEOUT", "120")),
         )
 
+    def ocr_upload(self, model: str, content: bytes, upload_name: str) -> OcrResponseEnvelope:
+        return unwrap_status(
+            upload(
+                URL(f"{self.base_url.rstrip('/')}/v1/ocr"),
+                headers=self._headers(),
+                form=OcrUploadForm(model=model),
+                filename=upload_name,
+                content=content,
+                file_content_type="application/octet-stream",
+                response_type=OcrResponseEnvelope,
+                timeout=float(os.getenv("E2E_REQUEST_TIMEOUT", "120")),
+            ),
+            200,
+        )
+
     def create_model(self, model_name: str, litellm_params: dict[str, str]) -> StreamingResponse:
         return send(
             URL(f"{self.base_url.rstrip('/')}/model/new"),
@@ -399,6 +440,23 @@ class TestRustOcrGateway:
 
         assert response.status_code == 200, response.body
         OcrResponseEnvelope.model_validate_json(response.body)
+
+    @pytest.mark.parametrize("fixture_path", RUST_OCR_UPLOAD_CASES)
+    def test_rust_ocr_octet_stream_upload_response(
+        self,
+        resources: OcrResources,
+        fixture_path: Path,
+    ) -> None:
+        assert fixture_path.is_file()
+
+        response = resources.gateway.ocr_upload(
+            "rust-ocr-mistral",
+            fixture_path.read_bytes(),
+            "document",
+        )
+
+        assert response.object == "ocr"
+        assert response.pages
 
     @pytest.mark.e2e
     def test_rust_ocr_mistral_live_forwards_supported_params(self, resources: OcrResources) -> None:
