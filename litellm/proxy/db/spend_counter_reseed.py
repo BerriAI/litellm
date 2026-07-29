@@ -197,7 +197,15 @@ class SpendCounterReseed:
                         value=current_value,
                     )
                 else:
-                    await spend_counter_cache.async_increment_cache(key=counter_key, value=db_spend, refresh_ttl=True)
+                    cached = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+                    if cached is not None:
+                        current_value = float(cached)
+                    else:
+                        current_value = await spend_counter_cache.async_increment_cache(
+                            key=counter_key,
+                            value=db_spend,
+                            refresh_ttl=True,
+                        )
             except Exception:
                 verbose_proxy_logger.exception(
                     "SpendCounterReseed.coalesced: failed to warm counter %s",

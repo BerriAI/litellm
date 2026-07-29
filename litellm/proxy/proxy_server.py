@@ -2132,24 +2132,26 @@ async def _repair_stale_spend_counter(counter_key: str, db_spend: float) -> None
     in-memory copy is guarded by a read-compare-write with no await in between,
     so it is atomic within the worker.
     """
-    cached = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
-    needs_update = True
-    if cached is not None:
-        try:
-            needs_update = float(cached) < db_spend
-        except (TypeError, ValueError):
-            needs_update = True
-    if needs_update:
-        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=db_spend)
-    if spend_counter_cache.redis_cache is not None:
-        try:
-            await spend_counter_cache.redis_cache.async_set_max(key=counter_key, value=db_spend)
-        except Exception:
-            verbose_proxy_logger.debug(
-                "Unable to repair stale spend counter %s in Redis",
-                counter_key,
-                exc_info=True,
-            )
+    lock = await SpendCounterReseed._get_lock(counter_key)
+    async with lock:
+        cached = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+        needs_update = True
+        if cached is not None:
+            try:
+                needs_update = float(cached) < db_spend
+            except (TypeError, ValueError):
+                needs_update = True
+        if needs_update:
+            spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=db_spend)
+        if spend_counter_cache.redis_cache is not None:
+            try:
+                await spend_counter_cache.redis_cache.async_set_max(key=counter_key, value=db_spend)
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "Unable to repair stale spend counter %s in Redis",
+                    counter_key,
+                    exc_info=True,
+                )
 
 
 async def reseed_spend_counter_from_db(counter_key: str) -> None:
@@ -2522,11 +2524,8 @@ async def _init_and_increment_spend_counter(
     2. If not found, reseed from the DB via `SpendCounterReseed.coalesced`.
        Falls back to the cached object's `.spend` via user_api_key_cache
        only if prisma is unavailable, since that value can lag the flusher.
-    3. Seed counter via async_increment_cache (not async_set_cache) to avoid a
-       check-then-set race: if two pods cold-start simultaneously, both may see
-       the counter as absent and seed it. Using increment means the worst case
-       is over-counting (conservative, blocks slightly early) rather than
-       under-counting (would allow overspend).
+    3. Seed the counter through `SpendCounterReseed.coalesced`, which safely
+       initializes a cold counter without clobbering concurrent writes.
     4. Increment atomically (both in-memory + Redis)
     """
     await _ensure_spend_counter_initialized(
@@ -2662,11 +2661,13 @@ async def _increment_spend_counter_cache(counter_key: str, increment: float):
         )
         return current_value
 
-    return await spend_counter_cache.async_increment_cache(
-        key=counter_key,
-        value=increment,
-        refresh_ttl=True,
-    )
+    lock = await SpendCounterReseed._get_lock(counter_key)
+    async with lock:
+        return await spend_counter_cache.async_increment_cache(
+            key=counter_key,
+            value=increment,
+            refresh_ttl=True,
+        )
 
 
 async def _invalidate_spend_counter(counter_key: str):
