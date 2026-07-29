@@ -73,13 +73,20 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 precise_minute = f"{current_date}-{current_hour}-{current_minute}"
 
                 response_ms = end_time - start_time
+                if isinstance(response_ms, timedelta):
+                    # normalize to float seconds up-front: non-chat responses
+                    # (embeddings, speech, image) skip the ModelResponse branch
+                    # below, and a raw timedelta appended to the latency list
+                    # breaks JSON serialization when the router cache syncs to
+                    # Redis (issue #33169)
+                    response_ms = response_ms.total_seconds()
                 time_to_first_token_response_time = None
 
                 if kwargs.get("stream", None) is not None and kwargs["stream"] is True:
                     # only log ttft for streaming request
                     time_to_first_token_response_time = kwargs.get("completion_start_time", end_time) - start_time
 
-                final_value: Union[float, timedelta] = response_ms
+                final_value: float = response_ms
                 time_to_first_token: Optional[float] = None
                 total_tokens = 0
 
@@ -89,15 +96,12 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
 
-                        # Handle both timedelta and float response times
-                        if isinstance(response_ms, timedelta):
-                            response_seconds = response_ms.total_seconds()
-                        else:
-                            response_seconds = response_ms
+                        # response_ms is already normalized to float seconds above
+                        response_seconds = response_ms
 
-                        final_value = safe_divide_seconds(response_seconds, completion_tokens)
-                        if final_value is not None:
-                            final_value = float(final_value)
+                        normalized_value = safe_divide_seconds(response_seconds, completion_tokens)
+                        if normalized_value is not None:
+                            final_value = float(normalized_value)
                         else:
                             final_value = response_seconds
 
@@ -262,12 +266,19 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 precise_minute = f"{current_date}-{current_hour}-{current_minute}"
 
                 response_ms = end_time - start_time
+                if isinstance(response_ms, timedelta):
+                    # normalize to float seconds up-front: non-chat responses
+                    # (embeddings, speech, image) skip the ModelResponse branch
+                    # below, and a raw timedelta appended to the latency list
+                    # breaks JSON serialization when the router cache syncs to
+                    # Redis (issue #33169)
+                    response_ms = response_ms.total_seconds()
                 time_to_first_token_response_time = None
                 if kwargs.get("stream", None) is not None and kwargs["stream"] is True:
                     # only log ttft for streaming request
                     time_to_first_token_response_time = kwargs.get("completion_start_time", end_time) - start_time
 
-                final_value: Union[float, timedelta] = response_ms
+                final_value: float = response_ms
                 total_tokens = 0
                 time_to_first_token: Optional[float] = None
 
@@ -277,17 +288,14 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
 
-                        # Handle both timedelta and float response times
-                        if isinstance(response_ms, timedelta):
-                            response_seconds = response_ms.total_seconds()
-                        else:
-                            response_seconds = response_ms
+                        # response_ms is already normalized to float seconds above
+                        response_seconds = response_ms
 
-                        final_value = safe_divide_seconds(response_seconds, completion_tokens)
-                        if final_value is not None:
-                            final_value = float(final_value)
+                        normalized_value = safe_divide_seconds(response_seconds, completion_tokens)
+                        if normalized_value is not None:
+                            final_value = float(normalized_value)
                         else:
-                            final_value = response_ms
+                            final_value = response_seconds
 
                         if time_to_first_token_response_time is not None:
                             if isinstance(time_to_first_token_response_time, timedelta):
