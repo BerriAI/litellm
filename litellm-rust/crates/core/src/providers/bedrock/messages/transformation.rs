@@ -23,7 +23,7 @@ impl AnthropicMessagesProviderConfig for BedrockMessagesConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> CoreResult<String> {
         let _ = (api_base, model, env_lookup);
-        todo!("extend the shared URL contract for streaming, then implement Bedrock URLs")
+        todo!("Bedrock InvokeModel URLs carry the model id and the streaming mode in the path")
     }
 
     fn signing_region(
@@ -32,7 +32,7 @@ impl AnthropicMessagesProviderConfig for BedrockMessagesConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Option<String> {
         let _ = (api_base, env_lookup);
-        todo!("implement Bedrock region precedence and endpoint parsing")
+        todo!("resolve the AWS region the request is signed and routed for")
     }
 
     fn resolve_api_key(
@@ -44,7 +44,9 @@ impl AnthropicMessagesProviderConfig for BedrockMessagesConfig {
     }
 
     fn auth_strategy(&self) -> MessagesAuthStrategy {
-        todo!("extend MessagesAuthStrategy for Bedrock bearer and SigV4 authentication")
+        todo!(
+            "Bedrock authenticates with a bearer token or a signed request, not a static api key header"
+        )
     }
 
     fn transform_request(
