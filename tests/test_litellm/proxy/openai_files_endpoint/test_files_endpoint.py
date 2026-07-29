@@ -2742,3 +2742,39 @@ async def test_route_create_file_provider_only_falls_back_to_files_settings(
 
     assert kwargs["custom_llm_provider"] == "openai"
     assert kwargs["api_key"] == "sk-files-settings"
+
+
+def test_provider_scoped_credentials_never_use_other_teams_deployment():
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        resolve_provider_scoped_credentials,
+    )
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini-batch",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.0-flash",
+                    "vertex_project": "other-team-project",
+                },
+                "model_info": {"id": "other-team-dep", "team_id": "team-other"},
+            },
+            {
+                "model_name": "gemini-batch",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.0-flash",
+                    "vertex_project": "shared-project",
+                },
+                "model_info": {"id": "shared-dep"},
+            },
+        ]
+    )
+
+    credentials = resolve_provider_scoped_credentials(
+        llm_router=router,
+        custom_llm_provider="vertex_ai",
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", team_id="team-caller", team_models=[]),
+    )
+
+    assert credentials is not None
+    assert credentials["vertex_project"] == "shared-project"

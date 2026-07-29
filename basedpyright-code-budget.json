@@ -108,7 +108,7 @@
     "limit": 40525
   },
   "reportUnknownParameterType": {
-    "limit": 20384
+    "limit": 20383
   },
   "reportUnknownVariableType": {
     "limit": 32099

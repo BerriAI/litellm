@@ -60,19 +60,23 @@ from fastapi import Response
 # produces wrong creds (or KeyError) and is impossible to hide.
 # --------------------------------------------------------------------------- #
 
+AZURE_CREDS: Dict[str, str] = {
+    "custom_llm_provider": "azure",
+    "api_key": "sk-azure",
+    "api_base": "https://azure.test",
+    "model": "azure/gpt-4o-deployment",
+}
+VERTEX_CREDS: Dict[str, str] = {
+    "custom_llm_provider": "vertex_ai",
+    "api_key": "sk-vertex",
+    "api_base": "https://vertex.test",
+    "model": "vertex_ai/gemini-2.0",
+}
 CREDS: Dict[str, Dict[str, str]] = {
-    "azure/gpt-4o": {
-        "custom_llm_provider": "azure",
-        "api_key": "sk-azure",
-        "api_base": "https://azure.test",
-        "model": "azure/gpt-4o-deployment",
-    },
-    "vertex-model": {
-        "custom_llm_provider": "vertex_ai",
-        "api_key": "sk-vertex",
-        "api_base": "https://vertex.test",
-        "model": "vertex_ai/gemini-2.0",
-    },
+    "azure/gpt-4o": AZURE_CREDS,
+    "azure-dep-id": AZURE_CREDS,
+    "vertex-model": VERTEX_CREDS,
+    "vertex-dep-id": VERTEX_CREDS,
 }
 
 # A real model-encoded file id: decodes to "azure/gpt-4o", strips to "file-original123".
@@ -152,9 +156,22 @@ def _creds_lookup(*, model_id: str) -> Dict[str, str]:
 
 
 def _configure_provider_scoped_lookup(router: MagicMock) -> None:
-    router.model_list = []
-    router.get_model_names = MagicMock(return_value=list(CREDS.keys()))
+    router.model_list = [
+        {
+            "model_name": "azure/gpt-4o",
+            "litellm_params": {"model": "azure/gpt-4o-deployment"},
+            "model_info": {"id": "azure-dep-id"},
+        },
+        {
+            "model_name": "vertex-model",
+            "litellm_params": {"model": "vertex_ai/gemini-2.0"},
+            "model_info": {"id": "vertex-dep-id"},
+        },
+    ]
+    router.get_model_names = MagicMock(return_value=["azure/gpt-4o", "vertex-model"])
     router.get_model_access_groups = MagicMock(return_value={})
+    router.pattern_router = MagicMock()
+    router.pattern_router.route = MagicMock(return_value=None)
 
 
 @pytest.fixture
@@ -502,6 +519,10 @@ async def test_create__provider_only_merges_matching_deployment_credentials(harn
         "api_base": "https://vertex.test",
         "model": "vertex_ai/gemini-2.0",
     }
+    assert [call.kwargs["model_id"] for call in harness.creds_resolver.call_args_list] == [
+        "azure-dep-id",
+        "vertex-dep-id",
+    ]
 
 
 @pytest.mark.asyncio
@@ -540,6 +561,44 @@ async def test_create__provider_only_prefers_team_own_deployment(harness):
     payload = harness.acreate_kwargs()
     assert payload["api_key"] == "sk-team-vertex"
     assert payload["api_base"] == "https://team.vertex.test"
+
+
+@pytest.mark.asyncio
+async def test_create__provider_only_skips_other_teams_deployment(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    harness.provider_from_headers.return_value = "vertex_ai"
+    harness.router.model_list = [
+        {
+            "model_name": "vertex-model",
+            "litellm_params": {"model": "vertex_ai/gemini-2.0"},
+            "model_info": {"id": "foreign-dep-id", "team_id": "team-other"},
+        },
+        {
+            "model_name": "vertex-model",
+            "litellm_params": {"model": "vertex_ai/gemini-2.0"},
+            "model_info": {"id": "vertex-dep-id"},
+        },
+    ]
+    foreign_creds = {"custom_llm_provider": "vertex_ai", "api_key": "sk-foreign-team"}
+    harness.creds_resolver.side_effect = lambda *, model_id: (
+        dict(foreign_creds) if model_id in ("foreign-dep-id", "vertex-model") else dict(CREDS[model_id])
+    )
+
+    await call_create(
+        harness,
+        user=UserAPIKeyAuth(api_key="sk-test", team_id="team-b", team_models=[]),
+    )
+
+    payload = harness.acreate_kwargs()
+    assert payload["api_key"] == "sk-vertex"
+    assert all(call.kwargs["model_id"] != "foreign-dep-id" for call in harness.creds_resolver.call_args_list)
 
 
 # =========================================================================== #
