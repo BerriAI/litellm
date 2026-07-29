@@ -6,14 +6,18 @@ Self-service password reset endpoints for internal (non-SSO) users.
 /user/reset_password
 """
 
+import asyncio
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Optional, cast
 
 from fastapi import APIRouter, HTTPException, Request
 
-import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy.auth.network import TrustedProxyConfig, resolve_client_ip
+from litellm.proxy.auth.trusted_proxy_utils import get_trusted_proxy_cidrs
 from litellm.proxy.utils import get_proxy_base_url, hash_password, hash_token, send_email
 from litellm.repositories.password_reset_token_repository import (
     PasswordResetTokenRepository,
@@ -41,7 +45,11 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request):
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
 
-    client_ip = request.client.host if request.client else "unknown"
+    cidrs = get_trusted_proxy_cidrs()
+    resolved_ip, _ = resolve_client_ip(
+        request, TrustedProxyConfig(use_forwarded_for=bool(cidrs), trusted_proxy_cidrs=cidrs)
+    )
+    client_ip = resolved_ip or "unknown"
     email_count = await user_api_key_cache.async_increment_cache(
         key=f"password_reset_rl:email:{data.email.lower()}", value=1, ttl=_RATE_LIMIT_WINDOW_SECONDS
     )
@@ -55,11 +63,14 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request):
         verbose_proxy_logger.warning("Password reset rate limit exceeded for ip=%s", client_ip)
         raise HTTPException(status_code=429, detail={"error": "Too many requests. Please try again later."})
 
-    user_obj = await UserRepository(prisma_client).table.find_first(
-        where={"user_email": {"equals": data.email, "mode": "insensitive"}}
+    user_obj = cast(
+        Optional[LiteLLM_UserTable],
+        await UserRepository(prisma_client).table.find_first(
+            where={"user_email": {"equals": data.email, "mode": "insensitive"}}
+        ),
     )
 
-    if user_obj is None or getattr(user_obj, "password", None) is None:
+    if user_obj is None or user_obj.password is None:
         verbose_proxy_logger.warning("Password reset requested for an unknown or SSO-only email")
         return {"message": _GENERIC_FORGOT_PASSWORD_MESSAGE}
 
@@ -71,7 +82,7 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request):
         )
         return {"message": _GENERIC_FORGOT_PASSWORD_MESSAGE}
 
-    now = litellm.utils.get_utc_datetime()
+    now = datetime.now(timezone.utc)
     token_repo = PasswordResetTokenRepository(prisma_client)
     await token_repo.invalidate_unused_for_user(user_id=user_obj.user_id, now=now)
 
@@ -88,8 +99,8 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request):
     reset_base_url = configured_base_url.rstrip("/") + "/ui/reset-password"
     reset_link = f"{reset_base_url}?token={raw_token}"
 
-    try:
-        await send_email(
+    asyncio.create_task(
+        send_email(
             receiver_email=data.email,
             subject="Reset your LiteLLM password",
             html=(
@@ -97,8 +108,7 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request):
                 f"{_RESET_TOKEN_TTL_MINUTES} minutes.</p><p><a href='{reset_link}'>{reset_link}</a></p>"
             ),
         )
-    except ValueError as e:
-        verbose_proxy_logger.warning("Password reset email not sent, SMTP misconfigured: %s", e)
+    )
 
     return {"message": _GENERIC_FORGOT_PASSWORD_MESSAGE}
 
@@ -111,7 +121,7 @@ async def validate_reset_password_token(token: str):
         raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
 
     token_repo = PasswordResetTokenRepository(prisma_client)
-    now = litellm.utils.get_utc_datetime()
+    now = datetime.now(timezone.utc)
     token_row = await token_repo.find_valid_by_hash(token_hash=hash_token(token), now=now)
 
     if token_row is None:
@@ -132,7 +142,7 @@ async def reset_password(data: ResetPasswordRequest):
         raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
 
     token_hash = hash_token(data.token)
-    now = litellm.utils.get_utc_datetime()
+    now = datetime.now(timezone.utc)
 
     token_row = await PasswordResetTokenRepository(prisma_client).find_valid_by_hash(token_hash=token_hash, now=now)
     if token_row is None:
