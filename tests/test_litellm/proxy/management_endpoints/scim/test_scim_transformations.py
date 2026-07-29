@@ -332,6 +332,21 @@ class TestScimTransformations:
             assert scim_group.members[1].value == "test2@example.com"
             assert scim_group.members[1].display == "test2@example.com"
 
+    @pytest.mark.asyncio
+    async def test_transform_team_marks_members_as_users(
+        self, mock_team, mock_prisma_client
+    ):
+        """A LiteLLM team only holds users, and stating the member type keeps the
+        response from emitting a null ``type`` now that SCIMMember carries one."""
+        mock_client, _ = mock_prisma_client
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_client):
+            scim_group = await ScimTransformations.transform_litellm_team_to_scim_group(
+                mock_team
+            )
+
+        assert [member.type for member in scim_group.members] == ["User", "User"]
+
     def test_get_scim_user_name(self, mock_user, mock_user_minimal):
         # User with email
         result = ScimTransformations._get_scim_user_name(mock_user)
