@@ -257,3 +257,79 @@ def test_translate_responses_chunk_passthrough_chat_completion_chunk():
 
     assert result.choices[0].delta.content == "Hi! How can I help?"
     assert result.choices[0].finish_reason is None
+
+
+def test_tool_message_plain_string_passed_through_as_string():
+    """
+    Plain-string tool output must reach function_call_output.output as a string.
+
+    The Responses API spec documents function_call_output.output as a plain string.
+    Strict/enterprise backends reject the list-of-input_text form for simple text.
+    Regression guard for the fix to #34978.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    t = LiteLLMResponsesTransformationHandler()
+    messages = [
+        {"role": "user", "content": "What is the capital of France?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "Paris"},
+    ]
+
+    items, _ = t.convert_chat_completion_messages_to_responses_api(messages)
+    tool_item = next(i for i in items if i.get("type") == "function_call_output")
+
+    assert isinstance(tool_item["output"], str), (
+        "Plain-string tool content must pass through as a string, not be wrapped in a list"
+    )
+    assert tool_item["output"] == "Paris"
+
+
+def test_tool_message_multimodal_list_still_converted():
+    """
+    Multimodal (list) tool output must still be converted to Responses API content items.
+    This ensures the #17507 fix is preserved for the multimodal case.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    t = LiteLLMResponsesTransformationHandler()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_2",
+            "content": [{"type": "text", "text": "result text"}],
+        },
+    ]
+
+    items, _ = t.convert_chat_completion_messages_to_responses_api(messages)
+    tool_item = next(i for i in items if i.get("type") == "function_call_output")
+
+    assert isinstance(tool_item["output"], list), (
+        "Multimodal list tool content must be converted to a list of Responses API items"
+    )
