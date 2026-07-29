@@ -535,3 +535,95 @@ def test_assert_same_origin_error_message_does_not_leak_hostnames():
     detail = str(exc.value)
     assert "attacker.example.com" not in detail
     assert "api.internal-corp.example" not in detail
+
+
+class TestAsyncSafeRequest:
+    """async_safe_request is the method-generic sibling of async_safe_get and
+    must apply the same SSRF protections for POST/PUT/DELETE/PATCH."""
+
+    @pytest.mark.asyncio
+    async def test_blocks_private_ip_for_post(self, monkeypatch):
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+
+        class FakeClient:
+            async def request(self, *a, **kw):
+                raise AssertionError("request must not be issued for a blocked IP")
+
+        with pytest.raises(SSRFError):
+            await url_utils.async_safe_request(
+                FakeClient(), "POST", "http://example.com/x", json={"a": 1}
+            )
+
+    @pytest.mark.asyncio
+    async def test_blocks_metadata_ip_for_post(self, monkeypatch):
+        def fake(host, port, *a, **kw):
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", port))
+            ]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+
+        class FakeClient:
+            async def request(self, *a, **kw):
+                raise AssertionError("request must not reach cloud metadata")
+
+        with pytest.raises(SSRFError):
+            await url_utils.async_safe_request(
+                FakeClient(), "GET", "http://metadata.internal/latest"
+            )
+
+    @pytest.mark.asyncio
+    async def test_validates_each_redirect_hop(self, monkeypatch):
+        """A public host that redirects to a private target must be blocked at the
+        redirect hop before a second request is issued."""
+
+        def fake(host, port, *a, **kw):
+            ip = "93.184.216.34" if host == "public.example" else "127.0.0.1"
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+
+        class FakeResponse:
+            def __init__(self, status, location=None):
+                self.status_code = status
+                self.headers = {"location": location} if location else {}
+                self.is_redirect = 300 <= status < 400
+
+        hops = []
+
+        class FakeClient:
+            async def request(self, method, url, headers=None, **kw):
+                hops.append({"method": method, "host": (headers or {}).get("Host")})
+                return FakeResponse(302, "http://private.example/internal")
+
+        with pytest.raises(SSRFError):
+            await url_utils.async_safe_request(
+                FakeClient(), "DELETE", "http://public.example/start"
+            )
+        assert len(hops) == 1
+        assert hops[0]["method"] == "DELETE"
+        assert hops[0]["host"] == "public.example"
+
+    @pytest.mark.asyncio
+    async def test_master_switch_disabled_bypasses_validation(self, monkeypatch):
+        monkeypatch.setattr(litellm, "user_url_validation", False)
+        calls = []
+
+        class FakeClient:
+            async def request(self, method, url, **kwargs):
+                calls.append((method, url, kwargs))
+
+                class R:
+                    is_redirect = False
+
+                return R()
+
+        await url_utils.async_safe_request(
+            FakeClient(), "POST", "http://127.0.0.1/internal", json={"a": 1}
+        )
+        assert calls and calls[0][0] == "POST"
+        assert calls[0][1] == "http://127.0.0.1/internal"
+        assert calls[0][2].get("follow_redirects") is True
