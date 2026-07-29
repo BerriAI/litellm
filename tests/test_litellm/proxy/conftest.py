@@ -22,7 +22,12 @@ _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
 
 
 class StubClientNotConnectedError(ClientNotConnectedError):
-    pass
+    def __init__(
+        self,
+        message: str = "Client is not connected to the query engine, you must call `connect()` before attempting to query data.",
+    ) -> None:
+        self.message = message
+        Exception.__init__(self, message)
 
 
 class DisconnectedPrisma:
@@ -34,9 +39,6 @@ class DisconnectedPrisma:
 
     @property
     def _engine(self) -> None:
-        raise StubClientNotConnectedError(
-            "Client is not connected to the query engine, you must call `connect()` before attempting to query data."
-        )
         raise StubClientNotConnectedError()
 
 
