@@ -716,6 +716,60 @@ describe("processActivityData", () => {
     expect(result["gpt-4"].total_spend).toBe(100.5);
   });
 
+  it("should process model_groups data keyed by public model name including fallback entries", () => {
+    const upstreamModelMetrics = {
+      ...EMPTY_SPEND_METRICS,
+      spend: 10,
+      api_requests: 10,
+      successful_requests: 10,
+    };
+    const dailyActivityWithModelGroups: { results: DailyData[] } = {
+      results: [
+        {
+          date: "2025-01-01",
+          metrics: upstreamModelMetrics,
+          breakdown: {
+            ...EMPTY_BREAKDOWN,
+            models: {
+              "gpt-5.2": {
+                metrics: upstreamModelMetrics,
+                metadata: {},
+                api_key_breakdown: {},
+              },
+            },
+            model_groups: {
+              "gpt-5.2-eu": {
+                metrics: { ...EMPTY_SPEND_METRICS, spend: 7, api_requests: 7, successful_requests: 7 },
+                metadata: {},
+                api_key_breakdown: {
+                  "key-1": {
+                    metrics: { ...EMPTY_SPEND_METRICS, spend: 7, api_requests: 7, total_tokens: 700 },
+                    metadata: { key_alias: "eu-key", team_id: "team1" },
+                  },
+                },
+              },
+              "gpt-5.2": {
+                metrics: { ...EMPTY_SPEND_METRICS, spend: 3, api_requests: 3, successful_requests: 3 },
+                metadata: {},
+                api_key_breakdown: {},
+              },
+            },
+          },
+        },
+      ],
+    };
+
+    const result = processActivityData(dailyActivityWithModelGroups, "model_groups");
+
+    expect(Object.keys(result).sort()).toEqual(["gpt-5.2", "gpt-5.2-eu"]);
+    expect(result["gpt-5.2-eu"].label).toBe("gpt-5.2-eu");
+    expect(result["gpt-5.2-eu"].total_spend).toBe(7);
+    expect(result["gpt-5.2-eu"].top_api_keys).toHaveLength(1);
+    expect(result["gpt-5.2-eu"].top_api_keys[0].key_alias).toBe("eu-key");
+    expect(result["gpt-5.2"].total_spend).toBe(3);
+    expect(result["gpt-5.2"].total_requests).toBe(3);
+  });
+
   it("should process data for mcp_servers key", () => {
     const dailyActivityWithMCP: { results: DailyData[] } = {
       results: [

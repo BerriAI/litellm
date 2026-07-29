@@ -233,27 +233,28 @@ def update_breakdown_metrics(
         )
 
     # Update model group breakdown
-    if record.model_group and record.model_group not in breakdown.model_groups:
-        breakdown.model_groups[record.model_group] = MetricWithMetadata(
+    model_group_key = record.model_group or record.model
+    if model_group_key and model_group_key not in breakdown.model_groups:
+        breakdown.model_groups[model_group_key] = MetricWithMetadata(
             metrics=SpendMetrics(),
-            metadata=model_metadata.get(record.model_group, {}),
+            metadata=model_metadata.get(model_group_key, {}),
         )
-    if record.model_group:
-        breakdown.model_groups[record.model_group].metrics = update_metrics(
-            breakdown.model_groups[record.model_group].metrics, record
+    if model_group_key:
+        breakdown.model_groups[model_group_key].metrics = update_metrics(
+            breakdown.model_groups[model_group_key].metrics, record
         )
 
         # Update API key breakdown for this model
-        if record.api_key not in breakdown.model_groups[record.model_group].api_key_breakdown:
-            breakdown.model_groups[record.model_group].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
+        if record.api_key not in breakdown.model_groups[model_group_key].api_key_breakdown:
+            breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
                 metrics=SpendMetrics(),
                 metadata=KeyMetadata(
                     key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
                     team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
                 ),
             )
-        breakdown.model_groups[record.model_group].api_key_breakdown[record.api_key].metrics = update_metrics(
-            breakdown.model_groups[record.model_group].api_key_breakdown[record.api_key].metrics,
+        breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key].metrics = update_metrics(
+            breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key].metrics,
             record,
         )
 
@@ -574,11 +575,11 @@ def _build_aggregated_sql_query(
             date,
             api_key,
             model,
-            model_group,
+            COALESCE(NULLIF(model_group, ''), model) AS model_group,
             custom_llm_provider,
             mcp_namespaced_tool_name,
             endpoint,
-            GROUPING(date, api_key, model, model_group,
+            GROUPING(date, api_key, model, COALESCE(NULLIF(model_group, ''), model),
                      custom_llm_provider, mcp_namespaced_tool_name,
                      endpoint) AS group_level,
             SUM(spend)::float AS spend,
@@ -599,8 +600,8 @@ def _build_aggregated_sql_query(
             (date, api_key),
             (date, model),
             (date, model, api_key),
-            (date, model_group),
-            (date, model_group, api_key),
+            (date, COALESCE(NULLIF(model_group, ''), model)),
+            (date, COALESCE(NULLIF(model_group, ''), model), api_key),
             (date, custom_llm_provider),
             (date, custom_llm_provider, api_key),
             (date, mcp_namespaced_tool_name),
