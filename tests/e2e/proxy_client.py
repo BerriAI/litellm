@@ -75,14 +75,17 @@ from transport import HttpTransport, SplitTransport, Transport
 
 RowsPredicate = Callable[[list[SpendLogRow]], bool]
 
-# After /model/new, poll the data plane until the model is listed (or fail).
-# Shorter than poll_timeout (spend/log read-backs ~120s); longer than a single
-# request. 40s is the harness middle ground: happy path returns on the first
-# poll, a stuck reload fails in under a minute instead of two.
+# After /model/new, the control-plane writer reloads itself immediately, but every
+# other gateway worker (and peer pod) only picks the model up on its add_deployment
+# job. That job runs every proxy_config_reload_interval_seconds (product default 30).
+# A single /v1/models hit can land on a hot worker while the next /chat hits a cold
+# one ("Invalid model name"). Wait for first listing within MODEL_SERVABLE_TIMEOUT,
+# then require continuous listing for MODEL_SERVABLE_DB_SYNC_SECONDS (the default
+# reload interval) so every worker has had a chance to sync from the DB.
 MODEL_SERVABLE_TIMEOUT = 40.0
+MODEL_SERVABLE_DB_SYNC_SECONDS = 30.0
 MODEL_SERVABLE_INTERVAL = 2.0
-# Cap each /v1/models poll so one slow request cannot outlast the budget.
-# Clamped further to remaining deadline inside await_servable.
+# Cap each /v1/models poll so one slow request cannot outlast the remaining budget.
 MODEL_SERVABLE_REQUEST_TIMEOUT = 5.0
 
 
@@ -112,29 +115,55 @@ def await_servable(
     timeout: float,
     interval: float,
     request_timeout: float,
+    db_sync_seconds: float,
     now: Callable[[], float],
     sleep: Callable[[float], None],
 ) -> ServableOutcome:
-    """Poll `list_models` until the data plane lists `model_name` or `timeout` elapses.
+    """Poll until `model_name` is listed long enough for every worker to DB-sync.
 
-    `list_models` receives the per-poll request timeout, clamped to the remaining
-    deadline so a slow final poll cannot overrun the overall budget. Clock and sleep
-    are injected so this is exercised without wall-clock waits. Always polls at least
-    once when the loop starts with a positive budget."""
-    deadline = now() + timeout
+    First listing must happen within `timeout`. After that, the model must stay
+    listed continuously for `db_sync_seconds` (any miss resets the continuous
+    window). `db_sync_seconds=0` returns on the first listing. Each poll's request
+    timeout is clamped to the remaining budget. Clock and sleep are injected."""
+    started = now()
+    first_seen_at: float | None = None
     last_result: Result[ModelsListResponse] | None = None
     while True:
-        remaining = deadline - now()
+        t = now()
+        if first_seen_at is None:
+            deadline = started + timeout
+        else:
+            deadline = first_seen_at + db_sync_seconds
+        remaining = deadline - t
         if remaining <= 0 and last_result is not None:
+            if first_seen_at is not None and db_sync_seconds <= 0:
+                return Servable()
+            if first_seen_at is not None and t - first_seen_at >= db_sync_seconds:
+                return Servable()
             return NotServable(last_result=last_result)
         poll_timeout = min(request_timeout, remaining) if remaining > 0 else request_timeout
         last_result = list_models(poll_timeout)
-        if isinstance(last_result, Success) and any(
+        listed = isinstance(last_result, Success) and any(
             entry.id == model_name for entry in last_result.data.data
-        ):
+        )
+        t = now()
+        if not listed:
+            first_seen_at = None
+        elif first_seen_at is None:
+            first_seen_at = t
+            if db_sync_seconds <= 0:
+                return Servable()
+        elif t - first_seen_at >= db_sync_seconds:
             return Servable()
-        if now() + interval >= deadline:
-            return NotServable(last_result=last_result)
+        if first_seen_at is None:
+            if now() + interval >= started + timeout:
+                return NotServable(last_result=last_result)
+        elif now() + interval >= first_seen_at + db_sync_seconds:
+            # Final stretch: sleep only the remainder of the continuous window.
+            remainder = first_seen_at + db_sync_seconds - now()
+            if remainder > 0:
+                sleep(remainder)
+            continue
         sleep(interval)
 
 
@@ -142,6 +171,7 @@ def servable_timeout_message(
     *,
     model_name: str,
     timeout: float,
+    db_sync_seconds: float,
     last_result: Result[ModelsListResponse] | None,
 ) -> str:
     last_error = (
@@ -151,7 +181,8 @@ def servable_timeout_message(
     )
     return (
         f"model {model_name!r} was created but never became servable on the data "
-        f"plane within {timeout}s of /model/new (control/data-plane propagation or "
+        f"plane within {timeout}s of first listing (plus {db_sync_seconds}s continuous "
+        f"DB sync) after /model/new (control/data-plane propagation or "
         f"STORE_MODEL_IN_DB reload issue){last_error}"
     )
 
@@ -162,6 +193,7 @@ class ProxyClient:
     poll_timeout: float = 120.0
     poll_interval: float = 5.0
     model_servable_timeout: float = MODEL_SERVABLE_TIMEOUT
+    model_servable_db_sync_seconds: float = MODEL_SERVABLE_DB_SYNC_SECONDS
     model_servable_interval: float = MODEL_SERVABLE_INTERVAL
     model_servable_request_timeout: float = MODEL_SERVABLE_REQUEST_TIMEOUT
 
@@ -252,10 +284,10 @@ class ProxyClient:
         handing back, so callers can invoke it immediately. In the monolithic case
         it is already present on the first poll, so this adds one request.
 
-        The wait is bounded by `model_servable_timeout` rather than the much longer
-        `poll_timeout` used for batched read-backs, so a stuck reload fails in under
-        a minute instead of two. Happy path still returns as soon as /v1/models lists
-        the model (usually the first poll)."""
+        First listing must arrive within `model_servable_timeout` (not the longer
+        spend `poll_timeout`). The model must then stay listed for
+        `model_servable_db_sync_seconds` (product default DB reload interval) so every
+        gateway worker has run add_deployment before callers use the model."""
         model_id = unwrap(
             self.transport.post(
                 "/model/new",
@@ -272,9 +304,10 @@ class ProxyClient:
         return model_id
 
     def _await_model_servable(self, model_name: str) -> None:
-        """Block until the data plane lists `model_name`, or fail loudly if it does
-        not within model_servable_timeout (a real propagation/config problem,
-        surfaced here instead of as a downstream "Invalid model name passed")."""
+        """Block until the data plane lists `model_name` long enough for DB sync.
+
+        Fails if first listing misses model_servable_timeout, or if continuous listing
+        for model_servable_db_sync_seconds never holds (multi-worker / peer reload)."""
         outcome = await_servable(
             lambda poll_timeout: self.transport.get(
                 "/v1/models",
@@ -287,6 +320,7 @@ class ProxyClient:
             timeout=self.model_servable_timeout,
             interval=self.model_servable_interval,
             request_timeout=self.model_servable_request_timeout,
+            db_sync_seconds=self.model_servable_db_sync_seconds,
             now=time.monotonic,
             sleep=time.sleep,
         )
@@ -298,6 +332,7 @@ class ProxyClient:
                     servable_timeout_message(
                         model_name=model_name,
                         timeout=self.model_servable_timeout,
+                        db_sync_seconds=self.model_servable_db_sync_seconds,
                         last_result=last_result,
                     )
                 )
