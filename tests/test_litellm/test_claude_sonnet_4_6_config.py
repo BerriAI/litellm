@@ -39,8 +39,8 @@ def test_bedrock_sonnet_4_6_region_prefixes():
         ), f"{model} should use bedrock_converse, got {model_info['litellm_provider']}"
         assert model_info["mode"] == "chat"
         assert model_info["max_input_tokens"] == 1000000
-        assert model_info["max_output_tokens"] == 64000
-        assert model_info["max_tokens"] == 64000
+        assert model_info["max_output_tokens"] == 128000
+        assert model_info["max_tokens"] == 128000
         assert model_info.get("supports_vision") is True
         assert model_info.get("supports_computer_use") is True
         assert model_info.get("supports_function_calling") is True
