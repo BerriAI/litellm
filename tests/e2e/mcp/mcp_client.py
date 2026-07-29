@@ -11,13 +11,14 @@ request/response bodies are co-located here because only this suite speaks MCP.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
-from e2e_http import Headers, NoBody, Result, Success, unwrap
+from e2e_http import Headers, NoBody, Result, Success, UnknownApiError, unwrap
 from models import KeyGenerateBody, ObjectPermission
 from proxy_client import ProxyClient
 
@@ -195,6 +196,27 @@ class McpClient:
             )
         ).root
 
+    def await_registered(self, server_id: str) -> None:
+        """Poll /v1/mcp/server until `server_id` is listed. Fails at poll_timeout.
+
+        The DB row exists the moment registration returns, but a data-plane pod
+        answers the listing from a registry it refreshes on a periodic DB sync, so a
+        pod that joined the load balancer after the write reports the server as
+        absent until its first sync.
+        """
+        deadline = time.monotonic() + self.proxy.poll_timeout
+        while True:
+            registered = frozenset(row.server_id for row in self.registered_servers())
+            if server_id in registered:
+                return
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"registered server {server_id} still absent from /v1/mcp/server "
+                    f"{self.proxy.poll_timeout}s after registration (the data plane never synced "
+                    f"the row): {registered}"
+                )
+            time.sleep(self.proxy.poll_interval)
+
     def generate_key(
         self,
         *,
@@ -249,6 +271,60 @@ class McpClient:
                 )
             time.sleep(self.proxy.poll_interval)
 
+    def await_call_tool(
+        self,
+        key: str,
+        *,
+        server_id: str,
+        name: str,
+        arguments: McpToolArguments,
+    ) -> McpCallToolResponse:
+        """Poll tools/call until the result is not a multi-worker registry miss.
+
+        Retries only on the gateway's own cold-worker 500 shapes (Tool <name>
+        not found / server_not_found). Upstream tool errors and other 500s fail
+        immediately so non-idempotent calls are not repeated.
+        """
+        deadline = time.monotonic() + self.proxy.poll_timeout
+        last: Result[McpCallToolResponse] | None = None
+        while True:
+            last = self.call_tool(key, server_id=server_id, name=name, arguments=arguments)
+            if not _is_mcp_not_synced(last, tool_name=name):
+                return unwrap(last)
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"tools/call for {name!r} on server {server_id} still missing on the "
+                    f"data plane after {self.proxy.poll_timeout}s (multi-worker registry lag); "
+                    f"last result: {last}"
+                )
+            time.sleep(self.proxy.poll_interval)
+
+    def await_call_tool_denied(
+        self,
+        key: str,
+        *,
+        server_id: str,
+        name: str,
+        arguments: McpToolArguments,
+    ) -> UnknownApiError:
+        """Poll tools/call until a cold-worker miss clears and the call is 403 access_denied."""
+        deadline = time.monotonic() + self.proxy.poll_timeout
+        last: Result[McpCallToolResponse] | None = None
+        while True:
+            last = self.call_tool(key, server_id=server_id, name=name, arguments=arguments)
+            if isinstance(last, UnknownApiError) and last.status_code == 403:
+                return last
+            if not _is_mcp_not_synced(last, tool_name=name):
+                raise AssertionError(
+                    f"ungranted key's tools/call was not 403 access_denied: {last}"
+                )
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"ungranted key never got 403 for {name!r} within {self.proxy.poll_timeout}s; "
+                    f"last result: {last}"
+                )
+            time.sleep(self.proxy.poll_interval)
+
     def register_mcp_content_filter(self, *, name: str, blocked_keyword: str) -> str:
         """Register a default-on content-filter guardrail that runs on the MCP
         tool-call hook (pre_mcp_call) and blocks a single keyword. The keyword is
@@ -294,6 +370,40 @@ class McpClient:
             ),
             response_type=McpCallToolResponse,
         )
+
+
+def _is_mcp_not_synced(
+    result: Result[McpCallToolResponse],
+    *,
+    tool_name: str | None = None,
+) -> bool:
+    """True only for gateway multi-worker registry misses, not upstream errors.
+
+    Matches the proxy's own shapes:
+    - ValueError ``Tool <name> not found`` wrapped as HTTP 500 (cold tool map /
+      unresolved server on this process)
+    - REST ``server_not_found`` when this worker has not loaded the MCP server row
+
+    Does not treat arbitrary 500 bodies that merely mention "tool" and "not found"
+    (e.g. upstream MCP payload text) as lag, so await_call_tool does not retry
+    real failures or non-idempotent calls.
+    """
+    if not isinstance(result, UnknownApiError) or result.status_code != 500:
+        return False
+    body = result.body
+    body_l = body.lower()
+
+    if "server_not_found" in body_l:
+        return True
+    if re.search(r"mcp server ['\"][^'\"]+['\"] was not found", body_l):
+        return True
+
+    # Gateway: "Tool search_datadog_logs not found" (optionally inside a longer message)
+    if tool_name is not None:
+        return (
+            re.search(rf"\btool\s+{re.escape(tool_name)}\s+not found\b", body_l) is not None
+        )
+    return re.search(r"\btool\s+\S+\s+not found\b", body_l) is not None
 
 
 def build_client(proxy: ProxyClient) -> McpClient:
