@@ -130,7 +130,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
         await fetchReloadStatus();
         await fetchSourceInfo();
       } else if (response.status === "no_op") {
-        NotificationsManager.fromBackend(
+        NotificationsManager.warning(
           response.message || "Reload was a no-op because LITELLM_LOCAL_MODEL_COST_MAP forces the bundled cost map.",
         );
         await fetchReloadStatus();
