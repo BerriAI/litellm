@@ -2867,3 +2867,87 @@ def test_delete_file_provider_only_resolves_named_vertex_credentials(
     assert captured_kwargs.get("file_id") == "file-abc123"
     _assert_vertex_named_credentials_attached(captured_kwargs)
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+def test_create_file_provider_only_skips_other_team_vertex_deployment(
+    mocker: MockerFixture, monkeypatch
+):
+    """
+    Regression: with a team-scoped vertex deployment indexed before a global
+    one under the same model name, a provider-only upload from a different
+    team must use the global deployment's credentials, never the other
+    team's.
+    """
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "vertex_project": "team-b-project",
+                },
+                "model_info": {
+                    "id": "team-b-vertex",
+                    "team_id": "team-b",
+                    "team_public_model_name": "gemini-2.5-pro",
+                },
+            },
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "vertex_project": "shared-project",
+                },
+            },
+        ]
+    )
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    captured_kwargs: dict = {}
+
+    async def _mock_acreate_file(**kwargs):
+        captured_kwargs.update(kwargs)
+        return OpenAIFileObject(
+            id="file-vertex-456",
+            object="file",
+            bytes=2,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(litellm, "acreate_file", _mock_acreate_file)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+        team_id="team-a",
+        team_models=["gemini-2.5-pro"],
+    )
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", b"{}", "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={
+                "Authorization": "Bearer test-key",
+                "custom-llm-provider": "vertex_ai",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert captured_kwargs.get("vertex_project") == "shared-project"
+    proxy_logging_obj.post_call_failure_hook.assert_not_called()
