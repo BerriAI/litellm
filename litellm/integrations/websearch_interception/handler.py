@@ -807,22 +807,56 @@ class WebSearchInterceptionLogger(CustomLogger):
         return self._inject_native_blocks(response, native_blocks)
 
     @staticmethod
+    def _build_server_tool_use_pair(
+        tool_call: dict,
+        structured: Optional[SearchResponse],
+    ) -> tuple[dict, dict]:
+        """Mint a ``srvtoolu_`` id and return the paired ``server_tool_use`` +
+        ``web_search_tool_result`` blocks for one search call.
+
+        ``name`` is always ``web_search`` (the Anthropic native server-tool
+        name); the intercepted tool_call carries ``litellm_web_search`` after
+        pre-request conversion, which is not a valid native tool name.
+        """
+        tool_use_id = f"srvtoolu_{uuid.uuid4().hex}"
+        query = (tool_call.get("input") or {}).get("query")
+        server_tool_use = {
+            "type": "server_tool_use",
+            "id": tool_use_id,
+            "name": "web_search",
+            "input": {"query": query} if query is not None else {},
+        }
+        return (
+            server_tool_use,
+            WebSearchTransformation.build_web_search_tool_result_block(
+                tool_use_id=tool_use_id,
+                search_response=structured,
+            ),
+        )
+
+    @staticmethod
     def _build_native_result_blocks(
         tool_calls: List[Dict],
         structured_results: List[Optional[SearchResponse]],
     ) -> List[Dict[str, Any]]:
-        """Build one ``web_search_tool_result`` block per tool_call."""
-        blocks: List[Dict[str, Any]] = []
-        for i, tool_call in enumerate(tool_calls):
-            tool_use_id = tool_call.get("id") or ""
-            structured = structured_results[i] if i < len(structured_results) else None
-            blocks.append(
-                WebSearchTransformation.build_web_search_tool_result_block(
-                    tool_use_id=tool_use_id,
-                    search_response=structured,
-                )
+        """Build paired ``server_tool_use`` + ``web_search_tool_result`` blocks
+        for each tool_call.
+
+        The result block's ``tool_use_id`` must match ``^srvtoolu_`` and pair
+        with a ``server_tool_use`` block in the same assistant turn. Reusing the
+        client's original ``toolu_`` id leaves the turn without a matching
+        ``server_tool_use`` block, which Anthropic (and Bedrock, which inherits
+        the Anthropic Messages shape) rejects with a 400 the moment the turn is
+        replayed on a later request.
+        """
+        return [
+            block
+            for i, tool_call in enumerate(tool_calls)
+            for block in WebSearchInterceptionLogger._build_server_tool_use_pair(
+                tool_call=tool_call,
+                structured=(structured_results[i] if i < len(structured_results) else None),
             )
-        return blocks
+        ]
 
     @staticmethod
     def _inject_native_blocks(response: Any, native_blocks: List[Dict[str, Any]]) -> Any:

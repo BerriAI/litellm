@@ -52,24 +52,16 @@ class TestIsAnthropicNativeWebSearchTool:
     """The detector must match native tools without catching look-alikes."""
 
     def test_matches_web_search_20250305(self):
-        assert is_anthropic_native_web_search_tool(
-            {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
-        )
+        assert is_anthropic_native_web_search_tool({"type": "web_search_20250305", "name": "web_search", "max_uses": 5})
 
     def test_matches_future_dated_variant(self):
-        assert is_anthropic_native_web_search_tool(
-            {"type": "web_search_20260101", "name": "web_search"}
-        )
+        assert is_anthropic_native_web_search_tool({"type": "web_search_20260101", "name": "web_search"})
 
     def test_rejects_litellm_standard(self):
-        assert not is_anthropic_native_web_search_tool(
-            {"name": "litellm_web_search", "input_schema": {}}
-        )
+        assert not is_anthropic_native_web_search_tool({"name": "litellm_web_search", "input_schema": {}})
 
     def test_rejects_openai_function_shape(self):
-        assert not is_anthropic_native_web_search_tool(
-            {"type": "function", "function": {"name": "litellm_web_search"}}
-        )
+        assert not is_anthropic_native_web_search_tool({"type": "function", "function": {"name": "litellm_web_search"}})
 
     def test_rejects_claude_desktop_builtin(self):
         # Claude Desktop's builtin client-side ``WebSearch`` tool must not be
@@ -77,9 +69,7 @@ class TestIsAnthropicNativeWebSearchTool:
         assert not is_anthropic_native_web_search_tool({"name": "WebSearch"})
 
     def test_rejects_unrelated_tool(self):
-        assert not is_anthropic_native_web_search_tool(
-            {"type": "function", "function": {"name": "calculator"}}
-        )
+        assert not is_anthropic_native_web_search_tool({"type": "function", "function": {"name": "calculator"}})
 
     def test_handles_missing_type(self):
         assert not is_anthropic_native_web_search_tool({"name": "web_search"})
@@ -159,14 +149,10 @@ class TestPreRequestHookFlagsNativeTools:
     async def test_native_tool_sets_flag(self):
         logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
         kwargs = {
-            "tools": [
-                {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
-            ],
+            "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}],
             "litellm_params": {"custom_llm_provider": "bedrock"},
         }
-        out = await logger.async_pre_request_hook(
-            model="bedrock/claude", messages=[], kwargs=kwargs
-        )
+        out = await logger.async_pre_request_hook(model="bedrock/claude", messages=[], kwargs=kwargs)
         assert out is not None
         assert out.get(WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY) is True
 
@@ -177,9 +163,7 @@ class TestPreRequestHookFlagsNativeTools:
             "tools": [{"name": "litellm_web_search", "input_schema": {}}],
             "litellm_params": {"custom_llm_provider": "bedrock"},
         }
-        out = await logger.async_pre_request_hook(
-            model="bedrock/claude", messages=[], kwargs=kwargs
-        )
+        out = await logger.async_pre_request_hook(model="bedrock/claude", messages=[], kwargs=kwargs)
         assert out is not None
         assert WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY not in out
 
@@ -224,10 +208,15 @@ class TestBuildPlanAttachesBlocks:
 
         blocks = plan.metadata.get(WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY)
         assert isinstance(blocks, list)
-        assert len(blocks) == 1
-        assert blocks[0]["type"] == "web_search_tool_result"
-        assert blocks[0]["tool_use_id"] == "toolu_one"
-        assert blocks[0]["content"][0]["url"] == "https://docs.litellm.ai/"
+        assert len(blocks) == 2
+        server_use, tool_result = blocks
+        assert server_use["type"] == "server_tool_use"
+        assert server_use["id"].startswith("srvtoolu_")
+        assert server_use["input"] == {"query": "what is litellm"}
+        assert tool_result["type"] == "web_search_tool_result"
+        assert tool_result["tool_use_id"] == server_use["id"]
+        assert tool_result["tool_use_id"] != "toolu_one"
+        assert tool_result["content"][0]["url"] == "https://docs.litellm.ai/"
 
     @pytest.mark.asyncio
     async def test_metadata_does_not_carry_blocks_when_flag_absent(self):
@@ -288,9 +277,7 @@ class TestPostHookInjectsBlocks:
             "stop_reason": "end_turn",
         }
 
-        out = await logger.async_post_agentic_loop_response_hook(
-            response=response, plan=plan, kwargs={}
-        )
+        out = await logger.async_post_agentic_loop_response_hook(response=response, plan=plan, kwargs={})
 
         # Native block must be first so the client can pair it with the
         # tool_use before reading the assistant text.
@@ -306,9 +293,7 @@ class TestPostHookInjectsBlocks:
             "id": "msg_1",
             "content": [{"type": "text", "text": "answer"}],
         }
-        out = await logger.async_post_agentic_loop_response_hook(
-            response=response, plan=plan, kwargs={}
-        )
+        out = await logger.async_post_agentic_loop_response_hook(response=response, plan=plan, kwargs={})
         assert out == response
 
     @pytest.mark.asyncio
@@ -328,9 +313,7 @@ class TestPostHookInjectsBlocks:
                 self.content = [{"type": "text", "text": "ok"}]
 
         resp = _Resp()
-        out = await logger.async_post_agentic_loop_response_hook(
-            response=resp, plan=plan, kwargs={}
-        )
+        out = await logger.async_post_agentic_loop_response_hook(response=resp, plan=plan, kwargs={})
         assert out.content[0]["type"] == "web_search_tool_result"
         assert out.content[1]["type"] == "text"
 
@@ -479,6 +462,95 @@ class TestLegacyPathMatchesNewPath:
                 kwargs={WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
             )
 
-        assert out["content"][0]["type"] == "web_search_tool_result"
-        assert out["content"][0]["tool_use_id"] == "toolu_legacy"
-        assert out["content"][1]["type"] == "text"
+        assert out["content"][0]["type"] == "server_tool_use"
+        assert out["content"][0]["id"].startswith("srvtoolu_")
+        assert out["content"][1]["type"] == "web_search_tool_result"
+        assert out["content"][1]["tool_use_id"] == out["content"][0]["id"]
+        assert out["content"][1]["tool_use_id"] != "toolu_legacy"
+        assert out["content"][2]["type"] == "text"
+
+
+class TestNativeResultBlockUsesServerToolId:
+    """Regression for the multi-turn 400 on Bedrock/Anthropic Claude.
+
+    The agentic-loop path must mint ``srvtoolu_`` ids and pair each
+    ``web_search_tool_result`` with a ``server_tool_use`` block, rather than
+    reusing the client's original ``toolu_`` tool_call id. The reused id has no
+    matching ``server_tool_use`` block and fails ``^srvtoolu_`` validation when
+    the assistant turn is replayed on the next request."""
+
+    def test_blocks_never_reuse_client_toolu_id(self):
+        tool_calls = [
+            {
+                "id": "toolu_client_original",
+                "type": "tool_use",
+                "name": "web_search",
+                "input": {"query": "weather in tokyo"},
+            }
+        ]
+        blocks = WebSearchInterceptionLogger._build_native_result_blocks(
+            tool_calls=tool_calls,
+            structured_results=[_make_search_response()],
+        )
+
+        assert [b["type"] for b in blocks] == [
+            "server_tool_use",
+            "web_search_tool_result",
+        ]
+        server_use, tool_result = blocks
+        assert server_use["id"].startswith("srvtoolu_")
+        assert server_use["name"] == "web_search"
+        assert server_use["input"] == {"query": "weather in tokyo"}
+        assert tool_result["tool_use_id"] == server_use["id"]
+        assert tool_result["tool_use_id"].startswith("srvtoolu_")
+        assert "toolu_client_original" not in (
+            server_use["id"],
+            tool_result["tool_use_id"],
+        )
+        assert tool_result["content"][0]["url"] == "https://docs.litellm.ai/"
+
+    def test_multiple_tool_calls_get_distinct_server_ids(self):
+        tool_calls = [
+            {"id": "toolu_a", "name": "web_search", "input": {"query": "a"}},
+            {"id": "toolu_b", "name": "web_search", "input": {"query": "b"}},
+        ]
+        blocks = WebSearchInterceptionLogger._build_native_result_blocks(
+            tool_calls=tool_calls,
+            structured_results=[_make_search_response(), None],
+        )
+
+        assert [b["type"] for b in blocks] == [
+            "server_tool_use",
+            "web_search_tool_result",
+            "server_tool_use",
+            "web_search_tool_result",
+        ]
+        first_use, first_result, second_use, second_result = blocks
+        assert first_use["id"] != second_use["id"]
+        assert first_result["tool_use_id"] == first_use["id"]
+        assert second_result["tool_use_id"] == second_use["id"]
+        assert all(b["id"].startswith("srvtoolu_") for b in (first_use, second_use))
+
+    def test_missing_query_emits_empty_input(self):
+        tool_calls = [{"id": "toolu_x", "name": "web_search", "input": {}}]
+        blocks = WebSearchInterceptionLogger._build_native_result_blocks(
+            tool_calls=tool_calls,
+            structured_results=[None],
+        )
+
+        server_use, tool_result = blocks
+        assert server_use["input"] == {}
+        assert server_use["id"].startswith("srvtoolu_")
+        assert tool_result["tool_use_id"] == server_use["id"]
+
+    def test_server_tool_use_name_is_native_not_intercepted(self):
+        # After pre-request conversion the model's tool_call carries the
+        # litellm_web_search name; the native block must report web_search.
+        tool_calls = [{"id": "toolu_x", "name": "litellm_web_search", "input": {"query": "q"}}]
+        blocks = WebSearchInterceptionLogger._build_native_result_blocks(
+            tool_calls=tool_calls,
+            structured_results=[None],
+        )
+
+        server_use = blocks[0]
+        assert server_use["name"] == "web_search"
