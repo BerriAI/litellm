@@ -194,7 +194,7 @@ class TritonGenerateConfig(TritonConfig):
         # chat_template_kwargs is a LiteLLM-level param: apply it here when
         # rendering the prompt text. Triton (TritonSamplingParams) has no
         # knowledge of this argument and will raise if it reaches the server.
-        chat_template_kwargs: dict = inference_params.pop("chat_template_kwargs", {}) or {}
+        chat_template_kwargs: dict[str, Any] = inference_params.pop("chat_template_kwargs", {}) or {}
         data_for_triton: Dict[str, Any] = {
             "text_input": prompt_factory(model=model, messages=messages, chat_template_kwargs=chat_template_kwargs),
             "parameters": {
