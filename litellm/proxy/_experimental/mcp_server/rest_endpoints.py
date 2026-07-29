@@ -12,6 +12,11 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from litellm._logging import verbose_logger
+from litellm.exceptions import (
+    BlockedPiiEntityError,
+    GuardrailRaisedException,
+    ModifyResponseException,
+)
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
     MCPUpstreamAuthError,
@@ -33,6 +38,8 @@ from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 if TYPE_CHECKING:
+    from mcp.types import CallToolResult
+
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.types.mcp import MCPAuth
@@ -49,6 +56,13 @@ except ImportError as e:
 router = APIRouter(
     prefix="/mcp-rest",
     tags=["mcp"],
+)
+
+_MCP_GUARDRAIL_REJECTIONS = (
+    BlockedPiiEntityError,
+    GuardrailRaisedException,
+    ModifyResponseException,
+    HTTPException,
 )
 
 
@@ -99,9 +113,17 @@ if MCP_AVAILABLE:
         end_time: datetime,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         request_data: Mapping[str, object] | None = None,
-    ) -> None:
+    ) -> "CallToolResult":
+        """Fire post-call logging, returning the tool result to send to the client.
+
+        ``post_mcp_call`` guardrails already ran on ``execute_mcp_tool``'s return
+        path, so the result arriving here is the guardrailed one. A guardrail
+        rejection raised by a native ``async_post_mcp_tool_call_hook`` is still
+        re-raised rather than swallowed as a logging failure, which would return
+        the unguarded result.
+        """
         if logging_obj is None:
-            return
+            return result
         logging_results = await asyncio.gather(
             _fire_mcp_tool_call_logging(
                 logging_obj,
@@ -113,11 +135,13 @@ if MCP_AVAILABLE:
             ),
             return_exceptions=True,
         )
-        logging_error = logging_results[0]
-        if isinstance(logging_error, asyncio.CancelledError):
-            raise logging_error
-        if isinstance(logging_error, BaseException):
-            verbose_logger.warning("MCP tool call logging failed (continuing): %s", logging_error)
+        outcome = logging_results[0]
+        if isinstance(outcome, (asyncio.CancelledError, *_MCP_GUARDRAIL_REJECTIONS)):
+            raise outcome
+        if isinstance(outcome, BaseException):
+            verbose_logger.warning("MCP tool call logging failed (continuing): %s", outcome)
+            return result
+        return outcome
 
     def _relay_upstream_auth_http_exception(e: MCPUpstreamAuthError, request: Request) -> HTTPException:
         """Convert a client-forwarded pass-through upstream 401 into an HTTPException that preserves the
@@ -196,7 +220,7 @@ if MCP_AVAILABLE:
             raw_headers=virtual_raw_headers,
             litellm_logging_obj=virtual_logging_obj,
         )
-        await _safe_fire_mcp_tool_call_logging(
+        return await _safe_fire_mcp_tool_call_logging(
             virtual_logging_obj,
             result,
             _tool_start_time,
@@ -204,7 +228,6 @@ if MCP_AVAILABLE:
             user_api_key_auth=user_api_key_dict,
             request_data=data,
         )
-        return result
 
     def _get_server_auth_header(
         server,
@@ -998,7 +1021,7 @@ if MCP_AVAILABLE:
                 litellm_logging_obj=data.get("litellm_logging_obj"),
                 requested_server_id=canonical_server_id,
             )
-            await _safe_fire_mcp_tool_call_logging(
+            return await _safe_fire_mcp_tool_call_logging(
                 logging_obj,
                 result,
                 _tool_start_time,
@@ -1006,7 +1029,6 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_dict,
                 request_data=data,
             )
-            return result
         except MCPMissingUserEnvVarsError as e:
             verbose_logger.info(
                 "MCP tool call missing per-user env vars: server_id=%s missing=%s",

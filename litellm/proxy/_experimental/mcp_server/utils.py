@@ -4,6 +4,7 @@ MCP Server Utilities
 
 import json
 import re
+from collections.abc import MutableMapping, MutableSequence
 from typing import (
     Any,
     Dict,
@@ -434,6 +435,56 @@ def extract_mcp_tool_result_error_message(result: object) -> Optional[str]:
     return "MCP tool call returned isError=true"
 
 
+def mcp_tool_result_content_list(result: object) -> MutableSequence[object] | None:  # mutable-ok: see below
+    """The mutable content list of an MCP tool result, or ``None`` when it has none.
+
+    Deliberately mutable: a guardrail masking the result rewrites entries in place,
+    because the logging payload captured before the guardrail runs references this
+    same list, so handing back a copy would leave the unmasked text in the spend log
+    and the OTel span.
+
+    Accepts both ``mcp.types.CallToolResult`` objects and their dict
+    equivalents, duck-typed so the ``mcp`` package is not required.
+    """
+    content: object = result.get("content") if isinstance(result, Mapping) else getattr(result, "content", None)
+    if isinstance(content, MutableSequence):
+        return content
+    return None
+
+
+def mcp_content_item_text(item: object) -> str | None:
+    """The ``text`` of a rewritable MCP content item, or ``None``.
+
+    Only mappings and Pydantic-style models report a text, because those are the
+    only shapes ``with_mcp_content_item_text`` can rewrite; a caller therefore
+    never reads text it would be unable to write back (e.g. masked by a
+    guardrail). Non-text content (images, embedded resources) has no ``text``
+    and is reported as ``None``.
+    """
+    text: object
+    if isinstance(item, Mapping):
+        text = item.get("text")
+    elif callable(getattr(item, "model_copy", None)):
+        text = getattr(item, "text", None)
+    else:
+        return None
+    return text if isinstance(text, str) else None
+
+
+def with_mcp_content_item_text(item: object, text: str) -> object:
+    """A copy of an MCP content item carrying ``text`` instead of its own.
+
+    Only meaningful for items ``mcp_content_item_text`` returned a text for; any
+    other item is returned unchanged.
+    """
+    if isinstance(item, Mapping):
+        return {**item, "text": text}
+    model_copy = getattr(item, "model_copy", None)
+    if callable(model_copy):
+        return model_copy(update={"text": text})
+    return item
+
+
 TOOL_DISPLAY_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
@@ -618,3 +669,112 @@ def merge_mcp_headers(
         merged.update({str(k): str(v) for k, v in static_headers.items()})
 
     return merged or None
+
+
+# Local rather than litellm.constants: this module deliberately imports no litellm
+# package, so pulling one in for a single integer would drag in litellm/__init__.
+MAX_STRUCTURED_CONTENT_SCAN_DEPTH = 100
+
+
+JSONLeafPath = tuple[str | int, ...]
+
+
+def _flatten_leaf_groups(
+    groups: Iterable[tuple[tuple[JSONLeafPath, str], ...] | None],
+) -> tuple[tuple[JSONLeafPath, str], ...] | None:
+    """Concatenate child leaf groups, propagating the too-deep sentinel."""
+    materialized = tuple(groups)
+    if any(group is None for group in materialized):
+        return None
+    return tuple(leaf for group in materialized if group is not None for leaf in group)
+
+
+def json_string_leaves(value: object, path: JSONLeafPath = ()) -> tuple[tuple[JSONLeafPath, str], ...] | None:
+    """Depth-first, deterministically ordered string leaves of a JSON value.
+
+    Returns ``None`` when the value is nested past ``MAX_STRUCTURED_CONTENT_SCAN_DEPTH``,
+    so the caller blocks rather than letting deeper values through unscanned; an
+    empty tuple means there was simply nothing to scan. A sentinel rather than an
+    exception because this module is reloaded by tests (see the note above the
+    environment-backed constants), which would give a custom exception class a new
+    identity and let it escape a caller's ``except``.
+    """
+    if len(path) > MAX_STRUCTURED_CONTENT_SCAN_DEPTH:
+        return None
+    if isinstance(value, str):
+        return ((path, value),)
+    if isinstance(value, dict):
+        return _flatten_leaf_groups(json_string_leaves(item, (*path, key)) for key, item in value.items())
+    if isinstance(value, list):
+        return _flatten_leaf_groups(json_string_leaves(item, (*path, index)) for index, item in enumerate(value))
+    return ()
+
+
+def with_json_string_leaves(
+    value: object,
+    replacements: Mapping[JSONLeafPath, str],
+    path: JSONLeafPath = (),
+) -> object:
+    """Rebuild a JSON value with the guardrail's rewritten string leaves."""
+    if isinstance(value, str):
+        return replacements.get(path, value)
+    if isinstance(value, dict):
+        return {key: with_json_string_leaves(item, replacements, (*path, key)) for key, item in value.items()}
+    if isinstance(value, list):
+        return [with_json_string_leaves(item, replacements, (*path, index)) for index, item in enumerate(value)]
+    return value
+
+
+def json_unrewritable_labels(value: object, path_depth: int = 0) -> tuple[str, ...] | None:
+    """Strings in a JSON value that carry meaning but cannot be rewritten.
+
+    Dictionary keys and non-string scalars: masking either would change the
+    payload's contract rather than redact a value, so a caller scans these and
+    blocks on a match instead of rewriting, matching what the content filter
+    already does for MCP tool call arguments. ``None`` means the value is nested
+    past the scan depth, same contract as ``json_string_leaves``.
+    """
+    if path_depth > MAX_STRUCTURED_CONTENT_SCAN_DEPTH:
+        return None
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return ()
+    if isinstance(value, (int, float)):
+        return (str(value),)
+    if isinstance(value, dict):
+        own = tuple(key for key in value if isinstance(key, str))
+        nested = tuple(json_unrewritable_labels(item, path_depth + 1) for item in value.values())
+        if any(group is None for group in nested):
+            return None
+        return own + tuple(label for group in nested if group is not None for label in group)
+    if isinstance(value, list):
+        nested = tuple(json_unrewritable_labels(item, path_depth + 1) for item in value)
+        if any(group is None for group in nested):
+            return None
+        return tuple(label for group in nested if group is not None for label in group)
+    return ()
+
+
+def mcp_tool_result_structured_content(result: object) -> object:
+    """The ``structuredContent`` of an MCP tool result, or ``None`` when it has none."""
+    if isinstance(result, Mapping):
+        return result.get("structuredContent")
+    return getattr(result, "structuredContent", None)
+
+
+def set_mcp_tool_result_structured_content(result: object, value: object) -> bool:
+    """Replace ``structuredContent`` in place; ``False`` when the shape does not carry it.
+
+    In place for the same reason the content list is: the logging payload captured
+    before the guardrail ran references this object, so a copy would leave the
+    unmasked value in the spend log and the OTel span.
+    """
+    if isinstance(result, MutableMapping):
+        result["structuredContent"] = value
+        return True
+    if not hasattr(result, "structuredContent"):
+        return False
+    try:
+        setattr(result, "structuredContent", value)  # attribute name is fixed by the MCP result shape
+        return True
+    except (AttributeError, TypeError, ValueError):
+        return False
