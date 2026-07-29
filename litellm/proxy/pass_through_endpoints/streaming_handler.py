@@ -77,13 +77,13 @@ class PassThroughStreamingHandler:
                     if endpoint_type == EndpointType.VERTEX_AI:
                         if "streamRawPredict" in url_route or "rawPredict" in url_route:
                             modified_chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
-                                chunk, resolved_model_name
+                                chunk, resolved_model_name, litellm_logging_obj
                             )
                             if modified_chunk is not None:
                                 chunk = modified_chunk
                     else:  # EndpointType.ANTHROPIC
                         modified_chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
-                            chunk, resolved_model_name
+                            chunk, resolved_model_name, litellm_logging_obj
                         )
                         if modified_chunk is not None:
                             chunk = modified_chunk

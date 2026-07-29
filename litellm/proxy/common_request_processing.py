@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.common_utils.callback_utils import (
@@ -56,7 +57,6 @@ from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
-from litellm.types.utils import ServerToolUse
 
 # Type alias for streaming chunk serializer (chunk after hooks + cost injection -> wire format)
 StreamChunkSerializer = Callable[[Any], str]
@@ -74,7 +74,6 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     StandardLoggingPayloadErrorInformation,
-    Usage,
 )
 
 # Datadog streaming spans are a no-op when ddtrace is not enabled, but the
@@ -2808,7 +2807,9 @@ class ProxyBaseLLMRequestProcessing:
                         str_so_far += str(chunk.get("content", ""))
 
                     model_name = request_data.get("model", "")
-                    chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, model_name)
+                    chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                        chunk, model_name, request_data.get("litellm_logging_obj")
+                    )
 
                 # Set before the yield: an async generator suspends at the yield,
                 # so a GeneratorExit on client disconnect is raised there and any
@@ -2903,13 +2904,17 @@ class ProxyBaseLLMRequestProcessing:
         )
 
     @staticmethod
-    def _process_chunk_with_cost_injection(chunk: Any, model_name: str) -> Any:
+    def _process_chunk_with_cost_injection(
+        chunk: Any, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
+    ) -> Any:
         """
         Process a streaming chunk and inject cost information if enabled.
 
         Args:
             chunk: The streaming chunk (dict, str, bytes, or bytearray)
             model_name: Model name for cost calculation
+            litellm_logging_obj: The call's logging object, used to price the chunk
+                with the same custom/deployment pricing as the logging callback
 
         Returns:
             The processed chunk with cost information injected if applicable
@@ -2919,21 +2924,27 @@ class ProxyBaseLLMRequestProcessing:
 
         try:
             if isinstance(chunk, dict):
-                maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(chunk, model_name)
+                maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
+                    chunk, model_name, litellm_logging_obj
+                )
                 if maybe_modified is not None:
                     return maybe_modified
             elif isinstance(chunk, (bytes, bytearray)):
                 # Decode to str, inject, and rebuild as bytes
                 try:
                     s = chunk.decode("utf-8", errors="ignore")
-                    maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(s, model_name)
+                    maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(
+                        s, model_name, litellm_logging_obj
+                    )
                     if maybe_mod is not None:
                         return (maybe_mod + ("" if maybe_mod.endswith("\n\n") else "\n\n")).encode("utf-8")
                 except Exception:
                     pass
             elif isinstance(chunk, str):
                 # Try to parse SSE frame and inject cost into the data line
-                maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(chunk, model_name)
+                maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(
+                    chunk, model_name, litellm_logging_obj
+                )
                 if maybe_mod is not None:
                     # Ensure trailing frame separator
                     return maybe_mod if maybe_mod.endswith("\n\n") else (maybe_mod + "\n\n")
@@ -2944,13 +2955,16 @@ class ProxyBaseLLMRequestProcessing:
         return chunk
 
     @staticmethod
-    def _inject_cost_into_sse_frame_str(frame_str: str, model_name: str) -> Optional[str]:
+    def _inject_cost_into_sse_frame_str(
+        frame_str: str, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
+    ) -> Optional[str]:
         """
         Inject cost information into an SSE frame string by modifying the JSON in the 'data:' line.
 
         Args:
             frame_str: SSE frame string that may contain multiple lines
             model_name: Model name for cost calculation
+            litellm_logging_obj: The call's logging object, forwarded for pricing
 
         Returns:
             Modified SSE frame string with cost injected, or None if no modification needed
@@ -2964,7 +2978,9 @@ class ProxyBaseLLMRequestProcessing:
                     json_part = stripped_ln.split("data:", 1)[1].strip()
                     if json_part and json_part != "[DONE]":
                         obj = json.loads(json_part)
-                        maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(obj, model_name)
+                        maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
+                            obj, model_name, litellm_logging_obj
+                        )
                         if maybe_modified is not None:
                             # Replace just this line with updated JSON using safe_dumps
                             lines[idx] = f"data: {safe_dumps(maybe_modified)}"
@@ -2974,70 +2990,46 @@ class ProxyBaseLLMRequestProcessing:
             return None
 
     @staticmethod
-    def _inject_cost_into_usage_dict(obj: dict, model_name: str) -> Optional[dict]:
+    def _inject_cost_into_usage_dict(
+        obj: dict, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
+    ) -> Optional[dict]:
         """
-        Inject cost information into a usage dictionary for message_delta events.
+        Inject cost into a ``message_delta`` usage dict, or return None to skip.
 
-        Args:
-            obj: Dictionary containing the SSE event data
-            model_name: Model name for cost calculation
-
-        Returns:
-            Modified dictionary with cost injected, or None if no modification needed
+        ``AnthropicConfig.calculate_usage`` rebuilds the ``Usage`` so the cache read and
+        cache creation tokens (including the 5m/1h ``cache_creation`` split) are priced the
+        same way the logging callback prices them.
         """
-        if obj.get("type") == "message_delta" and isinstance(obj.get("usage"), dict):
-            _usage = obj["usage"]
-            input_tokens = int(_usage.get("input_tokens", 0) or 0)
-            completion_tokens = int(_usage.get("output_tokens", 0) or 0)
+        if obj.get("type") != "message_delta" or not isinstance(obj.get("usage"), dict):
+            return None
 
-            # Extract additional usage fields
-            cache_creation_input_tokens = _usage.get("cache_creation_input_tokens")
-            cache_read_input_tokens = _usage.get("cache_read_input_tokens")
-            web_search_requests = _usage.get("web_search_requests")
-            completion_tokens_details = _usage.get("completion_tokens_details")
-            prompt_tokens_details = _usage.get("prompt_tokens_details")
+        usage = AnthropicConfig().calculate_usage(usage_object=obj["usage"], reasoning_content=None)
+        response = ModelResponse(usage=usage)
+        cost_val = ProxyBaseLLMRequestProcessing._streamed_usage_cost(response, model_name, litellm_logging_obj)
+        if cost_val is None:
+            return None
 
-            prompt_tokens = input_tokens + int(cache_creation_input_tokens or 0) + int(cache_read_input_tokens or 0)
-            total_tokens = int(
-                _usage.get("total_tokens", prompt_tokens + completion_tokens) or (prompt_tokens + completion_tokens)
-            )
+        obj.setdefault("usage", {})["cost"] = cost_val
+        return obj
 
-            usage_kwargs: dict[str, Any] = {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": total_tokens,
-            }
-
-            # Add optional named parameters
-            if completion_tokens_details is not None:
-                usage_kwargs["completion_tokens_details"] = completion_tokens_details
-            if prompt_tokens_details is not None:
-                usage_kwargs["prompt_tokens_details"] = prompt_tokens_details
-
-            # Handle web_search_requests by wrapping in ServerToolUse
-            if web_search_requests is not None:
-                usage_kwargs["server_tool_use"] = ServerToolUse(web_search_requests=web_search_requests)
-
-            # Add cache-related fields to **params (handled by Usage.__init__)
-            if cache_creation_input_tokens is not None:
-                usage_kwargs["cache_creation_input_tokens"] = cache_creation_input_tokens
-            if cache_read_input_tokens is not None:
-                usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
-
-            _mr = ModelResponse(usage=Usage(**usage_kwargs))
-
+    @staticmethod
+    def _streamed_usage_cost(
+        response: ModelResponse, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None
+    ) -> float | None:
+        """
+        Cost a streamed usage response through the logging object when present so the
+        streamed cost matches the callback's custom/deployment pricing, else fall back to
+        ``completion_cost`` by model name.
+        """
+        if litellm_logging_obj is not None:
             try:
-                cost_val = litellm.completion_cost(
-                    completion_response=_mr,
-                    model=model_name,
-                )
+                return litellm_logging_obj._response_cost_calculator(result=response)  # pyright: ignore[reportPrivateUsage]  # reuse the call's own cost calc for pricing parity with the logging callback
             except Exception:
-                cost_val = None
-
-            if cost_val is not None:
-                obj.setdefault("usage", {})["cost"] = cost_val
-                return obj
-        return None
+                pass
+        try:
+            return litellm.completion_cost(completion_response=response, model=model_name)
+        except Exception:
+            return None
 
     def maybe_get_model_id(self, _logging_obj: Optional[LiteLLMLoggingObj]) -> Optional[str]:
         """
