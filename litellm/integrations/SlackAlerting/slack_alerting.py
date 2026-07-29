@@ -514,7 +514,7 @@ class SlackAlerting(CustomBatchLogger):
         # - Don't re-alert, if alert already sent
         _cache: DualCache = self.internal_usage_cache
 
-        if self.alerting is None or self.alert_types is None:
+        if (self.alerting is None and not self.is_budget_webhook_enabled()) or self.alert_types is None:
             # do nothing if alerting is not switched on
             return
         if "budget_alerts" not in self.alert_types:
@@ -552,7 +552,14 @@ class SlackAlerting(CustomBatchLogger):
 
         # send alert
         if event is not None and user_info.event_group is not None:
-            _cache_key = "budget_alerts:{}:{}".format(event, _id)
+            # Include threshold level in cache key so each configured threshold fires its own alert
+            # rather than the first crossing suppressing all subsequent ones.
+            _threshold_suffix = (
+                f":{round(user_info.budget_percentage_used * 100)}"
+                if user_info.budget_percentage_used is not None
+                else ""
+            )
+            _cache_key = "budget_alerts:{}:{}{}".format(event, _id, _threshold_suffix)
             result = await _cache.async_get_cache(key=_cache_key)
             if result is None:
                 webhook_event = WebhookEvent(
@@ -627,6 +634,9 @@ class SlackAlerting(CustomBatchLogger):
             if user_info.spend >= user_info.max_budget:
                 event = "budget_crossed"
                 event_message += f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
+            elif user_info.budget_percentage_used is not None:
+                event = "threshold_crossed"
+                event_message += f"{round(user_info.budget_percentage_used * 100)}% Threshold Crossed"
             elif percent_left <= SLACK_ALERTING_THRESHOLD_5_PERCENT:
                 event = "threshold_crossed"
                 event_message += "5% Threshold Crossed "
@@ -655,7 +665,7 @@ class SlackAlerting(CustomBatchLogger):
         Create a standard message for a budget alert
         """
         _all_fields_as_dict = user_info.model_dump(exclude_none=True)
-        _all_fields_as_dict.pop("token")
+        _all_fields_as_dict.pop("token", None)
         msg = ""
         for k, v in _all_fields_as_dict.items():
             if isinstance(v, Litellm_EntityType):
@@ -1071,36 +1081,61 @@ Model Info:
     async def model_removed_alert(self, model_name: str):
         pass
 
+    def is_budget_webhook_enabled(self) -> bool:
+        """
+        Budget alerts are POSTed as JSON when either:
+          - "webhook" is in `general_settings.alerting`, or
+          - a budget webhook URL is configured (config.yaml or the Alerting Settings UI).
+
+        The second case means an admin who sets the URL does not also have to edit
+        `general_settings.alerting` by hand.
+        """
+        if self.alerting is not None and "webhook" in self.alerting:
+            return True
+        # Only the explicit config field enables webhooks on its own. WEBHOOK_URL keeps
+        # its old meaning: a fallback URL, used only when "webhook" alerting is on.
+        return bool(self.alerting_args.budget_alerts_webhook_url)
+
+    def _get_budget_alert_webhook_urls(self) -> List[str]:
+        """
+        Resolve the webhook URLs that budget alerts are POSTed to.
+
+        Resolution order:
+          1. alerting_args.budget_alerts_webhook_url (config / UI, comma-separated for several URLs)
+          2. WEBHOOK_URL env var
+
+        `alert_to_webhook_url` is deliberately NOT read here - that map holds Slack
+        incoming-webhook URLs, which expect Slack's block format and reject this
+        JSON payload.
+        """
+        raw = self.alerting_args.budget_alerts_webhook_url or os.getenv("WEBHOOK_URL")
+        if not raw:
+            return []
+        return [url.strip() for url in raw.split(",") if url.strip()]
+
     async def send_webhook_alert(self, webhook_event: WebhookEvent) -> bool:
         """
-        Sends structured alert to webhook, if set.
+        Sends structured alert to all configured budget-alert webhook URLs.
 
-        Currently only implemented for budget alerts
-
-        Returns -> True if sent, False if not.
-
-        Raises Exception
-            - if WEBHOOK_URL is not set
+        Returns True if at least one POST succeeded.
+        Raises Exception if no URL is configured.
         """
-
-        webhook_url = os.getenv("WEBHOOK_URL", None)
-        if webhook_url is None:
-            raise Exception("Missing webhook_url from environment")
+        urls = self._get_budget_alert_webhook_urls()
+        if not urls:
+            raise Exception(
+                "No webhook URL configured for budget alerts (set alerting_args.budget_alerts_webhook_url or the WEBHOOK_URL env var)"
+            )
 
         payload = webhook_event.model_dump_json()
         headers = {"Content-type": "application/json"}
-
-        response = await self.async_http_handler.post(
-            url=webhook_url,
-            headers=headers,
-            data=payload,
-        )
-        if response.status_code == 200:
-            return True
-        else:
-            print("Error sending webhook alert. Error=", response.text)  # noqa: T201
-
-        return False
+        any_success = False
+        for url in urls:
+            response = await self.async_http_handler.post(url=url, headers=headers, data=payload)
+            if response.status_code == 200:
+                any_success = True
+            else:
+                verbose_proxy_logger.warning("Error sending webhook alert: %s", response.text)
+        return any_success
 
     async def _check_if_using_premium_email_feature(
         self,
@@ -1296,6 +1331,9 @@ Model Info:
             api_base: Optional[str] - api base for digest grouping
         """
         if self.alerting is None:
+            # a configured budget webhook URL works on its own - see is_budget_webhook_enabled()
+            if alert_type == "budget_alerts" and user_info is not None and self.is_budget_webhook_enabled():
+                await self.send_webhook_alert(webhook_event=user_info)
             return
 
         # Start periodic flush if not already started
@@ -1303,7 +1341,7 @@ Model Info:
             asyncio.create_task(self.periodic_flush())
             self.periodic_started = True
 
-        if "webhook" in self.alerting and alert_type == "budget_alerts" and user_info is not None:
+        if alert_type == "budget_alerts" and user_info is not None and self.is_budget_webhook_enabled():
             await self.send_webhook_alert(webhook_event=user_info)
 
         if "email" in self.alerting and alert_type == "budget_alerts" and user_info is not None:

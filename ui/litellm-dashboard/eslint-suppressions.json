@@ -2713,17 +2713,11 @@
   "src/components/alerting/alerting_settings.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "prefer-const": {
-      "count": 1
     }
   },
   "src/components/alerting/dynamic_form.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 4
     },
     "no-restricted-imports": {
       "count": 2
@@ -3794,6 +3788,9 @@
     },
     "local/no-complex-jsx-arrow": {
       "count": 2
+    },
+    "max-lines": {
+      "count": 1
     },
     "no-nested-ternary": {
       "count": 2

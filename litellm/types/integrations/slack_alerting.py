@@ -2,7 +2,7 @@ import os
 import time
 from datetime import datetime as dt
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, Union
+from typing import List, Optional, Set, Union
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -90,6 +90,22 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
     log_to_console: bool = Field(
         default=False,
         description="If true, the alerting payload will be printed to the console.",
+    )
+    key_budget_alert_thresholds: List[float] = Field(
+        default=[0.8, 0.85, 0.95],
+        description="Fraction of max_budget consumed at which to send alerts for virtual keys (e.g. [0.8, 0.9]). Each threshold fires once per budget period.",
+    )
+    team_budget_alert_thresholds: List[float] = Field(
+        default=[0.8, 0.85, 0.95],
+        description="Fraction of max_budget consumed at which to send alerts for teams.",
+    )
+    user_budget_alert_thresholds: List[float] = Field(
+        default=[0.8, 0.85, 0.95],
+        description="Fraction of max_budget consumed at which to send alerts for users.",
+    )
+    budget_alerts_webhook_url: Optional[str] = Field(
+        default=None,
+        description="URL that budget alerts are POSTed to as JSON. This is not a Slack webhook URL. Comma-separate the value to POST to several endpoints. Falls back to the WEBHOOK_URL env var when unset.",
     )
 
 

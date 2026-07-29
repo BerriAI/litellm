@@ -1913,16 +1913,24 @@ class ProxyLogging:
             type == "soft_budget" and user_info.alert_emails is not None and len(user_info.alert_emails) > 0
         )
 
-        if self.alerting is None and not is_soft_budget_with_alert_emails:
+        # SlackAlerting.budget_alerts() drives both the Slack message and the JSON webhook
+        # POST, so it has to run whenever budget webhooks are on - not only for "slack".
+        slack_alerting_instance = self.slack_alerting_instance
+        is_budget_webhook_enabled = (
+            slack_alerting_instance is not None and slack_alerting_instance.is_budget_webhook_enabled()
+        )
+
+        if self.alerting is None and not is_soft_budget_with_alert_emails and not is_budget_webhook_enabled:
             # do nothing if alerting is not switched on (unless it's a soft_budget alert with team-specific emails)
             return
 
-        if self.alerting is not None and "slack" in self.alerting:
-            if self.slack_alerting_instance is not None:
-                await self.slack_alerting_instance.budget_alerts(
-                    type=type,
-                    user_info=user_info,
-                )
+        if slack_alerting_instance and (
+            (self.alerting is not None and "slack" in self.alerting) or is_budget_webhook_enabled
+        ):
+            await slack_alerting_instance.budget_alerts(
+                type=type,
+                user_info=user_info,
+            )
 
         # Call email_logging_instance if:
         # 1. "email" is in alerting config, OR
