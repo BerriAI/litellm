@@ -1034,13 +1034,6 @@ if MCP_AVAILABLE:
 
         if connected_app_view is True and is_ui_session_credential(user_api_key_dict):
             reachable_ids = await _connected_app_reachable_server_ids(user_api_key_dict.user_id)
-            listed_ids = {server.server_id for server in redacted_mcp_servers}
-            missing_tables = [
-                global_mcp_server_manager._build_mcp_server_table(registry_server)
-                for missing_id in sorted(reachable_ids - listed_ids)
-                if (registry_server := global_mcp_server_manager.get_mcp_server_by_id(missing_id)) is not None
-            ]
-            redacted_mcp_servers.extend(_redact_mcp_credentials_list(missing_tables))
             for server in redacted_mcp_servers:
                 server.connected_app_reachable = server.server_id in reachable_ids
 
