@@ -1177,7 +1177,7 @@ class UpdateKeyRequest(KeyRequestBase):
     auto_rotate: Optional[bool] = None
     rotation_interval: Optional[str] = None
     organization_id: Optional[str] = None
-    key_type: Optional[LiteLLMKeyType] = None
+    key_type: LiteLLMKeyType | None = None
 
     @model_validator(mode="after")
     def validate_temp_budget(self) -> "UpdateKeyRequest":
