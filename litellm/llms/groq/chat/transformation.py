@@ -23,7 +23,7 @@ from litellm.llms.openai.chat.gpt_transformation import (
 )
 from litellm.llms.openai.common_utils import OpenAIError
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -35,11 +35,19 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
-from litellm.types.utils import ModelResponse, ModelResponseStream, PromptTokensDetailsWrapper
+from litellm.types.utils import ModelResponse, ModelResponseStream, ServerToolUse
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
 GROQ_COMPOUND_MODELS = frozenset({"compound", "compound-mini"})
+
+
+class GroqExecutedToolIdentity(BaseModel):
+    name: str | None = None
+    type: str | None = None
+
+
+_EXECUTED_TOOLS_ADAPTER = TypeAdapter(tuple[GroqExecutedToolIdentity, ...])
 
 
 class GroqChatConfig(OpenAILikeChatConfig):
@@ -308,22 +316,33 @@ class GroqChatConfig(OpenAILikeChatConfig):
             original_service_tier=getattr(model_response, "service_tier")
         )
         setattr(model_response, "service_tier", mapped_service_tier)
-        self._add_web_search_usage(model_response=model_response, raw_response=raw_response)
+        self._add_web_search_usage(model_response=model_response)
         return model_response
 
-    def _add_web_search_usage(self, model_response: ModelResponse, raw_response: httpx.Response) -> None:
-        searches = sum(
-            1
-            for choice in raw_response.json().get("choices") or []
-            for tool in (choice.get("message") or {}).get("executed_tools") or []
-            if tool.get("name") == "browser.search" or tool.get("type") == "browser_search"
-        )
+    def _add_web_search_usage(self, model_response: ModelResponse) -> None:
         usage = getattr(model_response, "usage", None)
-        if searches == 0 or usage is None:
+        if usage is None:
             return
-        if usage.prompt_tokens_details is None:
-            usage.prompt_tokens_details = PromptTokensDetailsWrapper()
-        usage.prompt_tokens_details.web_search_requests = searches
+        actions = self._executed_tool_actions(model_response)
+        searches = actions.count("browser.search") + actions.count("browser_search")
+        opens = actions.count("browser.open")
+        if searches == 0 and opens == 0:
+            return
+        usage.server_tool_use = ServerToolUse(web_search_requests=searches, browser_open_requests=opens)
+
+    @staticmethod
+    def _executed_tool_actions(model_response: ModelResponse) -> tuple[str | None, ...]:
+        try:
+            return tuple(
+                identity.name or identity.type
+                for choice in model_response.choices
+                for identity in _EXECUTED_TOOLS_ADAPTER.validate_python(
+                    getattr(getattr(choice, "message", None), "executed_tools", None) or ()
+                )
+            )
+        except ValidationError as e:
+            verbose_logger.info(f"Groq executed_tools entries did not match the expected shape; not billed: {e}")
+            return ()
 
     def _map_groq_service_tier(self, original_service_tier: Optional[str]) -> Literal["auto", "default", "flex"]:
         """

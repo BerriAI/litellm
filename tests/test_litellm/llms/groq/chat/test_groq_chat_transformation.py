@@ -150,10 +150,19 @@ def _searched_groq_response(executed_tools: list | None) -> dict:
     }
 
 
-EXECUTED_TOOLS_TWO_SEARCHES = [
+EXECUTED_TOOLS_THREE_SEARCHES_TWO_OPENS = [
     {"name": "browser.search", "type": "browser_search"},
     {"name": "browser.open", "type": "function"},
     {"name": "browser.search", "type": "browser_search"},
+    {"type": "browser_search"},
+    {"name": "browser.open", "type": "browser_search"},
+    {"name": "browser.find", "type": "browser.find"},
+]
+
+EXECUTED_TOOLS_OPENS_ONLY = [
+    {"name": "browser.open", "type": "browser.open"},
+    {"name": "browser.open", "type": "function"},
+    {"name": "browser.find", "type": "browser.find"},
 ]
 
 
@@ -175,18 +184,32 @@ def _groq_completion_with_mocked_response(response_json: dict) -> litellm.ModelR
 
 
 class TestGroqWebSearchUsageSignal:
-    def test_counts_browser_searches_into_usage(self):
-        response = _groq_completion_with_mocked_response(_searched_groq_response(EXECUTED_TOOLS_TWO_SEARCHES))
-        assert response.usage.prompt_tokens_details.web_search_requests == 2
+    @pytest.mark.parametrize(
+        "executed_tools, expected_searches, expected_opens",
+        [
+            (EXECUTED_TOOLS_THREE_SEARCHES_TWO_OPENS, 3, 2),
+            (EXECUTED_TOOLS_OPENS_ONLY, 0, 2),
+        ],
+    )
+    def test_counts_actions_into_usage(self, executed_tools: list, expected_searches: int, expected_opens: int):
+        response = _groq_completion_with_mocked_response(_searched_groq_response(executed_tools))
+        assert response.usage.server_tool_use.web_search_requests == expected_searches
+        assert response.usage.server_tool_use.browser_open_requests == expected_opens
 
     def test_no_signal_without_executed_tools(self):
         response = _groq_completion_with_mocked_response(_searched_groq_response(None))
-        details = response.usage.prompt_tokens_details
-        assert details is None or details.web_search_requests is None
+        assert getattr(response.usage, "server_tool_use", None) is None
 
     @pytest.mark.usefixtures("local_model_cost_map")
-    def test_searched_response_billed(self):
-        response = _groq_completion_with_mocked_response(_searched_groq_response(EXECUTED_TOOLS_TWO_SEARCHES))
+    @pytest.mark.parametrize(
+        "executed_tools, expected_cost",
+        [
+            (EXECUTED_TOOLS_THREE_SEARCHES_TWO_OPENS, 3 * 0.005 + 2 * 0.001),
+            (EXECUTED_TOOLS_OPENS_ONLY, 2 * 0.001),
+        ],
+    )
+    def test_response_billed_per_action(self, executed_tools: list, expected_cost: float):
+        response = _groq_completion_with_mocked_response(_searched_groq_response(executed_tools))
         assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
             response_object=response, usage=response.usage
         )
@@ -197,7 +220,7 @@ class TestGroqWebSearchUsageSignal:
             custom_llm_provider="groq",
             standard_built_in_tools_params={"web_search_options": {"search_context_size": "high"}},
         )
-        assert cost == pytest.approx(2 * 0.005)
+        assert cost == pytest.approx(expected_cost)
 
 
 class TestGroqWebSearchCost:

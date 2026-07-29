@@ -1578,6 +1578,7 @@ class PromptTokensDetailsWrapper(
 class ServerToolUse(BaseModel):
     web_search_requests: Optional[int] = None
     tool_search_requests: Optional[int] = None
+    browser_open_requests: Optional[int] = None
 
     def __getitem__(self, key: str) -> Optional[int]:
         if key not in self.__class__.model_fields:
