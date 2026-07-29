@@ -17,13 +17,19 @@ export function BadgeLink({ href, variant = "secondary", className, children }: 
   const router = useRouter();
 
   const handleClick = (e: React.MouseEvent) => {
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+    const hasModifierKey = e.metaKey || e.ctrlKey || e.shiftKey;
+    const isNativeNewTabClick = hasModifierKey || e.button === 1;
+    if (isNativeNewTabClick) return;
     e.preventDefault();
     router.push(href);
   };
 
   return (
-    <Badge variant={variant} className={cn("cursor-pointer", className)} render={<a href={href} onClick={handleClick} />}>
+    <Badge
+      variant={variant}
+      className={cn("cursor-pointer px-2.5 py-1 text-sm", className)}
+      render={<a href={href} onClick={handleClick} />}
+    >
       {children}
     </Badge>
   );
