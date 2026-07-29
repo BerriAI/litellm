@@ -186,7 +186,7 @@ def test_trigger_cooldown_skips_when_no_deployment_id():
 def test_trigger_cooldown_uses_deployment_cooldown_time_when_present():
     router = MagicMock()
     router.cooldown_time = 60
-    router.get_model_info.return_value = {"litellm_params": {"cooldown_time": 30}}
+    router.get_model_info.return_value = {"model_info": {"cooldown_time": 30}}
 
     exc = RuntimeError("upstream error")
     exc.status_code = 429
@@ -204,6 +204,31 @@ def test_trigger_cooldown_uses_deployment_cooldown_time_when_present():
 
     _, call_kwargs = mock_set.call_args
     assert call_kwargs["time_to_cooldown"] == 30
+
+
+def test_trigger_cooldown_ignores_litellm_params_cooldown_time():
+    """litellm_params gets copied into the actual provider call kwargs, so a
+    cooldown_time placed there (instead of model_info) must not be read."""
+    router = MagicMock()
+    router.cooldown_time = 60
+    router.get_model_info.return_value = {"litellm_params": {"cooldown_time": 30}}
+
+    exc = RuntimeError("upstream error")
+    exc.status_code = 429
+
+    kwargs = {
+        "litellm_metadata": {"model_info": {"id": "deployment-abc"}, "deployment_model_name": "gpt-4"}
+    }
+
+    with patch(
+        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
+    ) as mock_set:
+        _trigger_cooldown_for_failed_deployment(
+            litellm_router=router, kwargs=kwargs, exception=exc
+        )
+
+    _, call_kwargs = mock_set.call_args
+    assert call_kwargs["time_to_cooldown"] == 60
 
 
 def test_trigger_cooldown_silently_catches_exceptions():
