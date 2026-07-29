@@ -1,5 +1,5 @@
 import json
-from typing import Any, List, Tuple
+from typing import Any, AsyncIterator, Iterator, List, Mapping, Tuple, Union
 
 import os
 
@@ -7,9 +7,16 @@ import httpx
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.openai.chat.gpt_transformation import (
+    OpenAIChatCompletionStreamingHandler,
+)
 from litellm.llms.openai.openai import OpenAIConfig
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
-from litellm.types.utils import ModelResponse
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionThinkingBlock,
+    ChatCompletionToolCallChunk,
+)
+from litellm.types.utils import ModelResponse, ModelResponseStream
 
 from ..authenticator import Authenticator
 from ..common_utils import (
@@ -320,3 +327,76 @@ class GithubCopilotConfig(OpenAIConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: bool | None = False,
+    ) -> "GithubCopilotChatCompletionStreamingHandler":
+        return GithubCopilotChatCompletionStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+    def transform_parsed_streaming_chunk_dict(
+        self,
+        parsed_chunk: dict,  # mutable-ok: base signature takes a parsed chunk dict
+    ) -> Mapping[str, Any] | None:
+        return _remap_copilot_reasoning_chunk(parsed_chunk)
+
+
+def _remap_copilot_reasoning_delta(delta: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    reasoning_text = delta.get("reasoning_text")
+    reasoning_opaque = delta.get("reasoning_opaque")
+    if reasoning_text is None and reasoning_opaque is None:
+        return None
+
+    thinking_block = ChatCompletionThinkingBlock(type="thinking", thinking=reasoning_text or "")
+    if reasoning_opaque is not None:
+        thinking_block["signature"] = reasoning_opaque
+
+    return {
+        **{k: v for k, v in delta.items() if k not in ("reasoning_text", "reasoning_opaque")},
+        **({"reasoning_content": reasoning_text} if reasoning_text is not None else {}),
+        "thinking_blocks": [thinking_block],
+        "provider_specific_fields": {
+            **(delta.get("provider_specific_fields") or {}),
+            **({"reasoning_text": reasoning_text} if reasoning_text is not None else {}),
+            **({"reasoning_opaque": reasoning_opaque} if reasoning_opaque is not None else {}),
+        },
+    }
+
+
+def _remap_copilot_reasoning_chunk(chunk: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """
+    GitHub Copilot streams extended thinking as `delta.reasoning_text` deltas followed by a final
+    `delta.reasoning_opaque` signature chunk; neither key is understood by the OpenAI schema, so
+    they get dropped. Returns None when the chunk carries no Copilot reasoning keys.
+
+    See: https://github.com/BerriAI/litellm/issues/35021
+    """
+    choices = chunk.get("choices") or []
+    remapped_deltas = tuple(
+        _remap_copilot_reasoning_delta(choice["delta"]) if isinstance(choice.get("delta"), dict) else None
+        for choice in choices
+    )
+    if not any(delta is not None for delta in remapped_deltas):
+        return None
+
+    return {
+        **chunk,
+        "choices": [
+            choice if delta is None else {**choice, "delta": delta}
+            for choice, delta in zip(choices, remapped_deltas)
+        ],
+    }
+
+
+class GithubCopilotChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
+    def chunk_parser(
+        self,
+        chunk: dict,  # mutable-ok: base signature takes a chunk dict
+    ) -> ModelResponseStream:
+        return super().chunk_parser(dict(_remap_copilot_reasoning_chunk(chunk) or chunk))

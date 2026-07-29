@@ -3,6 +3,7 @@ import types
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncIterable,
     AsyncIterator,
     Callable,
     Coroutine,
@@ -706,6 +707,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             logging_obj=logging_obj,
                             headers=headers,
                             data=data,
+                            provider_config=provider_config,
                             model=model,
                             api_base=api_base,
                             api_key=api_key,
@@ -950,11 +952,31 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     body=exception_body,
                 )
 
+    @staticmethod
+    def _apply_provider_streaming_chunk_transform(
+        response: Union[Iterable[BaseModel], AsyncIterable[BaseModel]],
+        provider_config: BaseConfig,
+    ) -> Union[Iterator[Union[BaseModel, ModelResponseStream]], AsyncIterator[Union[BaseModel, ModelResponseStream]]]:
+        def transform(chunk: BaseModel) -> Union[BaseModel, ModelResponseStream]:
+            parsed_chunk = provider_config.transform_parsed_streaming_chunk_dict(chunk.model_dump())
+            return chunk if parsed_chunk is None else ModelResponseStream(**dict(parsed_chunk))
+
+        if isinstance(response, AsyncIterable):
+
+            async def aiterator() -> AsyncIterator[Union[BaseModel, ModelResponseStream]]:
+                async for chunk in response:
+                    yield transform(chunk)
+
+            return aiterator()
+
+        return (transform(chunk) for chunk in response)
+
     def streaming(
         self,
         logging_obj,
         timeout: Union[float, httpx.Timeout],
         data: dict,
+        provider_config: BaseConfig,
         model: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
@@ -998,7 +1020,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
         logging_obj.model_call_details["response_headers"] = headers
         streamwrapper = CustomStreamWrapper(
-            completion_stream=response,
+            completion_stream=self._apply_provider_streaming_chunk_transform(response, provider_config),
             model=model,
             custom_llm_provider="openai",
             logging_obj=logging_obj,
@@ -1070,7 +1092,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 )
                 logging_obj.model_call_details["response_headers"] = headers
                 streamwrapper = CustomStreamWrapper(
-                    completion_stream=response,
+                    completion_stream=self._apply_provider_streaming_chunk_transform(response, provider_config),
                     model=model,
                     custom_llm_provider="openai",
                     logging_obj=logging_obj,
