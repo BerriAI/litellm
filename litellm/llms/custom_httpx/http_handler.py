@@ -630,7 +630,7 @@ class AsyncHTTPHandler:
                 files=files,
                 content=request_content,
             )
-            response = await self._send(req, stream=stream)
+            response = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
         except httpx.TimeoutException as e:
@@ -681,7 +681,7 @@ class AsyncHTTPHandler:
                 timeout=timeout,
                 content=request_content,  # type: ignore
             )
-            response = await self._send(req)
+            response = await self.client.send(req)
             response.raise_for_status()
             return response
         except httpx.TimeoutException as e:
@@ -730,7 +730,7 @@ class AsyncHTTPHandler:
                 timeout=timeout,
                 content=request_content,  # type: ignore
             )
-            response = await self._send(req)
+            response = await self.client.send(req)
             response.raise_for_status()
             return response
         except httpx.TimeoutException as e:
@@ -779,31 +779,13 @@ class AsyncHTTPHandler:
                 timeout=timeout,
                 content=request_content,  # type: ignore
             )
-            response = await self._send(req, stream=stream)
+            response = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
         except httpx.HTTPStatusError as e:
             await _raise_masked_async_error(e, stream)
         except Exception as e:
             raise e
-
-    async def _send(self, req: httpx.Request, stream: bool = False) -> httpx.Response:
-        """
-        Send `req`, retrying once if the connection died before a response arrived.
-
-        A pooled keep-alive connection the upstream has already dropped fails this
-        way. The transport evicts the dead connection, so the retry is served over
-        a fresh one from the same client: no single-use client to own, no lifetime
-        coupling between a client and a streaming body, and a faithful replay of
-        the original request (same method, same body, same client configuration).
-
-        `raise_for_status()` stays with the caller so a retry-path 4xx/5xx still
-        reaches its `except httpx.HTTPStatusError` clause and gets masked.
-        """
-        try:
-            return await self.client.send(req, stream=stream)
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
-            return await self.client.send(req, stream=stream)
 
     def __del__(self) -> None:
         try:
