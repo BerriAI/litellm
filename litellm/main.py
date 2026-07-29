@@ -27,7 +27,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncIterator,
-    Callable,
     Coroutine,
     Dict,
     Iterable,
@@ -81,19 +80,19 @@ from litellm.constants import (
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.chat_completion_agentic_loop import (
-    maybe_run_chat_completion_agentic_loop,
-)
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
 )
-from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
-from litellm.litellm_core_utils.request_timeout_resolver import (
-    get_configured_request_timeout,
+from litellm.litellm_core_utils.chat_completion_agentic_loop import (
+    maybe_run_chat_completion_agentic_loop,
 )
-from litellm.litellm_core_utils.get_litellm_params import OPTIONAL_KWARGS_KEYS
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.get_litellm_params import (
+    AWS_CREDENTIAL_KWARGS_KEYS,
+    OPTIONAL_KWARGS_KEYS,
+)
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
 )
@@ -108,6 +107,9 @@ from litellm.litellm_core_utils.mock_functions import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
+)
+from litellm.litellm_core_utils.request_timeout_resolver import (
+    get_configured_request_timeout,
 )
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
@@ -218,24 +220,25 @@ from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
+from .llms.gdc.chat.transformation import GDCGeminiConfig
 from .llms.gemini.common_utils import get_api_key_from_env
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
-from .llms.oci.chat.transformation import OCIChatConfig
-from .llms.ollama.completion import handler as ollama
-from .llms.oobabooga.chat import oobabooga
-from .llms.openai.completion.handler import OpenAITextCompletion
-from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
-from .llms.openai.openai import OpenAIChatCompletion
 from .llms.nvidia_riva.audio_transcription.handler import (
     NvidiaRivaAudioTranscription,
 )
 from .llms.nvidia_riva.audio_transcription.transformation import (
     NvidiaRivaAudioTranscriptionConfig,
 )
+from .llms.oci.chat.transformation import OCIChatConfig
+from .llms.ollama.completion import handler as ollama
+from .llms.oobabooga.chat import oobabooga
+from .llms.openai.completion.handler import OpenAITextCompletion
+from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
+from .llms.openai.openai import OpenAIChatCompletion
 from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
@@ -318,6 +321,7 @@ google_batch_embeddings = GoogleBatchEmbeddings()
 vertex_partner_models_chat_completion = VertexAIPartnerModels()
 vertex_gemma_chat_completion = VertexAIGemmaModels()
 vertex_model_garden_chat_completion = VertexAIModelGardenModels()
+gdc_transformation = GDCGeminiConfig()
 # vertex_text_to_speech is now replaced by VertexAITextToSpeechConfig
 sagemaker_llm = SagemakerLLM()
 watsonx_chat_completion = WatsonXChatHandler()
@@ -505,6 +509,20 @@ async def acompletion(
     #########################################################
     #########################################################
     litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
+
+    from litellm.integrations.anthropic_cache_control_hook import (
+        AnthropicCacheControlHook,
+    )
+    from litellm.types.llms.openai import AllMessageValues
+
+    AnthropicCacheControlHook.maybe_seed_default_injection_points(
+        non_default_params=kwargs,
+        messages=cast(list[AllMessageValues], messages),  # cast-ok: acompletion types messages as a bare List
+        model=model,
+        custom_llm_provider=cast(Optional[str], custom_llm_provider),  # cast-ok: read from untyped kwargs
+        tools=tools,
+    )
+
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
         litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=kwargs.get("prompt_id", None),
@@ -580,6 +598,7 @@ async def acompletion(
         "api_key": api_key,
         "model_list": model_list,
         "reasoning_effort": reasoning_effort,
+        "verbosity": verbosity,
         "safety_identifier": safety_identifier,
         "service_tier": service_tier,
         "extra_headers": extra_headers,
@@ -1077,6 +1096,54 @@ def _build_custom_pricing_entry(
                 entry.setdefault(key, model_info[key])
 
     return entry
+
+
+def _get_router_deployment_id(kwargs: dict) -> Optional[str]:
+    for metadata_key in ("litellm_metadata", "metadata"):
+        metadata = kwargs.get(metadata_key) or {}
+        if not isinstance(metadata, dict):
+            continue
+        deployment_model_info = metadata.get("model_info") or {}
+        if not isinstance(deployment_model_info, dict):
+            continue
+        deployment_id = deployment_model_info.get("id")
+        if deployment_id is not None:
+            return str(deployment_id)
+    return None
+
+
+def _register_custom_pricing_for_request(
+    model: str,
+    custom_llm_provider: str,
+    kwargs: dict,
+    model_info: Optional[dict],
+) -> None:
+    """Register per-request custom pricing in litellm.model_cost.
+
+    Router-originated requests (identified by the deployment id the router puts
+    in metadata) get their full pricing registered under that unique id only;
+    the shared ``{provider}/{model}`` key receives the entry with pricing fields
+    stripped, mirroring Router._create_deployment. This keeps one deployment's
+    pricing overrides (e.g. a zero-cost wildcard) from clobbering built-in
+    pricing used by sibling deployments of the same backend model. Direct SDK
+    calls keep the legacy behavior of registering the shared key with pricing.
+    """
+    entry = _build_custom_pricing_entry(
+        custom_llm_provider=custom_llm_provider,
+        kwargs=kwargs,
+        model_info=model_info,
+    )
+    shared_key = f"{custom_llm_provider}/{model}"
+    deployment_id = _get_router_deployment_id(kwargs)
+    if deployment_id is None:
+        litellm.register_model({shared_key: entry})
+        return
+    litellm.register_model(
+        {
+            deployment_id: entry,
+            shared_key: CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry),
+        }
+    )
 
 
 def _complete_azure(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
@@ -4336,6 +4403,45 @@ def _complete_gradient_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     )
 
 
+def _complete_gdc(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    acompletion = ctx.acompletion
+    api_base = ctx.api_base
+    api_key = ctx.api_key
+    client = ctx.client
+    custom_llm_provider = ctx.custom_llm_provider
+    headers = ctx.headers
+    litellm_params = ctx.litellm_params
+    logging = ctx.logging
+    messages = ctx.messages
+    model = ctx.model
+    model_response = ctx.model_response
+    optional_params = ctx.optional_params
+    stream = ctx.stream
+    timeout = ctx.timeout
+
+    api_key = api_key or litellm.gdc_key or get_secret_str("GDC_API_KEY") or litellm.api_key
+    api_base = api_base or litellm.gdc_api_base or get_secret_str("GDC_API_BASE") or litellm.api_base
+
+    return base_llm_http_handler.completion(
+        model=model,
+        messages=messages,
+        headers=headers,
+        model_response=model_response,
+        api_key=api_key,
+        api_base=api_base,
+        acompletion=acompletion,
+        logging_obj=logging,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        timeout=timeout,  # type: ignore
+        client=client,
+        custom_llm_provider=custom_llm_provider,
+        encoding=_get_encoding(),
+        stream=stream,
+        provider_config=gdc_transformation,
+    )
+
+
 def _complete_bytez(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion = ctx.acompletion
     api_base = ctx.api_base
@@ -4962,6 +5068,19 @@ def completion(  # type: ignore
     litellm_params = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
 
+    from litellm.integrations.anthropic_cache_control_hook import (
+        AnthropicCacheControlHook,
+    )
+    from litellm.types.llms.openai import AllMessageValues
+
+    AnthropicCacheControlHook.maybe_seed_default_injection_points(
+        non_default_params=non_default_params,
+        messages=cast(list[AllMessageValues], messages),  # cast-ok: completion types messages as a bare List
+        model=model,
+        custom_llm_provider=cast(Optional[str], kwargs.get("custom_llm_provider")),  # cast-ok: untyped kwargs
+        tools=tools,
+    )
+
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
         litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id, non_default_params=non_default_params
@@ -4992,7 +5111,10 @@ def completion(  # type: ignore
     try:
         if base_url is not None:
             api_base = base_url
-        if num_retries is not None:
+        is_router_call = any("model_group" in (kwargs.get(k) or ()) for k in ("metadata", "litellm_metadata"))
+        if is_router_call:
+            max_retries = 0
+        elif num_retries is not None:
             max_retries = num_retries
         logging: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, litellm_logging_obj)
         fallbacks = fallbacks or litellm.model_fallbacks
@@ -5066,14 +5188,11 @@ def completion(  # type: ignore
         if (
             input_cost_per_token is not None and output_cost_per_token is not None
         ) or input_cost_per_second is not None:
-            litellm.register_model(
-                {
-                    f"{custom_llm_provider}/{model}": _build_custom_pricing_entry(
-                        custom_llm_provider=custom_llm_provider,
-                        kwargs=kwargs,
-                        model_info=model_info,
-                    )
-                }
+            _register_custom_pricing_for_request(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=kwargs,
+                model_info=model_info,
             )
         ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
         custom_prompt_dict = {}  # type: ignore
@@ -5152,6 +5271,7 @@ def completion(  # type: ignore
             "parallel_tool_calls": parallel_tool_calls,
             "messages": messages,
             "reasoning_effort": reasoning_effort,
+            "verbosity": verbosity,
             "thinking": thinking,
             "web_search_options": web_search_options,
             "include_server_side_tool_invocations": (
@@ -5234,7 +5354,7 @@ def completion(  # type: ignore
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
-            aws_bedrock_project_id=kwargs.get("aws_bedrock_project_id"),
+            **{key: kwargs[key] for key in AWS_CREDENTIAL_KWARGS_KEYS if key in kwargs},
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
@@ -5533,6 +5653,8 @@ def completion(  # type: ignore
         elif custom_llm_provider == "gradient_ai":
             response = _complete_gradient_ai(_dispatch_ctx)
 
+        elif custom_llm_provider == "gdc":
+            response = _complete_gdc(_dispatch_ctx)
         elif custom_llm_provider == "bytez":
             response = _complete_bytez(_dispatch_ctx)
         elif custom_llm_provider == "lemonade":
@@ -5914,14 +6036,11 @@ def embedding(
 
     ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
     if (input_cost_per_token is not None and output_cost_per_token is not None) or input_cost_per_second is not None:
-        litellm.register_model(
-            {
-                f"{custom_llm_provider}/{model}": _build_custom_pricing_entry(
-                    custom_llm_provider=custom_llm_provider,
-                    kwargs=kwargs,
-                    model_info=kwargs.get("model_info"),
-                )
-            }
+        _register_custom_pricing_for_request(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            kwargs=kwargs,
+            model_info=kwargs.get("model_info"),
         )
 
     litellm_params_dict = get_litellm_params(**kwargs)
@@ -7605,6 +7724,32 @@ def transcription(
             headers=extra_headers,
             provider_config=provider_config,  # type: ignore[arg-type]
         )
+    elif custom_llm_provider == "bedrock":
+        from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
+
+        dispatch = BedrockAudioTranscriptionRustDispatch()
+        if atranscription:
+            response = dispatch.async_audio_transcriptions(
+                model=model,
+                audio_file=file,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                optional_params=optional_params,
+                timeout=timeout,
+            )
+        else:
+            response = dispatch.audio_transcriptions(
+                model=model,
+                audio_file=file,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                optional_params=optional_params,
+                timeout=timeout,
+            )
     elif provider_config is not None:
         response = base_llm_http_handler.audio_transcriptions(
             model=model,
@@ -8261,26 +8406,6 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
     finish_reason = chunks[-1]["choices"][0]["finish_reason"]
     logprobs = chunks[-1]["choices"][0]["logprobs"]
 
-    response = {
-        "id": id,
-        "object": object,
-        "created": created,
-        "model": model,
-        "system_fingerprint": system_fingerprint,
-        "choices": [
-            {
-                "text": None,
-                "index": 0,
-                "logprobs": logprobs,
-                "finish_reason": finish_reason,
-            }
-        ],
-        "usage": {
-            "prompt_tokens": None,
-            "completion_tokens": None,
-            "total_tokens": None,
-        },
-    }
     content_list = []
     for chunk in chunks:
         choices = chunk["choices"]
@@ -8292,25 +8417,37 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
     # Combine the "content" strings into a single string || combine the 'function' strings into a single string
     combined_content = "".join(content_list)
 
-    # Update the "content" field within the response dictionary
-    response["choices"][0]["text"] = combined_content
-
-    if len(combined_content) > 0:
-        pass
-    else:
-        pass
-    # # Update usage information if needed
     try:
-        response["usage"]["prompt_tokens"] = token_counter(model=model, messages=messages)
+        prompt_tokens = token_counter(model=model, messages=messages)
     except Exception:  # don't allow this failing to block a complete streaming response from being returned
         print_verbose("token_counter failed, assuming prompt tokens is 0")
-        response["usage"]["prompt_tokens"] = 0
-    response["usage"]["completion_tokens"] = token_counter(
+        prompt_tokens = 0
+    completion_tokens = token_counter(
         model=model,
         text=combined_content,
         count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
     )
-    response["usage"]["total_tokens"] = response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
+
+    response = {
+        "id": id,
+        "object": object,
+        "created": created,
+        "model": model,
+        "system_fingerprint": system_fingerprint,
+        "choices": [
+            {
+                "text": combined_content,
+                "index": 0,
+                "logprobs": logprobs,
+                "finish_reason": finish_reason,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
     return TextCompletionResponse(**response)
 
 

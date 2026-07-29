@@ -1,8 +1,7 @@
 import { isAdminRole } from "@/utils/roles";
-import { LoadingOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Button, Text, Title } from "@tremor/react";
-import { Form, Input, Modal, Select, Spin, Table } from "antd";
+import { Form, Input, Modal, Select } from "antd";
 import React, { useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -13,7 +12,7 @@ import {
   updateSearchTool,
 } from "@/components/networking";
 import CreateSearchTool from "./CreateSearchTools";
-import { searchToolColumns } from "./SearchToolColumn";
+import SearchToolTable from "./SearchToolTable";
 import { SearchToolView } from "./SearchToolView";
 import { AvailableSearchProvider, SearchTool } from "./types";
 
@@ -58,34 +57,29 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
   const [isEditModalVisible, setEditModalVisible] = useState(false);
   const [form] = Form.useForm();
 
-  const columns = React.useMemo(
-    () =>
-      searchToolColumns(
-        (toolId: string) => {
-          setSelectedToolId(toolId);
-          setEditTool(false);
-        },
-        (toolId: string) => {
-          const tool = searchTools?.find((t) => t.search_tool_id === toolId);
-          if (tool) {
-            form.setFieldsValue({
-              search_tool_name: tool.search_tool_name,
-              search_provider: tool.litellm_params.search_provider,
-              api_key: tool.litellm_params.api_key,
-              api_base: tool.litellm_params.api_base,
-              timeout: tool.litellm_params.timeout,
-              max_retries: tool.litellm_params.max_retries,
-              description: tool.search_tool_info?.description,
-            });
-            setSelectedToolId(toolId);
-            setEditModalVisible(true);
-          }
-        },
-        handleDelete,
-        availableProviders,
-      ),
-    [availableProviders, searchTools, form],
-  );
+  const handleView = (toolId: string) => {
+    setSelectedToolId(toolId);
+    setEditTool(false);
+  };
+
+  const handleEditOpen = (toolId: string) => {
+    const tool = searchTools?.find((t) => t.search_tool_id === toolId);
+    if (!tool) {
+      return;
+    }
+    const editFormValues = {
+      search_tool_name: tool.search_tool_name,
+      search_provider: tool.litellm_params.search_provider,
+      api_key: tool.litellm_params.api_key,
+      api_base: tool.litellm_params.api_base,
+      timeout: tool.litellm_params.timeout,
+      max_retries: tool.litellm_params.max_retries,
+      description: tool.search_tool_info?.description,
+    };
+    form.setFieldsValue(editFormValues);
+    setSelectedToolId(toolId);
+    setEditModalVisible(true);
+  };
 
   function handleDelete(toolId: string) {
     setToolToDelete(toolId);
@@ -194,7 +188,6 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
   );
 
   if (!accessToken || !userRole || !userID) {
-    console.log("Missing required authentication parameters", { accessToken, userRole, userID });
     return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>;
   }
 
@@ -221,19 +214,14 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
       />
     ) : (
       <div className="w-full h-full">
-        <Spin spinning={isLoadingTools} indicator={<LoadingOutlined spin />} size="large">
-          <Table
-            bordered
-            dataSource={searchTools || []}
-            columns={columns}
-            rowKey={(record) => record.search_tool_id || record.search_tool_name}
-            pagination={false}
-            locale={{
-              emptyText: "No search tools configured",
-            }}
-            size="small"
-          />
-        </Spin>
+        <SearchToolTable
+          searchTools={searchTools || []}
+          isLoading={isLoadingTools}
+          availableProviders={availableProviders}
+          onView={handleView}
+          onEdit={handleEditOpen}
+          onDelete={handleDelete}
+        />
       </div>
     );
 

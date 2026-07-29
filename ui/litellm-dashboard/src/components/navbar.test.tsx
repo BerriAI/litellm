@@ -252,7 +252,7 @@ describe("Navbar", () => {
     expect(screen.queryByRole("button", { name: /^notifications$/i })).not.toBeInTheDocument();
   });
 
-  it("should handle hide new features toggle", async () => {
+  it("should handle hide new feature indicators toggle", async () => {
     const user = userEvent.setup();
 
     // Initially disabled

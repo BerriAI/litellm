@@ -20,12 +20,16 @@ from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_no_callback_env_reference,
 )
+from litellm.types.integrations.compression_interception import (
+    CompressionSavingsMetadata,
+)
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import (
     AllMessageValues,
     ResponsesAPIResponse,
 )
 from litellm.types.mcp import (
+    MCPAuth,
     MCPAuthType,
     MCPCredentials,
     MCPTransport,
@@ -189,6 +193,9 @@ class LitellmTableNames(str, enum.Enum):
     TOOL_TABLE_NAME = "LiteLLM_ToolTable"
     CACHE_CONFIG_TABLE_NAME = "LiteLLM_CacheConfig"
     CONFIG_OVERRIDES_TABLE_NAME = "LiteLLM_ConfigOverrides"
+    CONFIG_TABLE_NAME = "LiteLLM_Config"
+    SSO_CONFIG_TABLE_NAME = "LiteLLM_SSOConfig"
+    UI_SETTINGS_TABLE_NAME = "LiteLLM_UISettings"
 
 
 class Litellm_EntityType(enum.Enum):
@@ -585,6 +592,7 @@ class LiteLLMRoutes(enum.Enum):
             # team
             "/team/new",
             "/team/update",
+            "/team/{team_id}",
             "/team/delete",
             "/team/list",
             "/v2/team/list",
@@ -621,6 +629,10 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/logs/v2",
         "/spend/logs/ui",
         "/spend/logs/session/ui",
+        # Reads end users out of spend logs, scoped to the caller's own rows and
+        # permitted teams exactly like /spend/logs/ui — it belongs to the same
+        # access tier, not to customer management.
+        "/management/v1/spend_logs/end_users",
         "/cost/estimate",
     ]
 
@@ -811,10 +823,12 @@ class LiteLLMRoutes(enum.Enum):
             # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
             "/customer/list",
             "/customer/info",
-            # UI Logs page detail drawer (single + session). The list endpoint
-            # `/spend/logs/ui` is covered via spend_tracking_routes below.
+            # UI Logs page detail drawer (single + session) and the end-user filter
+            # facet. The list endpoint `/spend/logs/ui` is covered via
+            # spend_tracking_routes below.
             "/spend/logs/ui/{logId}",
             "/spend/logs/session/ui",
+            "/management/v1/spend_logs/end_users",
             # Settings / observability read endpoints exposed in admin-only
             # sidebar groups (Logging & Alerts, Admin Settings, Budgets,
             # Invitations).
@@ -1003,12 +1017,13 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     agent_access_groups: Optional[List[str]] = None
     models: Optional[List[str]] = None
     search_tools: Optional[List[str]] = None
+    mcp_tool_search_enabled: Optional[bool] = None
 
 
+from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
 from litellm.types.object_permission import (  # noqa: E402
     ObjectPermissionDict as ObjectPermissionDict,
 )
-from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
 
 
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
@@ -1035,11 +1050,13 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     config: Optional[dict] = {}
     permissions: Optional[dict] = {}
     model_max_budget: Optional[dict] = {}  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
+    budget_fallbacks: Optional[dict[str, list[str]]] = None
 
     model_config = ConfigDict(protected_namespaces=())
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
     mcp_rpm_limit: Optional[Dict[str, int]] = None
+    tag_rpm_limit: Optional[dict[str, int]] = None
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
     prompts: Optional[List[str]] = None
@@ -1065,6 +1082,7 @@ class KeyRequestBase(GenerateRequestBase):
     budget_id: Optional[str] = None
     tags: Optional[List[str]] = None
     disable_global_guardrails: Optional[bool] = None
+    throttle_on_budget_exceeded: Optional[bool] = None
     enforced_params: Optional[List[str]] = None
     allowed_routes: Optional[list] = []
     allowed_passthrough_routes: Optional[list] = None
@@ -1109,6 +1127,7 @@ class GenerateKeyRequest(KeyRequestBase):
 class GenerateKeyResponse(KeyRequestBase):
     key: str  # type: ignore
     key_name: Optional[str] = None
+    key_type: str | None = None
     expires: Optional[datetime] = None
     user_id: Optional[str] = None
     token_id: Optional[str] = None
@@ -1132,6 +1151,7 @@ class GenerateKeyResponse(KeyRequestBase):
             "config",
             "permissions",
             "model_max_budget",
+            "budget_fallbacks",
             "router_settings",
             "budget_limits",
         ]
@@ -1221,6 +1241,14 @@ from litellm.models.mcp_server import (  # noqa: E402
 
 
 # MCP Proxy Request Types
+def _dcr_bridge_auth_type_error(auth_type: object) -> ValueError:
+    return ValueError(
+        f"dcr_bridge is only supported for auth_type true_passthrough or oauth_delegate (got {auth_type!r}). "
+        "The DCR bridge serves gateway-hosted OAuth discovery for the client-forwarded token modes; "
+        "interactive oauth2 servers already run the gateway authorization-code flow."
+    )
+
+
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
     server_name: Optional[str] = None
@@ -1244,19 +1272,30 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+    issuer: Optional[str] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
+    # Token Exchange (OBO) fields — RFC 8693. These top-level fields are the
+    # canonical shape; the same keys inside ``credentials`` are the legacy
+    # pre-column REST shape and are lifted into these columns on write (an
+    # explicit top-level value wins) and stripped from the stored blob.
+    token_exchange_endpoint: Optional[str] = None
+    audience: Optional[str] = None
+    subject_token_type: Optional[str] = None
+    token_exchange_profile: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
+    dcr_bridge: Optional[bool] = None
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
     timeout: Optional[float] = None
+    max_concurrent_requests: Optional[int] = None
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: Optional[str] = Field(
@@ -1305,6 +1344,16 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         """
         return values
 
+    @model_validator(mode="before")
+    @classmethod
+    def validate_dcr_bridge_auth_type(cls, values):
+        if not isinstance(values, dict) or not values.get("dcr_bridge"):
+            return values
+        auth_type = values.get("auth_type")
+        if auth_type in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
+            return values
+        raise _dcr_bridge_auth_type_error(auth_type)
+
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
@@ -1329,19 +1378,30 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+    issuer: Optional[str] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
+    # Token Exchange (OBO) fields — RFC 8693. These top-level fields are the
+    # canonical shape; the same keys inside ``credentials`` are the legacy
+    # pre-column REST shape and are lifted into these columns on write (an
+    # explicit top-level value wins) and stripped from the stored blob.
+    token_exchange_endpoint: Optional[str] = None
+    audience: Optional[str] = None
+    subject_token_type: Optional[str] = None
+    token_exchange_profile: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
+    dcr_bridge: Optional[bool] = None
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
     timeout: Optional[float] = None
+    max_concurrent_requests: Optional[int] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1364,6 +1424,21 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                 if not values.get("url") and not values.get("spec_path"):
                     raise ValueError("url or spec_path is required for HTTP/SSE transport")
         return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_dcr_bridge_auth_type(cls, values):
+        """Partial updates omit auth_type; that case is validated against the stored row by the
+        update endpoint, which can read the database. This validator covers payloads that carry
+        both fields."""
+        if not isinstance(values, dict) or not values.get("dcr_bridge"):
+            return values
+        if "auth_type" not in values:
+            return values
+        auth_type = values.get("auth_type")
+        if auth_type in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
+            return values
+        raise _dcr_bridge_auth_type_error(auth_type)
 
 
 from litellm.models.mcp_server import (  # noqa: E402
@@ -1787,6 +1862,17 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     default_team_member_models: Optional[List[str]] = None  # default allowed_models seeded onto new team members
 
 
+class PatchTeamRequest(UpdateTeamRequest):
+    """
+    Body of PATCH /team/{team_id}.
+
+    Identical to UpdateTeamRequest except team_id is optional, because PATCH takes it
+    from the path. A team_id in the body is still accepted when it matches the path.
+    """
+
+    team_id: str | None = None
+
+
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
     """
     internal type used to reset the budget on a team
@@ -2056,6 +2142,8 @@ class ConfigList(LiteLLMPydanticObjectBase):
     field_default_value: Any
     premium_field: bool = False
     nested_fields: Optional[List[FieldDetail]] = None  # For nested dictionary or Pydantic fields
+    field_options: Optional[list[str]] = None  # Allowed values, for field_type == "Select"
+    field_tab: Optional[str] = None  # Admin UI sub-tab this field renders under; None groups it with the rest
 
 
 class UserHeaderMapping(LiteLLMPydanticObjectBase):
@@ -2089,6 +2177,41 @@ class PluginConfig(LiteLLMPydanticObjectBase):
     )
 
 
+class CoordinationRedisNode(LiteLLMPydanticObjectBase):
+    """A single startup node of a cluster-mode Redis used for proxy coordination."""
+
+    host: str = Field(description="hostname of the cluster node")
+    port: int = Field(description="port of the cluster node")
+
+
+class CoordinationRedisParams(LiteLLMPydanticObjectBase):
+    """
+    Connection params for the proxy's coordination Redis (cross-pod tpm/rpm rate
+    limits, spend tracking, pod lock manager, shared health checks), configured
+    independently of the response-cache backend in `litellm_settings.cache_params`.
+    """
+
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+    host: Optional[str] = Field(None, description="Redis hostname")
+    port: Optional[int] = Field(None, description="Redis port")
+    password: Optional[str] = Field(None, description="Redis password")
+    username: Optional[str] = Field(None, description="Redis username")
+    url: Optional[str] = Field(None, description="full Redis connection url, e.g. redis://:pass@host:6379")
+    ssl: Optional[bool] = Field(None, description="connect over TLS")
+    startup_nodes: Optional[List[CoordinationRedisNode]] = Field(
+        None, description="cluster-mode startup nodes; when set a cluster client is used"
+    )
+    sentinel_nodes: Optional[List[List[Union[str, int]]]] = Field(
+        None, description="sentinel [host, port] pairs; when set a sentinel-managed client is used"
+    )
+    sentinel_password: Optional[str] = Field(None, description="password for the sentinel nodes")
+    service_name: Optional[str] = Field(None, description="sentinel service name")
+
+    def has_connection_target(self) -> bool:
+        return any(value is not None for value in (self.host, self.url, self.startup_nodes, self.sentinel_nodes))
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -2104,6 +2227,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     use_google_kms: Optional[bool] = Field(None, description="decrypt keys with google kms")
     use_azure_key_vault: Optional[bool] = Field(None, description="load keys from azure key vault")
     master_key: Optional[str] = Field(None, description="require a key for all calls to proxy")
+    coordination_redis: Optional[CoordinationRedisParams] = Field(
+        None,
+        description=(
+            "standalone Redis for cross-pod coordination (tpm/rpm rate limits, "
+            "spend tracking, pod lock manager, shared health checks), configured "
+            "independently of the response-cache backend; takes precedence over "
+            "borrowing the `cache_params` Redis and over the REDIS_* env fallback"
+        ),
+    )
     allow_cli_sso_verification_uri_complete: bool | None = Field(
         None,
         description="opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine",
@@ -2182,6 +2314,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="max response size in MB, if a response is larger than this size it will be rejected",
     )
+    proxy_config_reload_interval_seconds: int = Field(
+        30,
+        gt=0,
+        description="how often (in seconds) each pod reloads config-in-DB objects (models, credentials, guardrails, etc.) when store_model_in_db is enabled; lower values speed up multi-pod convergence at the cost of more DB load. Applied on proxy startup",
+    )
     cancel_on_disconnect: Optional[bool] = Field(
         None,
         description="cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure",
@@ -2259,6 +2396,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    disable_auto_add_proxy_admin_to_teams: bool | None = Field(
+        None,
+        description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
+    )
     maximum_spend_logs_retention_period: Optional[str] = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
@@ -2313,6 +2454,38 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "A proxy-level WARNING is logged on every request while this flag "
             "is active as a reminder that hard enforcement is relaxed."
         ),
+    )
+    skip_user_budget_on_team_key: bool | None = Field(
+        None,
+        description=(
+            "If True, restores the legacy behavior where a user's personal "
+            "max_budget is NOT enforced when their key belongs to a team; only "
+            "the team (and team-member) budgets apply. Defaults to False, meaning "
+            "the user's personal max_budget is always enforced regardless of "
+            "whether the key belongs to a team (see GitHub issue #12905)."
+        ),
+    )
+    user_url_validation: Optional[bool] = Field(
+        None,
+        description=(
+            "Master switch for the SSRF guard applied to user-supplied URLs "
+            "(image_url, file_url, MCP/OpenAPI spec URLs, etc). Defaults to True. "
+            "Set to False to disable DNS/IP validation entirely (not recommended)."
+        ),
+    )
+    user_url_allowed_hosts: Optional[list[str]] = Field(
+        None,
+        description=(
+            "SSRF allowlist for user-supplied URLs. Entries are `hostname` or "
+            "`hostname:port` (bracketed for IPv6, e.g. `[::1]:8080`). Allowlisted "
+            "hosts skip the blocked-network check in validate_url() but still "
+            "resolve DNS. Use this to permit legitimate internal targets, e.g. "
+            "an internal OpenAPI/MCP server."
+        ),
+    )
+    provider_url_destination_allowed_hosts: Optional[list[str]] = Field(
+        None,
+        description="Allowlist of hosts a request may redirect a provider call's destination URL to.",
     )
 
 
@@ -2438,7 +2611,30 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     user_max_budget: Optional[float] = None
     request_route: Optional[str] = None
     is_session_token: bool = False
+    # Server-only marker set exclusively by the MCP gateway admission path
+    # (_reload_admitted_user) for a keyless user-subject admitted via a gateway DCR session
+    # bearer or bridge envelope. Not a DB column and never populated from caller-controlled key
+    # metadata or JWT claims, so it cannot be forged to gain the team-inherited MCP grant union
+    # or to escape the caller-Authorization egress scrub. exclude=True keeps it out of serialization.
+    mcp_admitted_user_subject: bool = Field(default=False, exclude=True)
+    # team_id -> that team's mcp_rpm_limit map, for a keyless admitted subject that reaches MCP
+    # servers through several teams at once and therefore has no single team_id for the limiter to
+    # key off. Server-only and stripped from validated input for the same reason as the marker
+    # above: a forged entry would let a caller pick which team's rpm bucket it is charged against.
+    mcp_source_team_rpm_limits: dict[str, dict[str, int]] | None = Field(default=None, exclude=True)
+    via_virtual_key: bool = Field(
+        default=False,
+        exclude=True,
+        description=(
+            "Server-only marker set exclusively by the DB virtual-key and master-key auth paths via "
+            "post-construction assignment. Stripped from validated input so custom auth handlers, JWT "
+            "claims, or key metadata cannot forge it. Gates overwrite_user_with_key_hash stamping: only "
+            "a credential the proxy itself validated as a key may be forwarded as the provider-facing "
+            "user id."
+        ),
+    )
     budget_reservation: Optional[Dict[str, Any]] = Field(default=None, exclude=True)
+    budget_throttle_pct: Optional[float] = Field(default=None, exclude=True)
     user: Optional[Any] = None  # Expanded user object when expand=user is used
     created_by_user: Optional[Any] = None  # Expanded created_by user when expand=user is used
     end_user_object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
@@ -2457,6 +2653,12 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         # If values is already an instance (not a dict), return it as-is
         if not isinstance(values, dict):
             return values
+        # mcp_admitted_user_subject is a server-only marker, set ONLY by the MCP gateway admission
+        # path via post-construction assignment. Strip it from any validated input (constructor
+        # kwargs, model_validate, a JWT/key claim splat) so it can never be forged from caller data.
+        values.pop("mcp_admitted_user_subject", None)
+        values.pop("mcp_source_team_rpm_limits", None)
+        values.pop("via_virtual_key", None)
         if values.get("api_key") is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
             if isinstance(values.get("api_key"), str):
@@ -2608,6 +2810,30 @@ class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
                 values["metadata"][field] = values.get(field)
                 values.pop(field)
         return values
+
+
+class OrganizationUpdateRequestV2(LiteLLMPydanticObjectBase):
+    """
+    Typed PATCH body for ``/v2/organization/{organization_id}`` (RFC 7396 merge-patch).
+
+    Presence is read from ``model_fields_set``, so a sent field is written and an omitted one is
+    left untouched. ``extra="forbid"`` makes an unknown key a 422 rather than a silent no-op, since
+    the contract hinges on which keys are present. See the endpoint for the per-field clear tokens.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_alias: str | None = None
+    models: list[str] | None = None
+    metadata: dict | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    max_budget: float | None = None
+    soft_budget: float | None = None
+    max_parallel_requests: int | None = None
+    model_max_budget: dict | None = None
+    budget_duration: str | None = None
+    object_permission: LiteLLM_ObjectPermissionBase | None = None
 
 
 from litellm.models.organization import (  # noqa: E402
@@ -3093,6 +3319,7 @@ class SpendLogsMetadata(TypedDict):
     attempted_retries: Optional[int]  # Number of retries attempted (0 = first attempt succeeded)
     max_retries: Optional[int]  # Max retries configured for this request
     cost_breakdown: Optional[CostBreakdown]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
+    compression_savings: CompressionSavingsMetadata | None
 
 
 class SpendLogsPayload(TypedDict):
@@ -3411,6 +3638,13 @@ DB_CONNECTION_ERROR_TYPES = (
     httpx.ReadError,
     httpx.ReadTimeout,
 )
+
+# What a NON-IDEMPOTENT write (increment upsert) may retry: only ConnectError
+# proves the statements never reached the database. Post-send errors are
+# ambiguous; a stalled statement can leave its transaction open on the pooled
+# connection, where a retry stacks a second increment set into the same commit.
+# Idempotent writes (create_many with skip_duplicates) may retry the full tuple.
+DB_RETRY_SAFE_ERROR_TYPES = (httpx.ConnectError,)
 
 
 class SSOUserDefinedValues(TypedDict):
@@ -3821,6 +4055,7 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "model_rpm_limit",
     "model_tpm_limit",
     "mcp_rpm_limit",
+    "tag_rpm_limit",
     "rpm_limit_type",
     "tpm_limit_type",
     "enforced_params",
@@ -3829,6 +4064,7 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "allowed_vector_store_indexes",
     "enforced_batch_output_expires_after",
     "enforced_file_expires_after",
+    "throttle_on_budget_exceeded",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
@@ -3892,6 +4128,7 @@ class JWTAuthBuilderResult(TypedDict):
     token: str
     team_id: Optional[str]
     user_id: Optional[str]
+    user_email: str | None
     end_user_id: Optional[str]
     org_id: Optional[str]
     team_membership: Optional[LiteLLM_TeamMembership]
@@ -4093,7 +4330,13 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     team_id_upsert: bool = False
     team_ids_jwt_field: Optional[str] = None
     upsert_sso_user_to_team: bool = False
-    team_allowed_routes: List[str] = ["openai_routes", "info_routes", "mcp_routes"]
+    team_allowed_routes: List[str] = [
+        "openai_routes",
+        "info_routes",
+        "mcp_routes",
+        "/v1/messages",
+        "/v1/messages/count_tokens",
+    ]
     team_id_default: Optional[str] = Field(
         default=None,
         description="If no team_id given, default permissions/spend-tracking to this team.s",
@@ -4174,6 +4417,17 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "the single-team DB fallback (caller's only team membership) "
             "instead of raising. Default False preserves strict claim-based "
             "authorization."
+        ),
+    )
+    fallback_to_db_teams: bool = Field(
+        default=False,
+        description=(
+            "When True, users whose JWT contains no team claims are authenticated "
+            "using their database team memberships instead of receiving HTTP 403. "
+            "Usage is attributed to the user's first resolvable DB team, or to the "
+            "team specified via the x-litellm-team-id request header (validated "
+            "against DB membership). Requires user_id_upsert=True so that user "
+            "records exist before the fallback runs."
         ),
     )
     issuers: Optional[List[JWTIssuerConfig]] = Field(
@@ -4299,6 +4553,11 @@ class BaseDailySpendTransaction(TypedDict):
     completion_tokens: int
     cache_read_input_tokens: int
     cache_creation_input_tokens: int
+    compression_saved_tokens: int
+
+    # cost-savings metrics (dollars, priced per request before aggregation)
+    compression_savings_spend: float
+    prompt_caching_savings_spend: float
 
     # request level metrics
     spend: float

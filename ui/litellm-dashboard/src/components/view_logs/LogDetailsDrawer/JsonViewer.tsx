@@ -27,7 +27,7 @@ export function JsonViewer({ data }: JsonViewerProps) {
         borderRadius: 4,
       }}
     >
-      <div className="[&_[role='tree']]:bg-white [&_[role='tree']]:text-slate-900">
+      <div className="**:[[role='tree']]:bg-white **:[[role='tree']]:text-slate-900">
         <JsonView data={data} style={defaultStyles} clickToExpandNode={true} />
       </div>
     </div>

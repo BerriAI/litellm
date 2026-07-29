@@ -223,6 +223,15 @@ lives in [`plumbing/`](./plumbing):
   readers/exporters receive them alongside the server metrics, and one is built
   and registered as the global only when none is set (mirroring how V2 owns trace
   export).
+- [`events.py`](./plumbing/events.py) — GenAI client events. Gated on
+  `enable_events` (`LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS`), a failed LLM call
+  records the semconv `gen_ai.client.operation.exception` log event at severity
+  WARN, carrying `exception.type` / `exception.message` / `exception.stacktrace`
+  and correlated to the failed span through the trace and span ids. The
+  `LoggerProvider` is resolved like the meter provider, except that an explicit
+  `NoOpLoggerProvider` global is an operator opt-out that builds no recorder at
+  all. The deprecated `error.*` span attributes and the `exception` span event
+  are still stamped by the emitter for backwards compatibility.
 
 ### Adapter
 

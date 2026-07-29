@@ -95,6 +95,9 @@ class ExceptionCheckers:
         if "current length is" in _error_str_lowercase and "while limit is" in _error_str_lowercase:
             return True
 
+        if "maximum input length is" in _error_str_lowercase and "tokens" in _error_str_lowercase:
+            return True
+
         return False
 
     @staticmethod
@@ -1944,7 +1947,7 @@ def _map_azure_exception(
             response=getattr(original_exception, "response", None),
             body=getattr(original_exception, "body", None),
         )
-    elif "invalid_request_error" in error_str:
+    elif "invalid_request_error" in error_str and getattr(original_exception, "status_code", None) in (None, 400):
         raise BadRequestError(
             message=f"AzureException BadRequestError - {message}",
             llm_provider="azure",
@@ -1981,6 +1984,14 @@ def _map_azure_exception(
         elif original_exception.status_code == 401:
             raise AuthenticationError(
                 message=f"AzureException AuthenticationError - {message}",
+                llm_provider="azure",
+                model=model,
+                litellm_debug_info=extra_information,
+                response=getattr(original_exception, "response", None),
+            )
+        elif original_exception.status_code == 404:
+            raise NotFoundError(
+                message=f"AzureException NotFoundError - {message}",
                 llm_provider="azure",
                 model=model,
                 litellm_debug_info=extra_information,
@@ -2173,7 +2184,7 @@ def exception_type(  # type: ignore
     litellm_response_headers = _get_response_headers(original_exception=original_exception)
     try:
         error_str = redact_string(str(original_exception)) if _ENABLE_SECRET_REDACTION else str(original_exception)
-        if model:
+        if model or custom_llm_provider:
             if hasattr(original_exception, "message"):
                 error_str = (
                     redact_string(str(original_exception.message))

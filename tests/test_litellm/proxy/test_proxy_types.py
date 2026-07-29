@@ -124,3 +124,18 @@ def test_proxy_exception_str_returns_message():
         "param": "key",
         "code": "401",
     }
+
+
+def test_key_request_router_settings_keeps_enable_tag_filtering():
+    """``router_settings`` on key requests validates through
+    ``UpdateRouterConfig``; a field missing from that model is silently
+    dropped at parse time, so a key's "Enable Tag Filtering" toggle would
+    never reach the DB even though the team path (plain dict) kept it."""
+    from litellm.proxy._types import GenerateKeyRequest
+
+    req = GenerateKeyRequest(router_settings={"enable_tag_filtering": True, "num_retries": 2})
+
+    assert req.router_settings is not None
+    dumped = req.router_settings.model_dump(exclude_none=True)
+    assert dumped["enable_tag_filtering"] is True
+    assert dumped["num_retries"] == 2

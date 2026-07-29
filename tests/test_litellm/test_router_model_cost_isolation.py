@@ -681,3 +681,266 @@ def test_custom_pricing_isolated_from_sibling_via_proxy_model_info_path():
         assert resolved["gemini-2.5-flash"] != resolved["custom-priced-flash"]
     finally:
         _restore_model_cost_entries(model_keys)
+
+
+def test_custom_model_info_metadata_not_leaked_to_shared_backend_key():
+    """LIT-4544: two deployments share the same backend model but carry
+    different custom model_info (arbitrary keys, access_via_team_ids, ids).
+    None of that per-deployment metadata may land on the shared backend key in
+    litellm.model_cost (served raw by /public/litellm_model_cost_map);
+    before the fix it was merged last-write-wins so values flipped randomly.
+    """
+    backend_model = "openai/gpt-4o-mini"
+    shared_keys = ("gpt-4o-mini", backend_model)
+    leak_fields = ("id", "additionalProp1", "access_via_team_ids", "db_model")
+
+    model_keys = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (*shared_keys, "lit4544-deploy-a", "lit4544-deploy-b")
+    }
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "alias-unrestricted",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_key": "fake-key-a",
+                    },
+                    "model_info": {
+                        "id": "lit4544-deploy-a",
+                        "additionalProp1": {"restricted": False, "model_location": "EU"},
+                    },
+                },
+                {
+                    "model_name": "alias-restricted",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_key": "fake-key-b",
+                    },
+                    "model_info": {
+                        "id": "lit4544-deploy-b",
+                        "additionalProp1": {"restricted": True, "model_location": "US"},
+                        "access_via_team_ids": ["team-b-only"],
+                    },
+                },
+            ],
+        )
+
+        for shared_key in shared_keys:
+            shared_entry = litellm.model_cost.get(shared_key) or {}
+            leaked = [field for field in leak_fields if field in shared_entry]
+            assert not leaked, (
+                f"per-deployment metadata {leaked} leaked onto shared key "
+                f"{shared_key}: {shared_entry}"
+            )
+
+        entry_a = litellm.model_cost["lit4544-deploy-a"]
+        assert entry_a["additionalProp1"] == {"restricted": False, "model_location": "EU"}
+        entry_b = litellm.model_cost["lit4544-deploy-b"]
+        assert entry_b["additionalProp1"] == {"restricted": True, "model_location": "US"}
+        assert entry_b["access_via_team_ids"] == ["team-b-only"]
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_add_deployment_does_not_leak_custom_metadata_to_shared_backend_key():
+    """LIT-4544 dynamic path: deployments added at runtime (e.g. loaded from
+    the DB every scheduler cycle) must not re-pollute the shared backend key
+    with per-deployment metadata either.
+    """
+    backend_model = "openai/gpt-4o-mini"
+    shared_keys = ("gpt-4o-mini", backend_model)
+    deploy_id = "lit4544-add-deployment"
+
+    model_keys = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (*shared_keys, deploy_id)
+    }
+    try:
+        router = Router(model_list=[])
+        router.add_deployment(
+            deployment=Deployment(
+                model_name="alias-dynamic",
+                litellm_params=LiteLLM_Params(
+                    model=backend_model,
+                    api_key="fake-key-dynamic",
+                ),
+                model_info=ModelInfo(
+                    id=deploy_id,
+                    additionalProp1={"restricted": True},
+                    access_via_team_ids=["team-dynamic"],
+                ),
+            )
+        )
+
+        for shared_key in shared_keys:
+            shared_entry = litellm.model_cost.get(shared_key) or {}
+            leaked = [
+                field
+                for field in ("id", "additionalProp1", "access_via_team_ids", "db_model")
+                if field in shared_entry
+            ]
+            assert not leaked, (
+                f"per-deployment metadata {leaked} leaked onto shared key "
+                f"{shared_key}: {shared_entry}"
+            )
+
+        assert litellm.model_cost[deploy_id]["access_via_team_ids"] == ["team-dynamic"]
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_shared_backend_model_info_keeps_schema_fields_and_drops_the_rest():
+    """Unit test of the whitelist helper: cost-map schema fields survive,
+    custom pricing overrides and per-deployment metadata do not.
+    """
+    from litellm.types.utils import shared_backend_model_info
+
+    filtered = shared_backend_model_info(
+        {
+            "mode": "chat",
+            "litellm_provider": "openai",
+            "max_tokens": 128000,
+            "supports_vision": True,
+            "supported_endpoints": ["/v1/responses"],
+            "use_openai_responses_path": True,
+            "input_cost_per_token": 0.99,
+            "output_cost_per_token": 0.99,
+            "id": "deploy-a",
+            "db_model": False,
+            "access_via_team_ids": ["team-a"],
+            "additionalProp1": {"restricted": True},
+            "base_model": "gpt-4o-mini",
+        }
+    )
+
+    assert filtered == {
+        "mode": "chat",
+        "litellm_provider": "openai",
+        "max_tokens": 128000,
+        "supports_vision": True,
+        "supported_endpoints": ["/v1/responses"],
+        "use_openai_responses_path": True,
+    }
+
+
+def test_capability_flags_propagate_from_deployment_model_info_to_shared_key():
+    """Backend-model capability facts (supported_endpoints,
+    use_openai_responses_path) declared in a deployment's model_info must reach
+    the shared backend key: the Bedrock Mantle routing gates read them raw off
+    litellm.model_cost and document proxy model_info as an override path for
+    models missing from the built-in cost map.
+    """
+    from litellm.llms.bedrock_mantle.common_utils import (
+        mantle_base_segment,
+        mantle_supports_responses,
+    )
+
+    bare_model = "somelab.lit4544-unmapped-model"
+    backend_model = f"bedrock_mantle/{bare_model}"
+    deploy_id = "lit4544-mantle-deploy"
+
+    model_keys = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (bare_model, backend_model, deploy_id)
+    }
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "mantle-alias",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_key": "fake-key",
+                    },
+                    "model_info": {
+                        "id": deploy_id,
+                        "supported_endpoints": ["/v1/responses"],
+                        "use_openai_responses_path": True,
+                    },
+                },
+            ],
+        )
+
+        shared_entry = litellm.model_cost.get(backend_model) or {}
+        assert shared_entry.get("supported_endpoints") == ["/v1/responses"]
+        assert shared_entry.get("use_openai_responses_path") is True
+        assert "id" not in shared_entry
+        assert mantle_supports_responses(bare_model, litellm.model_cost) is True
+        assert mantle_base_segment(bare_model, litellm.model_cost) == "openai/v1"
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_wildcard_zero_cost_request_does_not_poison_named_deployment_pricing():
+    """LIT-3991 end to end: a proxy has a named text-embedding-3-small
+    deployment relying on built-in pricing plus an ``openai/*`` wildcard with
+    explicit zero pricing. One embedding call routed through the wildcard must
+    not clobber the shared ``openai/text-embedding-3-small`` pricing; requests
+    to the named deployment afterwards must still cost non-zero.
+    """
+    shared_key = "openai/text-embedding-3-small"
+    model_keys = {
+        shared_key: copy.deepcopy(litellm.model_cost.get(shared_key)),
+        "text-embedding-3-small": copy.deepcopy(
+            litellm.model_cost.get("text-embedding-3-small")
+        ),
+        "openai/*": copy.deepcopy(litellm.model_cost.get("openai/*")),
+        "lit3991-named": litellm.model_cost.get("lit3991-named"),
+        "lit3991-wildcard": litellm.model_cost.get("lit3991-wildcard"),
+    }
+    builtin_input_cost = litellm.get_model_info(model=shared_key)[
+        "input_cost_per_token"
+    ]
+    assert builtin_input_cost > 0
+
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "text-embedding-3-small",
+                    "litellm_params": {
+                        "model": "openai/text-embedding-3-small",
+                        "api_key": "fake-key-named",
+                    },
+                    "model_info": {"id": "lit3991-named"},
+                },
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {
+                        "model": "openai/*",
+                        "api_key": "fake-key-wildcard",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {"id": "lit3991-wildcard"},
+                },
+            ],
+        )
+
+        router.embedding(
+            model="openai/text-embedding-3-small",
+            input=["hello"],
+            mock_response=[0.1, 0.2],
+        )
+
+        assert (
+            litellm.get_model_info(model=shared_key)["input_cost_per_token"]
+            == builtin_input_cost
+        ), (
+            "one call through the zero-cost wildcard poisoned the shared "
+            f"{shared_key} pricing for the named deployment"
+        )
+
+        named_response = router.embedding(
+            model="text-embedding-3-small",
+            input=["hello"],
+            mock_response=[0.1, 0.2],
+        )
+        named_cost = litellm.completion_cost(
+            completion_response=named_response, call_type="embedding"
+        )
+        assert named_cost == pytest.approx(10 * builtin_input_cost)
+    finally:
+        _restore_model_cost_entries(model_keys)

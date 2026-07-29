@@ -83,9 +83,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
 
     setLoadingStatus(true);
     try {
-      console.log("Fetching reload status...");
       const status = await getModelCostMapReloadStatus(accessToken);
-      console.log("Received status:", status);
       setReloadStatus(status);
     } catch (error) {
       console.error("Failed to fetch reload status:", error);

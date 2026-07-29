@@ -453,6 +453,83 @@ async def test_async_log_success_event_pushes_redis_increments_when_redis_config
 
 
 @pytest.mark.asyncio
+async def test_get_fallback_model_within_budget_returns_none_without_fallbacks(
+    budget_limiter,
+):
+    user_api_key = UserAPIKeyAuth(token="test-key", budget_fallbacks={})
+    assert (
+        await budget_limiter.get_fallback_model_within_budget(user_api_key, "gpt-4")
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_fallback_model_within_budget_returns_first_within_budget(
+    budget_limiter,
+):
+    user_api_key = UserAPIKeyAuth(
+        token="test-key",
+        model_max_budget={"gpt-4o-mini": {"budget_limit": 100.0, "time_period": "1d"}},
+        budget_fallbacks={"gpt-4": ["gpt-4o-mini", "claude-haiku"]},
+    )
+    with patch.object(
+        budget_limiter, "_get_virtual_key_spend_for_model", return_value=1.0
+    ):
+        result = await budget_limiter.get_fallback_model_within_budget(
+            user_api_key, "gpt-4"
+        )
+    assert result == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_get_fallback_model_within_budget_skips_exhausted_fallback(
+    budget_limiter,
+):
+    user_api_key = UserAPIKeyAuth(
+        token="test-key",
+        model_max_budget={
+            "gpt-4o-mini": {"budget_limit": 100.0, "time_period": "1d"},
+            "claude-haiku": {"budget_limit": 100.0, "time_period": "1d"},
+        },
+        budget_fallbacks={"gpt-4": ["gpt-4o-mini", "claude-haiku"]},
+    )
+
+    async def _spend_for_model(user_api_key_hash, model, key_budget_config):
+        return 150.0 if model == "gpt-4o-mini" else 1.0
+
+    with patch.object(
+        budget_limiter,
+        "_get_virtual_key_spend_for_model",
+        side_effect=_spend_for_model,
+    ):
+        result = await budget_limiter.get_fallback_model_within_budget(
+            user_api_key, "gpt-4"
+        )
+    assert result == "claude-haiku"
+
+
+@pytest.mark.asyncio
+async def test_get_fallback_model_within_budget_returns_none_when_chain_exhausted(
+    budget_limiter,
+):
+    user_api_key = UserAPIKeyAuth(
+        token="test-key",
+        model_max_budget={
+            "gpt-4o-mini": {"budget_limit": 100.0, "time_period": "1d"},
+            "claude-haiku": {"budget_limit": 100.0, "time_period": "1d"},
+        },
+        budget_fallbacks={"gpt-4": ["gpt-4o-mini", "claude-haiku"]},
+    )
+    with patch.object(
+        budget_limiter, "_get_virtual_key_spend_for_model", return_value=150.0
+    ):
+        result = await budget_limiter.get_fallback_model_within_budget(
+            user_api_key, "gpt-4"
+        )
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_async_log_success_event_skips_redis_push_without_redis(budget_limiter):
     """When dual_cache has no Redis backend, do not await _push_in_memory_increments_to_redis."""
     assert budget_limiter.dual_cache.redis_cache is None

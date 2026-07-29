@@ -1455,6 +1455,132 @@ def test_model_group_info_cost_none_when_db_model_info_has_no_cost():
         assert result.output_cost_per_token is None
 
 
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("1e-05", 1e-05),
+        ("0.00001", 1e-05),
+        (1e-05, 1e-05),
+        (5, 5.0),
+        (None, None),
+        ("not-a-number", None),
+    ],
+)
+def test_cost_value_as_float(value, expected):
+    from litellm.router import _cost_value_as_float
+
+    assert _cost_value_as_float(value) == expected
+
+
+def test_model_group_info_with_stringified_cost_values():
+    """
+    YAML 1.2 parsers emit '1e-05' (integer mantissa) as a string, so cost
+    values in deployment model_info can arrive as str. Aggregating the model
+    group must not raise TypeError('>' between str and float) and must return
+    float costs.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {
+                    "model": "openai/my-custom-backend-1",
+                    "api_key": "fake",
+                },
+                "model_info": {
+                    "input_cost_per_token": "1e-05",
+                    "output_cost_per_token": "1e-05",
+                },
+            },
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {
+                    "model": "openai/my-custom-backend-2",
+                    "api_key": "fake",
+                },
+                "model_info": {
+                    "input_cost_per_token": "2e-05",
+                    "output_cost_per_token": "2e-05",
+                },
+            },
+        ]
+    )
+
+    def _model_info_with_str_costs(model_id: str, model_name: str):
+        for model in router.model_list:
+            if model["model_info"]["id"] == model_id:
+                return {
+                    "key": model_name,
+                    "input_cost_per_token": model["model_info"]["input_cost_per_token"],
+                    "output_cost_per_token": model["model_info"]["output_cost_per_token"],
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                }
+        return None
+
+    with patch.object(
+        router, "get_deployment_model_info", side_effect=_model_info_with_str_costs
+    ):
+        result = router._set_model_group_info(
+            model_group="my-custom-model",
+            user_facing_model_group_name="my-custom-model",
+        )
+
+    assert result is not None
+    assert result.input_cost_per_token == 2e-05
+    assert result.output_cost_per_token == 2e-05
+    assert isinstance(result.input_cost_per_token, float)
+    assert isinstance(result.output_cost_per_token, float)
+
+
+def test_model_group_info_db_fallback_with_stringified_cost_values():
+    """
+    Fallback path: when get_deployment_model_info returns nothing, costs are
+    read straight from the deployment's model_info dict, which can hold
+    stringified floats parsed from YAML. They must be coerced to float.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {
+                    "model": "openai/my-custom-backend-1",
+                    "api_key": "fake",
+                },
+                "model_info": {
+                    "input_cost_per_token": "1e-05",
+                    "output_cost_per_token": "3e-05",
+                },
+            },
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {
+                    "model": "openai/my-custom-backend-2",
+                    "api_key": "fake",
+                },
+                "model_info": {
+                    "input_cost_per_token": "2e-05",
+                    "output_cost_per_token": "2e-05",
+                },
+            },
+        ]
+    )
+
+    with patch.object(
+        router, "get_deployment_model_info", side_effect=Exception("not found")
+    ):
+        result = router._set_model_group_info(
+            model_group="my-custom-model",
+            user_facing_model_group_name="my-custom-model",
+        )
+
+    assert result is not None
+    assert result.input_cost_per_token == 2e-05
+    assert result.output_cost_per_token == 3e-05
+    assert isinstance(result.input_cost_per_token, float)
+    assert isinstance(result.output_cost_per_token, float)
+
+
 def test_get_model_access_groups_caching():
     """
     Test that get_model_access_groups caches the no-args result
@@ -2738,6 +2864,185 @@ def test_pre_call_checks_counts_once_and_filters_on_max_input_tokens(monkeypatch
     assert calls == [1]
 
 
+def test_pre_call_checks_counts_tokens_from_responses_input_string(monkeypatch):
+    """
+    Responses API calls pass `input` (str) instead of `messages`. Context-window
+    checks must count tokens from `input` and filter deployments over the limit. Uses
+    the real token_counter so the transform + counting path is a true regression guard.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1}
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="m",
+            healthy_deployments=deployments,
+            input="a very long prompt that exceeds the tiny context window",
+        )
+
+
+def test_pre_call_checks_counts_tokens_from_responses_input_list(monkeypatch):
+    """
+    Responses API `input` can be a list of input items. It must be normalized to
+    chat messages and counted so oversized requests are filtered out. Uses the real
+    token_counter (no mock) so the transform + counting path is a true regression guard.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1}
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="m",
+            healthy_deployments=deployments,
+            input=[
+                {"role": "user", "content": "count these tokens against the one token limit please"},
+            ],
+        )
+
+
+def test_pre_call_checks_counts_responses_instructions_tokens(monkeypatch):
+    """
+    Responses API `instructions` become a system message the model receives, so their
+    tokens must be counted too. A request whose `input` alone fits under the limit but
+    whose `input` + `instructions` exceeds it must be filtered (regression for the
+    context-window check under-filtering when instructions were ignored).
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+
+    short_input = "hi"
+    long_instructions = "you are a helpful assistant. " * 20
+
+    input_only_tokens = router._count_pre_call_check_tokens(messages=None, input=short_input)
+    with_instructions_tokens = router._count_pre_call_check_tokens(
+        messages=None, input=short_input, instructions=long_instructions
+    )
+    assert with_instructions_tokens > input_only_tokens
+
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": input_only_tokens}
+    )
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="m",
+            healthy_deployments=deployments,
+            input=short_input,
+            request_kwargs={"instructions": long_instructions},
+        )
+
+
+def test_count_pre_call_check_tokens_across_api_surfaces():
+    """
+    _count_pre_call_check_tokens must count tokens from chat `messages`, a Responses
+    API string `input`, and a Responses API list `input`, and raise when given neither.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+    )
+
+    messages_tokens = router._count_pre_call_check_tokens(
+        messages=[{"role": "user", "content": "hello world"}], input=None
+    )
+    string_input_tokens = router._count_pre_call_check_tokens(messages=None, input="hello world")
+    list_input_tokens = router._count_pre_call_check_tokens(
+        messages=None, input=[{"role": "user", "content": "hello world"}]
+    )
+
+    assert messages_tokens > 0
+    assert string_input_tokens > 0
+    assert list_input_tokens > 0
+
+    with pytest.raises(ValueError):
+        router._count_pre_call_check_tokens(messages=None, input=None)
+
+
+def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
+    """
+    When neither messages nor input is provided (e.g. endpoints without prompt text),
+    token counting is skipped gracefully and all deployments are returned.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+    )
+
+    counted: list[dict] = []
+    original = router._count_pre_call_check_tokens
+    monkeypatch.setattr(
+        router,
+        "_count_pre_call_check_tokens",
+        lambda **kwargs: counted.append(kwargs) or original(**kwargs),
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+    result = router._pre_call_checks(model="m", healthy_deployments=deployments)
+    assert len(result) == 1
+    assert counted == []  # token counting skipped entirely, so no misleading error is logged
+
+
+@pytest.mark.asyncio
+async def test_aresponses_enforces_context_window_pre_call_check():
+    """
+    End-to-end router regression: a Responses API call whose `input` exceeds the
+    deployment's max_input_tokens must be filtered by the pre-call check, raising
+    ContextWindowExceededError instead of being silently routed. This guards the
+    wiring that forwards `input` from the generic-call path into deployment selection
+    (the deployment uses mock_response, so the check must trip before any real call).
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "small-ctx",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "hi"},
+                "model_info": {"max_input_tokens": 5},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aresponses(
+            model="small-ctx",
+            input="this responses input is definitely much longer than five tokens for sure",
+        )
+
+
 def test_get_deployment_model_info_base_model_flow():
     """Test that get_deployment_model_info correctly handles the base model flow"""
     from unittest.mock import patch
@@ -3407,6 +3712,125 @@ def test_get_deployment_credentials_with_provider_resolves_credential_name():
 
     # Cleanup
     litellm.credential_list = []
+
+
+def _team_wildcard_model(api_key: str, model_id: str = "team-wildcard-id") -> dict:
+    return {
+        "model_name": f"model_name_team-1_{model_id}",
+        "litellm_params": {"model": "openai/*", "api_key": api_key},
+        "model_info": {
+            "id": model_id,
+            "team_id": "team-1",
+            "team_public_model_name": "openai/*",
+        },
+    }
+
+
+def test_get_deployment_credentials_with_provider_team_wildcard_priority():
+    """
+    Regression: a global wildcard pattern (e.g. "openai/*") must not shadow a
+    team's own wildcard entry. When team_id is provided, the team wildcard
+    deployment's credentials win; without team_id the global one is used.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "global-key"},
+            },
+            _team_wildcard_model(api_key="team-key"),
+        ],
+    )
+
+    team_credentials = router.get_deployment_credentials_with_provider(
+        model_id="openai/gpt-5.2", team_id="team-1"
+    )
+    assert team_credentials is not None
+    assert team_credentials["api_key"] == "team-key"
+
+    global_credentials = router.get_deployment_credentials_with_provider(
+        model_id="openai/gpt-5.2"
+    )
+    assert global_credentials is not None
+    assert global_credentials["api_key"] == "global-key"
+
+
+def test_team_wildcard_credentials_not_usable_after_delete_deployment():
+    """
+    Regression: team_pattern_routers retained deleted deployments, so a team
+    user could keep resolving credentials of a deleted wildcard deployment.
+    """
+    router = litellm.Router(model_list=[_team_wildcard_model(api_key="old-key")])
+
+    assert (
+        router.get_deployment_credentials_with_provider(
+            model_id="openai/gpt-5.2", team_id="team-1"
+        )
+        is not None
+    )
+
+    router.delete_deployment(id="team-wildcard-id")
+
+    assert (
+        router.get_deployment_credentials_with_provider(
+            model_id="openai/gpt-5.2", team_id="team-1"
+        )
+        is None
+    )
+
+
+def test_pattern_match_router_remove_deployment():
+    """
+    remove_deployment must drop only the deployment with the given model id and
+    delete patterns whose deployment list becomes empty.
+    """
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+
+    pattern_router = PatternMatchRouter()
+    pattern_router.add_pattern(
+        "openai/*",
+        {"litellm_params": {"model": "openai/*", "api_key": "key-a"}, "model_info": {"id": "dep-a"}},
+    )
+    pattern_router.add_pattern(
+        "openai/*",
+        {"litellm_params": {"model": "openai/*", "api_key": "key-b"}, "model_info": {"id": "dep-b"}},
+    )
+
+    pattern_router.remove_deployment(model_id="dep-a")
+    matches = pattern_router.route("openai/gpt-5.2")
+    assert matches is not None
+    assert [m["model_info"]["id"] for m in matches] == ["dep-b"]
+
+    pattern_router.remove_deployment(model_id="dep-b")
+    assert pattern_router.patterns == {}
+    assert pattern_router.route("openai/gpt-5.2") is None
+
+
+def test_team_wildcard_credentials_refreshed_on_upsert_and_set_model_list():
+    """
+    Regression: replacing a team wildcard deployment (upsert or model list
+    reload) must serve the new credentials, not the stale cached ones.
+    """
+    from litellm.types.router import Deployment
+
+    router = litellm.Router(model_list=[_team_wildcard_model(api_key="old-key")])
+
+    router.upsert_deployment(
+        deployment=Deployment(**_team_wildcard_model(api_key="new-key"))
+    )
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="openai/gpt-5.2", team_id="team-1"
+    )
+    assert credentials is not None
+    assert credentials["api_key"] == "new-key"
+
+    router.set_model_list(model_list=[])
+    assert (
+        router.get_deployment_credentials_with_provider(
+            model_id="openai/gpt-5.2", team_id="team-1"
+        )
+        is None
+    )
 
 
 def test_get_available_guardrail_single_deployment():
@@ -5304,3 +5728,673 @@ class TestRouterRequestTimeoutPropagation:
             )
             == 60
         )
+
+
+class TestAdvisorSubCallCooldown:
+    """Regression for LIT-4565: an advisor orchestration failure must not cool
+    down the selected (healthy) deployment, which would reject unrelated
+    callers to the same model group."""
+
+    def _router(self):
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "claude-sonnet-5",
+                    "litellm_params": {"model": "bedrock/us.anthropic.claude-opus-4-8"},
+                    "model_info": {"id": "dep-1"},
+                }
+            ],
+        )
+
+    def _kwargs(self, exception):
+        return {
+            "exception": exception,
+            "litellm_params": {"model_info": {"id": "dep-1"}, "metadata": {}},
+        }
+
+    def _auth_error(self):
+        return litellm.AuthenticationError(
+            message="x-api-key header is required",
+            llm_provider="anthropic",
+            model="claude-opus-4-8",
+        )
+
+    def _cooled_down_ids(self, router):
+        active = router.cooldown_cache.get_active_cooldowns(
+            model_ids=["dep-1"], parent_otel_span=None
+        )
+        return [entry[0] for entry in active]
+
+    @pytest.mark.asyncio
+    async def test_untagged_auth_error_cools_down_deployment(self):
+        from datetime import datetime
+
+        router = self._router()
+        now = datetime.now()
+        assert (
+            router.deployment_callback_on_failure(
+                self._kwargs(self._auth_error()), None, now, now
+            )
+            is True
+        )
+        assert "dep-1" in self._cooled_down_ids(router)
+
+    def test_advisor_orchestration_failure_does_not_cool_down_deployment(self):
+        from datetime import datetime
+
+        from litellm.router_utils.cooldown_handlers import (
+            mark_advisor_orchestration_failure,
+        )
+
+        router = self._router()
+        exception = self._auth_error()
+        mark_advisor_orchestration_failure(exception)
+
+        now = datetime.now()
+        assert (
+            router.deployment_callback_on_failure(
+                self._kwargs(exception), None, now, now
+            )
+            is False
+        )
+        assert "dep-1" not in self._cooled_down_ids(router)
+
+
+def test_get_configured_token_limits_reads_deployment_model_info():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_input_tokens": 32000, "max_output_tokens": 8000},
+            }
+        ]
+    )
+
+    assert router.get_configured_token_limits("my-custom-model") == (32000, 8000)
+
+
+def test_get_configured_token_limits_returns_none_for_unset_or_unknown():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "no-limits-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+            }
+        ]
+    )
+
+    assert router.get_configured_token_limits("no-limits-model") == (None, None)
+    assert router.get_configured_token_limits("not-a-real-model") == (None, None)
+
+
+def test_get_configured_token_limits_skips_wildcard_pattern_matching():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+                "model_info": {"max_input_tokens": 12345},
+            }
+        ]
+    )
+
+    with patch.object(
+        router.pattern_router, "route", side_effect=AssertionError("pattern route called")
+    ):
+        assert router.get_configured_token_limits(
+            "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+        ) == (None, None)
+
+
+def test_get_configured_token_limits_treats_malformed_values_as_absent():
+    malformed = ["", "unlimited", "128,000", [128000], {"max": 128000}, True]
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": f"bad-limit-{i}",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_input_tokens": bad, "max_output_tokens": bad},
+            }
+            for i, bad in enumerate(malformed)
+        ]
+    )
+
+    for i in range(len(malformed)):
+        assert router.get_configured_token_limits(f"bad-limit-{i}") == (None, None)
+
+
+def test_get_configured_token_limits_coerces_numeric_strings():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "quoted-limits-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_input_tokens": "32000", "max_output_tokens": "8000"},
+            }
+        ]
+    )
+
+    assert router.get_configured_token_limits("quoted-limits-model") == (32000, 8000)
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import CommonBatchFilesUtils
+
+    deployment_tags = [{"key": "application", "value": "config-level"}]
+    request_tags = [{"key": "application", "value": "request-level"}]
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-sonnet-5",
+                    "aws_batch_role_arn": "arn:aws:iam::123:role/batch-role",
+                    "aws_region_name": "us-west-2",
+                    "bedrock_tags": deployment_tags,
+                },
+            }
+        ]
+    )
+
+    def fake_response():
+        return httpx.Response(
+            status_code=200,
+            json={
+                "jobArn": "arn:aws:bedrock:us-west-2:123:model-invocation-job/abc1234567",
+                "status": "Submitted",
+            },
+        )
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(side_effect=lambda *args, **kwargs: fake_response())
+
+    with patch.object(
+        CommonBatchFilesUtils,
+        "sign_aws_request",
+        return_value=({"Authorization": "signed"}, b"{}"),
+    ) as mock_sign, patch(
+        "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        await router.acreate_batch(
+            model="bedrock-batch-model",
+            input_file_id="s3://bucket/input.jsonl",
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+        )
+        assert mock_sign.call_args.kwargs["data"]["tags"] == deployment_tags
+
+        await router.acreate_batch(
+            model="bedrock-batch-model",
+            input_file_id="s3://bucket/input.jsonl",
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+            bedrock_tags=request_tags,
+        )
+        assert mock_sign.call_args.kwargs["data"]["tags"] == request_tags
+
+
+class TestPreRoutingStrategyRegistryLifecycle:
+    """
+    Regression tests: a deployment leaving the model_list must release the
+    pre-routing strategy slot it holds in `auto_routers` / `complexity_routers` /
+    `adaptive_routers` / `quality_routers`.
+
+    Before this fix, editing an auto-router-family model (a UI save, which reaches
+    every other pod as an `upsert_deployment` from the periodic DB reload) popped
+    the deployment out of the model_list and then failed to re-add it: registration
+    raised "already exists" against the stale registry entry, and
+    `ignore_invalid_deployments=True` swallowed the error. The router vanished from
+    the Models page and stayed gone until a proxy restart, while the DB row and the
+    "saved successfully" response both looked fine.
+    """
+
+    @staticmethod
+    def _complexity_router_params(default_model: str, tags=None) -> dict:
+        return {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o", "COMPLEX": "gpt-4o"}
+            },
+            "complexity_router_default_model": default_model,
+            **({"tags": tags} if tags else {}),
+        }
+
+    @classmethod
+    def _router_with_complexity_router(cls, default_model: str = "gpt-4o") -> "litellm.Router":
+        return litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}},
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": cls._complexity_router_params(default_model),
+                    "model_info": {"id": "router-1", "db_model": True},
+                },
+            ],
+            ignore_invalid_deployments=True,
+        )
+
+    @staticmethod
+    def _model_names(router: "litellm.Router") -> list:
+        return [model["model_name"] for model in router.model_list]
+
+    def test_upsert_of_edited_router_keeps_it_routable(self):
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = self._router_with_complexity_router()
+
+        router.upsert_deployment(
+            deployment=Deployment(
+                model_name="smart-router",
+                litellm_params=LiteLLM_Params(**self._complexity_router_params("gpt-4o-mini")),
+                model_info=ModelInfo(id="router-1", db_model=True),
+            )
+        )
+
+        assert "smart-router" in self._model_names(router)
+        registered = router.complexity_routers["smart-router"]
+        assert len(registered) == 1
+        # the surviving strategy is the edited one, not the pre-edit leftover
+        assert registered[0].strategy.config.default_model == "gpt-4o-mini"
+
+    def test_unchanged_upsert_leaves_router_untouched(self):
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = self._router_with_complexity_router()
+        strategy_before = router.complexity_routers["smart-router"][0].strategy
+
+        for _ in range(3):
+            router.upsert_deployment(
+                deployment=Deployment(
+                    model_name="smart-router",
+                    litellm_params=LiteLLM_Params(**self._complexity_router_params("gpt-4o")),
+                    model_info=ModelInfo(id="router-1", db_model=True),
+                )
+            )
+
+        assert "smart-router" in self._model_names(router)
+        assert router.complexity_routers["smart-router"][0].strategy is strategy_before
+
+    def test_delete_frees_the_name_for_a_new_router(self):
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = self._router_with_complexity_router()
+
+        router.delete_deployment(id="router-1")
+        assert "smart-router" not in router.complexity_routers
+
+        router.add_deployment(
+            deployment=Deployment(
+                model_name="smart-router",
+                litellm_params=LiteLLM_Params(**self._complexity_router_params("gpt-4o-mini")),
+                model_info=ModelInfo(id="router-2", db_model=True),
+            )
+        )
+
+        assert "smart-router" in self._model_names(router)
+        assert router.complexity_routers["smart-router"][0].strategy.config.default_model == "gpt-4o-mini"
+
+    def test_delete_only_frees_the_matching_tag_slot(self):
+        router = litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}},
+                {
+                    "model_name": "shared-router",
+                    "litellm_params": self._complexity_router_params("gpt-4o", tags=["team-a"]),
+                    "model_info": {"id": "router-a"},
+                },
+                {
+                    "model_name": "shared-router",
+                    "litellm_params": self._complexity_router_params("gpt-4o-mini", tags=["team-b"]),
+                    "model_info": {"id": "router-b"},
+                },
+            ],
+            ignore_invalid_deployments=True,
+        )
+        assert len(router.complexity_routers["shared-router"]) == 2
+
+        router.delete_deployment(id="router-a")
+
+        remaining = router.complexity_routers["shared-router"]
+        assert len(remaining) == 1
+        assert remaining[0].tags == ("team-b",)
+
+    def test_delete_of_regular_model_preserves_router_sharing_its_name(self):
+        router = litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}},
+                {
+                    "model_name": "shared-name",
+                    "litellm_params": self._complexity_router_params("gpt-4o"),
+                    "model_info": {"id": "router-1"},
+                },
+                {
+                    "model_name": "shared-name",
+                    "litellm_params": {"model": "openai/gpt-4o"},
+                    "model_info": {"id": "regular-1"},
+                },
+            ],
+            ignore_invalid_deployments=True,
+        )
+        strategy = router.complexity_routers["shared-name"][0].strategy
+
+        router.delete_deployment(id="regular-1")
+
+        assert router.complexity_routers["shared-name"][0].strategy is strategy
+
+    def test_upsert_of_edited_adaptive_router_rebuilds_it(self):
+        """Adaptive routers are built by set_model_list()'s deferred pass, not by
+        add_deployment(), so releasing the slot on edit must be paired with a rebuild -
+        otherwise the edit silently turns adaptive routing off."""
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        def adaptive_params(available_models: list) -> dict:
+            return {
+                "model": "auto_router/adaptive_router",
+                "adaptive_router_config": {"available_models": available_models},
+            }
+
+        router = litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}},
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+                {
+                    "model_name": "adaptive-router",
+                    "litellm_params": adaptive_params(["gpt-4o-mini"]),
+                    "model_info": {"id": "router-1", "db_model": True},
+                },
+            ],
+            ignore_invalid_deployments=True,
+        )
+        assert "adaptive-router" in router.adaptive_routers
+
+        router.upsert_deployment(
+            deployment=Deployment(
+                model_name="adaptive-router",
+                litellm_params=LiteLLM_Params(**adaptive_params(["gpt-4o", "gpt-4o-mini"])),
+                model_info=ModelInfo(id="router-1", db_model=True),
+            )
+        )
+
+        assert "adaptive-router" in self._model_names(router)
+        registered = router.adaptive_routers["adaptive-router"]
+        assert len(registered) == 1
+        assert set(registered[0].strategy.config.available_models) == {"gpt-4o", "gpt-4o-mini"}
+
+    def test_delete_repairs_indices_even_when_strategy_release_fails(self):
+        """Structural removal and strategy release are not equally critical. Once the entry
+        leaves model_list the index maps must be repaired no matter what, so releasing the
+        registry slot runs after that repair and cannot abandon the router half-updated."""
+        router = self._router_with_complexity_router()
+        idx = router.model_id_to_deployment_index_map["router-1"]
+        router.model_list[idx] = {"model_name": "smart-router", "litellm_params": None}
+
+        returned = router.delete_deployment(id="router-1")
+
+        assert returned is not None
+        assert "router-1" not in router.model_id_to_deployment_index_map
+        assert all(entry.get("model_info", {}).get("id") != "router-1" for entry in router.model_list)
+        assert router.get_deployment(model_id="router-1") is None
+        assert "gpt-4o" in self._model_names(router)
+
+    def test_delete_of_adaptive_enabled_complexity_router_frees_both_registries(self):
+        """A complexity router with adaptive set is registered in BOTH complexity_routers
+        and adaptive_routers under the same (model_name, tags). Releasing only the first
+        match leaves the adaptive strategy live, so a deleted alias stays routable and its
+        post-call hook keeps recording."""
+        import litellm as litellm_module
+        from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
+
+        params = {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+                "adaptive": True,
+            },
+            "complexity_router_default_model": "gpt-4o",
+        }
+        router = litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}},
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+                {
+                    "model_name": "hybrid-router",
+                    "litellm_params": params,
+                    "model_info": {"id": "router-1", "db_model": True},
+                },
+            ],
+            ignore_invalid_deployments=True,
+        )
+        assert "hybrid-router" in router.complexity_routers
+        assert "hybrid-router" in router.adaptive_routers
+        hooks = litellm_module.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook)
+        assert len(hooks) == 1
+
+        router.delete_deployment(id="router-1")
+
+        assert "hybrid-router" not in router.complexity_routers
+        assert "hybrid-router" not in router.adaptive_routers
+        remaining_hooks = litellm_module.logging_callback_manager.get_custom_loggers_for_type(
+            AdaptiveRouterPostCallHook
+        )
+        assert remaining_hooks == []
+
+    def test_upsert_of_edited_quality_router_keeps_it_routable(self):
+        """_unregister_pre_routing_strategy_for_deployment dispatches on four prefixes;
+        quality_router is one of them and would otherwise go unexercised."""
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        def quality_params(default_model: str) -> dict:
+            return {
+                "model": "auto_router/quality_router",
+                "quality_router_default_model": default_model,
+            }
+
+        router = litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}},
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+                {
+                    "model_name": "quality-router",
+                    "litellm_params": quality_params("gpt-4o"),
+                    "model_info": {"id": "router-1", "db_model": True},
+                },
+            ],
+            ignore_invalid_deployments=True,
+        )
+        assert "quality-router" in router.quality_routers
+
+        router.upsert_deployment(
+            deployment=Deployment(
+                model_name="quality-router",
+                litellm_params=LiteLLM_Params(**quality_params("gpt-4o-mini")),
+                model_info=ModelInfo(id="router-1", db_model=True),
+            )
+        )
+
+        assert "quality-router" in self._model_names(router)
+        registered = router.quality_routers["quality-router"]
+        assert len(registered) == 1
+        assert registered[0].strategy.config.default_model == "gpt-4o-mini"
+
+    @staticmethod
+    def _hybrid_router_params(tiers: dict) -> dict:
+        return {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"tiers": tiers, "adaptive": True},
+            "complexity_router_default_model": "gpt-4o",
+        }
+
+    @classmethod
+    def _router_with_hybrid_router(cls) -> "litellm.Router":
+        return litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}},
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+                {
+                    "model_name": "hybrid-router",
+                    "litellm_params": cls._hybrid_router_params({"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"}),
+                    "model_info": {"id": "router-1", "db_model": True},
+                },
+            ],
+            ignore_invalid_deployments=True,
+        )
+
+    def test_upsert_of_edited_hybrid_complexity_router_relinks_adaptive(self):
+        """Editing an adaptive-enabled complexity router releases its adaptive companion
+        along with the complexity slot; the finalize re-run must fire for it (not just for
+        `auto_router/adaptive_router` deployments) or the rebuilt complexity router keeps
+        routing while bandit recording, DB persistence and /adaptive_router/state all
+        silently stop until the next full reload."""
+        import litellm as litellm_module
+        from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = self._router_with_hybrid_router()
+        assert "hybrid-router" in router.adaptive_routers
+
+        router.upsert_deployment(
+            deployment=Deployment(
+                model_name="hybrid-router",
+                litellm_params=LiteLLM_Params(
+                    **self._hybrid_router_params(
+                        {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o", "COMPLEX": "gpt-4o"}
+                    )
+                ),
+                model_info=ModelInfo(id="router-1", db_model=True),
+            )
+        )
+
+        assert "hybrid-router" in self._model_names(router)
+        assert "hybrid-router" in router.complexity_routers
+        assert "hybrid-router" in router.adaptive_routers
+        rebuilt = router.complexity_routers["hybrid-router"][0].strategy
+        assert router.adaptive_routers["hybrid-router"][0].strategy is rebuilt.adaptive_router
+        hooks = litellm_module.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook)
+        assert len(hooks) == 1
+
+    def test_upsert_turning_adaptive_on_builds_the_companion(self):
+        """An edit that flips `adaptive: true` on an existing complexity router must
+        register the companion immediately; neither side of the old prefix-only gate
+        matches a complexity deployment, so the flip was a silent no-op until restart."""
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = self._router_with_complexity_router()
+        assert "smart-router" not in router.adaptive_routers
+
+        params = self._complexity_router_params("gpt-4o")
+        params["complexity_router_config"] = {**params["complexity_router_config"], "adaptive": True}
+        router.upsert_deployment(
+            deployment=Deployment(
+                model_name="smart-router",
+                litellm_params=LiteLLM_Params(**params),
+                model_info=ModelInfo(id="router-1", db_model=True),
+            )
+        )
+
+        assert "smart-router" in router.adaptive_routers
+
+    def test_unregister_pre_routing_strategy_scopes_the_drop_by_tags(self):
+        """The bool return drives the hook re-sync; a tag mismatch must report False and
+        leave the registry untouched, and dropping the last entry must free the key."""
+        from litellm.types.router import TaggedPreRoutingStrategy
+
+        registry = {
+            "m": [
+                TaggedPreRoutingStrategy(tags=("team-a",), strategy=object()),
+                TaggedPreRoutingStrategy(tags=(), strategy=object()),
+            ]
+        }
+
+        assert litellm.Router._unregister_pre_routing_strategy(registry, "m", ("team-b",)) is False
+        assert len(registry["m"]) == 2
+
+        assert litellm.Router._unregister_pre_routing_strategy(registry, "m", ("team-a",)) is True
+        assert [entry.tags for entry in registry["m"]] == [()]
+
+        assert litellm.Router._unregister_pre_routing_strategy(registry, "m", ()) is True
+        assert "m" not in registry
+
+    def test_unregister_for_deployment_ignores_non_router_deployments(self):
+        """Direct twin of the endpoint-level test: a regular deployment that shares a
+        router's model_name must not evict the router's registry slot."""
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = self._router_with_complexity_router()
+
+        router._unregister_pre_routing_strategy_for_deployment(
+            deployment=Deployment(
+                model_name="smart-router",
+                litellm_params=LiteLLM_Params(model="openai/gpt-4o"),
+                model_info=ModelInfo(id="plain-1", db_model=True),
+            )
+        )
+
+        assert "smart-router" in router.complexity_routers
+
+    def test_sync_adaptive_router_hooks_keeps_one_hook_per_registered_router(self):
+        """Re-syncing must replace, not accumulate: a duplicated hook double-fires
+        bandit signal recording for every request."""
+        import litellm as litellm_module
+        from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
+
+        router = self._router_with_hybrid_router()
+
+        router._sync_adaptive_router_hooks()
+        router._sync_adaptive_router_hooks()
+
+        hooks = litellm_module.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook)
+        assert len(hooks) == 1
+
+    def test_deployment_participates_in_adaptive_routing_matrix(self):
+        """The upsert finalize re-run keys off this predicate for both the incoming and
+        outgoing deployment; a false negative silently strands the adaptive companion."""
+        from litellm.types.router import LiteLLM_Params
+
+        router = self._router_with_complexity_router()
+
+        cases = [
+            ({"model": "auto_router/adaptive_router", "adaptive_router_config": {}}, True),
+            (self._hybrid_router_params({"SIMPLE": "gpt-4o-mini"}), True),
+            (self._complexity_router_params("gpt-4o"), False),
+            (
+                {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini"}, "adaptive": False},
+                    "complexity_router_default_model": "gpt-4o",
+                },
+                False,
+            ),
+            ({"model": "openai/gpt-4o"}, False),
+        ]
+        for params, expected in cases:
+            actual = router._deployment_participates_in_adaptive_routing(
+                litellm_params=LiteLLM_Params(**params)
+            )
+            assert actual is expected, params["model"]
+
+
+def test_model_info_is_active_for_environment_matrix(monkeypatch):
+    """The model-write endpoints consult this predicate to tell a deliberately
+    environment-inactive model from one dropped by a failed reload; the Router's own
+    deployment gate delegates to it, so the two can never diverge."""
+    from litellm.router import model_info_is_active_for_environment
+
+    assert model_info_is_active_for_environment(model_info=None) is True
+    assert model_info_is_active_for_environment(model_info={"id": "m1"}) is True
+    assert model_info_is_active_for_environment(model_info={"supported_environments": None}) is True
+
+    monkeypatch.setenv("LITELLM_ENVIRONMENT", "development")
+    assert model_info_is_active_for_environment(model_info={"supported_environments": ["development"]}) is True
+    assert model_info_is_active_for_environment(model_info={"supported_environments": ["production"]}) is False
+
+    monkeypatch.delenv("LITELLM_ENVIRONMENT")
+    with pytest.raises(ValueError, match="LITELLM_ENVIRONMENT"):
+        model_info_is_active_for_environment(model_info={"supported_environments": ["production"]})

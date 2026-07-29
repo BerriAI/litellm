@@ -358,6 +358,23 @@ describe("EntityUsageExport utils", () => {
       expect(result[0]).toHaveProperty("Total Tokens");
       expect(result[0]).toHaveProperty("Prompt Tokens");
       expect(result[0]).toHaveProperty("Completion Tokens");
+      expect(result[0]).toHaveProperty("Cache Read Input Tokens");
+      expect(result[0]).toHaveProperty("Cache Creation Input Tokens");
+    });
+
+    it("should export exact cache token values per entity per day", () => {
+      const result = generateDailyData(mockSpendData, "Team", mockTeamAliasMap);
+
+      const day1Team1 = result.find((r) => r.Date === "2025-01-01" && r["Team ID"] === "team-1");
+      const day1Team2 = result.find((r) => r.Date === "2025-01-01" && r["Team ID"] === "team-2");
+      const day2Team1 = result.find((r) => r.Date === "2025-01-02" && r["Team ID"] === "team-1");
+
+      expect(day1Team1?.["Cache Read Input Tokens"]).toBe(50);
+      expect(day1Team1?.["Cache Creation Input Tokens"]).toBe(30);
+      expect(day1Team2?.["Cache Read Input Tokens"]).toBe(100);
+      expect(day1Team2?.["Cache Creation Input Tokens"]).toBe(60);
+      expect(day2Team1?.["Cache Read Input Tokens"]).toBe(75);
+      expect(day2Team1?.["Cache Creation Input Tokens"]).toBe(45);
     });
 
     it("should sort data by date ascending", () => {
@@ -469,6 +486,8 @@ describe("EntityUsageExport utils", () => {
 
       expect(result[0]["Prompt Tokens"]).toBe(0);
       expect(result[0]["Completion Tokens"]).toBe(0);
+      expect(result[0]["Cache Read Input Tokens"]).toBe(0);
+      expect(result[0]["Cache Creation Input Tokens"]).toBe(0);
     });
   });
 
@@ -614,6 +633,61 @@ describe("EntityUsageExport utils", () => {
       expect(result[0]).toHaveProperty("Total Tokens");
       expect(result[0]).toHaveProperty("Prompt Tokens");
       expect(result[0]).toHaveProperty("Completion Tokens");
+      expect(result[0]).toHaveProperty("Cache Read Input Tokens");
+      expect(result[0]).toHaveProperty("Cache Creation Input Tokens");
+    });
+
+    it("should export and aggregate cache token values per key", () => {
+      const makeDay = (cacheRead: number, cacheCreation: number) => ({
+        date: "2025-01-01",
+        breakdown: {
+          entities: {
+            "team-1": {
+              metrics: {
+                spend: 5.0,
+                api_requests: 50,
+                successful_requests: 50,
+                failed_requests: 0,
+                total_tokens: 500,
+                prompt_tokens: 300,
+                completion_tokens: 200,
+                cache_read_input_tokens: cacheRead,
+                cache_creation_input_tokens: cacheCreation,
+              },
+              api_key_breakdown: {
+                key1: {
+                  metrics: {
+                    spend: 5.0,
+                    api_requests: 50,
+                    successful_requests: 50,
+                    failed_requests: 0,
+                    total_tokens: 500,
+                    prompt_tokens: 300,
+                    completion_tokens: 200,
+                    cache_read_input_tokens: cacheRead,
+                    cache_creation_input_tokens: cacheCreation,
+                  },
+                  metadata: {
+                    team_id: "team-1",
+                    key_alias: "alias-1",
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const spendDataWithCache: EntitySpendData = {
+        results: [makeDay(40, 25), makeDay(10, 5)],
+        metadata: mockSpendDataWithKeys.metadata,
+      };
+
+      const result = generateDailyWithKeysData(spendDataWithCache, "Team");
+
+      expect(result).toHaveLength(1);
+      expect(result[0]["Cache Read Input Tokens"]).toBe(50);
+      expect(result[0]["Cache Creation Input Tokens"]).toBe(30);
     });
 
     it("should sort data by date ascending", () => {
@@ -935,6 +1009,8 @@ describe("EntityUsageExport utils", () => {
 
       expect(key1Entry?.["Prompt Tokens"]).toBe(0);
       expect(key1Entry?.["Completion Tokens"]).toBe(0);
+      expect(key1Entry?.["Cache Read Input Tokens"]).toBe(0);
+      expect(key1Entry?.["Cache Creation Input Tokens"]).toBe(0);
     });
 
     it("should handle empty api_key_breakdown", () => {
@@ -1096,6 +1172,117 @@ describe("EntityUsageExport utils", () => {
       expect(result[0]).toHaveProperty("Successful");
       expect(result[0]).toHaveProperty("Failed");
       expect(result[0]).toHaveProperty("Total Tokens");
+      expect(result[0]).toHaveProperty("Prompt Tokens");
+      expect(result[0]).toHaveProperty("Completion Tokens");
+      expect(result[0]).toHaveProperty("Cache Read Input Tokens");
+      expect(result[0]).toHaveProperty("Cache Creation Input Tokens");
+    });
+
+    it("should export prompt, completion, and cache token values summed across keys for the same model", () => {
+      const data: EntitySpendData = {
+        results: [
+          {
+            date: "2025-03-01",
+            breakdown: {
+              entities: {
+                "team-1": {
+                  metrics: {
+                    spend: 5.0,
+                    api_requests: 25,
+                    successful_requests: 25,
+                    failed_requests: 0,
+                    total_tokens: 1050,
+                    prompt_tokens: 750,
+                    completion_tokens: 300,
+                    cache_read_input_tokens: 450,
+                    cache_creation_input_tokens: 200,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 2.0,
+                        api_requests: 10,
+                        successful_requests: 10,
+                        failed_requests: 0,
+                        total_tokens: 700,
+                      },
+                      metadata: { team_id: "team-1" },
+                    },
+                    key2: {
+                      metrics: {
+                        spend: 3.0,
+                        api_requests: 15,
+                        successful_requests: 15,
+                        failed_requests: 0,
+                        total_tokens: 350,
+                      },
+                      metadata: { team_id: "team-1" },
+                    },
+                  },
+                },
+              },
+              models: {
+                "claude-sonnet-4-5": {
+                  metrics: {
+                    spend: 5.0,
+                    api_requests: 25,
+                    successful_requests: 25,
+                    failed_requests: 0,
+                    total_tokens: 1050,
+                  },
+                  api_key_breakdown: {
+                    key1: {
+                      metrics: {
+                        spend: 2.0,
+                        api_requests: 10,
+                        successful_requests: 10,
+                        failed_requests: 0,
+                        total_tokens: 700,
+                        prompt_tokens: 500,
+                        completion_tokens: 200,
+                        cache_read_input_tokens: 300,
+                        cache_creation_input_tokens: 120,
+                      },
+                      metadata: { team_id: "team-1" },
+                    },
+                    key2: {
+                      metrics: {
+                        spend: 3.0,
+                        api_requests: 15,
+                        successful_requests: 15,
+                        failed_requests: 0,
+                        total_tokens: 350,
+                        prompt_tokens: 250,
+                        completion_tokens: 100,
+                        cache_read_input_tokens: 150,
+                        cache_creation_input_tokens: 80,
+                      },
+                      metadata: { team_id: "team-1" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: {
+          total_spend: 5.0,
+          total_api_requests: 25,
+          total_successful_requests: 25,
+          total_failed_requests: 0,
+          total_tokens: 1050,
+        },
+      };
+
+      const result = generateDailyWithModelsData(data, "Team");
+
+      expect(result).toHaveLength(1);
+      expect(result[0].Model).toBe("claude-sonnet-4-5");
+      expect(result[0]["Total Tokens"]).toBe(1050);
+      expect(result[0]["Prompt Tokens"]).toBe(750);
+      expect(result[0]["Completion Tokens"]).toBe(300);
+      expect(result[0]["Cache Read Input Tokens"]).toBe(450);
+      expect(result[0]["Cache Creation Input Tokens"]).toBe(200);
     });
 
     it("should sort data by date ascending", () => {

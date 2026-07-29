@@ -1,5 +1,5 @@
-lint.ignore = ["F405", "E402", "E501", "F403"]
-lint.extend-select = ["E501", "T20", "PGH004", "RUF008", "RUF009", "RUF100"]
+lint.ignore = ["F405", "E402", "F403"]
+lint.extend-select = ["T20", "PGH004", "RUF008", "RUF009", "RUF100"]
 # RUF100 (unused-noqa) only knows the rules enabled in THIS config, so it would strip
 # `# noqa` directives that protect rules enforced elsewhere. List those codes as external
 # so RUF100 leaves their directives alone: the strict gate (ruff-strict.toml) and upstream

@@ -49,7 +49,7 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
 
   const renderMessageBody = (message: MessageType) => (
     <div
-      className="whitespace-pre-wrap break-words"
+      className="whitespace-pre-wrap wrap-break-word"
       style={{
         wordWrap: "break-word",
         overflowWrap: "break-word",
@@ -84,7 +84,7 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
                 {String(children).replace(/\n$/, "")}
               </SyntaxHighlighter>
             ) : (
-              <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} {...props}>
+              <code className={`${className} px-1.5 py-0.5 rounded-sm bg-gray-100 text-sm font-mono`} {...props}>
                 {children}
               </code>
             );
@@ -127,7 +127,7 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-gray-700">{displayModel}</span>
                     {assistantMessage.toolName && (
-                      <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
+                      <span className="rounded-sm bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
                         {assistantMessage.toolName}
                       </span>
                     )}

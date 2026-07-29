@@ -608,3 +608,320 @@ class TestValidateFiniteSpend:
         with pytest.raises(HTTPException) as exc_info:
             validate_finite_spend(bad)
         assert exc_info.value.status_code == 400
+
+
+class TestValidateFiniteSpendErrorDetail:
+    """The 400 for non-finite spend must carry the exact {"error": <msg>} body."""
+
+    def test_rejection_detail_is_exact(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_finite_spend,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            validate_finite_spend(float("nan"))
+
+        assert exc_info.value.detail == {
+            "error": "spend must be a finite number. Received: nan"
+        }
+
+
+class TestRequireCallerUserIdErrorDetail:
+    """The 403 for a service-account key must carry the exact error body."""
+
+    def test_rejection_detail_is_exact(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            require_caller_user_id_for_non_admin,
+        )
+
+        service_account_key = UserAPIKeyAuth(
+            user_id=None,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            require_caller_user_id_for_non_admin(service_account_key)
+
+        assert exc_info.value.detail == {
+            "error": "Service-account keys cannot query user analytics. Use a user-bound key, or call as a proxy admin."
+        }
+
+
+class TestCheckPassthroughRoutesCallerPermission:
+    """Only proxy admins may set allowed_passthrough_routes (top-level or under
+    metadata); non-admins get a 403 naming the entity."""
+
+    def _non_admin(self):
+        return UserAPIKeyAuth(
+            user_id="u1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+
+    def test_top_level_routes_rejected_with_default_entity(self):
+        from fastapi import HTTPException
+        from pydantic import BaseModel
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_passthrough_routes_caller_permission,
+        )
+
+        class _RouteData(BaseModel):
+            allowed_passthrough_routes: list | None = None
+            metadata: dict | None = None
+
+        data = _RouteData(allowed_passthrough_routes=["/v1/foo"])
+        with pytest.raises(HTTPException) as exc_info:
+            _check_passthrough_routes_caller_permission(data, self._non_admin())
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == {
+            "error": "Only proxy admins can set `allowed_passthrough_routes` on a key."
+        }
+
+    def test_metadata_routes_rejected_with_default_entity(self):
+        from fastapi import HTTPException
+        from pydantic import BaseModel
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_passthrough_routes_caller_permission,
+        )
+
+        class _RouteData(BaseModel):
+            allowed_passthrough_routes: list | None = None
+            metadata: dict | None = None
+
+        data = _RouteData(metadata={"allowed_passthrough_routes": ["/v1/foo"]})
+        with pytest.raises(HTTPException) as exc_info:
+            _check_passthrough_routes_caller_permission(data, self._non_admin())
+
+        assert exc_info.value.detail == {
+            "error": "Only proxy admins can set `metadata.allowed_passthrough_routes` on a key."
+        }
+
+    def test_tolerates_data_missing_passthrough_and_metadata_fields(self):
+        from pydantic import BaseModel
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_passthrough_routes_caller_permission,
+        )
+
+        class _Bare(BaseModel):
+            unrelated: str = "x"
+
+        assert (
+            _check_passthrough_routes_caller_permission(_Bare(), self._non_admin())
+            is None
+        )
+
+
+class TestIsUserOrgAdminForTeam:
+    """The caller must be looked up with its exact identity; a nulled or omitted
+    lookup argument would silently mis-resolve org-admin status."""
+
+    @pytest.mark.asyncio
+    async def test_get_user_object_called_with_caller_identity(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            _is_user_org_admin_for_team,
+        )
+
+        team = LiteLLM_TeamTable(
+            team_id="t1", organization_id="org1", members_with_roles=[]
+        )
+        key = UserAPIKeyAuth(
+            user_id="u1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+        fake_prisma, fake_cache, fake_logging = MagicMock(), MagicMock(), MagicMock()
+        mock_get_user = AsyncMock(return_value=None)
+
+        with patch(
+            "litellm.proxy.proxy_server.prisma_client", fake_prisma
+        ), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", fake_cache
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", fake_logging
+        ), patch(
+            "litellm.proxy.auth.auth_checks.get_user_object", mock_get_user
+        ):
+            result = await _is_user_org_admin_for_team(key, team)
+
+        assert result is False
+        mock_get_user.assert_awaited_once_with(
+            user_id="u1",
+            prisma_client=fake_prisma,
+            user_api_key_cache=fake_cache,
+            user_id_upsert=False,
+            proxy_logging_obj=fake_logging,
+        )
+
+
+class TestTeamMemberHasPermission:
+    def test_requires_caller_to_be_a_team_member(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            _team_member_has_permission,
+        )
+
+        team = LiteLLM_TeamTable(
+            team_id="t1",
+            team_member_permissions=["/key/generate"],
+            members_with_roles=[Member(user_id="someone-else", role="user")],
+        )
+        key = UserAPIKeyAuth(
+            user_id="u1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+        assert _team_member_has_permission(key, team, "/key/generate") is False
+
+
+class TestUserHasAdminPrivilegesGuard:
+    @pytest.mark.asyncio
+    async def test_no_user_lookup_when_prisma_is_none(self):
+        """With no DB the guard short-circuits before any user lookup."""
+        auth = UserAPIKeyAuth(
+            user_id="user1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+        mock_get_user = AsyncMock(return_value=None)
+        with patch("litellm.proxy.auth.auth_checks.get_user_object", mock_get_user):
+            result = await _user_has_admin_privileges(
+                user_api_key_dict=auth, prisma_client=None
+            )
+        assert result is False
+        mock_get_user.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_org_admin_membership_grants_privileges(self):
+        """With DB + user_id present, an ORG_ADMIN membership yields True."""
+        auth = UserAPIKeyAuth(
+            user_id="user1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+        now = datetime.now(timezone.utc)
+        user_obj = LiteLLM_UserTable(
+            user_id="user1",
+            organization_memberships=[
+                LiteLLM_OrganizationMembershipTable(
+                    user_id="user1",
+                    organization_id="org1",
+                    user_role=LitellmUserRoles.ORG_ADMIN.value,
+                    created_at=now,
+                    updated_at=now,
+                )
+            ],
+        )
+        mock_get_user = AsyncMock(return_value=user_obj)
+        with patch("litellm.proxy.auth.auth_checks.get_user_object", mock_get_user):
+            result = await _user_has_admin_privileges(
+                user_api_key_dict=auth, prisma_client=MagicMock()
+            )
+        assert result is True
+
+
+class TestAdminCanInviteUserGuard:
+    @pytest.mark.asyncio
+    async def test_no_user_lookup_when_prisma_is_none(self):
+        auth = UserAPIKeyAuth(
+            user_id="admin1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+        mock_get_user = AsyncMock(return_value=None)
+        with patch("litellm.proxy.auth.auth_checks.get_user_object", mock_get_user):
+            result = await admin_can_invite_user(
+                target_user_id="target1",
+                user_api_key_dict=auth,
+                prisma_client=None,
+            )
+        assert result is False
+        mock_get_user.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_org_admin_can_invite_user_in_shared_org(self):
+        now = datetime.now(timezone.utc)
+        auth = UserAPIKeyAuth(
+            user_id="admin1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+
+        def membership(role):
+            return LiteLLM_OrganizationMembershipTable(
+                user_id="x",
+                organization_id="org1",
+                user_role=role,
+                created_at=now,
+                updated_at=now,
+            )
+
+        admin_obj = LiteLLM_UserTable(
+            user_id="admin1",
+            organization_memberships=[membership(LitellmUserRoles.ORG_ADMIN.value)],
+        )
+        target_obj = LiteLLM_UserTable(
+            user_id="target1",
+            organization_memberships=[membership(LitellmUserRoles.INTERNAL_USER.value)],
+        )
+        mock_get_user = AsyncMock(side_effect=[admin_obj, target_obj])
+        with patch("litellm.proxy.auth.auth_checks.get_user_object", mock_get_user):
+            result = await admin_can_invite_user(
+                target_user_id="target1",
+                user_api_key_dict=auth,
+                prisma_client=MagicMock(),
+            )
+        assert result is True
+
+
+class TestTeamAdminCanInviteUserQuery:
+    @pytest.mark.asyncio
+    async def test_find_many_queries_admin_teams_with_exact_where(self):
+        mock_prisma = MagicMock()
+        mock_auth = MagicMock()
+        mock_auth.user_id = "admin"
+        admin_user = LiteLLM_UserTable(user_id="admin", teams=["t1", "t2"])
+        target_user = LiteLLM_UserTable(user_id="target", teams=["t2"])
+
+        def make_team(tid):
+            obj = MagicMock()
+            obj.team_id = tid
+            obj.model_dump = lambda: {
+                "team_id": tid,
+                "members_with_roles": [{"user_id": "admin", "role": "admin"}],
+            }
+            return obj
+
+        find_many = AsyncMock(return_value=[make_team("t1"), make_team("t2")])
+        mock_prisma.db.litellm_teamtable.find_many = find_many
+
+        await _team_admin_can_invite_user(
+            user_api_key_dict=mock_auth,
+            admin_user_obj=admin_user,
+            target_user_obj=target_user,
+            prisma_client=mock_prisma,
+        )
+
+        find_many.assert_awaited_once_with(where={"team_id": {"in": ["t1", "t2"]}})
+
+
+class TestSetObjectMetadataFieldPremiumArg:
+    def test_premium_check_receives_the_field_name(self):
+        team = LiteLLM_TeamTable(team_id="t1", metadata={})
+        with patch(
+            "litellm.proxy.management_endpoints.common_utils._premium_user_check"
+        ) as mock_premium:
+            _set_object_metadata_field(team, "guardrails", ["g1"])
+            mock_premium.assert_called_once_with("guardrails")
+
+
+class TestUpdateMetadataFieldMove:
+    def test_none_valued_field_is_not_moved_into_metadata(self):
+        """A None value must leave the field untouched (guard requires non-None)."""
+        from litellm.proxy.management_endpoints.common_utils import (
+            _update_metadata_field,
+        )
+
+        updated_kv = {"guardrails": None}
+        _update_metadata_field(updated_kv=updated_kv, field_name="guardrails")
+        assert updated_kv == {"guardrails": None}
+
+    def test_set_premium_field_is_moved_into_metadata(self):
+        updated_kv = {"guardrails": ["g1"]}
+        with patch(
+            "litellm.proxy.management_endpoints.common_utils._premium_user_check"
+        ):
+            _update_metadata_fields(updated_kv)
+        assert "guardrails" not in updated_kv
+        assert updated_kv["metadata"]["guardrails"] == ["g1"]

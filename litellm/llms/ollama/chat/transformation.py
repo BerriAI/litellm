@@ -363,7 +363,11 @@ class OllamaChatConfig(BaseConfig):
                 response_json_message["reasoning_content"] = reasoning_content
                 response_json_message["content"] = content
 
-        if request_data.get("format", "") == "json" and litellm_params.get("function_name") is not None:
+        if (
+            request_data.get("format", "") == "json"
+            and litellm_params.get("function_name") is not None
+            and response_json_message is not None
+        ):
             function_call = json.loads(response_json_message["content"])
             message = litellm.Message(
                 content=None,
