@@ -15,8 +15,10 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.router_utils.cooldown_cache import CooldownCache, CooldownCacheValue
 from litellm.router_utils.cooldown_handlers import (
     _get_deployment_cooldown_policy,
+    _has_explicit_allowed_fails_policy_for_exception,
     _resolve_allowed_fails_from_policy,
     _should_cooldown_deployment,
+    mark_advisor_orchestration_failure,
     should_cooldown_based_on_allowed_fails_policy,
 )
 from litellm.router_utils.fallback_event_handlers import _trigger_cooldown_for_failed_deployment
@@ -372,8 +374,67 @@ class TestFallbackDeploymentCooldown:
 
     def test_trigger_cooldown_uses_deployment_cooldown_time_override(self):
         """
-        When the deployment has a litellm_params.cooldown_time, that value must be
+        When the deployment has a model_info.cooldown_time, that value must be
         passed as time_to_cooldown rather than the router-level cooldown_time.
+        """
+        mock_router = MagicMock()
+        mock_router.cooldown_time = 300.0
+        mock_router.get_model_info.return_value = {"model_info": {"cooldown_time": 30.0}}
+
+        kwargs = {
+            "litellm_metadata": {
+                "model_info": {"id": "fallback-deployment"},
+                "deployment_model_name": "gpt-4",
+            }
+        }
+        exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
+
+        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+            _trigger_cooldown_for_failed_deployment(
+                litellm_router=mock_router,
+                kwargs=kwargs,
+                exception=exc,
+            )
+
+            call_kwargs = mock_set_cooldown.call_args[1]
+            assert call_kwargs["time_to_cooldown"] == 30.0, (
+                "Deployment-level cooldown_time must override router-level value"
+            )
+
+    def test_trigger_cooldown_skipped_for_advisor_orchestration_failure(self):
+        """
+        A failure tagged as originating from advisor orchestration (not the selected
+        deployment) must not cool down the fallback deployment, matching the same
+        guard already applied in Router.deployment_callback_on_failure.
+        """
+        mock_router = MagicMock()
+        mock_router.cooldown_time = 60.0
+        mock_router.get_model_info.return_value = None
+
+        kwargs = {
+            "litellm_metadata": {
+                "model_info": {"id": "fallback-deployment"},
+                "deployment_model_name": "gpt-4",
+            }
+        }
+        exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
+        mark_advisor_orchestration_failure(exc)
+
+        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+            _trigger_cooldown_for_failed_deployment(
+                litellm_router=mock_router,
+                kwargs=kwargs,
+                exception=exc,
+            )
+
+            mock_set_cooldown.assert_not_called()
+
+    def test_trigger_cooldown_ignores_litellm_params_cooldown_time(self):
+        """
+        litellm_params.cooldown_time must not be read: that dict is copied wholesale
+        into the actual provider call kwargs elsewhere in the router, so router-only
+        settings must live in model_info instead to avoid leaking into the outgoing
+        LLM request.
         """
         mock_router = MagicMock()
         mock_router.cooldown_time = 300.0
@@ -395,8 +456,152 @@ class TestFallbackDeploymentCooldown:
             )
 
             call_kwargs = mock_set_cooldown.call_args[1]
-            assert call_kwargs["time_to_cooldown"] == 30.0, (
-                "Deployment-level cooldown_time must override router-level value"
+            assert call_kwargs["time_to_cooldown"] == 300.0, (
+                "litellm_params.cooldown_time must be ignored; router-level default should apply"
+            )
+
+
+class TestSingleDeploymentModelGroupProtection:
+    def test_generic_allowed_fails_does_not_bypass_single_deployment_protection(self):
+        """
+        Setting only a generic model_info.allowed_fails on a single-deployment model
+        group must not disable the "avoid cooldowns on single deployment model groups"
+        safety net; before this feature existed the field had no effect at all here,
+        so a plain 500 error must behave the same as the no-policy control.
+        """
+        router = _make_router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {"model": "openai/gpt-4"},
+                    "model_info": {"id": "solo", "allowed_fails": 1},
+                },
+            ],
+        )
+
+        exc = Exception("Internal error")
+        for _ in range(2):
+            should_cooldown = _should_cooldown_deployment(
+                litellm_router_instance=router,
+                deployment="solo",
+                exception_status=500,
+                original_exception=exc,
+            )
+            assert should_cooldown is False, (
+                "single-deployment model group must stay protected from a generic allowed_fails override"
+            )
+
+    def test_named_exception_policy_still_overrides_single_deployment_protection(self):
+        """
+        Unlike a generic allowed_fails, an explicit per-exception-type allowed_fails_policy
+        entry is a deliberate, unambiguous opt-in and must still apply even on a
+        single-deployment model group.
+        """
+        router = _make_router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {"model": "openai/gpt-4"},
+                    "model_info": {
+                        "id": "solo",
+                        "allowed_fails_policy": {"RateLimitErrorAllowedFails": 0},
+                    },
+                },
+            ],
+        )
+
+        exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
+        should_cooldown = _should_cooldown_deployment(
+            litellm_router_instance=router,
+            deployment="solo",
+            exception_status=429,
+            original_exception=exc,
+        )
+        assert should_cooldown is True, "explicit per-exception-type policy must still cool down a solo deployment"
+
+
+class TestShouldCooldownBasedOnAllowedFailsPolicyFalsyZero:
+    def test_router_level_policy_of_zero_is_not_swallowed_by_allowed_fails(self):
+        """
+        Router.get_allowed_fails_from_policy returning 0 (a legitimate "cooldown after
+        the very first failure" policy) must not be treated as falsy and replaced by
+        router.allowed_fails.
+        """
+        router = _make_router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {"model": "openai/gpt-4"},
+                    "model_info": {"id": "primary"},
+                },
+            ],
+            allowed_fails=10,
+            allowed_fails_policy=AllowedFailsPolicy(RateLimitErrorAllowedFails=0),
+        )
+
+        exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
+        should_cooldown = should_cooldown_based_on_allowed_fails_policy(
+            litellm_router_instance=router,
+            deployment="primary",
+            original_exception=exc,
+        )
+        assert should_cooldown is True, "RateLimitErrorAllowedFails=0 must cool down after the first failure"
+
+
+class TestResolveAllowedFailsFromPolicyFallsThrough:
+    def test_none_value_on_first_match_falls_through_to_next_type(self):
+        """
+        ContentPolicyViolationError is also a BadRequestError; if the policy names
+        ContentPolicyViolationError but leaves its value unset (None) while setting
+        BadRequestErrorAllowedFails, resolution must fall through to the
+        BadRequestError entry rather than stopping at the first isinstance match.
+        """
+        policy = {
+            "ContentPolicyViolationErrorAllowedFails": None,
+            "BadRequestErrorAllowedFails": 3,
+        }
+        exc = litellm.ContentPolicyViolationError("flagged", "openai", "gpt-4")
+        result = _resolve_allowed_fails_from_policy(policy=policy, exception=exc)
+        assert result == 3, "must fall through to BadRequestErrorAllowedFails when the more specific field is unset"
+
+
+class TestDeploymentCallbackOnFailureCooldownTimePrecedence:
+    def test_model_info_cooldown_time_used_in_primary_sync_path(self):
+        """
+        Router.deployment_callback_on_failure (the primary sync failure-callback path,
+        as opposed to the fallback path covered by TestFallbackDeploymentCooldown) must
+        also honor a model_info.cooldown_time, not just litellm_params.cooldown_time.
+        """
+        router = _make_router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {"model": "openai/gpt-4"},
+                    "model_info": {"id": "primary", "cooldown_time": 15.0},
+                },
+            ],
+        )
+
+        exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
+        kwargs = {
+            "exception": exc,
+            "litellm_params": {
+                "model_info": {"id": "primary", "cooldown_time": 15.0},
+            },
+        }
+
+        with patch("litellm.router._set_cooldown_deployments") as mock_set_cooldown:
+            router.deployment_callback_on_failure(
+                kwargs=kwargs,
+                completion_response=None,
+                start_time=0,
+                end_time=1,
+            )
+
+            mock_set_cooldown.assert_called_once()
+            call_kwargs = mock_set_cooldown.call_args[1]
+            assert call_kwargs["time_to_cooldown"] == 15.0, (
+                "model_info.cooldown_time must be honored in the primary sync failure-callback path"
             )
 
 

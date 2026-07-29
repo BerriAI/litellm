@@ -7062,7 +7062,7 @@ class Router:
             )
 
             # Determine cooldown time with priority: deployment config > response header > router default
-            deployment_cooldown: Final = litellm_params.get("cooldown_time", None)
+            deployment_cooldown = _model_info.get("cooldown_time") if isinstance(_model_info, dict) else None
 
             header_cooldown = None
             if exception_headers is not None:

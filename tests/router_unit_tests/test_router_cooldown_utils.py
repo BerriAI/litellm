@@ -139,18 +139,20 @@ def test_should_run_cooldown_logic_generic_bad_request_excluded_by_default(
     )
 
 
-def test_should_run_cooldown_logic_explicit_router_level_policy_overrides_bad_request_exclusion(
+def test_should_run_cooldown_logic_router_level_policy_does_not_override_bad_request_exclusion(
     single_deployment_router,
 ):
-    """An explicit router-level allowed_fails_policy entry for BadRequestError is a
-    deliberate opt-in and must override the generic 4XX exclusion, otherwise the
-    policy field is silently unreachable no matter what value it's set to."""
+    """A router-level allowed_fails_policy is a pre-existing, router-wide setting that
+    predates the per-deployment override feature, so it must keep its existing behavior
+    and stay subject to the generic 4XX exclusion. Only an explicit deployment-level
+    policy (an unambiguous per-exception opt-in for that one deployment) overrides it;
+    see test_should_run_cooldown_logic_explicit_deployment_level_policy_overrides_content_policy_exclusion."""
     exc = litellm.BadRequestError("bad request", "openai", "gpt-5-mini")
     single_deployment_router.allowed_fails_policy = AllowedFailsPolicy(
         BadRequestErrorAllowedFails=5
     )
     assert (
-        _should_run_cooldown_logic(single_deployment_router, "dep-1", 400, exc) is True
+        _should_run_cooldown_logic(single_deployment_router, "dep-1", 400, exc) is False
     )
 
 
@@ -179,9 +181,12 @@ class TestHasExplicitAllowedFailsPolicyForException:
             is False
         )
 
-    def test_router_level_policy_for_matching_exception_returns_true(
+    def test_router_level_policy_for_matching_exception_returns_false(
         self, single_deployment_router
     ):
+        """Deliberately scoped to deployment-level only: a router-level policy
+        predates this feature and must not be treated as an explicit per-exception
+        opt-in for cooldown-gate purposes."""
         exc = litellm.RateLimitError("rate limited", "openai", "gpt-5-mini")
         single_deployment_router.allowed_fails_policy = AllowedFailsPolicy(
             RateLimitErrorAllowedFails=3
@@ -190,7 +195,7 @@ class TestHasExplicitAllowedFailsPolicyForException:
             _has_explicit_allowed_fails_policy_for_exception(
                 single_deployment_router, "dep-1", exc
             )
-            is True
+            is False
         )
 
     def test_router_level_policy_for_different_exception_returns_false(
@@ -222,9 +227,7 @@ class TestHasExplicitAllowedFailsPolicyForException:
             is True
         )
 
-    def test_none_deployment_falls_back_to_router_level_only(
-        self, single_deployment_router
-    ):
+    def test_none_deployment_returns_false(self, single_deployment_router):
         exc = litellm.RateLimitError("rate limited", "openai", "gpt-5-mini")
         single_deployment_router.allowed_fails_policy = AllowedFailsPolicy(
             RateLimitErrorAllowedFails=3
@@ -233,7 +236,7 @@ class TestHasExplicitAllowedFailsPolicyForException:
             _has_explicit_allowed_fails_policy_for_exception(
                 single_deployment_router, None, exc
             )
-            is True
+            is False
         )
 
 

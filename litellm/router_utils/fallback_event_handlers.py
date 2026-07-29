@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final
 
@@ -9,7 +10,10 @@ from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     get_fallback_error_info,
 )
-from litellm.router_utils.cooldown_handlers import _first_present, _set_cooldown_deployments
+from litellm.router_utils.cooldown_handlers import (
+    _set_cooldown_deployments,
+    is_advisor_orchestration_failure,
+)
 from litellm.types.router import LiteLLMParamsTypedDict
 
 if TYPE_CHECKING:
@@ -20,7 +24,7 @@ else:
     LitellmRouter = Any
 
 
-def _router_authored_metadata(kwargs: dict) -> dict[str, Any]:
+def _router_authored_metadata(kwargs: Mapping[str, Any]) -> Mapping[str, Any]:
     """Return whichever of kwargs["metadata"]/["litellm_metadata"] the router itself
     just wrote deployment info into, rather than trusting whichever key happens to be
     present.
@@ -41,7 +45,7 @@ def _router_authored_metadata(kwargs: dict) -> dict[str, Any]:
 
 def _trigger_cooldown_for_failed_deployment(
     litellm_router: LitellmRouter,
-    kwargs: dict,
+    kwargs: Mapping[str, Any],
     exception: Exception,
 ) -> None:
     """
@@ -53,6 +57,13 @@ def _trigger_cooldown_for_failed_deployment(
     fallback deployment is evaluated for cooldown regardless.
     """
     try:
+        if is_advisor_orchestration_failure(exception):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment: failure originated "
+                "from advisor orchestration, not the selected deployment."
+            )
+            return
+
         # Router._set_failed_deployment_id_on_exception() stamps the failed deployment's
         # id directly on the exception at the exact point of failure, so it's immune to
         # metadata-bucket ambiguity (a caller can't forge it, and it doesn't depend on
@@ -73,9 +84,7 @@ def _trigger_cooldown_for_failed_deployment(
         time_to_cooldown = litellm_router.cooldown_time
         deployment_dict = litellm_router.get_model_info(id=deployment_id)
         if deployment_dict is not None:
-            deployment_cooldown = _first_present(
-                deployment_dict.get("litellm_params"), deployment_dict.get("model_info"), key="cooldown_time"
-            )
+            deployment_cooldown = (deployment_dict.get("model_info") or {}).get("cooldown_time")
             if deployment_cooldown is not None and deployment_cooldown >= 0:
                 time_to_cooldown = deployment_cooldown
 
@@ -88,7 +97,7 @@ def _trigger_cooldown_for_failed_deployment(
         )
 
         verbose_router_logger.debug(f"Triggered cooldown for fallback deployment {deployment_id}")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - best-effort cooldown trigger must never break the fallback response itself
         verbose_router_logger.debug(f"Error triggering cooldown for fallback deployment: {e}")
 
 

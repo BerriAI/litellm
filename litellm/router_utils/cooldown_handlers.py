@@ -8,6 +8,7 @@ Router cooldown handlers
 
 import asyncio
 import math
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -72,70 +73,71 @@ _EXCEPTION_POLICY_FIELDS: tuple[tuple[type, str], ...] = (
 )
 
 
-def _first_present(*sources: dict[str, Any] | None, key: str) -> Any:
-    """Return *key* from the first source dict where it's set, so callers can support
-    a setting living in more than one deployment config location. Sources are checked
-    in order from most to least specific to that setting."""
-    for source in sources:
-        if source is None:
-            continue
-        value = source.get(key)
-        if value is not None:
-            return value
-    return None
-
-
 def _get_deployment_cooldown_policy(
     litellm_router_instance: LitellmRouter,
     deployment: str,
-) -> tuple[dict[str, int] | None, int | None]:
+) -> tuple[Mapping[str, int] | None, int | None]:
     """Return (allowed_fails_policy, allowed_fails) from deployment model_info, or (None, None).
 
-    `model_info` is the canonical location for these two fields; `litellm_params` is
-    also accepted as a fallback for operators who colocate them with `cooldown_time`.
+    `model_info` (not `litellm_params`) is the only supported location for these
+    fields: `litellm_params` gets copied wholesale into the actual provider call
+    kwargs (see e.g. Router._image_generation's `data = deployment["litellm_params"].copy()`),
+    so anything placed there would leak into the outgoing LLM request instead of
+    staying router-internal.
     """
     dep = litellm_router_instance.get_model_info(id=deployment)
     if dep is None:
         return None, None
-    mi: dict[str, Any] = dep.get("model_info") or {}
-    litellm_params: dict[str, Any] = dep.get("litellm_params") or {}
-    raw = _first_present(mi, litellm_params, key="allowed_fails_policy")
-    policy: dict[str, int] | None = raw if isinstance(raw, dict) else None
-    allowed: int | None = _first_present(mi, litellm_params, key="allowed_fails")
+    mi: Mapping[str, Any] = dep.get("model_info") or {}
+    raw = mi.get("allowed_fails_policy")
+    policy: Mapping[str, int] | None = raw if isinstance(raw, dict) else None
+    allowed: int | None = mi.get("allowed_fails")
     return policy, allowed
 
 
 def _resolve_allowed_fails_from_policy(
-    policy: dict[str, int] | None,
-    exception: Any,
+    policy: Mapping[str, int] | None,
+    exception: Exception,
 ) -> int | None:
     """Match *exception* against *policy* and return the configured allowed-fail count, or None."""
     if policy is None:
         return None
     for exc_type, field in _EXCEPTION_POLICY_FIELDS:
         if isinstance(exception, exc_type):
-            return policy.get(field)
+            value = policy.get(field)
+            if value is not None:
+                return value
     return None
 
 
 def _should_cooldown_based_on_deployment_policy(
     litellm_router_instance: LitellmRouter,
     deployment: str,
-    original_exception: Any,
-    dep_policy: dict[str, int] | None,
+    original_exception: Exception,
+    dep_policy: Mapping[str, int] | None,
     dep_allowed_fails: int | None,
+    is_single_deployment_model_group: bool,
 ) -> bool:
     """Resolve deployment-level allowed-fails and delegate to the shared counting logic.
 
     When the deployment's policy doesn't cover *original_exception*'s type and no
     deployment-wide `allowed_fails` is set either, defer to router-level behavior
     instead of forcing an immediate cooldown.
+
+    A generic, deployment-wide `allowed_fails` predates this feature's per-exception-type
+    policy and is a much less deliberate opt-in, so on a single-deployment model group it
+    still defers to the "avoid cooldowns on single deployment model groups" safety net
+    (see `_should_cooldown_deployment`'s BASE CASE) rather than silently disabling it. An
+    explicit, named-exception-type `allowed_fails_policy` entry is unambiguous enough to
+    override that safety net, matching `_has_explicit_allowed_fails_policy_for_exception`.
     """
     allowed_fails_from_policy = _resolve_allowed_fails_from_policy(dep_policy, original_exception)
     if allowed_fails_from_policy is not None:
         allowed_fails_override: int | None = allowed_fails_from_policy
         cache_key_suffix: str | None = type(original_exception).__name__
     elif dep_allowed_fails is not None:
+        if is_single_deployment_model_group:
+            return False
         allowed_fails_override = dep_allowed_fails
         cache_key_suffix = "generic"
     else:
@@ -145,7 +147,7 @@ def _should_cooldown_based_on_deployment_policy(
     dep = litellm_router_instance.get_model_info(id=deployment)
     cooldown_time_override: float | None = None
     if dep is not None:
-        cooldown_time_override = _first_present(dep.get("litellm_params"), dep.get("model_info"), key="cooldown_time")
+        cooldown_time_override = (dep.get("model_info") or {}).get("cooldown_time")
 
     return should_cooldown_based_on_allowed_fails_policy(
         litellm_router_instance=litellm_router_instance,
@@ -160,21 +162,27 @@ def _should_cooldown_based_on_deployment_policy(
 def _has_explicit_allowed_fails_policy_for_exception(
     litellm_router_instance: LitellmRouter,
     deployment: str | None,
-    original_exception: Any,
+    original_exception: Exception,
 ) -> bool:
-    """True if an operator explicitly configured an allowed_fails_policy field matching
-    *original_exception*'s type, at either the deployment level or the router level.
+    """True if this deployment has an explicit, deployment-level allowed_fails_policy
+    entry matching *original_exception*'s type.
 
     `_is_cooldown_required` skips cooldown evaluation for most 4XX errors (BadRequestError,
     ContentPolicyViolationError) by default, since a generic client error is usually not the
-    deployment's fault. An explicit allowed_fails_policy entry for that exact exception type
-    is a deliberate opt-in that should override that default.
+    deployment's fault. A deployment-level allowed_fails_policy entry naming that exact
+    exception type is this PR's own per-deployment opt-in, so it overrides that default.
+
+    Deliberately scoped to the deployment level only, and to the named-exception-type
+    policy dict rather than a plain `allowed_fails` integer: a pre-existing router-wide
+    `allowed_fails_policy` (or a deployment's generic `allowed_fails`) predates this
+    feature and must keep its existing behavior for 4XX types `_is_cooldown_required`
+    already excludes, rather than silently start cooling down deployments whose configs
+    never opted into this specific override.
     """
-    if deployment is not None:
-        dep_policy, _ = _get_deployment_cooldown_policy(litellm_router_instance, deployment)
-        if _resolve_allowed_fails_from_policy(dep_policy, original_exception) is not None:
-            return True
-    return litellm_router_instance.get_allowed_fails_from_policy(exception=original_exception) is not None
+    if deployment is None:
+        return False
+    dep_policy, _ = _get_deployment_cooldown_policy(litellm_router_instance, deployment)
+    return _resolve_allowed_fails_from_policy(dep_policy, original_exception) is not None
 
 
 def _is_cooldown_required(
@@ -313,6 +321,11 @@ def _should_cooldown_deployment(
 
     - v1 logic (Legacy): if allowed fails or allowed fail policy set, coolsdown if num fails in this minute > allowed fails
     """
+    model_group = litellm_router_instance.get_model_group(id=deployment)
+    is_single_deployment_model_group = False
+    if model_group is not None and len(model_group) == 1:
+        is_single_deployment_model_group = True
+
     ## CHECK DEPLOYMENT-LEVEL POLICY FIRST (overrides router-level)
     dep_policy, dep_allowed_fails = _get_deployment_cooldown_policy(litellm_router_instance, deployment)
     if dep_policy is not None or dep_allowed_fails is not None:
@@ -322,13 +335,10 @@ def _should_cooldown_deployment(
             original_exception,
             dep_policy,
             dep_allowed_fails,
+            is_single_deployment_model_group,
         )
 
     ## BASE CASE - single deployment
-    model_group: Final = litellm_router_instance.get_model_group(id=deployment)
-    is_single_deployment_model_group = False
-    if model_group is not None and len(model_group) == 1:
-        is_single_deployment_model_group = True
     if (
         litellm_router_instance.allowed_fails_policy is None
         and _is_allowed_fails_set_on_router(litellm_router_instance=litellm_router_instance) is False
@@ -534,12 +544,16 @@ def should_cooldown_based_on_allowed_fails_policy(
     - True if fails exceed the allowed limit (should cooldown)
     - False if fails are within the allowed limit (should not cooldown)
     """
+    allowed_fails_from_policy: Final = litellm_router_instance.get_allowed_fails_from_policy(
+        exception=original_exception
+    )
     allowed_fails: Final = (
         allowed_fails_override
         if allowed_fails_override is not None
         else (
-            litellm_router_instance.get_allowed_fails_from_policy(exception=original_exception)
-            or litellm_router_instance.allowed_fails
+            allowed_fails_from_policy
+            if allowed_fails_from_policy is not None
+            else litellm_router_instance.allowed_fails
         )
     )
     cooldown_time: Final = (
