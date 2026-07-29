@@ -1476,6 +1476,19 @@ class TestVertexEmbeddingsBatchInputTranslation:
 
         assert row["key"] == "request-1"
 
+    def test_should_encode_a_custom_id_that_looks_like_a_fan_out_tag(self):
+        """A customer custom_id ending in `#<i>/<n>` must not read back as fan-out metadata."""
+        (row,) = _wrap_entries(
+            [
+                _embeddings_entry(
+                    custom_id="request-1#0/2",
+                    body={"model": "gemini-embedding-2", "input": "hello world"},
+                )
+            ]
+        )
+
+        assert row["key"] == "request-1%230%2F2"
+
     def test_should_combine_a_nested_input_into_one_multipart_row(self):
         """Nested arrays are the combined-embedding shape, as on the online path."""
         (row,) = _wrap_entries(
@@ -1710,6 +1723,68 @@ class TestVertexEmbeddingsBatchOutputTranslation:
         assert [result["custom_id"] for result in results] == ["request-2", "request-1"]
         assert len(results[0]["response"]["body"]["data"]) == 2
         assert len(results[1]["response"]["body"]["data"]) == 1
+
+    def test_should_not_merge_an_entry_whose_custom_id_looks_like_a_fan_out_tag(self, config):
+        """`request-1#0/2` is a legal custom_id, and a distinct entry from `request-1`."""
+        lookalike_row, plain_row = _wrap_entries(
+            [
+                _embeddings_entry(
+                    custom_id="request-1#0/2",
+                    body={"model": "gemini-embedding-2", "input": "lookalike"},
+                ),
+                _embeddings_entry(
+                    custom_id="request-1",
+                    body={"model": "gemini-embedding-2", "input": "plain"},
+                ),
+            ]
+        )
+
+        results = self._transform(
+            config,
+            [
+                {**row, "status": "", "response": {"embedding": {"values": values}}}
+                for row, values in ((lookalike_row, [0.1]), (plain_row, [0.2]))
+            ],
+        )
+
+        assert [result["custom_id"] for result in results] == [
+            "request-1#0/2",
+            "request-1",
+        ]
+        assert [
+            result["response"]["body"]["data"][0]["embedding"] for result in results
+        ] == [[0.1], [0.2]]
+
+    def test_should_round_trip_a_fan_out_of_a_custom_id_holding_the_separator(self, config):
+        rows = _wrap_entries(
+            [
+                _embeddings_entry(
+                    custom_id="request#1/1",
+                    body={
+                        "model": "gemini-embedding-2",
+                        "input": ["first", "second"],
+                    },
+                )
+            ]
+        )
+
+        assert [row["key"] for row in rows] == [
+            "request%231%2F1#0/2",
+            "request%231%2F1#1/2",
+        ]
+
+        (result,) = self._transform(
+            config,
+            [
+                {**row, "status": "", "response": {"embedding": {"values": values}}}
+                for row, values in zip(reversed(rows), ([0.3], [0.1]))
+            ],
+        )
+
+        assert result["custom_id"] == "request#1/1"
+        assert [
+            embedding["embedding"] for embedding in result["response"]["body"]["data"]
+        ] == [[0.1], [0.3]]
 
     def test_should_fail_the_whole_entry_when_one_of_its_rows_failed(self, config):
         """An OpenAI batch row is either a response or an error, never both."""
