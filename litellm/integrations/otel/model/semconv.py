@@ -257,13 +257,27 @@ class LiteLLM:
 
 
 class Metric:
-    """GenAI metric instrument names."""
+    """GenAI metric instrument names.
+
+    Every name here that a convention or a backend defines uses that name, so a
+    consumer charting GenAI telemetry finds litellm's series where it looks for
+    them. ``TOKEN_USAGE``, ``OPERATION_DURATION``, ``TIME_TO_FIRST_TOKEN`` and
+    ``TIME_PER_OUTPUT_TOKEN`` are semconv instruments, defined in the GenAI
+    conventions; the ``gen_ai.client.response.*`` spellings litellm used for the
+    latter two are not conventions at all, so nothing downstream could chart
+    them. Cost has no semconv instrument, so it takes ``gen_ai.usage.cost``, the
+    name backends already query for spend.
+
+    ``RESPONSE_DURATION`` keeps its vendor spelling deliberately: the closest
+    convention, ``gen_ai.server.request.duration``, would collide in meaning with
+    ``OPERATION_DURATION``, which litellm already emits for the whole operation.
+    """
 
     TOKEN_USAGE: Final = "gen_ai.client.token.usage"
     OPERATION_DURATION: Final = "gen_ai.client.operation.duration"
-    TOKEN_COST: Final = "gen_ai.client.token.cost"
-    TIME_TO_FIRST_TOKEN: Final = "gen_ai.client.response.time_to_first_token"
-    TIME_PER_OUTPUT_TOKEN: Final = "gen_ai.client.response.time_per_output_token"
+    TOKEN_COST: Final = "gen_ai.usage.cost"
+    TIME_TO_FIRST_TOKEN: Final = "gen_ai.server.time_to_first_token"
+    TIME_PER_OUTPUT_TOKEN: Final = "gen_ai.server.time_per_output_token"
     RESPONSE_DURATION: Final = "gen_ai.client.response.duration"
 
 
