@@ -2031,8 +2031,7 @@ class TestDeleteTeamBYOKModelGhost:
 
         mock_refresh.assert_awaited_once()
         assert mock_refresh.await_args.kwargs["team_row"] is updated_team_row
-        # BYOK internal name can't be an alias value -> the alias-table scan is skipped.
-        mock_prisma.db.litellm_modeltable.find_many.assert_not_awaited()
+        mock_prisma.db.litellm_modeltable.find_many.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_delete_non_internal_team_model_still_scans_aliases(self):
@@ -2185,6 +2184,171 @@ class TestDeleteTeamBYOKModelGhost:
         # The public name is still backed by the sibling, so team.models is untouched.
         mock_prisma.db.litellm_teamtable.update.assert_not_awaited()
         mock_refresh.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_delete_legacy_team_model_scrubs_stale_alias_and_keeps_gateway_access(
+        self,
+    ):
+        """Regression: legacy team models store {public_name: internal model_name} in
+        the team's model_aliases. delete_model skipped the alias scan for
+        internal-shaped names, so the stale alias kept rewriting requests for the
+        public name to a deployment that no longer existed ("no healthy deployments
+        for model_name_{team_id}_..."). Deleting the deployment must scrub the
+        alias, and the public name must stay in team.models while a gateway-level
+        deployment still serves it."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
+            delete_model as delete_model_endpoint,
+        )
+
+        team_id = "team-legacy-alias"
+        model_id = "legacy-alias-model-1"
+        public_name = "gpt-4"
+        internal_name = f"model_name_{team_id}_abc-uuid"
+
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name=internal_name,
+            litellm_params={"model": "openai/gpt-4.1-nano"},
+            model_info={"id": model_id, "team_id": team_id},
+            created_by="admin",
+            updated_by="admin",
+        )
+        team_row = LiteLLM_TeamTable(
+            team_id=team_id,
+            team_alias="legacy-alias-team",
+            members_with_roles=[Member(user_id="admin", role="admin")],
+            models=[public_name],
+        )
+        alias_row = MagicMock(
+            id="alias-row-1", model_aliases={public_name: internal_name}
+        )
+        alias_row.team = MagicMock()
+        alias_row.team.team_id = team_id
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=db_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_teamtable = AsyncMock()
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=team_row)
+        mock_prisma.db.litellm_modeltable = AsyncMock()
+        mock_prisma.db.litellm_modeltable.find_many = AsyncMock(
+            return_value=[alias_row]
+        )
+        mock_prisma.db.litellm_modeltable.update = AsyncMock()
+
+        mock_router = MagicMock()
+        mock_router.model_name_to_deployment_indices = {public_name: [0]}
+
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        _PS = "litellm.proxy.proxy_server"
+        _MOD = "litellm.proxy.management_endpoints.model_management_endpoints"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", mock_router),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.user_api_key_cache", MagicMock()),
+            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()) as mock_refresh,
+        ):
+            result = await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+
+        assert "deleted successfully" in result["message"]
+
+        mock_prisma.db.litellm_modeltable.update.assert_awaited_once()
+        alias_update_kwargs = mock_prisma.db.litellm_modeltable.update.await_args.kwargs
+        assert alias_update_kwargs["where"] == {"id": "alias-row-1"}
+        assert json.loads(alias_update_kwargs["data"]["model_aliases"]) == {}
+
+        # A gateway-level deployment still serves the public name -> team access stays.
+        mock_prisma.db.litellm_teamtable.update.assert_not_awaited()
+        mock_refresh.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_delete_replica_keeps_alias_while_surviving_replica_serves_it(self):
+        """Deleting one replica of a load-balanced legacy team model (several
+        deployment rows sharing one internal model_name) must not scrub the team
+        alias: the surviving replicas still serve the aliased name, so removing
+        the alias would break routing that works."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
+            delete_model as delete_model_endpoint,
+        )
+
+        team_id = "team-lb-legacy"
+        model_id = "lb-replica-1"
+        internal_name = f"model_name_{team_id}_shared-uuid"
+
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name=internal_name,
+            litellm_params={"model": "openai/gpt-4.1-nano"},
+            model_info={"id": model_id, "team_id": team_id},
+            created_by="admin",
+            updated_by="admin",
+        )
+        team_row = LiteLLM_TeamTable(
+            team_id=team_id,
+            team_alias="lb-legacy-team",
+            members_with_roles=[Member(user_id="admin", role="admin")],
+            models=["gpt-4"],
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=db_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_teamtable = AsyncMock()
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=team_row)
+        mock_prisma.db.litellm_modeltable = AsyncMock()
+        mock_prisma.db.litellm_modeltable.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_modeltable.update = AsyncMock()
+
+        mock_router = MagicMock()
+        mock_router.model_name_to_deployment_indices = {internal_name: [0]}
+
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        _PS = "litellm.proxy.proxy_server"
+        _MOD = "litellm.proxy.management_endpoints.model_management_endpoints"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", mock_router),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.user_api_key_cache", MagicMock()),
+            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()),
+        ):
+            result = await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+
+        assert "deleted successfully" in result["message"]
+        mock_prisma.db.litellm_modeltable.find_many.assert_not_awaited()
+        mock_prisma.db.litellm_modeltable.update.assert_not_awaited()
+        mock_prisma.db.litellm_teamtable.update.assert_not_awaited()
 
 
 class TestDeleteModelTeamAuth:
