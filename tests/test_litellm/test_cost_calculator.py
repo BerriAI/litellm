@@ -1036,8 +1036,11 @@ def test_tiered_pricing_only_deployment_selects_router_model_id():
     entry = litellm.model_cost[router_model_id]
     assert entry.get("input_cost_per_token") is None
     assert entry.get("tiered_pricing") is not None
-    # The stripped shared alias must not carry tiered pricing.
-    assert litellm.model_cost["dashscope/qwen3.7-plus"].get("tiered_pricing") is None
+    # The stripped shared alias must not carry the deployment's tiered pricing.
+    assert (
+        litellm.model_cost["dashscope/qwen3.7-plus"].get("tiered_pricing")
+        != router.model_list[0]["model_info"]["tiered_pricing"]
+    )
 
     selected = _select_model_name_for_cost_calc(
         model="dashscope/qwen3.7-plus",
