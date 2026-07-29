@@ -526,6 +526,17 @@ class BedrockGuardrailConfigModel(BaseModel):
         description="InvokeGuardrailChecks: block when any sensitiveInformation confidenceScore "
         ">= this value (scores are in [0,1]). Set to null to make PII detection detect-only.",
     )
+    chunk_budget_chars: int = Field(
+        default=25_000,
+        gt=0,
+        description="ApplyGuardrail: how much content (in characters) to send per call. "
+        "Content above this is split across several sequential calls. Defaults to 25,000, "
+        "matching ApplyGuardrail's default quota of 25 text units (~1,000 characters each) "
+        "per second, so chunking does not trip that rate limit. Raise it if your account's "
+        "quotas have been increased; a batch AWS still rejects as too large is bisected "
+        "automatically, so an over-large value costs an extra round trip rather than "
+        "failing the request.",
+    )
 
 
 class LakeraV2GuardrailConfigModel(BaseModel):

@@ -4325,3 +4325,54 @@ async def test_apply_guardrail_too_large_reported_as_429_bisects_without_burning
     assert result.get("action") == "NONE"
     output_texts = [o.get("text") for o in result.get("outputs") or []]
     assert output_texts == ["half-2", "half-3"]
+
+
+def test_chunk_budget_defaults_to_apply_guardrail_per_second_quota():
+    """The default budget must track ApplyGuardrail's default quota of 25 text units
+    (about 1,000 characters each) per second. Packing to that size and posting
+    sequentially is what stops chunking from trading a size error for a throttle, so
+    this default is a deliberate match to AWS behaviour rather than an arbitrary
+    number."""
+    assert _BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS == 25_000
+    assert BedrockGuardrail(guardrailIdentifier="g", guardrailVersion="DRAFT").chunk_budget_chars == 25_000
+
+
+@pytest.mark.asyncio
+async def test_configured_chunk_budget_changes_how_content_is_packed():
+    """An account with raised quotas can set a larger `chunk_budget_chars` and have it
+    actually drive packing, spending fewer ApplyGuardrail calls for the same content
+    instead of being pinned to the conservative default.
+
+    Four 20,000-character messages are 80,000 characters total. At the 25,000 default
+    only one message fits per batch, so it takes four calls; at 100,000 all four fit
+    in a single batch, so it takes one."""
+    messages = [{"role": "user", "content": "x" * 20_000} for _ in range(4)]
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    async def _calls_made_with_budget(budget: int) -> int:
+        guardrail = BedrockGuardrail(
+            guardrail_name="test-bedrock-guard",
+            guardrailIdentifier="test-guardrail",
+            guardrailVersion="DRAFT",
+            disable_exception_on_block=False,
+            chunk_budget_chars=budget,
+        )
+        with (
+            patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+            patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+            patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        ):
+            mock_post.side_effect = lambda *_a, **_k: _passing_bedrock_httpx_response("ok")
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=messages,
+                request_data={"model": "bedrock-nova-micro"},
+            )
+            return mock_post.await_count
+
+    assert await _calls_made_with_budget(_BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS) == 4
+    assert await _calls_made_with_budget(100_000) == 1

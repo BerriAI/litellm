@@ -93,7 +93,7 @@ _BEDROCK_TOO_LARGE_ERROR_SUBSTRINGS = (
     "too large",
     "exceeds the maximum",
 )
-_BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS = 20_000
+_BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS = 25_000
 _BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES = 3
 _BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS = 0.5
 # Resource-less, detect-only InvokeGuardrailChecks API (no guardrail resource required).
@@ -216,12 +216,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         content_filter_threshold: float | None = 0.5,
         prompt_attack_threshold: float | None = 0.5,
         pii_confidence_threshold: float | None = 0.5,
+        chunk_budget_chars: int = _BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.guardrailIdentifier = guardrailIdentifier
         self.guardrailVersion = guardrailVersion
         self.guardrail_provider = "bedrock"
+        self.chunk_budget_chars = chunk_budget_chars
         self.experimental_use_latest_role_message_only = bool(kwargs.get("experimental_use_latest_role_message_only"))
 
         # Resource-less, detect-only InvokeGuardrailChecks mode. Present `checks`
@@ -847,9 +849,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         content: list[BedrockContentItem] = bedrock_request_data.get("content") or []
         allow_chunking = not self._content_uses_contextual_grounding(content)
         batches = (
-            self._bin_pack_bedrock_content(content, budget=_BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS)
-            if allow_chunking
-            else [content]
+            self._bin_pack_bedrock_content(content, budget=self.chunk_budget_chars) if allow_chunking else [content]
         )
 
         try:
@@ -1199,14 +1199,19 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         too large, `_apply_guardrail_content_with_chunking`'s existing
         recursive-bisection fallback takes over for that batch only.
 
-        `budget` (`_BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS` at the call site)
-        is a conservative starting guess, not a correctness dependency. It only
-        sets how many calls the common case takes. AWS's real per-request
-        text-unit cap depends on account, region, and policy, is not a fixed
-        character count, and cannot be read from config, so any batch it still
-        rejects falls back to bisection, which self-corrects however wrong the
-        guess was. A too-generous guess therefore costs one extra probe-and-bisect
-        round trip, the same one pure reactive bisection would have paid anyway.
+        `budget` comes from the guardrail's ``chunk_budget_chars`` setting and
+        defaults to 25,000, matching ApplyGuardrail's default quota of 25 text
+        units (roughly 1,000 characters each) per second. Packing to that size and
+        posting sequentially is what keeps chunking from tripping the rate quota
+        and trading a size error for a throttle. Accounts with raised quotas can
+        configure a larger budget to spend fewer calls.
+
+        The budget is not a correctness dependency either way. AWS's effective cap
+        varies by account, region, and policy, is not a fixed character count, and
+        cannot be read from config, so any batch it still rejects falls back to
+        bisection, which self-corrects however wrong the value was. An over-large
+        budget therefore costs one extra probe-and-bisect round trip rather than
+        failing the request.
         """
         if not content:
             return [content]
