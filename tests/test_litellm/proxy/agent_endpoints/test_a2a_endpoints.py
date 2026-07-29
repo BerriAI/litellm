@@ -1317,13 +1317,74 @@ async def test_handle_stream_message_rejects_invalid_params_with_32602():
         request_id="req-1",
         params={"message": 12345},
     )
+    assert response.media_type == "text/event-stream"
     chunks = [chunk async for chunk in response.body_iterator]
     body = "".join(
         chunk.decode() if isinstance(chunk, bytes) else chunk for chunk in chunks
     )
-    payload = json.loads(body.strip())
+    assert body.startswith("data: ")
+    assert body.endswith("\n\n")
+    payload = json.loads(body.removeprefix("data: ").strip())
     assert payload["error"]["code"] == -32602
     assert payload["id"] == "req-1"
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_frames_events_as_sse():
+    """message/stream must return text/event-stream with each JSON-RPC object
+    framed as ``data: <json>\\n\\n``. Regression for #35027: NDJSON framing
+    breaks the official a2a-sdk client, which requires SSE."""
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    events = [
+        {
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "result": {"kind": "task", "id": "t-1", "status": {"state": "working"}},
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "result": {"kind": "message", "parts": [{"kind": "text", "text": "pong"}]},
+        },
+    ]
+
+    async def fake_stream(**kwargs):
+        for event in events:
+            yield event
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch(
+                "litellm.a2a_protocol.asend_message_streaming",
+                new=fake_stream,
+            )
+        )
+
+        response = await _handle_stream_message(
+            api_base="http://upstream.local",
+            request_id="req-1",
+            params={
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hi"}],
+                    "messageId": "msg-1",
+                }
+            },
+        )
+
+        assert response.media_type == "text/event-stream"
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert len(chunks) == len(events)
+    for chunk, event in zip(chunks, events):
+        assert chunk.startswith("data: ")
+        assert chunk.endswith("\n\n")
+        assert json.loads(chunk.removeprefix("data: ").strip()) == event
 
 
 @pytest.mark.asyncio
