@@ -4098,10 +4098,13 @@ class TestMCPServerManager:
         resolved = manager._resolve_mcp_server_for_tool_call("zapier-alias", "create_zap")
         assert resolved is server
 
-    def test_resolve_mcp_server_for_tool_call_unknown_tool_with_empty_mapping(self):
-        """Server-name match alone must not let unknown tools through when the
-        mapping has no entries for that server (e.g. listing has not completed
-        or the server is OAuth2 and the user has not yet listed tools).
+    def test_resolve_mcp_server_for_tool_call_empty_mapping_still_resolves_server(self):
+        """Registry name match is enough when this process never ran tools/list.
+
+        Multi-worker deployments reload MCP servers from the DB without
+        re-listing tools, so the in-process tool map is empty while the
+        server row is present. call_tool must still resolve the server;
+        upstream rejects tools that do not exist.
         """
         manager = MCPServerManager()
         server = MCPServer(
@@ -4112,8 +4115,21 @@ class TestMCPServerManager:
         )
         manager.registry = {"srv-uuid-123": server}
 
-        with pytest.raises(ValueError, match="Tool create_zap not found"):
-            manager._resolve_mcp_server_for_tool_call("zapier-alias", "create_zap")
+        resolved = manager._resolve_mcp_server_for_tool_call("zapier-alias", "create_zap")
+        assert resolved is server
+
+    def test_resolve_mcp_server_for_tool_call_by_server_id_without_tool_map(self):
+        """REST clients pass server_id; registry id match must not need the tool map."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv-uuid-abc",
+            name="datadog",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"srv-uuid-abc": server}
+
+        resolved = manager._resolve_mcp_server_for_tool_call("srv-uuid-abc", "search_datadog_logs")
+        assert resolved is server
 
     def test_resolve_mcp_server_for_tool_call_fallback_to_unprefixed_lookup(self):
         """Fallback to unprefixed _get_mcp_server_from_tool_name when other paths fail."""
@@ -4137,11 +4153,10 @@ class TestMCPServerManager:
             manager._resolve_mcp_server_for_tool_call("nonexistent", "ghost_tool")
 
     def test_resolve_mcp_server_for_tool_call_unknown_tool_with_known_server(self):
-        """Server-name match alone must not let unknown tools slip through.
+        """A known server still resolves even when the tool is not in the map.
 
-        If the registry has tools for this server but neither the prefixed nor
-        unprefixed tool name is in the mapping, raise rather than returning the
-        server (would otherwise allow tool enumeration via name spoofing).
+        The tool map is a routing cache filled by tools/list, not an allow-list.
+        Unknown tool names are rejected by the upstream MCP server.
         """
         manager = MCPServerManager()
         server = MCPServer(
@@ -4150,12 +4165,11 @@ class TestMCPServerManager:
             transport=MCPTransport.http,
         )
         manager.registry = {"github": server}
-        # Mapping has *some* tools for github but not "missing_tool".
         manager.tool_name_to_mcp_server_name_mapping["github-list_repos"] = "github"
         manager.tool_name_to_mcp_server_name_mapping["list_repos"] = "github"
 
-        with pytest.raises(ValueError, match="Tool missing_tool not found"):
-            manager._resolve_mcp_server_for_tool_call("github", "missing_tool")
+        resolved = manager._resolve_mcp_server_for_tool_call("github", "missing_tool")
+        assert resolved is server
 
     @pytest.mark.asyncio
     async def test_resolve_oauth2_headers_skipped_when_not_user_oauth(self):
