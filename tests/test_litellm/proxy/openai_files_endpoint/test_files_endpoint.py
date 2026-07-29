@@ -2951,3 +2951,103 @@ def test_create_file_provider_only_skips_other_team_vertex_deployment(
     assert response.status_code == 200, response.text
     assert captured_kwargs.get("vertex_project") == "shared-project"
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+def _team_openai_plus_global_anthropic_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "team-gpt",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "team-openai-key",
+                },
+                "model_info": {
+                    "id": "team-a-openai",
+                    "team_id": "team-a",
+                    "team_public_model_name": "team-gpt",
+                },
+            },
+            {
+                "model_name": "claude-opus-4-6",
+                "litellm_params": {
+                    "model": "anthropic/claude-opus-4-6",
+                    "api_key": "anthropic-key",
+                },
+            },
+        ]
+    )
+
+
+def _list_files_captured_kwargs(
+    mocker: MockerFixture, monkeypatch, router: Router, key_models: list
+) -> dict:
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=[])
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    captured_kwargs: dict = {}
+
+    async def _mock_afile_list(**kwargs):
+        captured_kwargs.update(kwargs)
+        return []
+
+    monkeypatch.setattr(litellm, "afile_list", _mock_afile_list)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+        team_id="team-a",
+        team_models=["team-gpt", "claude-opus-4-6"],
+        models=key_models,
+    )
+
+    try:
+        response = client.get(
+            "/v1/files",
+            headers={
+                "Authorization": "Bearer test-key",
+                "custom-llm-provider": "openai",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    return captured_kwargs
+
+
+def test_list_files_key_restricted_to_other_provider_does_not_leak_team_openai_credentials(
+    mocker: MockerFixture, monkeypatch
+):
+    """
+    Regression: a key restricted to an anthropic model on a team that also has
+    an openai deployment must not attach the team's openai credentials to a
+    provider-only openai files call; key-level model restrictions apply to
+    credential resolution, not just completions.
+    """
+    captured_kwargs = _list_files_captured_kwargs(
+        mocker, monkeypatch, _team_openai_plus_global_anthropic_router(), ["claude-opus-4-6"]
+    )
+    assert captured_kwargs.get("api_key") != "team-openai-key"
+
+
+def test_list_files_key_allowed_openai_model_still_resolves_team_credentials(
+    mocker: MockerFixture, monkeypatch
+):
+    """
+    A key whose allowlist includes the team's openai model keeps resolving that
+    deployment's credentials for provider-only openai files calls.
+    """
+    captured_kwargs = _list_files_captured_kwargs(
+        mocker, monkeypatch, _team_openai_plus_global_anthropic_router(), ["team-gpt"]
+    )
+    assert captured_kwargs.get("api_key") == "team-openai-key"

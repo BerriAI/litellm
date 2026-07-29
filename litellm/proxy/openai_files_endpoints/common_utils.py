@@ -295,9 +295,8 @@ def get_credentials_for_model(
 
 def get_team_provider_credentials(
     llm_router: Optional["Router"],
-    team_models: List[str],
+    user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str,
-    team_id: Optional[str] = None,
 ) -> Optional[dict]:
     """
     Resolve upstream credentials for a provider-scoped file operation
@@ -305,18 +304,58 @@ def get_team_provider_credentials(
 
     Priority:
     1. The team's own (BYOK) deployment for this provider — a deployment whose
-       ``model_info.team_id`` matches ``team_id``. This keeps team-scoped listings
-       on the team's own provider account/key instead of a shared global one.
-    2. Fallback: any deployment the team is granted access to for this provider,
-       expanding wildcard routes and the all-proxy-models sentinel.
+       ``model_info.team_id`` matches the caller's team. This keeps team-scoped
+       listings on the team's own provider account/key instead of a shared
+       global one.
+    2. Fallback: any deployment the caller is granted access to for this
+       provider, expanding wildcard routes and the all-proxy-models sentinel.
 
-    Credential lookup is always scoped to the team's allowlist, so a team can
-    never resolve a provider key for a deployment it isn't authorized to use.
+    Credential lookup is scoped to both the team's allowlist and the key's own
+    model allowlist (``user_api_key_dict.models``), so neither a team nor a
+    restricted key within a team can resolve a provider key for a deployment
+    it isn't authorized to use. A key restricted to an explicit model list
+    only narrows the team scope; sentinel-bearing keys (all-proxy-models /
+    all-team-models) defer to the team scope instead of widening past it.
     Returns None when the router is unavailable or no authorized deployment
     matches, so the caller can fall back to default credential resolution.
     """
     if llm_router is None:
         return None
+
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.model_checks import get_complete_model_list, get_key_models
+
+    team_id = user_api_key_dict.team_id
+    team_models = user_api_key_dict.team_models or []
+
+    proxy_model_list = llm_router.get_model_names(team_id=team_id)
+    model_access_groups = llm_router.get_model_access_groups()
+
+    raw_key_models = user_api_key_dict.models or []
+    sentinel_values = {
+        SpecialModelNames.all_proxy_models.value,
+        SpecialModelNames.all_team_models.value,
+    }
+    key_is_restricted = bool(raw_key_models) and not (set(raw_key_models) & sentinel_values)
+    key_model_allowlist = (
+        tuple(
+            dict.fromkeys(
+                get_key_models(
+                    user_api_key_dict=user_api_key_dict,
+                    proxy_model_list=proxy_model_list,
+                    model_access_groups=model_access_groups,
+                )
+            )
+        )
+        if key_is_restricted
+        else ()
+    )
+    key_model_allowlist_set = frozenset(key_model_allowlist)
+
+    def _key_may_use(public_model_name: Optional[str]) -> bool:
+        if not key_model_allowlist_set:
+            return True
+        return public_model_name is not None and public_model_name in key_model_allowlist_set
 
     def _provider_credentials(model_id: str) -> Optional[dict]:
         credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
@@ -333,27 +372,27 @@ def get_team_provider_credentials(
             deployment_id = model_info.get("id")
             if deployment_id is None:
                 continue
+            if not _key_may_use(model_info.get("team_public_model_name") or deployment.get("model_name")):
+                continue
             credentials = _provider_credentials(deployment_id)
             if credentials is not None:
                 return credentials
 
-    # 2. Fall back to deployments the team is allowed to access. The
-    #    all-proxy-models sentinel isn't expanded by get_complete_model_list, so
-    #    normalize it to an empty allowlist, which defers to the team-scoped
-    #    proxy model list. A team with a restricted allowlist (e.g. anthropic
-    #    only) therefore never resolves another provider's key.
-    from litellm.proxy._types import SpecialModelNames
-    from litellm.proxy.auth.model_checks import get_complete_model_list
-
+    # 2. Fall back to deployments the caller is allowed to access. The key's
+    #    effective allowlist (sentinels and access groups already expanded by
+    #    get_key_models) wins when set; otherwise the team's allowlist applies.
+    #    The all-proxy-models sentinel isn't expanded by
+    #    get_complete_model_list, so normalize it to an empty allowlist, which
+    #    defers to the team-scoped proxy model list. A team or key with a
+    #    restricted allowlist (e.g. anthropic only) therefore never resolves
+    #    another provider's key.
     grants_all_models = SpecialModelNames.all_proxy_models.value in team_models
     effective_team_models = [] if grants_all_models else team_models
 
-    proxy_model_list = llm_router.get_model_names(team_id=team_id)
-    model_access_groups = llm_router.get_model_access_groups()
     models_to_try = list(
         dict.fromkeys(
             get_complete_model_list(
-                key_models=[],
+                key_models=list(key_model_allowlist),
                 team_models=effective_team_models,
                 proxy_model_list=proxy_model_list,
                 user_model=None,
@@ -388,9 +427,8 @@ def apply_team_provider_credentials(
     """
     credentials = get_team_provider_credentials(
         llm_router=llm_router,
-        team_models=user_api_key_dict.team_models or [],
+        user_api_key_dict=user_api_key_dict,
         custom_llm_provider=custom_llm_provider,
-        team_id=user_api_key_dict.team_id,
     )
     if credentials is None:
         return
