@@ -3,7 +3,9 @@ This module is used to transform the request and response for the Voyage context
 This would be used for all the contextualized embeddings models in Voyage.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from __future__ import annotations
+
+from typing import Any
 
 import httpx
 
@@ -20,7 +22,7 @@ class VoyageError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Union[dict, httpx.Headers] = {},
+        headers: dict | httpx.Headers = {},
     ):
         self.status_code = status_code
         self.message = message
@@ -43,12 +45,12 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         if api_base:
             if not api_base.endswith("/contextualizedembeddings"):
@@ -81,11 +83,11 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key is None:
             api_key = (
@@ -105,7 +107,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
     def transform_embedding_request(
         self,
         model: str,
-        input: Union[AllEmbeddingInputValues, List[List[str]]],
+        input: AllEmbeddingInputValues | list[list[str]],
         optional_params: dict,
         headers: dict,
     ) -> dict:
@@ -120,9 +122,9 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
     @classmethod
     def _transform_contextual_inputs(
         cls,
-        input: Union[AllEmbeddingInputValues, List[List[str]]],
+        input: AllEmbeddingInputValues | list[list[str]],
         optional_params: dict,
-    ) -> Tuple[Union[List[str], List[List[str]]], dict]:
+    ) -> tuple[list[str] | list[list[str]], dict]:
         """
         Normalize ``input`` for Voyage's contextualized embeddings API and
         return ``(inputs, extra_params)`` where ``extra_params`` carries any
@@ -172,7 +174,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         ``enable_auto_chunking=True`` requires ``input_type="document"``, so set
         it unless the caller already provided an ``input_type``.
         """
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "enable_auto_chunking": True,
             "chunk_size": cls.AUTO_CHUNK_SIZE,
         }
@@ -186,7 +188,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
@@ -208,9 +210,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         model_response.usage = usage
         return model_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return VoyageError(message=error_message, status_code=status_code, headers=headers)
 
     @staticmethod
