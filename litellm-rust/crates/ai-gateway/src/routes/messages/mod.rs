@@ -10,6 +10,7 @@ use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use litellm_core::CoreError;
+use litellm_core::logging::stream::count_forwarded_stream;
 use serde_json::{Map, Value};
 
 use crate::auth::RequireMasterKey;
@@ -28,7 +29,7 @@ async fn handle(
     Json(body): Json<Value>,
 ) -> Result<Response, MessagesRouteError> {
     let extra_headers = forwarded_headers(&headers)?;
-    match service::run(&state.router, body, extra_headers)
+    match service::run(&state.router, body, extra_headers, state.logging_sink)
         .await
         .map_err(MessagesRouteError::from)?
     {
@@ -37,31 +38,33 @@ async fn handle(
     }
 }
 
-fn stream_response(upstream: reqwest::Response) -> Result<Response, MessagesRouteError> {
+fn stream_response(
+    upstream: litellm_core::messages::types::MessagesStreamResponse,
+) -> Result<Response, MessagesRouteError> {
     let content_type = upstream
+        .response
         .headers()
         .get(CONTENT_TYPE)
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("text/event-stream"));
     let mut response = Response::builder()
         .status(
-            StatusCode::from_u16(upstream.status().as_u16()).map_err(|error| {
+            StatusCode::from_u16(upstream.response.status().as_u16()).map_err(|error| {
                 MessagesRouteError(CoreError::InvalidResponse(format!(
                     "invalid upstream response status: {error}"
                 )))
             })?,
         )
         .header(CONTENT_TYPE, content_type);
-    if let Some(value) = upstream.headers().get(CACHE_CONTROL) {
+    if let Some(value) = upstream.response.headers().get(CACHE_CONTROL) {
         response = response.header(CACHE_CONTROL, value);
     }
-    response
-        .body(Body::from_stream(upstream.bytes_stream()))
-        .map_err(|error| {
-            MessagesRouteError(CoreError::InvalidResponse(format!(
-                "failed to build streaming response: {error}"
-            )))
-        })
+    let content = count_forwarded_stream(upstream.response.bytes_stream(), upstream.logger);
+    response.body(Body::from_stream(content)).map_err(|error| {
+        MessagesRouteError(CoreError::InvalidResponse(format!(
+            "failed to build streaming response: {error}"
+        )))
+    })
 }
 
 fn forwarded_headers(headers: &HeaderMap) -> Result<Option<Map<String, Value>>, CoreError> {
@@ -160,6 +163,7 @@ mod tests {
             master_key: master_key.map(Arc::from),
             loggers: Arc::new(Vec::new()),
             realtime_pool: RealtimePool::disabled(),
+            logging_sink: None,
         }
     }
 

@@ -3,6 +3,7 @@ pub mod caching;
 pub mod call_lifecycle;
 pub mod constants;
 pub mod error;
+pub mod logging;
 pub mod messages;
 pub mod ocr;
 pub mod providers;

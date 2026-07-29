@@ -1,5 +1,6 @@
 use litellm_core::CoreResult;
 use litellm_core::error::CoreError;
+use litellm_core::logging::http::{JsonRequest, execute_json};
 use litellm_core::ocr::transformation::OcrResponseHandling;
 use serde_json::Value;
 
@@ -8,6 +9,26 @@ use super::types::ProviderOcrRequest;
 use crate::client::http_client;
 
 pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> CoreResult<Value> {
+    if request.config.response_handling() != OcrResponseHandling::AzureDocumentIntelligencePoll {
+        let response = execute_json::<Value>(
+            http_client(),
+            JsonRequest {
+                logger: request.logger,
+                model: request.model.clone(),
+                stream: false,
+                url: request.url,
+                headers: request.upstream_headers,
+                body: request.body,
+                timeout: request.timeout,
+            },
+        )
+        .await?;
+        return Ok(request
+            .config
+            .transform_ocr_response(&request.model, response)?
+            .into_json());
+    }
+
     let mut request_builder = http_client().post(&request.url).json(&request.body);
     for (key, value) in &request.upstream_headers {
         request_builder = request_builder.header(key, value);

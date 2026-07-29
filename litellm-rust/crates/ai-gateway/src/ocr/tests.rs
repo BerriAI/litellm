@@ -326,6 +326,7 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
             ..Default::default()
         },
         litellm_call_id: Some("ocr-call-1"),
+        logging_sink: None,
     })
     .await
     .expect("ocr request succeeds");
@@ -391,6 +392,7 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
         guardrails: Vec::new(),
         request_metadata: RequestMetadata::default(),
         litellm_call_id: Some("ocr-call-2"),
+        logging_sink: None,
     })
     .await
     .expect_err("provider error propagates");
@@ -435,6 +437,7 @@ async fn ocr_lifecycle_pre_call_block_skips_provider_socket() {
         guardrails: vec![guardrail.clone()],
         request_metadata: RequestMetadata::default(),
         litellm_call_id: Some("ocr-call-3"),
+        logging_sink: None,
     })
     .await
     .expect_err("guardrail blocks request");
@@ -505,6 +508,7 @@ async fn ocr_does_not_duplicate_authorization_header_when_header_is_supplied() {
         guardrails: Vec::new(),
         request_metadata: RequestMetadata::default(),
         litellm_call_id: None,
+        logging_sink: None,
     })
     .await
     .expect("ocr request succeeds");
@@ -574,6 +578,7 @@ async fn document_intelligence_poll_uses_resolved_subscription_key() {
         guardrails: Vec::new(),
         request_metadata: RequestMetadata::default(),
         litellm_call_id: None,
+        logging_sink: None,
     })
     .await
     .expect("document intelligence request succeeds");

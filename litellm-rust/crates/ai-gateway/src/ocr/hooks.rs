@@ -111,6 +111,7 @@ impl OcrLifecycleHooks {
             body,
             upstream_headers,
             timeout: request.timeout,
+            logger: request.logger,
         })
     }
 
