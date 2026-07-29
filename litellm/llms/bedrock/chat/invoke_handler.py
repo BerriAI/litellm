@@ -1464,10 +1464,20 @@ class AWSEventStreamDecoder:
         # the empty-args tool chunk and reset tracking state
         if self.json_mode is True and self._current_tool_name == RESPONSE_FORMAT_TOOL_NAME:
             self._current_tool_name = None
+            self.content_blocks = []
             return tool_use
 
+        # Bedrock streams no contentBlockDelta events for a tool called with
+        # zero arguments, so content_blocks stays empty and
+        # check_empty_tool_call_args() alone cannot detect the empty tool call.
+        is_tool_block_without_deltas = self._current_tool_name is not None and len(self.content_blocks) == 0
         self._current_tool_name = None
-        is_empty = self.check_empty_tool_call_args()
+        is_empty = is_tool_block_without_deltas or self.check_empty_tool_call_args()
+        # Reset delta state at every block boundary: text blocks arrive without
+        # a contentBlockStart event (content_blocks is otherwise only reset on
+        # start events), so stale toolUse deltas would be re-checked at the next
+        # block's stop and emit a duplicate "{}" chunk.
+        self.content_blocks = []
         if is_empty:
             tool_use = {
                 "id": None,

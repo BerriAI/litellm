@@ -2045,3 +2045,127 @@ def test_non_bash_tool_result_skipped():
     assert (
         len(code_results) == 0
     ), f"Expected 0 code_interpreter_results for text_editor result, got {len(code_results)}"
+
+
+def _accumulate_tool_call_args(iterator, chunks):
+    """Feed raw Anthropic SSE event dicts through chunk_parser, accumulate tool args per tool index."""
+    accumulated_args = {}
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        if not parsed.choices:
+            continue
+        for tool_call in parsed.choices[0].delta.tool_calls or []:
+            tool_call = (
+                tool_call if isinstance(tool_call, dict) else tool_call.model_dump()
+            )
+            index = tool_call["index"]
+            accumulated_args.setdefault(index, "")
+            accumulated_args[index] += tool_call["function"]["arguments"] or ""
+    return accumulated_args
+
+
+def test_tool_call_with_no_input_json_deltas_emits_empty_args_chunk():
+    """
+    A zero-argument tool call streams content_block_start(tool_use) followed
+    directly by content_block_stop - no input_json_delta events in between.
+    The iterator must still emit the arguments="{}" repair chunk at
+    content_block_stop, otherwise clients accumulate arguments == "" and
+    json.loads("") fails with "Expecting value".
+
+    See: https://github.com/BerriAI/litellm/issues/19858
+    """
+    chunks = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_noargs",
+                "name": "list_files",
+                "input": {},
+            },
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 5},
+        },
+    ]
+    iterator = ModelResponseIterator(streaming_response=None, sync_stream=True)
+
+    accumulated_args = _accumulate_tool_call_args(iterator, chunks)
+    assert accumulated_args == {0: "{}"}
+    json.loads(accumulated_args[0])  # must be valid JSON
+
+
+def test_zero_arg_tool_call_followed_by_tool_with_args():
+    """A zero-argument tool must not corrupt a following tool call's index or args."""
+    chunks = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "list_files",
+                "input": {},
+            },
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_2",
+                "name": "read_file",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": '{"path": "a.py"}'},
+        },
+        {"type": "content_block_stop", "index": 1},
+    ]
+    iterator = ModelResponseIterator(streaming_response=None, sync_stream=True)
+
+    accumulated_args = _accumulate_tool_call_args(iterator, chunks)
+    assert accumulated_args == {0: "{}", 1: '{"path": "a.py"}'}
+
+
+def test_text_block_stop_emits_no_tool_call_chunk():
+    """content_block_stop after a text block must not emit a "{}" tool chunk."""
+    chunks = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello"},
+        },
+        {"type": "content_block_stop", "index": 0},
+    ]
+    iterator = ModelResponseIterator(streaming_response=None, sync_stream=True)
+
+    assert _accumulate_tool_call_args(iterator, chunks) == {}
+
+
+def test_thinking_block_stop_emits_no_tool_call_chunk():
+    """content_block_stop after a start-only thinking block must not emit a "{}" tool chunk."""
+    chunks = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "redacted_thinking", "data": "redacted"},
+        },
+        {"type": "content_block_stop", "index": 0},
+    ]
+    iterator = ModelResponseIterator(streaming_response=None, sync_stream=True)
+
+    assert _accumulate_tool_call_args(iterator, chunks) == {}
