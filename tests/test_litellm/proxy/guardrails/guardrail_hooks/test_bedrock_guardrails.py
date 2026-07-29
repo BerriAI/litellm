@@ -3321,6 +3321,23 @@ def _throttling_httpx_response() -> MagicMock:
     return response
 
 
+def _too_large_throttling_httpx_response() -> MagicMock:
+    """The shape AWS actually returns for an oversized ApplyGuardrail request when
+    the guardrail has an active content-filter policy: a 429 ThrottlingException,
+    not the documented 400 ValidationException. Message taken from a live call."""
+    response = MagicMock()
+    response.status_code = 429
+    response.json.return_value = {
+        "message": (
+            "Input text size (3273 text units) exceeds the maximum allowed "
+            "(1000 text units) for the content filter policy (Classic tier)."
+        )
+    }
+    response.text = json.dumps(response.json.return_value)
+    response.headers = {}
+    return response
+
+
 def _passing_bedrock_httpx_response(marker: str) -> MagicMock:
     """A successful ApplyGuardrail response tagged with `marker` so tests can
     verify which chunk produced which output/usage after merging."""
@@ -4124,3 +4141,63 @@ def test_bin_pack_bedrock_content_empty_content_makes_exactly_one_empty_batch():
     pre-bin-packing behavior of sending the content list as-is in one call --
     bin-packing must not turn an empty request into zero ApplyGuardrail calls."""
     assert BedrockGuardrail._bin_pack_bedrock_content([], budget=100) == [[]]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_too_large_reported_as_429_bisects_without_burning_retries():
+    """AWS reports an oversized ApplyGuardrail request as a 429 ThrottlingException
+    (not the documented 400 ValidationException) when the guardrail has an active
+    content-filter policy. That is not a transient throttle -- re-posting the same
+    oversized content can never succeed -- so it must bisect immediately instead of
+    consuming the exponential-backoff retry budget first.
+
+    Regression for a bug found against a live guardrail: because the throttle retry
+    only keyed off status 429, every oversized chunk burned all
+    _BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES attempts (each a billed AWS call,
+    each preceded by a backoff sleep) before bisection got a chance, at every level
+    of the recursion."""
+    guardrail = _bedrock_guardrail_for_chunk_tests()
+
+    messages = [
+        {"role": "user", "content": "chunk one text"},
+        {"role": "user", "content": "chunk two text"},
+    ]
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    call_count = 0
+
+    async def _post_side_effect(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _too_large_throttling_httpx_response()
+        return _passing_bedrock_httpx_response(f"half-{call_count}")
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        patch(
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.asyncio.sleep",
+            new_callable=AsyncMock,
+        ) as mock_sleep,
+    ):
+        mock_post.side_effect = _post_side_effect
+
+        result = await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=messages,
+            request_data={"model": "bedrock-nova-micro"},
+        )
+
+    # One rejected whole-content call, then exactly one call per bisected half.
+    assert call_count == 3
+    # No backoff sleep: a size error must not be treated as a transient throttle.
+    mock_sleep.assert_not_awaited()
+    assert result.get("action") == "NONE"
+    output_texts = [o.get("text") for o in result.get("outputs") or []]
+    assert output_texts == ["half-2", "half-3"]

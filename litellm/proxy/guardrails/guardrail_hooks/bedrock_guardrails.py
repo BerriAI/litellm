@@ -914,8 +914,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         Tries `content` as a single call first. AWS's per-request "maximum input
         size in text units" quota is account/region/policy-dependent and cannot be
-        predicted ahead of time, so it is only ever discovered reactively: on a 400
-        ValidationException whose message indicates the input was too large, the
+        predicted ahead of time, so it is only ever discovered reactively: on an
+        error whose message indicates the input was too large (a ThrottlingException
+        in practice, a ValidationException per the docs -- see
+        ``_is_input_too_large_error``), the
         content is split in half and each half is retried the same way (recursing
         until every piece fits or cannot be split further). A single oversized
         content item (one very long message) is split by its own text instead of
@@ -946,12 +948,19 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
             ]
         except HTTPException as exc:
-            if allow_chunking and self._is_input_too_large_validation_error(exc.detail):
+            if allow_chunking and self._is_input_too_large_error(exc.detail):
                 split_content = self._split_bedrock_content(content)
                 if split_content is None:
                     raise
                 first_half, second_half = split_content
                 is_text_fragment = len(content) == 1
+                verbose_proxy_logger.warning(
+                    "Bedrock Guardrail: ApplyGuardrail rejected %d content item(s) as too large; "
+                    "splitting into %d + %d and retrying each",
+                    len(content),
+                    len(first_half),
+                    len(second_half),
+                )
                 first_results = await self._apply_guardrail_content_with_chunking(
                     content=first_half,
                     base_request_data=base_request_data,
@@ -998,6 +1007,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         retries here are capped low -- they must not multiply per-request latency
         by an order of magnitude when the account's per-second text-unit quota is
         the binding constraint rather than the per-request size quota.
+
+        A too-large rejection is deliberately excluded from the retry. AWS reports
+        it as a ThrottlingException (429), not only as a ValidationException, but
+        unlike a genuine throttle it is not transient: re-posting the same
+        oversized content can never succeed. Retrying it would burn every backoff
+        sleep and every (billed) attempt before the caller's bisection gets a
+        chance to split the content, at every level of the recursion.
         """
         attempt = 0
         while True:
@@ -1013,7 +1029,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     start_time=start_time,
                 )
             except HTTPException as exc:
-                if exc.status_code == 429 and attempt < _BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES:
+                if (
+                    exc.status_code == 429
+                    and not self._is_input_too_large_error(exc.detail)
+                    and attempt < _BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES
+                ):
                     await asyncio.sleep(_BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS * (2**attempt))
                     attempt += 1
                     continue
@@ -1274,9 +1294,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return left + 1 if midpoint - left <= right - midpoint else right + 1
 
     @staticmethod
-    def _is_input_too_large_validation_error(detail: object) -> bool:
-        """True if `detail` is the AWS ValidationException message for input
-        exceeding the per-request text-unit quota.
+    def _is_input_too_large_error(detail: object) -> bool:
+        """True if `detail` is an AWS error message for input exceeding the
+        per-request text-unit quota.
+
+        Matched on the message rather than the status code on purpose: AWS is not
+        consistent about which error it raises for this. Observed against a live
+        guardrail with an active content-filter policy, an oversized request comes
+        back as a *ThrottlingException* (429) reading ``Input text size (3273 text
+        units) exceeds the maximum allowed (1000 text units) for the content filter
+        policy (Classic tier)``, while the documented failure mode is a
+        ValidationException (400). Keying off the message covers both.
 
         A guardrail *block* is also raised as an HTTPException with status 400,
         but its ``detail`` is always a dict (built by
