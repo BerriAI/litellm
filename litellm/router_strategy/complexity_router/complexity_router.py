@@ -794,12 +794,37 @@ class ComplexityRouter(CustomLogger):
         The tier comes from the caller because a model may sit in several tier pools, and
         recovering it from the model would promote the pin to that model's highest tier and
         hold later turns above the tier the session actually needed.
+
+        Tier keys expire independently, so a weaker turn that resolved before an escalation
+        but wrote after it would outlive the stronger key and hand the session back to the
+        cheaper model. A turn whose tier already sits below a live key therefore skips the
+        write, and writing a tier drops the keys beneath it. The cache has no
+        compare-and-swap, so a turn that escalates between this read and this write can
+        still leave a weaker key behind; the session's next turn drops it.
         """
+        keyed_tiers = self._session_pin_keys(cache_key)
+        cached = await self.litellm_router_instance.cache.async_batch_get_cache(keys=[key for _, key in keyed_tiers])
+        pinned = cached if isinstance(cached, list) and len(cached) == len(keyed_tiers) else [None] * len(keyed_tiers)
+        rank = TIER_SEVERITY_ORDER.index(tier)
+        if any(
+            isinstance(model, str) and TIER_SEVERITY_ORDER.index(key_tier) > rank
+            for (key_tier, _), model in zip(keyed_tiers, pinned)
+        ):
+            return
         await self.litellm_router_instance.cache.async_set_cache(
             key=f"{cache_key}:{tier.value}",
             value=routed_model,
             ttl=self.config.session_affinity_ttl_seconds,
         )
+        subordinate_keys = tuple(
+            key
+            for (key_tier, key), model in zip(keyed_tiers, pinned)
+            if isinstance(model, str) and TIER_SEVERITY_ORDER.index(key_tier) < rank
+        )
+        if subordinate_keys:
+            await asyncio.gather(
+                *(self.litellm_router_instance.cache.async_delete_cache(key) for key in subordinate_keys)
+            )
 
     def _lexical_tier_override(self, user_message: str) -> ComplexityTier | None:
         """When keyword_tier_rules match literally, the most-severe matched tier wins.

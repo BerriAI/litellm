@@ -2985,6 +2985,77 @@ class TestSessionAffinity:
         assert later.model == "o1-preview"
 
     @pytest.mark.asyncio
+    async def test_session_pin_is_absent_when_no_tiers_are_configured(self, mock_router_instance):
+        """With no tiers configured there are no pin keys to read, so the session has no pin
+        and the router falls through to classification rather than reading a stray key."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={"tiers": {}, "session_affinity": True},
+        )
+        assert router._session_pin_keys("session-1") == ()
+        assert await router._get_session_pin("session-1") is None
+
+    @pytest.mark.asyncio
+    async def test_session_pin_is_absent_when_the_cache_returns_a_short_batch(
+        self, mock_router_instance, session_affinity_config
+    ):
+        """A batch read that does not line up with the keys requested cannot be zipped back
+        to its tiers, so the pin is treated as absent instead of mapped to the wrong tier."""
+        cache = AsyncMock()
+        cache.async_batch_get_cache = AsyncMock(return_value=["gpt-4o-mini"])
+        mock_router_instance.cache = cache
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        assert await router._get_session_pin("session-1") is None
+
+    @pytest.mark.asyncio
+    async def test_a_stale_weaker_write_is_skipped_once_the_session_escalated(
+        self, mock_router_instance, session_affinity_config
+    ):
+        """Regression: tier keys expire independently, so a weaker turn that resolved before
+        an escalation but wrote after it would outlive the stronger key and hand the session
+        back to the cheap model once that key expired."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        cache_key = router._get_session_affinity_cache_key("session-1", request_kwargs)
+        await router._persist_session_pin(cache_key, "o1-preview", ComplexityTier.REASONING)
+
+        await router._persist_session_pin(cache_key, "gpt-4o-mini", ComplexityTier.SIMPLE)
+
+        assert await mock_router_instance.cache.async_get_cache(key=f"{cache_key}:SIMPLE") is None
+        assert await router._get_session_pin(cache_key) == ("o1-preview", ComplexityTier.REASONING)
+
+    @pytest.mark.asyncio
+    async def test_escalating_drops_the_subordinate_tier_key(self, mock_router_instance, session_affinity_config):
+        """A key beneath the escalated tier must not survive the escalation, otherwise it can
+        outlive the stronger key and become the highest pin the session resolves to."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        cache_key = router._get_session_affinity_cache_key("session-1", request_kwargs)
+        await router._persist_session_pin(cache_key, "gpt-4o-mini", ComplexityTier.SIMPLE)
+        assert await mock_router_instance.cache.async_get_cache(key=f"{cache_key}:SIMPLE") == "gpt-4o-mini"
+
+        await router._persist_session_pin(cache_key, "o1-preview", ComplexityTier.REASONING)
+
+        assert await mock_router_instance.cache.async_get_cache(key=f"{cache_key}:SIMPLE") is None
+        assert await router._get_session_pin(cache_key) == ("o1-preview", ComplexityTier.REASONING)
+
+    @pytest.mark.asyncio
     async def test_pin_escalation_check_does_not_call_the_llm_classifier(
         self, mock_router_instance, session_affinity_config
     ):
