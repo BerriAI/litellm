@@ -91,31 +91,25 @@ class TestMcpToolSearchDefaultTopK:
         )
         assert get_mcp_tool_search_default_top_k(uak) == 10
 
-    def test_global_litellm_settings_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        mock_config = MagicMock()
-        mock_config.get_config_state.return_value = {
-            "litellm_settings": {"mcp_tool_search_default_top_k": 12}
-        }
-        monkeypatch.setattr(
-            "litellm.proxy.proxy_server.proxy_config",
-            mock_config,
+    def test_global_litellm_settings_override(self) -> None:
+        assert (
+            get_mcp_tool_search_default_top_k(
+                litellm_settings={"mcp_tool_search_default_top_k": 12}
+            )
+            == 12
         )
-        assert get_mcp_tool_search_default_top_k() == 12
 
-    def test_per_key_beats_global(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        mock_config = MagicMock()
-        mock_config.get_config_state.return_value = {
-            "litellm_settings": {"mcp_tool_search_default_top_k": 12}
-        }
-        monkeypatch.setattr(
-            "litellm.proxy.proxy_server.proxy_config",
-            mock_config,
-        )
+    def test_per_key_beats_global(self) -> None:
         uak = UserAPIKeyAuth(
             api_key="k",
             object_permission=_make_perm(mcp_tool_search_top_k=8),
         )
-        assert get_mcp_tool_search_default_top_k(uak) == 8
+        assert (
+            get_mcp_tool_search_default_top_k(
+                uak, {"mcp_tool_search_default_top_k": 12}
+            )
+            == 8
+        )
 
     def test_resolve_uses_explicit_top_k(self) -> None:
         uak = UserAPIKeyAuth(

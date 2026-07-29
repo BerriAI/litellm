@@ -15,17 +15,9 @@ MCP_TOOL_CALL_TOOL_NAME: str = "mcp_tool_call"
 DEFAULT_MCP_TOOL_SEARCH_TOP_K: int = 5
 
 
-def _get_litellm_settings() -> dict[str, Any]:
-    try:
-        from litellm.proxy.proxy_server import proxy_config
-
-        return proxy_config.get_config_state().get("litellm_settings") or {}
-    except Exception:
-        return {}
-
-
 def get_mcp_tool_search_default_top_k(
     user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+    litellm_settings: Optional[dict[str, Any]] = None,
 ) -> int:
     """Resolve the default top_k for mcp_tool_search (per-key, then global, then 5)."""
     if user_api_key_dict is not None:
@@ -35,7 +27,7 @@ def get_mcp_tool_search_default_top_k(
             if key_top_k is not None:
                 return coerce_top_k(key_top_k, default=DEFAULT_MCP_TOOL_SEARCH_TOP_K)
 
-    global_top_k = _get_litellm_settings().get("mcp_tool_search_default_top_k")
+    global_top_k = (litellm_settings or {}).get("mcp_tool_search_default_top_k")
     if global_top_k is not None:
         return coerce_top_k(global_top_k, default=DEFAULT_MCP_TOOL_SEARCH_TOP_K)
 
@@ -45,8 +37,11 @@ def get_mcp_tool_search_default_top_k(
 def resolve_mcp_tool_search_top_k(
     explicit_top_k: Any,
     user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+    litellm_settings: Optional[dict[str, Any]] = None,
 ) -> int:
-    default_top_k = get_mcp_tool_search_default_top_k(user_api_key_dict)
+    default_top_k = get_mcp_tool_search_default_top_k(
+        user_api_key_dict, litellm_settings
+    )
     if explicit_top_k is None:
         return default_top_k
     return coerce_top_k(explicit_top_k, default=default_top_k)

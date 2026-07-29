@@ -168,7 +168,11 @@ if MCP_AVAILABLE:
         if tool_name == MCP_TOOL_SEARCH_TOOL_NAME:
             return await handle_mcp_tool_search(
                 query=tool_arguments.get("query", ""),
-                top_k=resolve_mcp_tool_search_top_k(tool_arguments.get("top_k"), user_api_key_dict),
+                top_k=resolve_mcp_tool_search_top_k(
+                    tool_arguments.get("top_k"),
+                    user_api_key_dict,
+                    proxy_config.get_config_state().get("litellm_settings") or {},
+                ),
                 user_api_key_dict=user_api_key_dict,
                 client_ip=rest_client_ip,
                 mcp_auth_header=virtual_mcp_auth_header,
@@ -736,10 +740,15 @@ if MCP_AVAILABLE:
                     get_mcp_tool_search_default_top_k,
                     get_virtual_tool_definitions,
                 )
+                from litellm.proxy.proxy_server import proxy_config
 
                 return {
                     "tools": get_virtual_tool_definitions(
-                        default_top_k=get_mcp_tool_search_default_top_k(user_api_key_dict)
+                        default_top_k=get_mcp_tool_search_default_top_k(
+                            user_api_key_dict,
+                            proxy_config.get_config_state().get("litellm_settings")
+                            or {},
+                        )
                     ),
                     "error": None,
                     "message": "Successfully retrieved tools",
