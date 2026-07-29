@@ -1,6 +1,7 @@
 use litellm_core::CoreError;
 use litellm_core::CoreResult;
 use litellm_core::messages::transformation::MessagesAuthStrategy;
+use litellm_core::providers::bedrock::AWS_REGION_NAME;
 use litellm_core::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 use serde_json::Value;
 
@@ -29,10 +30,10 @@ pub(super) fn prepare_messages_call(
 
     let config = messages_provider_config(provider)
         .ok_or_else(|| CoreError::InvalidProvider(provider.to_string()))?;
+    let region_override = request.aws_region_name;
     let env_lookup = |key: &str| {
-        if key == "AWS_REGION_NAME" {
-            return request
-                .aws_region_name
+        if key == AWS_REGION_NAME {
+            return region_override
                 .map(str::to_string)
                 .or_else(|| std::env::var(key).ok());
         }

@@ -6,4 +6,5 @@
 pub mod audio_transcription;
 pub mod aws_base;
 mod constants;
+pub use constants::AWS_REGION_NAME;
 pub mod messages;

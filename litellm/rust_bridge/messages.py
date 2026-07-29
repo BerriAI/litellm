@@ -111,7 +111,7 @@ def messages(
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
         timeout_seconds=timeout_to_seconds(timeout),
-        **({"aws_region_name": aws_region_name} if aws_region_name is not None else {}),
+        aws_region_name=aws_region_name,
     )
 
 
@@ -137,5 +137,5 @@ async def amessages(
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
         timeout_seconds=timeout_to_seconds(timeout),
-        **({"aws_region_name": aws_region_name} if aws_region_name is not None else {}),
+        aws_region_name=aws_region_name,
     )

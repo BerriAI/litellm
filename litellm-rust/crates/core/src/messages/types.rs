@@ -45,7 +45,7 @@ pub struct AnthropicMessage {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AnthropicMessagesRequest {
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub model: String,
     pub messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]

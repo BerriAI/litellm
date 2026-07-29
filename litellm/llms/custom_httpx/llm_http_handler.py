@@ -2283,7 +2283,6 @@ class BaseLLMHTTPHandler:
         from litellm.rust_bridge import messages as rust_messages_bridge
 
         upstream_body = {key: value for key, value in request_body.items() if key != "stream"}
-        upstream_body.setdefault("model", model)
         try:
             rust_response = await rust_messages_bridge.amessages(
                 model=model,
