@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import {
   SearchIcon,
   PlusIcon,
@@ -728,6 +730,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
     rejected: 0,
   });
   const [search, setSearch] = useState("");
+  const [searchDebounced] = useDebouncedValue(search, { wait: DEBOUNCE_WAIT_MS });
   const [statusFilter, setStatusFilter] = useState<"all" | GuardrailStatus>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expandedHeaders, setExpandedHeaders] = useState<Set<string>>(new Set());
@@ -737,15 +740,9 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
   } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [searchDebounced, setSearchDebounced] = useState("");
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
   const [submitForm] = Form.useForm();
   const registerGuardrail = useRegisterGuardrail();
-
-  useEffect(() => {
-    const t = setTimeout(() => setSearchDebounced(search), 300);
-    return () => clearTimeout(t);
-  }, [search]);
 
   const fetchSubmissions = useCallback(async () => {
     if (!accessToken) {

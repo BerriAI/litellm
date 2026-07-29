@@ -718,6 +718,12 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         except StopAsyncIteration:
             # Normal end of stream - don't log as failure
             raise
+        except (httpx.ReadError, httpx.RemoteProtocolError) as e:
+            self.finished = True
+            if self.completed_response is None:
+                self._handle_failure(e)
+                raise
+            raise StopAsyncIteration from e
         except httpx.HTTPError as e:
             # Handle HTTP errors
             self.finished = True
@@ -794,6 +800,12 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         except StopIteration:
             # Normal end of stream - don't log as failure
             raise
+        except (httpx.ReadError, httpx.RemoteProtocolError) as e:
+            self.finished = True
+            if self.completed_response is None:
+                self._handle_failure(e)
+                raise
+            raise StopIteration from e
         except httpx.HTTPError as e:
             # Handle HTTP errors
             self.finished = True

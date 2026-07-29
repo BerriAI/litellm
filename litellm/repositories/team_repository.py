@@ -4,10 +4,17 @@ Team repository for database operations on LiteLLM_TeamTable.
 
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
 
-from litellm.models.team import LiteLLM_TeamTable
+from pydantic import TypeAdapter
+
+from litellm.models.team import LiteLLM_TeamTable, Member
 from litellm.repositories.base_repository import BaseRepository
+
+if TYPE_CHECKING:
+    from prisma import Prisma
+
+_MEMBERS_WITH_ROLES_ADAPTER = TypeAdapter(list[Member])
 
 
 class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
@@ -45,6 +52,24 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
                 data[field] = json.loads(data[field])
 
         return LiteLLM_TeamTable(**data)
+
+    async def get_members_with_roles_locked(self, tx: "Prisma", team_id: str) -> List[Member]:
+        """Return the team's members_with_roles, locking the row FOR UPDATE.
+
+        Must be called inside a transaction so the row lock is held until
+        commit. This serializes concurrent membership writers on the team row
+        so the losing writer appends onto the winner's committed result instead
+        of overwriting it from a stale snapshot.
+        """
+        rows = await tx.query_raw(
+            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = $1 FOR UPDATE',
+            team_id,
+        )
+        raw_value = rows[0]["members_with_roles"] if rows else None
+        parsed = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+        if not parsed:
+            return []
+        return _MEMBERS_WITH_ROLES_ADAPTER.validate_python(parsed)
 
     async def find_by_id(self, team_id: str, id_field: str = "team_id") -> Optional[LiteLLM_TeamTable]:
         return await super().find_by_id(team_id, id_field)

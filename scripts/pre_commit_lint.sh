@@ -5,6 +5,7 @@
 # gating CI checks, so a clean run means a green CI lint:
 #   - litellm/ Python staged -> `make lint` (test-linting.yml's lint job)
 #   - tests/e2e Python staged -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
+#                                + raw HTTP client ban (test-code-quality.yml's check_e2e_no_raw_requests)
 #   - dashboard staged        -> prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
 #   - proxy/types staged      -> regenerate dashboard API types and fail on drift (check-ui-api-types.yml)
 #
@@ -89,6 +90,11 @@ EOF
 
 status=0
 
+bootstrap_hint() {
+    echo "  This checkout looks unprovisioned (fresh worktree or clone)." >&2
+    echo "  Fix: make bootstrap" >&2
+}
+
 if [ -n "$litellm_py_files" ]; then
     echo "pre-commit: linting Python (make lint)"
     make lint || { echo "✗ Python lint failed. Fix the reds above, then re-run make pre-commit." >&2; status=1; }
@@ -107,9 +113,21 @@ if [ -n "$e2e_py_files" ] && [ -z "$litellm_py_files" ]; then
     make lint-e2e-basedpyright || { echo "✗ tests/e2e basedpyright failed. Fix the errors above, then re-run make pre-commit." >&2; status=1; }
 fi
 
+if [ -n "$e2e_py_files" ]; then
+    echo "pre-commit: checking tests/e2e raw HTTP client ban (check_e2e_no_raw_requests)"
+    uv run --no-sync python tests/code_coverage_tests/check_e2e_no_raw_requests.py \
+        || { echo "✗ Raw HTTP client import in tests/e2e. Route the call through tests/e2e/e2e_http.py, then re-run make pre-commit." >&2; status=1; }
+fi
+
 if [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ]; then
     echo "pre-commit: linting dashboard (prettier + eslint + lint budgets)"
-    lint_dashboard || { echo "✗ Dashboard lint failed. See above; format with: (cd ui/litellm-dashboard && npm run format)." >&2; status=1; }
+    if [ ! -d ui/litellm-dashboard/node_modules ]; then
+        echo "✗ ui/litellm-dashboard/node_modules is missing; dashboard lint cannot run." >&2
+        bootstrap_hint
+        status=1
+    else
+        lint_dashboard || { echo "✗ Dashboard lint failed. See above; format with: (cd ui/litellm-dashboard && npm run format)." >&2; status=1; }
+    fi
 fi
 
 if [ -n "$spec_files" ]; then
@@ -118,7 +136,15 @@ if [ -n "$spec_files" ]; then
     # and an up-to-date Prisma client; check-ui-api-types.yml installs those and runs
     # prisma generate before gen:api, so mirror that here or a stale client can mask
     # drift that CI will still flag.
-    if ! uv run --no-sync python scripts/prisma_generate_if_needed.py; then
+    if [ ! -d ui/litellm-dashboard/node_modules ]; then
+        echo "✗ ui/litellm-dashboard/node_modules is missing; the gen:api sync check cannot run." >&2
+        bootstrap_hint
+        status=1
+    elif ! uv run --no-sync python -c "import orjson, prisma" 2>/dev/null; then
+        echo "✗ The Python env lacks the proxy deps (orjson/prisma) that gen:api needs." >&2
+        bootstrap_hint
+        status=1
+    elif ! uv run --no-sync python scripts/prisma_generate_if_needed.py; then
         echo "✗ Could not regenerate Prisma client (prisma generate failed)." >&2
         status=1
     elif ( cd ui/litellm-dashboard && LITELLM_PYTHON="uv run --no-sync python" npm run gen:api ); then

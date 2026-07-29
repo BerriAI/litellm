@@ -4,13 +4,14 @@ import json
 import re
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, List, Literal, Optional
 
 import httpx
 from fastapi import HTTPException
 
 import litellm
 from httpx import Response as HttpxResponse
+from litellm.proxy.spend_tracking.compression_savings import HEADROOM_GUARDRAIL_PROVIDER
 from typing_extensions import TypeGuard
 
 from litellm._logging import verbose_proxy_logger
@@ -26,6 +27,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]
     httpxSpecialProvider,
+)
+from litellm.proxy.guardrails.guardrail_hooks.content_text import (
+    content_to_text,
+    is_all_text_parts,
+    merge_rewritten_text_parts,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
@@ -48,6 +54,60 @@ def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard
 
 def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
     return isinstance(value, list)
+
+
+def _flatten_messages_for_compression(messages: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Collapse all-text list-of-parts content to plain strings for /v1/compress.
+
+    The compression service's transforms only rewrite string content and skip
+    the OpenAI list-of-parts shape, which is what every Anthropic-format
+    request translates to. Only rows whose parts are ALL text are flattened:
+    cache_control breakpoints are positional (each caches the prefix ending
+    at its part), so merging text across a non-text part would move a later
+    breakpoint to the other side of it. Rows with non-text parts are sent
+    unchanged and pass through the service untouched.
+    """
+    flattened: list[dict[str, object]] = []
+    for msg in messages:
+        content = msg.get("content")
+        if is_all_text_parts(content):
+            text = content_to_text(content)
+            if text:
+                flattened.append({**msg, "content": text})
+                continue
+        flattened.append(msg)
+    return flattened
+
+
+def _restore_content_shapes(
+    originals: list[dict[str, object]], returned: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    """Write compressed text back into each original row's content shape.
+
+    Rows are matched positionally; the pairing is only trusted when the
+    service kept the row count and every role lines up. If it restructured
+    the conversation (e.g. dropped rows), its output is adopted as-is, which
+    is the pre-flattening behavior.
+    """
+    if len(returned) != len(originals):
+        return returned
+    for orig, ret in zip(originals, returned):
+        if orig.get("role") != ret.get("role"):
+            return returned
+    restored: list[dict[str, object]] = []
+    for orig, ret in zip(originals, returned):
+        orig_content = orig.get("content")
+        ret_content = ret.get("content")
+        if isinstance(orig_content, list) and isinstance(ret_content, str):
+            if ret_content == content_to_text(orig_content):
+                # Untouched row: keep the exact original parts, including
+                # per-part fields like cache_control on later text parts.
+                restored.append({**ret, "content": orig_content})
+            else:
+                restored.append({**ret, "content": merge_rewritten_text_parts(orig_content, ret_content)})
+        else:
+            restored.append(ret)
+    return restored
 
 
 def extract_hashes_from_messages(messages: list[dict[str, object]]) -> list[str]:
@@ -208,6 +268,8 @@ def _build_responses_followup_items(
 
 
 class HeadroomGuardrail(CustomGuardrail):
+    records_own_guardrail_information: ClassVar[bool] = True
+
     @classmethod
     def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
         return [
@@ -409,6 +471,19 @@ class HeadroomGuardrail(CustomGuardrail):
             )
             if key in body
         }
+        tokens_before = stats.get("tokens_before")
+        tokens_after = stats.get("tokens_after")
+        if (
+            "tokens_saved" not in stats
+            and isinstance(tokens_before, (int, float))
+            and not isinstance(tokens_before, bool)
+            and isinstance(tokens_after, (int, float))
+            and not isinstance(tokens_after, bool)
+        ):
+            # Spend tracking (extract_compression_saved_tokens) reads only
+            # tokens_saved, which the live compression service omits; derive it
+            # so savings are counted, but let a service-sent value win.
+            stats["tokens_saved"] = tokens_before - tokens_after
         return filtered, True, stats
 
     async def _call_retrieve(self, hash_value: str, query: str | None = None) -> str:
@@ -475,23 +550,39 @@ class HeadroomGuardrail(CustomGuardrail):
         model = self.headroom_model or request_data.get("model")
         start_time = time.time()
         compressed, compression_succeeded, stats = await self._call_compress(
-            messages=messages,
+            messages=_flatten_messages_for_compression(messages),
             model=model if isinstance(model, str) else None,
         )
         end_time = time.time()
+        compressed = _restore_content_shapes(originals=messages, returned=compressed)
+
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
 
         if not compression_succeeded:
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response={"error": "headroom compression unavailable; request forwarded uncompressed"},
+                request_data=request_data,
+                guardrail_status="guardrail_failed_to_respond",
+                guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
+                start_time=start_time,
+                end_time=end_time,
+                duration=end_time - start_time,
+            )
+            add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
             return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=stats,
             request_data=request_data,
             guardrail_status="success",
-            guardrail_provider="headroom",
+            guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
             start_time=start_time,
             end_time=end_time,
             duration=end_time - start_time,
         )
+        add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
 
         hashes = extract_hashes_from_messages(compressed)
         if not hashes:

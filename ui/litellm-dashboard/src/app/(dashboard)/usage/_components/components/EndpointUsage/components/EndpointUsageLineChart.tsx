@@ -1,10 +1,10 @@
-import { Card, LineChart, Title } from "@tremor/react";
 import { useMemo } from "react";
+import { LineChart, type ChartColor } from "@/components/shared/charts";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DailyData } from "@/components/UsagePage/types";
 
 interface EndpointUsageLineChartProps {
   dailyData?: { results: DailyData[] };
-  endpointData?: Record<string, any>;
 }
 
 // Transform daily data into chart format
@@ -42,7 +42,7 @@ function transformDailyDataToChart(dailyData: DailyData[]): Array<Record<string,
   return chartData.reverse();
 }
 
-export function EndpointUsageLineChart({ dailyData, endpointData }: EndpointUsageLineChartProps) {
+export function EndpointUsageLineChart({ dailyData }: EndpointUsageLineChartProps) {
   const chartData = useMemo(() => {
     if (!dailyData?.results || dailyData.results.length === 0) {
       return [];
@@ -59,26 +59,39 @@ export function EndpointUsageLineChart({ dailyData, endpointData }: EndpointUsag
   }, [chartData]);
 
   // Tremor color palette for multiple lines
-  const colors = ["blue", "cyan", "indigo", "violet", "purple", "fuchsia", "pink", "rose", "red", "orange"];
+  const colors: readonly ChartColor[] = [
+    "blue",
+    "cyan",
+    "indigo",
+    "violet",
+    "purple",
+    "fuchsia",
+    "pink",
+    "rose",
+    "red",
+    "orange",
+  ];
 
   return (
     <Card className="mb-6">
-      <div className="flex items-center justify-between mb-4">
-        <Title>Endpoint Usage Trends</Title>
-      </div>
-      <LineChart
-        className="h-80"
-        data={chartData}
-        index="date"
-        categories={categories}
-        colors={colors.slice(0, categories.length)}
-        valueFormatter={(value) => value.toLocaleString()}
-        showLegend={true}
-        showGridLines={true}
-        yAxisWidth={60}
-        connectNulls={true}
-        curveType="natural"
-      />
+      <CardHeader>
+        <CardTitle className="text-base font-semibold">Endpoint Usage Trends</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <LineChart
+          className="h-80"
+          data={chartData}
+          index="date"
+          categories={categories}
+          colors={colors.slice(0, categories.length)}
+          valueFormatter={(value) => value.toLocaleString()}
+          showLegend={true}
+          showGridLines={true}
+          yAxisWidth={60}
+          connectNulls={true}
+          curveType="natural"
+        />
+      </CardContent>
     </Card>
   );
 }

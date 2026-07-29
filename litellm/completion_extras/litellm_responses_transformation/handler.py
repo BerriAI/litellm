@@ -209,7 +209,15 @@ class ResponsesToCompletionBridgeHandler:
                 json_mode=kwargs.get("json_mode"),
             )
         elif isinstance(result, ModelResponse):
-            return result
+            if not stream:
+                return result
+            return self._completed_response_as_stream(
+                response=result,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+                json_mode=kwargs.get("json_mode"),
+            )
         elif not stream:
             responses_api_response = self._collect_response_from_stream(result)
             return self.transformation_handler.transform_response(
@@ -299,7 +307,15 @@ class ResponsesToCompletionBridgeHandler:
                 json_mode=kwargs.get("json_mode"),
             )
         elif isinstance(result, ModelResponse):
-            return result
+            if not stream:
+                return result
+            return self._completed_response_as_stream(
+                response=result,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+                json_mode=kwargs.get("json_mode"),
+            )
         elif not stream:
             responses_api_response = await self._collect_response_from_stream_async(result)
             return self.transformation_handler.transform_response(
@@ -330,6 +346,25 @@ class ResponsesToCompletionBridgeHandler:
                 logging_obj=logging_obj,
             )
             return self._apply_post_stream_processing(streamwrapper, model, custom_llm_provider)
+
+    def _completed_response_as_stream(
+        self,
+        response: "ModelResponse",
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: "LiteLLMLoggingObj",
+        json_mode: bool | None,
+    ) -> "CustomStreamWrapper":
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+
+        streamwrapper = CustomStreamWrapper(
+            completion_stream=MockResponseIterator(model_response=response, json_mode=json_mode),
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            logging_obj=logging_obj,
+        )
+        return self._apply_post_stream_processing(streamwrapper, model, custom_llm_provider)
 
     @staticmethod
     def _apply_post_stream_processing(

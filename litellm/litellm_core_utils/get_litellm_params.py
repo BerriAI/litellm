@@ -2,26 +2,8 @@ from typing import Optional
 
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 
-# Pre-define optional kwargs keys as frozenset for O(1) lookups
-# These are extracted from kwargs only if present, avoiding unnecessary .get() calls
-OPTIONAL_KWARGS_KEYS = frozenset(
+AWS_CREDENTIAL_KWARGS_KEYS = frozenset(
     {
-        "azure_ad_token",
-        "tenant_id",
-        "client_id",
-        "client_secret",
-        "azure_username",
-        "azure_password",
-        "azure_scope",
-        "timeout",
-        "gcs_bucket_name",
-        "bucket_name",
-        "vertex_credentials",
-        "vertex_project",
-        "vertex_location",
-        "vertex_ai_project",
-        "vertex_ai_location",
-        "vertex_ai_credentials",
         "aws_region_name",
         "aws_access_key_id",
         "aws_secret_access_key",
@@ -34,12 +16,38 @@ OPTIONAL_KWARGS_KEYS = frozenset(
         "aws_external_id",
         "aws_bedrock_runtime_endpoint",
         "aws_bedrock_project_id",
-        "tpm",
-        "rpm",
-        "itpm",
-        "otpm",
-        "use_xai_oauth",
     }
+)
+
+# Pre-define optional kwargs keys as frozenset for O(1) lookups
+# These are extracted from kwargs only if present, avoiding unnecessary .get() calls
+OPTIONAL_KWARGS_KEYS = (
+    frozenset(
+        {
+            "azure_ad_token",
+            "tenant_id",
+            "client_id",
+            "client_secret",
+            "azure_username",
+            "azure_password",
+            "azure_scope",
+            "timeout",
+            "gcs_bucket_name",
+            "bucket_name",
+            "vertex_credentials",
+            "vertex_project",
+            "vertex_location",
+            "vertex_ai_project",
+            "vertex_ai_location",
+            "vertex_ai_credentials",
+            "tpm",
+            "rpm",
+            "itpm",
+            "otpm",
+            "use_xai_oauth",
+        }
+    )
+    | AWS_CREDENTIAL_KWARGS_KEYS
 )
 
 # Backward-compatible alias for existing imports/tests.

@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 CHAT_COMPLETION_AGENTIC_SURFACE = "chat_completions"
+RESPONSES_AGENTIC_SURFACE = "responses"
 CODE_INTERPRETER_INTERCEPTION_PREFIX = "_code_interpreter_interception"
 NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES = frozenset(
     ("_websearch_interception", "_compression_interception")

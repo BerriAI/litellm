@@ -1,35 +1,39 @@
 import asyncio
 import importlib
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from typing import (
+    TYPE_CHECKING,
     Any,
-    Awaitable,
-    Callable,
-    Dict,
-    List,
     Literal,
-    Mapping,
-    Optional,
-    Set,
-    Tuple,
-    Union,
 )
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from litellm._logging import verbose_logger
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPServerListError,
+    MCPUpstreamAuthError,
+)
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+    classify_list_exception,
+    list_fault_http_status,
+)
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     MCPMissingUserEnvVarsError,
+    get_server_prefix,
     merge_mcp_headers,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+if TYPE_CHECKING:
+    from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.types.mcp import MCPAuth
 from litellm.types.utils import CallTypes
@@ -89,12 +93,12 @@ if MCP_AVAILABLE:
     ########################################################
     ############ MCP Server REST API Routes #################
     async def _safe_fire_mcp_tool_call_logging(
-        logging_obj: Optional[Any],
+        logging_obj: Any | None,
         result: Any,
         start_time: datetime,
         end_time: datetime,
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-        request_data: Optional[Mapping[str, object]] = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+        request_data: Mapping[str, object] | None = None,
     ) -> None:
         if logging_obj is None:
             return
@@ -126,7 +130,7 @@ if MCP_AVAILABLE:
 
     async def _handle_virtual_mcp_tool(
         request: Request,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         tool_name: str,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> Any:
@@ -204,9 +208,9 @@ if MCP_AVAILABLE:
 
     def _get_server_auth_header(
         server,
-        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
-        mcp_auth_header: Optional[str],
-    ) -> Optional[Union[Dict[str, str], str]]:
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+        mcp_auth_header: str | None,
+    ) -> dict[str, str] | str | None:
         """Helper function to get server-specific auth header with case-insensitive matching."""
         from litellm.proxy._experimental.mcp_server.utils import (
             lookup_mcp_server_auth_in_headers,
@@ -222,34 +226,53 @@ if MCP_AVAILABLE:
                 return server_auth
         return mcp_auth_header
 
-    def _get_oauth2_server_ids(allowed_server_ids: List[str]) -> Set[str]:
-        """Return the subset of *allowed_server_ids* whose servers use OAuth2 auth.
+    def _is_v1_resolved_oauth2_server(server: MCPServer | None) -> bool:
+        """Whether this server's per-user OAuth2 token is still resolved by v1.
 
-        Used as a cheap pre-flight check to skip bulk credential fetching when no
-        OAuth2 servers are involved in the current request.
+        A server the v2 resolver owns reads its stored token from the resolver at connect
+        time and drops any Authorization built for it here, so the v1 lookup would be a DB
+        round-trip whose result is discarded. Mirrors the same guard on the protocol listing
+        path and in ``_resolve_oauth2_headers_for_tool_call``.
+        """
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+            to_server_spec,
+        )
+
+        if getattr(server, "auth_type", None) != MCPAuth.oauth2:
+            return False
+        return to_server_spec(server) is None
+
+    def _v1_resolved_oauth2_server_ids(allowed_server_ids: list[str]) -> set[str]:
+        """Return the subset of *allowed_server_ids* whose per-user OAuth2 token is still
+        resolved by v1.
+
+        Used as a cheap pre-flight check to skip bulk credential fetching when no such
+        server is involved in the current request.
         """
         return {
             sid
             for sid in allowed_server_ids
-            if getattr(global_mcp_server_manager.get_mcp_server_by_id(sid), "auth_type", None) == MCPAuth.oauth2
+            if _is_v1_resolved_oauth2_server(global_mcp_server_manager.get_mcp_server_by_id(sid))
         }
 
     async def _get_user_oauth_extra_headers(
-        server,
+        server: MCPServer,
         user_api_key_dict: UserAPIKeyAuth,
-        prefetched_creds: Optional[Dict[str, Dict[str, Any]]] = None,
-    ) -> Optional[Dict[str, str]]:
+        prefetched_creds: dict[str, "OAuthCredentialPayload"] | None = None,
+    ) -> dict[str, str] | None:
         """
         For OAuth2 servers, look up the user's stored access token and return it
         as extra_headers {"Authorization": "Bearer <token>"} so that it reaches
         the MCP server the same way the admin "Add MCP / Authorize and Fetch" flow does.
         Returns None for non-OAuth2 servers or when no credential is stored.
 
+        A server the v2 resolver owns is skipped; see ``_is_v1_resolved_oauth2_server``.
+
         Args:
             prefetched_creds: Optional dict keyed by server_id with credential payloads.
                               When provided, avoids a per-server DB round-trip.
         """
-        if getattr(server, "auth_type", None) != MCPAuth.oauth2:
+        if not _is_v1_resolved_oauth2_server(server):
             return None
         user_id = getattr(user_api_key_dict, "user_id", None)
         server_id = getattr(server, "server_id", None)
@@ -288,7 +311,7 @@ if MCP_AVAILABLE:
 
     async def _prefetch_user_oauth_creds(
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> Dict[str, Dict[str, Any]]:
+    ) -> dict[str, "OAuthCredentialPayload"]:
         """Fetch all OAuth2 credentials for the user in a single DB query.
 
         Returns a dict keyed by server_id. Used to avoid N+1 DB queries when
@@ -310,38 +333,6 @@ if MCP_AVAILABLE:
             return {c["server_id"]: c for c in creds if "server_id" in c}
         except Exception as e:
             verbose_logger.warning(f"_prefetch_user_oauth_creds: failed to prefetch for user={user_id}: {e}")
-            return {}
-
-    async def _get_bulk_user_oauth_headers(
-        user_api_key_dict: UserAPIKeyAuth,
-    ) -> Dict[str, Dict[str, str]]:
-        """
-        Fetch ALL OAuth2 credentials for the current user in a single DB query and
-        return a mapping of server_id → {"Authorization": "Bearer <token>"}.
-
-        This is the batch alternative to calling _get_user_oauth_extra_headers
-        per-server inside a loop (N+1 DB queries).
-        """
-        user_id = getattr(user_api_key_dict, "user_id", None)
-        if not user_id:
-            return {}
-        try:
-            from litellm.proxy._experimental.mcp_server.db import (
-                list_user_oauth_credentials,
-            )
-            from litellm.proxy.utils import get_prisma_client_or_throw
-
-            prisma_client = get_prisma_client_or_throw(
-                "Database not connected. Connect a database to use OAuth2 MCP tools."
-            )
-            creds = await list_user_oauth_credentials(prisma_client, user_id)
-            return {
-                c["server_id"]: {"Authorization": f"Bearer {c['access_token']}"}
-                for c in creds
-                if c.get("access_token") and c.get("server_id")
-            }
-        except Exception:
-            verbose_logger.debug("Failed to bulk-fetch OAuth credentials", exc_info=True)
             return {}
 
     def _create_tool_response_objects(tools, server: MCPServer):
@@ -384,8 +375,8 @@ if MCP_AVAILABLE:
 
     def _resolve_mcp_server_id_for_rest(
         server_id: str,
-        allowed_server_ids: Union[Set[str], List[str]],
-        client_ip: Optional[str] = None,
+        allowed_server_ids: set[str] | list[str],
+        client_ip: str | None = None,
     ) -> str:
         """
         Map REST ``server_id`` (UUID, server_name, or alias) to canonical server_id.
@@ -405,7 +396,7 @@ if MCP_AVAILABLE:
         request: Request,
         user_api_key_dict: UserAPIKeyAuth,
         server_id: str,
-    ) -> Tuple[List[MCPServer], str]:
+    ) -> tuple[list[MCPServer], str]:
         """
         Resolve allowed MCP servers for a tool call with IP filtering.
 
@@ -476,7 +467,7 @@ if MCP_AVAILABLE:
             )
 
         # Build allowed_mcp_servers list (only include allowed servers)
-        allowed_mcp_servers: List[MCPServer] = []
+        allowed_mcp_servers: list[MCPServer] = []
         for allowed_server_id in allowed_server_ids_set:
             server = global_mcp_server_manager.get_mcp_server_by_id(allowed_server_id)
             if server is not None:
@@ -487,9 +478,9 @@ if MCP_AVAILABLE:
     async def _get_tools_for_single_server(
         server,
         server_auth_header,
-        raw_headers: Optional[Dict[str, str]] = None,
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
+        raw_headers: dict[str, str] | None = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+        extra_headers: dict[str, str] | None = None,
         apply_tool_filters: bool = True,
     ):
         """Helper function to get tools for a single server.
@@ -515,20 +506,19 @@ if MCP_AVAILABLE:
         # enforced even when no allowlist is set (matches the SSE/HTTP path).
         tools = filter_tools_by_allowed_tools(tools, server)
 
-        # Filter tools based on user_api_key_auth.object_permission.mcp_tool_permissions
-        # This provides per-key/team/org control over which tools can be accessed
-        if (
-            user_api_key_auth
-            and user_api_key_auth.object_permission
-            and user_api_key_auth.object_permission.mcp_tool_permissions
-        ):
-            # Dict keys may be server_ids OR names/aliases; normalize so lookup
-            # by concrete server_id resolves name-keyed restrictions too.
-            allowed_tools_for_server = global_mcp_server_manager.expand_tool_permissions(
-                user_api_key_auth.object_permission.mcp_tool_permissions
-            ).get(server.server_id)
-            if allowed_tools_for_server is not None and len(allowed_tools_for_server) > 0:
-                # Filter tools to only include those in the allowed list
+        # Filter by the key's effective tool permissions through the same
+        # primitive the MCP protocol path uses (direct grants, toolset grants,
+        # and team/agent/org ceilings), so REST listing cannot drift from it
+        if user_api_key_auth:
+            from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+                MCPRequestHandler,
+            )
+
+            allowed_tools_for_server = await MCPRequestHandler.get_allowed_tools_for_server(
+                server_id=server.server_id,
+                user_api_key_auth=user_api_key_auth,
+            )
+            if allowed_tools_for_server is not None:
                 tools = [tool for tool in tools if _tool_name_matches(tool.name, allowed_tools_for_server)]
 
         return _create_tool_response_objects(tools, server)
@@ -536,7 +526,7 @@ if MCP_AVAILABLE:
     async def _resolve_allowed_mcp_servers_for_tool_call(
         user_api_key_dict: UserAPIKeyAuth,
         server_id: str,
-    ) -> List[MCPServer]:
+    ) -> list[MCPServer]:
         """Resolve allowed MCP servers for the given user and validate server_id access."""
         auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
         allowed_server_ids_set = set()
@@ -551,7 +541,7 @@ if MCP_AVAILABLE:
                     "message": f"The key is not allowed to access server {server_id}",
                 },
             )
-        allowed_mcp_servers: List[MCPServer] = []
+        allowed_mcp_servers: list[MCPServer] = []
         for allowed_server_id in allowed_server_ids_set:
             server = global_mcp_server_manager.get_mcp_server_by_id(allowed_server_id)
             if server is not None:
@@ -560,10 +550,10 @@ if MCP_AVAILABLE:
 
     async def _list_tools_for_single_server(
         server_id: str,
-        allowed_server_ids: List[str],
-        rest_client_ip: Optional[str],
+        allowed_server_ids: list[str],
+        rest_client_ip: str | None,
         mcp_server_auth_headers: dict,
-        mcp_auth_header: Optional[str],
+        mcp_auth_header: str | None,
         raw_headers_from_request: dict,
         user_api_key_dict: UserAPIKeyAuth,
         apply_tool_filters: bool = True,
@@ -627,6 +617,16 @@ if MCP_AVAILABLE:
             # matching status code and WWW-Authenticate challenge; that is what
             # lets standards-compliant MCP clients run the upstream OAuth flow.
             raise
+        except MCPServerListError as e:
+            fault = classify_list_exception(e)
+            verbose_logger.info(f"Listing tools from {server.name} failed with a {fault.tag} fault")
+            raise HTTPException(
+                status_code=list_fault_http_status(fault),
+                detail={
+                    "error": fault.tag,
+                    "message": f"Failed to list tools from server {get_server_prefix(server)}",
+                },
+            ) from e
         except Exception as e:
             verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
             return {
@@ -640,12 +640,12 @@ if MCP_AVAILABLE:
             "message": "Successfully retrieved tools",
         }
 
-    def _as_query_str(value: Any) -> Optional[str]:
+    def _as_query_str(value: Any) -> str | None:
         """Coerce an Optional[str] Query param to str|None, dropping unresolved FastAPI defaults."""
         return value if isinstance(value, str) else None
 
     async def _resolve_toolset_scope(
-        toolset_name: Optional[str],
+        toolset_name: str | None,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> UserAPIKeyAuth:
         """Resolve ``toolset_name`` to its scoped ``UserAPIKeyAuth``, or return unchanged."""
@@ -666,11 +666,9 @@ if MCP_AVAILABLE:
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
     async def list_tool_rest_api(
         request: Request,
-        server_id: Optional[str] = Query(None, description="The server id to list tools for"),
-        mcp_server_name: Optional[str] = Query(
-            None, description="Filter tools to a single MCP server by name or alias"
-        ),
-        toolset_name: Optional[str] = Query(None, description="Filter tools to a single toolset by name"),
+        server_id: str | None = Query(None, description="The server id to list tools for"),
+        mcp_server_name: str | None = Query(None, description="Filter tools to a single MCP server by name or alias"),
+        toolset_name: str | None = Query(None, description="Filter tools to a single toolset by name"),
         include_disabled_tools: bool = Query(
             False,
             description=(
@@ -808,7 +806,7 @@ if MCP_AVAILABLE:
                 # to avoid an unnecessary DB round-trip on requests with no OAuth2 MCP servers.
                 prefetched_oauth_creds = (
                     await _prefetch_user_oauth_creds(user_api_key_dict)
-                    if _get_oauth2_server_ids(allowed_server_ids)
+                    if _v1_resolved_oauth2_server_ids(allowed_server_ids)
                     else {}
                 )
 
@@ -838,7 +836,11 @@ if MCP_AVAILABLE:
                         list_tools_result.extend(tools_result)
                     except Exception as e:
                         verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
-                        errors.append(f"{server.name}: {str(e)}")
+                        errors.append(
+                            f"{get_server_prefix(server)}: {classify_list_exception(e).tag}"
+                            if isinstance(e, (MCPServerListError, MCPUpstreamAuthError))
+                            else f"{get_server_prefix(server)}: {str(e)}"
+                        )
                         continue
 
                 if errors and not list_tools_result:
@@ -858,7 +860,10 @@ if MCP_AVAILABLE:
                 request_path=request.scope.get("_original_path") or request.url.path,
             )
         except HTTPException as http_exc:
-            if http_exc.status_code == status.HTTP_404_NOT_FOUND:
+            if http_exc.status_code == status.HTTP_404_NOT_FOUND or server_id:
+                # Single-server requests relay the truthful status (a 502/504 upstream fault must
+                # not masquerade as a 200 empty-success body); only the multi-server aggregate
+                # keeps the legacy error-dict response shape below.
                 raise
             # Internal access/IP 403s keep the legacy error-dict response shape
             # so the existing contract stays intact.
@@ -970,7 +975,7 @@ if MCP_AVAILABLE:
             ) = await _resolve_allowed_mcp_servers_with_ip_filter(request, user_api_key_dict, server_id)
 
             # Look up per-user OAuth headers for this server (mirrors list_tool_rest_api).
-            user_oauth_extra_headers: Optional[Dict[str, str]] = None
+            user_oauth_extra_headers: dict[str, str] | None = None
             target_server = next(
                 (s for s in allowed_mcp_servers if s.server_id == canonical_server_id),
                 None,
@@ -1083,18 +1088,18 @@ if MCP_AVAILABLE:
             (client_id, client_secret, scopes) — any value may be ``None``.
         """
         creds = request.credentials if isinstance(request.credentials, dict) else {}
-        client_id: Optional[str] = creds.get("client_id")
-        client_secret: Optional[str] = creds.get("client_secret")
+        client_id: str | None = creds.get("client_id")
+        client_secret: str | None = creds.get("client_secret")
         scopes_raw = creds.get("scopes")
-        scopes: Optional[List[str]] = scopes_raw if isinstance(scopes_raw, list) else None
+        scopes: list[str] | None = scopes_raw if isinstance(scopes_raw, list) else None
         return client_id, client_secret, scopes
 
     async def _execute_with_mcp_client(
         request: NewMCPServerRequest,
         operation: Callable[..., Awaitable[Any]],
-        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
-        oauth2_headers: Optional[Dict[str, str]] = None,
-        raw_headers: Optional[Dict[str, str]] = None,
+        mcp_auth_header: str | dict[str, str] | None = None,
+        oauth2_headers: dict[str, str] | None = None,
+        raw_headers: dict[str, str] | None = None,
     ) -> dict:
         """
         Create a temporary MCP client from *request*, run *operation*, and return the result.
@@ -1117,7 +1122,7 @@ if MCP_AVAILABLE:
         try:
             client_id, client_secret, scopes = _extract_credentials(request)
 
-            _oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = request.oauth2_flow or (
+            _oauth2_flow: Literal["client_credentials", "authorization_code"] | None = request.oauth2_flow or (
                 "client_credentials" if client_id and client_secret and request.token_url else None
             )
             # client_credentials requires token_url to fetch a token; without it the
@@ -1138,6 +1143,7 @@ if MCP_AVAILABLE:
                 static_headers=request.static_headers,
                 client_id=client_id,
                 client_secret=client_secret,
+                issuer=request.issuer,
                 token_url=request.token_url,
                 scopes=scopes,
                 authorization_url=request.authorization_url,
@@ -1232,7 +1238,7 @@ if MCP_AVAILABLE:
             spec = await load_openapi_spec_async(spec_path)
             paths = spec.get("paths", {})
             components = spec.get("components", {})
-            tools: List[dict] = []
+            tools: list[dict] = []
             used_names: set = set()
             for path, path_item in paths.items():
                 for method in ("get", "post", "put", "delete", "patch"):
@@ -1339,7 +1345,7 @@ if MCP_AVAILABLE:
 
         headers = request.headers
 
-        mcp_auth_header: Optional[str] = None
+        mcp_auth_header: str | None = None
         if new_mcp_server_request.auth_type in {
             MCPAuth.api_key,
             MCPAuth.bearer_token,
@@ -1353,7 +1359,7 @@ if MCP_AVAILABLE:
         # Authorization doubles as the admission fallback (LITELLM_API_KEY_HEADER_NAME_SECONDARY):
         # when the primary x-litellm-api-key header is absent, the Authorization value is the
         # caller's LiteLLM key, not an upstream token, and must never be forwarded upstream.
-        oauth2_headers: Optional[Dict[str, str]] = None
+        oauth2_headers: dict[str, str] | None = None
         if new_mcp_server_request.auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES and headers.get(
             MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY
         ):
@@ -1364,8 +1370,8 @@ if MCP_AVAILABLE:
                 return await session.list_tools()
 
             list_tools_response = await client.run_with_session(_list_tools_session_operation)
-            list_tools_result: List[MCPTool] = list_tools_response.tools
-            model_dumped_tools: List[dict] = [tool.model_dump() for tool in list_tools_result]
+            list_tools_result: list[MCPTool] = list_tools_response.tools
+            model_dumped_tools: list[dict] = [tool.model_dump() for tool in list_tools_result]
             return {
                 "tools": model_dumped_tools,
                 "error": None,

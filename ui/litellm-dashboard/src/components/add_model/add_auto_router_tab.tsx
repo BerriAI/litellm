@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Radio, Badge, Space } from "antd";
+import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Radio, Badge, Space, Modal } from "antd";
 import type { FormInstance } from "antd";
 import { ThunderboltOutlined, BranchesOutlined } from "@ant-design/icons";
 import { Text, TextInput } from "@tremor/react";
@@ -8,10 +8,22 @@ import { all_admin_roles } from "@/utils/roles";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "./RouterConfigBuilder";
-import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
+import ComplexityRouterConfig, {
+  ComplexityRouterConfigValue,
+  DEFAULT_ADAPTIVE_WEIGHTS,
+  DEFAULT_TIER_DISTANCE_PENALTY,
+} from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
+import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
-import { buildComplexityRouterConfig, getSemanticConfigError } from "./build_complexity_router_config";
+import {
+  buildComplexityRouterConfig,
+  getMissingTiersError,
+  getSemanticConfigError,
+} from "./build_complexity_router_config";
+import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
+import { getSemanticRouterError } from "./build_semantic_router_validation";
+import AutoRouterConnectionTest from "./auto_router_connection_test";
 import NotificationManager from "../molecules/notifications_manager";
 
 interface AddAutoRouterTabProps {
@@ -32,7 +44,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
   const [routerType, setRouterType] = useState<RouterType>("recommended");
 
   const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
-    tiers: { SIMPLE: "", MEDIUM: "", COMPLEX: "", REASONING: "" },
+    tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
     classifier_type: "heuristic",
   });
 
@@ -41,9 +53,16 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
   const [semanticMatchingEnabled, setSemanticMatchingEnabled] = useState<boolean>(false);
   const [embeddingModel, setEmbeddingModel] = useState<string | undefined>(undefined);
   const [matchThreshold, setMatchThreshold] = useState<number>(DEFAULT_MATCH_THRESHOLD);
+  const [escalationKeywords, setEscalationKeywords] = useState<string[]>(DEFAULT_ESCALATION_KEYWORDS);
+  const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
 
   // Semantic router config (existing)
   const [routerConfig, setRouterConfig] = useState<any>(null);
+
+  const [isTestModalVisible, setIsTestModalVisible] = useState<boolean>(false);
+  const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
+  const [connectionTestId, setConnectionTestId] = useState<number>(0);
+  const [testTargets, setTestTargets] = useState<AutoRouterTestTarget[]>([]);
 
   useEffect(() => {
     const fetchModelAccessGroups = async () => {
@@ -77,26 +96,34 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
       tiers,
       classifier_type: classifierType,
       classifier_llm_config: classifierLlmConfig,
+      adaptive = false,
+      adaptive_weights: adaptiveWeights = DEFAULT_ADAPTIVE_WEIGHTS,
+      tier_distance_penalty: tierDistancePenalty = DEFAULT_TIER_DISTANCE_PENALTY,
+      adaptive_eligible: adaptiveEligible = "all",
+      return_raw_model_name: returnRawModelName = false,
     } = complexityRouterConfig;
 
-    const filledTiers = Object.values(tiers).filter(Boolean);
-    if (filledTiers.length === 0) {
-      NotificationManager.fromBackend("Please select at least one model for a complexity tier");
+    const missingTiersError = getMissingTiersError(tiers);
+    if (missingTiersError) {
+      setShowValidationErrors(true);
+      NotificationManager.fromBackend(missingTiersError);
       return;
     }
 
     if (classifierType === "llm" && !classifierLlmConfig?.model) {
+      setShowValidationErrors(true);
       NotificationManager.fromBackend("Please select a classifier model, or switch back to Heuristic");
       return;
     }
 
     const semanticError = getSemanticConfigError({ semanticMatchingEnabled, embeddingModel, keywordTierRules });
     if (semanticError) {
+      setShowValidationErrors(true);
       NotificationManager.fromBackend(semanticError);
       return;
     }
 
-    const defaultModel = tiers.MEDIUM || tiers.SIMPLE || tiers.COMPLEX || tiers.REASONING;
+    const defaultModel = tiers.MEDIUM[0] || tiers.SIMPLE[0] || tiers.COMPLEX[0] || tiers.REASONING[0];
 
     form.setFieldsValue({
       custom_llm_provider: "auto_router",
@@ -117,6 +144,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
           semanticMatchingEnabled,
           embeddingModel,
           matchThreshold,
+          escalationKeywords,
+          adaptive,
+          adaptiveWeights,
+          tierDistancePenalty,
+          adaptiveEligible,
+          returnRawModelName,
         };
 
         const submitValues = {
@@ -137,23 +170,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
   };
 
   const submitSemanticRouter = (name: string) => {
-    if (!form.getFieldValue("auto_router_default_model")) {
-      NotificationManager.fromBackend("Please select a Default Model");
-      return;
-    }
-
-    if (!routerConfig || !routerConfig.routes || routerConfig.routes.length === 0) {
-      NotificationManager.fromBackend("Please configure at least one route for the auto router");
-      return;
-    }
-
-    const invalidRoutes = routerConfig.routes.filter(
-      (route: any) => !route.name || !route.description || route.utterances.length === 0,
-    );
-    if (invalidRoutes.length > 0) {
-      NotificationManager.fromBackend(
-        "Please ensure all routes have a target model, description, and at least one utterance",
-      );
+    const validationError = getSemanticRouterError({
+      defaultModel: form.getFieldValue("auto_router_default_model"),
+      embeddingModel: form.getFieldValue("auto_router_embedding_model"),
+      routerConfig,
+    });
+    if (validationError) {
+      NotificationManager.fromBackend(validationError);
       return;
     }
 
@@ -183,6 +206,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
   const handleAutoRouterSubmit = () => {
     const name = form.getFieldValue("auto_router_name");
     if (!name) {
+      setShowValidationErrors(true);
+      form.validateFields(["auto_router_name"]).catch(() => undefined);
       NotificationManager.fromBackend("Please enter an Auto Router Name");
       return;
     }
@@ -192,6 +217,24 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
     } else {
       submitSemanticRouter(name);
     }
+  };
+
+  const handleTestConnection = () => {
+    const targets = buildAutoRouterTestTargets({
+      tiers: complexityRouterConfig.tiers,
+      semanticMatchingEnabled,
+      embeddingModel,
+    });
+
+    if (targets.length === 0) {
+      NotificationManager.fromBackend("Please select at least one model for a complexity tier");
+      return;
+    }
+
+    setTestTargets(targets);
+    setConnectionTestId((id) => id + 1);
+    setIsTestingConnection(true);
+    setIsTestModalVisible(true);
   };
 
   return (
@@ -205,7 +248,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
       <Card className="mb-4">
         <div className="mb-4">
           <Text className="text-sm font-medium mb-2 block">Router Type</Text>
-          <Radio.Group value={routerType} onChange={(e) => setRouterType(e.target.value)} className="w-full">
+          <Radio.Group
+            value={routerType}
+            onChange={(e) => {
+              setRouterType(e.target.value);
+              setShowValidationErrors(false);
+            }}
+            className="w-full"
+          >
             <Space direction="vertical" className="w-full">
               <Radio value="recommended" className="w-full">
                 <div className="flex items-center gap-2">
@@ -271,6 +321,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
                 onEmbeddingModelChange={setEmbeddingModel}
                 matchThreshold={matchThreshold}
                 onMatchThresholdChange={setMatchThreshold}
+                escalationKeywords={escalationKeywords}
+                onEscalationKeywordsChange={setEscalationKeywords}
+                showValidationErrors={showValidationErrors}
               />
             </div>
           ) : (
@@ -303,18 +356,18 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
               </Form.Item>
 
               <Form.Item
+                rules={[{ required: true, message: "Embedding model is required" }]}
                 label="Embedding Model"
                 name="auto_router_embedding_model"
-                tooltip="Optional: embedding model to use for semantic routing decisions"
+                tooltip="Embedding model to use for semantic routing decisions"
                 labelCol={{ span: 10 }}
                 labelAlign="left"
               >
                 <AntdSelect
-                  placeholder="Select an embedding model (optional)"
+                  placeholder="Select an embedding model"
                   options={modelGroupOptions}
                   style={{ width: "100%" }}
                   showSearch
-                  allowClear
                 />
               </Form.Item>
             </>
@@ -355,10 +408,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
               <Typography.Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Typography.Link>
             </Tooltip>
             <div className="space-x-2">
-              {/* TODO: add back a Test Connection or JSON preview action here. Test Connection was removed
-                  because prepareModelAddRequest can't build a valid pre-save payload for an auto router
-                  (tiers are model-group references, not litellm_params); a JSON preview of the
-                  complexity_router_config would be a good alternative. */}
+              {routerType === "recommended" && (
+                <Button
+                  data-testid="auto-router-test-connect-btn"
+                  onClick={handleTestConnection}
+                  loading={isTestingConnection}
+                >
+                  Test Connection
+                </Button>
+              )}
               <Button
                 type="primary"
                 onClick={() => {
@@ -371,6 +429,36 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
           </div>
         </Form>
       </Card>
+
+      <Modal
+        title="Connection Test Results"
+        open={isTestModalVisible}
+        onCancel={() => {
+          setIsTestModalVisible(false);
+          setIsTestingConnection(false);
+        }}
+        footer={[
+          <Button
+            key="close"
+            onClick={() => {
+              setIsTestModalVisible(false);
+              setIsTestingConnection(false);
+            }}
+          >
+            Close
+          </Button>,
+        ]}
+        width={700}
+      >
+        {isTestModalVisible && (
+          <AutoRouterConnectionTest
+            key={connectionTestId}
+            accessToken={accessToken}
+            targets={testTargets}
+            onTestComplete={() => setIsTestingConnection(false)}
+          />
+        )}
+      </Modal>
     </>
   );
 };

@@ -1,9 +1,12 @@
 import ast
+import base64
 import os
+import time
 import traceback
 from typing import Optional, Union
 
 import httpx
+from pydantic import BaseModel, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -15,6 +18,33 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
 from litellm.secret_managers.secret_manager_handler import get_secret_from_manager
 
 oidc_cache = DualCache()
+
+
+_OIDC_TOKEN_EXPIRY_MARGIN_SECONDS = 60
+
+
+class _OidcTokenClaims(BaseModel):
+    exp: float | None = None
+
+
+def _oidc_token_cache_ttl(oidc_token: str, max_ttl: int) -> int:
+    """Cache TTL for a fetched OIDC token: ``max_ttl``, capped so the cache entry
+    never outlives the token's own ``exp`` claim (minus a safety margin).
+    Falls back to ``max_ttl`` when the token carries no readable ``exp``."""
+    segments = oidc_token.split(".")
+    if len(segments) != 3:
+        return max_ttl
+    payload = segments[1]
+    try:
+        decoded = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        claims = _OidcTokenClaims.model_validate_json(decoded)
+        if claims.exp is None:
+            return max_ttl
+        exp = int(claims.exp)
+    except (ValueError, OverflowError, ValidationError):
+        return max_ttl
+    return min(max_ttl, exp - int(time.time()) - _OIDC_TOKEN_EXPIRY_MARGIN_SECONDS)
+
 
 _DEFAULT_OIDC_ALLOWED_CREDENTIAL_DIRS = ("/var/run/secrets", "/run/secrets")
 
@@ -187,7 +217,15 @@ def get_secret(
             )
             if response.status_code == 200:
                 oidc_token = response.text
-                oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=3600 - 60)
+                ttl = _oidc_token_cache_ttl(oidc_token, 3600 - 60)
+                if ttl > 0:
+                    oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=ttl)
+                else:
+                    verbose_logger.warning(
+                        "Google OIDC token for %s is already expired or expires within %ss; not caching it",
+                        secret_name,
+                        _OIDC_TOKEN_EXPIRY_MARGIN_SECONDS,
+                    )
                 return oidc_token
             else:
                 raise ValueError("Google OIDC provider failed")

@@ -6,6 +6,7 @@ import mimetypes
 import re
 import xml.etree.ElementTree as ET
 from enum import Enum
+from collections.abc import Mapping
 from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Union, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
@@ -5350,7 +5351,9 @@ def prompt_factory(
 def get_attribute_or_key(tool_or_function, attribute, default=None):
     if hasattr(tool_or_function, attribute):
         return getattr(tool_or_function, attribute)
-    return tool_or_function.get(attribute, default)
+    if isinstance(tool_or_function, Mapping):
+        return tool_or_function.get(attribute, default)
+    return default
 
 
 class NormalizedToolCall(TypedDict):
@@ -5379,14 +5382,18 @@ def _parse_tool_call_arguments(raw: Any, tool_name: Optional[str], context: str)
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _tool_calls_from_chat_completion_response(response: Any) -> list[NormalizedToolCall]:
+def _tool_calls_from_chat_completion_response(
+    response: Any, include_all_choices: bool = False
+) -> list[NormalizedToolCall]:
     choices = get_attribute_or_key(response, "choices", None)
     if not (isinstance(choices, list) and choices):
         return []
-    message = get_attribute_or_key(choices[0], "message", None)
-    tool_calls = get_attribute_or_key(message, "tool_calls", None) if message else None
-    if not isinstance(tool_calls, list):
-        return []
+    tool_calls: list[Any] = []
+    for choice in choices if include_all_choices else choices[:1]:
+        message = get_attribute_or_key(choice, "message", None)
+        choice_tool_calls = get_attribute_or_key(message, "tool_calls", None) if message else None
+        if isinstance(choice_tool_calls, list):
+            tool_calls.extend(choice_tool_calls)
     result: list[NormalizedToolCall] = []
     for tc in tool_calls:
         fn = get_attribute_or_key(tc, "function", None)
@@ -5449,7 +5456,7 @@ def _tool_calls_from_anthropic_messages_response(response: Any) -> list[Normaliz
     return result
 
 
-def get_tool_calls_from_response(response: Any) -> list[NormalizedToolCall]:
+def get_tool_calls_from_response(response: Any, include_all_choices: bool = False) -> list[NormalizedToolCall]:
     """
     Extract tool/function calls from a response object into a normalized
     ``{"id", "name", "arguments"}`` shape, regardless of which API surface
@@ -5457,11 +5464,20 @@ def get_tool_calls_from_response(response: Any) -> list[NormalizedToolCall]:
     the Responses API (``output`` items of type ``function_call``), or the
     Anthropic Messages API (``content`` blocks of type ``tool_use``).
 
+    ``include_all_choices`` decides the chat-completions scope: the default
+    reads only ``choices[0]``, which is what consumers that act on THE reply
+    (e.g. guardrails rebuilding the primary assistant message) want; usage
+    accounting passes True because every choice of an ``n>1`` request costs
+    money and its tool calls really ran. The other surfaces have a single
+    output, so the flag has no effect on them.
+
     Callers that only care about a specific tool should filter the result by
     ``name`` themselves -- this returns every tool call found.
     """
+    chat_tool_calls = _tool_calls_from_chat_completion_response(response, include_all_choices=include_all_choices)
+    if chat_tool_calls:
+        return chat_tool_calls
     for extractor in (
-        _tool_calls_from_chat_completion_response,
         _tool_calls_from_responses_api_response,
         _tool_calls_from_anthropic_messages_response,
     ):
@@ -5494,3 +5510,56 @@ def has_tool_with_name(tools: Any, tool_name: str) -> bool:
         elif tool.get("name") == tool_name:
             return True
     return False
+
+
+def resolve_structured_messages(
+    messages: list[dict[str, Any]] | None,
+    request_kwargs: dict[str, Any],
+) -> list[dict[str, Any]] | None:
+    """
+    Normalize a request's messages to OpenAI-spec chat-completions shape,
+    regardless of which API surface produced them (chat completions,
+    Anthropic /v1/messages, Responses API ``input``, etc).
+
+    Returns ``messages`` unchanged if already present. Otherwise dispatches
+    through the guardrail translation handlers (the same per-surface
+    conversion logic guardrails use) to convert e.g. Responses API ``input``
+    into a message list. Returns ``None`` if no messages could be resolved.
+    """
+    if messages:
+        return messages
+
+    from litellm.litellm_core_utils.api_route_to_call_types import (
+        get_call_types_for_route,
+    )
+    from litellm.llms import load_guardrail_translation_mappings
+    from litellm.types.utils import CallTypes
+
+    mappings = load_guardrail_translation_mappings()
+    call_type: CallTypes | None = None
+
+    # 1. Try route-based inference from proxy metadata
+    route = request_kwargs.get("litellm_metadata", {}).get("user_api_key_request_route")
+    if route:
+        call_types_list = get_call_types_for_route(route)
+        if call_types_list:
+            for ct in call_types_list:
+                if ct in mappings:
+                    call_type = ct
+                    break
+
+    # 2. Fallback: try each mapped handler until one produces messages
+    handlers_to_try: list[Any] = []
+    if call_type is not None and call_type in mappings:
+        handlers_to_try.append(mappings[call_type]())
+    else:
+        handlers_to_try.extend(handler_cls() for handler_cls in mappings.values())
+
+    for handler in handlers_to_try:
+        structured = handler.get_structured_messages(request_kwargs)
+        if structured:
+            return [
+                msg if isinstance(msg, dict) else msg.model_dump()  # type: ignore
+                for msg in structured
+            ]
+    return None

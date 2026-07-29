@@ -18,6 +18,7 @@ import {
   type OnChangeFn,
   type Row,
   type RowData,
+  type RowSelectionState,
   type Table,
   type TableOptions,
   useReactTable,
@@ -70,6 +71,8 @@ export function validateDataTableConfig<TData extends RowData, TValue>(
   const bothSortingSources = props.defaultSorting !== undefined && props.sorting !== undefined;
   const bothFilterSources = props.defaultColumnFilters !== undefined && props.columnFilters !== undefined;
 
+  const controlledSelectionIncomplete = props.rowSelection !== undefined && props.onRowSelectionChange === undefined;
+
   return [
     serverSortingIncomplete ? "sortingMode='server' requires both `sorting` and `onSortingChange`." : null,
     serverPaginationIncomplete
@@ -79,6 +82,9 @@ export function validateDataTableConfig<TData extends RowData, TValue>(
     bothSortingSources ? "Provide either `defaultSorting` (uncontrolled) or `sorting` (controlled), not both." : null,
     bothFilterSources
       ? "Provide either `defaultColumnFilters` (uncontrolled) or `columnFilters` (controlled), not both."
+      : null,
+    controlledSelectionIncomplete
+      ? "Controlled `rowSelection` requires `onRowSelectionChange`; without it selection changes are dropped."
       : null,
   ].filter((message): message is string => message !== null);
 }
@@ -338,11 +344,35 @@ const SKELETON_WIDTHS = ["w-[58%]", "w-[44%]", "w-[70%]", "w-[50%]", "w-[64%]", 
 function SkeletonCell<TData>({ column, index }: { column: Column<TData, unknown> | undefined; index: number }) {
   const meta = column?.columnDef.meta;
   const width = SKELETON_WIDTHS[index % SKELETON_WIDTHS.length];
-  if (meta?.skeleton === "twoLine") {
+  const shape = meta?.skeleton;
+  if (meta?.renderSkeleton !== undefined) {
+    return <>{meta.renderSkeleton()}</>;
+  }
+  if (shape === "twoLine") {
     return (
       <div className="flex flex-col gap-2">
         <Skeleton className={cn("h-3.5", width)} />
         <Skeleton className="h-2.5 w-2/5 opacity-65" />
+      </div>
+    );
+  }
+  if (shape === "badge") {
+    return <Skeleton className={cn("h-5 w-16 rounded-full", meta?.numeric ? "ml-auto" : "")} />;
+  }
+  if (shape === "chips") {
+    return (
+      <div className="flex items-center gap-1.5">
+        <Skeleton className="h-5 w-14 rounded-full" />
+        <Skeleton className="h-5 w-20 rounded-full" />
+        <Skeleton className="h-5 w-9 rounded-full opacity-65" />
+      </div>
+    );
+  }
+  if (shape === "meter") {
+    return (
+      <div className="flex flex-col gap-1.5">
+        <Skeleton className="h-3.5 w-24" />
+        <Skeleton className="h-1.5 w-full rounded-full" />
       </div>
     );
   }
@@ -365,7 +395,11 @@ function SkeletonRows<TData>({
   return (
     <Fragment>
       {rowKeys.map((rowKey) => (
-        <TableRow key={`skeleton-${rowKey}`} className="hover:bg-transparent" data-testid="skeleton-row">
+        <TableRow
+          key={`skeleton-${rowKey}`}
+          className={cn("hover:bg-transparent", size === "compact" ? "h-8" : "")}
+          data-testid="skeleton-row"
+        >
           {cells.map((column, columnKey) => (
             <TableCell key={column?.id ?? columnKey} className={size === "compact" ? "px-2 py-1" : ""}>
               <SkeletonCell column={column} index={columnKey} />
@@ -420,6 +454,9 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
     renderSubComponent,
     expanded,
     onExpandedChange,
+    enableRowSelection,
+    rowSelection,
+    onRowSelectionChange,
   } = props;
 
   const sortingState = useControllable(sorting, onSortingChange, defaultSorting ?? []);
@@ -434,6 +471,7 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
   );
   const globalFilterState = useControllable<string>(globalFilter, onGlobalFilterChange, "");
   const expandedState = useControllable<ExpandedState>(expanded, onExpandedChange, {});
+  const rowSelectionState = useControllable<RowSelectionState>(rowSelection, onRowSelectionChange, {});
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(defaultColumnVisibility ?? {});
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const columnPinning = React.useMemo(() => derivePinning(columns), [columns]);
@@ -448,6 +486,7 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
       columnFilters: filterState.value,
       globalFilter: globalFilterState.value,
       expanded: expandedState.value,
+      rowSelection: rowSelectionState.value,
       columnVisibility,
       columnSizing,
     },
@@ -463,11 +502,13 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
     onColumnFiltersChange: filterState.onChange,
     onGlobalFilterChange: globalFilterState.onChange,
     onExpandedChange: expandedState.onChange,
+    onRowSelectionChange: rowSelectionState.onChange,
     onColumnVisibilityChange: setColumnVisibility,
     onColumnSizingChange: setColumnSizing,
     getCoreRowModel: getCoreRowModel(),
     ...buildRowModels(sortingMode, paginationMode, filterMode, expansionGuard),
     ...(getRowId !== undefined ? { getRowId } : {}),
+    ...(enableRowSelection !== undefined ? { enableRowSelection } : {}),
     ...(paginationMode === "server" && rowCount !== undefined ? { rowCount } : {}),
   };
 
@@ -508,7 +549,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
   const rows = table.getRowModel().rows;
   const visibleColumnCount = table.getVisibleLeafColumns().length;
   const stickyHeader = maxBodyHeight !== undefined;
-  const tableStyle = enableColumnResizing ? { width: table.getTotalSize() } : undefined;
+  const tableStyle = enableColumnResizing ? { width: table.getTotalSize(), minWidth: "100%" } : undefined;
 
   const renderPagination = (): React.ReactNode => {
     if (paginationSlot !== undefined) {

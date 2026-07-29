@@ -1168,3 +1168,69 @@ class TestGetStructuredMessages:
         data = {"input": None}
         result = handler.get_structured_messages(data)
         assert result is None
+
+
+class ToolAppendingGuardrail(CustomGuardrail):
+    """Guardrail that appends a new function tool, mimicking a guardrail that
+    injects a retrieval/recovery tool the model can later call."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tools = list(inputs.get("tools") or [])
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": "injected_tool",
+                    "description": "injected by guardrail",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        )
+        inputs["tools"] = tools
+        return inputs
+
+
+class TestOpenAIResponsesHandlerToolInjection:
+    """A tool a guardrail injects must survive the write-back to Responses format."""
+
+    def test_merge_keeps_guardrail_appended_tool(self):
+        """_merge_tools_after_guardrail must not drop the extra appended tool."""
+        handler = OpenAIResponsesHandler()
+        original = [{"type": "function", "name": "a"}]
+        remapped = [
+            {"type": "function", "name": "a"},
+            {"type": "function", "name": "b"},
+        ]
+        merged = handler._merge_tools_after_guardrail(original, remapped)
+        assert [t["name"] for t in merged] == ["a", "b"]
+
+    @pytest.mark.asyncio
+    async def test_injected_tool_survives_when_request_already_has_tools(self):
+        """Regression: the merge dropped the injected tool whenever the request
+        already carried tools, so the model never saw it."""
+        handler = OpenAIResponsesHandler()
+        guardrail = ToolAppendingGuardrail(guardrail_name="test")
+
+        data = {
+            "input": [{"role": "user", "content": "hi", "type": "message"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+            "model": "gpt-4",
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        names = [t.get("name") for t in result["tools"]]
+        assert "get_weather" in names
+        assert "injected_tool" in names
