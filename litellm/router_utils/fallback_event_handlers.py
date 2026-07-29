@@ -14,6 +14,9 @@ from litellm.router_utils.cooldown_handlers import (
     _set_cooldown_deployments,
     is_advisor_orchestration_failure,
 )
+from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+    increment_deployment_failures_for_current_minute,
+)
 from litellm.types.router import LiteLLMParamsTypedDict
 
 if TYPE_CHECKING:
@@ -22,25 +25,6 @@ if TYPE_CHECKING:
     LitellmRouter = _Router
 else:
     LitellmRouter = Any
-
-
-def _router_authored_metadata(kwargs: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Return whichever of kwargs["metadata"]/["litellm_metadata"] the router itself
-    just wrote deployment info into, rather than trusting whichever key happens to be
-    present.
-
-    Router._update_kwargs_with_deployment() always writes "model_info" and
-    "deployment_model_name" into the same bucket together (whichever one it picks based
-    on the call type), so a bucket carrying "deployment_model_name" is the one the
-    router touched for this call. A metadata/litellm_metadata bucket lacking it (e.g.
-    caller-supplied and preserved via allow_client_pricing_override on the *other* key)
-    is not trusted.
-    """
-    for key in ("metadata", "litellm_metadata"):
-        bucket = kwargs.get(key)
-        if isinstance(bucket, dict) and "deployment_model_name" in bucket:
-            return bucket
-    return {}
 
 
 def _trigger_cooldown_for_failed_deployment(
@@ -64,14 +48,15 @@ def _trigger_cooldown_for_failed_deployment(
             )
             return
 
+        # Only Router._set_failed_deployment_id_on_exception()'s server-stamped id is
+        # trusted here: a metadata-bucket lookup (e.g. "metadata"/"litellm_metadata")
+        # can't reliably tell a caller-supplied bucket from a router-authored one
+        # without knowing this call's function_name, so a client with permission to
+        # set metadata could otherwise get an arbitrary deployment cooled down.
         deployment_id: str | None = getattr(exception, "failed_deployment_id", None)
-        if deployment_id is None:
-            metadata = _router_authored_metadata(kwargs)
-            model_info = metadata.get("model_info") or {}
-            deployment_id = model_info.get("id") if isinstance(model_info, dict) else None
 
         if deployment_id is None:
-            verbose_router_logger.debug("Cannot trigger cooldown for fallback: no deployment_id in metadata")
+            verbose_router_logger.debug("Cannot trigger cooldown for fallback: no failed_deployment_id on exception")
             return
 
         exception_status: str | int = getattr(exception, "status_code", "")
@@ -95,6 +80,10 @@ def _trigger_cooldown_for_failed_deployment(
         else:
             time_to_cooldown = litellm_router.cooldown_time
 
+        increment_deployment_failures_for_current_minute(
+            litellm_router_instance=litellm_router,
+            deployment_id=deployment_id,
+        )
         _set_cooldown_deployments(
             litellm_router_instance=litellm_router,
             exception_status=exception_status,
