@@ -263,6 +263,21 @@ describe("AllModelsTab", () => {
     expect(within(table).queryByText("gpt-4")).not.toBeInTheDocument();
   });
 
+  it("keeps an unknown model group (for example a stale deep link) visible as a removable filter chip", async () => {
+    const user = userEvent.setup();
+    setModelsInfo([makeRow()], 1);
+    render(<AllModelsTab {...defaultProps} selectedModelGroup="stale-deleted-model" />);
+
+    expect(screen.getByTestId("filter-chip-model_name")).toHaveTextContent("stale-deleted-model");
+    expect(screen.getByText("No models found")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("filter-chip-remove-model_name"));
+
+    await waitFor(() => {
+      expect(mockSetSelectedModelGroup).toHaveBeenCalledWith("all");
+    });
+  });
+
   it("resets search, filters, team and sorting from the drawer reset button", async () => {
     const user = userEvent.setup();
     render(<AllModelsTab {...defaultProps} selectedModelGroup="gpt-4" />);
