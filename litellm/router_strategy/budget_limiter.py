@@ -519,33 +519,50 @@ class RouterBudgetLimiting(CustomLogger):
                     DEFAULT_REDIS_SYNC_INTERVAL
                 )  # Still wait DEFAULT_REDIS_SYNC_INTERVAL seconds on error before retrying
 
-    async def _push_in_memory_increments_to_redis(self):
+    async def _push_in_memory_increments_to_redis(self) -> Optional[Dict[str, float]]:
         """
         How this works:
         - async_log_success_event collects all provider spend increments in `redis_increment_operation_queue`
         - This function pushes all increments to Redis in a batched pipeline to optimize performance
 
+        Awaits the pipeline so that once this returns Redis reflects the queued increments, and returns the
+        resulting per-key Redis values so callers can merge them back into memory without clobbering
+        concurrent in-memory increments.
+
+        If the pipeline fails, the snapshot is restored to the queue so the increments are retried on the
+        next push rather than lost. Returns None in that case.
+
         Only runs if Redis is initialized
         """
+        if not self.dual_cache.redis_cache:
+            return None  # Redis is not initialized
+
+        if len(self.redis_increment_operation_queue) == 0:
+            return None
+
+        queue = self.redis_increment_operation_queue
+        self.redis_increment_operation_queue = []
+
+        verbose_router_logger.debug(
+            "Pushing Redis Increment Pipeline for queue: %s",
+            queue,
+        )
         try:
-            if not self.dual_cache.redis_cache:
-                return  # Redis is not initialized
-
-            verbose_router_logger.debug(
-                "Pushing Redis Increment Pipeline for queue: %s",
-                self.redis_increment_operation_queue,
+            increment_result = await self.dual_cache.redis_cache.async_increment_pipeline(
+                increment_list=queue,
             )
-            if len(self.redis_increment_operation_queue) > 0:
-                asyncio.create_task(
-                    self.dual_cache.redis_cache.async_increment_pipeline(
-                        increment_list=self.redis_increment_operation_queue,
-                    )
-                )
-
-            self.redis_increment_operation_queue = []
-
         except Exception as e:
+            # Put the snapshot back (ahead of anything queued during the await) so the
+            # increments are retried on the next push instead of being silently lost;
+            # otherwise other instances would never see this spend in Redis
+            self.redis_increment_operation_queue = queue + self.redis_increment_operation_queue
             verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {str(e)}")
+            return None
+
+        if increment_result is None:
+            return None
+
+        return {op["key"]: float(value) for op, value in zip(queue, increment_result)}
 
     async def _sync_in_memory_spend_with_redis(self):
         """
@@ -565,11 +582,7 @@ class RouterBudgetLimiting(CustomLogger):
             if self.dual_cache.redis_cache is None:
                 return
 
-            # 1. Push all provider spend increments to Redis
-            await self._push_in_memory_increments_to_redis()
-
-            # 2. Fetch all current provider spend from Redis to update in-memory cache
-            cache_keys = []
+            cache_keys: List[str] = []
 
             if self.provider_budget_config is not None:
                 for provider, config in self.provider_budget_config.items():
@@ -589,15 +602,38 @@ class RouterBudgetLimiting(CustomLogger):
                         continue
                     cache_keys.append(f"tag_spend:{tag}:{config.budget_duration}")
 
-            # Batch fetch current spend values from Redis
-            redis_values = await self.dual_cache.redis_cache.async_batch_get_cache(key_list=cache_keys)
+            in_memory_before: List[Optional[float]] = await self.dual_cache.in_memory_cache.async_batch_get_cache(
+                keys=cache_keys
+            )
+            in_memory_before_dict: Dict[str, float] = {
+                key: float(value or 0) for key, value in zip(cache_keys, in_memory_before)
+            }
 
-            # Update in-memory cache with Redis values
-            if isinstance(redis_values, dict):  # Check if redis_values is a dictionary
-                for key, value in redis_values.items():
-                    if value is not None:
-                        await self.dual_cache.in_memory_cache.async_set_cache(key=key, value=float(value))
-                        verbose_router_logger.debug(f"Updated in-memory cache for {key}: {value}")
+            # 1. Push all provider spend increments to Redis
+            await self._push_in_memory_increments_to_redis()
+
+            # 2. Fetch all current provider spend from Redis to update in-memory cache
+            redis_values: Dict[str, Optional[float]] = await self.dual_cache.redis_cache.async_batch_get_cache(
+                key_list=cache_keys
+            )
+
+            for key in cache_keys:
+                redis_value = redis_values.get(key)
+                if redis_value is None:
+                    continue
+                redis_spend = float(redis_value)
+                before = in_memory_before_dict.get(key, 0.0)
+                current: Optional[float] = await self.dual_cache.in_memory_cache.async_get_cache(key=key)
+                after = float(current or 0)
+                delta = after - before
+                # When after <= redis_spend, Redis reflects the push and is the authoritative
+                # cross-instance total; add only the local increments that landed mid-sync (delta).
+                # When after > redis_spend, Redis is missing local spend (push failed or was
+                # skipped), so the in-memory total is already authoritative; applying delta on
+                # top of the stale Redis value would drop pre-snapshot local spend
+                merged = redis_spend + delta if after <= redis_spend else after
+                await self.dual_cache.in_memory_cache.async_set_cache(key=key, value=merged)
+                verbose_router_logger.debug(f"Updated in-memory cache for {key}: {merged}")
 
         except Exception as e:
             verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {str(e)}")
