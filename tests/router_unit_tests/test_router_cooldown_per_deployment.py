@@ -330,24 +330,19 @@ class TestFallbackDeploymentCooldown:
     def test_trigger_cooldown_for_failed_deployment_calls_set_cooldown(self):
         """
         _trigger_cooldown_for_failed_deployment must call _set_cooldown_deployments
-        with the deployment ID extracted from kwargs metadata.
+        with the deployment ID stamped on the exception.
         """
         mock_router = MagicMock()
         mock_router.cooldown_time = 60.0
         mock_router.get_model_info.return_value = None
 
-        kwargs = {
-            "litellm_metadata": {
-                "model_info": {"id": "fallback-deployment"},
-                "deployment_model_name": "gpt-4",
-            }
-        }
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
+        exc.failed_deployment_id = "fallback-deployment"
 
         with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
                 litellm_router=mock_router,
-                kwargs=kwargs,
+                kwargs={},
                 exception=exc,
             )
 
@@ -359,7 +354,7 @@ class TestFallbackDeploymentCooldown:
     def test_trigger_cooldown_no_op_when_deployment_id_missing(self):
         """
         _trigger_cooldown_for_failed_deployment must not raise and must skip
-        _set_cooldown_deployments when deployment_id is absent from metadata.
+        _set_cooldown_deployments when the exception has no failed_deployment_id.
         """
         mock_router = MagicMock()
 
@@ -367,10 +362,64 @@ class TestFallbackDeploymentCooldown:
             _trigger_cooldown_for_failed_deployment(
                 litellm_router=mock_router,
                 kwargs={},
-                exception=RuntimeError("no metadata"),
+                exception=RuntimeError("no stamped deployment id"),
             )
 
             mock_set_cooldown.assert_not_called()
+
+    def test_trigger_cooldown_does_not_trust_caller_supplied_metadata_bucket(self):
+        """
+        A metadata bucket can't reliably be told apart from a caller-supplied one
+        without knowing the call's function_name, so a client with permission to
+        set metadata must not be able to get an arbitrary deployment cooled down
+        by forging a deployment_model_name marker.
+        """
+        mock_router = MagicMock()
+        mock_router.cooldown_time = 60.0
+        mock_router.get_model_info.return_value = None
+
+        exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
+        kwargs = {
+            "metadata": {
+                "model_info": {"id": "attacker-chosen-deployment"},
+                "deployment_model_name": "gpt-4",
+            }
+        }
+
+        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+            _trigger_cooldown_for_failed_deployment(
+                litellm_router=mock_router,
+                kwargs=kwargs,
+                exception=exc,
+            )
+
+            mock_set_cooldown.assert_not_called()
+
+    def test_trigger_cooldown_increments_failure_counter_before_cooldown_check(self):
+        """
+        The fallback path must feed the same per-minute failure counter the
+        primary path uses, or repeated fallback failures never accumulate toward
+        the default percent-fail-rate cooldown threshold.
+        """
+        mock_router = MagicMock()
+        mock_router.cooldown_time = 60.0
+        mock_router.get_model_info.return_value = None
+
+        exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
+        exc.failed_deployment_id = "fallback-deployment"
+
+        with (
+            patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown,
+            patch(
+                "litellm.router_utils.fallback_event_handlers.increment_deployment_failures_for_current_minute"
+            ) as mock_increment,
+        ):
+            _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
+
+            mock_increment.assert_called_once_with(
+                litellm_router_instance=mock_router, deployment_id="fallback-deployment"
+            )
+            mock_set_cooldown.assert_called_once()
 
     def test_trigger_cooldown_uses_deployment_cooldown_time_override(self):
         """
@@ -381,18 +430,13 @@ class TestFallbackDeploymentCooldown:
         mock_router.cooldown_time = 300.0
         mock_router.get_model_info.return_value = {"model_info": {"cooldown_time": 30.0}}
 
-        kwargs = {
-            "litellm_metadata": {
-                "model_info": {"id": "fallback-deployment"},
-                "deployment_model_name": "gpt-4",
-            }
-        }
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
+        exc.failed_deployment_id = "fallback-deployment"
 
         with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
                 litellm_router=mock_router,
-                kwargs=kwargs,
+                kwargs={},
                 exception=exc,
             )
 
@@ -411,19 +455,14 @@ class TestFallbackDeploymentCooldown:
         mock_router.cooldown_time = 60.0
         mock_router.get_model_info.return_value = None
 
-        kwargs = {
-            "litellm_metadata": {
-                "model_info": {"id": "fallback-deployment"},
-                "deployment_model_name": "gpt-4",
-            }
-        }
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
+        exc.failed_deployment_id = "fallback-deployment"
         mark_advisor_orchestration_failure(exc)
 
         with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
                 litellm_router=mock_router,
-                kwargs=kwargs,
+                kwargs={},
                 exception=exc,
             )
 
@@ -440,18 +479,13 @@ class TestFallbackDeploymentCooldown:
         mock_router.cooldown_time = 300.0
         mock_router.get_model_info.return_value = {"litellm_params": {"cooldown_time": 30.0}}
 
-        kwargs = {
-            "litellm_metadata": {
-                "model_info": {"id": "fallback-deployment"},
-                "deployment_model_name": "gpt-4",
-            }
-        }
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
+        exc.failed_deployment_id = "fallback-deployment"
 
         with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
                 litellm_router=mock_router,
-                kwargs=kwargs,
+                kwargs={},
                 exception=exc,
             )
 
@@ -468,18 +502,13 @@ class TestFallbackDeploymentCooldown:
             "litellm_params": {"cooldown_time": 30.0},
         }
 
-        kwargs = {
-            "litellm_metadata": {
-                "model_info": {"id": "fallback-deployment"},
-                "deployment_model_name": "gpt-4",
-            }
-        }
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
+        exc.failed_deployment_id = "fallback-deployment"
 
         with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
                 litellm_router=mock_router,
-                kwargs=kwargs,
+                kwargs={},
                 exception=exc,
             )
 

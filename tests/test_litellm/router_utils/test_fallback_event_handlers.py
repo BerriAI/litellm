@@ -152,16 +152,13 @@ def test_trigger_cooldown_calls_set_cooldown_when_deployment_id_present():
 
     exc = RuntimeError("upstream error")
     exc.status_code = 429
-
-    kwargs = {
-        "litellm_metadata": {"model_info": {"id": "deployment-abc"}, "deployment_model_name": "gpt-4"}
-    }
+    exc.failed_deployment_id = "deployment-abc"
 
     with patch(
         "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
     ) as mock_set:
         _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs=kwargs, exception=exc
+            litellm_router=router, kwargs={}, exception=exc
         )
 
     mock_set.assert_called_once()
@@ -172,16 +169,62 @@ def test_trigger_cooldown_calls_set_cooldown_when_deployment_id_present():
 
 def test_trigger_cooldown_skips_when_no_deployment_id():
     router = MagicMock()
-    kwargs = {"litellm_metadata": {}}
 
     with patch(
         "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
     ) as mock_set:
         _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs=kwargs, exception=RuntimeError("err")
+            litellm_router=router, kwargs={}, exception=RuntimeError("err")
         )
 
     mock_set.assert_not_called()
+
+
+def test_trigger_cooldown_does_not_trust_caller_supplied_metadata_bucket():
+    """A metadata bucket can't reliably be told apart from a caller-supplied one
+    without knowing the call's function_name, so a client with permission to set
+    metadata must not be able to get an arbitrary deployment cooled down by
+    forging a deployment_model_name marker."""
+    router = MagicMock()
+    router.cooldown_time = 60
+    router.get_model_info.return_value = None
+
+    exc = RuntimeError("err")
+    kwargs = {"metadata": {"model_info": {"id": "attacker-chosen-deployment"}, "deployment_model_name": "gpt-4"}}
+
+    with patch(
+        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
+    ) as mock_set:
+        _trigger_cooldown_for_failed_deployment(
+            litellm_router=router, kwargs=kwargs, exception=exc
+        )
+
+    mock_set.assert_not_called()
+
+
+def test_trigger_cooldown_increments_failure_counter_before_cooldown_check():
+    """The fallback path must feed the same per-minute failure counter the
+    primary path uses, or repeated fallback failures never accumulate toward
+    the default percent-fail-rate cooldown threshold."""
+    router = MagicMock()
+    router.cooldown_time = 60
+    router.get_model_info.return_value = None
+
+    exc = RuntimeError("err")
+    exc.failed_deployment_id = "deployment-abc"
+
+    with (
+        patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set,
+        patch(
+            "litellm.router_utils.fallback_event_handlers.increment_deployment_failures_for_current_minute"
+        ) as mock_increment,
+    ):
+        _trigger_cooldown_for_failed_deployment(
+            litellm_router=router, kwargs={}, exception=exc
+        )
+
+    mock_increment.assert_called_once_with(litellm_router_instance=router, deployment_id="deployment-abc")
+    mock_set.assert_called_once()
 
 
 def test_trigger_cooldown_uses_deployment_cooldown_time_when_present():
@@ -191,16 +234,13 @@ def test_trigger_cooldown_uses_deployment_cooldown_time_when_present():
 
     exc = RuntimeError("upstream error")
     exc.status_code = 429
-
-    kwargs = {
-        "litellm_metadata": {"model_info": {"id": "deployment-abc"}, "deployment_model_name": "gpt-4"}
-    }
+    exc.failed_deployment_id = "deployment-abc"
 
     with patch(
         "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
     ) as mock_set:
         _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs=kwargs, exception=exc
+            litellm_router=router, kwargs={}, exception=exc
         )
 
     _, call_kwargs = mock_set.call_args
@@ -217,16 +257,13 @@ def test_trigger_cooldown_falls_back_to_litellm_params_cooldown_time():
 
     exc = RuntimeError("upstream error")
     exc.status_code = 429
-
-    kwargs = {
-        "litellm_metadata": {"model_info": {"id": "deployment-abc"}, "deployment_model_name": "gpt-4"}
-    }
+    exc.failed_deployment_id = "deployment-abc"
 
     with patch(
         "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
     ) as mock_set:
         _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs=kwargs, exception=exc
+            litellm_router=router, kwargs={}, exception=exc
         )
 
     _, call_kwargs = mock_set.call_args
@@ -244,17 +281,14 @@ def test_trigger_cooldown_uses_response_header_when_no_deployment_config():
 
     exc = RuntimeError("upstream error")
     exc.status_code = 429
+    exc.failed_deployment_id = "deployment-abc"
     exc.litellm_response_headers = httpx.Headers({"retry-after": "45"})
-
-    kwargs = {
-        "litellm_metadata": {"model_info": {"id": "deployment-abc"}, "deployment_model_name": "gpt-4"}
-    }
 
     with patch(
         "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
     ) as mock_set:
         _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs=kwargs, exception=exc
+            litellm_router=router, kwargs={}, exception=exc
         )
 
     _, call_kwargs = mock_set.call_args
@@ -267,172 +301,15 @@ def test_trigger_cooldown_silently_catches_exceptions():
     router.get_model_info.return_value = None
 
     exc = RuntimeError("upstream error")
-    kwargs = {
-        "litellm_metadata": {"model_info": {"id": "deployment-abc"}, "deployment_model_name": "gpt-4"}
-    }
+    exc.failed_deployment_id = "deployment-abc"
 
     with patch(
         "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments",
         side_effect=RuntimeError("cooldown error"),
     ):
         _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs=kwargs, exception=exc
+            litellm_router=router, kwargs={}, exception=exc
         )
-
-
-def test_trigger_cooldown_uses_metadata_when_litellm_metadata_absent():
-    """Router._update_kwargs_with_deployment() overwrites "model_info" (plus the
-    sibling "deployment_model_name" key) on whichever of "metadata"/"litellm_metadata"
-    the current call uses (regular completions use plain "metadata"; batch/thread/file
-    endpoints use "litellm_metadata"), so either bucket is trusted as long as it
-    carries that sibling key."""
-    router = MagicMock()
-    router.cooldown_time = 60
-    router.get_model_info.return_value = None
-
-    exc = RuntimeError("err")
-    kwargs = {"metadata": {"model_info": {"id": "deployment-abc"}, "deployment_model_name": "gpt-4"}}
-
-    with patch(
-        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
-    ) as mock_set:
-        _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs=kwargs, exception=exc
-        )
-
-    mock_set.assert_called_once()
-    _, call_kwargs = mock_set.call_args
-    assert call_kwargs["deployment"] == "deployment-abc"
-
-
-def test_trigger_cooldown_ignores_metadata_bucket_missing_router_marker():
-    """A bucket with "model_info" but no "deployment_model_name" was never written by
-    Router._update_kwargs_with_deployment(), so it must not be trusted even if it's
-    the only bucket present. This is the caller-supplied-metadata case a request-body
-    field could reach without the router ever touching it."""
-    router = MagicMock()
-    kwargs = {"metadata": {"model_info": {"id": "untrusted-id"}}}
-
-    with patch(
-        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
-    ) as mock_set:
-        _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs=kwargs, exception=RuntimeError("err")
-        )
-
-    mock_set.assert_not_called()
-
-
-def test_trigger_cooldown_ignores_poisoned_litellm_metadata_when_metadata_is_authoritative():
-    """Adversarial case: a caller with allow_client_pricing_override permission
-    preserves a poisoned litellm_metadata.model_info.id naming another deployment,
-    while the router (using plain "metadata" for this regular completion call, as it
-    always does) correctly overwrote "metadata" with the real failed deployment's
-    info. The poisoned litellm_metadata bucket must be ignored because it lacks the
-    router's own "deployment_model_name" marker."""
-    router = MagicMock()
-    router.cooldown_time = 60
-    router.get_model_info.return_value = None
-
-    exc = RuntimeError("err")
-    kwargs = {
-        "litellm_metadata": {"model_info": {"id": "victim-deployment"}},
-        "metadata": {"model_info": {"id": "real-failed-deployment"}, "deployment_model_name": "gpt-4"},
-    }
-
-    with patch(
-        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
-    ) as mock_set:
-        _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs=kwargs, exception=exc
-        )
-
-    _, call_kwargs = mock_set.call_args
-    assert call_kwargs["deployment"] == "real-failed-deployment"
-
-
-def test_trigger_cooldown_uses_litellm_metadata_when_it_is_the_authoritative_bucket():
-    """For batch/thread/file-style calls the router writes into litellm_metadata
-    instead of metadata; that bucket must be used even if a stale/caller-supplied
-    "metadata" bucket (lacking the router's marker) also happens to be present."""
-    router = MagicMock()
-    router.cooldown_time = 60
-    router.get_model_info.return_value = None
-
-    exc = RuntimeError("err")
-    kwargs = {
-        "litellm_metadata": {"model_info": {"id": "batch-deployment"}, "deployment_model_name": "gpt-4"},
-        "metadata": {"model_info": {"id": "stale-id"}},
-    }
-
-    with patch(
-        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
-    ) as mock_set:
-        _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs=kwargs, exception=exc
-        )
-
-    _, call_kwargs = mock_set.call_args
-    assert call_kwargs["deployment"] == "batch-deployment"
-
-
-def test_trigger_cooldown_prefers_failed_deployment_id_over_metadata_buckets():
-    """Router._set_failed_deployment_id_on_exception() stamps the failed deployment's
-    id directly on the exception at the point of failure; that must win over both
-    metadata buckets since it can't be stale or forged the way a metadata bucket can."""
-    router = MagicMock()
-    router.cooldown_time = 60
-    router.get_model_info.return_value = None
-
-    exc = RuntimeError("err")
-    exc.failed_deployment_id = "authoritative-dep"
-    kwargs = {
-        "metadata": {"model_info": {"id": "wrong-dep"}, "deployment_model_name": "gpt-4"},
-        "litellm_metadata": {"model_info": {"id": "also-wrong-dep"}, "deployment_model_name": "gpt-4"},
-    }
-
-    with patch(
-        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
-    ) as mock_set:
-        _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs=kwargs, exception=exc
-        )
-
-    _, call_kwargs = mock_set.call_args
-    assert call_kwargs["deployment"] == "authoritative-dep"
-
-
-def test_trigger_cooldown_falls_back_to_metadata_when_failed_deployment_id_absent():
-    """Reproduces the exact scenario Greptile flagged: a generic-API-call fallback
-    where the router writes the current attempt into litellm_metadata, but a stale
-    "metadata" bucket also carries the marker (e.g. left over from an earlier call
-    type in the same kwargs). Before Router._ageneric_api_call_with_fallbacks_helper
-    stamped failed_deployment_id, this fell back to metadata-bucket parsing, which
-    would have picked the stale "metadata" entry. With failed_deployment_id now
-    stamped for that call path, this case shouldn't arise in practice; this test
-    covers the fallback lookup's own behavior when the exception genuinely has no
-    failed_deployment_id (e.g. a call path that doesn't stamp it)."""
-    router = MagicMock()
-    router.cooldown_time = 60
-    router.get_model_info.return_value = None
-
-    exc = RuntimeError("err")
-    kwargs = {
-        "metadata": {"model_info": {"id": "stale-dep"}, "deployment_model_name": "gpt-4"},
-        "litellm_metadata": {"model_info": {"id": "current-dep"}, "deployment_model_name": "gpt-4"},
-    }
-
-    with patch(
-        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
-    ) as mock_set:
-        _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs=kwargs, exception=exc
-        )
-
-    _, call_kwargs = mock_set.call_args
-    # Documents existing metadata-bucket-priority behavior (prefers "metadata" first
-    # when both carry the marker) for call paths where failed_deployment_id isn't set.
-    assert call_kwargs["deployment"] == "stale-dep"
 
 
 @pytest.mark.asyncio
@@ -443,6 +320,7 @@ async def test_run_async_fallback_triggers_cooldown_when_logging_obj_has_logged(
     router.log_retry = MagicMock(side_effect=lambda kwargs, e: kwargs)
 
     exc = RuntimeError("fallback failed")
+    exc.failed_deployment_id = "dep-xyz"
 
     async def _always_fail(*args, **kwargs):
         raise exc
@@ -453,7 +331,6 @@ async def test_run_async_fallback_triggers_cooldown_when_logging_obj_has_logged(
     logging_obj.model_call_details = {"has_logged_async_failure": True}
 
     kwargs = {
-        "litellm_metadata": {"model_info": {"id": "dep-xyz"}, "deployment_model_name": "gpt-4"},
         "litellm_logging_obj": logging_obj,
     }
 
@@ -480,6 +357,7 @@ async def test_run_async_fallback_skips_cooldown_when_logging_obj_not_logged():
     router.log_retry = MagicMock(side_effect=lambda kwargs, e: kwargs)
 
     exc = RuntimeError("fallback failed")
+    exc.failed_deployment_id = "dep-xyz"
 
     async def _always_fail(*args, **kwargs):
         raise exc
@@ -490,7 +368,6 @@ async def test_run_async_fallback_skips_cooldown_when_logging_obj_not_logged():
     logging_obj.model_call_details = {"has_logged_async_failure": False}
 
     kwargs = {
-        "litellm_metadata": {"model_info": {"id": "dep-xyz"}, "deployment_model_name": "gpt-4"},
         "litellm_logging_obj": logging_obj,
     }
 
