@@ -30,6 +30,7 @@ from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
+    get_copilot_initiator,
 )
 
 if TYPE_CHECKING:
@@ -124,6 +125,24 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         so no transformation is needed.
         """
         return dict(response_api_optional_params)
+
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        response_api_optional_request_params: Dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Dict:
+        """Set Copilot's initiator header from the actual Responses input."""
+        headers["X-Initiator"] = get_copilot_initiator(input)
+        return super().transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     def transform_streaming_response(
         self,
@@ -337,27 +356,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Returns:
             "agent" or "user"
         """
-        # If input is a string, it's user-initiated
-        if isinstance(input_param, str):
-            return "user"
-
-        # If input is a list, analyze items
-        if isinstance(input_param, list):
-            for item in input_param:
-                if not isinstance(item, dict):
-                    continue
-
-                # Check if item has no role (agent-initiated)
-                if "role" not in item or not item.get("role"):
-                    return "agent"
-
-                # Check if role is assistant (agent-initiated)
-                role = item.get("role")
-                if isinstance(role, str) and role.lower() == "assistant":
-                    return "agent"
-
-        # Default to user-initiated
-        return "user"
+        return get_copilot_initiator(input_param)
 
     def _has_vision_input(self, input_param: Union[str, ResponseInputParam]) -> bool:
         """
