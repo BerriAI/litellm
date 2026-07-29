@@ -148,6 +148,8 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         """
         # Single string -> a one-element flat list, auto-chunked.
         if isinstance(input, str):
+            if optional_params.get("input_type") == "query":
+                return [input], {}
             return [input], cls._auto_chunk_params(optional_params)
 
         # Flat list[str].
