@@ -32,6 +32,16 @@ def parse_credential_info(raw: object) -> CredentialInfo | None:
         return None
 
 
+def is_logging_credential(raw: object) -> bool:
+    """Whether ``credential_info`` marks a trace destination (``credential_type == "logging"``).
+
+    Trace destinations are proxy-admin-managed regardless of a key's ``allowed_routes``;
+    provider credentials are not logging and keep their existing route-level authorization.
+    """
+    info = parse_credential_info(raw)
+    return info is not None and info.credential_type == "logging"
+
+
 def identity_scope(team_id: str | None, org_id: str | None) -> tuple[frozenset[str], frozenset[str]]:
     """A single request identity's scope as ``(team_ids, org_ids)`` for
     ``access_grants``."""
