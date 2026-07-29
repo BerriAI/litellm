@@ -819,7 +819,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _resolve_include_thoughts(
         reasoning_effort: str,
-        include_thoughts: Optional[bool],
+        include_thoughts: bool | None,
     ) -> bool:
         """Resolve Gemini ``includeThoughts`` for a reasoning_effort value.
 
@@ -836,11 +836,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _apply_include_thoughts_override(
-        thinking_config: Dict,
+        thinking_config: dict,
         include_thoughts: bool,
         *,
         thoughts_locked_off: bool = False,
-    ) -> Dict:
+    ) -> dict:
         """Apply ``include_thoughts`` onto an existing Gemini thinkingConfig.
 
         ``none`` / ``disable`` mappings lock thoughts off and cannot be forced
@@ -857,7 +857,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _map_reasoning_effort_to_thinking_budget(
         reasoning_effort: str,
         model: Optional[str] = None,
-        include_thoughts: Optional[bool] = None,
+        include_thoughts: bool | None = None,
     ) -> GeminiThinkingConfig:
         include = VertexGeminiConfig._resolve_include_thoughts(reasoning_effort, include_thoughts)
         if reasoning_effort == "minimal":
@@ -908,7 +908,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _map_reasoning_effort_to_thinking_level(
         reasoning_effort: str,
         model: Optional[str] = None,
-        include_thoughts: Optional[bool] = None,
+        include_thoughts: bool | None = None,
     ) -> GeminiThinkingConfig:
         """
         Map reasoning_effort to thinking_level for Gemini 3+ models.
