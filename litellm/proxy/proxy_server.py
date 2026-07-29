@@ -10397,9 +10397,11 @@ async def embeddings(
 
 """
     global proxy_logging_obj
-    data: Final = await _read_request_body(request=request)
-    base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    data: Any = {}
+    base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data, failure_call_type="aembedding")
     try:
+        data = await _read_request_body(request=request)
+        base_llm_response_processor.data = data
         ### HANDLE TOKEN ARRAY INPUT DECODING ###
         # This must happen BEFORE base_process_llm_request() since it modifies the input
         router_model_names: Final = llm_router.model_names if llm_router is not None else []

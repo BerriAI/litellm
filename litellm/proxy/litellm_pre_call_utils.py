@@ -1771,6 +1771,7 @@ async def add_litellm_data_to_request(
 
     safe_add_api_version_from_query_params(data, request)
     _metadata_variable_name: Final = _get_metadata_variable_name(request)
+    data["proxy_server_request"]["metadata_variable_name"] = _metadata_variable_name
     if data.get(_metadata_variable_name, None) is None:
         data[_metadata_variable_name] = {}
 

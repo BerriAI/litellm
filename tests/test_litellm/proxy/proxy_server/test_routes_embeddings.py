@@ -31,9 +31,7 @@ def patched_embedding(monkeypatch):
     router.model_names = ["text-embedding-ada-002"]
     router.get_deployment_by_model_group_name = MagicMock(return_value=None)
     monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(
-        proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock())
-    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock()))
 
     async def _fake_process(self, *args, **kwargs):
         return dict(HAPPY_RESPONSE)
@@ -51,25 +49,45 @@ def embedding_pipeline_raises(monkeypatch):
     router = MagicMock()
     router.model_names = []
     monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(
-        proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock())
-    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock()))
 
     from litellm.proxy._types import ProxyException
 
     async def _raise(self, *args, **kwargs):
+        self._failure_call_type = kwargs["route_type"]
         raise ValueError("boom")
 
     async def _handler(self, *, e, user_api_key_dict, proxy_logging_obj, version=None):
-        return ProxyException(
-            message="boom", type="bad_request_error", param="model", code=400
-        )
+        assert self._failure_call_type == "aembedding"
+        return ProxyException(message="boom", type="bad_request_error", param="model", code=400)
 
     monkeypatch.setattr(
         common_request_processing.ProxyBaseLLMRequestProcessing,
         "base_process_llm_request",
         _raise,
     )
+    monkeypatch.setattr(
+        common_request_processing.ProxyBaseLLMRequestProcessing,
+        "_handle_llm_api_exception",
+        _handler,
+    )
+    yield
+
+
+@pytest.fixture
+def embedding_body_read_raises(monkeypatch):
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock()))
+
+    from litellm.proxy._types import ProxyException
+
+    async def _raise_read(*args, **kwargs):
+        raise ValueError("body-read")
+
+    async def _handler(self, *, e, user_api_key_dict, proxy_logging_obj, version=None):
+        assert self._failure_call_type == "aembedding"
+        return ProxyException(message="body-read", type="bad_request_error", param="body", code=400)
+
+    monkeypatch.setattr(proxy_server, "_read_request_body", _raise_read)
     monkeypatch.setattr(
         common_request_processing.ProxyBaseLLMRequestProcessing,
         "_handle_llm_api_exception",
@@ -119,3 +137,12 @@ def test_embeddings_pipeline_error(client, auth_as, embedding_pipeline_raises, p
         response = client.post(path, json=payload)
     assert response.status_code == 400
     assert response.content  # non-empty error body
+
+
+@pytest.mark.parametrize("path", _EMBED_PATHS)
+def test_embeddings_body_read_error_preserves_call_type(client, auth_as, embedding_body_read_raises, path):
+    payload = {"model": "text-embedding-ada-002", "input": "boom"}
+    with auth_as():
+        response = client.post(path, json=payload)
+    assert response.status_code == 400
+    assert response.content
