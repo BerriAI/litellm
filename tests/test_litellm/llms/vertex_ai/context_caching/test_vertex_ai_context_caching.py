@@ -1881,26 +1881,30 @@ class TestVertexAIGlobalLocation:
                 "global-aiplatform" not in url
             ), "URL should not contain 'global-aiplatform' prefix"
 
-    def test_gemini_context_caching_with_custom_api_base_passes_model(self):
-        """Gemini context caching with custom api_base must pass model to _check_custom_proxy.
+    @pytest.mark.parametrize(
+        "api_base", ["https://my-proxy.example.com/genai/v1beta", "https://my-proxy.example.com/genai/v1beta/"]
+    )
+    def test_gemini_context_caching_with_custom_api_base_uses_collection_endpoint(self, api_base):
+        """Gemini context caching with custom api_base must hit the `cachedContents` collection.
 
-        Regression test for https://github.com/BerriAI/litellm/issues/23846
-        Previously model was hardcoded to None, causing ValueError when api_base was set.
+        Regression test for https://github.com/BerriAI/litellm/issues/34872 (and #23846, which
+        required the call to not raise when api_base is set). `cachedContents` is not a model
+        action, so the model must not be spliced into the url.
         """
         caching = ContextCachingEndpoints()
 
         auth_header, url = caching._get_token_and_url_context_caching(
             gemini_api_key="test-key",
             custom_llm_provider="gemini",
-            api_base="https://my-proxy.example.com",
+            api_base=api_base,
             vertex_project=None,
             vertex_location=None,
             vertex_auth_header=None,
-            model="gemini-1.5-pro",
+            model="gemini-2.5-flash",
         )
 
-        assert "models/gemini-1.5-pro" in url
-        assert url.startswith("https://my-proxy.example.com/")
+        assert url == "https://my-proxy.example.com/genai/v1beta/cachedContents"
+        assert auth_header == {"x-goog-api-key": "test-key"}
 
     def test_gemini_context_caching_without_api_base_ignores_model(self):
         """Without custom api_base, model param is not needed (default URL is used)."""
@@ -1971,3 +1975,101 @@ class TestContextCachingMultiRegionUrls:
 
         assert url.startswith("https://aiplatform.googleapis.com/")
         assert "/locations/global/cachedContents" in url
+
+
+class TestGeminiCustomApiBaseCacheRequests:
+    """Regression coverage for #34872: with a custom Gemini `api_base`, cache list/create
+    requests must go to `{api_base}/cachedContents` with the api key in `x-goog-api-key`,
+    never a stringified dict in an `Authorization` header."""
+
+    EXPECTED_URL = "https://my-proxy.example.com/genai/v1beta/cachedContents"
+
+    def setup_method(self):
+        self.caching = ContextCachingEndpoints()
+        self.logging_obj = MagicMock(spec=Logging)
+        self.messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Stable cacheable prefix. " * 800,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {"role": "user", "content": "Reply with ok."},
+        ]
+
+    @staticmethod
+    def _empty_list_response():
+        response = MagicMock()
+        response.json.return_value = {"cachedContents": []}
+        return response
+
+    @staticmethod
+    def _create_response():
+        response = MagicMock()
+        response.json.return_value = {
+            "name": "cachedContents/abc123",
+            "model": "models/gemini-2.5-flash",
+        }
+        return response
+
+    def _assert_requests(self, get_call, post_call):
+        assert get_call.kwargs["url"] == self.EXPECTED_URL
+        assert post_call.kwargs["url"] == self.EXPECTED_URL
+        assert post_call.kwargs["json"]["model"] == "models/gemini-2.5-flash"
+        for headers in (get_call.kwargs["headers"], post_call.kwargs["headers"]):
+            assert headers["x-goog-api-key"] == "sk-gemini-key"
+            assert headers["x-custom"] == "1"
+            assert "Authorization" not in headers
+
+    def test_sync_cache_lifecycle_uses_collection_url_and_api_key_header(self):
+        client = MagicMock(spec=HTTPHandler)
+        client.get.return_value = self._empty_list_response()
+        client.post.return_value = self._create_response()
+
+        _, _, cache_name = self.caching.check_and_create_cache(
+            messages=self.messages,
+            optional_params={},
+            api_key="sk-gemini-key",
+            api_base="https://my-proxy.example.com/genai/v1beta",
+            model="gemini-2.5-flash",
+            client=client,
+            timeout=30.0,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="gemini",
+            vertex_project=None,
+            vertex_location=None,
+            vertex_auth_header=None,
+            extra_headers={"x-custom": "1"},
+        )
+
+        assert cache_name == "cachedContents/abc123"
+        self._assert_requests(client.get.call_args, client.post.call_args)
+
+    @pytest.mark.asyncio
+    async def test_async_cache_lifecycle_uses_collection_url_and_api_key_header(self):
+        client = MagicMock(spec=AsyncHTTPHandler)
+        client.get = AsyncMock(return_value=self._empty_list_response())
+        client.post = AsyncMock(return_value=self._create_response())
+
+        _, _, cache_name = await self.caching.async_check_and_create_cache(
+            messages=self.messages,
+            optional_params={},
+            api_key="sk-gemini-key",
+            api_base="https://my-proxy.example.com/genai/v1beta",
+            model="gemini-2.5-flash",
+            client=client,
+            timeout=30.0,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="gemini",
+            vertex_project=None,
+            vertex_location=None,
+            vertex_auth_header=None,
+            extra_headers={"x-custom": "1"},
+        )
+
+        assert cache_name == "cachedContents/abc123"
+        self._assert_requests(client.get.call_args, client.post.call_args)

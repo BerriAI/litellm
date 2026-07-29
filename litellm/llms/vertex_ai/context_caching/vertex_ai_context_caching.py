@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import List, Literal, Optional, Tuple, Union
 
 import httpx
@@ -50,20 +51,24 @@ class ContextCachingEndpoints(VertexBase):
         vertex_location: Optional[str],
         vertex_auth_header: Optional[str],
         model: Optional[str] = None,
-    ) -> Tuple[Optional[str], str]:
+    ) -> Tuple[Union[str, Mapping[str, str], None], str]:
         """
         Internal function. Returns the token and url for the call.
 
         Handles logic if it's google ai studio vs. vertex ai.
+
+        For Google AI Studio the credential is a header mapping, since the API key is sent as
+        `x-goog-api-key` instead of a bearer token.
 
         Returns
             token, url
         """
         auth_header: Optional[str]
         if custom_llm_provider == "gemini":
-            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
-            endpoint = "cachedContents"
-            url = "https://generativelanguage.googleapis.com/v1beta/{}".format(endpoint)
+            gemini_auth_header = {"x-goog-api-key": gemini_api_key} if gemini_api_key is not None else None
+            if api_base:
+                return gemini_auth_header, "{}/cachedContents".format(api_base.rstrip("/"))
+            return gemini_auth_header, "https://generativelanguage.googleapis.com/v1beta/cachedContents"
         elif custom_llm_provider == "vertex_ai":
             auth_header = vertex_auth_header
             endpoint = "cachedContents"
@@ -339,7 +344,7 @@ class ContextCachingEndpoints(VertexBase):
         headers = {
             "Content-Type": "application/json",
         }
-        if isinstance(token, dict):
+        if isinstance(token, Mapping):
             headers.update(token)
         elif token is not None:
             headers["Authorization"] = f"Bearer {token}"
@@ -490,7 +495,7 @@ class ContextCachingEndpoints(VertexBase):
         headers = {
             "Content-Type": "application/json",
         }
-        if isinstance(token, dict):
+        if isinstance(token, Mapping):
             headers.update(token)
         elif token is not None:
             headers["Authorization"] = f"Bearer {token}"
