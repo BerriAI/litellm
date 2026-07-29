@@ -483,3 +483,43 @@ async def test_aresponses_client_error_event_skips_fallback():
 
     assert exc_info.value.status_code == 400
     mock_fallback.assert_not_awaited()
+
+
+# -------- regression: real bridge iterator honors the base contract (LIT-4912) --------
+
+
+def test_extract_partial_responses_usage_real_bridge_iterator_pre_first_chunk():
+    """
+    Regression for LIT-4912.
+
+    When a provider errors before the first content chunk, the completion-bridge
+    iterator reaches _extract_partial_responses_usage with no collected chunks.
+    A real LiteLLMCompletionStreamingIterator (not a MagicMock standing in for
+    it) must expose the base-class contract so usage extraction returns None
+    instead of raising AttributeError on completed_response, and must carry
+    _hidden_params so the router does not pre-wrap it for header attachment and
+    thereby skip the mid-stream fallback path entirely.
+    """
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    class _FakeStreamWrapper:
+        def __init__(self) -> None:
+            self.logging_obj = MagicMock()
+            self._hidden_params = {"model_id": "deployment-123"}
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="anthropic/claude-3-5-sonnet-latest",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(),
+        request_input="hi",
+        responses_api_request={},
+    )
+
+    assert isinstance(iterator, BaseResponsesAPIStreamingIterator)
+    assert iterator.completed_response is None
+    assert iterator._hidden_params == {"model_id": "deployment-123"}
+    assert not iterator.collected_chat_completion_chunks
+
+    assert Router._extract_partial_responses_usage(iterator) is None
