@@ -8542,6 +8542,8 @@ class ProviderConfigManager:
             )
 
             return get_dashscope_family_rerank_config(provider.value)
+        elif litellm.LlmProviders.CLOUDFLARE == provider:
+            return litellm.CloudflareRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
