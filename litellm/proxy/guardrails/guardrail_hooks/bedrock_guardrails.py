@@ -179,16 +179,20 @@ class BedrockContentChunkResult(NamedTuple):
     `content` is the exact content items this chunk was called with -- needed
     so an all-clear chunk (empty `outputs`) can still contribute one unmasked
     placeholder per item it covers, keeping every later chunk's masked text
-    aligned to its original global position. `is_text_fragment` is True when
-    this chunk is one half of a single content item's own text (split because
-    a list of length 1 could not be bisected by list length) -- its sibling
-    fragment must be concatenated back into that one item's masked output,
-    not treated as a second item.
+    aligned to its original global position. `fragment_group_size` is 1 for an
+    ordinary chunk, and otherwise the total number of consecutive chunk results
+    that together make up ONE original content item's own text (split because a
+    list of length 1 could not be bisected by list length). All of them must be
+    concatenated back into that one item's masked output rather than treated as
+    separate items. It is a count rather than a boolean because one item can be
+    bisected more than once: two levels of splitting produce four fragments for
+    a single item, not two, and grouping them in fixed pairs would emit two
+    outputs for one message and shift every later message's masked text.
     """
 
     response: BedrockGuardrailResponse
     content: list[BedrockContentItem]
-    is_text_fragment: bool
+    fragment_group_size: int
 
 
 class ApplyGuardrailMessageSelection(NamedTuple):
@@ -922,10 +926,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         until every piece fits or cannot be split further). A single oversized
         content item (one very long message) is split by its own text instead of
         by list length, since a list of length 1 has no items left to bisect --
-        the two text fragments are tagged ``is_text_fragment=True`` so the merge
+        the resulting fragments all carry a ``fragment_group_size`` so the merge
         step can recombine them into the one content item they came from, rather
         than treating each fragment as its own item when reconstructing positions
-        for masking. A real guardrail block on any (sub-)chunk raises immediately
+        for masking. That count covers however many fragments the item ended up
+        split into, not just two, since it can be bisected repeatedly. A real
+        guardrail block on any (sub-)chunk raises immediately
         -- callers must not lose that signal by continuing to post the remaining
         chunks.
         """
@@ -944,7 +950,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 BedrockContentChunkResult(
                     response=response,
                     content=content,
-                    is_text_fragment=False,
+                    fragment_group_size=1,
                 )
             ]
         except HTTPException as exc:
@@ -953,7 +959,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 if split_content is None:
                     raise
                 first_half, second_half = split_content
-                is_text_fragment = len(content) == 1
+                is_single_item_text_split = len(content) == 1
                 verbose_proxy_logger.warning(
                     "Bedrock Guardrail: ApplyGuardrail rejected %d content item(s) as too large; "
                     "splitting into %d + %d and retrying each",
@@ -984,8 +990,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     allow_chunking=allow_chunking,
                 )
                 combined_results = first_results + second_results
-                if is_text_fragment:
-                    return [result._replace(is_text_fragment=True) for result in combined_results]
+                if is_single_item_text_split:
+                    # Every leaf below this point came from one content item's own
+                    # text, however many levels deep the splitting went. Stamping
+                    # the total count on all of them (overwriting any smaller count
+                    # an inner split set) is what lets the merge step regroup them
+                    # into exactly one output entry for that one item.
+                    return [result._replace(fragment_group_size=len(combined_results)) for result in combined_results]
                 return combined_results
             raise
 
@@ -1074,6 +1085,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             request_data=request_data,
             event_type=event_type,
             start_time=start_time,
+            log_transport_failure=False,
         )
 
         if httpx_response.status_code == 200:
@@ -1352,7 +1364,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         to its item count is passed through as-is instead of guessed at, since
         AWS's docs don't cover partial masking within one multi-item call.
         """
-        logical_units = BedrockGuardrail._group_fragment_pairs(chunk_results)
+        logical_units = BedrockGuardrail._group_fragment_units(chunk_results)
         per_unit_outputs = tuple(BedrockGuardrail._merge_logical_unit_outputs(unit) for unit in logical_units)
         merged_outputs = [output for outputs, _ in per_unit_outputs for output in outputs]
         any_masked = any(masked for _, masked in per_unit_outputs)
@@ -1403,32 +1415,33 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
     @staticmethod
-    def _group_fragment_pairs(
+    def _group_fragment_units(
         chunk_results: list[BedrockContentChunkResult],
     ) -> list[tuple[BedrockContentChunkResult, ...]]:
-        """Group consecutive text-fragment chunk results into the sibling pairs
-        that originated from one content item's own text, leaving every other
-        chunk result as a unit of one. Fragments are always produced (and thus
-        appear here) as adjacent sibling pairs -- see ``_split_bedrock_content``."""
+        """Group consecutive text-fragment chunk results back into the one content
+        item each group came from, leaving every ordinary chunk result as a unit of
+        one.
+
+        The group size is read off the results themselves rather than assumed,
+        because a single content item can be bisected repeatedly: two levels of
+        splitting yield four fragments for one item, not two. Assuming a fixed pair
+        here would emit two outputs for one message and shift every later message's
+        masked text onto the wrong message."""
         units: list[tuple[BedrockContentChunkResult, ...]] = []
         index = 0
         while index < len(chunk_results):
-            chunk_result = chunk_results[index]
-            if chunk_result.is_text_fragment:
-                units.append((chunk_result, chunk_results[index + 1]))
-                index += 2
-            else:
-                units.append((chunk_result,))
-                index += 1
+            span = max(1, chunk_results[index].fragment_group_size)
+            units.append(tuple(chunk_results[index : index + span]))
+            index += span
         return units
 
     @staticmethod
     def _merge_logical_unit_outputs(
         unit: tuple[BedrockContentChunkResult, ...],
     ) -> tuple[list[BedrockGuardrailOutput], bool]:
-        """Reduce one logical unit (a fragment pair or a single chunk result)
-        to the ``BedrockGuardrailOutput`` entries it contributes to the merged
-        response, plus whether any masking actually happened in it.
+        """Reduce one logical unit (a fragment group of any size, or a single chunk
+        result) to the ``BedrockGuardrailOutput`` entries it contributes to the
+        merged response, plus whether any masking actually happened in it.
 
         Per AWS's documented ApplyGuardrail contract, a single call's
         ``outputs`` is positionally parallel to the ``content`` items *of that
@@ -1445,18 +1458,23 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         at, since AWS's docs don't cover partial masking within one multi-item
         call.
         """
-        if len(unit) == 2:
-            first, second = unit
-            first_outputs = first.response.get("outputs") or first.response.get("output") or []
-            second_outputs = second.response.get("outputs") or second.response.get("output") or []
-            first_source = (first.content[0].get("text") or {}).get("text") or ""
-            second_source = (second.content[0].get("text") or {}).get("text") or ""
-            first_text = first_outputs[0].get("text") if first_outputs else first_source
-            second_text = second_outputs[0].get("text") if second_outputs else second_source
-            merged_text = (first_text if first_text is not None else first_source) + (
-                second_text if second_text is not None else second_source
-            )
-            return [BedrockGuardrailOutput(text=merged_text)], bool(first_outputs or second_outputs)
+        if len(unit) > 1:
+            # Every result here is one fragment of a single content item's text, so
+            # the whole group collapses to one entry: each fragment's masked text
+            # (or its own original text when that fragment came back unmasked),
+            # concatenated in order. Holds for any group size, not just two.
+            def fragment_outputs(result: BedrockContentChunkResult) -> list[BedrockGuardrailOutput]:
+                return list(result.response.get("outputs") or result.response.get("output") or [])
+
+            def fragment_text(result: BedrockContentChunkResult) -> str:
+                source = (result.content[0].get("text") or {}).get("text") or ""
+                outputs = fragment_outputs(result)
+                masked = outputs[0].get("text") if outputs else None
+                return masked if masked is not None else source
+
+            merged_text = "".join(fragment_text(result) for result in unit)
+            any_masked = any(fragment_outputs(result) for result in unit)
+            return [BedrockGuardrailOutput(text=merged_text)], any_masked
 
         (chunk_result,) = unit
         chunk_outputs = chunk_result.response.get("outputs") or chunk_result.response.get("output") or []
@@ -1474,6 +1492,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request_data: dict | None,
         event_type: GuardrailEventHooks,
         start_time: "datetime",
+        log_transport_failure: bool = True,
     ) -> httpx.Response:
         """POST a signed Bedrock request, logging+raising on network/HTTP errors.
 
@@ -1481,6 +1500,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         transport-error handling cannot drift. Returns the raw ``httpx.Response`` on
         success (including non-2xx that httpx did not raise on); the 200-path logging,
         status and tracing stay with each caller because the two APIs report differently.
+
+        ``log_transport_failure=False`` suppresses the ``guardrail_failed_to_respond``
+        entry for a non-200 that is re-raised as an ``HTTPException``, for callers that
+        own consolidated per-request logging. The ApplyGuardrail path needs this:
+        ``AsyncHTTPHandler.post`` calls ``raise_for_status()``, so every non-200 lands
+        in this handler, and one logical request can legitimately produce several of
+        them (a too-large probe, then each rejected bisection level) while still
+        succeeding overall. Logging per attempt would report a recovered request as
+        several failures plus a success.
+
+        The connection-level branch below (timeout, endpoint down) still logs
+        unconditionally: it re-raises the original exception rather than an
+        ``HTTPException``, so no consolidating caller catches it, and suppressing it
+        would drop the only record of the failure.
         """
         try:
             return await self.async_handler.post(
@@ -1501,16 +1534,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         status_code,
                         detail_message,
                     ) = self._parse_bedrock_guardrail_error_response(err_response)
-                    self.add_standard_logging_guardrail_information_to_request_data(
-                        guardrail_provider=self.guardrail_provider,
-                        guardrail_json_response={"error": detail_message},
-                        request_data=request_data or {},
-                        guardrail_status="guardrail_failed_to_respond",
-                        start_time=start_time.timestamp(),
-                        end_time=datetime.now(timezone.utc).timestamp(),
-                        duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
-                        event_type=event_type,
-                    )
+                    if log_transport_failure:
+                        self.add_standard_logging_guardrail_information_to_request_data(
+                            guardrail_provider=self.guardrail_provider,
+                            guardrail_json_response={"error": detail_message},
+                            request_data=request_data or {},
+                            guardrail_status="guardrail_failed_to_respond",
+                            start_time=start_time.timestamp(),
+                            end_time=datetime.now(timezone.utc).timestamp(),
+                            duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
+                            event_type=event_type,
+                        )
                     raise HTTPException(status_code=status_code, detail=detail_message) from e
                 except HTTPException:
                     raise

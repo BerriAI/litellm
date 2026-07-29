@@ -7,6 +7,7 @@ import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -3686,6 +3687,178 @@ async def test_apply_guardrail_too_large_on_single_item_splits_by_text_and_succe
 
     assert mock_post.await_count == 3
     assert response.get("action") == "NONE"
+
+
+def _raised_bedrock_error(status_code: int, message: str) -> httpx.HTTPStatusError:
+    """A non-200 the way `AsyncHTTPHandler.post` actually surfaces it.
+
+    That handler calls `response.raise_for_status()`, so in production a non-200 from
+    Bedrock arrives as a raised `httpx.HTTPStatusError` carrying the response, never
+    as a returned response object. Tests that return the response instead exercise a
+    branch real traffic never reaches. A real `httpx.Response` is used rather than a
+    MagicMock because the transport helper branches on
+    `isinstance(err_response, httpx.Response)`."""
+    response = httpx.Response(
+        status_code=status_code,
+        json={"message": message},
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/guardrail"),
+    )
+    return httpx.HTTPStatusError(message, request=response.request, response=response)
+
+
+_TOO_LARGE_MESSAGE = "Input is too long. Content size exceeds the maximum input size in text units."
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_chunking_logs_once_when_client_raises_for_status():
+    """The too-large attempt recovered by chunking must still produce exactly one
+    telemetry entry when the HTTP client raises for status, which is what really
+    happens: `AsyncHTTPHandler.post` calls `raise_for_status()`.
+
+    Regression for per-attempt `guardrail_failed_to_respond` entries leaking out of
+    the transport helper on a request that ultimately succeeded, which made a
+    recovered request look like several failures plus a success."""
+    guardrail = _bedrock_guardrail_for_chunk_tests()
+
+    messages = [
+        {"role": "user", "content": "chunk one text"},
+        {"role": "user", "content": "chunk two text"},
+    ]
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    call_count = 0
+
+    async def _post_side_effect(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise _raised_bedrock_error(400, _TOO_LARGE_MESSAGE)
+        return _passing_bedrock_httpx_response(f"chunk-{call_count}")
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        patch.object(
+            guardrail,
+            "add_standard_logging_guardrail_information_to_request_data",
+        ) as mock_log,
+    ):
+        mock_post.side_effect = _post_side_effect
+
+        result = await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=messages,
+            request_data={"model": "bedrock-nova-micro"},
+        )
+
+    assert call_count == 3
+    assert result.get("action") == "NONE"
+    statuses = [call.kwargs.get("guardrail_status") for call in mock_log.call_args_list]
+    assert statuses == ["success"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_unrecoverable_failure_still_logs_once_when_client_raises():
+    """Suppressing the transport helper's per-attempt logging must not swallow the only
+    record of a genuine failure: an unsplittable too-large request still has to produce
+    exactly one `guardrail_failed_to_respond` entry, not zero."""
+    guardrail = _bedrock_guardrail_for_chunk_tests()
+
+    # Single character: `_split_bedrock_content` cannot halve this into two non-empty
+    # pieces, so chunking gives up and the original error propagates.
+    messages = [{"role": "user", "content": "x"}]
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    async def _post_side_effect(*_args, **_kwargs):
+        raise _raised_bedrock_error(400, _TOO_LARGE_MESSAGE)
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        patch.object(
+            guardrail,
+            "add_standard_logging_guardrail_information_to_request_data",
+        ) as mock_log,
+    ):
+        mock_post.side_effect = _post_side_effect
+
+        with pytest.raises(HTTPException):
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=messages,
+                request_data={"model": "bedrock-nova-micro"},
+            )
+
+    statuses = [call.kwargs.get("guardrail_status") for call in mock_log.call_args_list]
+    assert statuses == ["guardrail_failed_to_respond"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_single_item_split_twice_still_yields_one_output_per_item():
+    """One oversized content item that needs two levels of text bisection ends up
+    as four text fragments, and all four must still collapse back into exactly
+    ONE output entry, because they all came from one original content item.
+
+    Downstream masking (`_apply_masking_to_messages`) walks the merged outputs by
+    a running index across the original, unchunked message list, so emitting more
+    than one entry for a single message shifts every later message's masked text
+    onto the wrong message and drops the surplus. Regression for fragment
+    grouping assuming fragments only ever arrive as adjacent sibling *pairs*,
+    which holds for one bisection level but not for two."""
+    guardrail = _bedrock_guardrail_for_chunk_tests()
+
+    messages = [{"role": "user", "content": "aaaa bbbb cccc dddd eeee ffff gggg hhhh"}]
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    # whole item -> [first half] -> [q1] [q2] -> [second half] -> [q3] [q4].
+    # Only the four quarters fit; the whole item and both halves are too large.
+    responses = [
+        _too_large_validation_httpx_response(),  # whole single item
+        _too_large_validation_httpx_response(),  # first half
+        _passing_bedrock_httpx_response("q1"),
+        _passing_bedrock_httpx_response("q2"),
+        _too_large_validation_httpx_response(),  # second half
+        _passing_bedrock_httpx_response("q3"),
+        _passing_bedrock_httpx_response("q4"),
+    ]
+
+    async def _post_side_effect(*_args, **_kwargs):
+        return responses.pop(0)
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.side_effect = _post_side_effect
+
+        result = await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=messages,
+            request_data={"model": "bedrock-nova-micro"},
+        )
+
+    assert mock_post.await_count == 7
+    assert not responses
+    assert result.get("action") == "NONE"
+    output_texts = [o.get("text") for o in result.get("outputs") or []]
+    # One original content item in, so exactly one output entry out, carrying all
+    # four fragments' text in order.
+    assert output_texts == ["q1q2q3q4"]
 
 
 @pytest.mark.asyncio
