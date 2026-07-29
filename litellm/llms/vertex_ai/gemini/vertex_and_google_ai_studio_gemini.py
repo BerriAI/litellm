@@ -1141,6 +1141,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self._apply_include_server_side_tool_invocations(non_default_params, optional_params)
         gemini_sampling_params_warned: bool = False
         thoughts_locked_off: bool = False
+        include_thoughts_value = non_default_params.get("include_thoughts")
+        if include_thoughts_value is not None and not isinstance(
+            include_thoughts_value, bool
+        ):
+            raise ValueError("include_thoughts must be a boolean when provided")
         for param, value in non_default_params.items():
             if param == "temperature":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model):
@@ -1243,13 +1248,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         param_name="reasoning_effort",
                         param_description="thinking_budget",
                     )
-                    include_thoughts_value = non_default_params.get("include_thoughts")
-                    if include_thoughts_value is not None and not isinstance(
-                        include_thoughts_value, bool
-                    ):
-                        raise ValueError(
-                            "include_thoughts must be a boolean when provided"
-                        )
                     if effort_value in ("none", "disable"):
                         thoughts_locked_off = True
                     if VertexGeminiConfig._is_gemini_3_or_newer(model):
@@ -1265,10 +1263,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                             include_thoughts=include_thoughts_value,
                         )
             elif param == "include_thoughts":
-                # Applied after the loop onto whatever thinkingConfig was built
-                # (reasoning_effort and/or Anthropic-style thinking). Validate early.
-                if value is not None and not isinstance(value, bool):
-                    raise ValueError("include_thoughts must be a boolean when provided")
+                # Validated up-front; applied after the loop onto thinkingConfig.
+                continue
             elif param == "thinking":
                 # Validate no conflict with thinking_level
                 VertexGeminiConfig._validate_thinking_config_conflicts(
@@ -1293,10 +1289,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         # Apply include_thoughts onto reasoning_effort and/or thinking configs so
         # standalone/out-of-order use (e.g. thinking + include_thoughts=False) works.
-        include_thoughts_value = non_default_params.get("include_thoughts")
         if include_thoughts_value is not None:
-            if not isinstance(include_thoughts_value, bool):
-                raise ValueError("include_thoughts must be a boolean when provided")
             thinking_config = optional_params.get("thinkingConfig")
             if isinstance(thinking_config, dict):
                 optional_params["thinkingConfig"] = (
