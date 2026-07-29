@@ -954,3 +954,112 @@ def test_public_mcp_hub_does_not_expose_upstream_url():
     assert all("url" not in item for item in data)
     assert secret_url not in response.text
     app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# /public/providers/fields + /public/agents/fields are cached in-process
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=False)
+def reset_create_fields_caches():
+    """Clear the create-fields memoization before and after each test."""
+    _pe_module._get_provider_create_fields.cache_clear()
+    _pe_module._get_agent_create_fields.cache_clear()
+    yield
+    _pe_module._get_provider_create_fields.cache_clear()
+    _pe_module._get_agent_create_fields.cache_clear()
+
+
+def _bundled_reads(mock_read, filename):
+    return [call for call in mock_read.call_args_list if call.args[0] == filename]
+
+
+def test_get_provider_fields_reads_from_disk_once(reset_create_fields_caches):
+    """provider_create_fields.json is read once per process, not once per request."""
+    client = _make_client()
+
+    with patch(
+        "litellm.proxy.public_endpoints.public_endpoints._read_bundled_json",
+        wraps=_pe_module._read_bundled_json,
+    ) as mock_read:
+        first = client.get("/public/providers/fields")
+        second = client.get("/public/providers/fields")
+        third = client.get("/public/providers/fields")
+
+    assert first.status_code == 200
+    reads = _bundled_reads(mock_read, "provider_create_fields.json")
+    assert len(reads) == 1, f"expected 1 disk read across 3 requests, got {len(reads)}"
+    assert first.json() == second.json() == third.json()
+
+
+def test_get_agent_fields_reads_each_file_from_disk_once(reset_create_fields_caches):
+    """Both bundled files backing /public/agents/fields are read once, not per request."""
+    client = _make_client()
+
+    with patch(
+        "litellm.proxy.public_endpoints.public_endpoints._read_bundled_json",
+        wraps=_pe_module._read_bundled_json,
+    ) as mock_read:
+        first = client.get("/public/agents/fields")
+        second = client.get("/public/agents/fields")
+        third = client.get("/public/agents/fields")
+
+    assert first.status_code == 200
+    agent_reads = _bundled_reads(mock_read, "agent_create_fields.json")
+    provider_reads = _bundled_reads(mock_read, "provider_create_fields.json")
+    assert len(agent_reads) == 1, f"expected 1 agent-file read, got {len(agent_reads)}"
+    assert len(provider_reads) == 1, f"expected 1 provider-file read, got {len(provider_reads)}"
+    assert first.json() == second.json() == third.json()
+
+
+def test_get_agent_fields_merge_does_not_compound_across_requests(
+    reset_create_fields_caches,
+):
+    """The inherited-credentials merge runs once, so credential_fields cannot grow per request.
+
+    Caching the raw file contents instead of the merged result would let the merge
+    append inherited fields again on every request.
+    """
+    client = _make_client()
+
+    def counts():
+        return {
+            agent["agent_type"]: len(agent.get("credential_fields") or [])
+            for agent in client.get("/public/agents/fields").json()
+        }
+
+    first = counts()
+    assert first, "expected at least one agent type"
+    assert first == counts() == counts()
+
+
+def test_get_agent_fields_still_merges_inherited_provider_credentials(
+    reset_create_fields_caches,
+):
+    """Caching must not change what the merge produces."""
+    agents = _make_client().get("/public/agents/fields").json()
+
+    inheriting = [
+        agent
+        for agent in agents
+        if any(field.get("include_in_litellm_params") for field in (agent.get("credential_fields") or []))
+    ]
+    assert inheriting, "expected at least one agent to inherit provider credential fields"
+    assert all("inherit_credentials_from_provider" not in agent for agent in agents)
+
+
+def test_provider_fields_cache_is_shared_with_agent_fields(reset_create_fields_caches):
+    """Warming /public/providers/fields means /public/agents/fields re-reads only its own file."""
+    client = _make_client()
+    client.get("/public/providers/fields")
+
+    with patch(
+        "litellm.proxy.public_endpoints.public_endpoints._read_bundled_json",
+        wraps=_pe_module._read_bundled_json,
+    ) as mock_read:
+        response = client.get("/public/agents/fields")
+
+    assert response.status_code == 200
+    assert _bundled_reads(mock_read, "provider_create_fields.json") == []
+    assert len(_bundled_reads(mock_read, "agent_create_fields.json")) == 1
