@@ -3194,7 +3194,16 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         import httpx
 
+        from litellm.litellm_core_utils.core_helpers import process_response_headers
+
         if self.stream and isinstance(result, ModelResponse):
+            httpx_response = self.model_call_details.get("httpx_response", None)
+            if isinstance(httpx_response, httpx.Response) and not result._hidden_params.get(
+                "additional_headers"
+            ):
+                result._hidden_params["additional_headers"] = process_response_headers(
+                    httpx_response.headers
+                )
             return result
         elif isinstance(result, ModelResponse):
             return result
