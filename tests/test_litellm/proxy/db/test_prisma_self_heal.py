@@ -3,7 +3,7 @@ import os
 import signal
 import sys
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import httpx
 import pytest
@@ -256,6 +256,18 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_db_error(
     client._db_health_watchdog_interval_seconds = 1
     client._db_watchdog_reconnect_timeout_seconds = 7.0
     client._db_health_watchdog_probe_timeout_seconds = 0.2
+    diagnostics = {
+        "engine_pid": 123,
+        "engine_port": 4567,
+        "engine_alive": "true",
+        "pool_active": "2",
+        "pool_wait": "1",
+        "pool_busy": "3",
+        "pool_idle": "57",
+        "pool_open": "60",
+        "pool_target": "60",
+        "pool_metrics_error_type": "none",
+    }
 
     with (
         patch(
@@ -266,12 +278,35 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_db_error(
             "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_connection_error",
             return_value=True,
         ),
+        patch.object(client, "_get_db_watchdog_diagnostics", return_value=diagnostics),
+        patch("litellm.proxy.utils.time.perf_counter", side_effect=[10.0, 10.125]),
+        patch("litellm.proxy.utils.verbose_proxy_logger") as mock_logger,
     ):
         await client._db_health_watchdog_loop()
 
     client.attempt_db_reconnect.assert_awaited_once_with(
         reason="db_health_watchdog_connection_error",
         timeout_seconds=7.0,
+    )
+    warning_args = mock_logger.warning.call_args.args
+    assert warning_args[1:5] == (
+        "connection_error",
+        "Exception",
+        125,
+        "db connection dropped",
+    )
+    assert warning_args[5:] == (
+        0,
+        123,
+        4567,
+        "true",
+        "2",
+        "1",
+        "3",
+        "57",
+        "60",
+        "60",
+        "none",
     )
 
 
@@ -287,6 +322,18 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_probe_timeout(
     client._db_health_watchdog_interval_seconds = 1
     client._db_watchdog_reconnect_timeout_seconds = 9.0
     client._db_health_watchdog_probe_timeout_seconds = 0.2
+    diagnostics = {
+        "engine_pid": "unavailable",
+        "engine_port": "unavailable",
+        "engine_alive": "unknown",
+        "pool_active": "unavailable",
+        "pool_wait": "unavailable",
+        "pool_busy": "unavailable",
+        "pool_idle": "unavailable",
+        "pool_open": "unavailable",
+        "pool_target": "60",
+        "pool_metrics_error_type": "TimeoutError",
+    }
 
     with (
         patch(
@@ -297,13 +344,62 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_probe_timeout(
             "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_connection_error",
             return_value=False,
         ),
+        patch.object(client, "_get_db_watchdog_diagnostics", return_value=diagnostics),
+        patch("litellm.proxy.utils.time.perf_counter", side_effect=[20.0, 25.001]),
+        patch("litellm.proxy.utils.verbose_proxy_logger") as mock_logger,
     ):
         await client._db_health_watchdog_loop()
 
     client.attempt_db_reconnect.assert_awaited_once_with(
-        reason="db_health_watchdog_connection_error",
+        reason="db_health_watchdog_probe_timeout",
         timeout_seconds=9.0,
     )
+    warning_args = mock_logger.warning.call_args.args
+    assert warning_args[1:5] == ("probe_timeout", "TimeoutError", 5001, "")
+    assert warning_args[5] == 0
+    assert warning_args[-1] == "TimeoutError"
+
+
+def test_db_health_watchdog_diagnostics_reads_local_query_engine_metrics(
+    mock_proxy_logging,
+):
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client.db._original_prisma._engine.process.pid = 321
+    metrics = (
+        b"prisma_client_queries_active 2\n"
+        b"prisma_client_queries_wait 1\n"
+        b"prisma_pool_connections_busy 3\n"
+        b"prisma_pool_connections_idle 57\n"
+        b"prisma_pool_connections_open 60\n"
+    )
+    response = MagicMock()
+    response.__enter__.return_value.read.return_value = metrics
+
+    with (
+        patch(
+            "builtins.open",
+            mock_open(read_data=b"query-engine\0-p\0" b"4567\0"),
+        ),
+        patch("litellm.proxy.utils.os.kill"),
+        patch("litellm.proxy.utils.urllib.request.urlopen", return_value=response),
+        patch.dict(os.environ, {"DATABASE_CONNECTION_POOL_LIMIT": "60"}),
+    ):
+        diagnostics = client._get_db_watchdog_diagnostics()
+
+    assert diagnostics == {
+        "engine_pid": 321,
+        "engine_port": 4567,
+        "engine_alive": "true",
+        "pool_active": "2",
+        "pool_wait": "1",
+        "pool_busy": "3",
+        "pool_idle": "57",
+        "pool_open": "60",
+        "pool_target": "60",
+        "pool_metrics_error_type": "none",
+    }
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import traceback
+import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -3943,6 +3944,67 @@ class PrismaClient:
             pass
         return 0
 
+    def _get_db_watchdog_diagnostics(self) -> Dict[str, Union[str, int]]:
+        """Capture local query-engine state without issuing another DB query."""
+        pid = self._get_engine_pid()
+        diagnostics: Dict[str, Union[str, int]] = {
+            "engine_pid": pid if pid > 0 else "unavailable",
+            "engine_port": "unavailable",
+            "engine_alive": "unknown",
+            "pool_active": "unavailable",
+            "pool_wait": "unavailable",
+            "pool_busy": "unavailable",
+            "pool_idle": "unavailable",
+            "pool_open": "unavailable",
+            "pool_target": os.getenv("DATABASE_CONNECTION_POOL_LIMIT", "unset"),
+            "pool_metrics_error_type": "none",
+        }
+        if pid <= 0:
+            diagnostics["pool_metrics_error_type"] = "EnginePidUnavailable"
+            return diagnostics
+
+        try:
+            os.kill(pid, 0)
+            diagnostics["engine_alive"] = "true"
+        except ProcessLookupError:
+            diagnostics["engine_alive"] = "false"
+        except (PermissionError, OSError):
+            diagnostics["engine_alive"] = "unknown"
+
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as proc_cmdline:
+                arguments = [
+                    argument.decode("utf-8", errors="replace")
+                    for argument in proc_cmdline.read().split(b"\0")
+                    if argument
+                ]
+            port_index = arguments.index("-p")
+            port = int(arguments[port_index + 1])
+            if not 1 <= port <= 65535:
+                raise ValueError("query-engine port out of range")
+            diagnostics["engine_port"] = port
+
+            wanted_metrics = {
+                "prisma_client_queries_active": "pool_active",
+                "prisma_client_queries_wait": "pool_wait",
+                "prisma_pool_connections_busy": "pool_busy",
+                "prisma_pool_connections_idle": "pool_idle",
+                "prisma_pool_connections_open": "pool_open",
+            }
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/metrics", timeout=0.2
+            ) as response:
+                body = response.read(200000).decode("utf-8", errors="replace")
+            for raw_line in body.splitlines():
+                metric_name, separator, metric_value = raw_line.partition(" ")
+                diagnostic_name = wanted_metrics.get(metric_name)
+                if diagnostic_name is not None and separator:
+                    diagnostics[diagnostic_name] = metric_value.strip() or "unavailable"
+        except Exception as metrics_error:
+            diagnostics["pool_metrics_error_type"] = type(metrics_error).__name__
+
+        return diagnostics
+
     def _is_engine_alive(self) -> bool:
         if self._engine_pid <= 0:
             return True
@@ -4474,8 +4536,10 @@ class PrismaClient:
 
     async def _db_health_watchdog_loop(self) -> None:
         while True:
+            probe_started: Optional[float] = None
             try:
                 await asyncio.sleep(self._db_health_watchdog_interval_seconds)
+                probe_started = time.perf_counter()
                 await asyncio.wait_for(
                     self.db.query_raw("SELECT 1"),
                     timeout=self._db_health_watchdog_probe_timeout_seconds,
@@ -4483,11 +4547,52 @@ class PrismaClient:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                if isinstance(
-                    e, asyncio.TimeoutError
-                ) or PrismaDBExceptionHandler.is_database_connection_error(e):
+                is_probe_timeout = isinstance(e, asyncio.TimeoutError)
+                is_connection_error = (
+                    False
+                    if is_probe_timeout
+                    else PrismaDBExceptionHandler.is_database_connection_error(e)
+                )
+                if is_probe_timeout or is_connection_error:
+                    elapsed_ms = (
+                        int(round((time.perf_counter() - probe_started) * 1000))
+                        if probe_started is not None
+                        else -1
+                    )
+                    failure_kind = (
+                        "probe_timeout" if is_probe_timeout else "connection_error"
+                    )
+                    reconnect_reason = (
+                        "db_health_watchdog_probe_timeout"
+                        if is_probe_timeout
+                        else "db_health_watchdog_connection_error"
+                    )
+                    diagnostics = self._get_db_watchdog_diagnostics()
+                    verbose_proxy_logger.warning(
+                        "Prisma DB health watchdog probe failed before reconnect. "
+                        "failure_kind=%s exception_type=%s elapsed_ms=%s error=%s "
+                        "consecutive_reconnect_failures=%s engine_pid=%s "
+                        "engine_port=%s engine_alive=%s pool_active=%s pool_wait=%s "
+                        "pool_busy=%s pool_idle=%s pool_open=%s pool_target=%s "
+                        "pool_metrics_error_type=%s",
+                        failure_kind,
+                        type(e).__name__,
+                        elapsed_ms,
+                        _redact_string(str(e)),
+                        self._consecutive_reconnect_failures,
+                        diagnostics["engine_pid"],
+                        diagnostics["engine_port"],
+                        diagnostics["engine_alive"],
+                        diagnostics["pool_active"],
+                        diagnostics["pool_wait"],
+                        diagnostics["pool_busy"],
+                        diagnostics["pool_idle"],
+                        diagnostics["pool_open"],
+                        diagnostics["pool_target"],
+                        diagnostics["pool_metrics_error_type"],
+                    )
                     await self.attempt_db_reconnect(
-                        reason="db_health_watchdog_connection_error",
+                        reason=reconnect_reason,
                         timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
                     )
                 else:
