@@ -859,9 +859,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: Optional[str] = None,
         include_thoughts: Optional[bool] = None,
     ) -> GeminiThinkingConfig:
-        include = VertexGeminiConfig._resolve_include_thoughts(
-            reasoning_effort, include_thoughts
-        )
+        include = VertexGeminiConfig._resolve_include_thoughts(reasoning_effort, include_thoughts)
         if reasoning_effort == "minimal":
             # Use model-specific minimum thinking budget or fallback
             # Check for exact matches first, then partial matches
@@ -923,9 +921,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Returns:
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
-        include = VertexGeminiConfig._resolve_include_thoughts(
-            reasoning_effort, include_thoughts
-        )
+        include = VertexGeminiConfig._resolve_include_thoughts(reasoning_effort, include_thoughts)
         # Check if this is gemini-3-flash which supports MINIMAL thinking level
         # Covers gemini-3-flash, gemini-3-flash-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview,
         # gemini-3.5-flash, and any future 3.x-flash variants.
@@ -959,6 +955,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 return {"thinkingLevel": "low", "includeThoughts": False}
         else:
             raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
+
     @staticmethod
     def _is_thinking_budget_zero(thinking_budget: Optional[int]) -> bool:
         return thinking_budget is not None and thinking_budget == 0
@@ -1142,9 +1139,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         gemini_sampling_params_warned: bool = False
         thoughts_locked_off: bool = False
         include_thoughts_value = non_default_params.get("include_thoughts")
-        if include_thoughts_value is not None and not isinstance(
-            include_thoughts_value, bool
-        ):
+        if include_thoughts_value is not None and not isinstance(include_thoughts_value, bool):
             raise ValueError("include_thoughts must be a boolean when provided")
         for param, value in non_default_params.items():
             if param == "temperature":
@@ -1292,12 +1287,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if include_thoughts_value is not None:
             thinking_config = optional_params.get("thinkingConfig")
             if isinstance(thinking_config, dict):
-                optional_params["thinkingConfig"] = (
-                    VertexGeminiConfig._apply_include_thoughts_override(
-                        thinking_config,
-                        include_thoughts_value,
-                        thoughts_locked_off=thoughts_locked_off,
-                    )
+                optional_params["thinkingConfig"] = VertexGeminiConfig._apply_include_thoughts_override(
+                    thinking_config,
+                    include_thoughts_value,
+                    thoughts_locked_off=thoughts_locked_off,
                 )
 
         if litellm.vertex_ai_safety_settings is not None:
@@ -1319,6 +1312,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self._drop_search_tools_mixed_with_functions(optional_params)
 
         return optional_params
+
     def get_mapped_special_auth_params(self) -> dict:
         """
         Common auth params across bedrock/vertex_ai/azure/watsonx
