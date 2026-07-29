@@ -1,7 +1,6 @@
 """Tests for the optional Rust-backed Anthropic Messages path."""
 
 import importlib
-import os
 from typing import cast
 
 import httpx
@@ -121,29 +120,6 @@ def test_load_rust_messages_returns_injected_impl():
     bridge = RecordingMessages()
     litellm.use_litellm_rust(True, messages=bridge)
     assert rust_messages.load_rust_messages() is bridge
-
-
-@pytest.mark.asyncio
-async def test_bedrock_invoke_uses_native_rust_bridge():
-    model = os.getenv(
-        "BEDROCK_MODEL",
-        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    )
-
-    response = await litellm.anthropic.messages.acreate(
-        model=f"bedrock/{model}",
-        messages=[{"role": "user", "content": "Reply with one word: hello"}],
-        max_tokens=32,
-        api_key=os.getenv("AWS_BEARER_TOKEN_BEDROCK"),
-        aws_region_name=os.getenv("AWS_REGION_NAME", "us-west-2"),
-        rust=True,
-    )
-
-    assert response["type"] == "message"
-    assert response["role"] == "assistant"
-    assert response["content"][0]["type"] == "text"
-    assert response["content"][0]["text"].strip()
-    assert response["_hidden_params"]["additional_headers"]["x-litellm-rust"] == "true"
 
 
 def test_configuring_messages_does_not_enable_ocr():
