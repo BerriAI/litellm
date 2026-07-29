@@ -200,6 +200,13 @@ _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES: tuple[MCPAuth, ...] = (
 )
 
 
+# OAuth discovery retry cooldown for servers whose endpoints stay unresolved. The base is one
+# reload cadence so a transient upstream failure recovers immediately; the cap bounds the request
+# amplification and log volume of a permanently broken configuration.
+_OAUTH_DISCOVERY_RETRY_BASE_SECONDS = 30.0
+_OAUTH_DISCOVERY_RETRY_MAX_SECONDS = 900.0
+
+
 def _blank_to_none(value: str | None) -> str | None:
     """Collapse an absent, empty, or whitespace-only string to ``None``.
 
@@ -247,6 +254,7 @@ def _endpoints_yield_to_issuer(
     authorization_url: str | None,
     token_url: str | None,
     registration_url: str | None,
+    server_ref: str,
 ) -> tuple[str | None, str | None, str | None]:
     """The single rule that makes an admin-configured ``issuer`` the sole authoritative endpoint
     source (RFC 8414 §3.3): when it is set for a discovery auth type, the stored/manual
@@ -256,9 +264,29 @@ def _endpoints_yield_to_issuer(
     i.e. all ``None`` when issuer-anchored, else the inputs unchanged. Called at every resolution site
     so the invariant holds in one place instead of being re-derived per merge.
     """
-    if issuer is not None and is_discovery_auth_type:
-        return None, None, None
-    return authorization_url, token_url, registration_url
+    if issuer is None or not is_discovery_auth_type:
+        return authorization_url, token_url, registration_url
+    discarded = sorted(
+        label
+        for label, value in (
+            ("authorization_url", authorization_url),
+            ("token_url", token_url),
+            ("registration_url", registration_url),
+        )
+        if value
+    )
+    if discarded:
+        verbose_logger.warning(
+            "MCP server %s has a pinned Issuer, so its stored %s %s not used: an anchored issuer is the "
+            "sole endpoint source (RFC 8414 section 3.3) and a failed issuer fetch fails closed rather "
+            "than falling back to them. To use manually configured endpoints instead, clear the Issuer "
+            "field and re-enter the endpoint urls (clearing the Issuer also clears endpoints that may "
+            "have been resolved under it), or clear the Issuer alone to re-discover from the server url.",
+            server_ref,
+            ", ".join(discarded),
+            "is" if len(discarded) == 1 else "are",
+        )
+    return None, None, None
 
 
 def _normalized_authorize_endpoint(url: str) -> str:
@@ -278,6 +306,68 @@ def _issuer_matches(claimed_issuer: object, configured_issuer: str) -> bool:
     if not isinstance(claimed_issuer, str) or not claimed_issuer:
         return False
     return _normalized_authorize_endpoint(claimed_issuer) == _normalized_authorize_endpoint(configured_issuer)
+
+
+def _flow_endpoints_missing(
+    auth_type: MCPAuthType | None,
+    oauth2_flow: str | None,
+    authorization_url: str | None,
+    token_url: str | None,
+    token_exchange_endpoint: str | None = None,
+) -> bool:
+    """Whether a built server is missing an endpoint its flow needs to run at all.
+
+    Used by the reload fast-path exemption: discovery runs at build time only, and the fast path
+    reuses an unchanged row's registry entry verbatim, so a server whose discovery came back empty
+    (transient upstream failure, rate limiting) would stay broken until some unrelated config write
+    bumps ``updated_at``, serving its 400 the whole time. Rebuilding just these entries retries
+    discovery on the normal reload cadence. It costs no extra fetch for servers that resolved, and
+    none for those with no discovery source, since the build skips discovery for both.
+    """
+    if auth_type == MCPAuth.oauth2_token_exchange:
+        # A configured exchange endpoint replaces discovery entirely; only a server that must
+        # discover its token endpoint and still has none is unresolved.
+        return token_exchange_endpoint is None and token_url is None
+    if auth_type not in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES:
+        return False
+    if oauth2_flow == "client_credentials":
+        return token_url is None
+    return authorization_url is None or token_url is None
+
+
+def _oauth_endpoints_unresolved(server: MCPServer) -> bool:
+    """``_flow_endpoints_missing`` over a built registry entry, for the reload fast-path check.
+
+    The flow comes from ``effective_oauth2_flow``, the one column-first, shape-fallback judge every
+    flow decision uses, not from the raw column: a legacy row the startup backfill deliberately left
+    unstamped (the ambiguous M2M shape) serves M2M at request time, and reading the bare column here
+    would classify it as interactive-missing-endpoints and re-run discovery on every reload.
+    """
+    if (
+        server.auth_type == MCPAuth.oauth2_token_exchange
+        and server.token_exchange_profile == "entra_obo"
+        and not server.scopes
+    ):
+        # entra_obo fails closed at exchange time without a scope (token_exchanger.py), and scopes
+        # can come from resource discovery, so a server that resolved its endpoints but no scopes is
+        # still unresolved for its flow.
+        return True
+    if server.is_dcr_bridge and not server.client_id and server.registration_url is None:
+        # A DCR bridge with no admin-configured client can only register callers through the
+        # upstream's registration endpoint, so a build that resolved the authorize and token
+        # endpoints but not registration_endpoint (partial metadata) is still unresolved for its
+        # flow and must keep retrying; without this it silently degrades to the short-circuit arm
+        # until an unrelated config write. Scopes are deliberately NOT part of completeness: they
+        # are a request hint the authorization server bounds at consent (RFC 6749 section 3.3),
+        # and a server without them is fully functional.
+        return True
+    return _flow_endpoints_missing(
+        server.auth_type,
+        MCPServerManager.effective_oauth2_flow(server),
+        server.authorization_url,
+        server.token_url,
+        server.token_exchange_endpoint,
+    )
 
 
 def _endpoints_corroborate_authorization_url(
@@ -311,11 +401,10 @@ def _carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_serv
     during re-discovery downgrades a working server (``authorization_url`` set) to a broken one
     (``None``, /authorize 400s) with no configuration change. Mirrors the ``short_prefix``
     carry-forward. Skipped when the server's ``url`` or ``auth_type`` changed, since the previous
-    endpoints may then belong to a different upstream. ``registration_url`` IS carried even though
-    ``_persist_discovered_oauth_endpoints`` refuses to write it to the row: carrying only restores
-    the same in-memory value the previous build already ran with, while persisting it would flip
-    ``_dcr_bridge_relays_client_registration`` (which keys off the stored column) for dcr_bridge
-    servers that never had one configured.
+    endpoints may then belong to a different upstream. Discovery results live only on the in-memory
+    registry entry; the gateway never writes them to the row, whose OAuth columns carry admin intent
+    alone, so this carry is the sole last-known-good mechanism and restores exactly the values the
+    previous build already ran with.
 
     Carry-forward is a non-manual endpoint source, so the same trust rule as discovery applies: the
     previous ``token_url``/``registration_url``/``scopes`` are carried only when the previous
@@ -1182,6 +1271,40 @@ class MCPServerManager:
         # empty result, or failure). Used to throttle re-probes for servers that do
         # not return instructions, and to apply a short cooldown after failures.
         self._upstream_initialize_instructions_probed_at: dict[str, float] = {}
+        # Per-server (consecutive failures, monotonic timestamp) for OAuth discovery retries, so a
+        # server whose endpoints never resolve backs off instead of re-running the full
+        # RFC 9728 -> 8414 chain, and re-logging its warning, on every reload forever.
+        self._oauth_discovery_retry_state: dict[
+            str, tuple[int, float]
+        ] = {}  # mutable-ok: retry cooldown cache, keyed per server and pruned on success
+
+    def _oauth_discovery_retry_due(self, server_id: str) -> bool:
+        """Whether an unresolved server is due for another discovery attempt.
+
+        The reload fast-path exemption is what retries a failed discovery, so without a cooldown a
+        permanently unresolvable server re-runs the whole RFC 9728 -> RFC 8414 -> origin-fallback
+        chain and re-emits its unresolved-endpoints warning on every reload, per server, forever.
+        Delay doubles per consecutive failure from ``_OAUTH_DISCOVERY_RETRY_BASE_SECONDS`` up to
+        ``_OAUTH_DISCOVERY_RETRY_MAX_SECONDS``, so a transient outage still recovers on the next
+        reload while a broken configuration settles to one attempt per cap.
+        """
+        state = self._oauth_discovery_retry_state.get(server_id)
+        if state is None:
+            return True
+        failures, attempted_at = state
+        delay = min(
+            _OAUTH_DISCOVERY_RETRY_BASE_SECONDS * (2 ** max(failures - 1, 0)),
+            _OAUTH_DISCOVERY_RETRY_MAX_SECONDS,
+        )
+        return (time.monotonic() - attempted_at) >= delay
+
+    def _record_oauth_discovery_outcome(self, server: MCPServer) -> None:
+        """Advance or clear a server's retry cooldown after a rebuild resolved it or did not."""
+        if not _oauth_endpoints_unresolved(server):
+            self._oauth_discovery_retry_state.pop(server.server_id, None)
+            return
+        failures, _ = self._oauth_discovery_retry_state.get(server.server_id, (0, 0.0))
+        self._oauth_discovery_retry_state[server.server_id] = (failures + 1, time.monotonic())
 
     def _remember_upstream_initialize_instructions(self, server: MCPServer, client: MCPClient) -> None:
         raw = getattr(client, "_last_initialize_instructions", None)
@@ -1357,6 +1480,7 @@ class MCPServerManager:
                 manual_authorization_url,
                 manual_token_url,
                 manual_registration_url,
+                server_name or server_id,
             )
             should_discover = _has_oauth_discovery_source(server_url, use_issuer_anchor) and (
                 is_discovery_auth_type or obo_needs_discovery
@@ -1834,7 +1958,6 @@ class MCPServerManager:
         *,
         credentials_are_encrypted: bool = True,
         env_vars_are_encrypted: Optional[bool] = None,
-        persist_discovered_endpoints: bool = True,
     ) -> MCPServer:
         _mcp_info: MCPInfo = mcp_server.mcp_info or {}
         env_dict = _deserialize_json_dict(getattr(mcp_server, "env", None))
@@ -1925,7 +2048,12 @@ class MCPServerManager:
             or self._obo_needs_endpoint_discovery(auth_type, token_exchange_endpoint, manual_token_url),
         )
         manual_authorization_url, manual_token_url, manual_registration_url = _endpoints_yield_to_issuer(
-            manual_issuer, is_discovery_auth_type, manual_authorization_url, manual_token_url, manual_registration_url
+            manual_issuer,
+            is_discovery_auth_type,
+            manual_authorization_url,
+            manual_token_url,
+            manual_registration_url,
+            mcp_server.alias or mcp_server.server_name or mcp_server.server_id,
         )
         gated_oauth_metadata = await self._resolve_table_oauth_metadata(
             mcp_server=mcp_server,
@@ -2033,142 +2161,7 @@ class MCPServerManager:
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
         )
         _warn_internal_delegate_pkce_if_applicable(new_server, source="database")
-        if persist_discovered_endpoints:
-            await self._persist_discovered_obo_token_url(
-                server_id=mcp_server.server_id,
-                auth_type=auth_type,
-                existing_token_url=manual_token_url,
-                discovered_token_url=new_server.token_url,
-            )
-            await self._persist_discovered_oauth_endpoints(
-                server_id=mcp_server.server_id,
-                auth_type=auth_type,
-                existing_issuer=manual_issuer,
-                existing_authorization_url=manual_authorization_url,
-                existing_token_url=manual_token_url,
-                existing_scopes=scopes,
-                metadata=gated_oauth_metadata,
-                is_issuer_anchored=use_issuer_anchor,
-            )
         return new_server
-
-    async def _persist_discovered_obo_token_url(
-        self,
-        *,
-        server_id: str,
-        auth_type: Optional[MCPAuthType],
-        existing_token_url: Optional[str],
-        discovered_token_url: Optional[str],
-    ) -> None:
-        """Write a freshly discovered OBO token endpoint back onto the DB row.
-
-        ``build_mcp_server_from_table`` resolves ``token_url`` via RFC 9728 -> RFC 8414 for an
-        ``oauth2_token_exchange`` server that has none configured, but that resolved value otherwise
-        lives only on the returned in-memory object; the row keeps ``token_url=None`` so every rebuild
-        re-runs discovery, and a transient upstream outage during a rebuild leaves the server with no
-        endpoint until discovery next succeeds. Persisting it makes ``_obo_needs_endpoint_discovery``
-        return False on the next build. Fires at most once per server (skipped once the row has a
-        value), and is best-effort: a write failure just means discovery runs again next time.
-        """
-        if auth_type != MCPAuth.oauth2_token_exchange:
-            return
-        if existing_token_url or not discovered_token_url:
-            return
-        from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
-
-        if prisma_client is None:
-            return
-        try:
-            await MCPServerRepository(prisma_client).table.update(
-                where={"server_id": server_id},
-                data={"token_url": discovered_token_url},
-            )
-            verbose_logger.debug("Persisted discovered OBO token_url for MCP server %s", server_id)
-        except Exception as exc:  # noqa: BLE001 - best-effort; a failed write re-discovers next build
-            verbose_logger.warning("Failed to persist discovered OBO token_url for MCP server %s: %s", server_id, exc)
-
-    async def _persist_discovered_oauth_endpoints(
-        self,
-        *,
-        server_id: str,
-        auth_type: MCPAuthType | None,
-        existing_issuer: str | None,
-        existing_authorization_url: str | None,
-        existing_token_url: str | None,
-        existing_scopes: list[str] | None,
-        metadata: MCPOAuthMetadata | None,
-        is_issuer_anchored: bool = False,
-    ) -> None:
-        """Write freshly discovered OAuth endpoints back onto the DB row.
-
-        Same rationale as ``_persist_discovered_obo_token_url`` but for the interactive oauth2
-        family: discovered ``authorization_url``/``token_url``/``scopes`` otherwise live only on
-        the in-memory registry entry, which is rebuilt on every client connect (the DCR reuse path
-        calls ``update_server``) and on every post-write DB reload, so one failed re-discovery
-        serves the 400 "authorization url is not configured" from /authorize until a later rebuild succeeds.
-        Only fills row fields that are currently empty, never persists origin-fallback guesses
-        (RFC 9728/8414-advertised metadata only), and deliberately skips ``registration_url``
-        because ``_dcr_bridge_relays_client_registration`` keys off that column. Best-effort: a
-        failed write re-discovers on the next build. Scopes go through ``update_mcp_server`` so
-        they merge into the credentials blob without touching the stored client credentials.
-
-        For an issuer-anchored server (``is_issuer_anchored``) the endpoints are re-derived from the
-        §3.3-validated issuer document on every build, so they are NOT persisted into the endpoint
-        columns: persisting them would make the next build see populated endpoints and treat them as
-        authoritative stored values, defeating the "endpoints come solely from the issuer" invariant.
-        Only the resource-driven scopes are persisted for such servers.
-        """
-        if auth_type not in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES:
-            return
-        if metadata is None or metadata.from_origin_fallback:
-            return
-        issuer_update = (
-            {"issuer": metadata.discovered_issuer} if metadata.discovered_issuer and not existing_issuer else {}
-        )
-        authorization_url_update = (
-            {"authorization_url": metadata.authorization_url}
-            if metadata.authorization_url and not existing_authorization_url and not is_issuer_anchored
-            else {}
-        )
-        token_url_update = (
-            {"token_url": metadata.token_url}
-            if metadata.token_url and not existing_token_url and not is_issuer_anchored
-            else {}
-        )
-        scopes_update = {"credentials": {"scopes": metadata.scopes}} if metadata.scopes and not existing_scopes else {}
-        updates: dict[str, object] = {
-            **issuer_update,
-            **authorization_url_update,
-            **token_url_update,
-            **scopes_update,
-        }
-        if not updates:
-            return
-        from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # db.py imports this module at load
-            update_mcp_server,
-        )
-        from litellm.proxy._types import UpdateMCPServerRequest  # noqa: PLC0415  # heavy module; import at call time
-        from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime value, set after startup
-
-        if prisma_client is None:
-            return
-        try:
-            await update_mcp_server(
-                prisma_client=prisma_client,
-                data=UpdateMCPServerRequest.model_validate({"server_id": server_id, **updates}),
-                touched_by="mcp_oauth_discovery",
-            )
-            verbose_logger.info(
-                "Persisted discovered OAuth endpoints for MCP server %s: %s",
-                server_id,
-                sorted(updates),
-            )
-        except Exception as exc:  # noqa: BLE001 - best-effort; a failed write re-discovers next build
-            verbose_logger.warning(
-                "Failed to persist discovered OAuth endpoints for MCP server %s: %s",
-                server_id,
-                exc,
-            )
 
     async def _maybe_register_openapi_tools(self, server: MCPServer, *, initialize_mapping: bool = True):
         """Register OpenAPI tools if the server has a spec_path configured."""
@@ -5347,6 +5340,10 @@ class MCPServerManager:
                     and existing_server.updated_at is not None
                     and server.updated_at is not None
                     and existing_server.updated_at == server.updated_at
+                    and not (
+                        _oauth_endpoints_unresolved(existing_server)
+                        and self._oauth_discovery_retry_due(server.server_id)
+                    )
                 ):
                     # Re-use existing server instance to avoid re-running build_mcp_server_from_table()
                     # which can perform network discovery for OAuth2 servers.
@@ -5364,6 +5361,7 @@ class MCPServerManager:
                 # already-decrypted records add_server/update_server are handed.
                 # Decrypt them while building the registry entry.
                 new_server = await self.build_mcp_server_from_table(server, env_vars_are_encrypted=True)
+                self._record_oauth_discovery_outcome(new_server)
                 # Carry the cached short_prefix from the previous registry entry
                 # (if any) so the prefix is stable across reloads.
                 if existing_server is not None and existing_server.short_prefix:

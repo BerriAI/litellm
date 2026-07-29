@@ -2,6 +2,7 @@ import importlib
 import asyncio
 import json
 import logging
+import time
 import os
 import sys
 from datetime import datetime
@@ -35,6 +36,8 @@ from mcp.types import Tool as MCPTool
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
+    _flow_endpoints_missing,
+    _oauth_endpoints_unresolved,
     _deserialize_json_list,
     _normalize_mcp_server_cost_info,
     _should_strip_caller_authorization,
@@ -1594,21 +1597,15 @@ class TestMCPServerManager:
             token_url="https://idp.example.com/token",
             scopes=["read"],
         )
-        with (
-            patch.object(
-                manager, "_fetch_issuer_anchored_oauth_metadata", new=AsyncMock(return_value=issuer_resolved)
-            ) as anchored,
-            patch.object(manager, "_persist_discovered_oauth_endpoints", new=AsyncMock()) as mock_persist,
-        ):
+        with patch.object(
+            manager, "_fetch_issuer_anchored_oauth_metadata", new=AsyncMock(return_value=issuer_resolved)
+        ) as anchored:
             built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
 
         anchored.assert_awaited_once_with("https://idp.example.com", "https://up.example.com/mcp")
         assert built.authorization_url == "https://idp.example.com/authorize"
         assert built.token_url == "https://idp.example.com/token"
         assert built.token_url != "https://attacker.example.com/steal"
-        # The issuer-anchored endpoints are never persisted into the endpoint columns, so a later
-        # build cannot treat them as authoritative stored values.
-        assert mock_persist.await_args.kwargs["is_issuer_anchored"] is True
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1624,8 +1621,8 @@ class TestMCPServerManager:
         and PKCE verifier to the attacker (config-time RFC 9700 mix-up). The resource-driven scopes
         are kept, because scope selection is resource-driven (MCP Scope Selection Strategy) and scope
         inflation is bounded by the authorization server at consent (RFC 6749 §3.3), not by dropping
-        scopes on an endpoint mismatch. Both the in-memory merge and the persisted metadata drop only
-        the uncorroborated endpoints."""
+        scopes on an endpoint mismatch. The gateway persists nothing, so the in-memory merge is the
+        entire behavior."""
         manager = MCPServerManager()
         row = LiteLLM_MCPServerTable(
             server_id="manual-auth-url-3",
@@ -1645,20 +1642,13 @@ class TestMCPServerManager:
             registration_url="https://attacker.example.com/register",
             scopes=["read", "admin"],
         )
-        with (
-            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=metadata)),
-            patch.object(manager, "_persist_discovered_oauth_endpoints", new=AsyncMock()) as mock_persist,
-        ):
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=metadata)):
             built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
 
         assert built.authorization_url == "https://idp.example.com/authorize"
         assert built.token_url is None
         assert built.registration_url is None
         assert built.scopes == ["read", "admin"]
-        persisted_metadata = mock_persist.await_args.kwargs["metadata"]
-        assert persisted_metadata.token_url is None
-        assert persisted_metadata.registration_url is None
-        assert persisted_metadata.scopes == ["read", "admin"]
 
     @pytest.mark.asyncio
     async def test_build_from_table_skips_discovery_when_all_upstream_oauth_fields_present(self):
@@ -5586,388 +5576,300 @@ class TestMCPServerTimestamps:
         assert server.token_exchange_endpoint == "https://idp.example.com/token"
 
     @pytest.mark.asyncio
-    async def test_build_mcp_server_from_table_persists_discovered_obo_token_url(self):
-        """A DB-backed OBO server with no configured endpoint discovers token_url and must write it
-        back to the row, so the next rebuild skips discovery instead of re-running it every time."""
+    async def test_discovery_never_writes_the_database(self):
+        """The #34985 regression, stated as the design invariant that fixes it: the gateway never
+        writes discovery results to the row. The OAuth columns and credentials.scopes carry admin
+        intent alone, so nothing the gateway learns can read back as an admin pin on a later build
+        (which is what anchored stamped servers fail-closed and 400ed /authorize). Discovery output
+        lives on the in-memory registry entry only, for oauth2 and OBO alike."""
         manager = MCPServerManager()
 
         async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
-            assert server_url == "https://example.com/mcp"
-            assert allow_origin_fallback is False  # OBO never guesses the origin
             return MCPOAuthMetadata(
-                scopes=None,
-                authorization_url=None,
-                token_url="https://discovered.example.com/token",
-                registration_url=None,
-            )
-
-        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
-
-        record = LiteLLM_MCPServerTable(
-            server_id="obo-persist-1",
-            server_name="obo_persist",
-            url="https://example.com/mcp",
-            transport=MCPTransport.http,
-            auth_type=MCPAuth.oauth2_token_exchange,
-            credentials={"client_id": "cid", "client_secret": "csec", "audience": "aud"},
-        )
-
-        update_mock = AsyncMock()
-        repo_instance = MagicMock()
-        repo_instance.table.update = update_mock
-        with (
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
-                return_value=repo_instance,
-            ),
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        ):
-            server = await manager.build_mcp_server_from_table(record, credentials_are_encrypted=False)
-
-        assert server.token_url == "https://discovered.example.com/token"
-        update_mock.assert_awaited_once()
-        assert update_mock.call_args.kwargs["where"] == {"server_id": "obo-persist-1"}
-        assert update_mock.call_args.kwargs["data"] == {"token_url": "https://discovered.example.com/token"}
-
-    @pytest.mark.asyncio
-    async def test_persist_discovered_obo_token_url_skips_when_not_needed(self):
-        """The write-back fires only for an OBO server that discovered a new endpoint: a row that
-        already has token_url, a non-OBO auth_type, or a discovery that found nothing all no-op."""
-        manager = MCPServerManager()
-        update_mock = AsyncMock()
-        repo_instance = MagicMock()
-        repo_instance.table.update = update_mock
-
-        with (
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
-                return_value=repo_instance,
-            ),
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        ):
-            # already populated -> no write
-            await manager._persist_discovered_obo_token_url(
-                server_id="s",
-                auth_type=MCPAuth.oauth2_token_exchange,
-                existing_token_url="https://already.example.com/token",
-                discovered_token_url="https://new.example.com/token",
-            )
-            # not an OBO server -> no write
-            await manager._persist_discovered_obo_token_url(
-                server_id="s",
-                auth_type=MCPAuth.oauth2,
-                existing_token_url=None,
-                discovered_token_url="https://new.example.com/token",
-            )
-            # discovery found nothing -> no write
-            await manager._persist_discovered_obo_token_url(
-                server_id="s",
-                auth_type=MCPAuth.oauth2_token_exchange,
-                existing_token_url=None,
-                discovered_token_url=None,
-            )
-
-        update_mock.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_persist_discovered_obo_token_url_is_best_effort(self):
-        """A write-back failure must not propagate; discovery just re-runs on the next build."""
-        manager = MCPServerManager()
-        update_mock = AsyncMock(side_effect=Exception("db unavailable"))
-        repo_instance = MagicMock()
-        repo_instance.table.update = update_mock
-
-        with (
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
-                return_value=repo_instance,
-            ),
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        ):
-            await manager._persist_discovered_obo_token_url(
-                server_id="s",
-                auth_type=MCPAuth.oauth2_token_exchange,
-                existing_token_url=None,
-                discovered_token_url="https://new.example.com/token",
-            )
-
-        update_mock.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_build_mcp_server_from_table_persists_discovered_oauth_endpoints(self):
-        """A DB-backed oauth2 server with no configured endpoints discovers them and must write
-        authorization_url, token_url, and scopes back to the row; otherwise the resolved values
-        live only in memory and one failed re-discovery serves the 400 "authorization url is not configured"
-        from /authorize. registration_url must never be persisted because
-        _dcr_bridge_relays_client_registration keys off that column."""
-        manager = MCPServerManager()
-
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
-            assert allow_origin_fallback is True
-            return MCPOAuthMetadata(
-                scopes=["mcp.read", "mcp.write"],
+                scopes=["mcp.read"],
                 authorization_url="https://idp.example.com/authorize",
                 token_url="https://idp.example.com/token",
                 registration_url="https://idp.example.com/register",
-            )
-
-        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
-
-        record = LiteLLM_MCPServerTable(
-            server_id="oauth-persist-1",
-            server_name="oauth_persist",
-            url="https://example.com/mcp",
-            transport=MCPTransport.http,
-            auth_type=MCPAuth.oauth2,
-            oauth2_flow="authorization_code",
-            credentials={"client_id": "cid", "client_secret": "csec"},
-        )
-
-        update_mcp_server_mock = AsyncMock()
-        with (
-            patch(
-                "litellm.proxy._experimental.mcp_server.db.update_mcp_server",
-                new=update_mcp_server_mock,
-            ),
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        ):
-            server = await manager.build_mcp_server_from_table(record, credentials_are_encrypted=False)
-
-        assert server.authorization_url == "https://idp.example.com/authorize"
-        update_mcp_server_mock.assert_awaited_once()
-        persisted = update_mcp_server_mock.call_args.kwargs["data"]
-        assert persisted.server_id == "oauth-persist-1"
-        assert persisted.authorization_url == "https://idp.example.com/authorize"
-        assert persisted.token_url == "https://idp.example.com/token"
-        assert persisted.credentials == {"scopes": ["mcp.read", "mcp.write"]}
-        assert "registration_url" not in persisted.fields_set()
-        assert update_mcp_server_mock.call_args.kwargs["touched_by"] == "mcp_oauth_discovery"
-
-    @pytest.mark.asyncio
-    async def test_persist_discovered_oauth_endpoints_guards(self):
-        """The write-back must no-op for non-discovery auth types, empty discovery, origin-fallback
-        guesses (never harden an inferred authorization server into configuration), and rows whose
-        fields are all already populated."""
-        manager = MCPServerManager()
-        advertised = MCPOAuthMetadata(
-            scopes=["s1"],
-            authorization_url="https://idp.example.com/authorize",
-            token_url="https://idp.example.com/token",
-        )
-
-        update_mcp_server_mock = AsyncMock()
-        with (
-            patch(
-                "litellm.proxy._experimental.mcp_server.db.update_mcp_server",
-                new=update_mcp_server_mock,
-            ),
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        ):
-            await manager._persist_discovered_oauth_endpoints(
-                server_id="s",
-                auth_type=MCPAuth.api_key,
-                existing_issuer=None,
-                existing_authorization_url=None,
-                existing_token_url=None,
-                existing_scopes=None,
-                metadata=advertised,
-            )
-            await manager._persist_discovered_oauth_endpoints(
-                server_id="s",
-                auth_type=MCPAuth.oauth2,
-                existing_issuer=None,
-                existing_authorization_url=None,
-                existing_token_url=None,
-                existing_scopes=None,
-                metadata=None,
-            )
-            await manager._persist_discovered_oauth_endpoints(
-                server_id="s",
-                auth_type=MCPAuth.oauth2,
-                existing_issuer=None,
-                existing_authorization_url=None,
-                existing_token_url=None,
-                existing_scopes=None,
-                metadata=advertised.model_copy(update={"from_origin_fallback": True}),
-            )
-            await manager._persist_discovered_oauth_endpoints(
-                server_id="s",
-                auth_type=MCPAuth.oauth2,
-                existing_issuer=None,
-                existing_authorization_url="https://configured.example.com/authorize",
-                existing_token_url="https://configured.example.com/token",
-                existing_scopes=["configured"],
-                metadata=advertised,
-            )
-
-        update_mcp_server_mock.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_persist_discovered_oauth_endpoints_only_fills_empty_fields(self):
-        """A row that already has token_url keeps it; only the missing authorization_url and
-        scopes are written, so admin-typed values always win over discovery."""
-        manager = MCPServerManager()
-
-        update_mcp_server_mock = AsyncMock()
-        with (
-            patch(
-                "litellm.proxy._experimental.mcp_server.db.update_mcp_server",
-                new=update_mcp_server_mock,
-            ),
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        ):
-            await manager._persist_discovered_oauth_endpoints(
-                server_id="s",
-                auth_type=MCPAuth.oauth2,
-                existing_issuer=None,
-                existing_authorization_url=None,
-                existing_token_url="https://configured.example.com/token",
-                existing_scopes=None,
-                metadata=MCPOAuthMetadata(
-                    scopes=["s1"],
-                    authorization_url="https://idp.example.com/authorize",
-                    token_url="https://idp.example.com/token",
-                ),
-            )
-
-        update_mcp_server_mock.assert_awaited_once()
-        persisted = update_mcp_server_mock.call_args.kwargs["data"]
-        assert persisted.authorization_url == "https://idp.example.com/authorize"
-        assert persisted.credentials == {"scopes": ["s1"]}
-        assert "token_url" not in persisted.fields_set()
-
-    @pytest.mark.asyncio
-    async def test_persist_discovered_oauth_endpoints_writes_discovered_issuer_trust_on_first_use(self):
-        """A server with no configured issuer records the discovered issuer trust-on-first-use, so the
-        next rebuild anchors discovery on it (RFC 8414 §3.3) instead of re-trusting the resource. When
-        an issuer is already set (admin-typed or a prior discovery), it is never overwritten."""
-        manager = MCPServerManager()
-        metadata = MCPOAuthMetadata(
-            authorization_url="https://idp.example.com/authorize",
-            token_url="https://idp.example.com/token",
-            discovered_issuer="https://idp.example.com",
-        )
-
-        update_mcp_server_mock = AsyncMock()
-        with (
-            patch("litellm.proxy._experimental.mcp_server.db.update_mcp_server", new=update_mcp_server_mock),
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        ):
-            await manager._persist_discovered_oauth_endpoints(
-                server_id="s",
-                auth_type=MCPAuth.oauth2,
-                existing_issuer=None,
-                existing_authorization_url=None,
-                existing_token_url=None,
-                existing_scopes=None,
-                metadata=metadata,
-            )
-            await manager._persist_discovered_oauth_endpoints(
-                server_id="s",
-                auth_type=MCPAuth.oauth2,
-                existing_issuer="https://admin-configured.example.com",
-                existing_authorization_url="https://admin-configured.example.com/authorize",
-                existing_token_url="https://admin-configured.example.com/token",
-                existing_scopes=["cfg"],
-                metadata=metadata,
-            )
-
-        assert update_mcp_server_mock.await_count == 1
-        persisted = update_mcp_server_mock.call_args.kwargs["data"]
-        assert persisted.issuer == "https://idp.example.com"
-
-    @pytest.mark.asyncio
-    async def test_persist_discovered_oauth_endpoints_does_not_persist_endpoints_for_issuer_anchored(self):
-        """For an issuer-anchored server the endpoints are re-derived from the §3.3-validated issuer
-        document every build, so they must NOT be written into the endpoint columns: persisting them
-        would make the next build see populated endpoints and treat them as authoritative stored
-        values, defeating the issuer-only invariant. Only the resource-driven scopes are persisted."""
-        manager = MCPServerManager()
-        metadata = MCPOAuthMetadata(
-            authorization_url="https://idp.example.com/authorize",
-            token_url="https://idp.example.com/token",
-            scopes=["read"],
-        )
-
-        update_mcp_server_mock = AsyncMock()
-        with (
-            patch("litellm.proxy._experimental.mcp_server.db.update_mcp_server", new=update_mcp_server_mock),
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        ):
-            await manager._persist_discovered_oauth_endpoints(
-                server_id="s",
-                auth_type=MCPAuth.oauth2,
-                existing_issuer="https://idp.example.com",
-                existing_authorization_url=None,
-                existing_token_url=None,
-                existing_scopes=None,
-                metadata=metadata,
-                is_issuer_anchored=True,
-            )
-
-        update_mcp_server_mock.assert_awaited_once()
-        persisted = update_mcp_server_mock.call_args.kwargs["data"]
-        assert "authorization_url" not in persisted.fields_set()
-        assert "token_url" not in persisted.fields_set()
-        assert persisted.credentials == {"scopes": ["read"]}
-
-    @pytest.mark.asyncio
-    async def test_build_mcp_server_from_table_skips_persistence_for_temporary_servers(self):
-        """The session endpoint builds temporary servers whose server_id has no DB row; with
-        persist_discovered_endpoints=False neither the oauth2 nor the OBO write-back may fire."""
-        manager = MCPServerManager()
-
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
-            return MCPOAuthMetadata(
-                scopes=["s1"],
-                authorization_url="https://idp.example.com/authorize",
-                token_url="https://idp.example.com/token",
+                discovered_issuer="https://idp.example.com",
             )
 
         manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
 
         update_mcp_server_mock = AsyncMock()
-        obo_update_mock = AsyncMock()
         repo_instance = MagicMock()
-        repo_instance.table.update = obo_update_mock
+        repo_instance.table.update = AsyncMock()
         with (
-            patch(
-                "litellm.proxy._experimental.mcp_server.db.update_mcp_server",
-                new=update_mcp_server_mock,
-            ),
+            patch("litellm.proxy._experimental.mcp_server.db.update_mcp_server", new=update_mcp_server_mock),
             patch(
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
                 return_value=repo_instance,
             ),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
         ):
-            oauth2_record = LiteLLM_MCPServerTable(
-                server_id="temp-oauth-1",
-                server_name="temp_oauth",
-                url="https://example.com/mcp",
+            for auth_type, flow in ((MCPAuth.oauth2, "authorization_code"), (MCPAuth.oauth2_token_exchange, None)):
+                record = LiteLLM_MCPServerTable(
+                    server_id=f"no-write-{auth_type}",
+                    server_name=f"no_write_{auth_type}",
+                    url="https://example.com/mcp",
+                    transport=MCPTransport.http,
+                    auth_type=auth_type,
+                    oauth2_flow=flow,
+                    credentials={"client_id": "cid", "client_secret": "csec", "audience": "aud"},
+                )
+                built = await manager.build_mcp_server_from_table(record, credentials_are_encrypted=False)
+                assert built.token_url == "https://idp.example.com/token"
+
+        update_mcp_server_mock.assert_not_awaited()
+        repo_instance.table.update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_declared_endpoints_survive_a_failed_discovery(self):
+        """The reporter's configuration: explicit authorization_url/token_url/registration_url,
+        issuer left empty. With the gateway never stamping the issuer column, the server never turns
+        anchored, so the declared endpoints resolve on every build, including one whose discovery
+        fails entirely; /authorize keeps redirecting instead of serving the 400."""
+        manager = MCPServerManager()
+        record = LiteLLM_MCPServerTable(
+            server_id="declared-1",
+            alias="declared",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            registration_url="https://idp.example.com/register",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            built = await manager.build_mcp_server_from_table(record, credentials_are_encrypted=False)
+
+        assert built.issuer_is_anchored is False
+        assert built.authorization_url == "https://idp.example.com/authorize"
+        assert built.token_url == "https://idp.example.com/token"
+        assert built.registration_url == "https://idp.example.com/register"
+
+    def test_flow_endpoints_missing_arms(self):
+        """The reload fast-path exemption's completeness rule. Interactive needs authorize+token,
+        client_credentials and OBO need token only, an OBO server with a configured exchange
+        endpoint never discovers and must not be sent into a rebuild loop, and non-OAuth auth types
+        are never unresolved."""
+        assert _flow_endpoints_missing(MCPAuth.oauth2, "authorization_code", "https://idp/auth", None) is True
+        assert _flow_endpoints_missing(MCPAuth.oauth2, "authorization_code", None, "https://idp/token") is True
+        assert (
+            _flow_endpoints_missing(MCPAuth.oauth2, "authorization_code", "https://idp/auth", "https://idp/token")
+            is False
+        )
+        assert _flow_endpoints_missing(MCPAuth.oauth2, "client_credentials", None, "https://idp/token") is False
+        assert _flow_endpoints_missing(MCPAuth.oauth2, "client_credentials", None, None) is True
+        assert _flow_endpoints_missing(MCPAuth.oauth2_token_exchange, None, None, None) is True
+        assert _flow_endpoints_missing(MCPAuth.oauth2_token_exchange, None, None, "https://idp/token") is False
+        assert (
+            _flow_endpoints_missing(MCPAuth.oauth2_token_exchange, None, None, None, "https://idp/exchange") is False
+        )
+        assert _flow_endpoints_missing(MCPAuth.api_key, None, None, None) is False
+
+    def test_unresolved_check_uses_the_flow_judge_not_the_raw_column(self):
+        """A legacy row the startup backfill deliberately left unstamped (token_url plus client
+        credentials, no authorization_url: the ambiguous M2M shape) serves client_credentials at
+        request time via effective_oauth2_flow. The reload check must reach the same verdict, or the
+        row is classified as interactive-missing-endpoints and re-runs discovery on every reload
+        forever. A null-flow row without the M2M shape stays interactive and genuinely unresolved."""
+        m2m_shaped = MCPServer(
+            server_id="null-flow-m2m",
+            name="null_flow_m2m",
+            server_name="null_flow_m2m",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow=None,
+            token_url="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+        assert _oauth_endpoints_unresolved(m2m_shaped) is False
+
+        interactive_unresolved = m2m_shaped.model_copy(update={"client_id": None, "client_secret": None})
+        assert _oauth_endpoints_unresolved(interactive_unresolved) is True
+
+    def test_dcr_bridge_relay_arm_needs_its_registration_endpoint(self):
+        """A dcr_bridge server with no admin-configured client can only register callers through the
+        upstream registration endpoint, so a partial discovery that resolved authorize and token but
+        not registration_endpoint leaves it silently degraded to the short-circuit arm. That counts as
+        unresolved so it keeps retrying. A bridge with a configured client_id uses the short-circuit
+        arm by design and is unaffected."""
+        relay_arm = MCPServer(
+            server_id="bridge-partial",
+            name="bridge_partial",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            # dcr_bridge is only valid on the client-forwarded modes (see MCPServer.is_dcr_bridge)
+            auth_type=MCPAuth.oauth_delegate,
+            dcr_bridge=True,
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            registration_url=None,
+        )
+        assert _oauth_endpoints_unresolved(relay_arm) is True
+        assert _oauth_endpoints_unresolved(relay_arm.model_copy(update={"registration_url": "https://idp/reg"})) is False
+        assert _oauth_endpoints_unresolved(relay_arm.model_copy(update={"client_id": "admin-client"})) is False
+
+    def test_entra_obo_without_scopes_is_unresolved(self):
+        """entra_obo token exchange fails closed without a scope, and scopes can come from resource
+        discovery, so an entra_obo server that resolved its token endpoint but no scopes is still
+        unresolved for its flow. The default rfc8693 profile has no such requirement."""
+        entra = MCPServer(
+            server_id="entra-noscope",
+            name="entra_noscope",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_profile="entra_obo",
+            token_url="https://idp.example.com/token",
+            scopes=None,
+        )
+        assert _oauth_endpoints_unresolved(entra) is True
+        assert _oauth_endpoints_unresolved(entra.model_copy(update={"scopes": ["api://app/.default"]})) is False
+        assert _oauth_endpoints_unresolved(entra.model_copy(update={"token_exchange_profile": "rfc8693"})) is False
+
+    def test_oauth_discovery_retry_backs_off_per_server(self):
+        """Without a cooldown the fast-path exemption re-runs the full discovery chain, and re-emits
+        the unresolved warning, on every reload forever for a server that can never resolve. Delay
+        doubles per consecutive failure up to the cap, a success clears the state so the next failure
+        starts from the base delay again, and the cooldown is per server."""
+        manager = MCPServerManager()
+
+        def unresolved(server_id):
+            return MCPServer(
+                server_id=server_id,
+                name=server_id,
+                url="https://up.example.com/mcp",
                 transport=MCPTransport.http,
                 auth_type=MCPAuth.oauth2,
                 oauth2_flow="authorization_code",
-                credentials={"client_id": "cid", "client_secret": "csec"},
-            )
-            obo_record = LiteLLM_MCPServerTable(
-                server_id="temp-obo-1",
-                server_name="temp_obo",
-                url="https://example.com/mcp",
-                transport=MCPTransport.http,
-                auth_type=MCPAuth.oauth2_token_exchange,
-                credentials={"client_id": "cid", "client_secret": "csec"},
-            )
-            built_oauth2 = await manager.build_mcp_server_from_table(
-                oauth2_record, credentials_are_encrypted=False, persist_discovered_endpoints=False
-            )
-            await manager.build_mcp_server_from_table(
-                obo_record, credentials_are_encrypted=False, persist_discovered_endpoints=False
             )
 
-        assert built_oauth2.authorization_url == "https://idp.example.com/authorize"
-        update_mcp_server_mock.assert_not_awaited()
-        obo_update_mock.assert_not_awaited()
+        assert manager._oauth_discovery_retry_due("a") is True
+
+        manager._record_oauth_discovery_outcome(unresolved("a"))
+        assert manager._oauth_discovery_retry_due("a") is False
+        assert manager._oauth_discovery_retry_due("b") is True, "cooldown must be per server"
+
+        failures_before, _ = manager._oauth_discovery_retry_state["a"]
+        manager._record_oauth_discovery_outcome(unresolved("a"))
+        failures_after, _ = manager._oauth_discovery_retry_state["a"]
+        assert failures_after == failures_before + 1
+
+        # An elapsed cooldown lets the retry through, and the delay grows with the failure count
+        manager._oauth_discovery_retry_state["a"] = (1, time.monotonic() - 31.0)
+        assert manager._oauth_discovery_retry_due("a") is True
+        manager._oauth_discovery_retry_state["a"] = (5, time.monotonic() - 31.0)
+        assert manager._oauth_discovery_retry_due("a") is False
+
+        resolved = unresolved("a").model_copy(
+            update={
+                "authorization_url": "https://idp.example.com/authorize",
+                "token_url": "https://idp.example.com/token",
+            }
+        )
+        manager._record_oauth_discovery_outcome(resolved)
+        assert "a" not in manager._oauth_discovery_retry_state
+        assert manager._oauth_discovery_retry_due("a") is True
+
+    @pytest.mark.asyncio
+    async def test_reload_fast_path_retries_unresolved_oauth_servers(self):
+        """A server whose discovery failed must not be pinned broken by the updated_at fast path:
+        the next reload rebuilds it, retrying discovery on the normal cadence instead of waiting for
+        an unrelated config write. A resolved server with an unchanged row still takes the fast path,
+        so the exemption costs nothing in the steady state."""
+        manager = MCPServerManager()
+        stamp = datetime.now()
+        row = LiteLLM_MCPServerTable(
+            server_id="retry-1",
+            server_name="retry_server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+            created_at=stamp,
+            updated_at=stamp,
+        )
+
+        def entry(authorization_url, token_url):
+            return MCPServer(
+                server_id="retry-1",
+                name="retry_server",
+                server_name="retry_server",
+                url="https://up.example.com/mcp",
+                transport=MCPTransport.http,
+                auth_type=MCPAuth.oauth2,
+                oauth2_flow="authorization_code",
+                authorization_url=authorization_url,
+                token_url=token_url,
+                updated_at=stamp,
+            )
+
+        raw_row = MagicMock()
+        raw_row.model_dump.return_value = row.model_dump()
+        repo_instance = MagicMock()
+        repo_instance.table.find_many = AsyncMock(return_value=[raw_row])
+
+        async def run_reload(previous_entry):
+            manager.registry = {"retry-1": previous_entry}
+            build_mock = AsyncMock(return_value=previous_entry)
+            with (
+                patch(
+                    "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                    return_value=repo_instance,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                    return_value=MagicMock(),
+                ),
+                patch.object(manager, "build_mcp_server_from_table", new=build_mock),
+            ):
+                await manager.reload_servers_from_database()
+            return build_mock
+
+        unresolved_build = await run_reload(entry(None, None))
+        unresolved_build.assert_awaited_once()
+
+        resolved_build = await run_reload(entry("https://idp.example.com/authorize", "https://idp.example.com/token"))
+        resolved_build.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_anchored_issuer_discarding_stored_endpoints_warns(self, caplog):
+        """An anchored server ignoring stored endpoint columns must say so: that state is exactly
+        what a row stamped by an earlier release looks like after upgrade, and the warning names the
+        remedy (clear the Issuer field) instead of leaving the 400 undiagnosable."""
+        manager = MCPServerManager()
+        record = LiteLLM_MCPServerTable(
+            server_id="stamped-1",
+            alias="stamped_row",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+            issuer="https://idp.example.com",
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        with (
+            patch.object(manager, "_fetch_issuer_anchored_oauth_metadata", new=AsyncMock(return_value=None)),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            built = await manager.build_mcp_server_from_table(record, credentials_are_encrypted=False)
+
+        assert built.issuer_is_anchored is True
+        assert built.authorization_url is None
+        assert "stamped_row" in caplog.text
+        assert "authorization_url, token_url" in caplog.text
+        assert "clear the Issuer" in caplog.text
 
     @pytest.mark.asyncio
     async def test_update_server_carries_forward_last_known_good_oauth_endpoints(self):
