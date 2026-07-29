@@ -1378,7 +1378,7 @@ async def _user_api_key_auth_builder(
                             proxy_logging_obj=proxy_logging_obj,
                         )
                         if _jwt_project_obj is not None:
-                            valid_token.project_metadata = _jwt_project_obj.metadata
+                            valid_token.project_metadata = _jwt_project_obj.merged_metadata
                             valid_token.project_alias = _jwt_project_obj.project_alias
 
                     return cast(UserAPIKeyAuth, valid_token)
@@ -1966,7 +1966,7 @@ async def _user_api_key_auth_builder(
                     proxy_logging_obj=proxy_logging_obj,
                 )
                 if _project_obj is not None:
-                    valid_token.project_metadata = _project_obj.metadata
+                    valid_token.project_metadata = _project_obj.merged_metadata
                     valid_token.project_alias = _project_obj.project_alias
 
             global_proxy_spend = None
@@ -2326,7 +2326,7 @@ async def _run_centralized_common_checks(
         )
 
     if project_object is not None:
-        user_api_key_auth_obj.project_metadata = project_object.metadata
+        user_api_key_auth_obj.project_metadata = project_object.merged_metadata
         user_api_key_auth_obj.project_alias = project_object.project_alias
 
     skip_budget_checks = _should_skip_budget_checks(
@@ -2960,7 +2960,7 @@ async def _run_post_custom_auth_checks(
             proxy_logging_obj=proxy_logging_obj,
         )
         if _project_obj is not None:
-            valid_token.project_metadata = _project_obj.metadata
+            valid_token.project_metadata = _project_obj.merged_metadata
             valid_token.project_alias = _project_obj.project_alias
 
     return valid_token
