@@ -1318,3 +1318,280 @@ class TestConfiguredBucketNameResolution:
         assert "bucket_name" in OPTIONAL_KWARGS_KEYS
         params = get_litellm_params(bucket_name="my-legacy-bucket")
         assert params.get("bucket_name") == "my-legacy-bucket"
+
+
+def _embeddings_entry(**overrides):
+    entry = {
+        "custom_id": "request-1",
+        "method": "POST",
+        "url": "/v1/embeddings",
+        "body": {"model": "gemini-embedding-2", "input": "hello world"},
+    }
+    entry.update(overrides)
+    return entry
+
+
+class TestVertexEmbeddingsBatchInputTranslation:
+    """
+    /v1/embeddings batch lines must be translated to Vertex's Gemini Embedding batch
+    shape, not the generateContent shape.
+
+    Ref: https://cloud.google.com/vertex-ai/generative-ai/docs/embeddings/batch-prediction-genai-embeddings
+    """
+
+    def test_should_emit_embed_content_request_shape(self):
+        (row,) = _wrap_entries([_embeddings_entry()])
+
+        assert row["request"] == {"content": {"parts": [{"text": "hello world"}]}}
+        assert "contents" not in row["request"]
+        assert "labels" not in row["request"]
+
+    def test_should_round_trip_custom_id_through_top_level_key(self):
+        (row,) = _wrap_entries([_embeddings_entry(custom_id="MyRequest-1")])
+
+        assert row["key"] == "MyRequest-1"
+
+    def test_should_omit_key_when_no_custom_id(self):
+        entry = _embeddings_entry()
+        del entry["custom_id"]
+
+        (row,) = _wrap_entries([entry])
+
+        assert "key" not in row
+
+    def test_should_map_openai_params_to_embed_content_config_sibling(self):
+        (row,) = _wrap_entries(
+            [
+                _embeddings_entry(
+                    body={
+                        "model": "gemini-embedding-001",
+                        "input": "hello world",
+                        "dimensions": 768,
+                        "task_type": "RETRIEVAL_DOCUMENT",
+                        "title": "some_title",
+                    }
+                )
+            ]
+        )
+
+        assert row["embed_content_config"] == {
+            "output_dimensionality": 768,
+            "task_type": "RETRIEVAL_DOCUMENT",
+            "title": "some_title",
+        }
+        assert "output_dimensionality" not in row["request"]
+
+    def test_should_omit_embed_content_config_when_no_params_given(self):
+        (row,) = _wrap_entries([_embeddings_entry()])
+
+        assert "embed_content_config" not in row
+
+    def test_should_translate_multimodal_gcs_input(self):
+        (row,) = _wrap_entries(
+            [
+                _embeddings_entry(
+                    body={
+                        "model": "gemini-embedding-2",
+                        "input": "gs://cloud-samples-data/generative-ai/image/benchmark.jpeg",
+                    }
+                )
+            ]
+        )
+
+        assert row["request"]["content"]["parts"] == [
+            {
+                "file_data": {
+                    "mime_type": "image/jpeg",
+                    "file_uri": "gs://cloud-samples-data/generative-ai/image/benchmark.jpeg",
+                }
+            }
+        ]
+
+    @pytest.mark.parametrize("url", ["/v1/embeddings", "v1/embeddings", "/v1/embeddings/"])
+    def test_should_detect_embeddings_route_variants(self, url):
+        (row,) = _wrap_entries([_embeddings_entry(url=url)])
+
+        assert "content" in row["request"]
+
+    def test_should_raise_when_input_missing(self):
+        with pytest.raises(ValueError, match="`input` is required"):
+            _wrap_entries([_embeddings_entry(body={"model": "gemini-embedding-2"})])
+
+    def test_should_keep_chat_completions_lines_on_generate_content_path(self):
+        (row,) = _wrap_entries(
+            [
+                {
+                    "custom_id": "request-1",
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": {
+                        "model": "gemini-2.0-flash-001",
+                        "messages": [{"role": "user", "content": "Hello"}],
+                    },
+                }
+            ]
+        )
+
+        assert row["request"]["contents"] == [
+            {"role": "user", "parts": [{"text": "Hello"}]}
+        ]
+        assert row["request"]["labels"]["litellm_custom_id"] == "request-1"
+        assert "key" not in row
+
+    def test_should_translate_each_line_by_its_own_url(self):
+        chat_row, embeddings_row = _wrap_entries(
+            [
+                {
+                    "custom_id": "chat-1",
+                    "url": "/v1/chat/completions",
+                    "body": {
+                        "model": "gemini-2.0-flash-001",
+                        "messages": [{"role": "user", "content": "Hello"}],
+                    },
+                },
+                _embeddings_entry(custom_id="embed-1"),
+            ]
+        )
+
+        assert "contents" in chat_row["request"]
+        assert "content" in embeddings_row["request"]
+
+
+class TestVertexEmbeddingsBatchOutputTranslation:
+    """Vertex Gemini Embedding batch output rows must come back as OpenAI batch rows."""
+
+    def _vertex_embeddings_output_row(self, **overrides):
+        row = {
+            "key": "request-1",
+            "request": {"content": {"parts": [{"text": "hello world"}]}},
+            "response": {
+                "tokenCount": "2",
+                "embedding": {"values": [-0.015, 0.024]},
+            },
+        }
+        row.update(overrides)
+        return row
+
+    def _transform(self, config, rows, url="https://example.com"):
+        content = "\n".join(json.dumps(row) for row in rows).encode("utf-8")
+        result = config.transform_file_content_response(
+            raw_response=httpx.Response(
+                status_code=200,
+                content=content,
+                headers={"content-type": "application/octet-stream"},
+                request=httpx.Request("GET", url),
+            ),
+            logging_obj=MagicMock(),
+            litellm_params={},
+        )
+        return [
+            json.loads(line)
+            for line in result.response.content.decode("utf-8").split("\n")
+        ]
+
+    def test_should_transform_embeddings_output_to_openai_batch_row(self, config):
+        (result,) = self._transform(config, [self._vertex_embeddings_output_row()])
+
+        assert result["custom_id"] == "request-1"
+        assert result["error"] is None
+        assert result["response"]["status_code"] == 200
+        body = result["response"]["body"]
+        assert body["object"] == "list"
+        assert body["data"] == [
+            {"embedding": [-0.015, 0.024], "index": 0, "object": "embedding"}
+        ]
+        assert body["usage"]["prompt_tokens"] == 2
+        assert body["usage"]["total_tokens"] == 2
+
+    def test_should_resolve_model_from_managed_gcs_object_path(self, config):
+        object_path = urllib.parse.quote(
+            "litellm-vertex-files/publishers/google/models/gemini-embedding-2/"
+            "prediction-model-2026-07-29T05:55:52Z/predictions.jsonl",
+            safe="",
+        )
+        url = f"https://storage.googleapis.com/storage/v1/b/my-bucket/o/{object_path}?alt=media"
+
+        (result,) = self._transform(
+            config, [self._vertex_embeddings_output_row()], url=url
+        )
+
+        assert result["response"]["body"]["model"] == "gemini-embedding-2"
+
+    def test_should_surface_failed_embeddings_row_as_error(self, config):
+        (result,) = self._transform(
+            config,
+            [
+                self._vertex_embeddings_output_row(
+                    status="Failed to parse JSON into proto", response={}
+                )
+            ],
+        )
+
+        assert result["custom_id"] == "request-1"
+        assert result["response"] is None
+        assert result["error"]["code"] == "vertex_ai_error"
+        assert "Failed to parse JSON into proto" in result["error"]["message"]
+
+    def test_should_transform_every_row_of_a_multi_row_file(self, config):
+        results = self._transform(
+            config,
+            [
+                self._vertex_embeddings_output_row(key=f"request-{index}")
+                for index in range(3)
+            ],
+        )
+
+        assert [result["custom_id"] for result in results] == [
+            "request-0",
+            "request-1",
+            "request-2",
+        ]
+
+    def test_should_end_to_end_round_trip_openai_embeddings_batch(self, config):
+        (vertex_row,) = _wrap_entries(
+            [
+                _embeddings_entry(
+                    custom_id="MyRequest-1",
+                    body={
+                        "model": "gemini-embedding-2",
+                        "input": "hello world",
+                        "dimensions": 2,
+                    },
+                )
+            ]
+        )
+
+        (result,) = self._transform(
+            config,
+            [
+                {
+                    **vertex_row,
+                    "status": "",
+                    "processed_time": "2026-07-29T05:55:52.379528Z",
+                    "response": {
+                        "tokenCount": "2",
+                        "embedding": {"values": [-0.015, 0.024]},
+                    },
+                }
+            ],
+        )
+
+        assert result["custom_id"] == "MyRequest-1"
+        assert result["response"]["body"]["data"][0]["embedding"] == [-0.015, 0.024]
+
+    def test_should_leave_legacy_predict_embeddings_output_untouched(self, config):
+        legacy_row = {
+            "instance": {"content": "hello world"},
+            "predictions": [
+                {
+                    "embeddings": {
+                        "statistics": {"token_count": 2, "truncated": False},
+                        "values": [0.2],
+                    }
+                }
+            ],
+            "status": "",
+        }
+        content = json.dumps(legacy_row).encode("utf-8")
+
+        assert config._try_transform_vertex_batch_output_to_openai(content) == content
