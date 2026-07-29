@@ -1955,10 +1955,15 @@ async def test_responses_api_otpm_output_cap_applied_not_skipped_as_embedding(ra
     Regression for a Greptile P1 finding: _reserve_project_io_tokens_or_raise
     classified any request with data["input"] set as an embedding (no output
     tokens), which also misclassifies the Responses API -- it puts its prompt
-    in "input" too, but does generate output. That skipped the output-cap
-    (data["max_tokens"]) applied whenever the configured OTPM limit is small
-    enough to need it, letting an unbounded Responses generation blow past
-    OTPM before post-call reconciliation catches up.
+    in "input" too, but does generate output. That skipped the output cap
+    applied whenever the configured OTPM limit is small enough to need it,
+    letting an unbounded Responses generation blow past OTPM before
+    post-call reconciliation catches up.
+
+    The cap must land on data["max_output_tokens"], not data["max_tokens"]:
+    the Responses-to-chat-completion transformation only reads
+    max_output_tokens, so a max_tokens cap is silently dropped before
+    provider dispatch (a second Greptile finding on the same code path).
     """
     handler, cache = rate_limiter
 
@@ -1983,10 +1988,13 @@ async def test_responses_api_otpm_output_cap_applied_not_skipped_as_embedding(ra
         call_type="aresponses",
     )
 
-    assert data.get("max_tokens") is not None, (
+    assert data.get("max_output_tokens") is not None, (
         "Responses call was misclassified as an embedding and skipped the OTPM output cap"
     )
-    assert data["max_tokens"] <= 10, f"expected the OTPM-derived floor (<=10), got {data['max_tokens']}"
+    assert data["max_output_tokens"] <= 10, f"expected the OTPM-derived floor (<=10), got {data['max_output_tokens']}"
+    assert data.get("max_tokens") is None, (
+        "OTPM output cap was written to max_tokens, which the Responses transformation ignores"
+    )
 
 
 @pytest.mark.asyncio
@@ -1996,7 +2004,9 @@ async def test_responses_api_combined_tpm_output_cap_applied_not_skipped_as_embe
     output-cap block of async_pre_call_hook (a second, independent
     `is_embedding = data.get("input") is not None` check). A project with
     only a combined model_tpm_limit (no split itpm/otpm) configured small
-    enough to need the output cap must still apply it to a Responses call.
+    enough to need the output cap must still apply it to a Responses call,
+    and must write it to max_output_tokens for the same reason as the OTPM
+    case above.
     """
     handler, cache = rate_limiter
 
@@ -2021,10 +2031,13 @@ async def test_responses_api_combined_tpm_output_cap_applied_not_skipped_as_embe
         call_type="aresponses",
     )
 
-    assert data.get("max_tokens") is not None, (
+    assert data.get("max_output_tokens") is not None, (
         "Responses call was misclassified as an embedding and skipped the combined-TPM output cap"
     )
-    assert data["max_tokens"] <= 10, f"expected the TPM-derived floor (<=10), got {data['max_tokens']}"
+    assert data["max_output_tokens"] <= 10, f"expected the TPM-derived floor (<=10), got {data['max_output_tokens']}"
+    assert data.get("max_tokens") is None, (
+        "combined-TPM output cap was written to max_tokens, which the Responses transformation ignores"
+    )
 
 
 @pytest.mark.asyncio

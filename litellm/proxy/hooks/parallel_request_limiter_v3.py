@@ -520,6 +520,36 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return baseline
         return min(baseline, max(1, min_configured_tpm_limit // _TPM_FLOOR_FRACTION))
 
+    @staticmethod
+    def _apply_implicit_output_cap(
+        data: dict,
+        min_configured_limit: int | None,
+        call_type: str | None,
+    ) -> None:
+        """Hard-cap generation length when the request has no explicit cap.
+
+        Guards against an unbounded response overshooting a small TPM/OTPM
+        budget before post-call reconciliation runs. Skips requests that
+        already set an explicit cap and embeddings, which have no generation
+        budget. The Responses API only honors ``max_output_tokens`` (its
+        underlying chat-completion transformation ignores ``max_tokens``), so
+        the cap must be written to that field for Responses call types.
+        """
+        capped_floor = _PROXY_MaxParallelRequestsHandler_v3._no_max_tokens_output_floor(min_configured_limit)
+        baseline_floor = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
+        has_explicit_max_tokens = (
+            data.get("max_tokens") is not None
+            or data.get("max_completion_tokens") is not None
+            or data.get("max_output_tokens") is not None
+        )
+        is_embedding = data.get("input") is not None and call_type not in RESPONSES_API_CALL_TYPES
+        if capped_floor >= baseline_floor or has_explicit_max_tokens or is_embedding:
+            return
+        cap_field = "max_output_tokens" if call_type in RESPONSES_API_CALL_TYPES else "max_tokens"
+        existing_cap = data.get(cap_field)
+        if existing_cap is None or capped_floor < existing_cap:
+            data[cap_field] = capped_floor
+
     def _estimate_tokens_for_request(
         self,
         data: dict,
@@ -2768,20 +2798,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         # Hard-cap generation length so an unbounded response can't overshoot
         # the OTPM budget before post-call reconciliation runs, mirroring the
-        # combined-TPM floor cap in the caller. Only tightens
-        # data["max_tokens"]; never loosens a cap already set.
-        capped_output_floor = self._no_max_tokens_output_floor(min_configured_otpm_limit)
-        baseline_floor = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
-        has_explicit_max_tokens = (
-            data.get("max_tokens") is not None
-            or data.get("max_completion_tokens") is not None
-            or data.get("max_output_tokens") is not None
+        # combined-TPM floor cap in the caller.
+        self._apply_implicit_output_cap(
+            data=data,
+            min_configured_limit=min_configured_otpm_limit,
+            call_type=call_type,
         )
-        is_embedding = data.get("input") is not None and call_type not in RESPONSES_API_CALL_TYPES
-        if capped_output_floor < baseline_floor and not has_explicit_max_tokens and not is_embedding:
-            existing_cap = data.get("max_tokens")
-            if existing_cap is None or capped_output_floor < existing_cap:
-                data["max_tokens"] = capped_output_floor
 
         io_response, itpm_reserved, otpm_reserved = await self.reserve_io_tokens(
             descriptors=io_token_descriptors,
@@ -3022,21 +3044,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 min_configured_tpm_limit = min(configured_tpm_limits)
 
                 # When the configured TPM cap is small enough to constrain the
-                # no-max_tokens floor, also hard-cap the model output via
-                # data["max_tokens"] so concurrent unbounded generations can't
-                # spend past the limit before post-call reconciliation runs.
-                # Skip when the request already sets max_tokens or has no
-                # generation budget at all (embeddings).
-                capped_floor = self._no_max_tokens_output_floor(min_configured_tpm_limit)
-                baseline_floor = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
-                has_explicit_max_tokens = (
-                    data.get("max_tokens") is not None
-                    or data.get("max_completion_tokens") is not None
-                    or data.get("max_output_tokens") is not None
+                # no-max_tokens floor, also hard-cap the model output so
+                # concurrent unbounded generations can't spend past the limit
+                # before post-call reconciliation runs.
+                self._apply_implicit_output_cap(
+                    data=data,
+                    min_configured_limit=min_configured_tpm_limit,
+                    call_type=call_type,
                 )
-                is_embedding = data.get("input") is not None and call_type not in RESPONSES_API_CALL_TYPES
-                if capped_floor < baseline_floor and not has_explicit_max_tokens and not is_embedding:
-                    data["max_tokens"] = capped_floor
 
                 # Floor at 1 token so contentless requests (/responses,
                 # tool-call continuations, empty messages) still flow
