@@ -97,12 +97,6 @@ def test_access_grants_not_global_when_false():
 
 
 # --- routing scope decided entirely by access -------------------------------
-#
-# Routing is access-only: a destination fires for exactly the identities its
-# access grants. Empty access fires for no one (deny-all); proxy-wide routing
-# must be requested explicitly with access.global=True.
-
-
 def test_empty_access_is_deny_all():
     """Empty access grants no one: not proxy-wide."""
     info = CredentialInfo(credential_type="logging")

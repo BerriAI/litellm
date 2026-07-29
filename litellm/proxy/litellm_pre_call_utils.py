@@ -723,7 +723,7 @@ async def _apply_admin_logging_exporters(
     The destinations are set on a server-only ContextVar (never on ``data``), so
     they are neither request-shaped nor reachable by the provider body; the OTEL v2
     router and the fan-out processor both read them from that ContextVar. Default-deny
-    means an identity with no assignment gets no per-tenant destination here.
+    means an identity no destination's access grants gets no per-tenant destination here.
 
     ``cached_destinations`` -- when ``user_api_key_auth`` already resolved the
     destinations on this request (the FastAPI path), reuse the result instead of

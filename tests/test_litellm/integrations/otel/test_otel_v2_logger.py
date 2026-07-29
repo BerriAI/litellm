@@ -987,17 +987,10 @@ def test_lazy_activation_emits_llm_span_when_destination_resolves(monkeypatch):
 
 
 def test_no_upstream_reject_emits_no_deferred_span_even_with_destinations(monkeypatch):
-    """LIT-3850 regression: a post-auth rejection (rate-limit/budget/guardrail) fires
-    the failure callback with the ``LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL`` marker set,
-    a real ``standard_logging_object`` payload, AND admin-resolved destinations already
-    hoisted at auth time. This is the exact intersection the lazy-activation close path
-    misses: because destinations are present, the ``not destinations`` guard does not
-    fire, so only re-reading ``call.is_no_upstream_call`` keeps the close from
-    fabricating a ``chat`` span for a call that never reached a provider. It mirrors
-    ``test_lazy_activation_emits_llm_span_when_destination_resolves`` (which emits) with
-    the marker added; without the no-upstream check this close emits a phantom span into
-    the tenant's destination (live-reproduced: a 429 rate-limited request produced a
-    ``chat gflash`` span in the tenant sink)."""
+    """A close for a no-upstream request (``LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL`` set)
+    with a payload and resolved destinations must emit no gen-AI span. Mirrors
+    ``test_lazy_activation_emits_llm_span_when_destination_resolves`` with the marker
+    set: that one emits, this one must not."""
     from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 
     logger, exporter = _logger()

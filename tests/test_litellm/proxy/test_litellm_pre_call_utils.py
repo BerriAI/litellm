@@ -5341,15 +5341,9 @@ async def test_apply_admin_logging_exporters_stamps_and_activates(
 
 @pytest.mark.asyncio
 async def test_apply_admin_logging_exporters_swallows_resolver_failure(monkeypatch):
-    """LIT-3850 regression: admin-owned telemetry setup is best-effort and must never
-    break a real request. The pre-call path re-runs the resolver when nothing was cached
-    at auth (the auth hoist failed, or the SDK path has no ``request.state``); the auth
-    hoist wraps the resolver in ``except Exception`` but this call site did not, so a
-    non-``HTTPException`` there (e.g. a cache-backend error surfacing through the org
-    fallback lookup in ``_effective_org_id``) propagated out of
-    ``add_litellm_data_to_request`` and 500'd the request. With the guard the request
-    proceeds: no exception escapes, no backend is activated, and request data is
-    untouched. Without it this raises."""
+    """Telemetry setup is best-effort: when the pre-call resolver raises a
+    non-``HTTPException``, ``_apply_admin_logging_exporters`` swallows it so the request
+    proceeds with no exception escaping, no backend activated, and request data untouched."""
     import litellm.proxy.litellm_pre_call_utils as pcu
     from litellm.integrations.otel.plumbing.context import (
         _request_destinations,
@@ -5375,8 +5369,8 @@ async def test_client_cannot_control_otel_destinations(_seeded_logging_credentia
     """Y3 spoofing guard: a client cannot control OTEL export destinations.
 
     A request injects ``otel_destinations`` at the top level AND inside
-    ``litellm_metadata`` pointing at an attacker endpoint, for an identity with no
-    admin assignment. Destinations are admin-owned and resolved server-side, so the
+    ``litellm_metadata`` pointing at an attacker endpoint, for an identity no
+    destination grants. Destinations are admin-owned and resolved server-side, so the
     client value is wiped before the resolver runs; default-deny then adds nothing.
     The attacker endpoint must appear nowhere in the outgoing request. This drives
     the full ``add_litellm_data_to_request`` so the wipe-then-resolve ORDER is under
@@ -5415,7 +5409,7 @@ async def test_client_cannot_control_otel_destinations(_seeded_logging_credentia
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-key",
         metadata={},
-        team_metadata={},  # no logging_exporters assigned anywhere
+        team_metadata={},
         spend=0.0,
         max_budget=100.0,
         model_max_budget={},
