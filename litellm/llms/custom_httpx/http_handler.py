@@ -13,6 +13,7 @@ from typing import (
     List,
     Mapping,
     Optional,
+    Set,
     Tuple,
     Union,
 )
@@ -133,6 +134,18 @@ _DEFAULT_TIMEOUT = httpx.Timeout(
     timeout=COMPLETION_HTTP_FALLBACK_SECONDS,
     connect=HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
 )
+
+_async_client_cleanup_tasks: Set[asyncio.Task] = set()
+
+
+def _discard_async_client_cleanup_task(task: asyncio.Task) -> None:
+    _async_client_cleanup_tasks.discard(task)
+    if task.cancelled():
+        return
+    try:
+        task.exception()
+    except Exception:
+        pass
 
 
 def _prepare_request_data_and_content(
@@ -830,7 +843,9 @@ class AsyncHTTPHandler:
 
     def __del__(self) -> None:
         try:
-            asyncio.get_running_loop().create_task(self.close())
+            task = asyncio.get_running_loop().create_task(self.close())
+            _async_client_cleanup_tasks.add(task)
+            task.add_done_callback(_discard_async_client_cleanup_task)
         except Exception:
             pass
 
