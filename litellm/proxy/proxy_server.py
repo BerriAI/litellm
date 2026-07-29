@@ -15661,10 +15661,14 @@ async def reload_model_cost_map(
             raise HTTPException(status_code=500, detail="Database connection not available")
 
         # Immediately reload the model cost map in the current pod
-        from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+        from litellm.litellm_core_utils.get_model_cost_map import (
+            get_model_cost_map,
+            get_model_cost_map_source_info,
+        )
 
         model_cost_map_url = litellm.model_cost_map_url
         new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
+        source_info = get_model_cost_map_source_info()
         litellm.model_cost = new_model_cost_map
         # Invalidate case-insensitive lookup map since model_cost was replaced
         _invalidate_model_cost_lowercase_map()
@@ -15698,12 +15702,30 @@ async def reload_model_cost_map(
         await invalidate_config_param("model_cost_map_reload_config")
 
         models_count = len(new_model_cost_map) if new_model_cost_map else 0
+
+        if source_info["is_env_forced"]:
+            no_op_message = (
+                "Reload was a no-op: LITELLM_LOCAL_MODEL_COST_MAP=true forces the bundled backup "
+                "cost map, so no fresh pricing data was fetched. Unset that env var to reload live data."
+            )
+            verbose_proxy_logger.warning(no_op_message)
+            return {
+                "message": no_op_message,
+                "status": "no_op",
+                "models_count": models_count,
+                "source": source_info["source"],
+                "is_env_forced": True,
+                "timestamp": current_time.isoformat(),
+            }
+
         verbose_proxy_logger.info(f"Model cost map reloaded successfully in current pod. Models count: {models_count}")
 
         return {
             "message": f"Price data reloaded successfully! {models_count} models updated.",
             "status": "success",
             "models_count": models_count,
+            "source": source_info["source"],
+            "is_env_forced": False,
             "timestamp": current_time.isoformat(),
         }
     except Exception as e:
