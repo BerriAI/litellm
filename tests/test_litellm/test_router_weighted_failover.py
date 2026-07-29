@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+import litellm
 from litellm import Router
 from litellm.utils import _get_excluded_filtered_deployments
 
@@ -769,3 +770,73 @@ async def test_failover_falls_through_to_external_fallback_when_remaining_in_coo
         )
 
     assert response._hidden_params["model_id"] == "fallback"
+
+
+# ---------------------------------------------------------------------------
+# Regression: weighted-failover exclusion must beat a stale affinity pin
+# (Issue #32308)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_weighted_failover_exclusion_beats_stale_affinity_pin():
+    """
+    Regression for #32308.
+
+    When weighted failover retries a request with the just-failed deployment
+    excluded, the exclusion must be applied before the affinity callback. A
+    session-affinity pin to the excluded deployment would otherwise narrow the
+    candidate set to that deployment, the exclusion filter (previously run last)
+    would then drop it, and async_get_healthy_deployments would raise instead of
+    landing on the healthy same-group sibling.
+    """
+    from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+        DeploymentAffinityCheck,
+    )
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "k"},
+                "model_info": {"id": "A"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "k"},
+                "model_info": {"id": "B"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+        enable_weighted_failover=True,
+        optional_pre_call_checks=["session_affinity"],
+    )
+
+    session_id = "session-32308"
+    stable_key = DeploymentAffinityCheck._get_stable_model_map_key_from_deployments(
+        [_make_dep("A"), _make_dep("B")]
+    )
+    assert stable_key is not None
+    session_cache_key = DeploymentAffinityCheck.get_session_affinity_cache_key(
+        model_group=stable_key, session_id=session_id
+    )
+
+    affinity_callbacks = [
+        cb for cb in litellm.callbacks if isinstance(cb, DeploymentAffinityCheck)
+    ]
+    assert affinity_callbacks, "session_affinity should register a DeploymentAffinityCheck"
+    for cb in affinity_callbacks:
+        await cb.cache.async_set_cache(session_cache_key, {"model_id": "A"})
+
+    # A just failed and is excluded; the session is still pinned to A.
+    result = await router.async_get_healthy_deployments(
+        model="test-model",
+        request_kwargs={
+            "metadata": {"session_id": session_id},
+            "_excluded_deployment_ids": ["A"],
+        },
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    ids = sorted(d["model_info"]["id"] for d in result)
+    assert ids == ["B"]
