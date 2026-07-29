@@ -18,7 +18,8 @@ from __future__ import annotations
 import asyncio
 import random
 import re
-from collections.abc import Mapping
+import time
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Union, cast
 
 from pydantic import BaseModel
@@ -26,6 +27,7 @@ from pydantic import BaseModel
 from litellm._logging import verbose_router_logger
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import get_request_metadata_field
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.utils import (
     ModelResponse,
@@ -50,6 +52,7 @@ if TYPE_CHECKING:
 
     from litellm.router import Router
     from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
+    from litellm.router_strategy.complexity_router.cache_warming.store import CacheWarmingStore
     from litellm.types.router import PreRoutingHookResponse
 else:
     Router = Any
@@ -619,6 +622,9 @@ class ComplexityRouter(CustomLogger):
         request_kwargs: dict,
     ) -> str:
         if not self.config.plugins:
+            warm_pick = await self._warm_aware_pick(self._tier_pools().get(tier.value, []), request_kwargs)
+            if warm_pick is not None:
+                return warm_pick
             return self.get_model_for_tier(tier)
 
         from litellm.types.router import RoutingContext
@@ -641,7 +647,36 @@ class ComplexityRouter(CustomLogger):
             # silently bypassed. Raise instead, matching the Router-level plugin
             # pipeline's own fail-closed behavior for the same situation.
             raise ValueError(f"No candidate models left for tier {tier_key} after routing-plugin filtering")
+        warm_pick = await self._warm_aware_pick(context.candidate_models, request_kwargs)
+        if warm_pick is not None:
+            return warm_pick
         return self._pick_from_tier_value(context.candidate_models, tier_key)
+
+    async def _warm_aware_pick(self, pool: Sequence[str], request_kwargs: Mapping[str, object]) -> str | None:
+        config = self.config.cache_warming
+        if not config.enabled or len(pool) <= 1:
+            return None
+        session_id = get_request_metadata_field(request_kwargs, "session_id")
+        if session_id is None:
+            return None
+        store = self.get_cache_warming_store()
+        if store is None or store.redis_cache is None:
+            return None
+        from litellm.router_strategy.complexity_router.cache_warming.types import is_cache_fresh
+
+        caller_scope = get_request_metadata_field(request_kwargs, "user_api_key_hash") or "unscoped"
+        record_key = store.record_key(self.model_name, caller_scope, session_id)
+        record = await store.get_record(record_key)
+        if record is None:
+            return None
+        warmth = await store.get_warmth(record_key, tuple(pool))
+        now = time.time()
+        warmed = frozenset(model for model, warmed_at in warmth.items() if is_cache_fresh(warmed_at, now))
+        served = frozenset((record.served_model,)) if is_cache_fresh(record.last_activity, now) else frozenset[str]()
+        candidates = tuple(model for model in pool if model in warmed | served)
+        if not candidates:
+            return None
+        return random.choice(candidates)
 
     def _ensure_adaptive_router(self) -> Any | None:
         if not self.config.adaptive:
@@ -1047,42 +1082,33 @@ class ComplexityRouter(CustomLogger):
 
         return user_message, system_prompt
 
-    @staticmethod
-    def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:
-        """Metadata may land on `metadata` or `litellm_metadata` depending on the
-        endpoint, mirroring DeploymentAffinityCheck's precedence."""
-        return [
-            metadata
-            for metadata_key in ("litellm_metadata", "metadata")
-            if isinstance(metadata := request_kwargs.get(metadata_key), dict)
-        ]
+    async def _capture_session(
+        self, request_kwargs: Mapping[str, object], messages: Sequence[Mapping[str, object]] | None, routed_model: str
+    ) -> None:
+        if not self.config.cache_warming.enabled:
+            return
+        from litellm.router_strategy.complexity_router.cache_warming.capture import capture_session
 
-    @staticmethod
-    def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
-        """Resolve a client-supplied session_id."""
-        for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
-            session_id = metadata.get("session_id")
-            if session_id is not None:
-                return str(session_id)
-        return None
+        try:
+            await capture_session(self, request_kwargs, messages, routed_model)
+        except Exception:  # noqa: BLE001  # a capture failure must never fail the user's request
+            verbose_router_logger.exception("cache_warming capture failed; the request continues unaffected")
 
-    @staticmethod
-    def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict) -> str | None:
-        """Resolve the proxy-derived API key hash, the same trust boundary
-        DeploymentAffinityCheck uses for its own key-based affinity (not the
-        client-supplied OpenAI `user` param, which isn't authenticated)."""
-        for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
-            user_key = metadata.get("user_api_key_hash")
-            if user_key is not None:
-                return str(user_key)
-        return None
+    def get_cache_warming_store(self) -> CacheWarmingStore | None:
+        if not self.config.cache_warming.enabled:
+            return None
+        from litellm.router_strategy.complexity_router.cache_warming.store import CacheWarmingStore
+
+        router = self.litellm_router_instance
+        redis_cache = router.cache.redis_cache if router is not None and router.cache is not None else None
+        return CacheWarmingStore(redis_cache=redis_cache, auto_router_model_name=self.model_name)
 
     def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict) -> str:
         # Namespace by the caller's API key hash so two different callers reusing the
         # same client-supplied session_id can't poison each other's routing pin. Falls
         # back to "unscoped" only when there's no authenticated caller to scope by
         # (e.g. direct Router usage without the proxy layer).
-        caller_scope = self._get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped"
+        caller_scope = get_request_metadata_field(request_kwargs, "user_api_key_hash") or "unscoped"
         return f"complexity_router_session_affinity:v1:{self.model_name}:{caller_scope}:{session_id}"
 
     async def async_pre_routing_hook(
@@ -1114,7 +1140,7 @@ class ComplexityRouter(CustomLogger):
                 metadata[RETURN_RAW_MODEL_NAME_METADATA_KEY] = True
 
         use_session_affinity = self.config.session_affinity and not self.config.plugins
-        session_id = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
+        session_id = get_request_metadata_field(request_kwargs, "session_id") if use_session_affinity else None
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
         if cache_key is not None:
@@ -1149,6 +1175,7 @@ class ComplexityRouter(CustomLogger):
                         kwargs_metadata = request_kwargs.setdefault("metadata", {})
                         if isinstance(kwargs_metadata, dict):
                             kwargs_metadata[ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY] = routed_model
+                    await self._capture_session(request_kwargs, messages, routed_model)
                     escalated = routed_model != pinned_model
                     cause: RoutingDecisionCause = "session_affinity_escalation" if escalated else "session_affinity_pin"
                     verbose_router_logger.info(
@@ -1179,6 +1206,8 @@ class ComplexityRouter(CustomLogger):
                 value=response.model,
                 ttl=self.config.session_affinity_ttl_seconds,
             )
+        if response is not None:
+            await self._capture_session(request_kwargs, messages, response.model)
         return response
 
     async def _classify_and_route(

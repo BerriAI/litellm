@@ -34,6 +34,8 @@ else:
 # breakpoints: "A maximum of 4 blocks with cache_control may be provided."
 MAX_CACHE_CONTROL_BLOCKS = 4
 
+EXPLICIT_PROMPT_CACHING_PROVIDERS = frozenset(("anthropic", "bedrock"))
+
 
 class AnthropicCacheControlHook(CustomPromptManagement):
     def get_chat_completion_prompt(
@@ -406,7 +408,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             except Exception:  # noqa: BLE001  # unroutable model must never block the call, just skip auto-caching
                 return []
 
-        if provider not in ("anthropic", "bedrock"):
+        if provider not in EXPLICIT_PROMPT_CACHING_PROVIDERS:
             return []
 
         from litellm.utils import supports_prompt_caching

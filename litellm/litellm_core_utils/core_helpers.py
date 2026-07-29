@@ -1,6 +1,7 @@
 # What is this?
 ## Helper utilities
 import copy
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union
 
 import httpx
@@ -212,6 +213,29 @@ def get_or_create_metadata_bucket(
         metadata_bucket = {}
         request_data[metadata_key] = metadata_bucket
     return metadata_key, metadata_bucket
+
+
+def iter_request_metadata_dicts(request_kwargs: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    """Every metadata dict present at the TOP level of request kwargs, litellm_metadata first.
+
+    Distinct from ``get_litellm_metadata_from_kwargs``, which reads the nested
+    ``kwargs["litellm_params"]`` level and returns one merged dict; callers that must inspect both
+    slots as written (routing affinity, cache warming) need them separately and unmerged.
+    """
+    return tuple(  # pyright: ignore[reportUnknownVariableType]  # isinstance narrows object to dict[Unknown, Unknown]
+        metadata  # pyright: ignore[reportUnknownArgumentType]  # request metadata keys are runtime strings
+        for metadata_key in ("litellm_metadata", "metadata")
+        if isinstance(metadata := request_kwargs.get(metadata_key), dict)
+    )
+
+
+def get_request_metadata_field(request_kwargs: Mapping[str, object], field: str) -> str | None:
+    """First stringified value of ``field`` across the top-level metadata slots."""
+    for metadata in iter_request_metadata_dicts(request_kwargs):
+        value = metadata.get(field)
+        if value is not None:
+            return str(value)
+    return None
 
 
 def get_litellm_metadata_from_kwargs(kwargs: dict):

@@ -248,6 +248,54 @@ class ClassifierLLMConfig(BaseModel):
     )
 
 
+class CacheWarmingConfig(BaseModel):
+    """Configuration for multi-model provider prompt-cache warming."""
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Capture each session's latest payload and keep provider prompt caches warm on every "
+            "tier model via background max_tokens=1 replays, so mid-session tier switches stay "
+            "cache hits. Requires Redis on the router cache and store_prompts_in_spend_logs=True"
+        ),
+    )
+    refresh_interval_seconds: int = Field(
+        default=270,
+        gt=0,
+        description="Replay cadence per model; keep under the provider's cache TTL (Anthropic: 5 minutes)",
+    )
+    session_ttl_seconds: int = Field(
+        default=3600,
+        gt=0,
+        description="TTL for the stored session payload record in Redis",
+    )
+    idle_timeout_seconds: int = Field(
+        default=600,
+        gt=0,
+        description="Stop warming a session after this long without a real request; resumes on the next turn",
+    )
+    max_sessions: int = Field(
+        default=1000,
+        gt=0,
+        description=(
+            "Exact upper bound on concurrently warmed sessions per auto-router, enforced by an atomic Redis "
+            "admission index; new sessions past the cap are not captured until existing ones expire"
+        ),
+    )
+    max_payload_bytes: int = Field(
+        default=1_048_576,
+        gt=0,
+        description="Skip capturing sessions whose compressed payload exceeds this size",
+    )
+    warm_models: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Explicit model groups to keep warm; defaults to the first member of each tier pool. "
+            "Only Anthropic/Bedrock models that support prompt caching are warmed"
+        ),
+    )
+
+
 class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
@@ -399,6 +447,11 @@ class ComplexityRouterConfig(BaseModel):
         description="TTL for the session affinity pin; refreshed on every cache hit",
     )
 
+    cache_warming: CacheWarmingConfig = Field(
+        default_factory=CacheWarmingConfig,
+        description="Multi-model provider prompt-cache warming; disabled by default",
+    )
+
     plugins: list[RoutingPlugin] | None = Field(
         default=None,
         description="RoutingPlugin instances that narrow the classified tier's candidate models before selection",
@@ -463,6 +516,15 @@ class ComplexityRouterConfig(BaseModel):
             raise ValueError(
                 "plugins and adaptive=True cannot both be set: adaptive's bandit selection doesn't yet "
                 "consume plugin-narrowed candidate pools. Disable adaptive or remove plugins."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_cache_warming_adaptive_combo(self) -> "ComplexityRouterConfig":
+        if self.cache_warming.enabled and self.adaptive:
+            raise ValueError(
+                "cache_warming and adaptive=True cannot both be set: adaptive's bandit selection doesn't yet "
+                "consult warm-cache state. Disable adaptive or disable cache_warming."
             )
         return self
 

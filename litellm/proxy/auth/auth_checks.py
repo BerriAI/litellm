@@ -498,7 +498,7 @@ async def common_checks(
     llm_router: Optional[Router],
     proxy_logging_obj: ProxyLogging,
     valid_token: Optional[UserAPIKeyAuth],
-    request: Request,
+    request: Optional[Request],
     skip_budget_checks: bool = False,
     project_object: Optional[LiteLLM_ProjectTableCachedObj] = None,
 ) -> bool:
@@ -2509,11 +2509,17 @@ async def get_key_object(
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
     check_cache_only: Optional[bool] = None,
+    check_db_only: Optional[bool] = None,
 ) -> UserAPIKeyAuth:
     """
     - Check if team id in proxy Team Table
     - if valid, return LiteLLM_TeamTable object with defined limits
     - if not, then raise an error
+
+    ``check_db_only`` skips the cache read, mirroring the flag get_team_object and get_user_object already
+    carry. A caller that must not act on a revoked key needs the authoritative row: the cache is written by
+    every worker and a key blocked, expired or deleted seconds ago still resolves to valid state from another
+    worker's entry until it expires.
     """
     if prisma_client is None:
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
@@ -2523,9 +2529,13 @@ async def get_key_object(
 
     # Same flow as before: use cache only when we have a hit we can turn into UserAPIKeyAuth
     # (dict from Redis / model_dump, or UserAPIKeyAuth from in-memory). Otherwise fall through to DB.
-    user_api_key_auth = await user_api_key_cache.async_get_cache(
-        key=key,
-        model_type=UserAPIKeyAuth,
+    user_api_key_auth = (
+        None
+        if check_db_only
+        else await user_api_key_cache.async_get_cache(
+            key=key,
+            model_type=UserAPIKeyAuth,
+        )
     )
     if user_api_key_auth is not None:
         return _copy_user_api_key_auth_for_cache(user_api_key_obj=user_api_key_auth)

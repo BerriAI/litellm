@@ -4159,3 +4159,182 @@ def test_every_routing_decision_field_is_classified():
         f"unclassified={declared - classified}, stale={classified - declared}"
     )
     assert not (PROMPT_QUOTING_ROUTING_DECISION_FIELDS & DERIVED_ROUTING_DECISION_FIELDS)
+class TestCacheWarmingConfig:
+    def test_cache_warming_config_defaults_disabled(self):
+        config = ComplexityRouterConfig()
+        assert config.cache_warming.enabled is False
+        assert config.cache_warming.refresh_interval_seconds == 270
+        assert config.cache_warming.session_ttl_seconds == 3600
+        assert config.cache_warming.idle_timeout_seconds == 600
+        assert config.cache_warming.max_sessions == 1000
+        assert config.cache_warming.warm_models is None
+
+    def test_cache_warming_coerces_from_nested_yaml_dict(self):
+        config = ComplexityRouterConfig(
+            cache_warming={"enabled": True, "refresh_interval_seconds": 120, "warm_models": ["sonnet", "opus"]}
+        )
+        assert config.cache_warming.enabled is True
+        assert config.cache_warming.refresh_interval_seconds == 120
+        assert config.cache_warming.warm_models == ("sonnet", "opus")
+
+    def test_cache_warming_and_adaptive_mutually_exclusive_raises(self):
+        with pytest.raises(ValueError, match="cache_warming and adaptive"):
+            ComplexityRouterConfig(
+                tiers={"SIMPLE": ["gpt-4o-mini"]},
+                adaptive=True,
+                cache_warming={"enabled": True},
+            )
+
+    def test_cache_warming_disabled_with_adaptive_is_allowed(self):
+        config = ComplexityRouterConfig(tiers={"SIMPLE": ["gpt-4o-mini"]}, adaptive=True)
+        assert config.cache_warming.enabled is False
+
+    def test_cache_warming_rejects_nonpositive_intervals(self):
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(cache_warming={"enabled": True, "refresh_interval_seconds": 0})
+
+
+class TestWarmAwarePick:
+    _POOL = ["fast-claude", "smart-claude", "cold-model"]
+
+    @staticmethod
+    def _router(mock_router_instance, redis, **config_overrides):
+        from types import SimpleNamespace
+
+        mock_router_instance.cache = SimpleNamespace(redis_cache=redis)
+        return ComplexityRouter(
+            model_name="warm-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": list(TestWarmAwarePick._POOL)},
+                "session_affinity": False,
+                "cache_warming": {"enabled": True},
+                **config_overrides,
+            },
+        )
+
+    @staticmethod
+    def _seed(redis, warmth, last_activity=None, served_model="fast-claude"):
+        import json
+        import time as time_module
+
+        from litellm.router_strategy.complexity_router.cache_warming.store import CacheWarmingStore
+        from litellm.router_strategy.complexity_router.cache_warming.types import (
+            CACHE_WARMING_RECORD_SCHEMA_VERSION,
+            CacheWarmingAttribution,
+            CacheWarmingPayload,
+            CacheWarmingRecord,
+            compress_payload,
+        )
+
+        payload = CacheWarmingPayload(
+            model=served_model,
+            messages=({"role": "user", "content": "hello"},),
+            call_surface="chat_completions",
+        )
+        blob, sha = compress_payload(payload)
+        record = CacheWarmingRecord(
+            schema_version=CACHE_WARMING_RECORD_SCHEMA_VERSION,
+            payload_compressed=blob,
+            payload_sha256=sha,
+            token_estimate=2048,
+            last_activity=last_activity if last_activity is not None else time_module.time(),
+            served_model=served_model,
+            attribution=CacheWarmingAttribution(user_api_key="hash-w"),
+            auto_router_model_name="warm-router",
+        )
+        store = CacheWarmingStore(redis_cache=redis, auto_router_model_name="warm-router")
+        key = store.record_key("warm-router", "hash-w", "warm-sess")
+        redis.hashes.setdefault(store.sessions_key(), {})[key] = json.dumps(record.model_dump())
+        for model_group, stamp in warmth.items():
+            redis.data[CacheWarmingStore.warmth_key(key, model_group)] = json.dumps(stamp)
+
+    @staticmethod
+    def _kwargs():
+        return {"metadata": {"session_id": "warm-sess", "user_api_key_hash": "hash-w"}}
+
+    @staticmethod
+    def _fresh_redis():
+        from tests.test_litellm.router_strategy.complexity_router.cache_warming.test_store import FakeRedisCache
+
+        return FakeRedisCache()
+
+    @pytest.mark.asyncio
+    async def test_pick_restricted_to_warmed_members_and_served_model(self, mock_router_instance):
+        import time as time_module
+
+        redis = self._fresh_redis()
+        self._seed(redis, warmth={"smart-claude": time_module.time()}, served_model="fast-claude")
+        router = self._router(mock_router_instance, redis)
+        picks = {
+            await router._pick_model_for_tier(ComplexityTier.SIMPLE, None, None, self._kwargs()) for _ in range(20)
+        }
+        assert "cold-model" not in picks
+        assert picks <= {"fast-claude", "smart-claude"}
+
+    @pytest.mark.asyncio
+    async def test_stale_warm_entries_fall_back(self, mock_router_instance):
+        import time as time_module
+
+        redis = self._fresh_redis()
+        stale = time_module.time() - (270 + 60 + 5)
+        self._seed(redis, warmth={"smart-claude": stale}, last_activity=time_module.time() - 601)
+        router = self._router(mock_router_instance, redis)
+        assert await router._warm_aware_pick(self._POOL, self._kwargs()) is None
+
+    @pytest.mark.asyncio
+    async def test_served_model_counts_as_warm_only_while_session_active(self, mock_router_instance):
+        import time as time_module
+
+        redis = self._fresh_redis()
+        self._seed(redis, warmth={}, served_model="fast-claude")
+        router = self._router(mock_router_instance, redis)
+        picks = {
+            await router._pick_model_for_tier(ComplexityTier.SIMPLE, None, None, self._kwargs()) for _ in range(20)
+        }
+        assert picks == {"fast-claude"}
+
+        self._seed(redis, warmth={}, served_model="fast-claude", last_activity=time_module.time() - 601)
+        assert await router._warm_aware_pick(self._POOL, self._kwargs()) is None
+
+    @pytest.mark.asyncio
+    async def test_falls_back_without_session_or_record_or_redis(self, mock_router_instance):
+        redis = self._fresh_redis()
+        router = self._router(mock_router_instance, redis)
+        assert await router._warm_aware_pick(self._POOL, {}) is None
+        assert await router._warm_aware_pick(self._POOL, self._kwargs()) is None
+        no_redis_router = self._router(MagicMock(), None)
+        assert await no_redis_router._warm_aware_pick(self._POOL, self._kwargs()) is None
+        pick = await router._pick_model_for_tier(ComplexityTier.SIMPLE, None, None, {})
+        assert pick in self._POOL
+
+    @pytest.mark.asyncio
+    async def test_disabled_or_single_member_pool_returns_none(self, mock_router_instance):
+        import time as time_module
+
+        redis = self._fresh_redis()
+        self._seed(redis, warmth={"smart-claude": time_module.time()})
+        router = self._router(mock_router_instance, redis)
+        assert await router._warm_aware_pick(["fast-claude"], self._kwargs()) is None
+        disabled = self._router(MagicMock(), redis, cache_warming={"enabled": False})
+        assert await disabled._warm_aware_pick(self._POOL, self._kwargs()) is None
+
+    @pytest.mark.asyncio
+    async def test_plugin_narrowed_candidates_get_warm_pick(self, mock_router_instance):
+        import time as time_module
+
+        class ExcludeSmartClaude:
+            async def run(self, context):
+                context.candidate_models = [m for m in context.candidate_models if m != "smart-claude"]
+                return context
+
+        redis = self._fresh_redis()
+        self._seed(redis, warmth={"smart-claude": time_module.time()}, served_model="fast-claude")
+        router = self._router(mock_router_instance, redis, plugins=[ExcludeSmartClaude()])
+        picks = {
+            await router._pick_model_for_tier(
+                ComplexityTier.SIMPLE, None, None, self._kwargs()
+            )
+            for _ in range(20)
+        }
+        assert picks == {"fast-claude"}
