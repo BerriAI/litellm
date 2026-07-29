@@ -911,12 +911,15 @@ class TestBuildAggregatedSqlQuery:
         assert "api_key = $5" in sql
 
     def test_model_group_rollups_fall_back_to_model_name(self):
-        """Aggregated model_groups rollups must coalesce NULL model_group to model.
+        """Aggregated model_groups rollups must fall back to model for group-less rows.
 
         The (date, model_group) grouping level cannot recover the model column
         after the fact (it is rolled up), so the fallback has to happen in SQL;
         without it, group-less rows silently vanish from the model_groups
-        breakdown that the usage UI now renders by default.
+        breakdown that the usage UI now renders by default. Group-less rows are
+        stored as empty strings, not NULL (spend_tracking_utils defaults
+        model_group to ""), so a plain COALESCE is not enough: the fallback must
+        be NULLIF-wrapped to catch both
         """
         sql, _ = _build_aggregated_sql_query(
             table_name="litellm_dailyuserspend",
@@ -929,13 +932,15 @@ class TestBuildAggregatedSqlQuery:
         )
 
         normalized = " ".join(sql.split())
-        assert "COALESCE(model_group, model) AS model_group" in normalized
+        fallback = "COALESCE(NULLIF(model_group, ''), model)"
+        assert f"{fallback} AS model_group" in normalized
         assert (
-            "GROUPING(date, api_key, model, COALESCE(model_group, model), "
+            f"GROUPING(date, api_key, model, {fallback}, "
             "custom_llm_provider, mcp_namespaced_tool_name, endpoint) AS group_level" in normalized
         )
-        assert "(date, COALESCE(model_group, model)), (date, COALESCE(model_group, model), api_key)," in normalized
+        assert f"(date, {fallback}), (date, {fallback}, api_key)," in normalized
         assert "(date, model_group)" not in normalized
+        assert "COALESCE(model_group, model)" not in normalized
 
 
 @pytest.mark.asyncio
