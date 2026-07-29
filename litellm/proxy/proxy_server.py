@@ -9302,6 +9302,7 @@ async def embeddings(
     try:
         # Use shared request body reading helper (same as chat/completions)
         data = await _read_request_body(request=request)
+        base_llm_response_processor.data = data
 
         ### HANDLE TOKEN ARRAY INPUT DECODING ###
         # This must happen BEFORE base_process_llm_request() since it modifies the input
@@ -9345,9 +9346,6 @@ async def embeddings(
                 data["metadata"]["user_api_key_org_alias"] = user_api_key_dict.organization_alias
             if hasattr(user_api_key_dict, "agent_id") and user_api_key_dict.agent_id is not None:
                 data["metadata"]["agent_id"] = user_api_key_dict.agent_id
-
-        # Use unified request processor (same as chat/completions and responses)
-        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
 
         # Process the request with all optimizations (shared sessions, network tuning, etc.)
         response = await base_llm_response_processor.base_process_llm_request(

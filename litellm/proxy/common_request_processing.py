@@ -889,9 +889,11 @@ async def _await_llm_call_cancelling_on_disconnect(
 
 
 class ProxyBaseLLMRequestProcessing:
-    def __init__(self, data: dict, failure_call_type: Optional[str] = None):
+    def __init__(
+        self, data: dict, failure_call_type: str | None = None
+    ):  # mutable-ok: request payload is mutated during processing
         self.data = data
-        self._failure_call_type: Optional[str] = failure_call_type
+        self._failure_call_type: str | None = failure_call_type
 
     @staticmethod
     def get_custom_headers(
