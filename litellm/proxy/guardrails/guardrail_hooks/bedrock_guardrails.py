@@ -1284,22 +1284,31 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     @staticmethod
     def _nearest_whitespace_split_index(text: str) -> int:
-        """Return the index nearest `text`'s midpoint that falls on a
-        whitespace boundary, so splitting `text[:i]` / `text[i:]` there never
-        severs a word. Falls back to the raw midpoint when `text` has no
-        whitespace at all (a single giant token) -- still a correct, lossless
-        split, just no longer guaranteed word-safe for that pathological case.
+        """Return the index nearest `text`'s midpoint that falls on a space
+        boundary, so splitting `text[:i]` / `text[i:]` there never severs a word.
+
+        The returned index always leaves both sides non-empty, which is what makes
+        the caller's recursion terminate. A boundary that would put the split at 0
+        or at ``len(text)`` is discarded: it would hand back a fragment identical to
+        the text just rejected as too large, AWS would reject that again, and each
+        retry would re-split it into the same unchanged fragment until the stack ran
+        out. The dangerous shape is a text whose only space at or after the midpoint
+        is its final character.
+
+        Falls back to the raw midpoint when no usable space boundary exists, either
+        because `text` has none at all (a single giant token) or because the only
+        candidates were degenerate. That is still a correct, lossless split, just no
+        longer guaranteed word-safe for those cases. `text` must be at least two
+        characters, which `_split_bedrock_content` guarantees, so the midpoint itself
+        is never degenerate.
         """
         midpoint = len(text) // 2
-        left = text.rfind(" ", 0, midpoint)
-        right = text.find(" ", midpoint)
-        if left == -1 and right == -1:
-            return midpoint
-        if left == -1:
-            return right + 1
-        if right == -1:
-            return left + 1
-        return left + 1 if midpoint - left <= right - midpoint else right + 1
+        boundaries = (text.rfind(" ", 0, midpoint), text.find(" ", midpoint))
+        candidates = sorted(
+            (found + 1 for found in boundaries if found != -1),
+            key=lambda split: abs(split - midpoint),
+        )
+        return next((split for split in candidates if 0 < split < len(text)), midpoint)
 
     @staticmethod
     def _is_input_too_large_error(detail: object) -> bool:

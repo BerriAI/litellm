@@ -4376,3 +4376,57 @@ async def test_configured_chunk_budget_changes_how_content_is_packed():
 
     assert await _calls_made_with_budget(_BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS) == 4
     assert await _calls_made_with_budget(100_000) == 1
+
+
+def test_split_index_never_produces_an_empty_fragment():
+    """Both fragments must be non-empty for every splittable text, so bisection always
+    makes progress.
+
+    A text whose only qualifying whitespace is its final character is the dangerous
+    shape: taking that boundary puts the split at len(text), leaving the first fragment
+    identical to the input that was just rejected and the second empty. The recursion
+    would then resubmit the unchanged fragment forever and exhaust the stack instead of
+    scanning or surfacing Bedrock's error."""
+    for text in ("ab ", "xxxx ", ("x" * 40) + " ", " ab", "a b", "ab", "  "):
+        split_at = BedrockGuardrail._nearest_whitespace_split_index(text)
+        assert 0 < split_at < len(text), f"degenerate split {split_at} for {text!r}"
+        assert text[:split_at] and text[split_at:], f"empty fragment for {text!r}"
+        assert text[:split_at] + text[split_at:] == text
+
+
+@pytest.mark.asyncio
+async def test_oversized_single_item_with_trailing_space_gives_up_instead_of_recursing():
+    """An oversized single item whose only space is trailing must bottom out and
+    surface Bedrock's error, not recurse forever.
+
+    AWS is modelled the way it really behaves, rejecting every attempt, because the
+    danger is a fragment identical to the input that was just rejected: AWS would
+    reject it again, and each retry would split it into the same unchanged fragment.
+    A split that always shrinks the text terminates and re-raises; one that can return
+    the whole text raises RecursionError instead. The call-count bound is generous:
+    halving 41 characters down to unsplittable is a handful of attempts, nowhere near
+    a stack limit."""
+    guardrail = _bedrock_guardrail_for_chunk_tests()
+    messages = [{"role": "user", "content": ("x" * 40) + " "}]
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.side_effect = lambda *_a, **_k: _too_large_validation_httpx_response()
+
+        with pytest.raises(HTTPException) as excinfo:
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=messages,
+                request_data={"model": "bedrock-nova-micro"},
+            )
+
+    assert excinfo.value.status_code == 400
+    assert mock_post.await_count < 200
