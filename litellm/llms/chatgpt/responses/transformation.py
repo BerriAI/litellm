@@ -203,7 +203,22 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return None
         response_payload = dict(response_payload)
         if not response_payload.get("output") and streamed_output_items:
-            response_payload["output"] = [item for _, item in sorted(streamed_output_items.items())]
+            # The Codex backend includes provider-specific fields (e.g. `phase`,
+            # `logprobs`) in output items that are not part of the Responses API
+            # schema.  Passing them verbatim to ResponsesAPIResponse causes
+            # Pydantic validation to fail, which leaves `output` empty and
+            # raises "Unknown items in responses API response: []".  Strip the
+            # extra fields before building the response object.
+            _EXTRA_FIELDS = {"phase", "logprobs"}
+            clean_items = []
+            for _, item in sorted(streamed_output_items.items()):
+                ci = {k: v for k, v in item.items() if k not in _EXTRA_FIELDS}
+                ci["content"] = [
+                    {k2: v2 for k2, v2 in c.items() if k2 not in _EXTRA_FIELDS}
+                    for c in ci.get("content", [])
+                ]
+                clean_items.append(ci)
+            response_payload["output"] = clean_items
         if "created_at" in response_payload:
             response_payload["created_at"] = _safe_convert_created_field(response_payload["created_at"])
         try:
