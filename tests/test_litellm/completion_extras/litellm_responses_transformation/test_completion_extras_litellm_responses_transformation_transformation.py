@@ -1,10 +1,7 @@
-import datetime
 import json
 import os
 import sys
-import unittest
-from typing import List, Optional, Tuple
-from unittest.mock import ANY, MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
@@ -51,7 +48,6 @@ def test_convert_chat_completion_messages_to_responses_api_image_input():
     assert user_content in response_str
     assert user_image in response_str
 
-    print("response: ", response)
     assert response[0]["content"][1]["image_url"] == user_image
 
 
@@ -142,22 +138,21 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_imag
     ), "image_url should be a flat string, not a nested object"
     assert "detail" in image_item, "detail field should be present"
 
-    print("✓ Tool result with image correctly transformed to Responses API format")
 
 
 def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text():
     """
-    Test that tool messages with text content are correctly transformed to Responses API format.
+    Test that tool messages with plain-string content pass through as a plain string.
 
-    This is a regression test for the issue where tool results were being transformed
-    with type='output_text' instead of type='input_text', which caused OpenAI's Responses API
-    to reject the request with "Invalid value: 'output_text'".
+    The Responses API documents function_call_output.output as a plain string.
+    A previous implementation wrapped the string in [{"type": "input_text", ...}],
+    which caused strict/enterprise Responses API backends to reject the request.
 
     Chat Completion format:
         {"role": "tool", "tool_call_id": "call_abc123", "content": "15 degrees"}
 
-    Responses API format should use input_text, not output_text:
-        {"type": "function_call_output", "call_id": "call_abc123", "output": [{"type": "input_text", "text": "15 degrees"}]}
+    Responses API format (correct):
+        {"type": "function_call_output", "call_id": "call_abc123", "output": "15 degrees"}
     """
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
@@ -165,7 +160,6 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text
 
     handler = LiteLLMResponsesTransformationHandler()
 
-    # Chat Completion format with tool result containing text
     messages = [
         {
             "role": "user",
@@ -194,7 +188,6 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text
 
     response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
 
-    # Find the function_call_output item
     function_call_output = None
     for item in response:
         if item.get("type") == "function_call_output":
@@ -206,23 +199,9 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text
     ), "function_call_output not found in response"
     assert function_call_output["call_id"] == "call_abc123"
 
-    # Check that the output is correctly transformed to use input_text, not output_text
     output = function_call_output["output"]
-    assert isinstance(output, list), "output should be a list"
-    assert len(output) == 1, "output should have one item"
-
-    text_item = output[0]
-    # Should be transformed to use input_text for tool results in Responses API format
-    assert (
-        text_item["type"] == "input_text"
-    ), f"Expected type 'input_text' for tool result, got '{text_item.get('type')}'"
-    assert (
-        text_item["text"] == "15 degrees"
-    ), f"Expected text '15 degrees', got '{text_item.get('text')}'"
-
-    print(
-        "✓ Tool result with text correctly transformed to use input_text for Responses API format"
-    )
+    assert isinstance(output, str), f"output should be a plain string, got {type(output)}"
+    assert output == "15 degrees", f"Expected '15 degrees', got '{output}'"
 
 
 def test_openai_responses_chunk_parser_reasoning_summary():
@@ -508,7 +487,6 @@ and I learn to carry this small calm home."""
     # Check reasoning content
     assert choice.message.reasoning_content == reasoning_summary.text
 
-    print("✓ transform_response correctly handled reasoning items and output messages")
 
 
 def _make_empty_responses_api_response(model: str = "gpt-5.4"):
@@ -961,9 +939,6 @@ def test_transform_request_single_char_keys_not_matched():
     assert result_correct.get("metadata") == {"user_id": "123"}
     assert result_correct.get("previous_response_id") == "resp_abc"
 
-    print(
-        "✓ Single-character keys are not incorrectly matched to metadata/previous_response_id"
-    )
 
 
 # =============================================================================
@@ -1294,16 +1269,11 @@ def test_text_plus_tool_calls_sequence():
 
 def test_tool_message_output_uses_input_text_not_output_text():
     """
-    Test that tool message content uses input_text type, not output_text.
+    Test that plain-string tool message content passes through as a plain string.
 
-    This is a regression test for a bug where tool results were transformed to:
-        {"type": "function_call_output", "output": [{"type": "output_text", "text": "..."}]}
-
-    But the Responses API expects input_text for tool results:
-        {"type": "function_call_output", "output": [{"type": "input_text", "text": "..."}]}
-
-    The incorrect format caused OpenAI to reject with:
-        "Invalid value: 'output_text'. Supported values are: 'input_text', 'input_image', and 'input_file'."
+    The Responses API documents function_call_output.output as a plain string.
+    Wrapping it in [{"type": "input_text", ...}] caused strict backends to reject
+    the request. This test verifies the output is the raw string, not a list.
     """
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
@@ -1336,7 +1306,6 @@ def test_tool_message_output_uses_input_text_not_output_text():
 
     response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
 
-    # Find the function_call_output item
     function_call_output = None
     for item in response:
         if item.get("type") == "function_call_output":
@@ -1346,16 +1315,9 @@ def test_tool_message_output_uses_input_text_not_output_text():
     assert function_call_output is not None, "function_call_output not found"
     assert function_call_output["call_id"] == "call_abc123"
 
-    # The output should be a list with input_text type
     output = function_call_output["output"]
-    assert isinstance(output, list), f"output should be a list, got {type(output)}"
-    assert len(output) == 1
-    assert (
-        output[0]["type"] == "input_text"
-    ), f"Expected input_text, got {output[0].get('type')}"
-    assert output[0]["text"] == '{"temperature": 15, "condition": "sunny"}'
-
-    print("✓ Tool message output correctly uses input_text type")
+    assert isinstance(output, str), f"output should be a plain string, got {type(output)}"
+    assert output == '{"temperature": 15, "condition": "sunny"}'
 
 
 def test_multiple_tool_calls_in_single_choice():
@@ -1498,7 +1460,6 @@ def test_multiple_tool_calls_in_single_choice():
     assert tool_calls[2]["id"] == "call_horoscope"
     assert tool_calls[2]["function"]["name"] == "get_horoscope"
 
-    print("✓ Multiple tool calls are correctly grouped in a single choice")
 
 
 def test_map_reasoning_effort_adds_summary_detailed():
@@ -1542,9 +1503,6 @@ def test_map_reasoning_effort_adds_summary_detailed():
                 "summary" not in result
             ), f"Summary should NOT be present by default for effort={effort}"
 
-            print(
-                f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}' (no summary by default)"
-            )
 
         # Test 2: With flag enabled - summary IS added
         litellm.reasoning_auto_summary = True
@@ -1558,9 +1516,6 @@ def test_map_reasoning_effort_adds_summary_detailed():
                 result["summary"] == "detailed"
             ), f"Summary should be 'detailed' when flag is enabled for effort={effort}"
 
-            print(
-                f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}', summary='detailed' (flag enabled)"
-            )
 
         # Test 3: With env var enabled (flag disabled) - summary IS added
         litellm.reasoning_auto_summary = False
@@ -1570,7 +1525,6 @@ def test_map_reasoning_effort_adds_summary_detailed():
         assert (
             result["summary"] == "detailed"
         ), "Summary should be 'detailed' when env var is enabled"
-        print("✓ LITELLM_REASONING_AUTO_SUMMARY env var works correctly")
 
         # Test 4: Dict input is passed through as-is (no modification)
         litellm.reasoning_auto_summary = False
@@ -1581,16 +1535,11 @@ def test_map_reasoning_effort_adds_summary_detailed():
         result_dict = handler._map_reasoning_effort(dict_input)
         assert result_dict["effort"] == "high"
         assert result_dict["summary"] == "custom_summary"
-        print("✓ Dict input is passed through without modification")
 
         # Test 5: None/unknown values return None
         result_unknown = handler._map_reasoning_effort("unknown_value")
         assert result_unknown is None
-        print("✓ Unknown reasoning_effort values return None")
 
-        print(
-            "✓ All reasoning_effort behaviors work correctly with flag/env var control"
-        )
 
     finally:
         # Restore original values
@@ -1783,9 +1732,6 @@ def test_transform_response_preserves_annotations():
     assert result.usage.completion_tokens == 20
     assert result.usage.total_tokens == 30
 
-    print(
-        "✓ Annotations from Responses API are correctly preserved in Chat Completions format"
-    )
 
 
 def test_apply_patch_tool_call_converted_to_chat_completion_tool_call():
@@ -2080,9 +2026,6 @@ def test_multi_tool_call_stream_no_premature_finish():
                 f"— only response.completed should terminate the stream"
             )
 
-    print(
-        "✓ Multi-tool-call stream completes without premature finish_reason termination"
-    )
 
 
 # =============================================================================
@@ -2396,9 +2339,6 @@ def test_parallel_tool_calls_comprehensive_streaming_integration():
         1,
     }, f"Parallel tool calls must have distinct indices {{0, 1}}, got: {set(added_tool_call_indices)}"
 
-    print(
-        "✓ Parallel tool calls with split argument deltas stream correctly end-to-end"
-    )
 
 
 def test_map_optional_params_preserves_reasoning_summary():
