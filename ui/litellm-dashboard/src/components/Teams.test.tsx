@@ -72,6 +72,31 @@ vi.mock("@/components/team/TeamInfo", () => ({
   },
 }));
 
+// The selected team is URL-derived (?team=) via useTeamDetailRouting. Next's real useSearchParams
+// re-renders subscribers on history.pushState/replaceState; mirror that so URL changes propagate.
+vi.mock("next/navigation", async () => {
+  const { useSyncExternalStore } = await import("react");
+  const LOCATION_CHANGE_EVENT = "test-locationchange";
+  for (const method of ["pushState", "replaceState"] as const) {
+    const original = window.history[method].bind(window.history);
+    window.history[method] = (...args: Parameters<History["pushState"]>) => {
+      original(...args);
+      window.dispatchEvent(new Event(LOCATION_CHANGE_EVENT));
+    };
+  }
+  const subscribe = (onChange: () => void) => {
+    window.addEventListener(LOCATION_CHANGE_EVENT, onChange);
+    window.addEventListener("popstate", onChange);
+    return () => {
+      window.removeEventListener(LOCATION_CHANGE_EVENT, onChange);
+      window.removeEventListener("popstate", onChange);
+    };
+  };
+  return {
+    useSearchParams: () => new URLSearchParams(useSyncExternalStore(subscribe, () => window.location.search)),
+  };
+});
+
 vi.mock("./ModelSelect/ModelSelect", () => {
   const ModelSelect = React.forwardRef(({ value, onChange, dataTestId, id }: any, ref: any) => {
     return (
@@ -159,6 +184,7 @@ const renderWithQueryClient = (component: React.ReactElement) => {
 // Re-establish safe defaults before every test (clearAllMocks keeps return values, so restore them here).
 beforeEach(() => {
   mockTeamsTableProps = null;
+  window.history.replaceState(null, "", "/teams/");
 });
 
 describe("Teams - handleCreate organization handling", () => {
@@ -433,6 +459,47 @@ describe("Teams - premium props", () => {
 
     await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
     expect(mockTeamInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ premiumUser: true }));
+  });
+});
+
+describe("Teams - team detail deep link (?team=)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue([]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    mockUseOrganizations.mockReturnValue({ data: [] });
+  });
+
+  it("selecting a team pushes ?team= to the URL", async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+
+    await waitFor(() => expect(mockTeamsTableProps).not.toBeNull());
+    act(() => mockTeamsTableProps.onSelectTeam({ ...baseTableTeam, team_id: "team-deep-link" }));
+
+    expect(window.location.search).toContain("team=team-deep-link");
+    await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
+    expect(mockTeamInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ teamId: "team-deep-link" }));
+  });
+
+  it("opens the team detail view directly from a ?team= deep link", async () => {
+    window.history.replaceState(null, "", "/teams/?team=team-from-url");
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+
+    await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
+    expect(mockTeamInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ teamId: "team-from-url" }));
+  });
+
+  it("closing the team detail view removes ?team= from the URL", async () => {
+    window.history.replaceState(null, "", "/teams/?team=team-from-url");
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+
+    await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
+    act(() => mockTeamInfoView.mock.calls.at(-1)?.[0].onClose());
+
+    expect(window.location.search).not.toContain("team=");
+    await waitFor(() => expect(screen.queryByTestId("team-info-view")).not.toBeInTheDocument());
   });
 });
 
