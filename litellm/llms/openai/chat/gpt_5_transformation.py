@@ -115,7 +115,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             return False
 
     @classmethod
-    def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
+    def _supports_reasoning_effort_level(cls, model: str, level: str, base_model: Optional[str] = None) -> bool:
         """Check if the model supports a specific reasoning_effort level.
 
         Looks up ``supports_{level}_reasoning_effort`` in the model map via
@@ -126,6 +126,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             model=model,
             custom_llm_provider=None,
             key=f"supports_{level}_reasoning_effort",
+            base_model=base_model,
         )
 
     @classmethod
