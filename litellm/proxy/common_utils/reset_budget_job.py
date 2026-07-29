@@ -1,11 +1,13 @@
 import asyncio
 import json
 import time
+from collections.abc import Coroutine
 from datetime import datetime, timezone
 from typing import Any, Callable, List, Literal, Optional, Union
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
 from litellm.constants import GLOBAL_PROXY_SPEND_CACHE_KEY, LITELLM_PROXY_BUDGET_NAME
 from litellm.proxy._types import (
     LiteLLM_BudgetTableFull,
@@ -27,6 +29,7 @@ from litellm.repositories.table_repositories import (
     TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
@@ -687,7 +690,7 @@ class ResetBudgetJob:
     async def _reset_expired_window(
         window: dict,
         counter_key: str,
-        spend_counter_cache: Any,
+        spend_counter_cache: DualCache,
         now: datetime,
         reset_settings: BudgetResetSettings,
     ) -> bool:
@@ -711,8 +714,9 @@ class ResetBudgetJob:
 
     async def reset_budget_windows(self) -> None:
         """
-        For keys and teams with budget_limits, reset any individual windows where
-        reset_at <= now. Only the expired windows are reset; other windows are untouched.
+        For keys, teams, and users with budget_limits, reset any individual
+        windows where reset_at <= now.  Only the expired windows are reset;
+        other windows are untouched.
         """
 
         from litellm.proxy.proxy_server import spend_counter_cache
@@ -722,22 +726,71 @@ class ResetBudgetJob:
         # Note on raw SQL: prisma-client-python does not support null-filtering
         # on `Json?` columns (no DbNull/JsonNull sentinel — see
         # RobertCraigie/prisma-client-py#714). We use `query_raw` with
-        # `IS NOT NULL` so we don't materialize every key/team row on each
-        # tick of the reset job. Writes still go through the ORM.
+        # `IS NOT NULL` so we don't materialize every key/team/user row on
+        # each tick of the reset job. Writes still go through the ORM.
 
-        # --- Keys ---
+        await self._reset_entity_budget_windows(
+            query='SELECT token, budget_limits FROM "LiteLLM_VerificationToken" WHERE budget_limits IS NOT NULL',
+            id_column="token",
+            counter_prefix="spend:key",
+            update_fn=lambda row_id, windows_json: VerificationTokenRepository(self.prisma_client).table.update(
+                where={"token": row_id},
+                data={"budget_limits": windows_json},  # type: ignore[arg-type]
+            ),
+            entity_label="keys",
+            spend_counter_cache=spend_counter_cache,
+            now=now,
+        )
+
+        await self._reset_entity_budget_windows(
+            query='SELECT team_id, budget_limits FROM "LiteLLM_TeamTable" WHERE budget_limits IS NOT NULL',
+            id_column="team_id",
+            counter_prefix="spend:team",
+            update_fn=lambda row_id, windows_json: TeamRepository(self.prisma_client).table.update(
+                where={"team_id": row_id},
+                data={"budget_limits": windows_json},  # type: ignore[arg-type]
+            ),
+            entity_label="teams",
+            spend_counter_cache=spend_counter_cache,
+            now=now,
+        )
+
+        await self._reset_entity_budget_windows(
+            query='SELECT user_id, budget_limits FROM "LiteLLM_UserTable" WHERE budget_limits IS NOT NULL',
+            id_column="user_id",
+            counter_prefix="spend:user",
+            update_fn=lambda row_id, windows_json: UserRepository(self.prisma_client).table.update(
+                where={"user_id": row_id},
+                data={"budget_limits": windows_json},  # pyright: ignore[reportArgumentType]  # Prisma stubs type budget_limits as Json, but we pass a str
+            ),
+            entity_label="users",
+            spend_counter_cache=spend_counter_cache,
+            now=now,
+        )
+
+    async def _reset_entity_budget_windows(
+        self,
+        *,
+        query: str,
+        id_column: str,
+        counter_prefix: str,
+        update_fn: Callable[[str, str], Coroutine[Any, Any, Any]],
+        entity_label: str,
+        spend_counter_cache: DualCache,
+        now: datetime,
+    ) -> None:
         try:
-            key_rows = await self.prisma_client.db.query_raw(
-                'SELECT token, budget_limits FROM "LiteLLM_VerificationToken" WHERE budget_limits IS NOT NULL'
-            )
-            for row in key_rows:
+            rows = await self.prisma_client.db.query_raw(query)
+            for row in rows:
                 raw = row["budget_limits"]
                 if not raw:
                     continue
-                windows: list = raw if isinstance(raw, list) else json.loads(raw)
+                windows: list[dict[str, object]] = (  # mutable-ok: modified in-place then serialized back
+                    raw if isinstance(raw, list) else json.loads(raw)
+                )
                 changed = False
                 for window in windows:
-                    counter_key = f"spend:key:{row['token']}:window:{window['budget_duration']}"
+                    counter_key = f"{counter_prefix}:{row[id_column]}:window:{window['budget_duration']}"
                     if await ResetBudgetJob._reset_expired_window(
                         window,
                         counter_key,
@@ -747,41 +800,9 @@ class ResetBudgetJob:
                     ):
                         changed = True
                 if changed:
-                    await VerificationTokenRepository(self.prisma_client).table.update(
-                        where={"token": row["token"]},
-                        data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
-                    )
+                    await update_fn(row[id_column], json.dumps(windows))
         except Exception as e:
-            verbose_proxy_logger.exception("Failed to reset budget windows for keys: %s", e)
-
-        # --- Teams ---
-        try:
-            team_rows = await self.prisma_client.db.query_raw(
-                'SELECT team_id, budget_limits FROM "LiteLLM_TeamTable" WHERE budget_limits IS NOT NULL'
-            )
-            for row in team_rows:
-                raw = row["budget_limits"]
-                if not raw:
-                    continue
-                windows = raw if isinstance(raw, list) else json.loads(raw)
-                changed = False
-                for window in windows:
-                    counter_key = f"spend:team:{row['team_id']}:window:{window['budget_duration']}"
-                    if await ResetBudgetJob._reset_expired_window(
-                        window,
-                        counter_key,
-                        spend_counter_cache,
-                        now,
-                        self.reset_settings,
-                    ):
-                        changed = True
-                if changed:
-                    await TeamRepository(self.prisma_client).table.update(
-                        where={"team_id": row["team_id"]},
-                        data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
-                    )
-        except Exception as e:
-            verbose_proxy_logger.exception("Failed to reset budget windows for teams: %s", e)
+            verbose_proxy_logger.exception("Failed to reset budget windows for %s: %s", entity_label, e)
 
     @staticmethod
     async def _reset_budget_common(
