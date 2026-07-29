@@ -4751,18 +4751,18 @@ async def regenerate_key_fn(  # noqa: C901  # single endpoint handling many opti
                 detail={"error": "You are not authorized to regenerate this key"},
             )
 
-        regenerate_team_table: LiteLLM_TeamTableCachedObj | None = None
-        if _key_in_db.team_id is not None:
-            try:
-                regenerate_team_table = await get_team_object(
-                    team_id=_key_in_db.team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    check_db_only=True,
-                )
-            except HTTPException:
-                regenerate_team_table = None
         if data is not None and (data.access_group_ids or data.object_permission is not None):
+            regenerate_team_table: LiteLLM_TeamTableCachedObj | None = None
+            if _key_in_db.team_id is not None:
+                try:
+                    regenerate_team_table = await get_team_object(
+                        team_id=_key_in_db.team_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        check_db_only=True,
+                    )
+                except HTTPException:
+                    regenerate_team_table = None
             _regen_is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
             TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
                 user_api_key_dict=user_api_key_dict,

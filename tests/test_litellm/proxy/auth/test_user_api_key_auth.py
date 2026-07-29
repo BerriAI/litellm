@@ -5251,3 +5251,28 @@ async def test_temp_budget_increase_applied_for_cached_key():
 
     cached_after = await user_api_key_cache.async_get_cache(key=hashed_token)
     assert cached_after.max_budget == 2.0
+
+
+@pytest.mark.asyncio
+async def test_hoist_request_destinations_idempotent(monkeypatch):
+    """The hoist fires early in the auth builder and again as an outer catch-all; the
+    second call must not re-run the resolver once request.state holds the result."""
+    import litellm.proxy.litellm_pre_call_utils as pcu
+    from litellm.proxy.auth.user_api_key_auth import _hoist_request_destinations
+
+    calls = {"n": 0}
+
+    async def fake_resolve(_uapk):
+        calls["n"] += 1
+        return ((), ())
+
+    monkeypatch.setattr(pcu, "_resolve_logging_exporters", fake_resolve)
+    request = MagicMock()
+    request.state = SimpleNamespace()
+    uapk = UserAPIKeyAuth(api_key="x", token="x")
+
+    await _hoist_request_destinations(request, uapk)
+    await _hoist_request_destinations(request, uapk)
+
+    assert calls["n"] == 1
+    assert request.state.otel_destinations == ()

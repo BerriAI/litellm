@@ -1014,8 +1014,12 @@ async def _hoist_request_destinations(request: Request, user_api_key_dict: UserA
     ``_apply_admin_logging_exporters`` can reuse it without a second DB pass.
 
     Best-effort: a resolver failure must not break the request. The contextvar
-    is left at its default (empty tuple), so the fan-out processor no-ops.
+    is left at its default (empty tuple), so the fan-out processor no-ops. Idempotent:
+    it fires early in the builder and again as an outer catch-all; the second call
+    skips once ``request.state`` holds the result (a failed first call leaves it unset).
     """
+    if getattr(getattr(request, "state", None), "otel_destinations", None) is not None:
+        return
     try:
         from litellm.integrations.otel.model.destination import OtelDestination
         from litellm.integrations.otel.plumbing.context import (

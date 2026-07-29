@@ -5789,3 +5789,12 @@ def test_get_sanitized_user_information_from_key_drops_callback_config():
     # UserAPIKeyAuth is the live auth object; the per-key callbacks are resolved
     # from it during pre-call, so it must not be mutated by building the log view
     assert "logging" in (user_api_key_dict.metadata or {})
+
+
+def test_otel_destination_params_declares_resource_attributes():
+    """The resolver populates ``resource_attributes`` and the auth hoist reads it, so
+    the ``OtelDestinationParams`` TypedDict must declare it (else strict type-checking
+    rejects the resolver's dict)."""
+    from litellm.types.utils import OtelDestinationParams
+
+    assert "resource_attributes" in OtelDestinationParams.__annotations__

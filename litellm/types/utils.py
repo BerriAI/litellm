@@ -3037,6 +3037,7 @@ class OtelDestinationParams(TypedDict, total=False):
     callback_name: str
     endpoint: str
     headers: Mapping[str, str]
+    resource_attributes: Mapping[str, str]
 
 
 class StandardCallbackDynamicParams(TypedDict, total=False):
