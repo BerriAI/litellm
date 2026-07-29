@@ -133,7 +133,10 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
             isLoading={isLoading}
             userRole={userRole}
             searchActive={searchActive}
-            onOrganizationClick={openOrg}
+            onOrganizationClick={(organizationId) => {
+              setEditOrg(false);
+              openOrg(organizationId);
+            }}
             onEditClick={(organizationId) => {
               openOrg(organizationId);
               setEditOrg(true);

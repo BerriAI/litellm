@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen } from "@testing-library/react";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type OrganizationsTableComponent from "./OrganizationsTable";
+import type OrganizationInfoViewComponent from "@/components/organization/organization_view";
 
 vi.mock("@/components/vector_store_management/VectorStoreSelector", () => ({
   __esModule: true,
@@ -18,18 +20,21 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
     userRole: null,
   }),
 }));
-let capturedTableProps: any = null;
+type OrganizationsTableProps = React.ComponentProps<typeof OrganizationsTableComponent>;
+type OrganizationInfoViewProps = React.ComponentProps<typeof OrganizationInfoViewComponent>;
+
+let capturedTableProps: OrganizationsTableProps | null = null;
 vi.mock("./OrganizationsTable", () => ({
   __esModule: true,
-  default: (props: { isLoading: boolean }) => {
+  default: (props: OrganizationsTableProps) => {
     capturedTableProps = props;
     return <div data-testid="organizations-table">isLoading:{String(props.isLoading)}</div>;
   },
 }));
-const mockOrgInfoView = vi.fn();
+const mockOrgInfoView = vi.fn<(props: OrganizationInfoViewProps) => void>();
 vi.mock("@/components/organization/organization_view", () => ({
   __esModule: true,
-  default: (props: any) => {
+  default: (props: OrganizationInfoViewProps) => {
     mockOrgInfoView(props);
     return <div data-testid="organization-info-view" />;
   },
@@ -101,7 +106,7 @@ describe("OrganizationsPanel - org detail deep link (?org=)", () => {
   it("clicking an organization pushes ?org= and opens the detail view", () => {
     renderWithQueryClient(<OrganizationsPanel userRole="Admin" accessToken={null} premiumUser={true} />);
 
-    act(() => capturedTableProps.onOrganizationClick("org-deep-link"));
+    act(() => capturedTableProps?.onOrganizationClick("org-deep-link"));
 
     expect(window.location.search).toContain("org=org-deep-link");
     expect(mockOrgInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ organizationId: "org-deep-link" }));
@@ -131,11 +136,25 @@ describe("OrganizationsPanel - org detail deep link (?org=)", () => {
   it("the edit action opens the detail in edit mode with ?org= set", () => {
     renderWithQueryClient(<OrganizationsPanel userRole="Admin" accessToken={null} premiumUser={true} />);
 
-    act(() => capturedTableProps.onEditClick("org-edit"));
+    act(() => capturedTableProps?.onEditClick("org-edit"));
 
     expect(window.location.search).toContain("org=org-edit");
     expect(mockOrgInfoView).toHaveBeenLastCalledWith(
       expect.objectContaining({ organizationId: "org-edit", editOrg: true }),
+    );
+  });
+
+  it("a plain row click after leaving an edit view via browser history does not reopen in edit mode", () => {
+    renderWithQueryClient(<OrganizationsPanel userRole="Admin" accessToken={null} premiumUser={true} />);
+
+    act(() => capturedTableProps?.onEditClick("org-edit"));
+    expect(mockOrgInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ editOrg: true }));
+
+    act(() => window.history.pushState(null, "", "/organizations/"));
+    act(() => capturedTableProps?.onOrganizationClick("org-plain"));
+
+    expect(mockOrgInfoView).toHaveBeenLastCalledWith(
+      expect.objectContaining({ organizationId: "org-plain", editOrg: false }),
     );
   });
 });
