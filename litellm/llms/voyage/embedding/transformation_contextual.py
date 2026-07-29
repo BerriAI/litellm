@@ -106,10 +106,41 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         headers: dict,
     ) -> dict:
         return {
-            "inputs": input,
+            "inputs": self._transform_contextual_inputs(input, optional_params),
             "model": model,
             **optional_params,
         }
+
+    @staticmethod
+    def _transform_contextual_inputs(
+        input: Union[AllEmbeddingInputValues, List[List[str]]],
+        optional_params: dict,
+    ) -> List[List[str]]:
+        """
+        Voyage's contextualized embeddings API expects ``inputs`` to be a
+        ``list[list[str]]`` (each inner list is a document made of chunks that
+        share context).
+
+        It also accepts a flat ``list[str]`` - but only when
+        ``input_type == "query"``. In every other case a flat list must be
+        wrapped so each string becomes its own single-chunk document, otherwise
+        the API rejects the request with a 400.
+
+        Reference: https://docs.voyageai.com/reference/contextualized-embeddings-api
+        """
+        # Single string -> one document with a single chunk.
+        if isinstance(input, str):
+            return [[input]]
+
+        # Flat list[str]: keep as list[str] when the API allows it
+        # (input_type="query"), otherwise wrap each string as its own document.
+        if isinstance(input, list) and all(isinstance(i, str) for i in input):
+            if optional_params.get("input_type") == "query":
+                return input  # type: ignore[return-value]
+            return [[i] for i in input]
+
+        # Already list[list[str]] (or another shape) -> pass through unchanged.
+        return input  # type: ignore[return-value]
 
     def transform_embedding_response(
         self,
