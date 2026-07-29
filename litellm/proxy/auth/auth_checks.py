@@ -953,7 +953,7 @@ async def get_default_end_user_budget(
             )
             return None
 
-        _budget_obj = LiteLLM_BudgetTable(**budget_record.dict())
+        _budget_obj = LiteLLM_BudgetTable.model_validate(budget_record.dict())
         # Cache the budget for 60 seconds
         await user_api_key_cache.async_set_cache(
             key=cache_key,
@@ -999,7 +999,7 @@ async def get_team_member_default_budget(
     if isinstance(cached_budget, LiteLLM_BudgetTable):
         return cached_budget
     if isinstance(cached_budget, dict):
-        return LiteLLM_BudgetTable(**cached_budget)
+        return LiteLLM_BudgetTable.model_validate(cached_budget)
 
     try:
         budget_record = await BudgetRepository(prisma_client).table.find_unique(where={"budget_id": budget_id})
@@ -1014,7 +1014,7 @@ async def get_team_member_default_budget(
             ttl=get_management_object_ttl(user_api_key_cache),
         )
 
-        return LiteLLM_BudgetTable(**budget_record.dict())
+        return LiteLLM_BudgetTable.model_validate(budget_record.dict())
 
     except Exception:
         verbose_proxy_logger.exception(f"Error fetching team-default member budget {budget_id}")
@@ -1168,7 +1168,7 @@ async def get_end_user_object(
             raise Exception
 
         # Convert to LiteLLM_EndUserTable object
-        _response = LiteLLM_EndUserTable(**response.dict())
+        _response = LiteLLM_EndUserTable.model_validate(response.dict())
 
         # Apply default budget if needed
         _response = await _apply_default_budget_to_end_user(
@@ -1360,7 +1360,7 @@ async def get_tag_objects_batch(
             for db_tag in db_tags:
                 tag_name = db_tag.tag_name
                 cache_key = f"tag:{tag_name}"
-                _tag_obj = LiteLLM_TagTable(**db_tag.dict())
+                _tag_obj = LiteLLM_TagTable.model_validate(db_tag.dict())
                 await user_api_key_cache.async_set_cache(
                     key=cache_key,
                     value=_tag_obj,
@@ -1453,7 +1453,7 @@ async def get_team_membership(
         if response is None:
             return None
 
-        _response = LiteLLM_TeamMembership(**response.dict())
+        _response = LiteLLM_TeamMembership.model_validate(response.dict())
         await user_api_key_cache.async_set_cache(
             key=_key,
             value=_response,
@@ -1719,13 +1719,13 @@ async def get_user_object(
         if response.organization_memberships is not None and len(response.organization_memberships) > 0:
             # dump each organization membership to type LiteLLM_OrganizationMembershipTable
             _dumped_memberships = [
-                LiteLLM_OrganizationMembershipTable(**membership.model_dump())
+                LiteLLM_OrganizationMembershipTable.model_validate(membership.model_dump())
                 for membership in response.organization_memberships
                 if membership is not None
             ]
             response.organization_memberships = _dumped_memberships
 
-        _response = LiteLLM_UserTable(**dict(response))
+        _response = LiteLLM_UserTable.model_validate(dict(response))
         response_dict = _response.model_dump()
 
         # save the user object to cache
@@ -1862,7 +1862,7 @@ async def _get_team_db_check(team_id: str, prisma_client: PrismaClient, team_id_
             http_request=mock_request,
             user_api_key_dict=system_admin_user,
         )
-        response = LiteLLM_TeamTable(**created_team_dict)
+        response = LiteLLM_TeamTable.model_validate(created_team_dict)
     return response
 
 
@@ -1894,7 +1894,7 @@ async def _get_team_object_from_user_api_key_cache(
     if response is None:
         raise Exception
 
-    _response = LiteLLM_TeamTableCachedObj(**response.dict())
+    _response = LiteLLM_TeamTableCachedObj.model_validate(response.dict())
 
     # Load object_permission if object_permission_id exists but object_permission is not loaded
     if _response.object_permission_id and not _response.object_permission:
@@ -2085,7 +2085,7 @@ async def get_access_object(
                 detail={"error": f"Access group doesn't exist in db. Access group={access_group_id}."},
             )
 
-        _response = LiteLLM_AccessGroupTable(**response.dict())
+        _response = LiteLLM_AccessGroupTable.model_validate(response.dict())
 
         # Save to cache
         await _cache_access_object(
@@ -2170,7 +2170,7 @@ async def get_team_object_by_alias(
             )
 
         team = teams[0]
-        team_obj = LiteLLM_TeamTableCachedObj(**team.model_dump())
+        team_obj = LiteLLM_TeamTableCachedObj.model_validate(team.model_dump())
 
         # Load object_permission if object_permission_id exists but object_permission is not loaded
         if team_obj.object_permission_id and not team_obj.object_permission:
@@ -2272,7 +2272,7 @@ async def get_org_object_by_alias(
             )
 
         org = orgs[0]
-        org_obj = LiteLLM_OrganizationTable(**org.model_dump())
+        org_obj = LiteLLM_OrganizationTable.model_validate(org.model_dump())
 
         # Cache the result
         await user_api_key_cache.async_set_cache(
@@ -2605,7 +2605,7 @@ async def get_object_permission(
         if response is None:
             return None
 
-        _perm_obj = LiteLLM_ObjectPermissionTable(**response.dict())
+        _perm_obj = LiteLLM_ObjectPermissionTable.model_validate(response.dict())
         await user_api_key_cache.async_set_cache(
             key=key,
             value=_perm_obj,
@@ -2665,7 +2665,7 @@ async def get_managed_vector_store_rows_by_uuids(
             row_dict = dict(row) if hasattr(row, "__dict__") else {}
         if not row_dict:
             continue
-        cached_obj = LiteLLM_ManagedVectorStoresTable(**row_dict)
+        cached_obj = LiteLLM_ManagedVectorStoresTable.model_validate(row_dict)
         key = "managed_vector_store_id:{}".format(cached_obj.vector_store_id)
         await user_api_key_cache.async_set_cache(
             key=key,
@@ -2746,7 +2746,7 @@ async def get_org_object(
             f"Organization doesn't exist in db. Organization={org_id}. Create organization via `/organization/new` call."
         )
 
-    _org_obj = LiteLLM_OrganizationTable(**response.model_dump())
+    _org_obj = LiteLLM_OrganizationTable.model_validate(response.model_dump())
     # Cache the result
     await user_api_key_cache.async_set_cache(
         key=cache_key,
@@ -4221,7 +4221,7 @@ async def get_project_object(
     if project_row is None:
         return None
 
-    project_obj = LiteLLM_ProjectTableCachedObj(**project_row.model_dump())
+    project_obj = LiteLLM_ProjectTableCachedObj.model_validate(project_row.model_dump())
 
     # Cache with TTL following _cache_management_object pattern
     project_obj.last_refreshed_at = time.time()

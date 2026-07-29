@@ -3667,3 +3667,38 @@ async def test_add_user_to_team_keeps_already_a_member_quiet(mocker, caplog):
         )
 
     assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_for_proxy_admin_validates_keys_and_teams():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _get_user_info_for_proxy_admin,
+    )
+
+    raw_rows = [
+        {
+            "teams": [
+                {"team_id": "team-b", "team_alias": "beta"},
+                {"team_id": "team-a", "team_alias": "alpha"},
+            ],
+            "keys": [
+                {"token": "hashed-token-1", "team_id": "team-a", "models": None, "spend": 1.0},
+            ],
+        }
+    ]
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=raw_rows)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        result = await _get_user_info_for_proxy_admin(user_api_key_dict=UserAPIKeyAuth(user_id=None))
+
+    assert all(isinstance(team, LiteLLM_TeamTable) for team in result.teams)
+    assert [team.team_alias for team in result.teams] == ["alpha", "beta"]
+    assert len(result.keys) == 1
+    returned_key = result.keys[0]
+    assert returned_key["team_id"] == "team-a"
+    assert returned_key["models"] == []
