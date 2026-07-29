@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+from collections.abc import Mapping
 from typing import (
     Any,
     Callable,
@@ -16,6 +17,7 @@ from typing import (
     Tuple,
     Union,
 )
+from urllib.parse import unquote
 
 import httpx
 from httpx import Headers, Response
@@ -51,6 +53,9 @@ from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
+from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
+    transform_openai_input_gemini_embed_content,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
@@ -62,13 +67,26 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.files import StreamingMediaUploadConfig
 from litellm.types.llms.vertex_ai import GcsBucketResponse
-from litellm.types.utils import LlmProviders, ModelResponse
+from litellm.types.utils import (
+    Embedding,
+    EmbeddingResponse,
+    LlmProviders,
+    ModelResponse,
+    Usage,
+)
 
 from ..common_utils import VertexAIError
 from ..vertex_llm_base import VertexBase
 
 _GCP_LABEL_VALUE_MAX_LEN = 63
 _CUSTOM_ID_RAW_LABEL_PREFIX = "b32_"
+_VERTEX_BATCH_KEY_FIELD = "key"
+_MANAGED_GCS_MODEL_PATH_PATTERN = re.compile(r"publishers/[^/]+/models/([^/?]+)")
+_EMBED_CONTENT_CONFIG_FIELD_BY_GEMINI_PARAM = {
+    "outputDimensionality": "output_dimensionality",
+    "taskType": "task_type",
+    "title": "title",
+}
 
 
 def _sanitize_gcp_label_value(value: str) -> str:
@@ -131,6 +149,21 @@ def _set_litellm_batch_custom_id_labels(labels: Dict[str, str], custom_id: Any) 
         labels[f"litellm_custom_id_raw_{index}"] = raw_label_chunk
 
 
+def _get_litellm_batch_custom_id(vertex_output_row: Mapping[str, Any]) -> str:
+    """
+    Resolve the OpenAI `custom_id` for a Vertex batch output row.
+
+    Embedding rows carry it in the top-level `key` field that Vertex echoes back;
+    `generateContent` rows have no such field, so it is smuggled through request
+    labels instead (see `_set_litellm_batch_custom_id_labels`).
+    """
+    key = vertex_output_row.get(_VERTEX_BATCH_KEY_FIELD)
+    if key is not None:
+        return str(key)
+    request_data = vertex_output_row.get("request") or {}
+    return _get_litellm_batch_custom_id_from_labels(request_data.get("labels") or {})
+
+
 def _get_litellm_batch_custom_id_from_labels(labels: Dict[str, Any]) -> str:
     """Prefer encoded custom_id when present (see _set_litellm_batch_custom_id_labels)."""
     raw = labels.get("litellm_custom_id_raw")
@@ -149,10 +182,156 @@ def _get_litellm_batch_custom_id_from_labels(labels: Dict[str, Any]) -> str:
     return str(labels.get("litellm_custom_id", "unknown"))
 
 
+def _is_vertex_embeddings_batch_output_row(vertex_output_row: Mapping[str, Any]) -> bool:
+    """
+    Whether a Vertex batch output row came from an `EmbedContentRequest`.
+
+    Successful rows hold the vector under `response.embedding.values`; failed rows only
+    carry `status`, so they are recognized from the singular `content` that the
+    embeddings request shape echoes back.
+    """
+    if "request" not in vertex_output_row:
+        return False
+    response = vertex_output_row.get("response")
+    if isinstance(response, dict) and isinstance(response.get("embedding"), dict):
+        return True
+    request_data = vertex_output_row.get("request")
+    return bool(vertex_output_row.get("status")) and isinstance(request_data, dict) and "content" in request_data
+
+
+def _openai_batch_output_row(
+    custom_id: str,
+    body: Mapping[str, Any] | None = None,
+    error: Mapping[str, str] | None = None,
+) -> Mapping[str, Any]:
+    """
+    One row of an OpenAI batch output file. Per the OpenAI Batch spec, failed rows set
+    `response` to null and populate `error` instead.
+    """
+    return {
+        "id": f"batch_req_{uuid.uuid4()}",
+        "custom_id": custom_id,
+        "response": None
+        if body is None
+        else {
+            "status_code": 200,
+            "request_id": body.get("id", ""),
+            "body": body,
+        },
+        "error": error,
+    }
+
+
+def _transform_vertex_embeddings_batch_output_row_to_openai(
+    vertex_output_row: Mapping[str, Any],
+    model: str | None,
+) -> Mapping[str, Any]:
+    """
+    Transforms one Vertex Gemini Embedding batch output row into an OpenAI batch
+    output row holding an `/v1/embeddings` response body.
+
+    Example Vertex jsonl
+    {"key": "id_1", "request": {...}, "response": {"tokenCount": "2", "embedding": {"values": [-0.015, 0.024]}}}
+
+    `tokenCount` is serialized as a string by Vertex (int64 proto field), and the row
+    carries no `modelVersion`, so the model comes from the batch the row belongs to.
+    """
+    custom_id = _get_litellm_batch_custom_id(vertex_output_row)
+    status = vertex_output_row.get("status", "")
+    if status:
+        return _openai_batch_output_row(
+            custom_id=custom_id,
+            error={"code": "vertex_ai_error", "message": status},
+        )
+
+    vertex_response = vertex_output_row.get("response") or {}
+    token_count = int(vertex_response.get("tokenCount") or 0)
+    body = EmbeddingResponse(
+        model=model or "",
+        data=[
+            Embedding(
+                embedding=vertex_response["embedding"]["values"],
+                index=0,
+                object="embedding",
+            )
+        ],
+        usage=Usage(prompt_tokens=token_count, total_tokens=token_count),
+    ).model_dump()
+    return _openai_batch_output_row(custom_id=custom_id, body=body)
+
+
+def _model_from_managed_gcs_url(url: str) -> str | None:
+    """
+    Extracts the model from a LiteLLM-managed Vertex batch GCS url.
+
+    Batch inputs and their sibling outputs are stored under
+    `.../publishers/google/models/<model>/...`, which is the only place the model of an
+    embeddings batch output row can be recovered from; unlike `generateContent`
+    responses, embedding rows carry no `modelVersion`.
+    """
+    match = _MANAGED_GCS_MODEL_PATH_PATTERN.search(unquote(url))
+    return match.group(1) if match else None
+
+
+def _is_embeddings_batch_entry(openai_entry: Mapping[str, Any]) -> bool:
+    """
+    Whether an OpenAI batch JSONL line targets the embeddings endpoint.
+
+    OpenAI puts the target route on each line's `url` (e.g. `/v1/embeddings`); Vertex
+    has no equivalent per-line field, so the route decides which Vertex request shape
+    the line has to be translated into.
+    """
+    url = openai_entry.get("url")
+    if not isinstance(url, str):
+        return False
+    path = url.split("?")[0].rstrip("/")
+    return path == "embeddings" or path.endswith("/embeddings")
+
+
+def _openai_batch_jsonl_entry_to_vertex_embeddings_row(
+    openai_entry: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """
+    Transforms a single OpenAI `/v1/embeddings` batch entry into a Vertex Gemini
+    Embedding batch row.
+
+    Example Vertex jsonl
+    {"key": "id_1", "request": {"content": {"parts": [{"text": "Hello World"}]}}, "embed_content_config": {"output_dimensionality": 768, "task_type": "RETRIEVAL_DOCUMENT"}}
+
+    Note that `content` is singular (an `EmbedContentRequest`, not a
+    `GenerateContentRequest`), the per-row config is a sibling of `request` rather than
+    part of it, and the `custom_id` round-trips through the top-level `key`.
+
+    API Ref: https://cloud.google.com/vertex-ai/generative-ai/docs/embeddings/batch-prediction-genai-embeddings
+    """
+    openai_request_body = openai_entry.get("body") or {}
+    embedding_input = openai_request_body.get("input")
+    if embedding_input is None:
+        raise ValueError("`input` is required on /v1/embeddings batch requests, but was not provided")
+
+    embed_content_request = transform_openai_input_gemini_embed_content(
+        input=embedding_input,
+        model=openai_request_body.get("model", ""),
+        optional_params=openai_request_body,
+    )
+    embed_content_config = {
+        config_field: embed_content_request[gemini_param]
+        for gemini_param, config_field in _EMBED_CONTENT_CONFIG_FIELD_BY_GEMINI_PARAM.items()
+        if gemini_param in embed_content_request
+    }
+
+    custom_id = openai_entry.get("custom_id")
+    return {
+        **({_VERTEX_BATCH_KEY_FIELD: str(custom_id)} if custom_id is not None else {}),
+        "request": {"content": embed_content_request["content"]},
+        **({"embed_content_config": embed_content_config} if embed_content_config else {}),
+    }
+
+
 def _openai_batch_jsonl_entry_to_vertex_wrapped_request(
     openai_entry: Dict[str, Any],
     map_openai_to_vertex_params: Callable[[Dict[str, Any]], Dict[str, Any]],
-) -> Dict[str, Any]:
+) -> Mapping[str, Any]:
     """
     Transforms a single OpenAI JSONL batch entry into its Vertex wrapped request.
 
@@ -160,6 +339,9 @@ def _openai_batch_jsonl_entry_to_vertex_wrapped_request(
     Example Vertex jsonl
     {"request":{"contents": [{"role": "user", "parts": [{"text": "What is the relation between the following video and image samples?"}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/video/animals.mp4", "mimeType": "video/mp4"}}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/image/cricket.jpeg", "mimeType": "image/jpeg"}}]}]}}
     """
+    if _is_embeddings_batch_entry(openai_entry):
+        return _openai_batch_jsonl_entry_to_vertex_embeddings_row(openai_entry)
+
     openai_request_body = openai_entry.get("body") or {}
     vertex_request_body = _transform_request_body(
         messages=openai_request_body.get("messages", []),
@@ -629,6 +811,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 transformed_content = self._try_transform_vertex_batch_output_to_openai(
                     content=content,
                     logging_obj=logging_obj,
+                    model=_model_from_managed_gcs_url(str(raw_response.request.url)),
                 )
                 if transformed_content != content:
                     # Create a new response with transformed content and updated Content-Length
@@ -650,7 +833,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         return HttpxBinaryResponseContent(response=raw_response)
 
     def _try_transform_vertex_batch_output_to_openai(
-        self, content: bytes, logging_obj: Optional[LiteLLMLoggingObj] = None
+        self,
+        content: bytes,
+        logging_obj: LiteLLMLoggingObj | None = None,
+        model: str | None = None,
     ) -> bytes:
         """
         Try to transform Vertex AI batch output to OpenAI format.
@@ -692,7 +878,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # first line is not valid UTF-8/JSON) raises and falls through to the
             # passthrough below, leaving the content untouched.
             first_row = json.loads(first_line)
-            is_vertex_batch_output = (
+            is_vertex_batch_output = _is_vertex_embeddings_batch_output_row(first_row) or (
                 "request" in first_row
                 and "response" in first_row
                 and "processed_time" in first_row
@@ -731,11 +917,19 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             output = bytearray()
             for line in itertools.chain([first_line], lines):
                 try:
-                    openai_output = self._transform_single_vertex_batch_output_to_openai(
-                        vertex_output=json.loads(line),
-                        vertex_gemini_config=vertex_gemini_config,
-                        logging_obj=batch_transform_logging_obj,
-                        mock_httpx_response=mock_httpx_response,
+                    vertex_output_row = json.loads(line)
+                    openai_output = (
+                        _transform_vertex_embeddings_batch_output_row_to_openai(
+                            vertex_output_row=vertex_output_row,
+                            model=model,
+                        )
+                        if _is_vertex_embeddings_batch_output_row(vertex_output_row)
+                        else self._transform_single_vertex_batch_output_to_openai(
+                            vertex_output=vertex_output_row,
+                            vertex_gemini_config=vertex_gemini_config,
+                            logging_obj=batch_transform_logging_obj,
+                            mock_httpx_response=mock_httpx_response,
+                        )
                     )
                 except Exception:
                     return content
@@ -755,30 +949,22 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         vertex_gemini_config: VertexGeminiConfig,
         logging_obj: Logging,
         mock_httpx_response: httpx.Response,
-    ) -> Dict[str, Any]:
+    ) -> Mapping[str, Any]:
         """
         Transform a single Vertex AI batch output line to OpenAI format.
         Uses the existing VertexGeminiConfig transformation for the response.
         """
-        # Extract custom_id from request labels (prefer raw for OpenAI round-trip)
-        request_data = vertex_output.get("request", {})
-        labels = request_data.get("labels", {}) or {}
-        custom_id = _get_litellm_batch_custom_id_from_labels(labels)
+        custom_id = _get_litellm_batch_custom_id(vertex_output)
 
         # Check if there's an error
         status = vertex_output.get("status", "")
         has_error = bool(status)
 
         if has_error:
-            return {
-                "id": f"batch_req_{uuid.uuid4()}",
-                "custom_id": custom_id,
-                "response": None,
-                "error": {
-                    "code": "vertex_ai_error",
-                    "message": status,
-                },
-            }
+            return _openai_batch_output_row(
+                custom_id=custom_id,
+                error={"code": "vertex_ai_error", "message": status},
+            )
 
         # Transform successful response using existing transformation
         vertex_response = vertex_output.get("response", {})
@@ -804,24 +990,13 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             response_dict = transformed_response.model_dump()
 
             # Return in OpenAI batch format
-            return {
-                "id": f"batch_req_{uuid.uuid4()}",
-                "custom_id": custom_id,
-                "response": {
-                    "status_code": 200,
-                    "request_id": response_dict.get("id", ""),
-                    "body": response_dict,
-                },
-                "error": None,
-            }
+            return _openai_batch_output_row(custom_id=custom_id, body=response_dict)
 
         except Exception as e:
-            return {
-                "id": f"batch_req_{uuid.uuid4()}",
-                "custom_id": custom_id,
-                "response": None,
-                "error": {
+            return _openai_batch_output_row(
+                custom_id=custom_id,
+                error={
                     "code": "transformation_error",
                     "message": f"Failed to transform response: {str(e)}",
                 },
-            }
+            )
