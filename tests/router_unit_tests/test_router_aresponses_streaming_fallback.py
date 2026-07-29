@@ -90,6 +90,36 @@ def test_extract_partial_responses_usage_no_completed_response():
     assert usage is None
 
 
+def test_extract_partial_responses_usage_dict_response():
+    """Regression #34754: some upstream providers return a plain dict
+    instead of a Pydantic ResponsesAPIResponse. The guard should extract
+    usage from the dict via .get() instead of accessing .usage as an
+    attribute."""
+    dict_usage = ResponseAPIUsage(input_tokens=5, output_tokens=3, total_tokens=8)
+    completed = ResponseCompletedEvent.model_construct(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response={"usage": dict_usage, "status": "completed"},
+    )
+    source = MagicMock()
+    source.completed_response = completed
+
+    usage = Router._extract_partial_responses_usage(source)
+    assert usage is dict_usage
+
+
+def test_extract_partial_responses_usage_dict_response_no_usage_key():
+    """A dict response without a 'usage' key should return None, not raise."""
+    completed = ResponseCompletedEvent.model_construct(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response={"status": "completed"},
+    )
+    source = MagicMock()
+    source.completed_response = completed
+
+    usage = Router._extract_partial_responses_usage(source)
+    assert usage is None
+
+
 # -------- _combine_responses_fallback_usage --------
 
 

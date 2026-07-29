@@ -3212,7 +3212,7 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime,
         is_async: bool,
         streaming_chunks: List[Any],
-    ) -> Optional[Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]]:
+    ) -> Optional[Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse, dict]]:
         if self.stream is not True:
             return None
         if isinstance(result, ModelResponse):

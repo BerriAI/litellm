@@ -2694,6 +2694,32 @@ def test_get_assembled_streaming_response_returns_none_for_non_streaming_text_co
     assert assembled is None
 
 
+def test_get_assembled_streaming_response_returns_none_for_dict_response():
+    """Regression #34754: when a ResponseCompletedEvent carries a plain dict
+    as .response (some upstream providers do this), the guard should return
+    None instead of raising AttributeError on .usage access."""
+    import datetime
+
+    from litellm.types.llms.openai import (
+        ResponseCompletedEvent,
+        ResponsesAPIStreamEvents,
+    )
+
+    logging_obj = _make_logging_obj(stream=True)
+    completed = ResponseCompletedEvent.model_construct(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response={"id": "resp-1", "status": "completed"},
+    )
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=completed,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+    assert assembled is None
+
+
 @pytest.mark.asyncio
 async def test_non_streaming_computes_standard_logging_object_once():
     """
