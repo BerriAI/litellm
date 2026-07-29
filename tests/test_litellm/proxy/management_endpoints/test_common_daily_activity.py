@@ -650,14 +650,14 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     assert key_data.metrics.spend == 10.0
 
 
-def _daily_user_spend_record(*, user_id, api_key, spend):
+def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_group="gpt-4"):
     """A LiteLLM_DailyUserSpend row as the per-user breakdown reads it."""
     return SimpleNamespace(
         date="2024-01-01",
         user_id=user_id,
         api_key=api_key,
-        model="gpt-4",
-        model_group="gpt-4",
+        model=model,
+        model_group=model_group,
         custom_llm_provider="openai",
         mcp_namespaced_tool_name=None,
         endpoint="/chat/completions",
@@ -729,6 +729,64 @@ async def test_get_daily_activity_applies_resolve_entity_metadata_to_breakdown()
     assert entities["user-with-email"].metadata["user_email"] == "spender@example.com"
     # No email on file -> empty metadata -> UI falls back to the UUID
     assert entities["user-no-email"].metadata == {}
+
+
+@pytest.mark.asyncio
+async def test_model_groups_breakdown_keys_by_public_name_with_model_fallback():
+    """The usage UI labels model traffic with the model_groups breakdown.
+
+    Keys must be the requested public model name (model_group), and rows with a
+    NULL or empty model_group (pre-routing failures, rows written before the
+    column existed) must fall back to their model name instead of being dropped
+    from the breakdown. The models breakdown keeps the upstream litellm names.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+
+    records = [
+        _daily_user_spend_record(
+            user_id="u1", api_key="key-1", spend=7.0, model="gpt-5.2", model_group="gpt-5.2-eu"
+        ),
+        _daily_user_spend_record(
+            user_id="u1", api_key="key-1", spend=3.0, model="gpt-5.2", model_group=None
+        ),
+        _daily_user_spend_record(
+            user_id="u1", api_key="key-1", spend=2.0, model="claude-x", model_group=""
+        ),
+    ]
+
+    mock_table = MagicMock()
+    mock_table.count = AsyncMock(return_value=len(records))
+    mock_table.find_many = AsyncMock(return_value=records)
+    mock_prisma.db.litellm_dailyuserspend = mock_table
+    mock_prisma.db.litellm_verificationtoken = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=1000,
+    )
+
+    breakdown = result.results[0].breakdown
+
+    assert set(breakdown.model_groups.keys()) == {"gpt-5.2-eu", "gpt-5.2", "claude-x"}
+    assert breakdown.model_groups["gpt-5.2-eu"].metrics.spend == 7.0
+    assert breakdown.model_groups["gpt-5.2"].metrics.spend == 3.0
+    assert breakdown.model_groups["claude-x"].metrics.spend == 2.0
+    assert breakdown.model_groups["gpt-5.2"].api_key_breakdown["key-1"].metrics.spend == 3.0
+
+    assert set(breakdown.models.keys()) == {"gpt-5.2", "claude-x"}
+    assert breakdown.models["gpt-5.2"].metrics.spend == 10.0
+    assert breakdown.models["claude-x"].metrics.spend == 2.0
 
 
 class TestAdjustDatesForTimezone:
@@ -851,6 +909,33 @@ class TestBuildAggregatedSqlQuery:
         ]
         assert "model = $4" in sql
         assert "api_key = $5" in sql
+
+    def test_model_group_rollups_fall_back_to_model_name(self):
+        """Aggregated model_groups rollups must coalesce NULL model_group to model.
+
+        The (date, model_group) grouping level cannot recover the model column
+        after the fact (it is rolled up), so the fallback has to happen in SQL;
+        without it, group-less rows silently vanish from the model_groups
+        breakdown that the usage UI now renders by default.
+        """
+        sql, _ = _build_aggregated_sql_query(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id=None,
+            start_date="2026-07-01",
+            end_date="2026-07-01",
+            model=None,
+            api_key=None,
+        )
+
+        normalized = " ".join(sql.split())
+        assert "COALESCE(model_group, model) AS model_group" in normalized
+        assert (
+            "GROUPING(date, api_key, model, COALESCE(model_group, model), "
+            "custom_llm_provider, mcp_namespaced_tool_name, endpoint) AS group_level" in normalized
+        )
+        assert "(date, COALESCE(model_group, model)), (date, COALESCE(model_group, model), api_key)," in normalized
+        assert "(date, model_group)" not in normalized
 
 
 @pytest.mark.asyncio
