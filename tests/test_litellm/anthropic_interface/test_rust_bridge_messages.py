@@ -46,6 +46,7 @@ class RecordingMessages:
         custom_llm_provider: str | None,
         extra_headers: dict[str, object] | None,
         timeout_seconds: float | None,
+        aws_region_name: str | None,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -56,6 +57,7 @@ class RecordingMessages:
                 "custom_llm_provider": custom_llm_provider,
                 "extra_headers": extra_headers,
                 "timeout_seconds": timeout_seconds,
+                "aws_region_name": aws_region_name,
             }
         )
         return dict(FAKE_MESSAGES_RESPONSE)
@@ -74,6 +76,7 @@ class RecordingAsyncMessages:
         custom_llm_provider: str | None,
         extra_headers: dict[str, object] | None,
         timeout_seconds: float | None,
+        aws_region_name: str | None,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -84,6 +87,7 @@ class RecordingAsyncMessages:
                 "custom_llm_provider": custom_llm_provider,
                 "extra_headers": extra_headers,
                 "timeout_seconds": timeout_seconds,
+                "aws_region_name": aws_region_name,
             }
         )
         return dict(FAKE_MESSAGES_RESPONSE)
@@ -192,6 +196,7 @@ def test_messages_wrapper_forwards_args_and_converts_timeout():
         "custom_llm_provider": "azure_ai",
         "extra_headers": {"anthropic-beta": "token-efficient-tools-2025-02-19"},
         "timeout_seconds": 42.0,
+        "aws_region_name": None,
     }
 
 
@@ -208,11 +213,13 @@ async def test_amessages_wrapper_forwards_args():
         custom_llm_provider="azure_ai",
         extra_headers=None,
         timeout=12.5,
+        aws_region_name="us-east-1",
     )
 
     assert response == FAKE_MESSAGES_RESPONSE
     assert bridge.calls[0]["model"] == "claude-sonnet-4-5"
     assert bridge.calls[0]["timeout_seconds"] == 12.5
+    assert bridge.calls[0]["aws_region_name"] == "us-east-1"
 
 
 def _gate(**overrides):
@@ -248,6 +255,32 @@ async def test_gate_invokes_rust_and_marks_response_header():
     assert call["api_base"] == "https://resource.services.ai.azure.com/anthropic"
     assert call["extra_headers"] == {"x-api-key": "sk-azure", "anthropic-version": "2023-06-01"}
     assert call["timeout_seconds"] == 30.0
+    assert call["aws_region_name"] is None
+
+
+@pytest.mark.asyncio
+async def test_gate_invokes_rust_for_bedrock_and_forwards_region():
+    bridge = RecordingAsyncMessages()
+    litellm.use_litellm_rust(True, amessages=bridge)
+
+    response = await _gate(
+        custom_llm_provider="bedrock",
+        litellm_params=GenericLiteLLMParams(
+            api_key="bedrock-token",
+            aws_region_name="us-east-1",
+            rust=True,
+        ),
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        api_key="bedrock-token",
+        api_base=None,
+        headers={},
+    )
+
+    assert response is not None
+    assert response["_hidden_params"]["additional_headers"] == {"x-litellm-rust": "true"}
+    assert bridge.calls[0]["model"] == "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    assert bridge.calls[0]["custom_llm_provider"] == "bedrock"
+    assert bridge.calls[0]["aws_region_name"] == "us-east-1"
 
 
 @pytest.mark.asyncio

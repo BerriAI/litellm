@@ -354,7 +354,7 @@ fn marshal_messages_inputs(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+#[pyo3(signature = (model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None, aws_region_name=None))]
 #[allow(clippy::too_many_arguments)]
 fn messages(
     py: Python<'_>,
@@ -365,6 +365,7 @@ fn messages(
     custom_llm_provider: Option<String>,
     extra_headers: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
+    aws_region_name: Option<String>,
 ) -> PyResult<Py<PyAny>> {
     let (body, extra_headers, timeout) =
         marshal_messages_inputs(py, body, extra_headers, timeout_seconds)?;
@@ -378,6 +379,7 @@ fn messages(
             custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
             timeout,
+            aws_region_name: aws_region_name.as_deref(),
         }))
     });
 
@@ -388,7 +390,7 @@ fn messages(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+#[pyo3(signature = (model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None, aws_region_name=None))]
 #[allow(clippy::too_many_arguments)]
 fn amessages(
     py: Python<'_>,
@@ -399,6 +401,7 @@ fn amessages(
     custom_llm_provider: Option<String>,
     extra_headers: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
+    aws_region_name: Option<String>,
 ) -> PyResult<Bound<'_, PyAny>> {
     let (body, extra_headers, timeout) =
         marshal_messages_inputs(py, body, extra_headers, timeout_seconds)?;
@@ -412,6 +415,7 @@ fn amessages(
             custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
             timeout,
+            aws_region_name: aws_region_name.as_deref(),
         })
         .await
         .map_err(core_error_to_pyerr)?;

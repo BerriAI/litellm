@@ -45,6 +45,7 @@ pub struct AnthropicMessage {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AnthropicMessagesRequest {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub model: String,
     pub messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -95,6 +96,7 @@ pub struct AnthropicMessagesResponse {
     #[serde(rename = "type")]
     pub message_type: String,
     pub role: String,
+    #[serde(default)]
     pub model: String,
     pub content: Vec<Value>,
     // Anthropic always includes stop_reason / stop_sequence, null until the turn

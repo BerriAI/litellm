@@ -12,6 +12,8 @@ pub struct LiteLLMParams {
     pub api_key: Option<String>,
     #[serde(default)]
     pub api_base: Option<String>,
+    #[serde(default)]
+    pub aws_region_name: Option<String>,
 }
 
 /// One entry of the `model_list`, mirroring Python's deployment dict.

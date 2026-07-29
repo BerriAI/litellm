@@ -11,6 +11,7 @@ pub struct MessagesRequest<'a> {
     pub custom_llm_provider: Option<&'a str>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
+    pub aws_region_name: Option<&'a str>,
 }
 
 pub(crate) struct ProviderMessagesRequest {
@@ -20,5 +21,7 @@ pub(crate) struct ProviderMessagesRequest {
     pub(crate) url: String,
     pub(crate) body: Value,
     pub(crate) upstream_headers: Vec<(String, String)>,
+    pub(crate) signing_region: Option<String>,
+    pub(crate) bearer_token: Option<String>,
     pub(crate) timeout: Option<Duration>,
 }

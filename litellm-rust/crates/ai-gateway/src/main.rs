@@ -142,6 +142,17 @@ fn build_router() -> Router {
 /// A real deployment loads `model_list` from config; this is the minimal stand-in
 /// so the gateway has one OpenAI deployment to route to.
 fn build_router_from_env() -> Router {
+    if let Ok(model) = std::env::var("BEDROCK_MODEL") {
+        let api_key = std::env::var("AWS_BEARER_TOKEN_BEDROCK").ok();
+        return Router::new(vec![Deployment {
+            model_name: model.clone(),
+            litellm_params: LiteLLMParams {
+                model: format!("bedrock/{model}"),
+                api_key,
+                api_base: None,
+            },
+        }]);
+    }
     let model =
         std::env::var("OPENAI_REALTIME_MODEL").unwrap_or_else(|_| "gpt-realtime".to_string());
     let api_key = std::env::var("OPENAI_API_KEY").ok();

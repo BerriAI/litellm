@@ -9,7 +9,10 @@ use crate::messages::{MessagesRequest, execute_messages};
 
 pub(crate) enum MessagesResponse {
     Json(Value),
-    Stream(reqwest::Response),
+    Stream {
+        provider: String,
+        response: reqwest::Response,
+    },
 }
 
 pub async fn run(
@@ -51,14 +54,15 @@ pub async fn run(
         custom_llm_provider,
         extra_headers,
         timeout: None,
+        aws_region_name: deployment.litellm_params.aws_region_name.as_deref(),
     };
     let stream = request.body.get("stream").and_then(Value::as_bool) == Some(true);
     execute_messages(request, stream)
         .await
         .map(|response| match response {
             crate::messages::MessagesResponse::Json(body) => MessagesResponse::Json(body),
-            crate::messages::MessagesResponse::Stream(upstream) => {
-                MessagesResponse::Stream(upstream)
+            crate::messages::MessagesResponse::Stream { provider, response } => {
+                MessagesResponse::Stream { provider, response }
             }
         })
 }
