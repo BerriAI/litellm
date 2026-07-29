@@ -6,6 +6,8 @@ Regression tests for the /v1/messages request-parse fast paths:
   while resolving the (static) type hints only once per process.
 """
 
+import pytest
+
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
     AnthropicMessagesRequestUtils,
@@ -88,3 +90,48 @@ def test_drop_params_keeps_speed_for_supporting_model():
         litellm.drop_params = original
 
     assert result == {"speed": "fast"}
+
+
+@pytest.mark.parametrize("param,value", [("temperature", 0.3), ("top_p", 0.9), ("top_k", 40)])
+def test_sampling_params_dropped_for_models_without_sampling_support(param, value):
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+            params={param: value, "max_tokens": 16},
+            model="claude-opus-4-8",
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result == {"max_tokens": 16}
+
+
+@pytest.mark.parametrize("param,value", [("temperature", 0.3), ("top_p", 0.9), ("top_k", 40)])
+def test_sampling_params_raise_without_drop_params(param, value):
+    original = litellm.drop_params
+    litellm.drop_params = False
+    try:
+        with pytest.raises(litellm.utils.UnsupportedParamsError):
+            AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+                params={param: value},
+                model="claude-opus-4-8",
+            )
+    finally:
+        litellm.drop_params = original
+
+
+def test_sampling_params_kept_for_supporting_model():
+    result = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+        params={"temperature": 0.3, "top_p": 0.9, "top_k": 40},
+        model="claude-sonnet-4-6",
+    )
+    assert result == {"temperature": 0.3, "top_p": 0.9, "top_k": 40}
+
+
+def test_temperature_one_allowed_for_model_without_sampling_support():
+    result = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+        params={"temperature": 1},
+        model="claude-opus-4-8",
+    )
+    assert result == {"temperature": 1}

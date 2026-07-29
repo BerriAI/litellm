@@ -1,10 +1,14 @@
 from functools import lru_cache
 from typing import Any, Dict, FrozenSet, List, cast, get_type_hints
 
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.types.llms.anthropic import AnthropicMessagesRequestOptionalParams
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
+
+
+_SAMPLING_PARAMS: frozenset[str] = frozenset(("temperature", "top_p", "top_k"))
 
 
 @lru_cache(maxsize=1)
@@ -51,6 +55,18 @@ class AnthropicMessagesRequestUtils:
                 drop_params=drop_params,
                 custom_llm_provider=custom_llm_provider,
             )
+            for param in _SAMPLING_PARAMS:
+                if param not in filtered_params:
+                    continue
+                value = filtered_params.pop(param)
+                AnthropicModelInfo._apply_sampling_param(
+                    optional_params=filtered_params,
+                    model=model,
+                    param=param,
+                    value=value,
+                    drop_params=drop_params,
+                    output_key=param,
+                )
         return cast(AnthropicMessagesRequestOptionalParams, filtered_params)
 
 
