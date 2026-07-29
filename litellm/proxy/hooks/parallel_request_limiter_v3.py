@@ -4052,29 +4052,68 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         request_data: dict | None = None,
     ) -> None:
         """
-        Release the api-key ``max_parallel_requests`` slot that
-        ``async_pre_call_hook`` acquired, for a request that ended without
-        either logging callback firing.
+        Release the api-key ``max_parallel_requests`` slot and any stashed
+        ITPM/OTPM token reservations for a request that ended without either
+        logging callback firing.
 
         The slot is normally released by ``async_log_success_event`` (natural
         stream completion) or ``async_log_failure_event`` (LLM error). When a
         client cancels a stream mid-flight, the cancellation surfaces as
         ``asyncio.CancelledError`` / ``GeneratorExit`` and neither callback
         runs, so without this the slot leaks per cancelled stream until its
-        TTL prunes it. ``request_data`` carries the stashed acquisition;
-        its presence (not the key object's current max_parallel_requests
-        configuration, which can change mid-request) decides whether there
-        is anything to release.
+        TTL prunes it. The same lifecycle gap applies to ITPM/OTPM
+        reservations: they stay inflated until the window TTL, letting a
+        caller repeatedly cancel streams to exhaust the project's quota.
+
+        ``request_data`` carries the stashed acquisition and reservation
+        amounts; their presence decides whether there is anything to release.
         """
         acquisition = self._get_parallel_slot_acquisition(kwargs=request_data)
-        if acquisition is None:
+        if acquisition is not None:
+            await self._release_parallel_request_slots(
+                acquisition=acquisition,
+                parent_otel_span=None,
+            )
+            self._clear_parallel_slot_marker(request_data)
+
+        if self._is_reservation_released(kwargs=request_data):
             return
 
-        await self._release_parallel_request_slots(
-            acquisition=acquisition,
-            parent_otel_span=None,
-        )
-        self._clear_parallel_slot_marker(request_data)
+        try:
+            itpm_reserved = self._get_reserved_itpm_tokens_from_kwargs(kwargs=request_data)
+            otpm_reserved = self._get_reserved_otpm_tokens_from_kwargs(kwargs=request_data)
+            if itpm_reserved <= 0 and otpm_reserved <= 0:
+                return
+
+            pipeline_operations: List[RedisPipelineIncrementOperation] = []
+            if itpm_reserved > 0:
+                itpm_scopes = self._get_reserved_itpm_scopes_from_kwargs(kwargs=request_data)
+                pipeline_operations.extend(
+                    self._build_reservation_aware_tpm_ops(
+                        targets=list(itpm_scopes),
+                        reserved_scopes=itpm_scopes,
+                        actual_tokens=0,
+                        reserved_tokens=itpm_reserved,
+                    )
+                )
+            if otpm_reserved > 0:
+                otpm_scopes = self._get_reserved_otpm_scopes_from_kwargs(kwargs=request_data)
+                pipeline_operations.extend(
+                    self._build_reservation_aware_tpm_ops(
+                        targets=list(otpm_scopes),
+                        reserved_scopes=otpm_scopes,
+                        actual_tokens=0,
+                        reserved_tokens=otpm_reserved,
+                    )
+                )
+            if pipeline_operations:
+                await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
+                    increment_list=pipeline_operations,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+            self._mark_reservation_released(request_data)
+        except Exception as e:
+            verbose_proxy_logger.exception(f"Error refunding IO token reservations on disconnect: {str(e)}")
 
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """

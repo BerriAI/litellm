@@ -1781,5 +1781,75 @@ async def test_itpm_reservation_accounts_for_audio_content_not_just_text(rate_li
     )
 
 
+@pytest.mark.asyncio
+async def test_itpm_otpm_refunded_on_stream_disconnect(rate_limiter):
+    """
+    Regression for Medium-severity veria-ai finding: stream cancellation
+    left ITPM/OTPM reservations charged.
+
+    async_release_max_parallel_requests_on_disconnect previously only
+    released the parallel slot and ignored any stashed ITPM/OTPM amounts,
+    letting a caller repeatedly start and cancel streams to exhaust the
+    project quota. The fix must refund both buckets and mark the reservation
+    released so async_log_failure_event can't double-refund if it fires later.
+    """
+    handler, cache = rate_limiter
+
+    api_key = hash_token("sk-disconnect-test")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=api_key,
+        project_id="proj-disconnect",
+        project_metadata={
+            "model_itpm_limit": {"bedrock_mantle/claude-opus": 1000},
+            "model_otpm_limit": {"bedrock_mantle/claude-opus": 500},
+        },
+    )
+
+    data: Dict[str, Any] = {
+        "model": "bedrock_mantle/claude-opus",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 50,
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    itpm_reserved = data.get(ITPM_RESERVED_TOKENS_KEY) or (
+        data.get("metadata", {}) or {}
+    ).get(ITPM_RESERVED_TOKENS_KEY)
+    otpm_reserved = data.get(OTPM_RESERVED_TOKENS_KEY) or (
+        data.get("metadata", {}) or {}
+    ).get(OTPM_RESERVED_TOKENS_KEY)
+    assert itpm_reserved is not None and int(itpm_reserved) > 0, "pre-call hook must stash an ITPM reservation"
+    assert otpm_reserved is not None and int(otpm_reserved) > 0, "pre-call hook must stash an OTPM reservation"
+
+    increment_calls: list[dict] = []
+
+    async def mock_increment(increment_list, litellm_parent_otel_span=None):
+        for op in increment_list:
+            increment_calls.append({"key": op["key"], "increment": op["increment_value"]})
+
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_increment
+
+    await handler.async_release_max_parallel_requests_on_disconnect(
+        user_api_key_dict=user_api_key_dict,
+        request_data=data,
+    )
+
+    itpm_refunds = [c for c in increment_calls if "model_per_project_itpm" in c["key"] and c["increment"] < 0]
+    otpm_refunds = [c for c in increment_calls if "model_per_project_otpm" in c["key"] and c["increment"] < 0]
+
+    assert itpm_refunds, "disconnect must refund ITPM reservation; counter stays inflated otherwise"
+    assert otpm_refunds, "disconnect must refund OTPM reservation; counter stays inflated otherwise"
+
+    assert RateLimitHandler._is_reservation_released(kwargs=data), (
+        "disconnect must mark reservation released so failure callbacks can't double-refund"
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
