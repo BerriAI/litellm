@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -17,7 +18,7 @@ DEFAULT_MCP_TOOL_SEARCH_TOP_K: int = 5
 
 def get_mcp_tool_search_default_top_k(
     user_api_key_dict: UserAPIKeyAuth | None = None,
-    litellm_settings: dict[str, object] | None = None,
+    litellm_settings: Mapping[str, object] | None = None,
 ) -> int:
     """Resolve the default top_k for mcp_tool_search (per-key, then global, then 5)."""
     if user_api_key_dict is not None:
@@ -37,7 +38,7 @@ def get_mcp_tool_search_default_top_k(
 def resolve_mcp_tool_search_top_k(
     explicit_top_k: object,
     user_api_key_dict: UserAPIKeyAuth | None = None,
-    litellm_settings: dict[str, object] | None = None,
+    litellm_settings: Mapping[str, object] | None = None,
 ) -> int:
     default_top_k = get_mcp_tool_search_default_top_k(user_api_key_dict, litellm_settings)
     if explicit_top_k is None:
