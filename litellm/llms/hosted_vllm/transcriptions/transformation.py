@@ -6,6 +6,7 @@ from typing import Optional, Union
 
 import httpx
 
+from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
 )
@@ -54,12 +55,23 @@ class HostedVLLMAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> AudioTranscriptionRequestData:
-        """
-        Transform the audio transcription request
-        """
-
-        data = {"model": model, "file": audio_file, **optional_params}
-
-        return AudioTranscriptionRequestData(
-            data=data,
+        processed_audio = process_audio_file(audio_file)
+        explicit_content_type = (
+            audio_file[2] if isinstance(audio_file, tuple) and len(audio_file) >= 3 and audio_file[2] else None
         )
+        content_type = explicit_content_type or processed_audio.content_type
+        extra_body = optional_params.get("extra_body") or {}
+        data = {
+            "model": model,
+            **{key: value for key, value in optional_params.items() if key != "extra_body"},
+            **extra_body,
+        }
+        files = {
+            "file": (
+                processed_audio.filename,
+                processed_audio.file_content,
+                content_type,
+            )
+        }
+
+        return AudioTranscriptionRequestData(data=data, files=files)
