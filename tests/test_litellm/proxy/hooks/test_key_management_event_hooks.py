@@ -4,6 +4,8 @@ Tests for KeyManagementEventHooks.
 Validates that email and secret manager operations are independent and non-blocking.
 """
 
+import asyncio
+import json
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -153,6 +155,92 @@ class TestKeyManagementEventHooksIndependentOperations:
 
         # Email should have been called despite secret manager failure
         assert email_called["called"] is True
+
+
+class TestKeyUpdatedHookAuditLog:
+    """Tests for async_key_updated_hook applied_values audit log merging."""
+
+    @pytest.mark.asyncio
+    async def test_audit_log_includes_applied_spend_reset_on_budget_window_rearm(self):
+        """Test that applied_values overrides/extends the audit log's updated_values."""
+        from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+
+        existing_key_row = LiteLLM_VerificationToken(
+            token="hashed_key",
+            key_alias="test-key-alias",
+        )
+        data = UpdateKeyRequest(key="sk-test", budget_duration="30d")
+        applied_values = {"spend": 0.0, "budget_duration": "30d"}
+
+        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict.api_key = "api-key-123"
+        mock_user_api_key_dict.user_id = "user-123"
+
+        with (
+            patch("litellm.store_audit_logs", True),
+            patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new_callable=AsyncMock,
+            ) as mock_create_audit_log,
+            patch(
+                "litellm.proxy.proxy_server.litellm_proxy_admin_name",
+                "admin",
+            ),
+        ):
+            await KeyManagementEventHooks.async_key_updated_hook(
+                data=data,
+                existing_key_row=existing_key_row,
+                response=None,
+                user_api_key_dict=mock_user_api_key_dict,
+                applied_values=applied_values,
+            )
+            await asyncio.sleep(0)
+
+        mock_create_audit_log.assert_awaited_once()
+        request_data = mock_create_audit_log.call_args.kwargs["request_data"]
+        updated_values = json.loads(request_data.updated_values)
+        assert updated_values["spend"] == 0.0
+        assert updated_values["budget_duration"] == "30d"
+
+    @pytest.mark.asyncio
+    async def test_audit_log_falls_back_to_raw_request_when_no_applied_values(self):
+        """Test that omitting applied_values preserves the prior audit log behavior."""
+        from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+
+        existing_key_row = LiteLLM_VerificationToken(
+            token="hashed_key",
+            key_alias="test-key-alias",
+        )
+        data = UpdateKeyRequest(key="sk-test", max_budget=100.0)
+
+        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict.api_key = "api-key-123"
+        mock_user_api_key_dict.user_id = "user-123"
+
+        with (
+            patch("litellm.store_audit_logs", True),
+            patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new_callable=AsyncMock,
+            ) as mock_create_audit_log,
+            patch(
+                "litellm.proxy.proxy_server.litellm_proxy_admin_name",
+                "admin",
+            ),
+        ):
+            await KeyManagementEventHooks.async_key_updated_hook(
+                data=data,
+                existing_key_row=existing_key_row,
+                response=None,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+            await asyncio.sleep(0)
+
+        mock_create_audit_log.assert_awaited_once()
+        request_data = mock_create_audit_log.call_args.kwargs["request_data"]
+        updated_values = json.loads(request_data.updated_values)
+        assert updated_values["max_budget"] == 100.0
+        assert "spend" not in updated_values
 
 
 class TestRotateVirtualKeyInSecretManager:
@@ -504,3 +592,103 @@ class TestKeyUpdatedAuditLogObjectId:
         audit_row = await self._run_updated_hook_and_capture_audit_log(request_key=hashed_key)
 
         assert audit_row.object_id == hashed_key
+
+    @pytest.mark.asyncio
+    async def test_rotation_audit_log_records_budget_reset_at_absent_from_the_response(self):
+        """budget_reset_at is not a GenerateKeyResponse field, so a rotation that arms
+        a budget window must take it from applied_values or it is lost."""
+        from datetime import datetime, timezone
+
+        from litellm.proxy._types import (
+            GenerateKeyResponse,
+            LiteLLM_VerificationToken,
+            RegenerateKeyRequest,
+        )
+
+        existing_key_row = LiteLLM_VerificationToken(token="old_hash", key_alias="rotate-me")
+        response = GenerateKeyResponse(
+            token_id="new_hash",
+            key="sk-rotated",
+            spend=0.0,
+            budget_duration="30d",
+            max_budget=10.0,
+            models=[],
+        )
+        reset_at = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        applied_values = {"spend": 0.0, "budget_duration": "30d", "budget_reset_at": reset_at}
+
+        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict.token = "api-key-123"
+        mock_user_api_key_dict.user_id = "user-123"
+
+        with (
+            patch("litellm.store_audit_logs", True),
+            patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new_callable=AsyncMock,
+            ) as mock_create_audit_log,
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+            patch.object(
+                KeyManagementEventHooks,
+                "_rotate_virtual_key_in_secret_manager",
+                new_callable=AsyncMock,
+            ),
+            patch.object(KeyManagementEventHooks, "_send_key_rotated_email", new_callable=AsyncMock),
+        ):
+            await KeyManagementEventHooks.async_key_rotated_hook(
+                data=RegenerateKeyRequest(key="sk-old", budget_duration="30d"),
+                existing_key_row=existing_key_row,
+                response=response,
+                user_api_key_dict=mock_user_api_key_dict,
+                applied_values=applied_values,
+            )
+            await asyncio.sleep(0)
+
+        mock_create_audit_log.assert_awaited_once()
+        updated_values = json.loads(mock_create_audit_log.call_args.kwargs["request_data"].updated_values)
+        assert updated_values["budget_reset_at"] == str(reset_at)
+        assert updated_values["spend"] == 0.0
+        assert updated_values["budget_duration"] == "30d"
+
+    @pytest.mark.asyncio
+    async def test_rotation_audit_log_unchanged_when_no_budget_window_applied(self):
+        """A rotation that does not touch the budget window keeps the prior payload."""
+        from litellm.proxy._types import (
+            GenerateKeyResponse,
+            LiteLLM_VerificationToken,
+            RegenerateKeyRequest,
+        )
+
+        existing_key_row = LiteLLM_VerificationToken(token="old_hash", key_alias="rotate-me")
+        response = GenerateKeyResponse(token_id="new_hash", key="sk-rotated", models=[])
+
+        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict.token = "api-key-123"
+        mock_user_api_key_dict.user_id = "user-123"
+
+        with (
+            patch("litellm.store_audit_logs", True),
+            patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new_callable=AsyncMock,
+            ) as mock_create_audit_log,
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+            patch.object(
+                KeyManagementEventHooks,
+                "_rotate_virtual_key_in_secret_manager",
+                new_callable=AsyncMock,
+            ),
+            patch.object(KeyManagementEventHooks, "_send_key_rotated_email", new_callable=AsyncMock),
+        ):
+            await KeyManagementEventHooks.async_key_rotated_hook(
+                data=RegenerateKeyRequest(key="sk-old"),
+                existing_key_row=existing_key_row,
+                response=response,
+                user_api_key_dict=mock_user_api_key_dict,
+                applied_values={},
+            )
+            await asyncio.sleep(0)
+
+        updated_values = json.loads(mock_create_audit_log.call_args.kwargs["request_data"].updated_values)
+        assert "budget_reset_at" not in updated_values
+        assert updated_values["token_id"] == "new_hash"

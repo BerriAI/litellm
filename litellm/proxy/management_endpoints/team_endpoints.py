@@ -895,6 +895,42 @@ def _check_team_budget_update_authority(
         )
 
 
+def _check_team_budget_window_rearm_authority(
+    data: UpdateTeamRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    existing_team_row: BaseModel,
+) -> None:
+    """
+    Only a proxy admin may re-arm a team's budget window on /team/update.
+
+    Re-arming (applying a fresh or changed budget_duration) resets the team's
+    accumulated spend, which is equivalent to restoring its full budget. Unlike
+    the max_budget ceiling checks, this guard applies to every team - standalone
+    and org-scoped alike - because the spend reset it protects
+    (_reset_team_spend_if_budget_window_newly_armed) runs unconditionally. A
+    no-op re-send of the same active duration does not reset spend and is
+    therefore allowed.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    if data.budget_duration is None:
+        return
+    from litellm.proxy.common_utils.timezone_utils import is_budget_window_newly_armed
+
+    if not is_budget_window_newly_armed(
+        new_duration=data.budget_duration,
+        existing_duration=getattr(existing_team_row, "budget_duration", None),
+        existing_reset_at=getattr(existing_team_row, "budget_reset_at", None),
+    ):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "Only a proxy admin can re-arm a team's budget window by changing budget_duration (it resets accumulated spend)."
+        },
+    )
+
+
 def _should_auto_add_team_creator(
     user_api_key_dict: UserAPIKeyAuth,
     general_settings: Mapping[str, object],
@@ -1816,6 +1852,15 @@ async def update_team(
                 existing_team_max_budget=existing_team_row.max_budget,
             )
 
+        # Re-arming a budget window resets accumulated spend, so it needs
+        # proxy-admin authority regardless of whether the team is standalone or
+        # org-scoped (the ceiling checks above only cover standalone teams).
+        _check_team_budget_window_rearm_authority(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            existing_team_row=existing_team_row,
+        )
+
         updated_kv = data.json(exclude_unset=True)
 
         # Drop server-owned metadata keys from caller input so they can only
@@ -1825,6 +1870,7 @@ async def update_team(
 
         # Check budget_duration and budget_reset_at
         _set_budget_reset_at(data, updated_kv)
+        _reset_team_spend_if_budget_window_newly_armed(data, updated_kv, existing_team_row)
 
         _team_member_fields_in_request = {
             field
@@ -1933,6 +1979,8 @@ async def update_team(
             proxy_logging_obj=proxy_logging_obj,
         )
 
+        await _invalidate_team_spend_counter_if_reset(updated_kv, team_row.team_id)
+
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
             await _create_team_update_audit_log(
@@ -2024,6 +2072,30 @@ async def patch_team(
         return result["data"]
     except Exception as e:  # noqa: BLE001  # normalize every failure to the proxy exception contract
         raise handle_exception_on_proxy(e)
+
+
+def _reset_team_spend_if_budget_window_newly_armed(
+    data: UpdateTeamRequest,
+    updated_kv: dict,  # mutable-ok: writes spend=0.0 back into the caller's update payload
+    existing_team_row: BaseModel,
+) -> None:
+    if data.budget_duration is None:
+        return
+    from litellm.proxy.common_utils.timezone_utils import is_budget_window_newly_armed
+
+    if is_budget_window_newly_armed(
+        new_duration=data.budget_duration,
+        existing_duration=getattr(existing_team_row, "budget_duration", None),
+        existing_reset_at=getattr(existing_team_row, "budget_reset_at", None),
+    ):
+        updated_kv["spend"] = 0.0
+
+
+async def _invalidate_team_spend_counter_if_reset(updated_kv: Mapping[str, Any], team_id: str) -> None:
+    if updated_kv.get("spend") == 0.0:
+        from litellm.proxy.proxy_server import _invalidate_spend_counter
+
+        await _invalidate_spend_counter(counter_key=f"spend:team:{team_id}")
 
 
 def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:

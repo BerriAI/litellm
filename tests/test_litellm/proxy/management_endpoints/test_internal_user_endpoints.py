@@ -3553,6 +3553,111 @@ async def test_resolve_user_email_metadata_skips_db_when_no_user_ids(mocker):
 
 
 @pytest.mark.asyncio
+async def test_user_update_zeroes_spend_on_new_budget_window(mocker):
+    from datetime import timedelta
+
+    from litellm.proxy._types import LitellmUserRoles, UpdateUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    existing = mocker.MagicMock()
+    existing.model_dump.return_value = {
+        "user_id": "u1",
+        "spend": 100.0,
+        "budget_duration": None,
+        "budget_reset_at": None,
+    }
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=existing)
+    captured = {}
+
+    async def _update_data(**kwargs):
+        captured.update(kwargs.get("data", {}))
+        return {"user_id": "u1", **kwargs.get("data", {})}
+
+    mock_prisma_client.update_data = mocker.AsyncMock(side_effect=_update_data)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._invalidate_spend_counter", mocker.AsyncMock())
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(user_id="u1", budget_duration="30d"),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    assert captured.get("spend") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_user_update_preserves_spend_on_unchanged_window_resend(mocker):
+    from datetime import timedelta
+
+    from litellm.proxy._types import LitellmUserRoles, UpdateUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    existing = mocker.MagicMock()
+    existing.model_dump.return_value = {
+        "user_id": "u1",
+        "spend": 100.0,
+        "budget_duration": "30d",
+        "budget_reset_at": datetime.now(timezone.utc) + timedelta(days=15),
+    }
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=existing)
+    captured = {}
+
+    async def _update_data(**kwargs):
+        captured.update(kwargs.get("data", {}))
+        return {"user_id": "u1", **kwargs.get("data", {})}
+
+    mock_prisma_client.update_data = mocker.AsyncMock(side_effect=_update_data)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._invalidate_spend_counter", mocker.AsyncMock())
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(user_id="u1", budget_duration="30d", metadata={"note": "x"}),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    assert "spend" not in captured
+
+
+@pytest.mark.asyncio
+async def test_user_update_explicit_spend_takes_precedence_over_window_reset(mocker):
+    """A caller-supplied explicit spend must not be clobbered by the window reset."""
+    from litellm.proxy._types import LitellmUserRoles, UpdateUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    existing = mocker.MagicMock()
+    existing.model_dump.return_value = {
+        "user_id": "u1",
+        "spend": 100.0,
+        "budget_duration": None,
+        "budget_reset_at": None,
+    }
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=existing)
+    captured = {}
+
+    async def _update_data(**kwargs):
+        captured.update(kwargs.get("data", {}))
+        return {"user_id": "u1", **kwargs.get("data", {})}
+
+    mock_prisma_client.update_data = mocker.AsyncMock(side_effect=_update_data)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._invalidate_spend_counter", mocker.AsyncMock())
+
+    # Newly-armed window would normally zero spend, but the explicit spend wins.
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(user_id="u1", budget_duration="30d", spend=42.0),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    assert captured.get("spend") == 42.0
+
+
+@pytest.mark.asyncio
 async def test_add_new_user_to_default_team_propagates_max_budget_in_team(mocker):
     """A configured per-member budget on a default team must reach the membership
     write; dropping it means the member is unlimited within the team budget."""
@@ -3667,3 +3772,223 @@ async def test_add_user_to_team_keeps_already_a_member_quiet(mocker, caplog):
         )
 
     assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+
+def test_newly_armed_user_ids_selects_only_rearmed_rows():
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _newly_armed_user_ids,
+    )
+
+    now = datetime.now(timezone.utc)
+    rows = [
+        SimpleNamespace(user_id="fresh", budget_duration=None, budget_reset_at=None),
+        SimpleNamespace(user_id="expired", budget_duration="30d", budget_reset_at=now - timedelta(days=1)),
+        SimpleNamespace(user_id="changed", budget_duration="7d", budget_reset_at=now + timedelta(days=3)),
+        SimpleNamespace(user_id="active", budget_duration="30d", budget_reset_at=now + timedelta(days=15)),
+        SimpleNamespace(user_id=None, budget_duration=None, budget_reset_at=None),
+    ]
+
+    assert _newly_armed_user_ids({"budget_duration": "30d"}, rows) == ("fresh", "expired", "changed")
+
+
+def test_newly_armed_user_ids_empty_without_budget_duration_or_with_explicit_spend():
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _newly_armed_user_ids,
+    )
+
+    rows = [SimpleNamespace(user_id="u1", budget_duration=None, budget_reset_at=None)]
+
+    assert _newly_armed_user_ids({"max_budget": 10.0}, rows) == ()
+    assert _newly_armed_user_ids({"budget_duration": "30d", "spend": 5.0}, rows) == ()
+
+
+@pytest.mark.asyncio
+async def test_invalidate_user_spend_counters_skips_empty_list(mocker):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _invalidate_user_spend_counters,
+    )
+
+    mock_invalidate = mocker.patch("litellm.proxy.proxy_server._invalidate_spend_counter", mocker.AsyncMock())
+
+    await _invalidate_user_spend_counters([])
+    mock_invalidate.assert_not_awaited()
+
+    await _invalidate_user_spend_counters(["u1", "u2"])
+    assert [c.kwargs["counter_key"] for c in mock_invalidate.await_args_list] == [
+        "spend:user:u1",
+        "spend:user:u2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_bulk_user_update_all_users_zeroes_spend_only_for_rearmed_windows(mocker):
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy._types import (
+        LitellmUserRoles,
+        UpdateUserRequestNoUserIDorEmail,
+        UserAPIKeyAuth,
+    )
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BulkUpdateUserRequest,
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
+
+    now = datetime.now(timezone.utc)
+    rows = [
+        SimpleNamespace(user_id="fresh", user_email=None, budget_duration=None, budget_reset_at=None),
+        SimpleNamespace(
+            user_id="active",
+            user_email=None,
+            budget_duration="30d",
+            budget_reset_at=now + timedelta(days=15),
+        ),
+    ]
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=rows)
+    update_many = mocker.AsyncMock()
+    mock_prisma_client.db.litellm_usertable.update_many = update_many
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_invalidate = mocker.patch("litellm.proxy.proxy_server._invalidate_spend_counter", mocker.AsyncMock())
+
+    response = await bulk_user_update(
+        data=BulkUpdateUserRequest(
+            all_users=True,
+            user_updates=UpdateUserRequestNoUserIDorEmail(budget_duration="30d", max_budget=10.0),
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response.successful_updates == 2
+    bulk_call, reset_call = update_many.await_args_list
+    assert bulk_call.kwargs["where"] == {}
+    assert "spend" not in bulk_call.kwargs["data"]
+    assert bulk_call.kwargs["data"]["budget_reset_at"] is not None
+    assert reset_call.kwargs["where"] == {"user_id": {"in": ["fresh"]}}
+    assert reset_call.kwargs["data"] == {"spend": 0.0}
+    assert [c.kwargs["counter_key"] for c in mock_invalidate.await_args_list] == ["spend:user:fresh"]
+    applied = {r.user_id: r.updated_user for r in response.results}
+    assert applied["fresh"]["spend"] == 0.0
+    assert "spend" not in applied["active"]
+
+
+@pytest.mark.asyncio
+async def test_bulk_user_update_all_users_skips_reset_query_when_no_window_rearm(mocker):
+    from litellm.proxy._types import (
+        LitellmUserRoles,
+        UpdateUserRequestNoUserIDorEmail,
+        UserAPIKeyAuth,
+    )
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BulkUpdateUserRequest,
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
+
+    rows = [SimpleNamespace(user_id="u1", user_email=None, budget_duration=None, budget_reset_at=None)]
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=rows)
+    update_many = mocker.AsyncMock()
+    mock_prisma_client.db.litellm_usertable.update_many = update_many
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_invalidate = mocker.patch("litellm.proxy.proxy_server._invalidate_spend_counter", mocker.AsyncMock())
+
+    await bulk_user_update(
+        data=BulkUpdateUserRequest(
+            all_users=True,
+            user_updates=UpdateUserRequestNoUserIDorEmail(max_budget=10.0),
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert len(update_many.await_args_list) == 1
+    mock_invalidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bulk_user_update_all_users_explicit_spend_invalidates_every_counter(mocker):
+    from litellm.proxy._types import (
+        LitellmUserRoles,
+        UpdateUserRequestNoUserIDorEmail,
+        UserAPIKeyAuth,
+    )
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BulkUpdateUserRequest,
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
+
+    rows = [
+        SimpleNamespace(user_id="u1", user_email=None, budget_duration=None, budget_reset_at=None),
+        SimpleNamespace(user_id="u2", user_email=None, budget_duration=None, budget_reset_at=None),
+    ]
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=rows)
+    update_many = mocker.AsyncMock()
+    mock_prisma_client.db.litellm_usertable.update_many = update_many
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_invalidate = mocker.patch("litellm.proxy.proxy_server._invalidate_spend_counter", mocker.AsyncMock())
+
+    await bulk_user_update(
+        data=BulkUpdateUserRequest(
+            all_users=True,
+            user_updates=UpdateUserRequestNoUserIDorEmail(spend=7.5),
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert len(update_many.await_args_list) == 1
+    assert [c.kwargs["counter_key"] for c in mock_invalidate.await_args_list] == [
+        "spend:user:u1",
+        "spend:user:u2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_bulk_user_update_audit_log_names_the_users_whose_spend_was_reset(mocker):
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy._types import (
+        LitellmUserRoles,
+        UpdateUserRequestNoUserIDorEmail,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BulkUpdateUserRequest,
+    )
+
+    now = datetime.now(timezone.utc)
+    rows = [
+        SimpleNamespace(user_id="armed", user_email=None, budget_duration=None, budget_reset_at=None),
+        SimpleNamespace(
+            user_id="untouched",
+            user_email=None,
+            budget_duration="30d",
+            budget_reset_at=now + timedelta(days=15),
+        ),
+    ]
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=rows)
+    mock_prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._invalidate_spend_counter", mocker.AsyncMock())
+    mock_audit = mocker.patch(
+        "litellm.proxy.hooks.user_management_event_hooks.UserManagementEventHooks.create_internal_user_audit_log",
+        new_callable=mocker.AsyncMock,
+    )
+
+    await bulk_user_update(
+        data=BulkUpdateUserRequest(
+            all_users=True,
+            user_updates=UpdateUserRequestNoUserIDorEmail(budget_duration="30d"),
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    after_value = json.loads(mock_audit.call_args.kwargs["after_value"])
+    assert after_value["spend_reset_user_ids"] == ["armed"]

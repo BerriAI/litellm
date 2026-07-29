@@ -15,7 +15,7 @@ These are members of a Team on LiteLLM
 import asyncio
 import json
 import traceback
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any, Optional, cast
 
@@ -1207,6 +1207,52 @@ async def _invalidate_user_spend_counter_if_changed(
         await _invalidate_spend_counter(counter_key=f"spend:user:{non_default_values['user_id']}")
 
 
+def _newly_armed_user_ids(non_default_values: Mapping[str, Any], user_rows: Sequence[Any]) -> tuple[str, ...]:
+    new_duration: str | None = non_default_values.get("budget_duration")
+    if new_duration is None or non_default_values.get("spend") is not None:
+        return ()
+    from litellm.proxy.common_utils.timezone_utils import is_budget_window_newly_armed
+
+    return tuple(
+        row.user_id
+        for row in user_rows
+        if getattr(row, "user_id", None)
+        and is_budget_window_newly_armed(
+            new_duration=new_duration,
+            existing_duration=getattr(row, "budget_duration", None),
+            existing_reset_at=getattr(row, "budget_reset_at", None),
+        )
+    )
+
+
+async def _invalidate_user_spend_counters(user_ids: Sequence[str]) -> None:
+    if not user_ids:
+        return
+    from litellm.proxy.proxy_server import _invalidate_spend_counter
+
+    for user_id in user_ids:
+        await _invalidate_spend_counter(counter_key=f"spend:user:{user_id}")
+
+
+def _reset_spend_if_budget_window_newly_armed(
+    non_default_values: dict,  # mutable-ok: writes spend=0.0 back into the caller's update payload
+    existing_user_row: "BaseModel | None",
+) -> None:
+    if existing_user_row is None or "budget_duration" not in non_default_values:
+        return
+    if non_default_values.get("spend") is not None:
+        # A caller-supplied explicit spend takes precedence over the window reset.
+        return
+    from litellm.proxy.common_utils.timezone_utils import is_budget_window_newly_armed
+
+    if is_budget_window_newly_armed(
+        new_duration=non_default_values["budget_duration"],
+        existing_duration=getattr(existing_user_row, "budget_duration", None),
+        existing_reset_at=getattr(existing_user_row, "budget_reset_at", None),
+    ):
+        non_default_values["spend"] = 0.0
+
+
 async def _update_single_user_helper(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1249,6 +1295,8 @@ async def _update_single_user_helper(
 
     if existing_user_row is not None:
         existing_user_row = LiteLLM_UserTable(**existing_user_row.model_dump(exclude_none=True))
+
+    _reset_spend_if_budget_window_newly_armed(non_default_values, existing_user_row)
 
     # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
     # must not be able to raise their own budget/spend fields.
@@ -1626,6 +1674,7 @@ async def bulk_user_update(
         successful_updates = 0
         failed_updates = 0
         results: list[UserUpdateResult] = []
+        newly_armed_user_ids = _newly_armed_user_ids(non_default_values, all_users_in_db)
 
         try:
             # Perform bulk database update
@@ -1634,17 +1683,34 @@ async def bulk_user_update(
                 data=non_default_values,  # Update all users
             )
 
+            if newly_armed_user_ids:
+                await UserRepository(prisma_client).table.update_many(
+                    where={"user_id": {"in": list(newly_armed_user_ids)}},
+                    data={"spend": 0.0},
+                )
+
+            _newly_armed_lookup = set(newly_armed_user_ids)
+
             # Create individual success results
             for user in all_users_in_db:
+                _applied_values = (
+                    {**non_default_values, "spend": 0.0} if user.user_id in _newly_armed_lookup else non_default_values
+                )
                 results.append(
                     UserUpdateResult(
                         user_id=user.user_id,
                         user_email=user.user_email,
                         success=True,
-                        updated_user={"user_id": user.user_id, **non_default_values},
+                        updated_user={"user_id": user.user_id, **_applied_values},
                     )
                 )
                 successful_updates += 1
+
+            await _invalidate_user_spend_counters(
+                [user.user_id for user in all_users_in_db if user.user_id]
+                if non_default_values.get("spend") is not None
+                else newly_armed_user_ids
+            )
 
             # Create single audit log entry for bulk operation
             try:
@@ -1656,7 +1722,12 @@ async def bulk_user_update(
                         user_api_key_dict=user_api_key_dict,
                         litellm_proxy_admin_name=litellm_proxy_admin_name,
                         before_value=f"Updated {len(all_users_in_db)} users",
-                        after_value=json.dumps(non_default_values),
+                        after_value=json.dumps(
+                            {**non_default_values, "spend_reset_user_ids": list(newly_armed_user_ids)}
+                            if newly_armed_user_ids
+                            else non_default_values,
+                            default=str,
+                        ),
                     )
                 )
             except Exception as audit_error:
