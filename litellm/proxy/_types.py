@@ -632,7 +632,7 @@ class LiteLLMRoutes(enum.Enum):
         # Reads end users out of spend logs, scoped to the caller's own rows and
         # permitted teams exactly like /spend/logs/ui — it belongs to the same
         # access tier, not to customer management.
-        "/customer/aliases",
+        "/management/v1/spend_logs/end_users",
         "/cost/estimate",
     ]
 
@@ -822,12 +822,13 @@ class LiteLLMRoutes(enum.Enum):
             # Customer / end-user listing (handlers already gate on
             # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
             "/customer/list",
-            "/customer/aliases",
             "/customer/info",
-            # UI Logs page detail drawer (single + session). The list endpoint
-            # `/spend/logs/ui` is covered via spend_tracking_routes below.
+            # UI Logs page detail drawer (single + session) and the end-user filter
+            # facet. The list endpoint `/spend/logs/ui` is covered via
+            # spend_tracking_routes below.
             "/spend/logs/ui/{logId}",
             "/spend/logs/session/ui",
+            "/management/v1/spend_logs/end_users",
             # Settings / observability read endpoints exposed in admin-only
             # sidebar groups (Logging & Alerts, Admin Settings, Budgets,
             # Invitations).
@@ -3638,6 +3639,13 @@ DB_CONNECTION_ERROR_TYPES = (
     httpx.ReadTimeout,
 )
 
+# What a NON-IDEMPOTENT write (increment upsert) may retry: only ConnectError
+# proves the statements never reached the database. Post-send errors are
+# ambiguous; a stalled statement can leave its transaction open on the pooled
+# connection, where a retry stacks a second increment set into the same commit.
+# Idempotent writes (create_many with skip_duplicates) may retry the full tuple.
+DB_RETRY_SAFE_ERROR_TYPES = (httpx.ConnectError,)
+
 
 class SSOUserDefinedValues(TypedDict):
     models: List[str]
@@ -4322,7 +4330,13 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     team_id_upsert: bool = False
     team_ids_jwt_field: Optional[str] = None
     upsert_sso_user_to_team: bool = False
-    team_allowed_routes: List[str] = ["openai_routes", "info_routes", "mcp_routes"]
+    team_allowed_routes: List[str] = [
+        "openai_routes",
+        "info_routes",
+        "mcp_routes",
+        "/v1/messages",
+        "/v1/messages/count_tokens",
+    ]
     team_id_default: Optional[str] = Field(
         default=None,
         description="If no team_id given, default permissions/spend-tracking to this team.s",

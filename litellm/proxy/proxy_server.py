@@ -109,6 +109,7 @@ from litellm.proxy.common_utils.callback_utils import (
     is_sensitive_callback_key,
     normalize_callback_names,
     process_callback,
+    strip_callback_config,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.router_utils.add_retry_fallback_headers import (
@@ -393,6 +394,16 @@ from litellm.proxy.management_endpoints.cost_tracking_settings import (
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
 )
+from litellm.proxy.management_endpoints.management_v1 import (
+    router as management_v1_router,
+)
+from litellm.proxy.management_endpoints.management_v1.common import (
+    MANAGEMENT_V1_PREFIX,
+    PROBLEM_TYPE_BASE,
+    ManagementProblem,
+    problem_response,
+)
+from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     router as fallback_management_router,
 )
@@ -1438,8 +1449,27 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Op
             request.state.parent_otel_span = None
 
 
+@app.exception_handler(ManagementProblem)
+async def management_problem_exception_handler(request: Request, exc: ManagementProblem):
+    _close_dangling_otel_server_span(request, exc.problem.status, exc=exc)
+    return problem_response(exc.problem)
+
+
 @app.exception_handler(RequestValidationError)
 async def otel_request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    if request.url.path.startswith(MANAGEMENT_V1_PREFIX):
+        _close_dangling_otel_server_span(request, 400, exc=exc)
+        return problem_response(
+            ProblemDetail(
+                type=f"{PROBLEM_TYPE_BASE}invalid-query-parameter",
+                title="Invalid query parameter",
+                status=400,
+                detail="; ".join(
+                    f"{'.'.join(str(part) for part in error['loc'][1:])}: {error['msg']}" for error in exc.errors()
+                )
+                or "The request query parameters are invalid.",
+            )
+        )
     _close_dangling_otel_server_span(request, 422, exc=exc)
     return JSONResponse(
         status_code=422,
@@ -13379,7 +13409,7 @@ async def async_queue_request(
             # extra_body); see above for the same guard upstream.
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
+        data["metadata"]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
         _headers = _safe_get_request_headers(request).copy()
         _headers.pop("authorization", None)  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
@@ -16306,6 +16336,7 @@ app.include_router(team_router)
 app.include_router(ui_sso_router)
 app.include_router(organization_router)
 app.include_router(customer_router)
+app.include_router(management_v1_router)
 app.include_router(spend_management_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)

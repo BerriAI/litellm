@@ -19,6 +19,7 @@ import threading
 import time
 import traceback
 from collections import defaultdict
+from collections.abc import Mapping
 from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
@@ -108,6 +109,9 @@ from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
+)
+from litellm.router_utils.auto_router_model_naming import (
+    classify_strategy_router_model,
 )
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient
 from litellm.router_utils.clientside_credential_handler import (
@@ -268,6 +272,43 @@ def _cost_value_as_float(value: Union[str, int, float, None]) -> Optional[float]
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def model_info_is_active_for_environment(model_info: Mapping[str, object] | None) -> bool:
+    """Single owner of the environment-gating rule: a deployment whose model_info names
+    `supported_environments` loads only on pods whose LITELLM_ENVIRONMENT is in that list.
+    `Router.deployment_is_active_for_environment` delegates here, and the model-write
+    endpoints consult the same rule to tell a deliberately inactive model from one that
+    was dropped by a failed reload."""
+    if model_info is None:
+        return True
+    supported_environments = model_info.get("supported_environments")
+    if supported_environments is None:
+        return True
+    if not isinstance(supported_environments, (list, tuple)):
+        raise ValueError(
+            f"supported_environments must be a list of {VALID_LITELLM_ENVIRONMENTS}. "
+            f"but set as: {supported_environments} for model_info: {model_info}"
+        )
+    litellm_environment = get_secret_str(secret_name="LITELLM_ENVIRONMENT")
+    if litellm_environment is None:
+        raise ValueError("Set 'supported_environments' for model but not 'LITELLM_ENVIRONMENT' set in .env")
+
+    if litellm_environment not in VALID_LITELLM_ENVIRONMENTS:
+        raise ValueError(
+            f"LITELLM_ENVIRONMENT must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {litellm_environment}"
+        )
+
+    for _env in supported_environments:
+        if _env not in VALID_LITELLM_ENVIRONMENTS:
+            raise ValueError(
+                f"supported_environments must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {_env} "
+                f"for model_info: {model_info}"
+            )
+
+    if litellm_environment in supported_environments:
+        return True
+    return False
 
 
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
@@ -7585,15 +7626,7 @@ class Router:
         but NOT "auto_router/complexity_router" or "auto_router/adaptive_router"
         (which use the complexity-router and adaptive-router strategies).
         """
-        if litellm_params.model.startswith("auto_router/complexity_router"):
-            return False  # This is handled by complexity_router
-        if litellm_params.model.startswith("auto_router/adaptive_router"):
-            return False  # This is handled by adaptive_router
-        if litellm_params.model.startswith("auto_router/quality_router"):
-            return False  # This is handled by quality_router
-        if litellm_params.model.startswith("auto_router/"):
-            return True
-        return False
+        return classify_strategy_router_model(litellm_params.model) == "semantic"
 
     @staticmethod
     def _deployment_tags(deployment: Deployment) -> tuple[str, ...]:
@@ -7648,9 +7681,7 @@ class Router:
 
         Returns True if the litellm_params model starts with "auto_router/complexity_router"
         """
-        if litellm_params.model.startswith("auto_router/complexity_router"):
-            return True
-        return False
+        return classify_strategy_router_model(litellm_params.model) == "complexity"
 
     def init_complexity_router_deployment(self, deployment: Deployment):
         """
@@ -7700,7 +7731,22 @@ class Router:
 
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
-        return litellm_params.model.startswith("auto_router/adaptive_router")
+        return classify_strategy_router_model(litellm_params.model) == "adaptive"
+
+    def _deployment_participates_in_adaptive_routing(self, litellm_params: LiteLLM_Params) -> bool:
+        """True when this deployment owns an `adaptive_routers` entry once finalized:
+        a dedicated adaptive router, or a complexity router whose config enables the
+        adaptive companion. Mirrors the two arms of
+        `_finalize_adaptive_router_if_configured`, which is the registry's only writer."""
+        if self._is_adaptive_router_deployment(litellm_params=litellm_params):
+            return True
+        if not self._is_complexity_router_deployment(litellm_params=litellm_params):
+            return False
+        config = litellm_params.complexity_router_config
+        if not config:
+            return False
+        adaptive_flag: object = config.get("adaptive")
+        return bool(adaptive_flag)
 
     @staticmethod
     def _has_registered_strategy(
@@ -7734,20 +7780,56 @@ class Router:
             TaggedPreRoutingStrategy(tags=tags, strategy=strategy),
         ]
 
+    @staticmethod
+    def _unregister_pre_routing_strategy(
+        registry: dict[str, list[TaggedPreRoutingStrategy[_PreRoutingStrategyT]]],
+        model_name: str,
+        tags: tuple[str, ...],
+    ) -> bool:
+        """Drop the strategy registered for this exact (model_name, tags) pair, leaving
+        strategies registered under the same name with different tags in place. Returns
+        whether anything was actually dropped."""
+        existing = registry.get(model_name, [])
+        remaining = [entry for entry in existing if entry.tags != tags]
+        if len(remaining) == len(existing):
+            return False
+        if remaining:
+            registry[model_name] = remaining
+        else:
+            registry.pop(model_name, None)
+        return True
+
+    def _unregister_pre_routing_strategy_for_deployment(self, deployment: Deployment) -> None:
+        """
+        Release the pre-routing strategy a deployment holds, so removing it from the
+        model_list also frees its (model_name, tags) slot.
+
+        Without this, re-adding the deployment (an edit arriving via upsert_deployment,
+        or a router recreated under a name that was deleted earlier) hits the
+        "already exists" guard in `_register_pre_routing_strategy`, which
+        `ignore_invalid_deployments` swallows - the deployment then silently never
+        makes it back into the model_list.
+
+        Released from every registry rather than the first match, because registration is
+        one-to-many: a complexity router configured with `adaptive` is also registered in
+        `adaptive_routers` under the same (model_name, tags) by the deferred finalize pass.
+        Guarded on the auto_router/ prefix so removing a *regular* deployment can't evict a
+        router that merely shares its model_name.
+        """
+        if not deployment.litellm_params.model.startswith("auto_router/"):
+            return
+        model_name = deployment.model_name
+        tags = self._deployment_tags(deployment)
+        for registry in (self.auto_routers, self.complexity_routers, self.quality_routers):
+            self._unregister_pre_routing_strategy(registry, model_name, tags)
+        if self._unregister_pre_routing_strategy(self.adaptive_routers, model_name, tags):
+            self._sync_adaptive_router_hooks()
+
     def _finalize_adaptive_router_if_configured(self) -> None:
         """Locate every adaptive-router deployment in the finalized model_list and
         build an AdaptiveRouter for each. Safe no-op when none are configured.
         Idempotent: skips any deployment whose (model_name, tags) pair is already
         initialized, so hot-reloads don't rebuild routers that would lose state."""
-        # Drop any adaptive-router hooks left over from a previous Router
-        # instance (e.g. after `/config/reload` replaced `llm_router`). Without
-        # this, stale AdaptiveRouterPostCallHook callbacks from the old Router
-        # remain wired up in `litellm.callbacks` and double-fire signal
-        # recording for every request.
-        from litellm.router_strategy.adaptive_router.hooks import (
-            AdaptiveRouterPostCallHook,
-        )
-
         for entry in self.model_list or []:
             lp = entry.get("litellm_params") if isinstance(entry, dict) else entry.litellm_params
             lp_model = (lp.get("model") if isinstance(lp, dict) else lp.model) if lp else None
@@ -7778,6 +7860,16 @@ class Router:
                         *self.adaptive_routers.get(model_name, []),
                         TaggedPreRoutingStrategy(tags=tagged.tags, strategy=adaptive_router),
                     ]
+
+        self._sync_adaptive_router_hooks()
+
+    def _sync_adaptive_router_hooks(self) -> None:
+        """Rebuild the AdaptiveRouterPostCallHook set so it is exactly one hook per
+        currently registered adaptive router. Run at every point the adaptive registry
+        changes, otherwise a released router keeps recording turns through its hook."""
+        from litellm.router_strategy.adaptive_router.hooks import (
+            AdaptiveRouterPostCallHook,
+        )
 
         for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook):
             litellm.logging_callback_manager.remove_callback_from_all_lists(callback)
@@ -7865,9 +7957,7 @@ class Router:
 
         Returns True if the litellm_params model starts with "auto_router/quality_router".
         """
-        if litellm_params.model.startswith("auto_router/quality_router"):
-            return True
-        return False
+        return classify_strategy_router_model(litellm_params.model) == "quality"
 
     def init_quality_router_deployment(self, deployment: Deployment):
         """
@@ -7921,30 +8011,7 @@ class Router:
         - ValueError: If LITELLM_ENVIRONMENT is not set in .env or not one of the valid values
         - ValueError: If supported_environments is not set in model_info or not one of the valid values
         """
-        if (
-            deployment.model_info is None
-            or "supported_environments" not in deployment.model_info
-            or deployment.model_info["supported_environments"] is None
-        ):
-            return True
-        litellm_environment = get_secret_str(secret_name="LITELLM_ENVIRONMENT")
-        if litellm_environment is None:
-            raise ValueError("Set 'supported_environments' for model but not 'LITELLM_ENVIRONMENT' set in .env")
-
-        if litellm_environment not in VALID_LITELLM_ENVIRONMENTS:
-            raise ValueError(
-                f"LITELLM_ENVIRONMENT must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {litellm_environment}"
-            )
-
-        for _env in deployment.model_info["supported_environments"]:
-            if _env not in VALID_LITELLM_ENVIRONMENTS:
-                raise ValueError(
-                    f"supported_environments must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {_env} for deployment: {deployment}"
-                )
-
-        if litellm_environment in deployment.model_info["supported_environments"]:
-            return True
-        return False
+        return model_info_is_active_for_environment(model_info=deployment.model_info)
 
     def set_model_list(self, model_list: list):
         original_model_list = copy.deepcopy(model_list)
@@ -8401,13 +8468,29 @@ class Router:
                         self._invalidate_access_groups_cache()
                         self._update_deployment_indices_after_removal(model_id=deployment_id, removal_idx=removal_idx)
 
+                # Free the outgoing deployment's pre-routing strategy slot (keyed by the
+                # OLD model_name/tags) before the re-add below re-registers it.
+                self._unregister_pre_routing_strategy_for_deployment(deployment=_deployment_on_router)
+
             # if the model_id is not in router
             self.add_deployment(deployment=deployment)
+            # add_deployment() builds every strategy EXCEPT the adaptive one, which
+            # set_model_list() defers until the whole model_list is visible. Re-run that
+            # deferred pass so an adaptive router whose slot was just released above is
+            # rebuilt rather than left unregistered.
+            if self._deployment_participates_in_adaptive_routing(litellm_params=deployment.litellm_params) or (
+                _deployment_on_router is not None
+                and self._deployment_participates_in_adaptive_routing(
+                    litellm_params=_deployment_on_router.litellm_params
+                )
+            ):
+                self._finalize_adaptive_router_if_configured()
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:
-                verbose_router_logger.debug(
-                    f"Error upserting deployment: {e}, ignoring and continuing with other deployments."
+                verbose_router_logger.warning(
+                    f"Error upserting deployment {deployment.model_name} (id={deployment.model_info.id}): {e}. "
+                    "Dropping it and continuing with other deployments."
                 )
                 return None
             else:
@@ -8436,6 +8519,16 @@ class Router:
                 _budget_limiter = self._get_router_deployment_budget_limiter()
                 if _budget_limiter is not None:
                     _budget_limiter.unregister_deployment_budget(model_id=id)
+                try:
+                    self._unregister_pre_routing_strategy_for_deployment(
+                        deployment=item if isinstance(item, Deployment) else Deployment(**item)
+                    )
+                except Exception:
+                    verbose_router_logger.exception(
+                        "delete_deployment: could not release pre-routing strategies for model_id=%s; "
+                        "the deployment is out of the model_list and its indices are repaired",
+                        id,
+                    )
                 return item
             else:
                 return None

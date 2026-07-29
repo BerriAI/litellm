@@ -331,6 +331,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "thinking",
             "output_format",
             "output_config",
+            "stop_sequences",
         ]
 
     def _is_web_search_tool(self, tool: Dict[str, Any]) -> bool:
@@ -615,7 +616,7 @@ class LiteLLMAnthropicMessagesAdapter:
         thinking_type = thinking.get("type", "disabled")
 
         if thinking_type == "disabled":
-            return None
+            return "none"
         elif thinking_type == "enabled":
             return reasoning_effort_from_thinking_budget(thinking.get("budget_tokens", 0))
         elif thinking_type == "adaptive":
@@ -683,24 +684,36 @@ class LiteLLMAnthropicMessagesAdapter:
                 thinking
             )
             if reasoning_effort:
-                summary = thinking.get("summary") if isinstance(thinking, dict) else None
-                auto_summary = is_reasoning_auto_summary_enabled()
-                if summary:
-                    return {
-                        "reasoning_effort": {
-                            "effort": reasoning_effort,
-                            "summary": summary,
-                        }
-                    }
-                elif auto_summary:
-                    return {
-                        "reasoning_effort": {
-                            "effort": reasoning_effort,
-                            "summary": "detailed",
-                        }
-                    }
-                return {"reasoning_effort": reasoning_effort}
+                return {
+                    "reasoning_effort": LiteLLMAnthropicMessagesAdapter._apply_reasoning_summary_wrapping(
+                        reasoning_effort, thinking
+                    )
+                }
             return {}
+
+    @staticmethod
+    def _apply_reasoning_summary_wrapping(
+        reasoning_effort: str,
+        thinking: Dict[str, Any],
+    ) -> Any:
+        """
+        Apply the reasoning_effort/summary wrapping rules shared by every
+        thinking->reasoning_effort translation path.
+
+        Disabled thinking always stays a plain string - there's no reasoning
+        trace to summarize, and non-Claude providers (e.g. Fireworks) expect
+        reasoning_effort as a plain string, not a summary dict.
+        """
+        thinking_type = thinking.get("type") if isinstance(thinking, dict) else None
+        if thinking_type == "disabled":
+            return reasoning_effort
+
+        summary = thinking.get("summary") if isinstance(thinking, dict) else None
+        if summary:
+            return {"effort": reasoning_effort, "summary": summary}
+        if is_reasoning_auto_summary_enabled():
+            return {"effort": reasoning_effort, "summary": "detailed"}
+        return reasoning_effort
 
     def translate_anthropic_tool_choice_to_openai(
         self, tool_choice: AnthropicMessagesToolChoice
@@ -919,6 +932,18 @@ class LiteLLMAnthropicMessagesAdapter:
             tool_choice=cast(AnthropicMessagesToolChoice, tool_choice)
         )
 
+    def _translate_stop_sequences_to_openai(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> None:
+        if "stop_sequences" not in anthropic_message_request:
+            return
+        stop_sequences = anthropic_message_request["stop_sequences"]
+        if not stop_sequences:
+            return
+        new_kwargs["stop"] = stop_sequences
+
     def _translate_tools_to_openai(
         self,
         anthropic_message_request: AnthropicMessagesRequest,
@@ -976,32 +1001,17 @@ class LiteLLMAnthropicMessagesAdapter:
         if not reasoning_effort:
             return
 
+        thinking_type = thinking.get("type") if isinstance(thinking, dict) else None
+
         # For adaptive thinking, override with output_config.effort if available
-        if isinstance(thinking, dict) and thinking.get("type") == "adaptive":
+        if thinking_type == "adaptive":
             output_config = anthropic_message_request.get("output_config")
             if isinstance(output_config, dict) and output_config.get("effort"):
                 reasoning_effort = output_config["effort"]
 
-        summary = thinking.get("summary") if isinstance(thinking, dict) else None
-        auto_summary = is_reasoning_auto_summary_enabled()
-        if summary:
-            new_kwargs["reasoning_effort"] = cast(
-                Any,
-                {
-                    "effort": reasoning_effort,
-                    "summary": summary,
-                },
-            )
-        elif auto_summary:
-            new_kwargs["reasoning_effort"] = cast(
-                Any,
-                {
-                    "effort": reasoning_effort,
-                    "summary": "detailed",
-                },
-            )
-        else:
-            new_kwargs["reasoning_effort"] = reasoning_effort
+        new_kwargs["reasoning_effort"] = self._apply_reasoning_summary_wrapping(
+            reasoning_effort, cast(Dict[str, Any], thinking)
+        )
 
     def _translate_output_format_to_openai(
         self,
@@ -1095,6 +1105,11 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         ## CONVERT THINKING
         self._translate_thinking_to_openai(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
+        ## CONVERT STOP_SEQUENCES
+        self._translate_stop_sequences_to_openai(
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
         )

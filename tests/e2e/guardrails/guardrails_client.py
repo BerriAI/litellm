@@ -5,6 +5,7 @@ and chat through them on the shared ProxyClient so resources.defer cleans up.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -140,7 +141,17 @@ class GuardrailsClient:
         *,
         identifier: str,
         version: str,
+        default_on: bool = False,
     ) -> str:
+        """Register a Bedrock guardrail, opted out of `default_on` by default.
+
+        `default_on=True` applies the guardrail to every request the proxy serves,
+        not just this test's. When the upstream ApplyGuardrail call fails (a missing
+        bedrock:ApplyGuardrail permission answers 403), that failure is returned to
+        unrelated traffic as `403 Bedrock guardrail request failed`, so one guardrail
+        test takes out whatever else is running. Callers select the guardrail
+        per-request instead, which keeps the blast radius to the test that wants it.
+        """
         return unwrap(
             self.proxy.transport.post(
                 "/guardrails",
@@ -150,7 +161,7 @@ class GuardrailsClient:
                         guardrail_name=name,
                         litellm_params=BedrockGuardrailParamsBody(
                             mode="pre_call",
-                            default_on=True,
+                            default_on=default_on,
                             guardrailIdentifier=identifier,
                             guardrailVersion=version,
                         ),
@@ -277,3 +288,24 @@ class GuardrailsClient:
 
 def build_client(proxy: ProxyClient) -> GuardrailsClient:
     return GuardrailsClient(proxy=proxy)
+
+
+def poll_until_blocked(call: Callable[[], Result[ChatResponse]]) -> Result[ChatResponse]:
+    """Retry a call that a guardrail should reject until it is, returning the last result.
+
+    Registering a guardrail is a control-plane write; the data-plane worker that
+    serves /chat/completions picks it up only on its next periodic DB sync (~30s in
+    proxy_server.py). A call issued right after the create therefore runs against a
+    worker that has no guardrail yet and is allowed through, which is in-flight
+    propagation rather than a guardrail that failed to block. Polling to the deadline
+    waits that out so the assertions judge the synced state; a guardrail that never
+    blocks still fails, on the last allowed result.
+    """
+    deadline = time.monotonic() + POLL_TIMEOUT
+    last = call()
+    while time.monotonic() < deadline:
+        if not isinstance(last, Success):
+            return last
+        time.sleep(POLL_INTERVAL)
+        last = call()
+    return last

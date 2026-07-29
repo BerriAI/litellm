@@ -195,6 +195,27 @@ class McpClient:
             )
         ).root
 
+    def await_registered(self, server_id: str) -> None:
+        """Poll /v1/mcp/server until `server_id` is listed. Fails at poll_timeout.
+
+        The DB row exists the moment registration returns, but a data-plane pod
+        answers the listing from a registry it refreshes on a periodic DB sync, so a
+        pod that joined the load balancer after the write reports the server as
+        absent until its first sync.
+        """
+        deadline = time.monotonic() + self.proxy.poll_timeout
+        while True:
+            registered = frozenset(row.server_id for row in self.registered_servers())
+            if server_id in registered:
+                return
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"registered server {server_id} still absent from /v1/mcp/server "
+                    f"{self.proxy.poll_timeout}s after registration (the data plane never synced "
+                    f"the row): {registered}"
+                )
+            time.sleep(self.proxy.poll_interval)
+
     def generate_key(
         self,
         *,
@@ -224,39 +245,28 @@ class McpClient:
             response_type=McpToolsListResponse,
         )
 
-    def await_registered(self, server_id: str) -> None:
-        """Poll /v1/mcp/server until server_id is listed (data-plane DB reload)."""
-        deadline = time.monotonic() + self.proxy.poll_timeout
-        while True:
-            registered = frozenset(row.server_id for row in self.registered_servers())
-            if server_id in registered:
-                return
-            if time.monotonic() >= deadline:
-                raise AssertionError(
-                    f"registered server {server_id} still absent from /v1/mcp/server "
-                    f"{self.proxy.poll_timeout}s after registration (data plane never synced): "
-                    f"{registered}"
-                )
-            time.sleep(self.proxy.poll_interval)
-
     def await_tool(self, key: str, server_id: str, needle: str) -> str:
-        """Poll tools/list until server_id serves a tool matching needle; return its name.
+        """Poll tools/list until `server_id` serves a tool matching `needle`, and
+        return its fully-qualified name. Fails at poll_timeout.
 
-        Multi-worker gateways only list tools on the process that handles the
-        request; retry until a hot worker answers or the poll deadline.
+        /v1/mcp/server returns as soon as the DB row is written, but the gateway
+        runs the initialize + tools/list handshake against the upstream lazily on
+        the first request that needs it, and reports a server it has not
+        discovered yet exactly like a dead one: an empty tool list. Waiting is
+        what separates the two.
         """
         deadline = time.monotonic() + self.proxy.poll_timeout
-        last: Result[McpToolsListResponse] | None = None
         while True:
-            last = self.list_tools(key)
-            if isinstance(last, Success):
-                tool_name = last.data.tool_name_containing(server_id, needle)
+            result = self.list_tools(key)
+            if isinstance(result, Success):
+                tool_name = result.data.tool_name_containing(server_id, needle)
                 if tool_name is not None:
                     return tool_name
             if time.monotonic() >= deadline:
                 raise AssertionError(
                     f"server {server_id} never served a tool matching {needle!r} within "
-                    f"{self.proxy.poll_timeout}s; last tools/list: {last}"
+                    f"{self.proxy.poll_timeout}s of registration (upstream unreachable, or "
+                    f"the key's grant was not applied); last tools/list: {result}"
                 )
             time.sleep(self.proxy.poll_interval)
 

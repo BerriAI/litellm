@@ -13,6 +13,7 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import datetime
 import json
+from collections.abc import Mapping, Sequence
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
@@ -52,13 +53,19 @@ from litellm.proxy.utils import PrismaClient
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import ModelTableRepository
 from litellm.repositories.team_repository import TeamRepository
+from litellm.router import Router
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     UpdateUsefulLinksRequest,
+)
+from litellm.router_utils.auto_router_model_naming import (
+    STRATEGY_ROUTER_PARAM_FIELDS,
+    validate_strategy_router_model_write,
 )
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
     DeploymentTypedDict,
+    GenericLiteLLMParams,
     LiteLLMParamsTypedDict,
     updateDeployment,
 )
@@ -94,6 +101,45 @@ async def get_db_model(model_id: str, prisma_client: PrismaClient) -> Optional[D
 
     deployment_pydantic_obj = Deployment(**db_model.model_dump(exclude_none=True))
     return deployment_pydantic_obj
+
+
+def _strategy_router_write_violation(
+    incoming_params: GenericLiteLLMParams | None,
+    existing_params: GenericLiteLLMParams | None,
+) -> str | None:
+    """Reject writes that would corrupt a strategy router's pseudo-model.
+
+    An auto-router deployment's ``litellm_params.model`` (``auto_router/...``) is
+    the discriminator the router loads it by; a write that mangles it makes the
+    router drop the deployment silently under ``ignore_invalid_deployments``.
+    Only writes that supply ``litellm_params.model`` are judged, against the
+    merged (stored + incoming) params, so partial patches and restores of an
+    already-corrupted row stay legal. Returns the violation, or None.
+    """
+    if incoming_params is None or incoming_params.model is None:
+        return None
+    present_fields = frozenset(
+        field
+        for field in STRATEGY_ROUTER_PARAM_FIELDS
+        for source in (incoming_params, existing_params)
+        if source is not None and getattr(source, field, None) is not None
+    )
+    return validate_strategy_router_model_write(model=incoming_params.model, present_fields=present_fields)
+
+
+def _raise_on_strategy_router_write_violation(
+    incoming_params: GenericLiteLLMParams | None,
+    existing_params: GenericLiteLLMParams | None,
+) -> None:
+    violation = _strategy_router_write_violation(incoming_params=incoming_params, existing_params=existing_params)
+    if violation is None:
+        return
+    raise ProxyException(
+        message=violation,
+        type=ProxyErrorTypes.validation_error.value,
+        code=status.HTTP_400_BAD_REQUEST,
+        param="litellm_params.model",
+    )
 
 
 def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
@@ -253,6 +299,11 @@ async def patch_model(
                 param="blocked",
             )
 
+        _raise_on_strategy_router_write_violation(
+            incoming_params=patch_data.litellm_params,
+            existing_params=db_model.litellm_params,
+        )
+
         # Handle team model updates with proper alias management
         update_data = await _update_team_model_in_db(
             db_model=db_model,
@@ -272,6 +323,7 @@ async def patch_model(
         )
 
         # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
+        live_before_reload = live_model_ids_snapshot()
         await clear_cache()
 
         ## CREATE AUDIT LOG ##
@@ -286,6 +338,12 @@ async def patch_model(
                 litellm_changed_by=user_api_key_dict.user_id,
                 litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
             )
+        )
+
+        raise_if_reload_degraded_serving(
+            before=live_before_reload,
+            written_models=[(model_id, getattr(updated_model, "model_info", None))],
+            action="update",
         )
 
         return updated_model
@@ -370,6 +428,7 @@ async def _set_model_blocked_status(
             },
         )
 
+        live_before_reload = live_model_ids_snapshot()
         await clear_cache()
 
         asyncio.create_task(
@@ -385,6 +444,12 @@ async def _set_model_blocked_status(
                 litellm_changed_by=litellm_changed_by,
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
             )
+        )
+
+        raise_if_reload_degraded_serving(
+            before=live_before_reload,
+            written_models=[(data.model_id, getattr(updated_model, "model_info", None))],
+            action=action,
         )
 
         return updated_model
@@ -713,13 +778,8 @@ async def _get_team_deployments(
     # Confirm team_id in model_info (defensive check)
     result = []
     for row in response:
-        model_info = row.model_info
-        if isinstance(model_info, str):
-            try:
-                model_info = json.loads(model_info)
-            except (TypeError, ValueError):
-                continue
-        if isinstance(model_info, dict) and model_info.get("team_id") == team_id:
+        model_info = model_info_as_mapping(row.model_info)
+        if model_info is not None and model_info.get("team_id") == team_id:
             result.append(row)
     return result
 
@@ -770,13 +830,8 @@ async def _get_team_public_model_names(
     deployments = await _get_team_deployments(team_id, prisma_client)
     public_names: Set[str] = set()
     for row in deployments:
-        model_info = row.model_info
-        if isinstance(model_info, str):
-            try:
-                model_info = json.loads(model_info)
-            except (TypeError, ValueError):
-                continue
-        if isinstance(model_info, dict):
+        model_info = model_info_as_mapping(row.model_info)
+        if model_info is not None:
             public_name = model_info.get("team_public_model_name")
             if public_name:
                 public_names.add(public_name)
@@ -788,6 +843,7 @@ async def _remove_unbacked_team_models(
     prisma_client: PrismaClient,
     user_api_key_cache: Any,
     proxy_logging_obj: Any,
+    llm_router: Router | None = None,
 ) -> None:
     """
     Strip a deleted team model's public name(s) from team.models and refresh the cache.
@@ -795,26 +851,50 @@ async def _remove_unbacked_team_models(
     Must be called after the deployment row is deleted: a public name is removed only
     when no remaining team deployment still backs it, so a load-balanced replica isn't
     revoked while siblings serve it, and concurrent deletes can't leave a ghost.
+
+    Legacy team models (created before team_public_model_name existed) store a
+    ``{public_name: "model_name_{team_id}_{uuid}"}`` entry in the team's model_aliases,
+    so the alias scan runs for every team model; skipping it for internal-shaped names
+    left stale aliases that rewrote requests to deployments that no longer exist.
+    Aliases are scrubbed only when the deleted deployment's name no longer resolves in
+    the router, so deleting one replica of a load-balanced group never breaks aliases
+    that still route to the surviving replicas (in any team).
+
+    A public name that still resolves to a live router deployment (e.g. a gateway-level
+    model group shared with the team) is kept in team.models, so deleting a per-team
+    duplicate does not revoke the team's access to the shared deployment.
     """
     team_id = model_params.model_info.team_id
     if team_id is None:
         return
 
-    # BYOK models carry an internal `model_name_{team_id}_{uuid}` name that can never
-    # be a team alias value, so skip the full litellm_modeltable scan for them.
-    removed_model_aliases: List[Tuple[str, str]] = []
-    if not model_params.model_name.startswith(f"model_name_{team_id}_"):
-        removed_model_aliases = await delete_team_model_alias(
+    deleted_name_still_served = (
+        llm_router is not None and model_params.model_name in llm_router.model_name_to_deployment_indices
+    )
+    removed_model_aliases: List[Tuple[str, str]] = (
+        []
+        if deleted_name_still_served
+        else await delete_team_model_alias(
             public_model_name=model_params.model_name,
             prisma_client=prisma_client,
         )
-    names_to_remove = {alias for alias_team_id, alias in removed_model_aliases if alias_team_id == team_id}
-    if model_params.model_info.team_public_model_name is not None:
-        names_to_remove.add(model_params.model_info.team_public_model_name)
+    )
+    removed_alias_names = {alias for alias_team_id, alias in removed_model_aliases if alias_team_id == team_id}
+    candidate_names = (
+        removed_alias_names | {model_params.model_info.team_public_model_name}
+        if model_params.model_info.team_public_model_name is not None
+        else removed_alias_names
+    )
+    if not candidate_names:
+        return
 
-    if names_to_remove:
-        names_to_remove -= await _get_team_public_model_names(team_id=team_id, prisma_client=prisma_client)
-
+    team_backed_names = await _get_team_public_model_names(team_id=team_id, prisma_client=prisma_client)
+    router_served_names = (
+        frozenset(name for name in candidate_names if name in llm_router.model_name_to_deployment_indices)
+        if llm_router is not None
+        else frozenset()
+    )
+    names_to_remove = candidate_names - team_backed_names - router_served_names
     if not names_to_remove:
         return
 
@@ -853,18 +933,11 @@ async def _update_existing_team_model_assignment(
     def _get_team_public_model_name(
         model_info: Optional[Union[dict, str]],
     ) -> Optional[str]:
-        if isinstance(model_info, dict):
-            value = model_info.get("team_public_model_name")
-            return value if isinstance(value, str) else None
-        if isinstance(model_info, str):
-            try:
-                parsed = json.loads(model_info)
-            except (TypeError, ValueError):
-                return None
-            if isinstance(parsed, dict):
-                value = parsed.get("team_public_model_name")
-                return value if isinstance(value, str) else None
-        return None
+        parsed = model_info_as_mapping(model_info)
+        if parsed is None:
+            return None
+        value = parsed.get("team_public_model_name")
+        return value if isinstance(value, str) else None
 
     old_public_name = db_model.model_info.team_public_model_name if db_model.model_info else None
 
@@ -1040,22 +1113,6 @@ class ModelManagementAuthChecks:
         return True
 
 
-def _deployment_name_and_model(deployment: Optional[Union[Deployment, Dict[str, object]]]) -> Tuple[Optional[str], str]:
-    """Return (model_name, litellm_params.model) for a deployment.
-
-    delete_deployment is annotated to return a Deployment but hands back the raw
-    model_list dict at runtime, so both shapes are handled; the model defaults to "".
-    """
-    if deployment is None:
-        return None, ""
-    if isinstance(deployment, dict):
-        name = deployment.get("model_name")
-        params = deployment.get("litellm_params")
-        model = params.get("model") if isinstance(params, dict) else None
-        return (name if isinstance(name, str) else None), (model if isinstance(model, str) else "")
-    return deployment.model_name, str(getattr(deployment.litellm_params, "model", "") or "")
-
-
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(
     "/model/delete",
@@ -1127,19 +1184,7 @@ async def delete_model(
 
             ## DELETE FROM ROUTER ##
             if llm_router is not None:
-                deleted_deployment = llm_router.delete_deployment(id=model_info.id)
-                # delete_deployment only drops the deployment from model_list; the auto/
-                # complexity router registries are keyed by model_name and would otherwise
-                # retain a stale (now unbacked) entry, so evict it here too. Guard on the
-                # auto_router/ prefix (as clear_cache does): a regular DB model that merely
-                # shares a model_name with a config-defined router must not evict that router,
-                # since add_deployment never restores config-defined routers.
-                deleted_name, deleted_model = _deployment_name_and_model(deleted_deployment)
-                if deleted_name is not None and deleted_model.startswith("auto_router/"):
-                    llm_router.auto_routers.pop(deleted_name, None)
-                    llm_router.complexity_routers.pop(deleted_name, None)
-                    llm_router.adaptive_routers.pop(deleted_name, None)
-                    llm_router.quality_routers.pop(deleted_name, None)
+                llm_router.delete_deployment(id=model_info.id)
 
             # Runs after the row delete so the sibling check sees post-delete state.
             if model_params.model_info.team_id is not None:
@@ -1148,6 +1193,7 @@ async def delete_model(
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
+                    llm_router=llm_router,
                 )
 
             ## CREATE AUDIT LOG ##
@@ -1295,6 +1341,11 @@ async def add_new_model(
             premium_user=premium_user,
         )
 
+        _raise_on_strategy_router_write_violation(
+            incoming_params=model_params.litellm_params,
+            existing_params=None,
+        )
+
         model_response: Optional[LiteLLM_ProxyModelTable] = None
         # update DB
         if store_model_in_db is True:
@@ -1303,6 +1354,7 @@ async def add_new_model(
             - store keys separately
             """
 
+            live_before_reload = live_model_ids_snapshot()
             try:
                 _original_litellm_model_name = model_params.model_name
                 if model_params.model_info.team_id is None:
@@ -1356,6 +1408,12 @@ async def add_new_model(
                 litellm_changed_by=user_api_key_dict.user_id,
                 litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
             )
+        )
+
+        raise_if_reload_degraded_serving(
+            before=live_before_reload,
+            written_models=[(model_response.model_id, getattr(model_response, "model_info", None))],
+            action="create",
         )
 
         return model_response
@@ -1442,6 +1500,11 @@ async def update_model(
             premium_user=premium_user,
         )
 
+        _raise_on_strategy_router_write_violation(
+            incoming_params=model_params.litellm_params,
+            existing_params=deployment.litellm_params,
+        )
+
         # update DB
         if store_model_in_db is True:
             _existing_litellm_params_dict = dict(_existing_litellm_params.litellm_params)
@@ -1478,8 +1541,8 @@ async def update_model(
             )
 
             # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
+            live_before_reload = live_model_ids_snapshot()
             await clear_cache()
-
             ## CREATE AUDIT LOG ##
             asyncio.create_task(
                 create_object_audit_log(
@@ -1500,6 +1563,12 @@ async def update_model(
                     litellm_changed_by=user_api_key_dict.user_id,
                     litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
                 )
+            )
+
+            raise_if_reload_degraded_serving(
+                before=live_before_reload,
+                written_models=[(_model_id, getattr(model_response, "model_info", None))],
+                action="update",
             )
 
             return model_response
@@ -1703,6 +1772,114 @@ def _deduplicate_litellm_router_models(models: List[Dict]) -> List[Dict]:
             unique_models.append(model)
             seen_ids.add(model_id)
     return unique_models
+
+
+def model_info_as_mapping(model_info: object) -> Mapping[str, object] | None:
+    """A DB row's model_info column arrives as a dict or as its JSON string depending on
+    the query path, and every consumer needs the mapping. Single owner of that parse:
+    returns None when no usable mapping exists (None, an unparseable string, or JSON
+    that is not an object), and callers choose what None means for them."""
+    if isinstance(model_info, Mapping):
+        return model_info
+    if not isinstance(model_info, str):
+        return None
+    try:
+        parsed = json.loads(model_info)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, Mapping) else None
+
+
+def _expects_liveness_on_this_pod(model_info: object) -> bool:
+    from litellm.router import model_info_is_active_for_environment
+
+    try:
+        return model_info_is_active_for_environment(model_info=model_info_as_mapping(model_info))
+    except ValueError:
+        return True
+
+
+def live_model_ids_snapshot() -> frozenset[str]:
+    """The ids this pod's router is currently serving, read fresh from the module global
+    because a reload can rebind it. The empirical ground truth every verdict below is
+    computed from; an absent router serves nothing."""
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return frozenset()
+    return frozenset(llm_router.get_model_ids())
+
+
+def reload_serving_verdict(
+    before: frozenset[str],
+    written_models: Sequence[tuple[str, object]],
+    written_must_serve: bool,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Judge a write-triggered reload by diffing the router's serving state instead of
+    trusting any layer of the reload stack to report its own failure.
+
+    The full cell matrix, per id:
+    - written, must-serve (the write's purpose is this model's serving state): live now
+      is fine; not live is reported unless the row is deliberately inactive for this
+      pod's LITELLM_ENVIRONMENT; a row whose model_info cannot be read counts as
+      expecting to serve, so its drop is still reported
+    - written, metadata-only (must_not_degrade): live before and gone now is reported;
+      a row that was already not serving stays silent, because its deadness predates
+      this write and blaming it would block unrelated metadata fixes
+    - not written but live before and gone now: collateral degradation of this pod
+      caused by the reload this request triggered (a wholesale re-add failure, or a
+      newly introduced conflict), always reported
+
+    Returns (written ids violating their obligation, collateral ids no longer served).
+    Best effort under concurrent admin writes: the snapshot spans only this request.
+    """
+    now = live_model_ids_snapshot()
+    written_ids = frozenset(model_id for model_id, _ in written_models)
+    if written_must_serve:
+        missing = tuple(
+            model_id
+            for model_id, model_info in written_models
+            if model_id not in now and _expects_liveness_on_this_pod(model_info)
+        )
+    else:
+        missing = tuple(model_id for model_id, _ in written_models if model_id in before and model_id not in now)
+    collateral = tuple(sorted(before - now - written_ids))
+    return (missing, collateral)
+
+
+def raise_if_reload_degraded_serving(
+    before: frozenset[str],
+    written_models: Sequence[tuple[str, object]],
+    action: str,
+) -> None:
+    """The caller-visible error this pod's model-write endpoints owe their caller when
+    the model they wrote is not being served after the reload they triggered. The DB
+    write is durable either way and every other pod reloads on its own interval; this
+    speaks only for the handling pod."""
+    missing, collateral = reload_serving_verdict(before=before, written_models=written_models, written_must_serve=True)
+    if not missing and not collateral:
+        return
+    missing_clause = (
+        f"the model id(s) {list(missing)} are not live in this pod's router after the reload and are not "
+        "being served by this pod."
+        if missing
+        else "the reload it triggered degraded this pod's serving state."
+    )
+    collateral_clause = (
+        f" Previously served model id(s) {list(collateral)} are also no longer being served by this pod."
+        if collateral
+        else ""
+    )
+    raise ProxyException(
+        message=(
+            f"Model {action} was saved to the database, but {missing_clause}{collateral_clause} "
+            "Other pods reload on their own interval. Check server logs for 'Error upserting deployment' or "
+            "'Error creating deployment' for the cause."
+        ),
+        type=ProxyErrorTypes.internal_server_error,
+        code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        param=None,
+    )
 
 
 async def clear_cache():

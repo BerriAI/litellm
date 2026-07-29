@@ -727,3 +727,103 @@ async def test_response_stream_closes_response_on_generator_exit():
     await iterator.aclose()
 
     assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_closed_shared_session_rebuild_uses_injected_session_factory():
+    """
+    A transport handed an already-built session (the proxy's shared session)
+    must rebuild through the injected factory. Rebuilding with a bare
+    ClientSession drops the connector's keep-alive socket options, pool limits
+    and DNS cache for every later request on that transport.
+    """
+    shared_session = aiohttp.ClientSession()
+    await shared_session.close()
+
+    rebuilt = []
+
+    def session_factory():
+        session = _make_mock_session()
+        rebuilt.append(session)
+        return session
+
+    transport = LiteLLMAiohttpTransport(
+        client=shared_session,
+        owns_session=False,
+        session_factory=session_factory,  # type: ignore
+    )
+
+    assert transport._get_valid_client_session() in rebuilt
+
+
+def test_rebuild_without_running_loop_uses_injected_session_factory():
+    """
+    The loop-validity fallback must also go through the injected factory, so a
+    transport recovering outside a running event loop does not silently swap in
+    an unconfigured session.
+    """
+    rebuilt = []
+
+    def session_factory():
+        session = _make_mock_session()
+        rebuilt.append(session)
+        return session
+
+    transport = LiteLLMAiohttpTransport(
+        client=object(),  # type: ignore
+        session_factory=session_factory,  # type: ignore
+    )
+
+    assert transport._get_valid_client_session() in rebuilt
+
+
+@pytest.mark.asyncio
+async def test_rebuilt_session_becomes_transport_owned():
+    """
+    A rebuilt session is reachable only from the transport, so aclose() must
+    close it even when the transport was handed a session it did not own.
+    """
+    shared_session = aiohttp.ClientSession()
+    await shared_session.close()
+
+    replacement = aiohttp.ClientSession()
+    transport = LiteLLMAiohttpTransport(
+        client=shared_session,
+        owns_session=False,
+        session_factory=lambda: replacement,
+    )
+
+    assert transport._get_valid_client_session() is replacement
+
+    await transport.aclose()
+
+    assert replacement.closed
+
+
+@pytest.mark.asyncio
+async def test_stale_loop_rebuild_does_not_close_unowned_session():
+    """
+    A session the transport does not own (the proxy's shared session) is used by
+    other transports too, so a rebuild must leave it open for them.
+    """
+    shared_session = aiohttp.ClientSession()
+    running_loop = asyncio.get_running_loop()
+    other_loop = asyncio.new_event_loop()
+
+    replacement = _make_mock_session()
+    transport = LiteLLMAiohttpTransport(
+        client=shared_session,
+        owns_session=False,
+        session_factory=lambda: replacement,  # type: ignore
+    )
+
+    try:
+        shared_session._loop = other_loop
+        assert transport._get_valid_client_session() is replacement
+        shared_session._loop = running_loop
+        await asyncio.sleep(0.05)
+        assert not shared_session.closed
+    finally:
+        shared_session._loop = running_loop
+        other_loop.close()
+        await shared_session.close()
