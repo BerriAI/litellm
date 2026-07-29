@@ -81,12 +81,26 @@ def _trigger_cooldown_for_failed_deployment(
 
         exception_status: str | int = getattr(exception, "status_code", "")
 
-        time_to_cooldown = litellm_router.cooldown_time
+        # Priority: deployment config > response header > router default, matching
+        # Router.deployment_callback_on_failure's precedence for the primary path.
         deployment_dict = litellm_router.get_model_info(id=deployment_id)
-        if deployment_dict is not None:
-            deployment_cooldown = (deployment_dict.get("model_info") or {}).get("cooldown_time")
-            if deployment_cooldown is not None and deployment_cooldown >= 0:
-                time_to_cooldown = deployment_cooldown
+        deployment_cooldown = (
+            (deployment_dict.get("model_info") or {}).get("cooldown_time") if deployment_dict is not None else None
+        )
+        exception_headers = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
+            original_exception=exception
+        )
+        header_cooldown = (
+            litellm.utils._get_retry_after_from_exception_header(response_headers=exception_headers)
+            if exception_headers is not None
+            else None
+        )
+        if deployment_cooldown is not None and deployment_cooldown >= 0:
+            time_to_cooldown = deployment_cooldown
+        elif header_cooldown is not None and header_cooldown >= 0:
+            time_to_cooldown = header_cooldown
+        else:
+            time_to_cooldown = litellm_router.cooldown_time
 
         _set_cooldown_deployments(
             litellm_router_instance=litellm_router,

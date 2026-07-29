@@ -1,6 +1,7 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from litellm.router_utils.fallback_event_handlers import (
@@ -229,6 +230,34 @@ def test_trigger_cooldown_ignores_litellm_params_cooldown_time():
 
     _, call_kwargs = mock_set.call_args
     assert call_kwargs["time_to_cooldown"] == 60
+
+
+def test_trigger_cooldown_uses_response_header_when_no_deployment_config():
+    """Precedence must match Router.deployment_callback_on_failure's primary path:
+    deployment config, then the response's Retry-After header, then the router
+    default. Without this, the fallback path always skips straight to the router
+    default whenever no deployment-level cooldown_time is configured."""
+    router = MagicMock()
+    router.cooldown_time = 60
+    router.get_model_info.return_value = {"model_info": {}}
+
+    exc = RuntimeError("upstream error")
+    exc.status_code = 429
+    exc.litellm_response_headers = httpx.Headers({"retry-after": "45"})
+
+    kwargs = {
+        "litellm_metadata": {"model_info": {"id": "deployment-abc"}, "deployment_model_name": "gpt-4"}
+    }
+
+    with patch(
+        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
+    ) as mock_set:
+        _trigger_cooldown_for_failed_deployment(
+            litellm_router=router, kwargs=kwargs, exception=exc
+        )
+
+    _, call_kwargs = mock_set.call_args
+    assert call_kwargs["time_to_cooldown"] == 45
 
 
 def test_trigger_cooldown_silently_catches_exceptions():
