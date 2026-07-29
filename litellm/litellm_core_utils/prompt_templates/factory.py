@@ -371,7 +371,7 @@ def _render_chat_template(
     bos_token: str,
     eos_token: str,
     messages: list,
-    chat_template_kwargs: Optional[dict] = None,
+    chat_template_kwargs: dict | None = None,
 ) -> str:
     """
     Shared template rendering logic for both sync and async hf_chat_template
@@ -597,7 +597,7 @@ def hf_chat_template(
     model: str,
     messages: list,
     chat_template: Optional[Any] = None,
-    chat_template_kwargs: Optional[dict] = None,
+    chat_template_kwargs: dict | None = None,
 ):
     """HuggingFace chat template (sync version)"""
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
@@ -5268,7 +5268,7 @@ def prompt_factory(
     messages: list,
     custom_llm_provider: Optional[str] = None,
     api_key: Optional[str] = None,
-    chat_template_kwargs: Optional[dict] = None,
+    chat_template_kwargs: dict | None = None,
 ):
     original_model_name = model
     model = model.lower()
