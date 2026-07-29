@@ -323,6 +323,7 @@ class Logging(LiteLLMLoggingBaseClass):
         applied_guardrails: list[str] | None = None,
         kwargs: dict | None = None,
         log_raw_request_response: bool = False,
+        supports_correlation_logging: bool = True,
     ):
         _input: Final[str | None] = messages  # save original value of messages
         if messages is not None:
@@ -355,10 +356,19 @@ class Logging(LiteLLMLoggingBaseClass):
         # a Token can only be reset in the exact Context where it was created.
         self._pre_call_trace_id: str = trace_id_var.get()
         self._pre_call_session_id: str = session_id_var.get()
-        set_trace_id(self.litellm_trace_id)
         _sid = (kwargs or {}).get("litellm_session_id")
         self.litellm_session_id: str = str(_sid) if _sid else ""
-        set_session_id(self.litellm_session_id)
+        # supports_correlation_logging is False for calls originating from the
+        # sync client entry point (wrapper() in utils.py): a plain OS thread
+        # has no per-call context isolation the way an asyncio Task does, and
+        # a thread pool's worker threads are recycled across unrelated
+        # requests, so stamping trace_id/session_id there risks one request's
+        # ids leaking into a different, later request on the same thread. Sync
+        # support is deferred to a follow-up PR with its own safe-restore
+        # mechanism; async calls (the proxy's only call path) are unaffected.
+        if supports_correlation_logging:
+            set_trace_id(self.litellm_trace_id)
+            set_session_id(self.litellm_session_id)
         # set_trace_id()/set_session_id() sanitize (strip control chars, bound
         # length) before storing, so the contextvar's actual value can differ
         # from self.litellm_trace_id/litellm_session_id. Capture what was

@@ -3554,65 +3554,64 @@ def test_openai_custom_tool_call_stream_deltas_survive_conversion(logging_obj: L
     assert "tool_calls" in finish_reasons
 
 
-def test_sync_streaming_completion_restores_context_immediately_on_return(monkeypatch):
-    """wrapper() (the sync entry point) must restore the originating thread's
-    correlation context the instant a streaming completion() call returns,
-    before the caller ever starts iterating - unlike wrapper_async(), it
-    cannot safely leave the contextvars "open" across the caller's own,
-    unboundedly long iteration.
+def test_sync_completion_never_stamps_correlation_context(monkeypatch):
+    """wrapper() (the sync entry point) does not participate in
+    request_correlation_in_logs at all: Logging.__init__() is called with
+    supports_correlation_logging=False for every sync call, so
+    trace_id_var/session_id_var are never touched, regardless of whether the
+    caller passes litellm_trace_id/litellm_session_id or the call streams.
 
-    A plain OS thread has no per-call isolation the way an asyncio Task does:
-    if a sync stream is abandoned mid-iteration (client disconnect, an early
-    break, an exception), nothing ever restores it, and a thread pool can hand
-    that same, now-poisoned thread to a completely unrelated future call,
-    which then inherits the wrong ids as its own "pre-call" baseline and
-    propagates them forward indefinitely. Restoring unconditionally in
-    wrapper()'s own finally, before the stream is ever handed to the caller,
-    closes that hole entirely for the sync path."""
+    This is a deliberate scoping decision, not an oversight: a plain OS
+    thread has no per-call isolation the way an asyncio Task does, and a
+    thread pool's worker threads are recycled across unrelated requests, so
+    safely supporting this for the sync path needs its own restore mechanism
+    with its own tests - tracked as a separate, follow-up piece of work.
+    Async (acompletion/wrapper_async, the only path the proxy uses) is
+    unaffected - see test_async_streaming_completion_does_not_reset_context_before_iteration."""
     monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
-    trace_id_var.set("outer-trace-stream")
-    session_id_var.set("outer-session-stream")
+    # Reset explicitly rather than asserting a clean slate - this must hold
+    # regardless of what any other test left behind in these module-level
+    # contextvars.
+    trace_id_var.set("")
+    session_id_var.set("")
     try:
+        litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+            litellm_trace_id="should-never-appear",
+            litellm_session_id="should-never-appear-either",
+            num_retries=0,
+        )
+        assert trace_id_var.get() == ""
+        assert session_id_var.get() == ""
+
         response = litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "hi"}],
             mock_response="Hello there!",
             stream=True,
-            litellm_session_id="streaming-call-session",
+            litellm_trace_id="should-never-appear-stream",
+            litellm_session_id="should-never-appear-stream-either",
             num_retries=0,
         )
-        # Already restored - before the caller has iterated a single chunk.
-        assert session_id_var.get() == "outer-session-stream"
-        assert trace_id_var.get() == "outer-trace-stream"
-
         for _ in response:
             pass
-
-        # Consuming the stream afterward must not disturb the already-restored
-        # outer context either.
-        assert session_id_var.get() == "outer-session-stream"
-        assert trace_id_var.get() == "outer-trace-stream"
+        assert trace_id_var.get() == ""
+        assert session_id_var.get() == ""
     finally:
         trace_id_var.set("")
         session_id_var.set("")
 
 
-def test_abandoned_sync_stream_does_not_contaminate_a_later_call_on_the_same_thread(monkeypatch):
-    """Reproduces the maintainer-reported blocking bug: request A starts a sync
-    stream, consumes one chunk, and abandons it (client disconnect / early
-    break / uncaught exception - never exhausts, never calls aclose()).
-    Request B is a completely separate, non-streaming call that later runs on
-    the *same* worker thread (a real ThreadPoolExecutor with a single worker,
-    forcing thread reuse, exactly like a WSGI/thread-pool-backed sync server).
-
-    Before the fix, A's contextvars stayed "open" (wrapper() skipped restoring
-    for streams) with no deterministic point that ever closed them, so B
-    inherited A's ids as its own pre-call baseline and then "restored" back to
-    that poison when it finished - permanently wrong-attributing every log
-    line on this thread to request A from then on, including B's own and any
-    unrelated future work. Restoring unconditionally in wrapper()'s own
-    finally, before a sync stream is ever handed to the caller, closes this:
-    B never sees A's ids in the first place."""
+def test_abandoned_sync_stream_cannot_contaminate_a_later_call_on_the_same_thread(monkeypatch):
+    """The maintainer-reported blocking bug reproduced live in this session -
+    request A starts a sync stream, consumes one chunk, abandons it; request
+    B runs next on the same forced-reuse ThreadPoolExecutor worker - is now
+    structurally impossible rather than merely restored-after-the-fact: since
+    sync calls never stamp trace_id_var/session_id_var at all
+    (supports_correlation_logging=False), there is nothing for request A to
+    leave behind for request B to inherit."""
     monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
 
     from concurrent.futures import ThreadPoolExecutor
@@ -3641,19 +3640,11 @@ def test_abandoned_sync_stream_does_not_contaminate_a_later_call_on_the_same_thr
                 litellm_trace_id="TRACE-BBB",
                 num_retries=0,
             )
-            # wrapper() has already restored to B's own pre-call snapshot by the
-            # time completion() returns - read it here, right after, to see
-            # exactly what B (wrongly, if the bug is present) inherited as its
-            # own baseline and just restored the thread back to.
             return trace_id_var.get(), session_id_var.get()
 
         pool.submit(call_a_abandon_stream).result()
         ids_after_b = pool.submit(call_b_non_streaming).result()
 
-        # The critical assertion: B must not have inherited request A's ids as
-        # its own pre-call baseline and restored the thread back to them - it
-        # must see whatever this thread started with before any of this (the
-        # ContextVar default), not request A's abandoned trace/session id.
         assert ids_after_b == ("", "")
     finally:
         pool.shutdown(wait=True)

@@ -216,9 +216,13 @@ class CustomStreamWrapper:
     def _restore_consumer_correlation_context(self, *, guarded: bool = False) -> None:
         """Restore trace_id/session_id in the *consuming* thread/task/context.
 
-        wrapper()/wrapper_async() deliberately skip restoring correlation context
-        when they return a stream, so log lines emitted while the caller
-        iterates it still carry this call's ids (see request_correlation_in_logs).
+        wrapper_async() deliberately skips restoring correlation context when
+        it returns a stream, so log lines emitted while the caller iterates it
+        still carry this call's ids (see request_correlation_in_logs).
+        wrapper() (the sync path) never stamps anything in the first place -
+        see Logging.__init__'s supports_correlation_logging - so this method
+        is an inert no-op for sync-created streams, harmless to call anyway
+        since the class is shared between __next__ and __anext__.
         But the terminal success/failure handlers this stream dispatches to
         finish the job run on a *different* Task/thread (asyncio.create_task,
         threading.Thread, or the shared executor) - restoring there fixes up
@@ -252,9 +256,10 @@ class CustomStreamWrapper:
         caller never fully consumes the stream - stops early, drops the
         reference, cancels it - none of the exit points
         _restore_consumer_correlation_context() is called from ever run. For a
-        sync stream (wrapper()), this is a no-op in practice: wrapper() already
-        restores unconditionally before ever handing the stream back, so there
-        is nothing left to clean up here.
+        sync stream (wrapper()), this is a no-op in practice: wrapper() never
+        stamps trace_id/session_id for sync calls in the first place (see
+        Logging.__init__'s supports_correlation_logging), so there is nothing
+        for this to clean up.
 
         This is a best-effort fallback, not a guarantee: __del__ timing is
         unpredictable (delayed by cyclic GC, not guaranteed at interpreter

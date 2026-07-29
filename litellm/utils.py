@@ -741,12 +741,15 @@ def _is_streaming_response_for_correlation(result: object) -> bool:
     (async_success_handler, dispatched once the full stream is actually
     assembled) is what restores it once streaming genuinely finishes.
 
-    wrapper() (the sync path) does NOT consult this and restores
-    unconditionally instead: a plain OS thread has no such per-call isolation,
-    and a thread pool's worker threads *are* recycled across unrelated
-    requests, so leaving a sync stream's contextvars "open" indefinitely can
-    permanently misattribute every subsequent log line on that thread to an
-    abandoned request.
+    wrapper() (the sync path) does NOT consult this at all: sync calls pass
+    supports_correlation_logging=False into function_setup()/Logging(), so
+    they never stamp trace_id/session_id in the first place - a plain OS
+    thread has no per-call isolation the way an asyncio Task does, and a
+    thread pool's worker threads *are* recycled across unrelated requests, so
+    stamping ids there without a safe restore mechanism could permanently
+    misattribute a later, unrelated request's logs. Full sync support is
+    deferred to a follow-up PR with its own restore mechanism; see
+    Logging.__init__'s supports_correlation_logging parameter.
 
     Genuinely circular otherwise: utils.py -> streaming_handler.py ->
     redact_messages.py -> llms/vertex_ai/common_utils.py -> utils.py, which
@@ -759,7 +762,7 @@ def _is_streaming_response_for_correlation(result: object) -> bool:
 
 
 def function_setup(
-    original_function: str, rules_obj, start_time, *args, **kwargs
+    original_function: str, rules_obj, start_time, *args, is_async_call: bool = True, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
     ### NOTICES ###
     if litellm.set_verbose is True:
@@ -1064,6 +1067,7 @@ def function_setup(
             dynamic_async_failure_callbacks=dynamic_async_failure_callbacks,
             kwargs=kwargs,
             applied_guardrails=applied_guardrails,
+            supports_correlation_logging=is_async_call,
         )
 
         ## check if metadata is passed in
@@ -1353,7 +1357,9 @@ def client(original_function):
 
         try:
             if logging_obj is None:
-                logging_obj, kwargs = function_setup(original_function.__name__, rules_obj, start_time, *args, **kwargs)
+                logging_obj, kwargs = function_setup(
+                    original_function.__name__, rules_obj, start_time, *args, is_async_call=False, **kwargs
+                )
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
@@ -1610,17 +1616,6 @@ def client(original_function):
                     e, traceback_exception, start_time, end_time
                 )  # DO NOT MAKE THREADED - router retry fallback relies on this!
             raise e
-
-        finally:
-            # Restore trace_id/session_id contextvars to their pre-call value once
-            # this call is fully done, in every case (success, retried-and-returned,
-            # or re-raised) - see request_correlation_in_logs. Always safe to restore
-            # here, even for a stream: unlike wrapper_async(), this is a plain
-            # synchronous function whose own thread never re-enters user code after
-            # this point without the caller making a brand new call, and leaving this
-            # ambient on a thread a pool may hand to a *different*, unrelated future
-            # call would misattribute that call's logs to this one.
-            _restore_correlation_context_if_supported(logging_obj)
 
     @wraps(original_function)
     async def wrapper_async(*args, **kwargs):
