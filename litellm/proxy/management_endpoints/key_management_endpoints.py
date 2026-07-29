@@ -2320,10 +2320,7 @@ async def _validate_update_key_data(
         allowed_routes=data.allowed_routes,
         user_api_key_dict=user_api_key_dict,
         allowed_routes_was_provided=(
-            "allowed_routes" in data.model_fields_set
-            and not (
-                data.allowed_routes == [] and data.key_type is not None
-            )
+            "allowed_routes" in data.model_fields_set and not (data.allowed_routes == [] and data.key_type is not None)
         ),
     )
     _check_allowed_routes_caller_permission(
@@ -2568,6 +2565,7 @@ async def update_key_fn(
     Parameters:
     - key: Optional[str] - The key to update. Either key or key_alias must be provided.
     - key_alias: Optional[str] - User-friendly key alias. If key is omitted, also identifies the key to update (must match exactly one key, same as /key/delete's key_aliases)
+    - key_type: Optional[LiteLLMKeyType] - Access preset to apply to the key.
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
     - agent_id: Optional[str] - The agent id associated with the key.

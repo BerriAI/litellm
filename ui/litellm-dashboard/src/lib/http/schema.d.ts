@@ -28463,6 +28463,7 @@ export interface components {
             guardrails?: string[] | null;
             /** Key Alias */
             key_alias?: string | null;
+            key_type?: components["schemas"]["LiteLLMKeyType"] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
