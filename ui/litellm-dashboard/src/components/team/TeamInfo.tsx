@@ -38,7 +38,9 @@ import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import MetadataKeyValueFields, {
   metadataObjectToPairs,
   metadataPairsToObject,
+  schemaMetadataToObject,
 } from "../common_components/MetadataKeyValueFields";
+import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import ModelAliasManager from "../common_components/ModelAliasManager";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -219,6 +221,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole, userId } = useAuthorized();
   const { data: userOrganizations = [] } = useOrganizations();
+  const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
   const queryClient = useQueryClient();
 
   // Check if user is org admin for this team's organization
@@ -469,7 +472,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       if (!accessToken) return;
       setIsTeamSaving(true);
 
-      const parsedMetadata = metadataPairsToObject(values.metadata);
+      const parsedMetadata = {
+        ...metadataPairsToObject(values.metadata),
+        ...schemaMetadataToObject(values.schema_metadata),
+      };
 
       let secretManagerSettings: Record<string, any> | undefined;
       if (typeof values.secret_manager_settings === "string") {
@@ -1159,7 +1165,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       label="Metadata"
                       help='Values are saved as text. Enter JSON for typed values, e.g. 3, true, or {"region": "us"}.'
                     >
-                      <MetadataKeyValueFields form={form} />
+                      <MetadataKeyValueFields
+                        form={form}
+                        schemaFields={teamMetadataSchemaFields}
+                        schemaLoading={isTeamMetadataSchemaLoading}
+                        sourceMetadata={info.metadata}
+                      />
                     </Form.Item>
 
                     <Form.Item

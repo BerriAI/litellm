@@ -3,10 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { Form } from "antd";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
+import { TeamMetadataField } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import MetadataKeyValueFields, {
   MetadataPair,
   metadataObjectToPairs,
   metadataPairsToObject,
+  schemaMetadataToObject,
 } from "./MetadataKeyValueFields";
 
 describe("metadataObjectToPairs", () => {
@@ -87,16 +89,51 @@ describe("metadataPairsToObject", () => {
   });
 });
 
+describe("schemaMetadataToObject", () => {
+  it("should return an empty object for null or undefined values", () => {
+    expect(schemaMetadataToObject(null)).toEqual({});
+    expect(schemaMetadataToObject(undefined)).toEqual({});
+  });
+
+  it("should omit blank and whitespace-only values", () => {
+    expect(schemaMetadataToObject({ cost_center: "CC-1001", app_name: "", notes: "   ", missing: undefined })).toEqual({
+      cost_center: "CC-1001",
+    });
+  });
+
+  it("should parse JSON values into their typed form", () => {
+    expect(schemaMetadataToObject({ tier: "3", beta: "true", code: '"42"' })).toEqual({
+      tier: 3,
+      beta: true,
+      code: "42",
+    });
+  });
+});
+
 interface HarnessProps {
-  onFinish: (values: { metadata?: MetadataPair[] }) => void;
+  onFinish: (values: { metadata?: MetadataPair[]; schema_metadata?: Record<string, string | undefined> }) => void;
   initialMetadata?: MetadataPair[];
+  schemaFields?: TeamMetadataField[];
+  schemaLoading?: boolean;
+  sourceMetadata?: Record<string, unknown>;
 }
 
-const Harness: React.FC<HarnessProps> = ({ onFinish, initialMetadata }) => {
+const Harness: React.FC<HarnessProps> = ({
+  onFinish,
+  initialMetadata,
+  schemaFields,
+  schemaLoading,
+  sourceMetadata,
+}) => {
   const [form] = Form.useForm();
   return (
     <Form form={form} onFinish={onFinish} initialValues={{ metadata: initialMetadata }}>
-      <MetadataKeyValueFields form={form} />
+      <MetadataKeyValueFields
+        form={form}
+        schemaFields={schemaFields}
+        schemaLoading={schemaLoading}
+        sourceMetadata={sourceMetadata}
+      />
       <button type="submit">Save</button>
     </Form>
   );
@@ -190,5 +227,114 @@ describe("MetadataKeyValueFields", () => {
       expect(screen.getByText("Missing key")).toBeInTheDocument();
     });
     expect(onFinish).not.toHaveBeenCalled();
+  });
+});
+
+describe("MetadataKeyValueFields with a declared schema", () => {
+  const schema: TeamMetadataField[] = [
+    { key: "cost_center", label: "Cost Center", required: true, description: "Cost center code" },
+    { key: "app_name", label: "Application Name" },
+  ];
+
+  it("should render a labeled input per declared field with its description and no remove icon", () => {
+    render(<Harness onFinish={vi.fn()} schemaFields={schema} initialMetadata={[{ key: "notes", value: "x" }]} />);
+
+    expect(screen.getByLabelText("Cost Center")).toBeInTheDocument();
+    expect(screen.getByLabelText("Application Name")).toBeInTheDocument();
+    expect(screen.getByText("Cost center code")).toBeInTheDocument();
+    expect(screen.getAllByLabelText("Remove key-value pair")).toHaveLength(1);
+  });
+
+  it("should submit declared field values under schema_metadata", async () => {
+    const user = userEvent.setup();
+    const onFinish = vi.fn();
+    render(<Harness onFinish={onFinish} schemaFields={schema} />);
+
+    await user.type(screen.getByLabelText("Cost Center"), "CC-1001");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(onFinish).toHaveBeenCalledWith(
+        expect.objectContaining({ schema_metadata: expect.objectContaining({ cost_center: "CC-1001" }) }),
+      );
+    });
+  });
+
+  it("should block submission when a required declared field is blank", async () => {
+    const user = userEvent.setup();
+    const onFinish = vi.fn();
+    render(<Harness onFinish={onFinish} schemaFields={schema} />);
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Cost Center is required")).toBeInTheDocument();
+    });
+    expect(onFinish).not.toHaveBeenCalled();
+  });
+
+  it("should prefill declared fields from sourceMetadata and prune them from free-form rows", async () => {
+    render(
+      <Harness
+        onFinish={vi.fn()}
+        schemaFields={schema}
+        initialMetadata={[
+          { key: "cost_center", value: "CC-1001" },
+          { key: "notes", value: "x" },
+        ]}
+        sourceMetadata={{ cost_center: "CC-1001", notes: "x" }}
+      />,
+    );
+
+    expect(screen.getByLabelText("Cost Center")).toHaveValue("CC-1001");
+    await waitFor(() => {
+      expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
+        "notes",
+      ]);
+    });
+  });
+
+  it("should submit the selected option for a declared field with allowed values", async () => {
+    const user = userEvent.setup();
+    const onFinish = vi.fn();
+    render(
+      <Harness
+        onFinish={onFinish}
+        schemaFields={[{ key: "chargeback_mode", label: "Chargeback Mode", allowed_values: ["direct", "shared"] }]}
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox"));
+    await user.click(await screen.findByTitle("direct"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(onFinish).toHaveBeenCalledWith(
+        expect.objectContaining({ schema_metadata: expect.objectContaining({ chargeback_mode: "direct" }) }),
+      );
+    });
+  });
+
+  it("should reject a free-form key that matches a declared field", async () => {
+    const user = userEvent.setup();
+    const onFinish = vi.fn();
+    render(<Harness onFinish={onFinish} schemaFields={schema} />);
+
+    await user.type(screen.getByLabelText("Cost Center"), "CC-1001");
+    await user.click(screen.getByRole("button", { name: /add key-value pair/i }));
+    await user.type(screen.getByPlaceholderText("Key"), "cost_center");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Key is managed by the fields above")).toBeInTheDocument();
+    });
+    expect(onFinish).not.toHaveBeenCalled();
+  });
+
+  it("should show a skeleton instead of the editor while the schema is loading", () => {
+    render(<Harness onFinish={vi.fn()} schemaLoading />);
+
+    expect(screen.getByTestId("metadata-schema-skeleton")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add key-value pair/i })).not.toBeInTheDocument();
   });
 });

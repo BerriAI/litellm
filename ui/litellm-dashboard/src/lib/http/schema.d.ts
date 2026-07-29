@@ -13596,6 +13596,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/metadata_schema": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Team Metadata Schema
+         * @description Get the team metadata fields declared in ``general_settings.team_metadata_schema``.
+         *
+         *     The UI uses this to prepopulate the team metadata form with the declared
+         *     keys. Returns an empty ``fields`` list when no schema is configured. This
+         *     schema is advisory; server-side enforcement stays with
+         *     ``custom_team_metadata_validate``.
+         */
+        get: operations["get_team_metadata_schema_team_metadata_schema_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/model/add": {
         parameters: {
             query?: never;
@@ -31869,6 +31894,36 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * TeamMetadataFieldSchema
+         * @description One declared team metadata field from ``general_settings.team_metadata_schema``.
+         *
+         *     Advisory only: the UI uses it to prepopulate the team metadata form.
+         *     Enforcement stays with ``custom_team_metadata_validate``.
+         */
+        TeamMetadataFieldSchema: {
+            /** Allowed Values */
+            allowed_values?: string[] | null;
+            /** Description */
+            description?: string | null;
+            /** Key */
+            key: string;
+            /** Label */
+            label?: string | null;
+            /**
+             * Required
+             * @default false
+             */
+            required: boolean;
+        };
+        /**
+         * TeamMetadataSchemaResponse
+         * @description Response for GET /team/metadata_schema; ``fields`` is empty when no schema is configured.
+         */
+        TeamMetadataSchemaResponse: {
+            /** Fields */
+            fields: components["schemas"]["TeamMetadataFieldSchema"][];
         };
         /**
          * TeamModelAddRequest
@@ -50863,6 +50918,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_team_metadata_schema_team_metadata_schema_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamMetadataSchemaResponse"];
                 };
             };
         };

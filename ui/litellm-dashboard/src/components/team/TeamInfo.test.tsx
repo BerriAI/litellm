@@ -1,3 +1,4 @@
+import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import * as networking from "@/components/networking";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -23,6 +24,10 @@ vi.mock("@/components/networking", () => ({
 vi.mock("@/components/utils/dataUtils", () => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),
   formatNumberWithCommas: vi.fn((value: number) => value.toLocaleString()),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/teams/useTeamMetadataSchema", () => ({
+  useTeamMetadataSchema: vi.fn(() => ({ data: [], isLoading: false })),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
@@ -219,6 +224,7 @@ describe("TeamInfoView", () => {
       isFetching: false,
       refetch: vi.fn(),
     } as any);
+    vi.mocked(useTeamMetadataSchema).mockReturnValue({ data: [], isLoading: false } as any);
 
     vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
     vi.mocked(networking.getPoliciesList).mockResolvedValue({ policies: [] });
@@ -953,6 +959,44 @@ describe("TeamInfoView", () => {
       });
 
       expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].metadata).toMatchObject({ cost_center: "eng-1" });
+    });
+
+    it("should prefill declared schema fields from team metadata and submit the edited value", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(useTeamMetadataSchema).mockReturnValue({
+        data: [{ key: "cost_center", label: "Cost Center", required: true }],
+        isLoading: false,
+      } as any);
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          metadata: { cost_center: "CC-OLD", department: "research" },
+          models: ["gpt-4"],
+        }),
+      );
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+      await openSettingsEditor(user);
+
+      expect(screen.getByLabelText("Cost Center")).toHaveValue("CC-OLD");
+      await waitFor(() => {
+        expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
+          "department",
+        ]);
+      });
+
+      await user.clear(screen.getByLabelText("Cost Center"));
+      await user.type(screen.getByLabelText("Cost Center"), "CC-NEW");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].metadata).toMatchObject({
+        cost_center: "CC-NEW",
+        department: "research",
+      });
     });
   });
 

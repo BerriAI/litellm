@@ -11,12 +11,15 @@ generic message (HTTP 503).
 
 import asyncio
 import inspect
-from typing import Awaitable, Callable, Literal, Optional
+from typing import Awaitable, Callable, Literal, Mapping
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.types.proxy.management_endpoints.team_endpoints import (
+    TeamMetadataFieldSchema,
+)
 
 DEFAULT_TEAM_METADATA_VALIDATION_TIMEOUT_SECONDS = 5.0
 DEFAULT_TEAM_METADATA_VALIDATION_UNAVAILABLE_MESSAGE = (
@@ -26,23 +29,23 @@ DEFAULT_TEAM_METADATA_VALIDATION_REJECTED_MESSAGE = "Team metadata failed valida
 
 
 class TeamMetadataRequester(BaseModel):
-    user_id: Optional[str] = None
-    user_email: Optional[str] = None
-    user_role: Optional[str] = None
+    user_id: str | None = None
+    user_email: str | None = None
+    user_role: str | None = None
 
 
 class TeamMetadataValidationPayload(BaseModel):
     operation: Literal["create", "update"]
-    metadata: dict[str, JsonValue]
-    existing_metadata: Optional[dict[str, JsonValue]] = None
-    team_id: Optional[str] = None
-    team_alias: Optional[str] = None
+    metadata: Mapping[str, JsonValue]
+    existing_metadata: Mapping[str, JsonValue] | None = None
+    team_id: str | None = None
+    team_alias: str | None = None
     requester: TeamMetadataRequester
 
 
 class TeamMetadataValidationResult(BaseModel):
     valid: bool
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
 
 TeamMetadataValidator = Callable[[TeamMetadataValidationPayload], Awaitable[TeamMetadataValidationResult]]
@@ -50,16 +53,46 @@ TeamMetadataValidator = Callable[[TeamMetadataValidationPayload], Awaitable[Team
 
 class TeamMetadataValidatorRegistry:
     def __init__(self) -> None:
-        self._validator: Optional[TeamMetadataValidator] = None
+        self._validator: TeamMetadataValidator | None = None
 
-    def set(self, validator: Optional[TeamMetadataValidator]) -> None:
+    def set(self, validator: TeamMetadataValidator | None) -> None:
         self._validator = validator
 
-    def get(self) -> Optional[TeamMetadataValidator]:
+    def get(self) -> TeamMetadataValidator | None:
         return self._validator
 
 
 TEAM_METADATA_VALIDATOR_REGISTRY = TeamMetadataValidatorRegistry()
+
+_TEAM_METADATA_SCHEMA_ADAPTER: TypeAdapter[tuple[TeamMetadataFieldSchema, ...]] = TypeAdapter(
+    tuple[TeamMetadataFieldSchema, ...]
+)
+
+
+def parse_team_metadata_schema(raw_schema: object) -> tuple[TeamMetadataFieldSchema, ...]:
+    """Parse ``general_settings.team_metadata_schema``; raises on a malformed schema so config load fails fast."""
+    if raw_schema is None:
+        return ()
+    fields = _TEAM_METADATA_SCHEMA_ADAPTER.validate_python(raw_schema)
+    keys = tuple(field.key for field in fields)
+    duplicate_keys = sorted({key for key in keys if keys.count(key) > 1})
+    if duplicate_keys:
+        raise ValueError(f"team_metadata_schema contains duplicate keys: {', '.join(duplicate_keys)}")
+    return fields
+
+
+class TeamMetadataSchemaRegistry:
+    def __init__(self) -> None:
+        self._fields: tuple[TeamMetadataFieldSchema, ...] = ()
+
+    def set(self, fields: tuple[TeamMetadataFieldSchema, ...]) -> None:
+        self._fields = fields
+
+    def get(self) -> tuple[TeamMetadataFieldSchema, ...]:
+        return self._fields
+
+
+TEAM_METADATA_SCHEMA_REGISTRY = TeamMetadataSchemaRegistry()
 
 
 async def run_team_metadata_validation(
@@ -100,14 +133,14 @@ async def run_team_metadata_validation(
         )
 
 
-def _read_timeout_seconds(general_settings: dict) -> float:
+def _read_timeout_seconds(general_settings: Mapping[str, object]) -> float:
     raw_timeout = general_settings.get("team_metadata_validation_timeout")
     if isinstance(raw_timeout, (int, float)) and not isinstance(raw_timeout, bool) and raw_timeout > 0:
         return float(raw_timeout)
     return DEFAULT_TEAM_METADATA_VALIDATION_TIMEOUT_SECONDS
 
 
-def _read_unavailable_message(general_settings: dict) -> str:
+def _read_unavailable_message(general_settings: Mapping[str, object]) -> str:
     raw_message = general_settings.get("team_metadata_validation_error_message")
     if isinstance(raw_message, str) and raw_message.strip():
         return raw_message
@@ -116,10 +149,10 @@ def _read_unavailable_message(general_settings: dict) -> str:
 
 async def validate_team_metadata_if_configured(
     operation: Literal["create", "update"],
-    metadata: Optional[dict],
-    existing_metadata: Optional[dict],
-    team_id: Optional[str],
-    team_alias: Optional[str],
+    metadata: Mapping[str, JsonValue] | None,
+    existing_metadata: Mapping[str, JsonValue] | None,
+    team_id: str | None,
+    team_alias: str | None,
     user_api_key_dict: UserAPIKeyAuth,
     registry: TeamMetadataValidatorRegistry = TEAM_METADATA_VALIDATOR_REGISTRY,
 ) -> None:

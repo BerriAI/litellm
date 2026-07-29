@@ -387,7 +387,7 @@ async def _drive_create(metadata, mock_sink=None):
 async def _drive_update(kind, existing_metadata, payload):
     from fastapi import Request
 
-    from litellm.proxy._types import LiteLLM_TeamTable, UpdateTeamRequest
+    from litellm.proxy._types import LiteLLM_TeamTable, PatchTeamRequest, UpdateTeamRequest
     from litellm.proxy.management_endpoints.team_endpoints import patch_team, update_team
 
     team_id = "matrix-team-upd"
@@ -424,9 +424,9 @@ async def _drive_update(kind, existing_metadata, payload):
                 user_api_key_dict=auth,
                 litellm_changed_by=None,
             )
-        req.json = AsyncMock(return_value=dict(payload))
         return await patch_team(
             team_id=team_id,
+            data=PatchTeamRequest.model_validate(dict(payload)),
             http_request=req,
             user_api_key_dict=auth,
             litellm_changed_by=None,
@@ -595,3 +595,72 @@ async def test_class_instance_with_sync_call_is_rejected():
     with pytest.raises(HTTPException) as exc_info:
         await _run(SyncValidator())
     assert exc_info.value.status_code == 500
+
+
+from litellm.proxy.management_helpers.team_metadata_validation import (
+    TeamMetadataSchemaRegistry,
+    parse_team_metadata_schema,
+)
+
+
+def test_parse_schema_none_returns_empty():
+    assert parse_team_metadata_schema(None) == ()
+
+
+def test_parse_schema_round_trips_fields_in_order():
+    raw = [
+        {
+            "key": "cost_center",
+            "label": "Cost Center",
+            "required": True,
+            "description": "Cost center code (e.g. CC-1001)",
+            "allowed_values": ["CC-1001", "CC-1002"],
+        },
+        {"key": "app_name"},
+    ]
+
+    fields = parse_team_metadata_schema(raw)
+
+    assert [field.key for field in fields] == ["cost_center", "app_name"]
+    assert fields[0].label == "Cost Center"
+    assert fields[0].required is True
+    assert fields[0].description == "Cost center code (e.g. CC-1001)"
+    assert fields[0].allowed_values == ("CC-1001", "CC-1002")
+    assert fields[1].label is None
+    assert fields[1].required is False
+    assert fields[1].description is None
+    assert fields[1].allowed_values is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "cost_center",
+        {"key": "cost_center"},
+        [{"label": "missing key"}],
+        [{"key": ""}],
+        [{"key": "cost_center", "requird": True}],
+        [{"key": "cost_center", "required": "sometimes"}],
+        [{"key": "cost_center", "allowed_values": "CC-1001"}],
+    ],
+)
+def test_parse_schema_malformed_raises(raw):
+    with pytest.raises(Exception):
+        parse_team_metadata_schema(raw)
+
+
+def test_parse_schema_duplicate_keys_raise():
+    with pytest.raises(ValueError, match="duplicate"):
+        parse_team_metadata_schema([{"key": "cost_center"}, {"key": "app_name"}, {"key": "cost_center"}])
+
+
+def test_schema_registry_defaults_empty_and_round_trips():
+    registry = TeamMetadataSchemaRegistry()
+    assert registry.get() == ()
+
+    fields = parse_team_metadata_schema([{"key": "cost_center"}])
+    registry.set(fields)
+    assert registry.get() == fields
+
+    registry.set(())
+    assert registry.get() == ()

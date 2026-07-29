@@ -464,7 +464,9 @@ from litellm.proxy.management_helpers.audit_logs import (
     create_object_audit_log,
 )
 from litellm.proxy.management_helpers.team_metadata_validation import (
+    TEAM_METADATA_SCHEMA_REGISTRY,
     TEAM_METADATA_VALIDATOR_REGISTRY,
+    parse_team_metadata_schema,
 )
 from litellm.proxy.memory.memory_endpoints import router as memory_router
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
@@ -789,6 +791,7 @@ def cleanup_router_config_variables():
     user_custom_key_generate = None
     user_custom_key_update = None
     TEAM_METADATA_VALIDATOR_REGISTRY.set(None)
+    TEAM_METADATA_SCHEMA_REGISTRY.set(())
     user_custom_sso = None
     user_custom_ui_sso_sign_in_handler = None
     use_background_health_checks = None
@@ -4847,6 +4850,7 @@ class ProxyConfig:
                 if custom_team_metadata_validate is not None
                 else None
             )
+            TEAM_METADATA_SCHEMA_REGISTRY.set(parse_team_metadata_schema(general_settings.get("team_metadata_schema")))
 
             custom_sso = general_settings.get("custom_sso", None)
             if custom_sso is not None:

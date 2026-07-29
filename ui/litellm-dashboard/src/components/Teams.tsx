@@ -14,7 +14,11 @@ import { Button as UIButton } from "@/components/ui/button";
 import { teamsTableKeys } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { TeamsTable } from "./TeamsPage/TeamsTable";
 import AccessGroupSelector from "./common_components/AccessGroupSelector";
-import MetadataKeyValueFields, { metadataPairsToObject } from "./common_components/MetadataKeyValueFields";
+import MetadataKeyValueFields, {
+  metadataPairsToObject,
+  schemaMetadataToObject,
+} from "./common_components/MetadataKeyValueFields";
+import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import PassThroughRoutesSelector from "./common_components/PassThroughRoutesSelector";
 import AgentSelector from "./agent_management/AgentSelector";
 import ModelAliasManager from "./common_components/ModelAliasManager";
@@ -125,6 +129,7 @@ const getOrganizationAlias = (
 const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser = false }) => {
   const { data: organizationsData } = useOrganizations();
   const organizations = organizationsData ?? null;
+  const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
   const queryClient = useQueryClient();
   const refreshTeams = () => queryClient.invalidateQueries({ queryKey: teamsTableKeys.all });
   const [currentOrg] = useState<Organization | null>(null);
@@ -324,9 +329,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
 
         const metadataObject = {
           ...metadataPairsToObject(formValues.metadata),
+          ...schemaMetadataToObject(formValues.schema_metadata),
           ...(loggingSettings.length > 0 ? { logging: loggingSettings.filter((config) => config.callback_name) } : {}),
         };
         formValues.metadata = Object.keys(metadataObject).length > 0 ? JSON.stringify(metadataObject) : undefined;
+        delete formValues.schema_metadata;
 
         if (formValues.secret_manager_settings) {
           if (typeof formValues.secret_manager_settings === "string") {
@@ -737,7 +744,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                 label="Metadata"
                 help='Values are saved as text. Enter JSON for typed values, e.g. 3, true, or {"region": "us"}.'
               >
-                <MetadataKeyValueFields form={form} />
+                <MetadataKeyValueFields
+                  form={form}
+                  schemaFields={teamMetadataSchemaFields}
+                  schemaLoading={isTeamMetadataSchemaLoading}
+                />
               </Form.Item>
 
               <Accordion

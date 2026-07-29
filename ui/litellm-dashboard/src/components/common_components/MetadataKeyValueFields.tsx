@@ -1,6 +1,8 @@
 import { MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
-import { Button, Form, FormInstance, Input, Space } from "antd";
-import React from "react";
+import { Button, Form, FormInstance, Input, Select, Skeleton, Space } from "antd";
+import React, { useEffect, useMemo } from "react";
+
+import { TeamMetadataField } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 
 export interface MetadataPair {
   key: string;
@@ -46,56 +48,127 @@ export function metadataPairsToObject(
   );
 }
 
+export function schemaMetadataToObject(
+  schemaValues: Record<string, string | undefined> | null | undefined,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(schemaValues ?? {})
+      .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].trim() !== "")
+      .map(([key, value]) => [key, parseMetadataValue(value)]),
+  );
+}
+
 interface MetadataKeyValueFieldsProps {
   form: FormInstance;
   name?: string;
+  schemaName?: string;
+  schemaFields?: readonly TeamMetadataField[];
+  schemaLoading?: boolean;
+  sourceMetadata?: Record<string, unknown> | null;
 }
 
-const MetadataKeyValueFields: React.FC<MetadataKeyValueFieldsProps> = ({ form, name = "metadata" }) => {
+const MetadataKeyValueFields: React.FC<MetadataKeyValueFieldsProps> = ({
+  form,
+  name = "metadata",
+  schemaName = "schema_metadata",
+  schemaFields = [],
+  schemaLoading = false,
+  sourceMetadata = null,
+}) => {
+  const schemaKeys = useMemo(() => new Set(schemaFields.map((field) => field.key)), [schemaFields]);
+
+  useEffect(() => {
+    if (schemaKeys.size === 0) return;
+    const pairs: (Partial<MetadataPair> | undefined)[] = form.getFieldValue(name) ?? [];
+    if (!Array.isArray(pairs)) return;
+    const remaining = pairs.filter((pair) => !pair?.key || !schemaKeys.has(pair.key));
+    if (remaining.length !== pairs.length) {
+      form.setFieldValue(name, remaining);
+    }
+  }, [form, name, schemaKeys]);
+
+  if (schemaLoading) {
+    return (
+      <div data-testid="metadata-schema-skeleton">
+        <Skeleton active title={false} paragraph={{ rows: 3 }} />
+      </div>
+    );
+  }
+
   return (
-    <Form.List name={name}>
-      {(fields, { add, remove }) => (
-        <>
-          {fields.map(({ key, name: fieldName, ...restField }) => (
-            <Space key={key} style={{ display: "flex", marginBottom: 8 }} align="baseline">
-              <Form.Item
-                {...restField}
-                name={[fieldName, "key"]}
-                rules={[
-                  { required: true, message: "Missing key" },
-                  {
-                    validator: (_, value) => {
-                      if (!value) return Promise.resolve();
-                      const all: (Partial<MetadataPair> | undefined)[] = form.getFieldValue(name) ?? [];
-                      const dupes = all.filter((entry) => entry?.key === value);
-                      if (dupes.length > 1) {
-                        return Promise.reject(new Error("Duplicate key"));
-                      }
-                      return Promise.resolve();
-                    },
-                  },
-                ]}
-              >
-                <Input placeholder="Key" />
-              </Form.Item>
-              <Form.Item {...restField} name={[fieldName, "value"]}>
-                <Input placeholder="Value" />
-              </Form.Item>
-              <MinusCircleOutlined
-                aria-label="Remove key-value pair"
-                onClick={() => remove(fieldName)}
-                style={{ color: "#ef4444" }}
+    <>
+      {schemaFields.map((field) => {
+        const label = field.label || field.key;
+        const initialRaw =
+          sourceMetadata != null && field.key in sourceMetadata ? sourceMetadata[field.key] : undefined;
+        return (
+          <Form.Item
+            key={field.key}
+            name={[schemaName, field.key]}
+            label={label}
+            extra={field.description || undefined}
+            initialValue={initialRaw !== undefined ? formatMetadataValue(initialRaw) : undefined}
+            rules={field.required ? [{ required: true, message: `${label} is required` }] : undefined}
+          >
+            {field.allowed_values?.length ? (
+              <Select
+                allowClear
+                placeholder={`Select ${label}`}
+                options={field.allowed_values.map((value) => ({ value, label: value }))}
               />
-            </Space>
-          ))}
-          <Form.Item style={{ marginBottom: 0 }}>
-            <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
-              Add Key-Value Pair
-            </Button>
+            ) : (
+              <Input placeholder={label} />
+            )}
           </Form.Item>
-        </>
-      )}
-    </Form.List>
+        );
+      })}
+      <Form.List name={name}>
+        {(fields, { add, remove }) => (
+          <>
+            {fields.map(({ key, name: fieldName, ...restField }) => (
+              <Space key={key} style={{ display: "flex", marginBottom: 8 }} align="baseline">
+                <Form.Item
+                  {...restField}
+                  name={[fieldName, "key"]}
+                  rules={[
+                    { required: true, message: "Missing key" },
+                    {
+                      validator: (_, value) => {
+                        if (!value) return Promise.resolve();
+                        if (schemaKeys.has(value)) {
+                          return Promise.reject(new Error("Key is managed by the fields above"));
+                        }
+                        const all: (Partial<MetadataPair> | undefined)[] = form.getFieldValue(name) ?? [];
+                        const dupes = all.filter((entry) => entry?.key === value);
+                        if (dupes.length > 1) {
+                          return Promise.reject(new Error("Duplicate key"));
+                        }
+                        return Promise.resolve();
+                      },
+                    },
+                  ]}
+                >
+                  <Input placeholder="Key" />
+                </Form.Item>
+                <Form.Item {...restField} name={[fieldName, "value"]}>
+                  <Input placeholder="Value" />
+                </Form.Item>
+                <MinusCircleOutlined
+                  aria-label="Remove key-value pair"
+                  onClick={() => remove(fieldName)}
+                  style={{ color: "#ef4444" }}
+                />
+              </Space>
+            ))}
+            <Form.Item style={{ marginBottom: 0 }}>
+              <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
+                Add Key-Value Pair
+              </Button>
+            </Form.Item>
+          </>
+        )}
+      </Form.List>
+    </>
   );
 };
 

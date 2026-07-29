@@ -103,6 +103,7 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
 from litellm.proxy.management_helpers.team_metadata_validation import (
+    TEAM_METADATA_SCHEMA_REGISTRY,
     validate_team_metadata_if_configured,
 )
 from litellm.proxy.management_helpers.utils import (
@@ -138,6 +139,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamListResponse,
     TeamMemberAddResult,
     TeamMemberInfoResponse,
+    TeamMetadataSchemaResponse,
     UpdateTeamMemberPermissionsRequest,
 )
 
@@ -3910,6 +3912,24 @@ async def unblock_team(
     )
 
     return record
+
+
+@router.get(
+    "/team/metadata_schema",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TeamMetadataSchemaResponse,
+)
+async def get_team_metadata_schema():
+    """
+    Get the team metadata fields declared in ``general_settings.team_metadata_schema``.
+
+    The UI uses this to prepopulate the team metadata form with the declared
+    keys. Returns an empty ``fields`` list when no schema is configured. This
+    schema is advisory; server-side enforcement stays with
+    ``custom_team_metadata_validate``.
+    """
+    return TeamMetadataSchemaResponse(fields=TEAM_METADATA_SCHEMA_REGISTRY.get())
 
 
 @router.get("/team/available")

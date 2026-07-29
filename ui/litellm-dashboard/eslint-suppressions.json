@@ -2881,6 +2881,16 @@
       "count": 2
     }
   },
+  "src/components/common_components/MetadataKeyValueFields.test.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/components/common_components/MetadataKeyValueFields.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
   "src/components/common_components/ModelAliasManager.tsx": {
     "no-restricted-imports": {
       "count": 1

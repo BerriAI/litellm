@@ -9813,7 +9813,6 @@ async def _drive_team_write(
     raw_body=None,
     user=None,
     find_returns_none=False,
-    json_side_effect=None,
     mock_sink=None,
 ):
     """Drive POST ``update_team`` or PATCH ``patch_team`` against a mocked team.
@@ -10537,3 +10536,49 @@ async def test_list_available_teams_filters_joined_and_validates_rows(monkeypatc
     assert result[0].team_alias == "open team"
     find_many_kwargs = mock_prisma_client.db.litellm_teamtable.find_many.call_args.kwargs
     assert find_many_kwargs["where"] == {"team_id": {"in": ["team-open"]}}
+
+
+@pytest.mark.asyncio
+async def test_get_team_metadata_schema_returns_configured_fields():
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_metadata_schema
+    from litellm.proxy.management_helpers.team_metadata_validation import (
+        TEAM_METADATA_SCHEMA_REGISTRY,
+        parse_team_metadata_schema,
+    )
+
+    TEAM_METADATA_SCHEMA_REGISTRY.set(
+        parse_team_metadata_schema(
+            [
+                {
+                    "key": "cost_center",
+                    "label": "Cost Center",
+                    "required": True,
+                    "description": "Cost center code",
+                    "allowed_values": ["CC-1001", "CC-1002"],
+                },
+                {"key": "app_name", "label": "Application Name"},
+            ]
+        )
+    )
+    try:
+        result = await get_team_metadata_schema()
+    finally:
+        TEAM_METADATA_SCHEMA_REGISTRY.set(())
+
+    assert [field.key for field in result.fields] == ["cost_center", "app_name"]
+    assert result.fields[0].required is True
+    assert result.fields[0].allowed_values == ("CC-1001", "CC-1002")
+    assert result.fields[1].required is False
+
+
+@pytest.mark.asyncio
+async def test_get_team_metadata_schema_empty_when_unconfigured():
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_metadata_schema
+    from litellm.proxy.management_helpers.team_metadata_validation import (
+        TEAM_METADATA_SCHEMA_REGISTRY,
+    )
+
+    TEAM_METADATA_SCHEMA_REGISTRY.set(())
+    result = await get_team_metadata_schema()
+
+    assert result.fields == ()

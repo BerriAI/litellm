@@ -1,6 +1,6 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from litellm.proxy._types import (
     KeyManagementRoutes,
@@ -123,3 +123,25 @@ class TeamMemberInfoResponse(LiteLLM_TeamMembership):
     role: Optional[str] = None
     user_email: Optional[str] = None
     team_alias: Optional[str] = None
+
+
+class TeamMetadataFieldSchema(BaseModel):
+    """One declared team metadata field from ``general_settings.team_metadata_schema``.
+
+    Advisory only: the UI uses it to prepopulate the team metadata form.
+    Enforcement stays with ``custom_team_metadata_validate``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(min_length=1)
+    label: Optional[str] = None
+    required: bool = False
+    description: Optional[str] = None
+    allowed_values: Optional[Tuple[str, ...]] = None
+
+
+class TeamMetadataSchemaResponse(BaseModel):
+    """Response for GET /team/metadata_schema; ``fields`` is empty when no schema is configured."""
+
+    fields: Tuple[TeamMetadataFieldSchema, ...]
