@@ -113,18 +113,14 @@ class _ProxyDBLogger(CustomLogger):
 
         existing_litellm_params = request_data.get("litellm_params", {})
         metadata_key = get_metadata_variable_name_from_kwargs(request_data)
-        merged_metadata = _merge_failure_metadata_buckets(
-            request_metadata=request_data.get(metadata_key),
-            litellm_params=existing_litellm_params,
-            trusted_metadata=_metadata,
-        )
+        merged = _merge_failure_metadata_buckets(request_data.get(metadata_key), existing_litellm_params, _metadata)
 
         request_data["litellm_params"]["proxy_server_request"] = (
             request_data.get("proxy_server_request") or existing_litellm_params.get("proxy_server_request") or {}
         )
-        request_data["litellm_params"]["metadata"] = merged_metadata
+        request_data["litellm_params"]["metadata"] = merged
         if metadata_key != "metadata":
-            request_data["litellm_params"][metadata_key] = dict(merged_metadata)
+            request_data["litellm_params"][metadata_key] = dict(merged)
 
         # Preserve model name and custom_llm_provider
         if "model" not in request_data:
@@ -430,28 +426,19 @@ def _merge_failure_metadata_buckets(
     trusted_metadata: Mapping[str, object],
 ) -> Mapping[str, object]:
     """
-    Build the metadata for a failure spend log out of every bucket the request may
-    have used.
+    Build failure spend-log metadata from every bucket the request may have used.
 
     Routes such as ``/v1/responses`` keep proxy-internal state (``model_group``,
     ``model_info``, retry counts, tags) in ``litellm_metadata`` rather than
     ``metadata``, so reading a single bucket drops router attribution. Key identity
     fields always come from the authenticated key, never from the request body.
     """
-    caller_metadata = {
-        key: value
-        for key, value in (request_metadata or {}).items()
-        if not key.startswith("user_api_key") and key != "status"
-    }
-    base = {
-        **_as_metadata_mapping(litellm_params.get("metadata")),
-        **_as_metadata_mapping(litellm_params.get("litellm_metadata")),
-        **caller_metadata,
-    }
-    return {
-        **base,
-        **{key: value for key, value in trusted_metadata.items() if value is not None or base.get(key) is None},
-    }
+    caller = {k: v for k, v in (request_metadata or {}).items() if not k.startswith("user_api_key") and k != "status"}
+    old_bucket = _as_metadata_mapping(litellm_params.get("metadata"))
+    new_bucket = _as_metadata_mapping(litellm_params.get("litellm_metadata"))
+    base = {**old_bucket, **new_bucket, **caller}
+    trusted = {k: v for k, v in trusted_metadata.items() if v is not None or base.get(k) is None}
+    return {**base, **trusted}
 
 
 def _should_track_cost_callback(
