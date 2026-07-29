@@ -13,6 +13,7 @@ import asyncio
 import math
 import re
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
 
 from fastapi import HTTPException, Request, status
@@ -34,6 +35,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     RBAC_ROLES,
+    BudgetLimitEntry,
     CallInfo,
     LiteLLM_AccessGroupTable,
     LiteLLM_BudgetTable,
@@ -693,6 +695,11 @@ async def common_checks(
                     valid_token=valid_token,
                 ),
                 _user_max_budget_check(),
+                _user_multi_budget_check(
+                    user_object=user_object,
+                    team_object=team_object,
+                    general_settings=general_settings,
+                ),
                 _check_team_member_budget(
                     team_object=team_object,
                     user_object=user_object,
@@ -4039,6 +4046,46 @@ async def _team_multi_budget_check(
                 ),
                 entity_type=Litellm_EntityType.TEAM.value,
                 entity_id=team_object.team_id,
+            )
+
+
+async def _user_multi_budget_check(
+    user_object: LiteLLM_UserTable | None,
+    team_object: LiteLLM_TeamTable | None = None,
+    general_settings: Mapping[str, object] | None = None,
+) -> None:
+    """
+    Raises BudgetExceededError if any budget window in user_object.budget_limits is exceeded.
+
+    Each window has its own Redis counter keyed by spend:user:{user_id}:window:{budget_duration}.
+    """
+    if user_object is None or not user_object.budget_limits:
+        return
+    is_team_key = team_object is not None and team_object.team_id is not None
+    if is_team_key and (general_settings or {}).get("skip_user_budget_on_team_key") is True:
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    for window in user_object.budget_limits:
+        entry = window if isinstance(window, BudgetLimitEntry) else BudgetLimitEntry(**window)
+        counter_key = f"spend:user:{user_object.user_id}:window:{entry.budget_duration}"
+        window_spend = await get_current_spend(
+            counter_key=counter_key,
+            fallback_spend=0.0,
+            max_budget=entry.max_budget,
+            window_entity_type="User",
+            window_entity_id=user_object.user_id,
+            window_start=get_budget_window_start(entry),
+        )
+        if math.isfinite(entry.max_budget) and window_spend >= entry.max_budget:
+            raise litellm.BudgetExceededError(
+                current_cost=window_spend,
+                max_budget=entry.max_budget,
+                message=(
+                    f"ExceededBudget: User={user_object.user_id} over {entry.budget_duration} budget. "
+                    f"Spend=${window_spend:.4f}, Limit=${entry.max_budget:.2f}"
+                ),
             )
 
 

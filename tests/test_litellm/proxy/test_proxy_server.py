@@ -10604,3 +10604,50 @@ async def test_startup_survives_database_read_failure_for_coordination_redis():
         )
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_user_scope_increments_window_counters_from_cached_model():
+    """When user_api_key_cache holds a LiteLLM_UserTable with budget_limits,
+    _user_scope must increment per-window spend counters."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    user_id = "user-window-counter-test"
+    user_obj = LiteLLM_UserTable(
+        user_id=user_id,
+        budget_limits=[
+            {"budget_duration": "1hr", "max_budget": 10.0, "reset_at": "2099-01-01T00:00:00"},
+            {"budget_duration": "1d", "max_budget": 100.0, "reset_at": "2099-01-01T00:00:00"},
+        ],
+    )
+
+    counter_cache = DualCache()
+    counter_cache.in_memory_cache.set_cache(key=f"spend:user:{user_id}", value=0.0)
+    counter_cache.in_memory_cache.set_cache(key=f"spend:user:{user_id}:window:1hr", value=0.0)
+    counter_cache.in_memory_cache.set_cache(key=f"spend:user:{user_id}:window:1d", value=0.0)
+
+    user_cache = DualCache()
+    await user_cache.async_set_cache(key=user_id, value=user_obj)
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_user = ps.spend_counter_cache, ps.user_api_key_cache
+    ps.spend_counter_cache = counter_cache
+    ps.user_api_key_cache = user_cache
+    try:
+        await increment_spend_counters(
+            token=None,
+            team_id=None,
+            user_id=user_id,
+            response_cost=1.5,
+            budget_reservation=None,
+        )
+
+        assert counter_cache.in_memory_cache.get_cache(key=f"spend:user:{user_id}") == pytest.approx(1.5)
+        assert counter_cache.in_memory_cache.get_cache(key=f"spend:user:{user_id}:window:1hr") == pytest.approx(1.5)
+        assert counter_cache.in_memory_cache.get_cache(key=f"spend:user:{user_id}:window:1d") == pytest.approx(1.5)
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.user_api_key_cache = orig_user

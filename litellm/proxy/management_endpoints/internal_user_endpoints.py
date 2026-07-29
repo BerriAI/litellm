@@ -15,7 +15,7 @@ These are members of a Team on LiteLLM
 import asyncio
 import json
 import traceback
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any, Optional, cast
 
@@ -1129,6 +1129,27 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
                 budget_duration=non_default_values["budget_duration"]
             )
 
+    if "budget_limits" in non_default_values:
+        raw_windows: tuple[BudgetLimitEntry | Mapping[str, object], ...] | None = non_default_values["budget_limits"]
+        if raw_windows:
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+            non_default_values["budget_limits"] = json.dumps(
+                tuple(
+                    {
+                        **(window if isinstance(window, dict) else window.model_dump()),
+                        "reset_at": get_budget_reset_time(
+                            budget_duration=str(
+                                window["budget_duration"] if isinstance(window, dict) else window.budget_duration
+                            )
+                        ).isoformat(),
+                    }
+                    for window in raw_windows
+                )
+            )
+        else:
+            non_default_values["budget_limits"] = json.dumps(None)
+
     return non_default_values
 
 
@@ -1259,7 +1280,7 @@ async def _update_single_user_helper(
     )
     _is_self_update = _target_user_id is not None and user_api_key_dict.user_id == _target_user_id
     if _is_self_update and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
-        _protected_fields = ("max_budget", "soft_budget", "spend")
+        _protected_fields = ("max_budget", "soft_budget", "spend", "budget_limits")
         for _field in _protected_fields:
             if _field in non_default_values:
                 raise HTTPException(
