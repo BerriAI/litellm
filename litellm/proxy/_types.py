@@ -1018,7 +1018,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     models: Optional[List[str]] = None
     search_tools: Optional[List[str]] = None
     mcp_tool_search_enabled: Optional[bool] = None
-    mcp_tool_search_top_k: Optional[int] = None
+    mcp_tool_search_top_k: int | None = None
 
 
 from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402

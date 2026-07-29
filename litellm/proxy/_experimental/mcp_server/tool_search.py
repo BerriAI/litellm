@@ -16,8 +16,8 @@ DEFAULT_MCP_TOOL_SEARCH_TOP_K: int = 5
 
 
 def get_mcp_tool_search_default_top_k(
-    user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-    litellm_settings: Optional[dict[str, Any]] = None,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+    litellm_settings: dict[str, object] | None = None,
 ) -> int:
     """Resolve the default top_k for mcp_tool_search (per-key, then global, then 5)."""
     if user_api_key_dict is not None:
@@ -35,9 +35,9 @@ def get_mcp_tool_search_default_top_k(
 
 
 def resolve_mcp_tool_search_top_k(
-    explicit_top_k: Any,
-    user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-    litellm_settings: Optional[dict[str, Any]] = None,
+    explicit_top_k: object,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+    litellm_settings: dict[str, object] | None = None,
 ) -> int:
     default_top_k = get_mcp_tool_search_default_top_k(user_api_key_dict, litellm_settings)
     if explicit_top_k is None:
@@ -45,7 +45,9 @@ def resolve_mcp_tool_search_top_k(
     return coerce_top_k(explicit_top_k, default=default_top_k)
 
 
-def coerce_top_k(value: Any, default: int = DEFAULT_MCP_TOOL_SEARCH_TOP_K) -> int:
+def coerce_top_k(value: object, default: int = DEFAULT_MCP_TOOL_SEARCH_TOP_K) -> int:
+    if not isinstance(value, (int, float, str, bytes, bytearray)):
+        return default
     try:
         result = int(value)
     except (TypeError, ValueError):
