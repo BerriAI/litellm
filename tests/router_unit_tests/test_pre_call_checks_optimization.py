@@ -255,5 +255,73 @@ class TestPreCallChecksSkipsRpmCacheReadWhenUnused:
         assert get_cache_calls == [], f"Expected zero cache reads under usage-based-routing-v2, got {get_cache_calls}"
 
 
+class TestPreCallChecksExceptionHandling:
+    """
+    _pre_call_checks() wraps the context-window check (get_router_model_info +
+    token counting) in a try/except so a single deployment's failure doesn't
+    take down pre-call filtering for the whole model group.
+    """
+
+    def test_token_counting_failure_returns_original_deployments(self, monkeypatch):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "test",
+                    "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-test"},
+                    "model_info": {"id": "dep-1", "max_input_tokens": 100},
+                },
+            ],
+            set_verbose=False,
+            enable_pre_call_checks=True,
+        )
+
+        def _raise_token_counting(*args, **kwargs):
+            raise ValueError("boom")
+
+        monkeypatch.setattr(router, "_count_pre_call_check_tokens", _raise_token_counting)
+
+        deployments = router.get_model_list(model_name="test")
+        assert deployments is not None
+
+        result = router._pre_call_checks(
+            model="test",
+            healthy_deployments=deployments,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert result == deployments, "Should return the original deployments unchanged on token counting failure"
+
+    def test_model_info_lookup_failure_is_swallowed(self, monkeypatch):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "test",
+                    "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-test"},
+                    "model_info": {"id": "dep-1"},
+                },
+            ],
+            set_verbose=False,
+            enable_pre_call_checks=True,
+        )
+
+        def _raise_model_info(*args, **kwargs):
+            raise ValueError("boom")
+
+        monkeypatch.setattr(router, "get_router_model_info", _raise_model_info)
+
+        deployments = router.get_model_list(model_name="test")
+        assert deployments is not None
+
+        result = router._pre_call_checks(
+            model="test",
+            healthy_deployments=deployments,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert [d["model_info"]["id"] for d in result] == ["dep-1"], (
+            "Deployment should still be returned even if get_router_model_info() raises"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
