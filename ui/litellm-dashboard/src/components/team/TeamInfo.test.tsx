@@ -444,6 +444,29 @@ describe("TeamInfoView", () => {
       });
     });
 
+    it("shows edit tabs when the fetched team data marks the session user as team admin, even without the is_team_admin prop", async () => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          members_with_roles: [
+            {
+              user_id: "user-1",
+              user_email: "admin@test.com",
+              role: "admin",
+              spend: 0,
+              budget_id: "budget1",
+            },
+          ],
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} is_team_admin={false} is_proxy_admin={false} />);
+
+      await waitFor(() => {
+        expect(screen.getByRole("tab", { name: "Settings" })).toBeInTheDocument();
+      });
+      expect(screen.getByRole("tab", { name: "Members" })).toBeInTheDocument();
+    });
+
     it("should navigate to settings tab when clicked", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
