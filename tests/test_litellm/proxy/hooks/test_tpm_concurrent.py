@@ -2533,5 +2533,52 @@ async def test_itpm_otpm_refund_exception_swallowed_on_disconnect(rate_limiter):
     )
 
 
+@pytest.mark.asyncio
+async def test_max_output_tokens_prevents_cap_injection(rate_limiter):
+    """
+    Regression for veria-ai comment: when a Responses API request supplies
+    max_output_tokens (the canonical Responses output bound) but not max_tokens
+    or max_completion_tokens, the has_explicit_max_tokens check was False, so
+    the code injected data["max_tokens"] = capped_floor and silently truncated
+    the response.
+
+    With the fix, max_output_tokens is included in the explicit-cap check and
+    data["max_tokens"] must NOT be injected when max_output_tokens is already
+    set.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-max-output-tokens"),
+        project_id="proj-responses-max-output",
+        project_metadata={
+            "model_otpm_limit": {"mock-model": 100},
+        },
+    )
+
+    data: dict = {
+        "model": "mock-model",
+        "input": "Summarise the document",
+        "max_output_tokens": 80,
+        "litellm_call_id": "test-max-output-tokens",
+        "metadata": {},
+    }
+
+    try:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data=data,
+            call_type="responses",
+        )
+    except Exception:
+        pass
+
+    assert "max_tokens" not in data, (
+        "data['max_tokens'] must not be injected when max_output_tokens is already "
+        "set; the cap injection was overriding the caller's explicit output bound"
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

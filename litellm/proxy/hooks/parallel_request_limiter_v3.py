@@ -2772,7 +2772,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # data["max_tokens"]; never loosens a cap already set.
         capped_output_floor = self._no_max_tokens_output_floor(min_configured_otpm_limit)
         baseline_floor = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
-        has_explicit_max_tokens = data.get("max_tokens") is not None or data.get("max_completion_tokens") is not None
+        has_explicit_max_tokens = (
+            data.get("max_tokens") is not None
+            or data.get("max_completion_tokens") is not None
+            or data.get("max_output_tokens") is not None
+        )
         is_embedding = data.get("input") is not None and call_type not in RESPONSES_API_CALL_TYPES
         if capped_output_floor < baseline_floor and not has_explicit_max_tokens and not is_embedding:
             existing_cap = data.get("max_tokens")
@@ -3026,7 +3030,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 capped_floor = self._no_max_tokens_output_floor(min_configured_tpm_limit)
                 baseline_floor = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
                 has_explicit_max_tokens = (
-                    data.get("max_tokens") is not None or data.get("max_completion_tokens") is not None
+                    data.get("max_tokens") is not None
+                    or data.get("max_completion_tokens") is not None
+                    or data.get("max_output_tokens") is not None
                 )
                 is_embedding = data.get("input") is not None and call_type not in RESPONSES_API_CALL_TYPES
                 if capped_floor < baseline_floor and not has_explicit_max_tokens and not is_embedding:
