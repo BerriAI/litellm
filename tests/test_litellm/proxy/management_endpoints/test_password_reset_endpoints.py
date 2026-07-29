@@ -1,3 +1,4 @@
+import logging
 import re
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
@@ -5,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+from litellm.proxy.management_endpoints.password_reset_endpoints import _send_reset_email_safely
 from litellm.proxy.proxy_server import app
 from litellm.proxy.utils import hash_token
 
@@ -93,6 +95,36 @@ async def test_forgot_password_emailed_token_matches_stored_hash(mocker, monkeyp
     stored_hash = mock_prisma.db.litellm_passwordresettoken.create.call_args.kwargs["data"]["token_hash"]
     assert stored_hash == hash_token(emailed_token)
     assert stored_hash != emailed_token
+
+
+@pytest.mark.asyncio
+async def test_send_reset_email_safely_warns_when_smtp_misconfigured(mocker, caplog):
+    """`send_email` raises ValueError above its own `except Exception` when SMTP env
+    vars are missing. Since the send is fire-and-forget, an escaping ValueError would
+    surface as an asyncio "Task exception was never retrieved" traceback, so the
+    wrapper has to turn it into the single admin-facing warning line instead."""
+    mocker.patch(
+        "litellm.proxy.management_endpoints.password_reset_endpoints.send_email",
+        new=AsyncMock(side_effect=ValueError("Trying to use SMTP, but SMTP_HOST is not set")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await _send_reset_email_safely(receiver_email="alice@example.com", subject="s", html="<p>link</p>")
+
+    assert "SMTP misconfigured" in caplog.text
+    assert "SMTP_HOST is not set" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_send_reset_email_safely_forwards_all_arguments(mocker):
+    mock_send_email = mocker.patch(
+        "litellm.proxy.management_endpoints.password_reset_endpoints.send_email",
+        new=AsyncMock(),
+    )
+
+    await _send_reset_email_safely(receiver_email="alice@example.com", subject="Reset", html="<p>link</p>")
+
+    mock_send_email.assert_awaited_once_with(receiver_email="alice@example.com", subject="Reset", html="<p>link</p>")
 
 
 @pytest.mark.asyncio

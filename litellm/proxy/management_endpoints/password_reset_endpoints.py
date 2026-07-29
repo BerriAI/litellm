@@ -38,6 +38,13 @@ _RESET_TOKEN_TTL_MINUTES = 30
 _RATE_LIMIT_WINDOW_SECONDS = 3600
 
 
+async def _send_reset_email_safely(receiver_email: str, subject: str, html: str) -> None:
+    try:
+        await send_email(receiver_email=receiver_email, subject=subject, html=html)
+    except ValueError as e:
+        verbose_proxy_logger.warning("Password reset email not sent, SMTP misconfigured: %s", e)
+
+
 @router.post("/user/forgot_password", include_in_schema=False)
 async def forgot_password(data: ForgotPasswordRequest, request: Request):
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
@@ -100,7 +107,7 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request):
     reset_link = f"{reset_base_url}?token={raw_token}"
 
     asyncio.create_task(
-        send_email(
+        _send_reset_email_safely(
             receiver_email=data.email,
             subject="Reset your LiteLLM password",
             html=(
