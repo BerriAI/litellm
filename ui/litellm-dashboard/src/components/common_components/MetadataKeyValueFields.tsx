@@ -1,5 +1,5 @@
 import { MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
-import { Button, Form, FormInstance, Input, Select, Skeleton, Space } from "antd";
+import { Button, Form, FormInstance, Input, Skeleton, Space } from "antd";
 import React, { useEffect, useMemo } from "react";
 
 import { TeamMetadataField } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
@@ -102,24 +102,24 @@ const MetadataKeyValueFields: React.FC<MetadataKeyValueFieldsProps> = ({
         const initialRaw =
           sourceMetadata != null && field.key in sourceMetadata ? sourceMetadata[field.key] : undefined;
         return (
-          <Form.Item
-            key={field.key}
-            name={[schemaName, field.key]}
-            label={label}
-            extra={field.description || undefined}
-            initialValue={initialRaw !== undefined ? formatMetadataValue(initialRaw) : undefined}
-            rules={field.required ? [{ required: true, message: `${label} is required` }] : undefined}
-          >
-            {field.allowed_values?.length ? (
-              <Select
-                allowClear
-                placeholder={`Select ${label}`}
-                options={field.allowed_values.map((value) => ({ value, label: value }))}
-              />
-            ) : (
+          <Space key={field.key} style={{ display: "flex", marginBottom: 8 }} align="baseline">
+            <Form.Item>
+              <Input value={field.key} disabled aria-label={`${label} key`} />
+            </Form.Item>
+            <Form.Item
+              name={[schemaName, field.key]}
+              extra={field.description || undefined}
+              initialValue={initialRaw !== undefined ? formatMetadataValue(initialRaw) : undefined}
+              rules={field.required ? [{ required: true, message: `${label} is required` }] : undefined}
+            >
               <Input placeholder={label} />
+            </Form.Item>
+            {field.required && (
+              <span title="Required" style={{ color: "#ef4444" }}>
+                *
+              </span>
             )}
-          </Form.Item>
+          </Space>
         );
       })}
       <Form.List name={name}>

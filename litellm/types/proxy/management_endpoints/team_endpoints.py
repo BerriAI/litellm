@@ -138,7 +138,6 @@ class TeamMetadataFieldSchema(BaseModel):
     label: Optional[str] = None
     required: bool = False
     description: Optional[str] = None
-    allowed_values: Optional[Tuple[str, ...]] = None
 
 
 class TeamMetadataSchemaResponse(BaseModel):

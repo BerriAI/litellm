@@ -236,13 +236,22 @@ describe("MetadataKeyValueFields with a declared schema", () => {
     { key: "app_name", label: "Application Name" },
   ];
 
-  it("should render a labeled input per declared field with its description and no remove icon", () => {
+  it("should render a locked pair row per declared field with its description and no remove icon", () => {
     render(<Harness onFinish={vi.fn()} schemaFields={schema} initialMetadata={[{ key: "notes", value: "x" }]} />);
 
-    expect(screen.getByLabelText("Cost Center")).toBeInTheDocument();
-    expect(screen.getByLabelText("Application Name")).toBeInTheDocument();
+    const costCenterKeyInput = screen.getByDisplayValue("cost_center");
+    expect(costCenterKeyInput).toBeDisabled();
+    expect(screen.getByDisplayValue("app_name")).toBeDisabled();
+    expect(screen.getByPlaceholderText("Cost Center")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Application Name")).toBeInTheDocument();
     expect(screen.getByText("Cost center code")).toBeInTheDocument();
     expect(screen.getAllByLabelText("Remove key-value pair")).toHaveLength(1);
+  });
+
+  it("should mark only required declared fields with an asterisk", () => {
+    render(<Harness onFinish={vi.fn()} schemaFields={schema} />);
+
+    expect(screen.getAllByTitle("Required")).toHaveLength(1);
   });
 
   it("should submit declared field values under schema_metadata", async () => {
@@ -250,7 +259,7 @@ describe("MetadataKeyValueFields with a declared schema", () => {
     const onFinish = vi.fn();
     render(<Harness onFinish={onFinish} schemaFields={schema} />);
 
-    await user.type(screen.getByLabelText("Cost Center"), "CC-1001");
+    await user.type(screen.getByPlaceholderText("Cost Center"), "CC-1001");
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
@@ -286,32 +295,11 @@ describe("MetadataKeyValueFields with a declared schema", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Cost Center")).toHaveValue("CC-1001");
+    expect(screen.getByPlaceholderText("Cost Center")).toHaveValue("CC-1001");
     await waitFor(() => {
       expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
         "notes",
       ]);
-    });
-  });
-
-  it("should submit the selected option for a declared field with allowed values", async () => {
-    const user = userEvent.setup();
-    const onFinish = vi.fn();
-    render(
-      <Harness
-        onFinish={onFinish}
-        schemaFields={[{ key: "chargeback_mode", label: "Chargeback Mode", allowed_values: ["direct", "shared"] }]}
-      />,
-    );
-
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByTitle("direct"));
-    await user.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => {
-      expect(onFinish).toHaveBeenCalledWith(
-        expect.objectContaining({ schema_metadata: expect.objectContaining({ chargeback_mode: "direct" }) }),
-      );
     });
   });
 
@@ -320,7 +308,7 @@ describe("MetadataKeyValueFields with a declared schema", () => {
     const onFinish = vi.fn();
     render(<Harness onFinish={onFinish} schemaFields={schema} />);
 
-    await user.type(screen.getByLabelText("Cost Center"), "CC-1001");
+    await user.type(screen.getByPlaceholderText("Cost Center"), "CC-1001");
     await user.click(screen.getByRole("button", { name: /add key-value pair/i }));
     await user.type(screen.getByPlaceholderText("Key"), "cost_center");
     await user.click(screen.getByRole("button", { name: "Save" }));

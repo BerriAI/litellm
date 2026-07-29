@@ -978,15 +978,15 @@ describe("TeamInfoView", () => {
       renderWithProviders(<TeamInfoView {...defaultProps} />);
       await openSettingsEditor(user);
 
-      expect(screen.getByLabelText("Cost Center")).toHaveValue("CC-OLD");
+      expect(screen.getByPlaceholderText("Cost Center")).toHaveValue("CC-OLD");
       await waitFor(() => {
         expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
           "department",
         ]);
       });
 
-      await user.clear(screen.getByLabelText("Cost Center"));
-      await user.type(screen.getByLabelText("Cost Center"), "CC-NEW");
+      await user.clear(screen.getByPlaceholderText("Cost Center"));
+      await user.type(screen.getByPlaceholderText("Cost Center"), "CC-NEW");
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {

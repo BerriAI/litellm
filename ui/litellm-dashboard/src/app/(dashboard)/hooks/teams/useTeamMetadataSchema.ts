@@ -9,7 +9,6 @@ export interface TeamMetadataField {
   label?: string | null;
   required?: boolean;
   description?: string | null;
-  allowed_values?: string[] | null;
 }
 
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;

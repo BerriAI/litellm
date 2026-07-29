@@ -10554,7 +10554,6 @@ async def test_get_team_metadata_schema_returns_configured_fields():
                     "label": "Cost Center",
                     "required": True,
                     "description": "Cost center code",
-                    "allowed_values": ["CC-1001", "CC-1002"],
                 },
                 {"key": "app_name", "label": "Application Name"},
             ]
@@ -10567,7 +10566,7 @@ async def test_get_team_metadata_schema_returns_configured_fields():
 
     assert [field.key for field in result.fields] == ["cost_center", "app_name"]
     assert result.fields[0].required is True
-    assert result.fields[0].allowed_values == ("CC-1001", "CC-1002")
+    assert result.fields[0].description == "Cost center code"
     assert result.fields[1].required is False
 
 

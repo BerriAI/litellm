@@ -614,7 +614,6 @@ def test_parse_schema_round_trips_fields_in_order():
             "label": "Cost Center",
             "required": True,
             "description": "Cost center code (e.g. CC-1001)",
-            "allowed_values": ["CC-1001", "CC-1002"],
         },
         {"key": "app_name"},
     ]
@@ -625,11 +624,9 @@ def test_parse_schema_round_trips_fields_in_order():
     assert fields[0].label == "Cost Center"
     assert fields[0].required is True
     assert fields[0].description == "Cost center code (e.g. CC-1001)"
-    assert fields[0].allowed_values == ("CC-1001", "CC-1002")
     assert fields[1].label is None
     assert fields[1].required is False
     assert fields[1].description is None
-    assert fields[1].allowed_values is None
 
 
 @pytest.mark.parametrize(
@@ -641,7 +638,7 @@ def test_parse_schema_round_trips_fields_in_order():
         [{"key": ""}],
         [{"key": "cost_center", "requird": True}],
         [{"key": "cost_center", "required": "sometimes"}],
-        [{"key": "cost_center", "allowed_values": "CC-1001"}],
+        [{"key": "cost_center", "allowed_values": ["CC-1001"]}],
     ],
 )
 def test_parse_schema_malformed_raises(raw):

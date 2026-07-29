@@ -684,7 +684,7 @@ describe("Teams - schema-declared metadata fields in team create", () => {
 
     fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Test Team" } });
     fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
-    fireEvent.change(screen.getByLabelText("Cost Center"), { target: { value: "CC-1001" } });
+    fireEvent.change(screen.getByPlaceholderText("Cost Center"), { target: { value: "CC-1001" } });
 
     const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
     fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
