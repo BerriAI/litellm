@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -1162,6 +1163,50 @@ def test_reset_budget_windows_skips_unexpired_key_window(monkeypatch):
         {
             "token": "sk-future",
             "budget_limits": [{"budget_duration": "1d", "reset_at": future}],
+        }
+    ]
+    job, prisma_client, _ = _make_reset_budget_windows_job(monkeypatch, key_rows=key_rows, team_rows=[])
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_verificationtoken.update.assert_not_awaited()
+
+
+def test_reset_budget_windows_resets_window_with_positive_utc_offset(monkeypatch):
+    """A `reset_at` written in a non-UTC timezone must be compared as an instant, not as a
+    naive wall-clock value. With `timezone: Asia/Tokyo` the stored offset is +09:00, so a
+    window that expired a minute ago has a wall-clock time 9 hours ahead of UTC; comparing
+    it naively kept keys blocked for the length of the offset (issue #34896).
+    """
+    tokyo = ZoneInfo("Asia/Tokyo")
+    expired = (datetime.now(timezone.utc) - timedelta(minutes=1)).astimezone(tokyo).isoformat()
+
+    key_rows = [
+        {
+            "token": "sk-tokyo",
+            "budget_limits": [{"budget_duration": "1mo", "reset_at": expired}],
+        }
+    ]
+    job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=key_rows, team_rows=[]
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_verificationtoken.update.assert_awaited_once()
+    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:sk-tokyo:window:1mo", value=0.0)
+
+
+def test_reset_budget_windows_skips_unexpired_window_with_negative_utc_offset(monkeypatch):
+    """The mirror case: a negative-offset `reset_at` whose wall-clock time already passed in
+    UTC terms is still in the future as an instant, so the window must not reset early."""
+    honolulu = ZoneInfo("Pacific/Honolulu")
+    future = (datetime.now(timezone.utc) + timedelta(minutes=5)).astimezone(honolulu).isoformat()
+
+    key_rows = [
+        {
+            "token": "sk-honolulu",
+            "budget_limits": [{"budget_duration": "1mo", "reset_at": future}],
         }
     ]
     job, prisma_client, _ = _make_reset_budget_windows_job(monkeypatch, key_rows=key_rows, team_rows=[])
