@@ -3308,8 +3308,36 @@ async def ui_view_session_spend_logs(
                 detail="Database not connected",
             )
 
-        # Build query conditions
-        where_conditions = {"session_id": session_id}
+        if _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+            scope_sql = ""
+            scope_params = ()
+            where_conditions = {"session_id": session_id}
+        else:
+            try:
+                permitted_team_ids = (
+                    await _get_permitted_team_ids_for_spend_logs(
+                        prisma_client=prisma_client,
+                        user_api_key_dict=user_api_key_dict,
+                    )
+                    if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
+                    else []
+                )
+            except Exception:  # noqa: BLE001  # mirror /spend/logs/ui: failed team lookup falls back to own-logs-only scope
+                permitted_team_ids = []
+            if permitted_team_ids:
+                scope_sql = ' AND ("user" = $4 OR team_id = ANY($5::text[]))'
+                scope_params = (user_api_key_dict.user_id, permitted_team_ids)
+                where_conditions = {
+                    "session_id": session_id,
+                    "OR": [
+                        {"user": user_api_key_dict.user_id},
+                        {"team_id": {"in": permitted_team_ids}},
+                    ],
+                }
+            else:
+                scope_sql = ' AND "user" = $4'
+                scope_params = (user_api_key_dict.user_id,)
+                where_conditions = {"session_id": session_id, "user": user_api_key_dict.user_id}
 
         # Calculate pagination offsets
         skip = (page - 1) * page_size
@@ -3318,7 +3346,7 @@ async def ui_view_session_spend_logs(
         total_records = await SpendLogsRepository(prisma_client).table.count(where=where_conditions)
 
         # Query with raw SQL to exclude heavy columns (messages, response, proxy_server_request)
-        sql_query = """
+        sql_query = f"""
             SELECT
                 request_id, call_type, api_key, spend, total_tokens,
                 prompt_tokens, completion_tokens, "startTime", "endTime",
@@ -3328,11 +3356,11 @@ async def ui_view_session_spend_logs(
                 organization_id, end_user, requester_ip_address,
                 session_id, status, mcp_namespaced_tool_name, agent_id
             FROM "LiteLLM_SpendLogs"
-            WHERE session_id = $1
+            WHERE session_id = $1{scope_sql}
             ORDER BY "startTime" DESC
             LIMIT $2 OFFSET $3
         """
-        result = await prisma_client.db.query_raw(sql_query, session_id, page_size, skip)
+        result = await prisma_client.db.query_raw(sql_query, session_id, page_size, skip, *scope_params)
 
         total_pages = (total_records + page_size - 1) // page_size
 
