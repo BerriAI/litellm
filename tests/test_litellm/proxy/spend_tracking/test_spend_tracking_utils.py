@@ -2902,3 +2902,27 @@ async def test_compression_savings_survive_to_spend_log_payload_metadata(monkeyp
         "tokens_saved": 7000,
         "source": "compression_interception",
     }
+
+
+def test_get_logging_payload_keeps_router_fields_when_guardrail_adds_litellm_metadata():
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "test-key",
+                    "user_api_key_team_id": "team-1",
+                    "model_group": "my-model-group",
+                    "model_info": {"id": "deployment-123"},
+                },
+                "litellm_metadata": {"guardrail_added": True},
+            },
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["model_group"] == "my-model-group"
+    assert payload["model_id"] == "deployment-123"
+    assert json.loads(payload["metadata"])["user_api_key_team_id"] == "team-1"

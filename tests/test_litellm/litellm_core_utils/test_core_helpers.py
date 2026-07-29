@@ -4,6 +4,7 @@ import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
+    add_missing_spend_metadata_to_litellm_metadata,
     get_or_create_metadata_bucket,
     map_finish_reason,
     reconstruct_model_name,
@@ -242,3 +243,28 @@ class TestRedactNestedMatchAndRegexKeys:
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None
         assert redact_nested_match_and_regex_keys("plain") == "plain"
+
+
+class TestAddMissingSpendMetadataToLitellmMetadata:
+    def test_fills_missing_router_fields_without_clobbering_litellm_metadata(self):
+        merged = add_missing_spend_metadata_to_litellm_metadata(
+            litellm_metadata={"guardrail_added": True, "model_group": "from-litellm-metadata"},
+            metadata={
+                "model_group": "from-metadata",
+                "model_info": {"id": "deployment-123"},
+                "user_api_key_team_id": "team-1",
+            },
+        )
+
+        assert merged["model_info"] == {"id": "deployment-123"}
+        assert merged["user_api_key_team_id"] == "team-1"
+        assert merged["guardrail_added"] is True
+        assert merged["model_group"] == "from-litellm-metadata"
+
+    def test_auth_keys_always_come_from_metadata(self):
+        merged = add_missing_spend_metadata_to_litellm_metadata(
+            litellm_metadata={"user_api_key": "stale"},
+            metadata={"user_api_key": "authoritative"},
+        )
+
+        assert merged["user_api_key"] == "authoritative"
