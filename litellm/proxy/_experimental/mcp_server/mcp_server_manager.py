@@ -4892,23 +4892,14 @@ class MCPServerManager:
         server_name: str,
         name: str,
     ) -> MCPServer:
-        """Resolve the MCP server that should handle call_tool.
-
-        Prefer the process-local tool→server map when this worker has listed
-        tools, then fall back to a registry match on server id / name / alias.
-        A registry hit is enough: do not require the tool map. That map is only
-        filled after tools/list on *this* process; multi-worker reloads load the
-        server row from the DB without re-listing, so gating on the map made
-        cold workers 500 "Tool X not found" for tools another worker already
-        served. Unknown tool names are rejected by the upstream MCP server.
-        """
+        """Resolve MCP server for call_tool (prefixed name, registry, fallback)."""
         prefixed_tool_name = add_server_prefix_to_name(name, server_name)
         mcp_server = self._get_mcp_server_from_tool_name(prefixed_tool_name)
+        resolved_by_server_name_only = False
         normalized_server_name = normalize_server_name(server_name)
 
         def _candidate_matches_server_name(candidate: MCPServer) -> bool:
             for identifier in (
-                candidate.server_id,
                 candidate.alias,
                 candidate.server_name,
                 candidate.name,
@@ -4921,6 +4912,7 @@ class MCPServerManager:
             for candidate in self.get_registry().values():
                 if _candidate_matches_server_name(candidate):
                     mcp_server = candidate
+                    resolved_by_server_name_only = True
                     break
         if mcp_server is None:
             fallback = self._get_mcp_server_from_tool_name(name)
@@ -4928,6 +4920,14 @@ class MCPServerManager:
                 mcp_server = fallback
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
+
+        if resolved_by_server_name_only:
+            tool_known = (
+                name in self.tool_name_to_mcp_server_name_mapping
+                or prefixed_tool_name in self.tool_name_to_mcp_server_name_mapping
+            )
+            if not tool_known:
+                raise ValueError(f"Tool {name} not found")
 
         return mcp_server
 
