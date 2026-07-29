@@ -3,7 +3,7 @@
 from urllib.parse import urlencode
 
 from fastapi import Request
-from fastapi.dependencies.utils import get_flat_dependant
+from fastapi.dependencies.models import Dependant
 from fastapi.responses import JSONResponse
 
 from litellm.types.proxy.management_endpoints.management_v1 import (
@@ -35,12 +35,19 @@ def problem_response(problem: ProblemDetail) -> JSONResponse:
     )
 
 
+def _flat_query_params(dependant: Dependant) -> tuple[str, ...]:
+    return (
+        *(field.alias for field in dependant.query_params),
+        *(alias for dependency in dependant.dependencies for alias in _flat_query_params(dependency)),
+    )
+
+
 def _declared_query_params(request: Request) -> frozenset[str]:
     route = request.scope.get("route")
     dependant = getattr(route, "dependant", None)
-    if dependant is None:
+    if not isinstance(dependant, Dependant):
         return frozenset()
-    return frozenset(field.alias for field in get_flat_dependant(dependant, skip_repeats=True).query_params)
+    return frozenset(_flat_query_params(dependant))
 
 
 async def reject_unknown_query_params(request: Request) -> None:
