@@ -625,6 +625,7 @@ def test_openrouter_reasoning_effort_high_passes_through():
     [
         ("openrouter/poolside/laguna-xs-2.1", 6e-08, 1.2e-07),
         ("openrouter/poolside/laguna-s-2.1", 1e-07, 2e-07),
+        ("openrouter/poolside/laguna-xs-2.1:free", 0, 0),
         ("openrouter/poolside/laguna-s-2.1:free", 0, 0),
     ],
 )
