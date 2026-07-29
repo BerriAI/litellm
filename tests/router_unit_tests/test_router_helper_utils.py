@@ -463,7 +463,16 @@ def test_get_fallback_model_group_from_fallbacks(model_list):
         model_group="gpt-5.5",
         fallbacks=[{"gpt-5.5": "gpt-5-mini"}],
     )
-    assert fallback_model_group_name == "gpt-5-mini"
+    assert fallback_model_group_name == ["gpt-5-mini"]
+
+
+def test_get_fallback_model_group_from_fallbacks_preserves_list_values(model_list):
+    router = Router(model_list=model_list)
+    fallback_model_group_name = router._get_fallback_model_group_from_fallbacks(
+        model_group="gpt-5.5",
+        fallbacks=[{"gpt-5.5": ["gpt-5-mini", "gpt-4o-mini"]}],
+    )
+    assert fallback_model_group_name == ["gpt-5-mini", "gpt-4o-mini"]
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])

@@ -153,3 +153,51 @@ def test_get_fallback_model_group_does_not_mutate_fallbacks():
 
     assert fallback_model_group == ["gpt-4o-mini"]
     assert fallbacks == [{"gpt-3.5-turbo": ["claude-3-haiku"]}, "gpt-4o-mini"]
+
+
+def test_get_fallback_model_group_coerces_string_dict_value_to_list():
+    """Router accepts fallbacks=[{"primary": "backup"}] (see Router.__init__
+    docstring). The resolved group must be a list so run_async_fallback does
+    not iterate the string character-by-character."""
+    fallback_model_group, _ = get_fallback_model_group(
+        fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}],
+        model_group="azure-gpt-3.5-turbo",
+    )
+
+    assert fallback_model_group == ["openai-gpt-3.5-turbo"]
+
+
+def test_get_fallback_model_group_coerces_string_wildcard_value_to_list():
+    fallback_model_group, _ = get_fallback_model_group(
+        fallbacks=[{"*": "default-backup"}],
+        model_group="any-unmatched-model",
+    )
+
+    assert fallback_model_group == ["default-backup"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_does_not_iterate_string_as_characters():
+    class RecordingFailRouter:
+        def __init__(self):
+            self.tried_models = []
+
+        def log_retry(self, kwargs, e):
+            return kwargs
+
+        async def async_function_with_fallbacks(self, *args, **kwargs):
+            self.tried_models.append(kwargs.get("model"))
+            raise RuntimeError("fallback model also failed")
+
+    router = RecordingFailRouter()
+    with pytest.raises(RuntimeError, match="fallback model also failed"):
+        await run_async_fallback(
+            litellm_router=router,
+            fallback_model_group="openai-gpt-3.5-turbo",
+            original_model_group="azure-gpt-3.5-turbo",
+            original_exception=RuntimeError("primary failed"),
+            max_fallbacks=25,
+            fallback_depth=0,
+        )
+
+    assert router.tried_models == ["openai-gpt-3.5-turbo"]
