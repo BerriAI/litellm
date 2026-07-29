@@ -60,19 +60,23 @@ from fastapi import Response
 # produces wrong creds (or KeyError) and is impossible to hide.
 # --------------------------------------------------------------------------- #
 
+AZURE_CREDS: Dict[str, str] = {
+    "custom_llm_provider": "azure",
+    "api_key": "sk-azure",
+    "api_base": "https://azure.test",
+    "model": "azure/gpt-4o-deployment",
+}
+VERTEX_CREDS: Dict[str, str] = {
+    "custom_llm_provider": "vertex_ai",
+    "api_key": "sk-vertex",
+    "api_base": "https://vertex.test",
+    "model": "vertex_ai/gemini-2.0",
+}
 CREDS: Dict[str, Dict[str, str]] = {
-    "azure/gpt-4o": {
-        "custom_llm_provider": "azure",
-        "api_key": "sk-azure",
-        "api_base": "https://azure.test",
-        "model": "azure/gpt-4o-deployment",
-    },
-    "vertex-model": {
-        "custom_llm_provider": "vertex_ai",
-        "api_key": "sk-vertex",
-        "api_base": "https://vertex.test",
-        "model": "vertex_ai/gemini-2.0",
-    },
+    "azure/gpt-4o": AZURE_CREDS,
+    "azure-dep-id": AZURE_CREDS,
+    "vertex-model": VERTEX_CREDS,
+    "vertex-dep-id": VERTEX_CREDS,
 }
 
 # A real model-encoded file id: decodes to "azure/gpt-4o", strips to "file-original123".
@@ -151,6 +155,25 @@ def _creds_lookup(*, model_id: str) -> Dict[str, str]:
     return dict(CREDS[model_id])
 
 
+def _configure_provider_scoped_lookup(router: MagicMock) -> None:
+    router.model_list = [
+        {
+            "model_name": "azure/gpt-4o",
+            "litellm_params": {"model": "azure/gpt-4o-deployment"},
+            "model_info": {"id": "azure-dep-id"},
+        },
+        {
+            "model_name": "vertex-model",
+            "litellm_params": {"model": "vertex_ai/gemini-2.0"},
+            "model_info": {"id": "vertex-dep-id"},
+        },
+    ]
+    router.get_model_names = MagicMock(return_value=["azure/gpt-4o", "vertex-model"])
+    router.get_model_access_groups = MagicMock(return_value={})
+    router.pattern_router = MagicMock()
+    router.pattern_router.route = MagicMock(return_value=None)
+
+
 @pytest.fixture
 def harness():
     """Seam harness. Patches only true I/O boundaries; pure encode/decode/merge
@@ -165,6 +188,7 @@ def harness():
     router = MagicMock(spec=Router)
     router.acreate_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
+    _configure_provider_scoped_lookup(router)
 
     read_body = AsyncMock(side_effect=lambda request: body_holder["body"])
     pre_call = AsyncMock(side_effect=lambda **kw: (body_holder["body"], MagicMock()))
@@ -403,8 +427,9 @@ async def test_create__body_model_beats_header_and_query(harness):
 
 
 # =========================================================================== #
-# SCENARIO 3 - fallback to custom_llm_provider (env-var creds). MUST NOT touch
-# the credential resolver.
+# SCENARIO 3 - provider-only fallback. Deployment credentials for the provider
+# are resolved from the router and merged; a provider with no configured
+# deployment forwards the payload untouched (env-var creds).
 # =========================================================================== #
 
 
@@ -423,8 +448,13 @@ async def test_create__fallback_default_openai(harness):
 
     assert harness.litellm_acreate.call_count == 1
     harness.router_acreate.assert_not_called()
-    harness.creds_resolver.assert_not_called()  # inverse-bug guard
-    assert harness.acreate_kwargs()["custom_llm_provider"] == "openai"
+    assert harness.acreate_kwargs() == {
+        "custom_llm_provider": "openai",
+        "input_file_id": "file-plain",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        "metadata": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -440,8 +470,9 @@ async def test_create__fallback_provider_path_param(harness):
 
     await call_create(harness, provider="anthropic")
 
-    harness.creds_resolver.assert_not_called()
-    assert harness.acreate_kwargs()["custom_llm_provider"] == "anthropic"
+    payload = harness.acreate_kwargs()
+    assert payload["custom_llm_provider"] == "anthropic"
+    assert "api_key" not in payload
 
 
 @pytest.mark.asyncio
@@ -460,6 +491,114 @@ async def test_create__fallback_body_custom_llm_provider(harness):
 
     payload = harness.acreate_kwargs()
     assert payload["custom_llm_provider"] == "bedrock"
+
+
+@pytest.mark.asyncio
+async def test_create__provider_only_merges_matching_deployment_credentials(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    harness.provider_from_headers.return_value = "vertex_ai"
+
+    await call_create(harness)
+
+    assert harness.litellm_acreate.call_count == 1
+    harness.router_acreate.assert_not_called()
+    assert harness.acreate_kwargs() == {
+        "custom_llm_provider": "vertex_ai",
+        "input_file_id": "file-plain",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        "metadata": None,
+        "api_key": "sk-vertex",
+        "api_base": "https://vertex.test",
+        "model": "vertex_ai/gemini-2.0",
+    }
+    assert [call.kwargs["model_id"] for call in harness.creds_resolver.call_args_list] == [
+        "azure-dep-id",
+        "vertex-dep-id",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_create__provider_only_prefers_team_own_deployment(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    harness.provider_from_headers.return_value = "vertex_ai"
+    harness.router.model_list = [
+        {
+            "model_name": "team-gemini",
+            "litellm_params": {"model": "vertex_ai/gemini-2.0"},
+            "model_info": {"id": "team-dep-id", "team_id": "team-a"},
+        }
+    ]
+    team_creds = {
+        "custom_llm_provider": "vertex_ai",
+        "api_key": "sk-team-vertex",
+        "api_base": "https://team.vertex.test",
+    }
+    harness.creds_resolver.side_effect = lambda *, model_id: (
+        dict(team_creds) if model_id == "team-dep-id" else dict(CREDS[model_id])
+    )
+
+    await call_create(
+        harness,
+        user=UserAPIKeyAuth(api_key="sk-test", team_id="team-a", team_models=[]),
+    )
+
+    harness.creds_resolver.assert_called_once_with(model_id="team-dep-id")
+    payload = harness.acreate_kwargs()
+    assert payload["api_key"] == "sk-team-vertex"
+    assert payload["api_base"] == "https://team.vertex.test"
+
+
+@pytest.mark.asyncio
+async def test_create__provider_only_skips_other_teams_deployment(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    harness.provider_from_headers.return_value = "vertex_ai"
+    harness.router.model_list = [
+        {
+            "model_name": "vertex-model",
+            "litellm_params": {"model": "vertex_ai/gemini-2.0"},
+            "model_info": {"id": "foreign-dep-id", "team_id": "team-other"},
+        },
+        {
+            "model_name": "vertex-model",
+            "litellm_params": {"model": "vertex_ai/gemini-2.0"},
+            "model_info": {"id": "vertex-dep-id"},
+        },
+    ]
+    foreign_creds = {"custom_llm_provider": "vertex_ai", "api_key": "sk-foreign-team"}
+    harness.creds_resolver.side_effect = lambda *, model_id: (
+        dict(foreign_creds) if model_id in ("foreign-dep-id", "vertex-model") else dict(CREDS[model_id])
+    )
+
+    await call_create(
+        harness,
+        user=UserAPIKeyAuth(api_key="sk-test", team_id="team-b", team_models=[]),
+    )
+
+    payload = harness.acreate_kwargs()
+    assert payload["api_key"] == "sk-vertex"
+    assert all(call.kwargs["model_id"] != "foreign-dep-id" for call in harness.creds_resolver.call_args_list)
 
 
 # =========================================================================== #
@@ -964,6 +1103,7 @@ def retrieve_harness():
     router = MagicMock(spec=Router)
     router.aretrieve_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
+    _configure_provider_scoped_lookup(router)
 
     pre_call = AsyncMock(side_effect=lambda **kw: (data_holder["data"], MagicMock()))
     get_headers = MagicMock(return_value={})
@@ -1174,8 +1314,9 @@ async def test_retrieve__loadbalancing_raw_id_routes_to_router(retrieve_harness)
 
 
 # --------------------------------------------------------------------------- #
-# SCENARIO 3 - fallback to custom_llm_provider (env-var creds). MUST NOT touch
-# the credential resolver or the router.
+# SCENARIO 3 - provider-only fallback. Deployment credentials for the provider
+# are resolved from the router and merged; a provider with no configured
+# deployment forwards the payload untouched (env-var creds).
 # --------------------------------------------------------------------------- #
 
 
@@ -1185,7 +1326,6 @@ async def test_retrieve__fallback_default_openai(retrieve_harness):
 
     assert retrieve_harness.litellm_aretrieve.call_count == 1
     retrieve_harness.router_aretrieve.assert_not_called()
-    retrieve_harness.creds_resolver.assert_not_called()  # inverse-bug guard
     assert retrieve_harness.aretrieve_kwargs() == {
         "custom_llm_provider": "openai",
         "batch_id": "batch-raw-xyz",
@@ -1197,8 +1337,9 @@ async def test_retrieve__fallback_default_openai(retrieve_harness):
 async def test_retrieve__fallback_provider_path_param(retrieve_harness):
     await call_retrieve(retrieve_harness, "batch-raw-xyz", provider="anthropic")
 
-    retrieve_harness.creds_resolver.assert_not_called()
-    assert retrieve_harness.aretrieve_kwargs()["custom_llm_provider"] == "anthropic"
+    payload = retrieve_harness.aretrieve_kwargs()
+    assert payload["custom_llm_provider"] == "anthropic"
+    assert "api_key" not in payload
 
 
 @pytest.mark.asyncio
@@ -1217,6 +1358,25 @@ async def test_retrieve__fallback_provider_from_query(retrieve_harness):
     await call_retrieve(retrieve_harness, "batch-raw-xyz")
 
     assert retrieve_harness.aretrieve_kwargs()["custom_llm_provider"] == "vertex_ai"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__provider_only_merges_matching_deployment_credentials(
+    retrieve_harness,
+):
+    retrieve_harness.provider_from_headers.return_value = "vertex_ai"
+
+    await call_retrieve(retrieve_harness, "batch-raw-xyz")
+
+    assert retrieve_harness.litellm_aretrieve.call_count == 1
+    retrieve_harness.router_aretrieve.assert_not_called()
+    assert retrieve_harness.aretrieve_kwargs() == {
+        "custom_llm_provider": "vertex_ai",
+        "batch_id": "batch-raw-xyz",
+        "api_key": "sk-vertex",
+        "api_base": "https://vertex.test",
+        "model": "vertex_ai/gemini-2.0",
+    }
 
 
 @pytest.mark.asyncio
@@ -1382,6 +1542,7 @@ def list_harness():
     router = MagicMock(spec=Router)
     router.alist_batches = AsyncMock(return_value=FakeListPage([]))
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
+    _configure_provider_scoped_lookup(router)
 
     read_body = AsyncMock(side_effect=lambda request: body_holder["body"])
     pre_call = AsyncMock(side_effect=lambda **kw: (body_holder["body"], MagicMock()))
@@ -1587,8 +1748,9 @@ async def test_list__target_model_names_takes_first_only(list_harness):
 
 
 # --------------------------------------------------------------------------- #
-# Branch 4 - fallback to custom_llm_provider (env-var creds). MUST NOT touch
-# the credential resolver or the router.
+# Branch 4 - provider-only fallback. Deployment credentials for the provider
+# are resolved from the router and merged; a provider with no configured
+# deployment forwards the payload untouched (env-var creds).
 # --------------------------------------------------------------------------- #
 
 
@@ -1598,7 +1760,6 @@ async def test_list__fallback_default_openai(list_harness):
 
     assert list_harness.litellm_alist.call_count == 1
     list_harness.router_alist.assert_not_called()
-    list_harness.creds_resolver.assert_not_called()  # inverse-bug guard
     assert list_harness.alist_kwargs() == {
         "custom_llm_provider": "openai",
         "after": None,
@@ -1610,8 +1771,9 @@ async def test_list__fallback_default_openai(list_harness):
 async def test_list__fallback_provider_path_param(list_harness):
     await call_list(list_harness, provider="anthropic")
 
-    list_harness.creds_resolver.assert_not_called()
-    assert list_harness.alist_kwargs()["custom_llm_provider"] == "anthropic"
+    payload = list_harness.alist_kwargs()
+    assert payload["custom_llm_provider"] == "anthropic"
+    assert "api_key" not in payload
 
 
 @pytest.mark.asyncio
@@ -1630,6 +1792,24 @@ async def test_list__fallback_provider_from_query(list_harness):
     await call_list(list_harness)
 
     assert list_harness.alist_kwargs()["custom_llm_provider"] == "vertex_ai"
+
+
+@pytest.mark.asyncio
+async def test_list__provider_only_merges_matching_deployment_credentials(list_harness):
+    list_harness.provider_from_headers.return_value = "vertex_ai"
+
+    await call_list(list_harness, limit=5, after="cur")
+
+    assert list_harness.litellm_alist.call_count == 1
+    list_harness.router_alist.assert_not_called()
+    assert list_harness.alist_kwargs() == {
+        "custom_llm_provider": "vertex_ai",
+        "after": "cur",
+        "limit": 5,
+        "api_key": "sk-vertex",
+        "api_base": "https://vertex.test",
+        "model": "vertex_ai/gemini-2.0",
+    }
 
 
 @pytest.mark.asyncio
@@ -1735,6 +1915,7 @@ def cancel_harness():
     router = MagicMock(spec=Router)
     router.acancel_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
+    _configure_provider_scoped_lookup(router)
 
     pre_call = AsyncMock(side_effect=lambda **kw: (data_holder["data"], MagicMock()))
     # add_litellm_data_to_request is a passthrough that returns the data it got.
@@ -1927,8 +2108,9 @@ async def test_cancel__unified_no_router_500(cancel_harness):
 
 
 # --------------------------------------------------------------------------- #
-# SCENARIO 3 - fallback to custom_llm_provider. Rebuilds a CancelBatchRequest
-# and forwards only {custom_llm_provider, batch_id}.
+# SCENARIO 3 - provider-only fallback. Rebuilds a CancelBatchRequest, then
+# merges deployment credentials resolved for the provider; a provider with no
+# configured deployment forwards only {custom_llm_provider, batch_id}.
 # --------------------------------------------------------------------------- #
 
 
@@ -1938,7 +2120,6 @@ async def test_cancel__fallback_default_openai(cancel_harness):
 
     assert cancel_harness.litellm_acancel.call_count == 1
     cancel_harness.router_acancel.assert_not_called()
-    cancel_harness.creds_resolver.assert_not_called()  # inverse-bug guard
     # current behavior: enrichment keys dropped; only these two forwarded.
     assert cancel_harness.acancel_kwargs() == {
         "custom_llm_provider": "openai",
@@ -1951,8 +2132,28 @@ async def test_cancel__fallback_default_openai(cancel_harness):
 async def test_cancel__fallback_provider_path_param(cancel_harness):
     await call_cancel(cancel_harness, "batch-raw-xyz", provider="anthropic")
 
-    cancel_harness.creds_resolver.assert_not_called()
-    assert cancel_harness.acancel_kwargs()["custom_llm_provider"] == "anthropic"
+    payload = cancel_harness.acancel_kwargs()
+    assert payload["custom_llm_provider"] == "anthropic"
+    assert "api_key" not in payload
+
+
+@pytest.mark.asyncio
+async def test_cancel__provider_only_merges_matching_deployment_credentials(
+    cancel_harness,
+):
+    cancel_harness.provider_from_headers.return_value = "vertex_ai"
+
+    await call_cancel(cancel_harness, "batch-raw-xyz")
+
+    assert cancel_harness.litellm_acancel.call_count == 1
+    cancel_harness.router_acancel.assert_not_called()
+    assert cancel_harness.acancel_kwargs() == {
+        "custom_llm_provider": "vertex_ai",
+        "batch_id": "batch-raw-xyz",
+        "api_key": "sk-vertex",
+        "api_base": "https://vertex.test",
+        "model": "vertex_ai/gemini-2.0",
+    }
 
 
 @pytest.mark.asyncio

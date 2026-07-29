@@ -3,7 +3,7 @@ import mimetypes
 import re
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Iterator, List, Literal, Mapping, Optional, Union
 
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
@@ -14,6 +14,7 @@ from litellm.types.utils import SpecialEnums
 if TYPE_CHECKING:
     from fastapi import Request
 
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
 
 
@@ -292,6 +293,54 @@ def get_credentials_for_model(
     return credentials
 
 
+def _deployment_provider_credentials(
+    llm_router: "Router",
+    custom_llm_provider: str,
+    model_id: str,
+) -> "Mapping[str, object] | None":
+    credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+    if credentials is not None and credentials.get("custom_llm_provider") == custom_llm_provider:
+        return credentials
+    return None
+
+
+def _team_byok_provider_credentials(
+    llm_router: "Router",
+    custom_llm_provider: str,
+    team_id: str,
+) -> "Mapping[str, object] | None":
+    for deployment in llm_router.model_list or []:
+        model_info = deployment.get("model_info") or {}
+        if model_info.get("team_id") != team_id:
+            continue
+        deployment_id = model_info.get("id")
+        if deployment_id is None:
+            continue
+        credentials = _deployment_provider_credentials(llm_router, custom_llm_provider, deployment_id)
+        if credentials is not None:
+            return credentials
+    return None
+
+
+def _authorized_deployment_ids(
+    llm_router: "Router",
+    model_name: str,
+    team_id: "str | None",
+) -> Iterator[str]:
+    name_matched = tuple(
+        deployment for deployment in llm_router.model_list or [] if deployment.get("model_name") == model_name
+    )
+    candidate_deployments = name_matched or tuple(llm_router.pattern_router.route(model_name) or [])
+    for deployment in candidate_deployments:
+        model_info = deployment.get("model_info") or {}
+        owner_team_id = model_info.get("team_id")
+        if owner_team_id is not None and owner_team_id != team_id:
+            continue
+        deployment_id = model_info.get("id")
+        if deployment_id is not None:
+            yield deployment_id
+
+
 def get_team_provider_credentials(
     llm_router: Optional["Router"],
     team_models: List[str],
@@ -307,7 +356,11 @@ def get_team_provider_credentials(
        ``model_info.team_id`` matches ``team_id``. This keeps team-scoped listings
        on the team's own provider account/key instead of a shared global one.
     2. Fallback: any deployment the team is granted access to for this provider,
-       expanding wildcard routes and the all-proxy-models sentinel.
+       expanding wildcard routes and the all-proxy-models sentinel. Candidate
+       names resolve to concrete deployments (by name, then wildcard pattern),
+       deployments owned by a different team are skipped, and credentials are
+       always fetched by deployment id; a foreign team's deployment can never
+       be selected just because it shares a model name with an authorized one.
 
     Credential lookup is always scoped to the team's allowlist, so a team can
     never resolve a provider key for a deployment it isn't authorized to use.
@@ -317,24 +370,11 @@ def get_team_provider_credentials(
     if llm_router is None:
         return None
 
-    def _provider_credentials(model_id: str) -> Optional[dict]:
-        credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
-        if credentials is not None and credentials.get("custom_llm_provider") == custom_llm_provider:
-            return credentials
-        return None
-
     # 1. Prefer the team's own BYOK deployment, matched by model_info.team_id.
     if team_id is not None:
-        for deployment in llm_router.model_list or []:
-            model_info = deployment.get("model_info") or {}
-            if model_info.get("team_id") != team_id:
-                continue
-            deployment_id = model_info.get("id")
-            if deployment_id is None:
-                continue
-            credentials = _provider_credentials(deployment_id)
-            if credentials is not None:
-                return credentials
+        credentials = _team_byok_provider_credentials(llm_router, custom_llm_provider, team_id)
+        if credentials is not None:
+            return dict(credentials)
 
     # 2. Fall back to deployments the team is allowed to access. The
     #    all-proxy-models sentinel isn't expanded by get_complete_model_list, so
@@ -366,11 +406,32 @@ def get_team_provider_credentials(
         )
     )
     for model_name in models_to_try:
-        credentials = _provider_credentials(model_name)
-        if credentials is not None:
-            return credentials
+        for deployment_id in _authorized_deployment_ids(llm_router, model_name, team_id):
+            credentials = _deployment_provider_credentials(llm_router, custom_llm_provider, deployment_id)
+            if credentials is not None:
+                return dict(credentials)
 
     return None
+
+
+def resolve_provider_scoped_credentials(
+    llm_router: Optional["Router"],
+    custom_llm_provider: str,
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> "Mapping[str, object] | None":
+    """
+    Resolve the caller's deployment credentials for ``custom_llm_provider`` on
+    provider-scoped batch/file operations that don't pin a model, so those
+    calls don't fall through to environment defaults (e.g.
+    ``google.auth.default()`` for Vertex AI). Returns None when no authorized
+    deployment matches the provider.
+    """
+    return get_team_provider_credentials(
+        llm_router=llm_router,
+        team_models=user_api_key_dict.team_models or [],
+        custom_llm_provider=custom_llm_provider,
+        team_id=user_api_key_dict.team_id,
+    )
 
 
 def prepare_data_with_credentials(
