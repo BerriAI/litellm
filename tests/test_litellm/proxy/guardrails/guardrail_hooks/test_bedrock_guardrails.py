@@ -16,11 +16,16 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+    _BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS,
     BedrockGuardrail,
     _redact_pii_matches,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+    BedrockContentItem,
+    BedrockTextContent,
+)
 from litellm.types.utils import ModelResponse
 
 
@@ -3898,3 +3903,224 @@ async def test_apply_guardrail_chunk_merge_preserves_masking_position():
     updated_messages = request_data["messages"]
     assert updated_messages[0]["content"] == "clean chunk with nothing to mask"
     assert updated_messages[1]["content"] == "chunk with PII: [NAME]"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_bin_packs_under_budget_content_with_no_probe_call():
+    """Content that fits under the fixed chunk budget in one pre-packed batch
+    must be sent in exactly one ApplyGuardrail call -- no initial too-large
+    probe call, unlike pure reactive bisection which always pays that extra
+    round trip. Regression for: falling back to always trying the whole
+    unpacked content list first, rather than bin-packing before the first
+    attempt."""
+    guardrail = _bedrock_guardrail_for_chunk_tests()
+
+    # Five items, individually tiny, whose combined length exceeds the budget
+    # only when summed -- proves this triggers packing into multiple batches
+    # by SIZE, not by falling back to per-item chunking.
+    item_text = "x" * (_BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS // 2)
+    messages = [{"role": "user", "content": item_text} for _ in range(3)]
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    call_count = 0
+
+    async def _post_side_effect(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        return _passing_bedrock_httpx_response(f"batch-{call_count}")
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.side_effect = _post_side_effect
+
+        result = await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=messages,
+            request_data={"model": "bedrock-nova-micro"},
+        )
+
+    # Three items at budget/2 each pack two-per-batch (2 + 1), never a single
+    # oversized call and never a wasted whole-content probe: exactly 2 calls.
+    assert call_count == 2
+    assert result.get("action") == "NONE"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_small_content_makes_exactly_one_call():
+    """Content that fits entirely within the budget in a single batch must
+    make exactly one ApplyGuardrail call -- confirms bin-packing does not
+    introduce an extra probe call for the common (small-request) case."""
+    guardrail = _bedrock_guardrail_for_chunk_tests()
+
+    messages = [
+        {"role": "user", "content": "short message one"},
+        {"role": "user", "content": "short message two"},
+    ]
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = _passing_bedrock_httpx_response("single-batch")
+
+        result = await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=messages,
+            request_data={"model": "bedrock-nova-micro"},
+        )
+
+    mock_post.assert_awaited_once()
+    assert result.get("action") == "NONE"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_batch_under_budget_still_rejected_falls_back_to_bisection():
+    """A pre-packed batch that fits the fixed budget guess but is still
+    rejected by AWS as too large (a lower real per-account/region/policy cap)
+    must fall back to bisection for that batch only -- and any other batch
+    from the same request that AWS already accepted must not be re-sent."""
+    guardrail = _bedrock_guardrail_for_chunk_tests()
+
+    item_text = "x" * (_BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS // 2)
+    messages = [
+        {"role": "user", "content": item_text},
+        {"role": "user", "content": item_text},
+        {"role": "user", "content": item_text},
+    ]
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    call_count = 0
+
+    async def _post_side_effect(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # First pre-packed batch (items 1+2): accepted immediately.
+            return _passing_bedrock_httpx_response("batch-1")
+        if call_count == 2:
+            # Second pre-packed batch (item 3 alone): rejected as too large
+            # despite fitting the fixed budget guess -- simulates a lower
+            # real-world per-account cap.
+            return _too_large_validation_httpx_response()
+        return _passing_bedrock_httpx_response(f"batch-2-bisected-{call_count}")
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.side_effect = _post_side_effect
+
+        result = await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=messages,
+            request_data={"model": "bedrock-nova-micro"},
+        )
+
+    # batch-1 (1 call, accepted) + batch-2 (1 rejected + 2 bisected halves) = 4.
+    assert call_count == 4
+    assert result.get("action") == "NONE"
+    output_texts = [o.get("text") for o in result.get("outputs") or []]
+    # batch-2's two bisected text fragments came from the same original
+    # content item, so they are merged back into one combined output entry.
+    assert output_texts == ["batch-1", "batch-2-bisected-3batch-2-bisected-4"]
+
+
+def test_split_bedrock_content_single_item_splits_on_whitespace_not_mid_word():
+    """A single content item whose raw character midpoint would fall inside a
+    word must instead split at the nearest whitespace, so neither fragment
+    ends or begins mid-token. Regression for the Veria AI review finding: a
+    denied word/PII pattern straddling a raw character-midpoint cut could be
+    truncated on both fragments and scan clean on each, then reassemble into
+    the original unmasked text -- a detection bypass."""
+    # 20 'a's + space + 30 'b's: the raw character midpoint (25) falls inside
+    # the run of 'b's, proving the split must move off it to the nearest space.
+    text = ("a" * 20) + " " + ("b" * 30)
+    raw_midpoint = len(text) // 2
+    assert text[raw_midpoint] == "b"
+    content = [BedrockContentItem(text=BedrockTextContent(text=text))]
+
+    split_content = BedrockGuardrail._split_bedrock_content(content)
+    assert split_content is not None
+    first_half, second_half = split_content
+
+    first_text = first_half[0]["text"]["text"]
+    second_text = second_half[0]["text"]["text"]
+
+    # Lossless: concatenating the two fragments reproduces the original exactly.
+    assert first_text + second_text == text
+    # Word-safe: the split lands exactly on the whitespace boundary, not
+    # inside either the "a" or "b" run.
+    assert first_text == ("a" * 20) + " "
+    assert second_text == "b" * 30
+
+
+def test_split_bedrock_content_single_item_with_no_whitespace_falls_back_to_midpoint():
+    """A single giant token with no whitespace anywhere has no safe split
+    point, so the split must fall back to the raw character midpoint rather
+    than failing or looping."""
+    text = "a" * 40
+    content = [BedrockContentItem(text=BedrockTextContent(text=text))]
+
+    split_content = BedrockGuardrail._split_bedrock_content(content)
+    assert split_content is not None
+    first_half, second_half = split_content
+
+    first_text = first_half[0]["text"]["text"]
+    second_text = second_half[0]["text"]["text"]
+    assert first_text + second_text == text
+    assert len(first_text) == 20
+    assert len(second_text) == 20
+
+
+def test_bin_pack_bedrock_content_packs_minimal_batches_within_budget():
+    """Many medium items should pack into the minimal number of in-order
+    batches that each stay within budget, not one batch per item."""
+    items = [BedrockContentItem(text=BedrockTextContent(text="x" * 30)) for _ in range(10)]
+
+    batches = BedrockGuardrail._bin_pack_bedrock_content(items, budget=100)
+
+    assert sum(len(batch) for batch in batches) == 10
+    for batch in batches:
+        combined_len = sum(len(item["text"]["text"]) for item in batch)
+        assert combined_len <= 100
+    # 10 items * 30 chars = 300 chars at a 100-char budget packs into 3 batches
+    # of 3 items (90 chars) plus 1 batch of 1 item -- never one batch per item.
+    assert len(batches) == 4
+
+
+def test_bin_pack_bedrock_content_oversized_single_item_becomes_its_own_batch():
+    """An item whose own text already exceeds the budget must not be
+    pre-split here -- it becomes its own oversized batch, and only the
+    reactive bisection fallback (on an AWS rejection) may split it later."""
+    small_item = BedrockContentItem(text=BedrockTextContent(text="short"))
+    oversized_item = BedrockContentItem(text=BedrockTextContent(text="x" * 200))
+    items = [small_item, oversized_item, small_item]
+
+    batches = BedrockGuardrail._bin_pack_bedrock_content(items, budget=100)
+
+    assert batches == [[small_item], [oversized_item], [small_item]]
+
+
+def test_bin_pack_bedrock_content_empty_content_makes_exactly_one_empty_batch():
+    """Empty content must still pack into exactly one (empty) batch, matching
+    pre-bin-packing behavior of sending the content list as-is in one call --
+    bin-packing must not turn an empty request into zero ApplyGuardrail calls."""
+    assert BedrockGuardrail._bin_pack_bedrock_content([], budget=100) == [[]]

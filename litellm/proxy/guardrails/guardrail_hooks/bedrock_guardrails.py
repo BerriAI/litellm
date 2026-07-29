@@ -30,6 +30,7 @@ from typing import (
 import copy
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from functools import reduce
 
 import httpx
 from fastapi import HTTPException
@@ -83,6 +84,15 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME = "bedrock"
+# KNOWN LIMITATION (chunking, below): splitting an oversized message's text on
+# a whitespace boundary (see `_nearest_whitespace_split_index`) prevents
+# accidentally severing a single token -- one denied word, one PII pattern --
+# across a chunk boundary. It does not stop a multi-word denied phrase
+# deliberately positioned to straddle that boundary, since each fragment can
+# scan clean independently. AWS's own guidance for this API acknowledges the
+# same gap for input chunking with no documented resolution; closing it would
+# require an overlap window reconciled against masked output, which AWS does
+# not guarantee to be length-preserving. Accepted as out of scope.
 _BEDROCK_DYNAMIC_BODY_DENYLIST = frozenset({"content", "source"})
 # ApplyGuardrail's per-request "maximum input size in text units" quota is
 # region/account/policy-dependent and cannot be predicted from config, so it is
@@ -98,6 +108,18 @@ _BEDROCK_TOO_LARGE_ERROR_SUBSTRINGS = (
     "too large",
     "exceeds the maximum",
 )
+# Conservative starting guess for how much content (by character count) to send
+# in one ApplyGuardrail call, used to pre-bin-pack content instead of always
+# starting from the whole payload. This is NOT a correctness dependency: it only
+# sets how many calls the common case takes. Any bin AWS still rejects as too
+# large (because the real per-request text-unit cap for this account/region/
+# policy is lower than this guess -- that cap is not knowable ahead of time and
+# is not a fixed character count) falls back to the recursive bisection below,
+# which self-corrects regardless of how wrong this guess was. So a too-generous
+# guess here costs the same one extra probe-and-bisect round trip that pure
+# reactive bisection would have paid anyway, while a well-tuned guess makes the
+# common case a single pass instead of O(log n) round trips per request.
+_BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS = 20_000
 # Exponential backoff for a chunk call throttled with ThrottlingException (429).
 # Kept small: chunking already trades one oversized call for several smaller
 # ones, so retries must not multiply per-request latency by an order of magnitude.
@@ -831,19 +853,28 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # reference source; bisecting it would fragment that evaluation and produce
         # misleading grounding scores, so a too-large error is never chunked here.
         allow_chunking = not self._content_uses_contextual_grounding(content)
+        batches = (
+            self._bin_pack_bedrock_content(content, budget=_BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS)
+            if allow_chunking
+            else [content]
+        )
 
         try:
-            responses = await self._apply_guardrail_content_with_chunking(
-                content=content,
-                base_request_data=bedrock_request_data,
-                credentials=credentials,
-                aws_region_name=aws_region_name,
-                api_key=api_key,
-                request_data=request_data,
-                event_type=event_type,
-                start_time=start_time,
-                allow_chunking=allow_chunking,
-            )
+            responses = [
+                result
+                for batch in batches
+                for result in await self._apply_guardrail_content_with_chunking(
+                    content=batch,
+                    base_request_data=bedrock_request_data,
+                    credentials=credentials,
+                    aws_region_name=aws_region_name,
+                    api_key=api_key,
+                    request_data=request_data,
+                    event_type=event_type,
+                    start_time=start_time,
+                    allow_chunking=allow_chunking,
+                )
+            ]
         except HTTPException as exc:
             # A block is logged where it happens, inside _post_apply_guardrail_content,
             # since chunking stops immediately and there is no later merged response to
@@ -1138,6 +1169,40 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return False
 
     @staticmethod
+    def _bin_pack_bedrock_content(
+        content: list[BedrockContentItem],
+        budget: int,
+    ) -> list[list[BedrockContentItem]]:
+        """Pack whole content items, in order, into batches whose combined text
+        length stays within `budget`.
+
+        This is the fast-path half of the hybrid chunking strategy: bin-packing
+        at a conservative fixed budget keeps the common case at O(n / budget)
+        ApplyGuardrail calls instead of the O(log n) round trips pure reactive
+        bisection pays on every oversized request. An item whose own text
+        already exceeds `budget` is not split here -- it becomes its own
+        (still oversized) batch and is sent as-is; if AWS rejects that batch as
+        too large, `_apply_guardrail_content_with_chunking`'s existing
+        recursive-bisection fallback takes over for that batch only.
+        """
+        if not content:
+            return [content]
+
+        def item_len(item: BedrockContentItem) -> int:
+            return len((item.get("text") or BedrockTextContent()).get("text") or "")
+
+        def add_item(
+            batches: tuple[tuple[BedrockContentItem, ...], ...],
+            item: BedrockContentItem,
+        ) -> tuple[tuple[BedrockContentItem, ...], ...]:
+            if batches and sum(item_len(existing) for existing in batches[-1]) + item_len(item) <= budget:
+                return batches[:-1] + (batches[-1] + (item,),)
+            return batches + ((item,),)
+
+        packed = reduce(add_item, content, ())
+        return [list(batch) for batch in packed]
+
+    @staticmethod
     def _split_bedrock_content(
         content: list[BedrockContentItem],
     ) -> tuple[list[BedrockContentItem], list[BedrockContentItem]] | None:
@@ -1145,12 +1210,31 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         When `content` already holds more than one item, it is split by list
         length. When it holds exactly one item, that item's own text is split
-        in half instead (a list of length 1 has no items left to bisect, but
-        one very long message is still a single content item). Returns None
-        when there is nothing left to split -- a single item whose text is
-        too short to halve into two non-empty pieces -- so the caller can
-        give up and propagate the original too-large error instead of
-        recursing forever.
+        instead (a list of length 1 has no items left to bisect, but one very
+        long message is still a single content item) -- at the whitespace
+        character nearest the midpoint rather than a raw character index, so
+        the cut never lands inside a word/token. This is a plain, lossless
+        cut with no overlap: concatenating the two fragments in order always
+        reproduces the original text exactly, so merging back at
+        ``_merge_logical_unit_outputs`` needs no reconciliation step.
+
+        Known, accepted limitation: whitespace splitting only guards against
+        *accidentally* severing a single token (one denied word, one PII
+        pattern) across the cut. It does not, and cannot without an overlap
+        window, stop a *multi-word* denied phrase deliberately positioned to
+        straddle the boundary -- each fragment can scan clean on its own and
+        still reassemble into the flagged phrase. AWS's own guidance on this
+        API acknowledges the same gap for input chunking ("a critical piece of
+        text could span two (or more) chunks if not carefully divided") with
+        no documented resolution, and overlap-and-reconcile was evaluated and
+        rejected for this PR: AWS's masking output has no documented
+        length-preservation guarantee, so reconciling an overlap region against
+        masked text is not sound in general. Out of scope for this PR.
+
+        Returns None when there is nothing left to split -- a single item
+        whose text is too short to halve into two non-empty pieces -- so the
+        caller can give up and propagate the original too-large error instead
+        of recursing forever.
         """
         if len(content) > 1:
             midpoint = max(1, len(content) // 2)
@@ -1160,15 +1244,34 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         text = text_content.get("text") or ""
         if len(text) < 2:
             return None
-        midpoint = len(text) // 2
+        split_at = BedrockGuardrail._nearest_whitespace_split_index(text)
         qualifiers = text_content.get("qualifiers")
         if qualifiers:
-            first_text = BedrockTextContent(text=text[:midpoint], qualifiers=qualifiers)
-            second_text = BedrockTextContent(text=text[midpoint:], qualifiers=qualifiers)
+            first_text = BedrockTextContent(text=text[:split_at], qualifiers=qualifiers)
+            second_text = BedrockTextContent(text=text[split_at:], qualifiers=qualifiers)
         else:
-            first_text = BedrockTextContent(text=text[:midpoint])
-            second_text = BedrockTextContent(text=text[midpoint:])
+            first_text = BedrockTextContent(text=text[:split_at])
+            second_text = BedrockTextContent(text=text[split_at:])
         return [BedrockContentItem(text=first_text)], [BedrockContentItem(text=second_text)]
+
+    @staticmethod
+    def _nearest_whitespace_split_index(text: str) -> int:
+        """Return the index nearest `text`'s midpoint that falls on a
+        whitespace boundary, so splitting `text[:i]` / `text[i:]` there never
+        severs a word. Falls back to the raw midpoint when `text` has no
+        whitespace at all (a single giant token) -- still a correct, lossless
+        split, just no longer guaranteed word-safe for that pathological case.
+        """
+        midpoint = len(text) // 2
+        left = text.rfind(" ", 0, midpoint)
+        right = text.find(" ", midpoint)
+        if left == -1 and right == -1:
+            return midpoint
+        if left == -1:
+            return right + 1
+        if right == -1:
+            return left + 1
+        return left + 1 if midpoint - left <= right - midpoint else right + 1
 
     @staticmethod
     def _is_input_too_large_validation_error(detail: object) -> bool:
