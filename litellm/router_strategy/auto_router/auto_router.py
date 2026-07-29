@@ -2,6 +2,7 @@
 Auto-Routing Strategy that works with a Semantic Router Config
 """
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_router_logger
@@ -48,6 +49,7 @@ class AutoRouter(CustomLogger):
         self.auto_sync_value = self.DEFAULT_AUTO_SYNC_VALUE
         self.loaded_routes: List[Route] = self._load_semantic_routing_routes()
         self.routelayer: Optional[SemanticRouter] = None
+        self._routelayer_lock = asyncio.Lock()
         self.default_model = default_model
         self.embedding_model: str = embedding_model
         self.litellm_router_instance: "Router" = litellm_router_instance
@@ -132,21 +134,24 @@ class AutoRouter(CustomLogger):
 
         routelayer = self.routelayer
         if routelayer is None:
-            #######################
-            # Create the route layer
-            #######################
-            routelayer = SemanticRouter(
-                routes=self.loaded_routes,
-                encoder=LiteLLMRouterEncoder(
-                    litellm_router_instance=self.litellm_router_instance,
-                    model_name=self.embedding_model,
-                ),
-                auto_sync=self.auto_sync_value,
-            )
-            self.routelayer = routelayer
+            async with self._routelayer_lock:
+                routelayer = self.routelayer
+                if routelayer is None:
+                    routelayer = await asyncio.to_thread(
+                        SemanticRouter,
+                        routes=self.loaded_routes,
+                        encoder=LiteLLMRouterEncoder(
+                            litellm_router_instance=self.litellm_router_instance,
+                            model_name=self.embedding_model,
+                        ),
+                        auto_sync=self.auto_sync_value,
+                    )
+                    self.routelayer = routelayer
 
         message_content = self._extract_text_from_messages(messages)
-        route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = routelayer(text=message_content)
+        route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = await asyncio.to_thread(
+            routelayer, text=message_content
+        )
         verbose_router_logger.debug(f"route_choice: {route_choice}")
         if isinstance(route_choice, RouteChoice):
             model = route_choice.name or self.default_model
