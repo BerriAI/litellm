@@ -35,11 +35,13 @@ def problem_response(problem: ProblemDetail) -> JSONResponse:
     )
 
 
-def _flat_query_params(dependant: Dependant) -> tuple[str, ...]:
-    return (
-        *(field.alias for field in dependant.query_params),
-        *(alias for dependency in dependant.dependencies for alias in _flat_query_params(dependency)),
-    )
+def _flat_query_param_aliases(dependant: Dependant) -> frozenset[str]:
+    frontier: tuple[Dependant, ...] = (dependant,)
+    aliases: frozenset[str] = frozenset()
+    while frontier:
+        aliases |= frozenset(field.alias for level in frontier for field in level.query_params)
+        frontier = tuple(sub for level in frontier for sub in level.dependencies)
+    return aliases
 
 
 def _declared_query_params(request: Request) -> frozenset[str]:
@@ -47,7 +49,7 @@ def _declared_query_params(request: Request) -> frozenset[str]:
     dependant = getattr(route, "dependant", None)
     if not isinstance(dependant, Dependant):
         return frozenset()
-    return frozenset(_flat_query_params(dependant))
+    return _flat_query_param_aliases(dependant)
 
 
 async def reject_unknown_query_params(request: Request) -> None:
