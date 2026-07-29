@@ -5156,7 +5156,7 @@ def _seeded_logging_credentials():
             credential_info={
                 "credential_type": "logging",
                 "description": "langfuse_otel",
-                "access": {"global": True},
+                "access": {"teams": ["team-x"]},
             },
         ),
         CredentialItem(
@@ -5169,7 +5169,25 @@ def _seeded_logging_credentials():
             credential_info={
                 "credential_type": "logging",
                 "description": "arize",
-                "access": {"global": True},
+                "access": {"teams": ["team-az"]},
+            },
+        ),
+        CredentialItem(
+            credential_name="generic-org",
+            credential_values={"otel_endpoint": "http://collector.internal/v1/traces"},
+            credential_info={
+                "credential_type": "logging",
+                "description": "generic",
+                "access": {"orgs": ["org-1"]},
+            },
+        ),
+        CredentialItem(
+            credential_name="empty-deny",
+            credential_values={"otel_endpoint": "http://never/v1/traces"},
+            credential_info={
+                "credential_type": "logging",
+                "description": "generic",
+                "access": {},
             },
         ),
         # A provider credential that must never resolve as a logging destination.
@@ -5189,14 +5207,12 @@ def _auth(token="hashed-key", org_id=None, team_id="team-x"):
     return UserAPIKeyAuth(api_key="hashed-key", token=token, org_id=org_id, team_id=team_id)
 
 
-def _patch_identity(monkeypatch, *, key=(), team=(), org=(), team_org_id=None):
-    """Route the resolver's identity lookups to ``logging_exporters`` columns.
+def _patch_identity(monkeypatch, *, team_org_id=None, **_ignored):
+    """Connect a prisma client and route the resolver's only remaining DB lookup.
 
-    Assignments now live on typed columns, so the resolver reads each level from
-    its own DB object. This connects a prisma client and patches
-    ``get_key_object`` / ``get_team_object`` / ``get_org_object`` to return objects
-    carrying the given ``logging_exporters``. ``team_org_id`` sets the team's
-    ``organization_id`` for the token-has-no-org_id org fallback.
+    Selection is access-only, read from ``litellm.credential_list``. The sole lookup
+    left is ``_effective_org_id`` resolving the team's organization when the token
+    carries no ``org_id``, so ``get_team_object`` returns just ``organization_id``.
     """
     from types import SimpleNamespace
 
@@ -5206,48 +5222,43 @@ def _patch_identity(monkeypatch, *, key=(), team=(), org=(), team_org_id=None):
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
     monkeypatch.setattr(proxy_server, "user_api_key_cache", MagicMock())
     monkeypatch.setattr(
-        auth_checks, "get_key_object", AsyncMock(return_value=SimpleNamespace(logging_exporters=list(key)))
-    )
-    monkeypatch.setattr(
         auth_checks,
         "get_team_object",
-        AsyncMock(return_value=SimpleNamespace(logging_exporters=list(team), organization_id=team_org_id)),
-    )
-    monkeypatch.setattr(
-        auth_checks, "get_org_object", AsyncMock(return_value=SimpleNamespace(logging_exporters=list(org)))
+        AsyncMock(return_value=SimpleNamespace(organization_id=team_org_id)),
     )
 
 
 @pytest.mark.asyncio
-async def test_resolve_logging_exporters_team_level(_seeded_logging_credentials, monkeypatch):
-    # team assignment lives on the team's logging_exporters column.
+async def test_resolve_logging_exporters_team_access(_seeded_logging_credentials, monkeypatch):
+    """A destination whose access grants the caller's team fires for it, and only it."""
     from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
 
-    _patch_identity(monkeypatch, team=["langfuse-eu"])
-    destinations, backends = await _resolve_logging_exporters(_auth())
-    assert {d["endpoint"] for d in destinations} == {
-        "https://cloud.langfuse.com/api/public/otel"
-    }
+    _patch_identity(monkeypatch)
+    destinations, backends = await _resolve_logging_exporters(_auth(team_id="team-x"))
+    assert {d["endpoint"] for d in destinations} == {"https://cloud.langfuse.com/api/public/otel"}
     assert backends == ("langfuse_otel",)
 
 
 @pytest.mark.asyncio
-async def test_resolve_logging_exporters_unions_team_org_keys_inherit(
-    _seeded_logging_credentials, monkeypatch
-):
-    # team and org are each read from their OWN logging_exporters column and union,
-    # deduped. Keys have no assignment column: they inherit from team/org, so a
-    # key-level value (patched below) must contribute nothing.
+async def test_resolve_logging_exporters_org_access(_seeded_logging_credentials, monkeypatch):
+    """An org-scoped destination fires for a caller in that org."""
     from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
 
-    _patch_identity(monkeypatch, key=["arize-prod"], team=["langfuse-eu"], org=["langfuse-eu"])
+    _patch_identity(monkeypatch)
+    destinations, backends = await _resolve_logging_exporters(_auth(team_id="team-none", org_id="org-1"))
+    assert {d["endpoint"] for d in destinations} == {"http://collector.internal/v1/traces"}
+    assert backends == ("generic",)
 
-    destinations, backends = await _resolve_logging_exporters(_auth(org_id="org-1"))
 
-    assert {d["endpoint"] for d in destinations} == {
-        "https://cloud.langfuse.com/api/public/otel",  # team + org (deduped)
-    }
-    assert set(backends) == {"langfuse_otel"}
+@pytest.mark.asyncio
+async def test_resolve_logging_exporters_org_fallback_from_team(_seeded_logging_credentials, monkeypatch):
+    """When the token carries no org_id, the team's organization grants org-scoped
+    destinations via the ``_effective_org_id`` fallback."""
+    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
+
+    _patch_identity(monkeypatch, team_org_id="org-1")
+    destinations, _ = await _resolve_logging_exporters(_auth(team_id="team-none", org_id=None))
+    assert {d["endpoint"] for d in destinations} == {"http://collector.internal/v1/traces"}
 
 
 @pytest.mark.asyncio
@@ -5256,8 +5267,8 @@ async def test_resolve_logging_exporters_carries_arize_project(
 ):
     from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
 
-    _patch_identity(monkeypatch, team=["arize-prod"])
-    destinations, _ = await _resolve_logging_exporters(_auth())
+    _patch_identity(monkeypatch)
+    destinations, _ = await _resolve_logging_exporters(_auth(team_id="team-az"))
 
     assert destinations == (
         {
@@ -5273,25 +5284,28 @@ async def test_resolve_logging_exporters_carries_arize_project(
 
 
 @pytest.mark.asyncio
-async def test_resolve_logging_exporters_empty_without_assignment(
-    _seeded_logging_credentials,
+async def test_resolve_logging_exporters_empty_without_access(
+    _seeded_logging_credentials, monkeypatch
 ):
+    """An identity no destination's access grants gets nothing; empty access is deny-all."""
     from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
 
-    destinations, backends = await _resolve_logging_exporters(_auth())
+    _patch_identity(monkeypatch)
+    destinations, backends = await _resolve_logging_exporters(_auth(team_id="team-none"))
     assert destinations == () and backends == ()
 
 
 @pytest.mark.asyncio
-async def test_resolve_logging_exporters_skips_unknown_and_provider_creds(
+async def test_resolve_logging_exporters_skips_provider_creds(
     _seeded_logging_credentials, monkeypatch
 ):
+    """A provider credential (not credential_type=logging) is never a destination,
+    even for a team that resolves a real one."""
     from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
 
-    # unknown name + a provider credential (not credential_type=logging) -> nothing
-    _patch_identity(monkeypatch, team=["does-not-exist", "openai-key"])
-    destinations, backends = await _resolve_logging_exporters(_auth())
-    assert destinations == () and backends == ()
+    _patch_identity(monkeypatch)
+    destinations, backends = await _resolve_logging_exporters(_auth(team_id="team-az"))
+    assert backends == ("arize",)
 
 
 @pytest.mark.asyncio
@@ -5304,7 +5318,7 @@ async def test_apply_admin_logging_exporters_stamps_and_activates(
     )
     from litellm.proxy.litellm_pre_call_utils import _apply_admin_logging_exporters
 
-    _patch_identity(monkeypatch, team=["langfuse-eu"])
+    _patch_identity(monkeypatch)
     token = _request_destinations.set(())
     data: dict = {}
     try:
@@ -5451,216 +5465,17 @@ async def test_apply_admin_logging_exporters_registers_on_failure(
     from litellm.integrations.otel.plumbing.context import _request_destinations
     from litellm.proxy.litellm_pre_call_utils import _apply_admin_logging_exporters
 
-    _patch_identity(monkeypatch, team=["langfuse-eu", "arize-prod"])
+    _patch_identity(monkeypatch)
     token = _request_destinations.set(())
-    # Seed a pre-existing failure callback to prove backends are unioned in, not
-    # overwriting, and that a duplicate backend is not appended twice.
     data: dict = {"failure_callback": ["arize"]}
     try:
-        await _apply_admin_logging_exporters(data, _auth())
+        await _apply_admin_logging_exporters(data, _auth(team_id="team-az"))
         for callback_list in ("success_callback", "failure_callback"):
             registered = data[callback_list]
-            assert "langfuse_otel" in registered
             assert "arize" in registered
             assert registered.count("arize") == 1
     finally:
         _request_destinations.reset(token)
-
-
-_LANGFUSE_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
-_ARIZE_ENDPOINT = "https://otlp.arize.com/v1"
-
-
-@pytest.fixture
-def _seeded_logging_credentials_with_access():
-    """``access`` gates enablement. ``langfuse-eu`` is granted to
-    ``team-eu``/``org-eu`` but never auto-fires (not auto_enable, not named);
-    ``arize-global`` carries ``access.global`` to prove global visibility alone
-    STILL does not auto-fire; ``arize-default`` is the proxy-wide auto default
-    (``auto_enable`` + ``access.global``). Empty access would be deny-all."""
-    from litellm.models.credentials import CredentialItem
-
-    original = litellm.credential_list
-    litellm.credential_list = [
-        CredentialItem(
-            credential_name="langfuse-eu",
-            credential_values={
-                "langfuse_host": "https://cloud.langfuse.com",
-                "langfuse_public_key": "pk-eu",
-                "langfuse_secret_key": "sk-eu",
-            },
-            credential_info={
-                "credential_type": "logging",
-                "description": "langfuse_otel",
-                "access": {"teams": ["team-eu"], "orgs": ["org-eu"]},
-            },
-        ),
-        CredentialItem(
-            credential_name="arize-global",
-            credential_values={"arize_space_id": "S", "arize_api_key": "K"},
-            credential_info={
-                "credential_type": "logging",
-                "description": "arize",
-                "access": {"global": True},
-            },
-        ),
-        CredentialItem(
-            credential_name="arize-default",
-            credential_values={"arize_space_id": "D", "arize_api_key": "K"},
-            credential_info={
-                "credential_type": "logging",
-                "description": "arize",
-                "auto_enable": True,
-                "access": {"global": True},
-            },
-        ),
-    ]
-    try:
-        yield
-    finally:
-        litellm.credential_list = original
-
-
-@pytest.mark.asyncio
-async def test_resolve_grant_does_not_auto_enable(
-    _seeded_logging_credentials_with_access,
-):
-    """Granting a destination to a team (or globally) must NOT enable it for the
-    team's requests. The pre-fix resolver fired on access alone; this pins that
-    access is now visibility-only. ``arize-default`` (auto_enable) is the only thing
-    that fires for an unassigned team-eu caller."""
-    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
-
-    destinations, _ = await _resolve_logging_exporters(_auth(team_id="team-eu"))
-
-    # langfuse-eu is granted to team-eu and arize-global is access.global, yet
-    # neither fires because neither is named; only the explicit auto_enable does.
-    assert {d["endpoint"] for d in destinations} == {_ARIZE_ENDPOINT}
-
-
-@pytest.mark.asyncio
-async def test_resolve_name_with_grant_enables(
-    _seeded_logging_credentials_with_access, monkeypatch
-):
-    """Naming a destination the caller is granted enables it (alongside the
-    auto_enable default)."""
-    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
-
-    _patch_identity(monkeypatch, team=["langfuse-eu"])
-    destinations, _ = await _resolve_logging_exporters(_auth(team_id="team-eu"))
-
-    assert {d["endpoint"] for d in destinations} == {_LANGFUSE_ENDPOINT, _ARIZE_ENDPOINT}
-
-
-@pytest.mark.asyncio
-async def test_resolve_name_without_visibility_is_dropped(
-    _seeded_logging_credentials_with_access, monkeypatch
-):
-    """A name that points at a destination NOT visible to the request identity is
-    defensively ignored, so a stale or cross-tenant assignment can never route
-    traffic out. team-other names langfuse-eu (granted only to team-eu)."""
-    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
-
-    _patch_identity(monkeypatch, team=["langfuse-eu"])
-    destinations, _ = await _resolve_logging_exporters(_auth(team_id="team-other"))
-
-    # langfuse-eu dropped (not visible to team-other); only auto_enable survives.
-    assert {d["endpoint"] for d in destinations} == {_ARIZE_ENDPOINT}
-
-
-@pytest.mark.asyncio
-async def test_resolve_auto_enable_empty_access_is_deny_all(monkeypatch):
-    """The core of the empty-access hardening: an auto_enable destination with no
-    access grants fires for NO ONE (empty access = deny-all, not proxy-wide).
-    Mutating the resolver to treat empty access as proxy-wide re-fires it here."""
-    from litellm.models.credentials import CredentialItem
-    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
-
-    original = litellm.credential_list
-    litellm.credential_list = [
-        CredentialItem(
-            credential_name="arize-empty-auto",
-            credential_values={"arize_space_id": "E", "arize_api_key": "K"},
-            credential_info={
-                "credential_type": "logging",
-                "description": "arize",
-                "auto_enable": True,
-            },
-        ),
-    ]
-    try:
-        for auth in (_auth(team_id="team-x"), _auth(org_id="org-y"), _auth()):
-            destinations, _ = await _resolve_logging_exporters(auth)
-            assert destinations == ()
-    finally:
-        litellm.credential_list = original
-
-
-@pytest.mark.asyncio
-async def test_resolve_access_global_alone_does_not_fire(
-    _seeded_logging_credentials_with_access,
-):
-    """The headline regression: a destination with access.global but no auto_enable
-    and no name must NOT fire for an unassigned caller. Mutating the resolver back to
-    selecting on access alone re-adds arize-global here and fails this test."""
-    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
-
-    # an org with no grants, no names: only the auto_enable default fires.
-    destinations, _ = await _resolve_logging_exporters(_auth(org_id="org-unrelated"))
-
-    # exactly one destination -- the auto_enable arize-default (space_id "D").
-    # arize-global shares the arize endpoint but carries space_id "S"; if access.global
-    # auto-fired it would survive as a SECOND destination here.
-    assert len(destinations) == 1
-    assert destinations[0]["endpoint"] == _ARIZE_ENDPOINT
-    assert destinations[0]["headers"]["space_id"] == "D"
-
-
-@pytest.mark.asyncio
-async def test_resolve_logging_exporters_access_default_deny(
-    _seeded_logging_credentials,
-):
-    """With no auto_enable and no identity assignment, nothing resolves even though
-    the seeded creds are access.global-visible -- visibility never invents a
-    destination."""
-    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
-
-    destinations, backends = await _resolve_logging_exporters(
-        _auth(team_id="team-eu", org_id="org-eu")
-    )
-    assert destinations == () and backends == ()
-
-
-@pytest.mark.asyncio
-async def test_resolve_org_scoped_via_team_when_token_has_no_org_id(monkeypatch):
-    """A team key whose token carries no org_id must still resolve an org-scoped
-    destination, via the team's organization_id. The write gate loads the team and
-    accepts the assignment, so the resolver must agree (M1); without the fallback the
-    org-granted destination is named but invisible (org_id None) and silently dropped.
-    Reverting _effective_org_id to user_api_key_dict.org_id fails this test."""
-    from litellm.models.credentials import CredentialItem
-    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
-
-    original = litellm.credential_list
-    litellm.credential_list = [
-        CredentialItem(
-            credential_name="arize-org",
-            credential_values={"arize_space_id": "S", "arize_api_key": "K"},
-            credential_info={
-                "credential_type": "logging",
-                "description": "arize",
-                "access": {"orgs": ["org-7"]},
-            },
-        ),
-    ]
-    # The key's token has no org_id; the team it belongs to is in org-7, and the
-    # arize-org destination is named on the team's logging_exporters column.
-    _patch_identity(monkeypatch, team=["arize-org"], team_org_id="org-7")
-    try:
-        destinations, _ = await _resolve_logging_exporters(_auth(team_id="team-x"))
-        assert {d["endpoint"] for d in destinations} == {"https://otlp.arize.com/v1"}
-    finally:
-        litellm.credential_list = original
 
 
 @pytest.mark.asyncio

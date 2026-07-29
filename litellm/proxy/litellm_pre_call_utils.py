@@ -4,7 +4,7 @@ import json
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Awaitable, Sequence
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from fastapi import HTTPException, Request
@@ -622,82 +622,15 @@ async def _effective_org_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     return getattr(team_obj, "organization_id", None)
 
 
-async def _union_logging_exporter_names(user_api_key_dict: UserAPIKeyAuth, org_id: str | None) -> frozenset[str]:
-    """The union of admin-assigned exporter names across the request's identity chain.
-
-    Each level is read from its own ``logging_exporters`` column: the team via
-    ``get_team_object``, the org via ``get_org_object`` on the effective ``org_id``
-    (token org or team fallback). Keys inherit from their team and org. Internal-user is
-    intentionally not a routing dimension. The assignment is an admin-owned column;
-    the request never supplies it. Needs a DB connection: in SDK mode there is no
-    identity to resolve against, so this is empty (admin-owned destinations do not
-    apply off the proxy).
-    """
-    from litellm.proxy import proxy_server
-    from litellm.proxy.auth.auth_checks import (
-        get_org_object,
-        get_team_object,
-    )
-
-    prisma_client = proxy_server.prisma_client
-    if prisma_client is None:
-        return frozenset()
-    cache = proxy_server.user_api_key_cache
-    span = getattr(user_api_key_dict, "parent_otel_span", None)
-
-    def _assigned(obj: object) -> tuple[str, ...]:
-        assigned = getattr(obj, "logging_exporters", None)
-        if isinstance(assigned, (list, tuple)):
-            return tuple(str(name) for name in assigned)
-        return ()
-
-    async def _level(lookup: "Awaitable[object]") -> tuple[str, ...]:
-        try:
-            return _assigned(await lookup)
-        except Exception:  # noqa: BLE001  # best-effort identity enrichment; a failed lookup must not block the request
-            return ()
-
-    team_names = (
-        await _level(
-            get_team_object(
-                team_id=user_api_key_dict.team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=cache,
-                parent_otel_span=span,
-                proxy_logging_obj=proxy_server.proxy_logging_obj,
-            )
-        )
-        if user_api_key_dict.team_id
-        else ()
-    )
-    org_names = (
-        await _level(
-            get_org_object(
-                org_id=org_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=cache,
-                parent_otel_span=span,
-                proxy_logging_obj=proxy_server.proxy_logging_obj,
-            )
-        )
-        if org_id
-        else ()
-    )
-    return frozenset((*team_names, *org_names))
-
-
 async def _resolve_logging_exporters(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> "tuple[tuple[OtelDestinationParams, ...], tuple[str, ...]]":
     """Resolve the destinations this request fans out to, as (destinations, backends).
 
-    ``credential_info.access`` gates every destination: empty access grants no one, so
-    an empty-access destination never fires (proxy-wide requires ``access.global``). A
-    destination is selected when its ``access`` grants the caller AND either it is
-    ``auto_enable`` (fires without being named) or it is named in the identity chain's
-    ``logging_exporters`` (key + team + org). The access check is also the defensive
-    re-check on a named destination, so a stale or cross-tenant assignment can never
-    route traffic out. Each survivor is built via ``build_destination`` and deduped on
+    ``credential_info.access`` is the sole routing determinant: a destination is
+    selected when its ``access`` grants the caller's team/org. Empty access grants no
+    one, so an empty-access destination never fires (proxy-wide requires
+    ``access.global``). Each survivor is built via ``build_destination`` and deduped on
     (endpoint, headers, resource attributes). Returns ([], []) when nothing is selected
     (default-deny).
     """
@@ -710,16 +643,13 @@ async def _resolve_logging_exporters(
 
     team_id = user_api_key_dict.team_id
     org_id = await _effective_org_id(user_api_key_dict)
-    names = await _union_logging_exporter_names(user_api_key_dict, org_id)
     team_ids, org_ids = identity_scope(team_id, org_id)
 
     def _selected(credential: "CredentialItem") -> bool:
         info = parse_credential_info(credential.credential_info)
         if info is None or info.credential_type != "logging":
             return False
-        if not access_grants(info.access, team_ids, org_ids):
-            return False
-        return info.auto_enable or credential.credential_name in names
+        return access_grants(info.access, team_ids, org_ids)
 
     def _build(
         credential: "CredentialItem",

@@ -25,12 +25,10 @@ export interface CreateLoggingCredentialInput {
   values: Record<string, string>;
   host?: string;
   access?: CredentialAccess;
-  autoEnable?: boolean;
 }
 
 // One place that owns the logging-credential contract: the credential_type tag, the
-// backend in description, the non-secret host, the admin-owned access grant, and the
-// explicit global/default (auto_enable) opt-in.
+// backend in description, the non-secret host, and the admin-owned access grant.
 export const createLoggingCredential = async (accessToken: string, input: CreateLoggingCredentialInput) =>
   credentialCreateCall(accessToken, {
     credential_name: input.credentialName,
@@ -40,6 +38,5 @@ export const createLoggingCredential = async (accessToken: string, input: Create
       description: input.backend,
       ...(input.host ? { host: input.host } : {}),
       ...(input.access ? { access: input.access } : {}),
-      ...(input.autoEnable ? { auto_enable: true } : {}),
     },
   });

@@ -957,7 +957,6 @@ async def new_team(
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
-    - logging_exporters: Optional[List[str]] - Names of admin-owned logging destinations (credential names) this team exports its traces to.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
@@ -1007,9 +1006,6 @@ async def new_team(
     ```
     """
     try:
-        from litellm.proxy.management_endpoints.logging_exporter_validation import (
-            validate_logging_exporter_field,
-        )
         from litellm.proxy.management_helpers.audit_logs import (
             get_audit_log_changed_by,
         )
@@ -1021,9 +1017,6 @@ async def new_team(
             prisma_client,
             user_api_key_cache,
         )
-
-        if data.logging_exporters is not None:
-            validate_logging_exporter_field(data.logging_exporters, user_api_key_dict)
 
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -1632,7 +1625,6 @@ async def update_team(
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
-    - logging_exporters: Optional[List[str]] - Names of admin-owned logging destinations (credential names) this team exports its traces to.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
@@ -1676,9 +1668,6 @@ async def update_team(
     ```
     """
     try:
-        from litellm.proxy.management_endpoints.logging_exporter_validation import (
-            validate_logging_exporter_field,
-        )
         from litellm.proxy.proxy_server import (
             litellm_proxy_admin_name,
             llm_router,
@@ -1732,13 +1721,6 @@ async def update_team(
             team_obj=team_for_auth,
             user_api_key_dict=user_api_key_dict,
         )
-
-        if data.logging_exporters is not None:
-            validate_logging_exporter_field(
-                data.logging_exporters,
-                user_api_key_dict,
-                existing_exporters=getattr(existing_team_row, "logging_exporters", None),
-            )
 
         _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
 
@@ -3658,7 +3640,6 @@ async def team_info(
         await _resolve_team_access_group_resources(_team_info)
 
         _team_info.resolved_logging_exporters = resolved_logging_exporter_names(
-            _team_info.logging_exporters,
             team_id,
             _team_info.organization_id,
         )

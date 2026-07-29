@@ -53,8 +53,6 @@ import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "../search_tools/SearchToolSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
-import { LoggingExportersFormItem } from "../logging_credentials/LoggingExportersSelect";
-import { loggingExportersOf } from "../logging_credentials/loggingExportersOf";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
@@ -231,13 +229,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam;
 
   // Destinations that will receive this team's traces, resolved server-side by
-  // /team/info (own logging_exporters plus auto-enabled destinations whose access
-  // grants the team). Names only, visible to every team viewer; the badge list is
-  // identical for every role because no client-side credentials read is involved.
-  const scopedExportersForTeam = useMemo<string[]>(() => {
-    const own = new Set(loggingExportersOf(teamData?.team_info));
-    return (teamData?.team_info?.resolved_logging_exporters ?? []).filter((name) => !own.has(name));
-  }, [teamData?.team_info]);
+  // /team/info from credential_info.access. Names only, visible to every team viewer.
+  const scopedExportersForTeam = useMemo<string[]>(
+    () => teamData?.team_info?.resolved_logging_exporters ?? [],
+    [teamData?.team_info],
+  );
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
 
@@ -529,8 +525,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         max_budget: values.max_budget,
         soft_budget: sanitizeNumeric(values.soft_budget),
         budget_duration: values.budget_duration,
-        // logging_exporters is a top-level typed column on the team, not metadata.
-        ...(values.logging_exporters !== undefined ? { logging_exporters: values.logging_exporters } : {}),
         metadata: {
           ...parsedMetadata,
           ...passthroughRoutesMetadata,
@@ -888,7 +882,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                 <LoggingSettingsView
                   loggingConfigs={info.metadata?.logging || []}
-                  loggingExporters={loggingExportersOf(info)}
                   scopedExporters={scopedExportersForTeam}
                   disabledCallbacks={[]}
                   variant="card"
@@ -1008,7 +1001,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           )
                         : "",
                       logging_settings: info.metadata?.logging || [],
-                      logging_exporters: loggingExportersOf(info),
                       secret_manager_settings: info.metadata?.secret_manager_settings
                         ? JSON.stringify(info.metadata.secret_manager_settings, null, 2)
                         : "",
@@ -1471,8 +1463,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     </Form.Item>
 
-                    <LoggingExportersFormItem tooltip="Trace destinations this team exports to. Resolved server-side and unioned with the key's and org's destinations. Destinations are created and assigned by the proxy admin." />
-
                     <Form.Item label="Logging Settings" name="logging_settings">
                       <EditLoggingSettings
                         value={form.getFieldValue("logging_settings")}
@@ -1707,7 +1697,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                     <LoggingSettingsView
                       loggingConfigs={info.metadata?.logging || []}
-                      loggingExporters={loggingExportersOf(info)}
                       scopedExporters={scopedExportersForTeam}
                       disabledCallbacks={[]}
                       variant="inline"

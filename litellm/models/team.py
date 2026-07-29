@@ -7,7 +7,6 @@ budget-window value types and the team-model alias table). Re-exported from
 """
 
 import json
-from collections.abc import Sequence
 from datetime import datetime
 from typing import List, Literal, Optional, Union
 
@@ -93,7 +92,6 @@ class LiteLLM_TeamTable(TeamBase):
     model_spend: Optional[dict] = {}
     model_max_budget: Optional[dict] = {}
     policies: Optional[List[str]] = None
-    logging_exporters: Sequence[str] | None = None
     allow_team_guardrail_config: Optional[bool] = False
     litellm_model_table: Optional[LiteLLM_ModelTable] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None

@@ -780,50 +780,6 @@ async def test_v2_update_metadata_replaces_not_merges(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_v2_update_writes_logging_exporters_to_org_column(monkeypatch):
-    """Assigning logging_exporters writes the credential names to the org column, not the budget row or metadata."""
-    prisma = await _run_update_organization_v2(
-        monkeypatch,
-        body={"logging_exporters": ["arize-prod", "langfuse-eu"]},
-        existing_budget_id="budget-1",
-        existing_metadata={"keep": "me"},
-    )
-
-    prisma.db.litellm_budgettable.update.assert_not_awaited()
-    write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
-    assert write_data["logging_exporters"] == ["arize-prod", "langfuse-eu"]
-    assert "metadata" not in write_data
-
-
-@pytest.mark.asyncio
-async def test_v2_update_clears_logging_exporters_with_empty_list(monkeypatch):
-    """A null logging_exporters clears the org's assignments by writing an empty list to the non-nullable column."""
-    prisma = await _run_update_organization_v2(
-        monkeypatch,
-        body={"logging_exporters": None},
-        existing_budget_id="budget-1",
-        existing_metadata={"keep": "me"},
-    )
-
-    write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
-    assert write_data["logging_exporters"] == []
-
-
-@pytest.mark.asyncio
-async def test_v2_update_omitted_logging_exporters_not_written(monkeypatch):
-    """Omitting logging_exporters leaves the existing assignments untouched."""
-    prisma = await _run_update_organization_v2(
-        monkeypatch,
-        body={"organization_alias": "renamed"},
-        existing_budget_id="budget-1",
-        existing_metadata={"keep": "me"},
-    )
-
-    write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
-    assert "logging_exporters" not in write_data
-
-
-@pytest.mark.asyncio
 async def test_v2_rejects_null_clear_of_non_nullable_fields(monkeypatch):
     """organization_alias and models are non-nullable columns, so a null clear is a 422, not a 500."""
     from litellm.proxy._types import LitellmUserRoles, OrganizationUpdateRequestV2, UserAPIKeyAuth

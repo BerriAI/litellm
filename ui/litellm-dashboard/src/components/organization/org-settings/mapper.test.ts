@@ -39,15 +39,9 @@ describe("orgToForm", () => {
       tpm_limit: "1000",
       rpm_limit: "50",
       vector_stores: ["vs-1"],
-      logging_exporters: [],
       mcp: { servers: ["srv-1"], accessGroups: ["group-1"], toolsets: ["ts-1"] },
       metadata: JSON.stringify({ cost_center: "eng" }, null, 2),
     });
-  });
-
-  it("reads the org's assigned logging exporters from the typed column", () => {
-    const withExporters = { ...org, logging_exporters: ["arize-prod", "langfuse-eu"] } as Organization;
-    expect(orgToForm(withExporters).logging_exporters).toEqual(["arize-prod", "langfuse-eu"]);
   });
 
   it("maps missing budget values and permissions to empty widget state", () => {
@@ -66,7 +60,6 @@ describe("orgToForm", () => {
       tpm_limit: "",
       rpm_limit: "",
       vector_stores: [],
-      logging_exporters: [],
       mcp: { servers: [], accessGroups: [], toolsets: [] },
       metadata: "",
     });
@@ -111,10 +104,5 @@ describe("buildOrgPatch", () => {
 
   it("omits object_permission entirely when neither permission field is dirty", () => {
     expect(buildOrgPatch({ organization_alias: "acme-2" })).toEqual({ organization_alias: "acme-2" });
-  });
-
-  it("sends logging_exporters as a top-level array when dirty, clearing with []", () => {
-    expect(buildOrgPatch({ logging_exporters: ["arize-prod"] })).toEqual({ logging_exporters: ["arize-prod"] });
-    expect(buildOrgPatch({ logging_exporters: [] })).toEqual({ logging_exporters: [] });
   });
 });

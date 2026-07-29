@@ -5,7 +5,6 @@ Canonical definition for ``litellm_organizationtable``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
-from collections.abc import Sequence
 from typing import List, Optional
 
 from litellm.models.budget import LiteLLM_BudgetTable
@@ -23,7 +22,6 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
     spend: float = 0.0
     metadata: Optional[dict] = None
     models: List[str] = []
-    logging_exporters: Sequence[str] | None = None
     model_spend: Optional[dict] = {}
     created_by: str
     updated_by: str

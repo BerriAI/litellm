@@ -233,10 +233,6 @@ export interface CredentialItem {
       teams?: string[];
       orgs?: string[];
     };
-    // Explicit global/default: when true the destination exports on every request
-    // without being named on any key/team/org. The deliberate replacement for the
-    // old behavior where access.global implicitly auto-enabled.
-    auto_enable?: boolean;
   };
 }
 

@@ -335,7 +335,6 @@ async def new_organization(
 
     - organization_alias: *str* - The name of the organization.
     - models: *List* - The models the organization has access to.
-    - logging_exporters: *Optional[List[str]]* - Names of admin-owned logging destinations (credential names) this organization exports its traces to.
     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the organization.
     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
     - max_budget: *Optional[float]* - Max budget for org
@@ -388,12 +387,6 @@ async def new_organization(
     }'
     ```
     """
-    from litellm.proxy.management_endpoints.logging_exporter_validation import (
-        validate_logging_exporter_field,
-    )
-
-    validate_logging_exporter_field(getattr(data, "logging_exporters", None), user_api_key_dict)
-
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
         llm_router,
@@ -652,12 +645,6 @@ async def update_organization(
     # Create validated data model
     data = LiteLLM_OrganizationTableUpdate(**raw_data_with_flat_budget_fields)
 
-    from litellm.proxy.management_endpoints.logging_exporter_validation import (
-        validate_logging_exporter_field,
-    )
-
-    validate_logging_exporter_field(getattr(data, "logging_exporters", None), user_api_key_dict)
-
     # Validate budget values are not negative
     if data.max_budget is not None and (not math.isfinite(data.max_budget) or data.max_budget < 0):
         raise HTTPException(
@@ -862,7 +849,6 @@ async def update_organization_v2(
     org_column_updates: Mapping[str, object] = {
         **{field: field_values[field] for field in present_fields if field in _ORG_COLUMN_FIELDS},
         **({"metadata": data.metadata or {}} if "metadata" in present_fields else {}),
-        **({"logging_exporters": data.logging_exporters or []} if "logging_exporters" in present_fields else {}),
     }
 
     object_permission_cleared = "object_permission" in present_fields and data.object_permission is None
@@ -1124,7 +1110,6 @@ async def info_organization(
 
     response_pydantic_obj = LiteLLM_OrganizationTableWithMembers.model_validate(response.model_dump())
     response_pydantic_obj.resolved_logging_exporters = resolved_logging_exporter_names(
-        response_pydantic_obj.logging_exporters,
         None,
         organization_id,
     )

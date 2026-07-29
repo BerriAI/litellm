@@ -118,7 +118,7 @@ describe("LoggingCallbacksTable", () => {
     expect(screen.getByText("Failure")).toBeInTheDocument();
   });
 
-  it("renders a global destination's scope and manual assignment mode", () => {
+  it("renders a global destination's scope", () => {
     render(
       <LoggingCallbacksTable
         callbacks={[
@@ -134,7 +134,6 @@ describe("LoggingCallbacksTable", () => {
       />,
     );
     expect(screen.getByText("Global access")).toBeInTheDocument();
-    expect(screen.getByText("Manual assignment")).toBeInTheDocument();
     expect(screen.queryByText("Success")).not.toBeInTheDocument();
   });
 
@@ -156,45 +155,6 @@ describe("LoggingCallbacksTable", () => {
     expect(screen.getByText("team: t1")).toBeInTheDocument();
     expect(screen.getByText("team: t2")).toBeInTheDocument();
     expect(screen.getByText("org: o1")).toBeInTheDocument();
-  });
-
-  it("renders auto-enable mode for a destination", () => {
-    render(
-      <LoggingCallbacksTable
-        callbacks={[
-          {
-            name: "otel-auto",
-            variables: baseVars,
-            credentialName: "otel-auto",
-            access: { teams: ["t1"] },
-            autoEnable: true,
-            resolvedScope: { global: false, teams: ["t1"], orgs: [] },
-          },
-        ]}
-        availableCallbacks={{}}
-      />,
-    );
-    expect(screen.getByText("Auto-enabled")).toBeInTheDocument();
-  });
-
-  it("renders disabled mode for an auto-enable destination with no access grants", () => {
-    render(
-      <LoggingCallbacksTable
-        callbacks={[
-          {
-            name: "otel-empty",
-            variables: baseVars,
-            credentialName: "otel-empty",
-            access: { global: false, teams: [], orgs: [] },
-            autoEnable: true,
-            resolvedScope: { global: false, teams: [], orgs: [] },
-          },
-        ]}
-        availableCallbacks={{}}
-      />,
-    );
-    expect(screen.getByText("Disabled")).toBeInTheDocument();
-    expect(screen.queryByText("Auto-enabled")).not.toBeInTheDocument();
   });
 
   it("a destination row edits access and deletes without exposing callback actions", async () => {

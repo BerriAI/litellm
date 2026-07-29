@@ -15,14 +15,6 @@ vi.mock("@/components/ModelSelect/ModelSelect", () => ({
     </button>
   ),
 }));
-vi.mock("@/components/logging_credentials/LoggingExportersSelect", () => ({
-  __esModule: true,
-  default: ({ onChange }: { onChange: (values: string[]) => void }) => (
-    <button type="button" onClick={() => onChange(["arize-prod"])}>
-      set-logging-exporters
-    </button>
-  ),
-}));
 vi.mock("@/components/vector_store_management/VectorStoreSelector", () => ({
   __esModule: true,
   default: ({ onChange }: { onChange: (values: string[]) => void }) => (
@@ -115,22 +107,6 @@ describe("OrgCreateDialog", () => {
       },
     };
     expect(createOrganization.mock.calls[0][0]).toStrictEqual(expectedBody);
-  });
-
-  it("sends the selected logging exporters in the create body", async () => {
-    const user = userEvent.setup();
-    const { createOrganization } = renderDialog();
-
-    await user.type(screen.getByLabelText("Organization Name"), "new-org");
-    await user.click(screen.getByRole("button", { name: "set-logging-exporters" }));
-    await user.click(screen.getByRole("button", { name: "Create Organization" }));
-
-    await waitFor(() => expect(createOrganization).toHaveBeenCalledTimes(1));
-    expect(createOrganization.mock.calls[0][0]).toStrictEqual({
-      organization_alias: "new-org",
-      models: [],
-      logging_exporters: ["arize-prod"],
-    });
   });
 
   it("blocks submit and shows an error for invalid metadata JSON", async () => {

@@ -3,7 +3,6 @@ import { z } from "zod/v4";
 import type { Organization } from "@/components/networking";
 import type { components } from "@/lib/http/schema";
 
-import { loggingExportersOf } from "../../logging_credentials/loggingExportersOf";
 import type { OrgSettingsFormValues } from "./schema";
 
 export type OrgPatchBody = components["schemas"]["OrganizationUpdateRequestV2"];
@@ -27,7 +26,6 @@ export const orgToForm = (org: Organization): OrgSettingsFormValues => {
     tpm_limit: budget.tpm_limit?.toString() ?? "",
     rpm_limit: budget.rpm_limit?.toString() ?? "",
     vector_stores: org.object_permission?.vector_stores ?? [],
-    logging_exporters: loggingExportersOf(org),
     mcp: {
       servers: org.object_permission?.mcp_servers ?? [],
       accessGroups: org.object_permission?.mcp_access_groups ?? [],
@@ -70,7 +68,6 @@ export const buildOrgPatch = (dirty: Partial<OrgSettingsFormValues>): OrgPatchBo
       budget_duration: dirty.budget_duration === "" ? null : dirty.budget_duration,
     }),
     ...(dirty.metadata !== undefined && { metadata: metadataOrNull(dirty.metadata) }),
-    ...(dirty.logging_exporters !== undefined && { logging_exporters: dirty.logging_exporters }),
     ...(objectPermission !== undefined && { object_permission: objectPermission }),
   };
 };

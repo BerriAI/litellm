@@ -1,17 +1,14 @@
 """Request-time routing predicate for admin-owned logging destinations.
 
 ``credential_info.access`` answers "which identities' traces may this destination
-receive". It is routing scope, decoupled from enablement (a named assignment plus
-the explicit ``auto_enable`` default-on flag). The request-time resolver in
-``litellm_pre_call_utils`` is the consumer: at call time it checks whether the
-request's team/org is granted before firing the destination.
+receive". It is the sole routing determinant: at call time the resolver in
+``litellm_pre_call_utils`` fires a destination for a request exactly when the
+request's team/org is granted by that destination's ``access``.
 
 ``access_grants`` is the primitive: does this ``access`` reach an identity whose
 scope is the given set of team ids and org ids. The resolver passes a
 one-element scope built with ``identity_scope``.
 """
-
-from collections.abc import Sequence
 
 from pydantic import ValidationError
 
@@ -45,7 +42,6 @@ def identity_scope(team_id: str | None, org_id: str | None) -> tuple[frozenset[s
 
 
 def resolved_logging_exporter_names(
-    assigned: Sequence[str] | None,
     team_id: str | None,
     org_id: str | None,
 ) -> tuple[str, ...]:
@@ -53,19 +49,16 @@ def resolved_logging_exporter_names(
     the team/org info pages.
 
     Mirrors the request-time resolver's selection: a logging destination is included
-    when its ``access`` grants the identity AND it is either ``auto_enable`` or named
-    in ``assigned`` (the identity's own ``logging_exporters``). Names only; endpoints,
-    headers, and the access map itself stay proxy-admin information.
+    when its ``access`` grants the identity. Names only; endpoints, headers, and the
+    access map itself stay proxy-admin information.
     """
     team_ids, org_ids = identity_scope(team_id, org_id)
-    own = frozenset(str(name) for name in (assigned or ()))
     selected = tuple(
         credential.credential_name
         for credential in litellm.credential_list
         if (info := parse_credential_info(credential.credential_info)) is not None
         and info.credential_type == "logging"
         and access_grants(info.access, team_ids, org_ids)
-        and (info.auto_enable or credential.credential_name in own)
     )
     return tuple(dict.fromkeys(selected))
 

@@ -15,7 +15,6 @@ export const emptyOrgFormValues: OrgSettingsFormValues = {
   rpm_limit: "",
   vector_stores: [],
   mcp: { servers: [], accessGroups: [], toolsets: [] },
-  logging_exporters: [],
   metadata: "",
 };
 
@@ -40,7 +39,6 @@ export const buildOrgCreateBody = (values: OrgSettingsFormValues): OrgCreateBody
     ...(values.tpm_limit.trim() !== "" && { tpm_limit: Number(values.tpm_limit) }),
     ...(values.rpm_limit.trim() !== "" && { rpm_limit: Number(values.rpm_limit) }),
     ...(values.budget_duration !== "" && { budget_duration: values.budget_duration }),
-    ...(values.logging_exporters.length > 0 && { logging_exporters: values.logging_exporters }),
     ...(values.metadata.trim() !== "" && { metadata: metadataRecordSchema.parse(JSON.parse(values.metadata)) }),
     ...(objectPermission !== undefined && { object_permission: objectPermission }),
   };

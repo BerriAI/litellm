@@ -66,12 +66,11 @@ class CredentialInfo(BaseModel):
     Existing stored credentials carry arbitrary extra fields (e.g.
     ``custom_llm_provider``); ``extra="allow"`` preserves them. Only the fields
     the resolver consumes are typed: ``credential_type`` selects logging
-    destinations, and ``access``/``auto_enable`` decide which identities the
-    destination fires for.
+    destinations, and ``access`` decides which identities the destination fires
+    for.
     """
 
     model_config = ConfigDict(extra="allow")
 
     credential_type: str | None = None
     access: CredentialAccess | None = None
-    auto_enable: bool = False

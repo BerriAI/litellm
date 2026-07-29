@@ -1,20 +1,13 @@
-"""Validation for admin-owned logging-exporter assignment on key/team/org.
+"""Shape validation for an admin-owned logging destination's ``credential_info.access``.
 
-An identity's ``metadata.logging_exporters`` binds it to admin-owned trace
-destinations. Only the proxy admin may write it, and every name must be a registered
-logging credential. Which identities a destination actually fires for is governed by
-the destination's own ``credential_info.access``; the resolver
-(``litellm_pre_call_utils``) evaluates that at request time.
+Which identities a destination fires for is governed entirely by its
+``credential_info.access``; the resolver (``litellm_pre_call_utils``) evaluates that at
+request time. This module only checks that a write sets a well-formed ``access`` object.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
 from fastapi import HTTPException, status
-
-import litellm
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-
-LOGGING_EXPORTERS_KEY = "logging_exporters"
 
 
 def validate_credential_access(credential_info: Mapping[str, object] | None) -> None:
@@ -50,123 +43,3 @@ def validate_credential_access(credential_info: Mapping[str, object] | None) -> 
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": f"access contains unknown field(s): {sorted(unknown)}"},
         )
-
-
-def _logging_credentials_by_name() -> Mapping[str, Mapping[str, object]]:
-    return {
-        credential.credential_name: (credential.credential_info or {})
-        for credential in litellm.credential_list
-        if (credential.credential_info or {}).get("credential_type") == "logging"
-    }
-
-
-def _logging_credential_names() -> frozenset[str]:
-    return frozenset(_logging_credentials_by_name())
-
-
-def _validate_exporters_shape_and_names(exporters: object) -> None:
-    """Common shape + registry check shared by every entry point."""
-    if not isinstance(exporters, list):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": "logging_exporters must be a list of credential names"},
-        )
-    known = _logging_credential_names()
-    unknown = [name for name in exporters if name not in known]
-    if unknown:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "error": (
-                    f"Unknown or non-logging credential(s): {unknown}. Register them "
-                    "as logging credentials before assigning."
-                )
-            },
-        )
-
-
-def _exporter_value_changes(
-    requested_metadata: Mapping[str, object] | None,
-    existing_metadata: Mapping[str, object] | None,
-) -> bool:
-    """True if the effective ``metadata.logging_exporters`` value would change.
-
-    An update endpoint that REPLACES stored metadata with ``requested_metadata``
-    will drop ``logging_exporters`` when the new payload omits it. So a write
-    requires authorization whenever:
-
-    - the new metadata sets ``logging_exporters`` (the previously-handled case), OR
-    - the new metadata is provided but omits ``logging_exporters`` while the
-      stored metadata had one (removal-via-omission, Veria F4).
-
-    Returns False when stored and requested values match exactly, or when the
-    update doesn't touch metadata at all.
-    """
-    if not isinstance(requested_metadata, dict):
-        return False
-    new_has = LOGGING_EXPORTERS_KEY in requested_metadata
-    existing = existing_metadata.get(LOGGING_EXPORTERS_KEY) if isinstance(existing_metadata, dict) else None
-    existing_has = existing is not None
-    if not new_has and not existing_has:
-        return False
-    if new_has and not existing_has:
-        return True
-    if not new_has and existing_has:
-        return True
-    new_value = requested_metadata.get(LOGGING_EXPORTERS_KEY)
-    if isinstance(new_value, (list, tuple)) and isinstance(existing, (list, tuple)):
-        return tuple(new_value) != tuple(existing)
-    return new_value != existing
-
-
-def validate_logging_exporter_field(
-    requested_exporters: Sequence[str] | None,
-    user_api_key_dict: UserAPIKeyAuth,
-    *,
-    existing_exporters: Sequence[str] | None = None,
-) -> None:
-    """Authorize a typed ``logging_exporters`` write (proxy-admin only).
-
-    Adapts the typed list to the metadata-shaped input the shared assignment
-    validator expects, so the authorization logic lives in one place.
-    ``requested_exporters is None`` means the field was not provided (no-op); an
-    empty list is an explicit clear and is gated like any other change.
-    ``existing_exporters`` is the stored column value, passed so a change is
-    detected and a non-admin cannot silently clear an admin-assigned value.
-    """
-    requested_metadata = None if requested_exporters is None else {LOGGING_EXPORTERS_KEY: requested_exporters}
-    existing_metadata = None if existing_exporters is None else {LOGGING_EXPORTERS_KEY: existing_exporters}
-    validate_logging_exporter_assignment(
-        requested_metadata,
-        user_api_key_dict,
-        existing_metadata=existing_metadata,
-    )
-
-
-def validate_logging_exporter_assignment(
-    metadata: Mapping[str, object] | None,
-    user_api_key_dict: UserAPIKeyAuth,
-    *,
-    existing_metadata: Mapping[str, object] | None = None,
-) -> None:
-    """Validate a ``metadata.logging_exporters`` write on key / team / org endpoints.
-
-    Proxy-admin only. No-op when the update does not change the effective
-    ``logging_exporters`` value; otherwise a non-proxy-admin is rejected.
-
-    Update paths replace stored metadata wholesale, so a caller could drop an
-    admin-assigned exporter by sending ``metadata`` without ``logging_exporters``.
-    Pass ``existing_metadata`` from the loaded row so removal-via-omission is gated
-    too (Veria F4). Every exporter name (when present) must resolve to a registered
-    logging credential.
-    """
-    if not _exporter_value_changes(metadata, existing_metadata):
-        return
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"error": "Only the proxy admin can assign logging exporters"},
-        )
-    requested = metadata.get(LOGGING_EXPORTERS_KEY) if isinstance(metadata, dict) else None
-    if requested is not None:
-        _validate_exporters_shape_and_names(requested)

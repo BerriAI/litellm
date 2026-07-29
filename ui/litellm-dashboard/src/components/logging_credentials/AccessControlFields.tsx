@@ -30,13 +30,13 @@ const AccessControlFields: React.FC<AccessControlFieldsProps> = ({ value = {}, o
     <>
       <Form.Item
         label="Global"
-        tooltip="Routing scope only: traces from every team and org may export to this destination. It does not turn on tracing by itself -- assign it on a key/team/org, or turn on Enable for entire scope, for that."
+        tooltip="Routing scope: traces from every team and org export to this destination."
       >
         <Switch checked={isGlobal} onChange={(global) => onChange({ ...value, global })} />
       </Form.Item>
       <Form.Item
         label="Teams"
-        tooltip="Routing scope: only these teams' traffic may export to this destination, once it is auto-enabled or assigned."
+        tooltip="Routing scope: only these teams' traffic exports to this destination."
       >
         <Select
           mode="multiple"
@@ -52,7 +52,7 @@ const AccessControlFields: React.FC<AccessControlFieldsProps> = ({ value = {}, o
       </Form.Item>
       <Form.Item
         label="Organizations"
-        tooltip="Routing scope: only these orgs' traffic may export to this destination, once it is auto-enabled or assigned."
+        tooltip="Routing scope: only these orgs' traffic exports to this destination."
       >
         <Select
           mode="multiple"

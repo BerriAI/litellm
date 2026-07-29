@@ -47,7 +47,6 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import EditLoggingCredentialModal from "./logging_credentials/EditLoggingCredentialModal";
 import AccessControlFields from "./logging_credentials/AccessControlFields";
-import { loggingExportersOf } from "./logging_credentials/loggingExportersOf";
 import {
   backendLabel,
   createLoggingCredential,
@@ -271,8 +270,6 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const [editAccessFor, setEditAccessFor] = useState<{ name: string; access?: CredentialAccess } | null>(null);
   // access for the destination branch of the unified Add modal
   const [addAccess, setAddAccess] = useState<CredentialAccess>({});
-  // explicit global/default (auto_enable) opt-in for the destination branch
-  const [addAutoEnable, setAddAutoEnable] = useState(false);
   const addingDestination = selectedCallback != null && LOGGING_BACKEND_IDS.has(selectedCallback);
   const addingDestinationFields = LOGGING_DESTINATION_BACKENDS.find((b) => b.id === selectedCallback)?.fields ?? [];
 
@@ -285,30 +282,11 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     return o?.organization_alias || id;
   };
 
-  // For each destination, the Scope column reflects BOTH directions:
-  //  (a) destination-side credential_info.access (global/teams/orgs on the credential)
-  //  (b) identity-side metadata.logging_exporters on each team/org that lists this destination
-  // The resolver unions them at request time; the column unions them at render time.
-  const resolveScope = (destinationName: string, access?: CredentialAccess): ResolvedScope => {
-    const teams = new Set<string>();
-    const orgs = new Set<string>();
-    const global = access?.global === true;
-    for (const teamId of access?.teams ?? []) teams.add(teamAlias(teamId));
-    for (const orgId of access?.orgs ?? []) orgs.add(orgAlias(orgId));
-    for (const team of teamsData ?? []) {
-      const exporters = loggingExportersOf(team);
-      if (exporters.includes(destinationName)) {
-        teams.add(team.team_alias || team.team_id);
-      }
-    }
-    for (const org of orgsData ?? []) {
-      const exporters = loggingExportersOf(org);
-      if (exporters.includes(destinationName)) {
-        orgs.add(org.organization_alias || org.organization_id);
-      }
-    }
-    return { global, teams: Array.from(teams), orgs: Array.from(orgs) };
-  };
+  const resolveScope = (access?: CredentialAccess): ResolvedScope => ({
+    global: access?.global === true,
+    teams: (access?.teams ?? []).map(teamAlias),
+    orgs: (access?.orgs ?? []).map(orgAlias),
+  });
 
   const destinationRows: AlertingObject[] = (credentialData?.credentials ?? [])
     .filter((c) => c.credential_info?.credential_type === "logging")
@@ -320,8 +298,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         ? `${backendLabel(c.credential_info?.description)} · ${c.credential_info.host}`
         : backendLabel(c.credential_info?.description),
       access: c.credential_info?.access,
-      autoEnable: c.credential_info?.auto_enable === true,
-      resolvedScope: resolveScope(c.credential_name, c.credential_info?.access),
+      resolvedScope: resolveScope(c.credential_info?.access),
     }));
 
   const handleDeleteDestination = async (name: string) => {
@@ -488,14 +465,12 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           values,
           host,
           access: hasAccess ? addAccess : undefined,
-          autoEnable: addAutoEnable,
         });
         NotificationsManager.success("Logging destination created");
         refetchCredentials();
         setShowAddCallbacksModal(false);
         setSelectedCallback(null);
         setAddAccess({});
-        setAddAutoEnable(false);
         addForm.resetFields();
       } catch (error) {
         NotificationsManager.fromBackend(parseErrorMessage(error));
@@ -843,7 +818,6 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           setSelectedCallback(null);
           setSelectedCallbackParams([]);
           setAddAccess({});
-          setAddAutoEnable(false);
         }}
         footer={null}
       >
@@ -899,12 +873,6 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 </FormItem>
               ))}
               <AccessControlFields value={addAccess} onChange={setAddAccess} />
-              <Form.Item
-                label="Enable for entire scope"
-                tooltip="On: every team and org in this destination's scope exports to it automatically. Off: only the keys, teams, or orgs you explicitly assign this destination to will export, letting you activate it for a subset of the scope."
-              >
-                <Switch checked={addAutoEnable} onChange={setAddAutoEnable} />
-              </Form.Item>
             </div>
           ) : (
             <DynamicParamsFields
@@ -921,7 +889,6 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 setSelectedCallback(null);
                 setSelectedCallbackParams([]);
                 setAddAccess({});
-                setAddAutoEnable(false);
                 addForm.resetFields();
               }}
               disabled={isAddingCallback}

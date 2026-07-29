@@ -9067,7 +9067,6 @@ export interface paths {
          *
          *     - organization_alias: *str* - The name of the organization.
          *     - models: *List* - The models the organization has access to.
-         *     - logging_exporters: *Optional[List[str]]* - Names of admin-owned logging destinations (credential names) this organization exports its traces to.
          *     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the organization.
          *     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
          *     - max_budget: *Optional[float]* - Max budget for org
@@ -13726,7 +13725,6 @@ export interface paths {
          *     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
-         *     - logging_exporters: Optional[List[str]] - Names of admin-owned logging destinations (credential names) this team exports its traces to.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
@@ -13904,7 +13902,6 @@ export interface paths {
          *     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
-         *     - logging_exporters: Optional[List[str]] - Names of admin-owned logging destinations (credential names) this team exports its traces to.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
@@ -25104,8 +25101,6 @@ export interface components {
             /** Litellm Changed By */
             litellm_changed_by?: string | null;
             litellm_model_table?: components["schemas"]["LiteLLM_ModelTable"] | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -25738,8 +25733,6 @@ export interface components {
             /** Created By */
             created_by: string;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /**
              * Members
              * @default []
@@ -26293,8 +26286,6 @@ export interface components {
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             litellm_model_table?: components["schemas"]["LiteLLM_ModelTable"] | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -28080,8 +28071,6 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -28131,8 +28120,6 @@ export interface components {
             /** Created By */
             created_by: string;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
@@ -28335,8 +28322,6 @@ export interface components {
             } | null;
             /** Guardrails */
             guardrails?: string[] | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Mcp Rpm Limit */
@@ -28841,8 +28826,6 @@ export interface components {
         OrganizationUpdateRequestV2: {
             /** Budget Duration */
             budget_duration?: string | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -29091,8 +29074,6 @@ export interface components {
             } | null;
             /** Guardrails */
             guardrails?: string[] | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Mcp Rpm Limit */
@@ -31500,8 +31481,6 @@ export interface components {
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             litellm_model_table?: components["schemas"]["LiteLLM_ModelTable"] | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -31617,8 +31596,6 @@ export interface components {
              */
             keys_count: number;
             litellm_model_table?: components["schemas"]["LiteLLM_ModelTable"] | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -32851,8 +32828,6 @@ export interface components {
             } | null;
             /** Guardrails */
             guardrails?: string[] | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Mcp Rpm Limit */

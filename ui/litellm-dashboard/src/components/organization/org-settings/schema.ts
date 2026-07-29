@@ -30,7 +30,6 @@ const orgSettingsShape = {
   tpm_limit: wholeNumberOrEmpty,
   rpm_limit: wholeNumberOrEmpty,
   vector_stores: z.array(z.string()),
-  logging_exporters: z.array(z.string()),
   mcp: z.object({
     servers: z.array(z.string()),
     accessGroups: z.array(z.string()),

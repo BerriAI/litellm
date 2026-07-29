@@ -24,7 +24,6 @@ import {
 } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
 import MemberModal from "../team/EditMembership";
-import { loggingExportersOf } from "../logging_credentials/loggingExportersOf";
 import { OrgSettingsForm } from "./org-settings/OrgSettingsForm";
 
 interface OrganizationInfoProps {
@@ -58,22 +57,10 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
   const teamAliasMap = useMemo(() => createTeamAliasMap(teams), [teams]);
 
-  // Destinations that will receive this org's traces, resolved server-side by
-  // /organization/info (own logging_exporters plus auto-enabled destinations whose
-  // access grants the org). Names only; identical for every role.
-  const scopedExportersForOrg = useMemo<string[]>(() => {
-    const own = new Set(loggingExportersOf(orgData));
-    return (orgData?.resolved_logging_exporters ?? []).filter((name) => !own.has(name));
-  }, [orgData]);
-
-  const loggingExporterBadges = useMemo(() => {
-    const own = loggingExportersOf(orgData);
-    const ownSet = new Set(own);
-    return [
-      ...own.map((name) => ({ name, viaScope: false })),
-      ...scopedExportersForOrg.filter((name) => !ownSet.has(name)).map((name) => ({ name, viaScope: true })),
-    ];
-  }, [orgData, scopedExportersForOrg]);
+  const loggingExporterBadges = useMemo(
+    () => (orgData?.resolved_logging_exporters ?? []).map((name) => ({ name })),
+    [orgData],
+  );
 
   const handleMemberAdd = async (values: any) => {
     try {

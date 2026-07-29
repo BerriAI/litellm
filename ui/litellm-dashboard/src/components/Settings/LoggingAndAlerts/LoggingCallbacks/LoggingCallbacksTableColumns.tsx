@@ -45,34 +45,6 @@ function callbackModeTone(mode: string): StatusTone {
   return "info";
 }
 
-function destinationMode(record: AlertingObject) {
-  if (record.autoEnable !== true) {
-    return <span className="text-xs text-muted-foreground">Manual assignment</span>;
-  }
-  const access = record.access;
-  const hasExplicitGrants = [
-    access?.global === true,
-    (access?.teams?.length ?? 0) > 0,
-    (access?.orgs?.length ?? 0) > 0,
-  ].some(Boolean);
-  if (!hasExplicitGrants) {
-    return (
-      <StatusBadge
-        tone="neutral"
-        label="Disabled"
-        tooltip="No access grants, so this destination receives nothing. Add Access (Global, or specific Teams/Orgs) to enable it."
-      />
-    );
-  }
-  return (
-    <StatusBadge
-      tone="warning"
-      label="Auto-enabled"
-      tooltip="Exports automatically for all identities within the access scope without requiring explicit assignment."
-    />
-  );
-}
-
 function ScopeCell({ callback }: { callback: AlertingObject }) {
   const scope = callback.resolvedScope;
   const hasResolvedScope = scope?.global === true || [...(scope?.teams ?? []), ...(scope?.orgs ?? [])].length > 0;
@@ -195,7 +167,7 @@ export const getLoggingCallbacksTableColumns = ({
     enableSorting: false,
     cell: ({ row }) => {
       if (isDestination(row.original)) {
-        return destinationMode(row.original);
+        return <span className="text-muted-foreground">—</span>;
       }
       const mode = callbackRowMode(row.original);
       return <StatusBadge tone={callbackModeTone(mode)} label={CALLBACK_MODE_LABELS[mode] || mode} />;

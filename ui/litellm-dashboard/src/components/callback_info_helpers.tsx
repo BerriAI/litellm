@@ -23,8 +23,8 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     id: "arize",
     displayName: "Arize",
     logo: arizeLogo.src,
-    // OTEL v2 destination: assigned per identity via the "Logging Exporters" field
-    // (metadata.logging_exporters), not configured as a per-team callback here.
+    // OTEL v2 destination: admin-owned and routed by credential_info.access,
+    // not configured as a per-team callback here.
     supports_key_team_logging: false,
     dynamic_params: {},
     description: "Arize Logging Integration",
@@ -103,8 +103,8 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     id: "langfuse_otel",
     displayName: "Langfuse OTEL",
     logo: langfuseLogo.src,
-    // OTEL v2 destination: assigned per identity via the "Logging Exporters" field
-    // (metadata.logging_exporters), not configured as a per-team callback here.
+    // OTEL v2 destination: admin-owned and routed by credential_info.access,
+    // not configured as a per-team callback here.
     supports_key_team_logging: false,
     dynamic_params: {},
     description: "Langfuse v3 OTEL Logging Integration",
@@ -112,8 +112,8 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
   {
     id: "weave_otel",
     displayName: "Weave OTEL",
-    // OTEL v2 destination: assigned per identity via the "Logging Exporters" field
-    // (metadata.logging_exporters), not configured as a per-team callback here.
+    // OTEL v2 destination: admin-owned and routed by credential_info.access,
+    // not configured as a per-team callback here.
     supports_key_team_logging: false,
     dynamic_params: {},
     description: "Weave (W&B) OTEL Logging Integration",

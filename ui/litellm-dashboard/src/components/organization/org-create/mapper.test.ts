@@ -20,7 +20,6 @@ describe("buildOrgCreateBody", () => {
       rpm_limit: "50",
       vector_stores: ["vs-1"],
       mcp: { servers: ["srv-1"], accessGroups: ["ag-1"], toolsets: ["ts-1"] },
-      logging_exporters: ["arize-prod", "langfuse-eu"],
       metadata: '{"env": "prod"}',
     };
     const expectedBody = {
@@ -30,7 +29,6 @@ describe("buildOrgCreateBody", () => {
       budget_duration: "30d",
       tpm_limit: 1000,
       rpm_limit: 50,
-      logging_exporters: ["arize-prod", "langfuse-eu"],
       metadata: { env: "prod" },
       object_permission: {
         vector_stores: ["vs-1"],
@@ -51,16 +49,6 @@ describe("buildOrgCreateBody", () => {
         mcp: { servers: [], accessGroups: [], toolsets: ["ts-1"] },
       }).object_permission,
     ).toStrictEqual({ mcp_toolsets: ["ts-1"] });
-  });
-
-  it("sends logging_exporters only when at least one destination is selected", () => {
-    expect(buildOrgCreateBody({ ...emptyOrgFormValues, organization_alias: "acme" })).not.toHaveProperty(
-      "logging_exporters",
-    );
-    expect(
-      buildOrgCreateBody({ ...emptyOrgFormValues, organization_alias: "acme", logging_exporters: ["arize-prod"] })
-        .logging_exporters,
-    ).toStrictEqual(["arize-prod"]);
   });
 
   it("parses metadata into an object instead of sending the raw string", () => {
