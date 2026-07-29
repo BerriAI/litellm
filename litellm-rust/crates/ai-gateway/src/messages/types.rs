@@ -20,5 +20,7 @@ pub(crate) struct ProviderMessagesRequest {
     pub(crate) url: String,
     pub(crate) body: Value,
     pub(crate) upstream_headers: Vec<(String, String)>,
+    pub(crate) signing_region: Option<String>,
+    pub(crate) bearer_token: Option<String>,
     pub(crate) timeout: Option<Duration>,
 }

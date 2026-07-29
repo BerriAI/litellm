@@ -181,6 +181,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-smithy-eventstream"
+version = "0.60.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78d8391e65fcea47c586a22e1a41f173b38615b112b2c6b7a44e80cec3e6b706"
+dependencies = [
+ "aws-smithy-types",
+ "bytes",
+ "crc32fast",
+]
+
+[[package]]
 name = "aws-smithy-http"
 version = "0.64.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -594,6 +605,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "crc32fast"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]
@@ -1216,8 +1236,10 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 name = "litellm-ai-gateway"
 version = "0.1.0"
 dependencies = [
+ "aws-smithy-eventstream",
  "axum",
  "base64",
+ "bytes",
  "futures-channel",
  "futures-util",
  "litellm-core",
