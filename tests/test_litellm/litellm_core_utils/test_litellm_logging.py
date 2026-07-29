@@ -693,6 +693,68 @@ async def test_anthropic_messages_marks_litellm_params_async():
         litellm.callbacks = original_callbacks
 
 
+def _anthropic_messages_logging_obj_for_unnormalizable_result(stream: bool) -> LitellmLogging:
+    logging_obj = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=stream,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="normalization-failure",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o",
+        user="",
+        optional_params={},
+        litellm_params={"api_base": "", "aanthropic_messages": True},
+    )
+    return logging_obj
+
+
+def test_success_handler_helper_fn_falls_back_to_raw_result_on_normalization_failure():
+    """A result the ``anthropic_messages`` normalizer cannot handle (e.g. the raw
+    Responses API payload the OpenAI bridge hands over) used to raise out of
+    ``_success_handler_helper_fn`` before any callback ran, so a streaming call, which
+    dispatches exactly one fire-and-forget success event, lost its spend record with no
+    client-visible symptom. The helper now degrades to the untransformed result."""
+    logging_obj = _anthropic_messages_logging_obj_for_unnormalizable_result(stream=True)
+
+    unnormalizable_result = {"id": "resp_1", "object": "response", "output": []}
+
+    start_time, end_time, result = logging_obj._success_handler_helper_fn(result=unnormalizable_result)
+
+    assert result is unnormalizable_result
+    assert start_time is not None and end_time is not None
+
+
+@pytest.mark.asyncio
+async def test_async_success_handler_fires_callbacks_on_normalization_failure():
+    """The async success path must still invoke callbacks when result normalization
+    fails, otherwise ``/v1/messages`` calls silently log nothing."""
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class Tracker(CustomLogger):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            self.calls.append(response_obj)
+
+    tracker = Tracker()
+    logging_obj = _anthropic_messages_logging_obj_for_unnormalizable_result(stream=False)
+    original_async_callbacks = list(litellm._async_success_callback or [])
+    litellm._async_success_callback = [tracker]
+    try:
+        await logging_obj.async_success_handler(result={"id": "resp_1", "object": "response", "output": []})
+    finally:
+        litellm._async_success_callback = original_async_callbacks
+
+    assert len(tracker.calls) == 1
+
+
 @pytest.mark.asyncio
 async def test_agenerate_content_marks_litellm_params_async():
     """LIT-4475: the async ``agenerate_content`` entrypoint must plant

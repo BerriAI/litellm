@@ -1854,15 +1854,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["end_time"] = end_time
             self.model_call_details["cache_hit"] = cache_hit
 
-            if self.call_type == CallTypes.anthropic_messages.value:
-                result = self._handle_anthropic_messages_response_logging(result=result)
-            elif (
-                self.call_type == CallTypes.generate_content.value
-                or self.call_type == CallTypes.agenerate_content.value
-            ):
-                result = self._handle_non_streaming_google_genai_generate_content_response_logging(result=result)
-            elif self.call_type == CallTypes.asend_message.value or self.call_type == CallTypes.send_message.value:
-                result = self._handle_a2a_response_logging(result=result)
+            result = self._normalize_result_for_call_type(result=result)
 
             logging_result = self.normalize_logging_result(result=result)
 
@@ -1909,6 +1901,36 @@ class Logging(LiteLLMLoggingBaseClass):
             return start_time, end_time, result
         except Exception as e:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
+
+    def _normalize_result_for_call_type(self, result: object) -> object:
+        """
+        Convert a call-type-specific result into the shape the logging pipeline expects.
+
+        A failure here must never skip the callbacks: a streaming call has a single
+        fire-and-forget success event, so raising loses the spend record entirely with
+        no client-visible symptom. Falling back to the untransformed result keeps
+        callbacks running on a degraded payload.
+        """
+        try:
+            if self.call_type == CallTypes.anthropic_messages.value:
+                return self._handle_anthropic_messages_response_logging(result=result)
+            if self.call_type in (
+                CallTypes.generate_content.value,
+                CallTypes.agenerate_content.value,
+            ):
+                return self._handle_non_streaming_google_genai_generate_content_response_logging(result=result)
+            if self.call_type in (
+                CallTypes.asend_message.value,
+                CallTypes.send_message.value,
+            ):
+                return self._handle_a2a_response_logging(result=result)
+            return result
+        except Exception as e:  # noqa: BLE001  # any normalizer failure must degrade, never skip callbacks
+            verbose_logger.exception(
+                f"LiteLLM.LoggingError: failed to normalize {self.call_type} result of type "
+                f"{type(result).__name__} for logging; logging the raw result instead. Error: {e}"
+            )
+            return result
 
     def _is_recognized_call_type_for_logging(
         self,
