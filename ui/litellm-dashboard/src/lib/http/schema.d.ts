@@ -23304,7 +23304,7 @@ export interface components {
              * @description Default role assigned to new users created
              * @default internal_user_viewer
              */
-            user_role: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+            user_role: ("internal_user" | "internal_user_viewer" | "proxy_admin" | "proxy_admin_viewer") | null;
         };
         /**
          * DefaultTeamSSOParams
@@ -25835,7 +25835,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Stream Timeout */
-            stream_timeout?: string | number | null;
+            stream_timeout?: number | string | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -33671,7 +33671,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Stream Timeout */
-            stream_timeout?: string | number | null;
+            stream_timeout?: number | string | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
