@@ -4,36 +4,50 @@ import { screen, waitFor, within } from "@testing-library/react";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import CacheDashboard from "./cache_dashboard";
 
-const { adminGlobalCacheActivity, cachingHealthCheckCall } = vi.hoisted(() => ({
-  adminGlobalCacheActivity: vi.fn(),
+const { useCacheActivity, cachingHealthCheckCall } = vi.hoisted(() => ({
+  useCacheActivity: vi.fn(),
   cachingHealthCheckCall: vi.fn(),
 }));
 
 vi.mock("@/components/networking", () => ({
-  adminGlobalCacheActivity,
   cachingHealthCheckCall,
 }));
 
-const cacheActivity = [
-  {
-    api_key: "sk-1",
-    model: "gpt-5.1",
-    call_type: "acompletion",
-    total_rows: 1500,
-    cache_hit_true_rows: 300,
-    cached_completion_tokens: 12000,
-    generated_completion_tokens: 48000,
+vi.mock("@/app/(dashboard)/hooks/caching/useCacheActivity", () => ({
+  useCacheActivity,
+}));
+
+const cacheActivity = {
+  groups: [
+    {
+      call_type: "acompletion",
+      api_requests: 1000,
+      cache_hits: 300,
+      failed_requests: 200,
+      cached_completion_tokens: 12000,
+      generated_completion_tokens: 48000,
+    },
+    {
+      call_type: "aembedding",
+      api_requests: 550,
+      cache_hits: 100,
+      failed_requests: 50,
+      cached_completion_tokens: 2000,
+      generated_completion_tokens: 9000,
+    },
+  ],
+  totals: {
+    api_requests: 1550,
+    cache_hits: 400,
+    failed_requests: 250,
+    cached_completion_tokens: 14000,
+    cache_hit_ratio: (400 / 2200) * 100,
   },
-  {
-    api_key: "sk-2",
-    model: "text-embedding-3-large",
-    call_type: "aembedding",
-    total_rows: 700,
-    cache_hit_true_rows: 100,
-    cached_completion_tokens: 2000,
-    generated_completion_tokens: 9000,
+  filter_options: {
+    key_aliases: ["my-key", "Unnamed Key"],
+    models: ["gpt-5.1", "text-embedding-3-large"],
   },
-];
+};
 
 const renderDashboard = () =>
   renderWithProviders(
@@ -75,7 +89,7 @@ const legendFillByCategory = (card: HTMLElement) =>
 describe("CacheDashboard cache analytics charts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    adminGlobalCacheActivity.mockResolvedValue(cacheActivity);
+    useCacheActivity.mockReturnValue({ data: cacheActivity, refetch: vi.fn() });
   });
 
   it("renders both chart card titles", async () => {
@@ -108,8 +122,13 @@ describe("CacheDashboard cache analytics charts", () => {
     expect(legendFillByCategory(requestsCard)).toEqual({
       "LLM API requests": "var(--color-sky-500, #0ea5e9)",
       "Cache hit": "var(--color-teal-500, #14b8a6)",
+      "Failed requests": "var(--color-red-500, #ef4444)",
     });
-    expect(barFills(requestsCard)).toEqual(["var(--color-sky-500, #0ea5e9)", "var(--color-teal-500, #14b8a6)"]);
+    expect(barFills(requestsCard)).toEqual([
+      "var(--color-sky-500, #0ea5e9)",
+      "var(--color-teal-500, #14b8a6)",
+      "var(--color-red-500, #ef4444)",
+    ]);
   });
 
   it("renders the tokens chart with each category legend-bound to its fill and stacked in order", async () => {
@@ -133,16 +152,37 @@ describe("CacheDashboard cache analytics charts", () => {
     }
   });
 
-  it("stacks the two categories into one column per call_type", async () => {
+  it("stacks all categories into one column per call_type", async () => {
     renderDashboard();
     const { requestsCard, tokensCard } = await findChartCards();
 
-    for (const card of [requestsCard, tokensCard]) {
+    const expectedRects = { requests: 6, tokens: 4 };
+    for (const [card, rectCount] of [
+      [requestsCard, expectedRects.requests],
+      [tokensCard, expectedRects.tokens],
+    ] as const) {
       const rects = Array.from(card.querySelectorAll("path.recharts-rectangle"));
-      expect(rects).toHaveLength(4);
+      expect(rects).toHaveLength(rectCount);
       const xPositions = rects.map((rect) => rect.getAttribute("d")?.split(",")[0]);
       expect(new Set(xPositions).size).toBe(2);
     }
+  });
+
+  it("renders the server-computed cache hit ratio", async () => {
+    renderDashboard();
+
+    expect(await screen.findByText("18.18%")).toBeInTheDocument();
+  });
+
+  it("passes the date range and selected filters to the activity query", () => {
+    renderDashboard();
+
+    expect(useCacheActivity).toHaveBeenCalledWith({
+      startDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      endDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      keyAliases: [],
+      models: [],
+    });
   });
 
   it("formats y-axis ticks with compact notation", async () => {
