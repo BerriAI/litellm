@@ -10,19 +10,46 @@ from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockEventStreamDecoderBase, BedrockModelInfo
 
 if TYPE_CHECKING:
+    from httpx import URL
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import CostResponseTypes
 
 
-if TYPE_CHECKING:
-    from httpx import URL
-
-
-class BedrockPassthroughConfig(
-    BaseAWSLLM, BedrockModelInfo, BedrockEventStreamDecoderBase, BasePassthroughConfig
-):
+class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamDecoderBase, BasePassthroughConfig):
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
         return "stream" in endpoint
+
+    def _encode_model_id_for_endpoint(self, model_id: str) -> str:
+        """
+        Encode model_id (especially ARNs) for use in Bedrock endpoints.
+
+        ARNs contain special characters like colons and slashes that need to be
+        properly URL-encoded when used in HTTP request paths. For example:
+        arn:aws:bedrock:us-east-1:123:application-inference-profile/abc123
+        becomes:
+        arn:aws:bedrock:us-east-1:123:application-inference-profile%2Fabc123
+
+        Args:
+            model_id: The model ID or ARN to encode
+
+        Returns:
+            The encoded model_id suitable for use in endpoint URLs
+        """
+        from litellm.passthrough.utils import CommonUtils
+        import re
+
+        # Create a temporary endpoint with the model_id to check if encoding is needed
+        temp_endpoint = f"/model/{model_id}/converse"
+        encoded_temp_endpoint = CommonUtils.encode_bedrock_runtime_modelid_arn(temp_endpoint)
+
+        # Extract the encoded model_id from the temporary endpoint
+        encoded_model_id_match = re.search(r"/model/([^/]+)/", encoded_temp_endpoint)
+        if encoded_model_id_match:
+            return encoded_model_id_match.group(1)
+        else:
+            # Fallback to original model_id if extraction fails
+            return model_id
 
     def get_complete_url(
         self,
@@ -34,11 +61,12 @@ class BedrockPassthroughConfig(
         litellm_params: dict,
     ) -> Tuple["URL", str]:
         optional_params = litellm_params.copy()
+        model_id = optional_params.get("model_id", None)
 
         aws_region_name = self._get_aws_region_name(
             optional_params=optional_params,
             model=model,
-            model_id=None,
+            model_id=model_id,
         )
 
         aws_bedrock_runtime_endpoint = optional_params.get("aws_bedrock_runtime_endpoint")
@@ -49,7 +77,20 @@ class BedrockPassthroughConfig(
             endpoint_type="runtime",
         )
 
-        return self.format_url(endpoint, endpoint_url, request_query_params or {}), endpoint_url
+        # If model_id is provided (e.g., Application Inference Profile ARN), use it in the endpoint
+        # instead of the translated model name
+        if model_id is not None:
+            import re
+
+            # Encode the model_id if it's an ARN to properly handle special characters
+            encoded_model_id = self._encode_model_id_for_endpoint(model_id)
+
+            # Replace the model name in the endpoint with the encoded model_id
+            endpoint = re.sub(r"model/[^/]+/", f"model/{encoded_model_id}/", endpoint)
+        return (
+            self.format_url(endpoint, endpoint_url, request_query_params or {}),
+            endpoint_url,
+        )
 
     def sign_request(
         self,
@@ -155,9 +196,7 @@ class BedrockPassthroughConfig(
         if "invoke" in endpoint:
             invoke_provider = AmazonInvokeConfig.get_bedrock_invoke_provider(model)
             if invoke_provider is None:
-                raise ValueError(
-                    f"Invalid invoke provider: {invoke_provider}, for model: {model}"
-                )
+                raise ValueError(f"Invalid invoke provider: {invoke_provider}, for model: {model}")
             obj = get_bedrock_event_stream_decoder(
                 invoke_provider=invoke_provider,
                 model=model,
@@ -178,9 +217,9 @@ class BedrockPassthroughConfig(
             message = json.loads(chunk)
             translated_chunk = obj._chunk_parser(chunk_data=message)
 
-            if isinstance(
-                translated_chunk, dict
-            ) and generic_chunk_has_all_required_fields(cast(dict, translated_chunk)):
+            if isinstance(translated_chunk, dict) and generic_chunk_has_all_required_fields(
+                cast(dict, translated_chunk)
+            ):
                 chunk_obj = convert_generic_chunk_to_model_response_stream(
                     cast(GenericStreamingChunk, translated_chunk)
                 )
@@ -194,6 +233,7 @@ class BedrockPassthroughConfig(
         if len(all_translated_chunks) > 0:
             model_response = stream_chunk_builder(
                 chunks=all_translated_chunks,
+                logging_obj=litellm_logging_obj,
             )
             return model_response
         return None

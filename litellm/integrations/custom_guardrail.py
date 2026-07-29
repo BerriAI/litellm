@@ -1,7 +1,12 @@
+import contextvars
+import hashlib
+import os
+import secrets
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
+    ClassVar,
     Dict,
     List,
     Literal,
@@ -12,11 +17,16 @@ from typing import (
 )
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import (
+    get_metadata_variable_name_from_kwargs,
+    get_or_create_metadata_bucket,
+    redact_nested_match_and_regex_keys,
+)
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import (
     DynamicGuardrailParams,
-    GenericGuardrailAPIInputs,
     GuardrailEventHooks,
     LitellmParams,
     Mode,
@@ -25,67 +35,103 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import (
     CallTypes,
+    GenericGuardrailAPIInputs,
     GuardrailStatus,
+    GuardrailTracingDetail,
     LLMResponseTypes,
     StandardLoggingGuardrailInformation,
 )
+
+try:
+    from fastapi.exceptions import HTTPException
+except ImportError:
+    HTTPException = None  # type: ignore
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 dc = DualCache()
 
 
-class ModifyResponseException(Exception):
+from litellm.constants import (
+    GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS,
+    PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+)
+from litellm.exceptions import (
+    BlockedPiiEntityError,
+    GuardrailRaisedException,
+    ModifyResponseException,
+    SensitiveDataRouteException,
+)
+
+# Per-process secret tagging each recorded marker. The deployment hook only
+# honors markers carrying this token, so a caller cannot forge the metadata
+# field to suppress a guardrail on the direct-SDK path that never reaches the
+# proxy's metadata sanitizer.
+_PRE_CALL_EXECUTED_TOKEN = secrets.token_hex(16)
+
+_GUARDRAIL_BLOCK_STATUS_CODES = frozenset({400, 403, 422})
+
+_guardrail_self_recorded: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "litellm_guardrail_self_recorded", default=False
+)
+
+
+def _strict_guardrail_modes_enabled() -> bool:
+    """Whether guardrail-mode validation raises (default) or logs a warning.
+
+    Set `LITELLM_STRICT_GUARDRAIL_MODES=false` to keep the pre-LIT-4226 behavior
+    for guardrails whose supported_event_hooks list newly includes their
+    configured mode: log the mismatch and continue instead of raising at boot.
     """
-    Exception raised when a guardrail wants to modify the response.
+    raw = os.environ.get("LITELLM_STRICT_GUARDRAIL_MODES")
+    if raw is None:
+        return True
+    parsed = str_to_bool(raw)
+    return True if parsed is None else parsed
 
-    This exception carries the synthetic response that should be returned
-    to the user instead of calling the LLM or instead of the LLM's response.
-    It should be caught by the proxy and returned with a 200 status code.
 
-    This is a base exception that all guardrails can use to replace responses,
-    allowing violation messages to be returned as successful responses
-    rather than errors.
-    """
+def get_session_id_from_request_data(request_data: Dict[str, Any]) -> Optional[str]:
+    """Extract session_id from request data (litellm_session_id or metadata)."""
+    session_id = request_data.get("litellm_session_id")
+    if session_id:
+        return str(session_id)
 
-    def __init__(
-        self,
-        message: str,
-        model: str,
-        request_data: Dict[str, Any],
-        guardrail_name: Optional[str] = None,
-        detection_info: Optional[Dict[str, Any]] = None,
-    ):
-        """
-        Initialize the modify response exception.
+    metadata = request_data.get("metadata") or {}
+    session_id = metadata.get("session_id")
+    if session_id:
+        return str(session_id)
 
-        Args:
-            message: The violation message to return to the user
-            model: The model that was being called
-            request_data: The original request data
-            guardrail_name: Name of the guardrail that raised this exception
-            detection_info: Additional detection metadata (scores, rules, etc.)
-        """
-        self.message = message
-        self.model = model
-        self.request_data = request_data
-        self.guardrail_name = guardrail_name
-        self.detection_info = detection_info or {}
-        super().__init__(message)
+    litellm_metadata = request_data.get("litellm_metadata") or {}
+    session_id = litellm_metadata.get("session_id")
+    if session_id:
+        return str(session_id)
+
+    return None
 
 
 class CustomGuardrail(CustomLogger):
+    # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
+    use_native_during_call_hook: ClassVar[bool] = False
+
+    records_own_guardrail_information: ClassVar[bool] = False
+
     def __init__(
         self,
         guardrail_name: Optional[str] = None,
         supported_event_hooks: Optional[List[GuardrailEventHooks]] = None,
-        event_hook: Optional[
-            Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]
-        ] = None,
+        event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]] = None,
         default_on: bool = False,
         mask_request_content: bool = False,
         mask_response_content: bool = False,
         violation_message_template: Optional[str] = None,
+        end_session_after_n_fails: Optional[int] = None,
+        on_violation: Optional[str] = None,
+        realtime_violation_message: Optional[str] = None,
+        on_sensitive_data: Optional[str] = None,
+        sensitive_data_route_to_model: Optional[str] = None,
+        sticky_session_routing: bool = True,
+        run_in_parallel: bool = False,
+        only_scan_new_messages: bool = False,
         **kwargs,
     ):
         """
@@ -98,25 +144,48 @@ class CustomGuardrail(CustomLogger):
             default_on: If True, the guardrail will be run by default on all requests
             mask_request_content: If True, the guardrail will mask the request content
             mask_response_content: If True, the guardrail will mask the response content
+            end_session_after_n_fails: For /v1/realtime sessions, end the session after this many violations
+            on_violation: For /v1/realtime sessions, 'warn' or 'end_session'
+            realtime_violation_message: Message the bot speaks aloud when a /v1/realtime guardrail fires
+            on_sensitive_data: Action when sensitive data is detected. 'block' (default) or 'route'
+            sensitive_data_route_to_model: Model to route to when on_sensitive_data='route'
+            sticky_session_routing: When True, all subsequent requests in the session use the same model
+            run_in_parallel: When True, this pre_call or post_call guardrail runs concurrently with
+                other opted-in guardrails of the same hook. Only safe for block-only guardrails that
+                do not mutate the request or response.
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
-        self.event_hook: Optional[
-            Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]
-        ] = event_hook
+        self.event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]] = event_hook
         self.default_on: bool = default_on
         self.mask_request_content: bool = mask_request_content
         self.mask_response_content: bool = mask_response_content
         self.violation_message_template: Optional[str] = violation_message_template
+        self.end_session_after_n_fails: Optional[int] = end_session_after_n_fails
+        self.on_violation: Optional[str] = on_violation
+        self.realtime_violation_message: Optional[str] = realtime_violation_message
+        self.on_sensitive_data: Optional[str] = on_sensitive_data
+        self.sensitive_data_route_to_model: Optional[str] = sensitive_data_route_to_model
+        self.sticky_session_routing: bool = sticky_session_routing
+        self.run_in_parallel: bool = run_in_parallel
+        self.only_scan_new_messages: bool = only_scan_new_messages
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks
-            self._validate_event_hook(event_hook, supported_event_hooks)
+            try:
+                self._validate_event_hook(event_hook, supported_event_hooks)
+            except ValueError as validation_error:
+                if _strict_guardrail_modes_enabled():
+                    raise
+                verbose_logger.warning(
+                    "%s. LITELLM_STRICT_GUARDRAIL_MODES=false; continuing "
+                    "with unsupported event_hook. Set the env var to true "
+                    "(default) to enforce validation and fail at startup.",
+                    validation_error,
+                )
         super().__init__(**kwargs)
 
-    def render_violation_message(
-        self, default: str, context: Optional[Dict[str, Any]] = None
-    ) -> str:
+    def render_violation_message(self, default: str, context: Optional[Dict[str, Any]] = None) -> str:
         """Return a custom violation message if template is configured."""
 
         if not self.violation_message_template:
@@ -179,6 +248,196 @@ class CustomGuardrail(CustomLogger):
             detection_info=detection_info,
         )
 
+    def raise_sensitive_data_route_exception(
+        self,
+        route_to_model: str,
+        request_data: Dict[str, Any],
+        detection_info: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Raise an exception to reroute the request to a different model.
+
+        Use this when sensitive data is detected and the guardrail is configured
+        to route to an on-premise model instead of blocking.
+
+        The exception will reroute this request to the specified model. When
+        sticky_session_routing is enabled (the default), it also stores the
+        routing decision so subsequent requests in this session reuse the model.
+
+        Args:
+            route_to_model: The model to route this request (and session) to
+            request_data: The original request data dictionary
+            detection_info: Optional non-sensitive detection metadata (e.g. matched
+                entity types, rule ids, scores). This is surfaced in request metadata
+                and logs, so it must not contain the raw detected sensitive values.
+
+        Raises:
+            SensitiveDataRouteException: Always raises to trigger rerouting
+        """
+        session_id = self._get_session_id_from_request_data(request_data)
+        if not session_id:
+            raise ValueError(
+                "Cannot route sensitive data without a session_id. "
+                "Ensure the request includes a session_id in metadata or headers."
+            )
+
+        raise SensitiveDataRouteException(
+            route_to_model=route_to_model,
+            session_id=session_id,
+            guardrail_name=self.guardrail_name,
+            detection_info=detection_info,
+            sticky_session_routing=self.sticky_session_routing,
+        )
+
+    def _get_session_id_from_request_data(self, request_data: Dict[str, Any]) -> Optional[str]:
+        """Extract session_id from request data."""
+        return get_session_id_from_request_data(request_data)
+
+    @staticmethod
+    def _scanned_text_hash(text: str) -> str:
+        """Stable content hash for a single scannable text segment.
+
+        Hashing the exact text the provider would receive means an edited earlier
+        segment produces a different hash and gets re-scanned, while an unchanged
+        segment repeated on a later turn is skipped.
+        """
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _scanned_texts_cache_key(self, session_id: str) -> str:
+        return f"guardrail_scanned_texts:{self.guardrail_name}:{session_id}"
+
+    async def filter_new_texts_for_session(
+        self,
+        texts: list[str] | None,
+        request_data: dict[str, object],
+        cache: DualCache,
+    ) -> list[str] | None:
+        """Return only the text segments not already scanned earlier in this session.
+
+        Returns ``None`` when incremental scanning is inactive (feature off, no
+        session id, masking enabled, or the cache read failed). ``None`` signals
+        the caller to fall back to a full scan; a returned list (possibly empty)
+        signals the caller to scan only that subset and skip masking write-back.
+        """
+        if not self.only_scan_new_messages or not texts:
+            return None
+
+        if self.mask_request_content or self.mask_response_content:
+            verbose_logger.warning(
+                "Guardrail %s: only_scan_new_messages is not supported with masking; scanning full context.",
+                self.guardrail_name,
+            )
+            return None
+
+        session_id = get_session_id_from_request_data(request_data)
+        if not session_id:
+            verbose_logger.debug(
+                "Guardrail %s: only_scan_new_messages enabled but request has no session id; scanning full context.",
+                self.guardrail_name,
+            )
+            return None
+
+        try:
+            cached: object = await cache.async_get_cache(key=self._scanned_texts_cache_key(session_id))
+        except Exception as e:  # noqa: BLE001  # cache is best-effort; any failure must fall back to a full scan
+            verbose_logger.warning(
+                "Guardrail %s: failed to read scanned-message cache (%s); scanning full context.",
+                self.guardrail_name,
+                e,
+            )
+            return None
+
+        seen: set[str] = {str(h) for h in cached} if isinstance(cached, list) else set()
+        return [text for text in texts if self._scanned_text_hash(text) not in seen]
+
+    async def mark_texts_scanned(
+        self,
+        texts: list[str] | None,
+        request_data: dict[str, object],
+        cache: DualCache,
+    ) -> None:
+        """Record the hashes of all text segments present on a successful (non-blocked) scan.
+
+        Called only after the guardrail allows the request, so a blocked segment is
+        never marked scanned and will be re-checked if the client retries.
+        """
+        if not self.only_scan_new_messages or not texts:
+            return
+        if self.mask_request_content or self.mask_response_content:
+            return
+        session_id = get_session_id_from_request_data(request_data)
+        if not session_id:
+            return
+
+        cache_key = self._scanned_texts_cache_key(session_id)
+        current_hashes = [self._scanned_text_hash(text) for text in texts]
+        try:
+            existing: object = await cache.async_get_cache(key=cache_key)
+            existing_hashes: list[str] = [str(h) for h in existing] if isinstance(existing, list) else []
+            merged: list[str] = list(dict.fromkeys(existing_hashes + current_hashes))
+            await cache.async_set_cache(
+                key=cache_key,
+                value=merged,
+                ttl=GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS,
+            )
+        except Exception as e:  # noqa: BLE001  # cache is best-effort; any failure must not block the request
+            verbose_logger.warning(
+                "Guardrail %s: failed to persist scanned-message cache (%s); next call will re-scan.",
+                self.guardrail_name,
+                e,
+            )
+
+    def should_route_on_sensitive_data(self) -> bool:
+        """
+        Returns True if this guardrail is configured to route requests
+        to a different model when sensitive data is detected.
+        """
+        return self.on_sensitive_data == "route" and self.sensitive_data_route_to_model is not None
+
+    def handle_sensitive_data_detection(
+        self,
+        request_data: Dict[str, Any],
+        detection_info: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Handle sensitive data detection based on guardrail configuration.
+
+        If on_sensitive_data='route', raises SensitiveDataRouteException to reroute.
+        Otherwise, raises GuardrailRaisedException to block. When routing is
+        configured but the request carries no session_id, routing is not possible
+        so the request falls back to a graceful block.
+
+        Args:
+            request_data: The request data dictionary
+            detection_info: Optional non-sensitive detection metadata. When routing,
+                this is surfaced in request metadata and logs, so it must not contain
+                the raw detected sensitive values.
+
+        Raises:
+            SensitiveDataRouteException: When configured to route and a session_id is present
+            GuardrailRaisedException: When configured to block, or when routing is
+                configured but no session_id is available
+        """
+        if self.should_route_on_sensitive_data():
+            try:
+                self.raise_sensitive_data_route_exception(
+                    route_to_model=self.sensitive_data_route_to_model,  # type: ignore
+                    request_data=request_data,
+                    detection_info=detection_info,
+                )
+            except ValueError:
+                raise GuardrailRaisedException(
+                    message=(
+                        f"Sensitive data detected by {self.guardrail_name} (routing skipped: request has no session_id)"
+                    ),
+                    guardrail_name=self.guardrail_name,
+                )
+        else:
+            raise GuardrailRaisedException(
+                message=f"Sensitive data detected by {self.guardrail_name}",
+                guardrail_name=self.guardrail_name,
+            )
+
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
         """
@@ -188,11 +447,21 @@ class CustomGuardrail(CustomLogger):
         """
         return None
 
+    @classmethod
+    def get_supported_event_hooks(cls) -> Optional[List[GuardrailEventHooks]]:
+        """
+        Returns the event hooks this guardrail supports, for the UI to render.
+
+        Subclasses should override to return their supported hooks list. When a
+        subclass returns None, the endpoint omits it from the per-provider map
+        and the UI is expected to fall back to the global `supported_modes`
+        list client-side.
+        """
+        return None
+
     def _validate_event_hook(
         self,
-        event_hook: Optional[
-            Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]
-        ],
+        event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]],
         supported_event_hooks: List[GuardrailEventHooks],
     ) -> None:
         def _validate_event_hook_list_is_in_supported_event_hooks(
@@ -203,53 +472,109 @@ class CustomGuardrail(CustomLogger):
                 if isinstance(hook, str):
                     hook = GuardrailEventHooks(hook)
                 if hook not in supported_event_hooks:
-                    raise ValueError(
-                        f"Event hook {hook} is not in the supported event hooks {supported_event_hooks}"
-                    )
+                    raise ValueError(f"Event hook {hook} is not in the supported event hooks {supported_event_hooks}")
 
         if event_hook is None:
             return
         if isinstance(event_hook, str):
             event_hook = GuardrailEventHooks(event_hook)
         if isinstance(event_hook, list):
-            _validate_event_hook_list_is_in_supported_event_hooks(
-                event_hook, supported_event_hooks
-            )
+            _validate_event_hook_list_is_in_supported_event_hooks(event_hook, supported_event_hooks)
         elif isinstance(event_hook, Mode):
-            _validate_event_hook_list_is_in_supported_event_hooks(
-                list(event_hook.tags.values()), supported_event_hooks
-            )
+            tag_values_flat: list = []
+            for v in event_hook.tags.values():
+                if isinstance(v, list):
+                    tag_values_flat.extend(v)
+                else:
+                    tag_values_flat.append(v)
+            _validate_event_hook_list_is_in_supported_event_hooks(tag_values_flat, supported_event_hooks)
             if event_hook.default:
-                _validate_event_hook_list_is_in_supported_event_hooks(
-                    [event_hook.default], supported_event_hooks
-                )
+                default_list = event_hook.default if isinstance(event_hook.default, list) else [event_hook.default]
+                _validate_event_hook_list_is_in_supported_event_hooks(default_list, supported_event_hooks)
         elif isinstance(event_hook, GuardrailEventHooks):
             if event_hook not in supported_event_hooks:
-                raise ValueError(
-                    f"Event hook {event_hook} is not in the supported event hooks {supported_event_hooks}"
-                )
+                raise ValueError(f"Event hook {event_hook} is not in the supported event hooks {supported_event_hooks}")
+
+    @staticmethod
+    def _get_admin_metadata(data: dict) -> dict:
+        """Return merged admin-configured key and team metadata from the request data.
+
+        The proxy may inject admin metadata (user_api_key_metadata,
+        user_api_key_team_metadata) into either ``metadata`` or
+        ``litellm_metadata`` depending on endpoint. Check both so a caller
+        cannot shadow admin config by pre-populating the other key.
+        Key-level settings override team-level.
+        """
+        team_meta: dict = {}
+        key_meta: dict = {}
+        for key in ("metadata", "litellm_metadata"):
+            # Defensive: an unparsed JSON-string metadata could leak past the
+            # proxy's normal parse path; don't AttributeError on .get().
+            meta = data.get(key)
+            if not isinstance(meta, dict):
+                continue
+            team_meta = meta.get("user_api_key_team_metadata") or team_meta
+            key_meta = meta.get("user_api_key_metadata") or key_meta
+        return {**team_meta, **key_meta}
 
     def get_disable_global_guardrail(self, data: dict) -> Optional[bool]:
         """
-        Returns True if the global guardrail should be disabled
-        """
-        if "disable_global_guardrail" in data:
-            return data["disable_global_guardrail"]
-        metadata = data.get("litellm_metadata") or data.get("metadata", {})
-        if "disable_global_guardrail" in metadata:
-            return metadata["disable_global_guardrail"]
-        return False
+        Returns True if the global guardrail should be disabled.
 
-    def get_guardrail_from_metadata(
-        self, data: dict
-    ) -> Union[List[str], List[Dict[str, DynamicGuardrailParams]]]:
+        Reads from admin-configured key/team metadata only, not from
+        the request body, to prevent callers from disabling guardrails.
+        """
+        return self._get_admin_metadata(data).get("disable_global_guardrails", False)
+
+    def get_opted_out_global_guardrails_from_metadata(self, data: dict) -> List[str]:
+        """
+        Returns the list of global guardrail names the team/key has opted out of.
+
+        Reads from admin-configured key/team metadata only.
+        """
+        value = self._get_admin_metadata(data).get("opted_out_global_guardrails")
+        return value if isinstance(value, list) else []
+
+    def _is_valid_response_type(self, result: Any) -> bool:
+        """
+        Check if result is a valid LLMResponseTypes instance.
+
+        Safely handles TypedDict types which don't support isinstance checks.
+        For non-LiteLLM responses (like passthrough httpx.Response), returns True
+        to allow them through.
+        """
+        if result is None:
+            return False
+
+        try:
+            # Try isinstance check on valid types that support it
+            response_types = get_args(LLMResponseTypes)
+            return isinstance(result, response_types)
+        except TypeError as e:
+            # TypedDict types don't support isinstance checks
+            # In this case, we can't validate the type, so we allow it through
+            if "TypedDict" in str(e):
+                return True
+            raise
+
+    def get_guardrail_from_metadata(self, data: dict) -> Union[List[str], List[Dict[str, DynamicGuardrailParams]]]:
         """
         Returns the guardrail(s) to be run from the metadata or root
         """
+
         if "guardrails" in data:
             return data["guardrails"]
-        metadata = data.get("litellm_metadata") or data.get("metadata", {})
-        return metadata.get("guardrails") or []
+        # Check both metadata locations. For regular endpoints move_guardrails_to_metadata
+        # writes to "metadata"; for thread/assistant endpoints it writes to
+        # "litellm_metadata". We check the one that actually contains the "guardrails"
+        # key so that a non-empty litellm_metadata without guardrails does not shadow
+        # the merged list stored in metadata (which would cause team guardrails to be
+        # silently skipped while default_on=True policy guardrails still fire).
+        for meta_key in ("metadata", "litellm_metadata"):
+            meta = data.get(meta_key) or {}
+            if isinstance(meta, dict) and "guardrails" in meta:
+                return meta.get("guardrails") or []
+        return []
 
     def _guardrail_is_in_requested_guardrails(
         self,
@@ -265,6 +590,65 @@ class CustomGuardrail(CustomLogger):
 
         return False
 
+    def _pre_call_marker(self) -> Optional[str]:
+        name = self.guardrail_name
+        if not name:
+            return None
+        return f"{_PRE_CALL_EXECUTED_TOKEN}:{name}"
+
+    def mark_pre_call_hook_ran(self, data: Dict[str, Any]) -> None:
+        """
+        Record that this guardrail's ``async_pre_call_hook`` already ran for this
+        request, so the deployment-level hook does not run it a second time.
+
+        The proxy runs pre-call guardrails in ``ProxyLogging.pre_call_hook``. The
+        router later spreads a deployment's model-level ``guardrails`` into the
+        top-level request kwargs, which would otherwise re-trigger the same hook
+        from ``async_pre_call_deployment_hook``.
+        """
+        marker = self._pre_call_marker()
+        if marker is None:
+            return
+        for meta_key in ("metadata", "litellm_metadata"):
+            meta = data.get(meta_key)
+            if isinstance(meta, dict):
+                executed = meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
+                if isinstance(executed, list):
+                    if marker not in executed:
+                        executed.append(marker)
+                else:
+                    meta[PRE_CALL_EXECUTED_GUARDRAILS_KEY] = [marker]
+                return
+        data["metadata"] = {PRE_CALL_EXECUTED_GUARDRAILS_KEY: [marker]}
+
+    def _pre_call_hook_already_ran(self, data: Dict[str, Any]) -> bool:
+        marker = self._pre_call_marker()
+        if marker is None:
+            return False
+        for meta_key in ("metadata", "litellm_metadata"):
+            meta = data.get(meta_key)
+            if isinstance(meta, dict):
+                executed = meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
+                if isinstance(executed, list) and marker in executed:
+                    return True
+        return False
+
+    def uses_apply_guardrail_interface(self) -> bool:
+        return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
+
+    def _deployment_pre_call_target(self) -> "CustomLogger":
+        if not self.uses_apply_guardrail_interface():
+            return self
+        try:
+            from litellm.proxy.utils import unified_guardrail
+        except ImportError as e:
+            raise ImportError(
+                f"Guardrail {self.guardrail_name or type(self).__name__} implements apply_guardrail, which needs "
+                "the litellm proxy dependencies to run at the deployment level. "
+                "Install them with: pip install 'litellm[proxy]'"
+            ) from e
+        return unified_guardrail
+
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
@@ -275,17 +659,18 @@ class CustomGuardrail(CustomLogger):
         if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
             return kwargs
 
-        if (
-            self.should_run_guardrail(
-                data=kwargs, event_type=GuardrailEventHooks.pre_call
-            )
-            is not True
-        ):
+        if self._pre_call_hook_already_ran(kwargs):
+            return kwargs
+
+        if self.should_run_guardrail(data=kwargs, event_type=GuardrailEventHooks.pre_call) is not True:
             return kwargs
 
         # CHECK IF GUARDRAIL REJECTS THE REQUEST
         if call_type == CallTypes.completion or call_type == CallTypes.acompletion:
-            result = await self.async_pre_call_hook(
+            target = self._deployment_pre_call_target()
+            if target is not self:
+                kwargs["guardrail_to_apply"] = self
+            result = await target.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(
                     user_id=kwargs.get("user_api_key_user_id"),
                     team_id=kwargs.get("user_api_key_team_id"),
@@ -295,7 +680,7 @@ class CustomGuardrail(CustomLogger):
                 ),
                 cache=dc,
                 data=kwargs,
-                call_type=call_type.value or "acompletion",  # type: ignore
+                call_type="completion" if call_type == CallTypes.completion else "acompletion",
             )
 
             if result is not None and isinstance(result, dict):
@@ -321,12 +706,7 @@ class CustomGuardrail(CustomLogger):
         if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
             return response
 
-        if (
-            self.should_run_guardrail(
-                data=request_data, event_type=GuardrailEventHooks.post_call
-            )
-            is not True
-        ):
+        if self.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is not True:
             return response
 
         # CHECK IF GUARDRAIL REJECTS THE REQUEST
@@ -342,7 +722,7 @@ class CustomGuardrail(CustomLogger):
             response=response,
         )
 
-        if result is None or not isinstance(result, get_args(LLMResponseTypes)):
+        if not self._is_valid_response_type(result):
             return response
 
         return result
@@ -357,6 +737,7 @@ class CustomGuardrail(CustomLogger):
         """
         requested_guardrails = self.get_guardrail_from_metadata(data)
         disable_global_guardrail = self.get_disable_global_guardrail(data)
+        opted_out_global_guardrails = self.get_opted_out_global_guardrails_from_metadata(data)
         verbose_logger.debug(
             "inside should_run_guardrail for guardrail=%s event_type= %s guardrail_supported_event_hooks= %s requested_guardrails= %s self.default_on= %s",
             self.guardrail_name,
@@ -365,6 +746,12 @@ class CustomGuardrail(CustomLogger):
             requested_guardrails,
             self.default_on,
         )
+        if self.default_on is True and self.guardrail_name in opted_out_global_guardrails:
+            return False
+
+        if self.default_on is True and disable_global_guardrail is True:
+            return False
+
         if self.default_on is True and disable_global_guardrail is not True:
             if self._event_hook_is_event_type(event_type):
                 if isinstance(self.event_hook, Mode):
@@ -377,7 +764,7 @@ class CustomGuardrail(CustomLogger):
                             "Setting tag-based guardrails is only available in litellm-enterprise. You must be a premium user to use this feature."
                         )
                     result = EnterpriseCustomGuardrailHelper._should_run_if_mode_by_tag(
-                        data, self.event_hook
+                        data, self.event_hook, event_type
                     )
                     if result is not None:
                         return result
@@ -403,9 +790,7 @@ class CustomGuardrail(CustomLogger):
                 raise ImportError(
                     "Setting tag-based guardrails is only available in litellm-enterprise. You must be a premium user to use this feature."
                 )
-            result = EnterpriseCustomGuardrailHelper._should_run_if_mode_by_tag(
-                data, self.event_hook
-            )
+            result = EnterpriseCustomGuardrailHelper._should_run_if_mode_by_tag(data, self.event_hook, event_type)
             if result is not None:
                 return result
         return True
@@ -423,7 +808,18 @@ class CustomGuardrail(CustomLogger):
         if isinstance(self.event_hook, list):
             return event_type.value in self.event_hook
         if isinstance(self.event_hook, Mode):
-            return event_type.value in self.event_hook.tags.values()
+            for tag_value in self.event_hook.tags.values():
+                if isinstance(tag_value, list):
+                    if event_type.value in tag_value:
+                        return True
+                elif event_type.value == tag_value:
+                    return True
+            if self.event_hook.default:
+                default_list = (
+                    self.event_hook.default if isinstance(self.event_hook.default, list) else [self.event_hook.default]
+                )
+                return event_type.value in default_list
+            return False
         return self.event_hook == event_type.value
 
     def get_guardrail_dynamic_request_body_params(self, request_data: dict) -> dict:
@@ -450,14 +846,19 @@ class CustomGuardrail(CustomLogger):
         for guardrail in requested_guardrails:
             if isinstance(guardrail, dict) and self.guardrail_name in guardrail:
                 # Get the configuration for this guardrail
-                guardrail_config: DynamicGuardrailParams = DynamicGuardrailParams(
-                    **guardrail[self.guardrail_name]
-                )
+                guardrail_config: DynamicGuardrailParams = DynamicGuardrailParams(**guardrail[self.guardrail_name])
+                extra_body = guardrail_config.get("extra_body", {})
                 if self._validate_premium_user() is not True:
+                    if isinstance(extra_body, dict) and extra_body:
+                        verbose_logger.warning(
+                            "Guardrail %s: ignoring dynamic extra_body keys %s because premium_user is False",
+                            self.guardrail_name,
+                            list(extra_body.keys()),
+                        )
                     return {}
 
                 # Return the extra_body if it exists, otherwise empty dict
-                return guardrail_config.get("extra_body", {})
+                return extra_body
 
         return {}
 
@@ -484,28 +885,70 @@ class CustomGuardrail(CustomLogger):
         duration: Optional[float] = None,
         masked_entity_count: Optional[Dict[str, int]] = None,
         guardrail_provider: Optional[str] = None,
+        event_type: Optional[GuardrailEventHooks] = None,
+        tracing_detail: Optional[GuardrailTracingDetail] = None,
     ) -> None:
         """
         Builds `StandardLoggingGuardrailInformation` and adds it to the request metadata so it can be used for logging to DataDog, Langfuse, etc.
+
+        Args:
+            tracing_detail: Optional typed dict with provider-specific tracing fields
+                (guardrail_id, policy_template, detection_method, confidence_score,
+                classification, match_details, patterns_checked, alert_recipients).
         """
         if isinstance(guardrail_json_response, Exception):
             guardrail_json_response = str(guardrail_json_response)
         from litellm.types.utils import GuardrailMode
 
+        # Use event_type if provided, otherwise fall back to self.event_hook
+        guardrail_mode: Union[GuardrailEventHooks, GuardrailMode, List[GuardrailEventHooks]]
+        if event_type is not None:
+            guardrail_mode = event_type
+        elif isinstance(self.event_hook, Mode):
+            guardrail_mode = GuardrailMode(**dict(self.event_hook.model_dump()))  # type: ignore[typeddict-item]
+        else:
+            guardrail_mode = self.event_hook  # type: ignore[assignment]
+
+        from litellm.litellm_core_utils.core_helpers import (
+            filter_exceptions_from_params,
+        )
+
+        # Sanitize the response to ensure it's JSON serializable and free of circular refs
+        # This prevents RecursionErrors in downstream loggers (Langfuse, Datadog, etc.)
+        clean_guardrail_response = filter_exceptions_from_params(guardrail_json_response)
+
+        # Strip secret_fields to prevent plaintext Authorization headers from
+        # being persisted to spend logs, OTEL traces, or other logging backends.
+        # This matches the pattern used by Langfuse and Arize integrations.
+        if isinstance(clean_guardrail_response, dict):
+            clean_guardrail_response.pop("secret_fields", None)
+        elif isinstance(clean_guardrail_response, list):
+            for item in clean_guardrail_response:
+                if isinstance(item, dict):
+                    item.pop("secret_fields", None)
+
+        # Default-safe behavior: never persist raw matched spans in standard
+        # guardrail logging payloads (single shared implementation; Bedrock hooks pass
+        # raw provider JSON so redaction is not duplicated upstream).
+        clean_guardrail_response = redact_nested_match_and_regex_keys(clean_guardrail_response)
+
+        from litellm.litellm_core_utils.sensitive_data_masker import (
+            mask_credentials_in_payload,
+        )
+
+        clean_guardrail_response = mask_credentials_in_payload(clean_guardrail_response)
+
         slg = StandardLoggingGuardrailInformation(
             guardrail_name=self.guardrail_name,
             guardrail_provider=guardrail_provider,
-            guardrail_mode=(
-                GuardrailMode(**self.event_hook.model_dump())  # type: ignore
-                if isinstance(self.event_hook, Mode)
-                else self.event_hook
-            ),
-            guardrail_response=guardrail_json_response,
+            guardrail_mode=guardrail_mode,
+            guardrail_response=clean_guardrail_response,
             guardrail_status=guardrail_status,
             start_time=start_time,
             end_time=end_time,
             duration=duration,
             masked_entity_count=masked_entity_count,
+            **(tracing_detail or {}),
         )
 
         def _append_guardrail_info(container: dict) -> None:
@@ -519,16 +962,20 @@ class CustomGuardrail(CustomLogger):
                 # should not happen
                 container[key] = [existing, slg]
 
-        if "metadata" in request_data:
-            if request_data["metadata"] is None:
-                request_data["metadata"] = {}
-            _append_guardrail_info(request_data["metadata"])
-        elif "litellm_metadata" in request_data:
-            _append_guardrail_info(request_data["litellm_metadata"])
-        else:
-            verbose_logger.warning(
-                "unable to log guardrail information. No metadata found in request_data"
-            )
+        _, metadata_bucket = get_or_create_metadata_bucket(request_data)
+        _append_guardrail_info(metadata_bucket)
+
+        _guardrail_self_recorded.set(True)
+
+        # Emit the otel guardrail span here, where every guardrail execution lands,
+        # rather than relying on a post-call hook that does not fire on every path
+        # (e.g. a pass-through request that passes its guardrails).
+        try:
+            from litellm.integrations.otel.logger import emit_guardrail_span
+
+            emit_guardrail_span(slg)
+        except Exception:
+            pass
 
     async def apply_guardrail(
         self,
@@ -567,6 +1014,8 @@ class CustomGuardrail(CustomLogger):
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
         duration: Optional[float] = None,
+        event_type: Optional[GuardrailEventHooks] = None,
+        original_inputs: Optional[Dict] = None,
     ):
         """
         Add StandardLoggingGuardrailInformation to the request data
@@ -574,7 +1023,18 @@ class CustomGuardrail(CustomLogger):
         This gets logged on downsteam Langfuse, DataDog, etc.
         """
         # Convert None to empty dict to satisfy type requirements
-        guardrail_response = {} if response is None else response
+        guardrail_response: Union[Dict[str, Any], str] = {} if response is None else response
+
+        # For apply_guardrail functions in custom_code_guardrail scenario,
+        # simplify the logged response to "allow", "deny", or "mask"
+        if original_inputs is not None and isinstance(response, dict):
+            # Check if inputs were modified by comparing them
+            if self._inputs_were_modified(original_inputs, response):
+                guardrail_response = "mask"
+            else:
+                guardrail_response = "allow"
+
+        verbose_logger.debug(f"Guardrail response: {response}")
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,
@@ -583,8 +1043,48 @@ class CustomGuardrail(CustomLogger):
             duration=duration,
             start_time=start_time,
             end_time=end_time,
+            event_type=event_type,
         )
         return response
+
+    @staticmethod
+    def _is_guardrail_intervention(e: Exception) -> bool:
+        """
+        Returns True if the exception represents an intentional guardrail block
+        (this was logged previously as an API failure - guardrail_failed_to_respond).
+
+        Guardrails signal intentional blocks by raising:
+        - GuardrailRaisedException (generic guardrail API, tool permission)
+        - BlockedPiiEntityError (Presidio PII detection)
+        - SensitiveDataRouteException (sensitive-data reroute to on-premise model)
+        - HTTPException with a block-signalling status (400, 403, 422)
+        - ModifyResponseException (passthrough mode violation)
+
+        Only the statuses guardrails use in-tree to signal a deliberate rejection
+        count as an intervention: 400 (content policy), 403 (e.g. akto) and 422
+        (e.g. llm_as_a_judge). Other 4xx codes are commonly propagated from an
+        upstream guardrail provider response (401 bad key, 408 timeout, 429 rate
+        limit, or a raw upstream status), which are technical failures, not
+        blocks, so they stay guardrail_failed_to_respond.
+        """
+        if isinstance(e, ModifyResponseException):
+            return True
+        if isinstance(
+            e,
+            (
+                GuardrailRaisedException,
+                BlockedPiiEntityError,
+                SensitiveDataRouteException,
+            ),
+        ):
+            return True
+        if (
+            HTTPException is not None
+            and isinstance(e, HTTPException)
+            and e.status_code in _GUARDRAIL_BLOCK_STATUS_CODES
+        ):
+            return True
+        return False
 
     def _process_error(
         self,
@@ -593,21 +1093,51 @@ class CustomGuardrail(CustomLogger):
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
         duration: Optional[float] = None,
+        event_type: Optional[GuardrailEventHooks] = None,
     ):
         """
         Add StandardLoggingGuardrailInformation to the request data
 
         This gets logged on downsteam Langfuse, DataDog, etc.
         """
+        guardrail_status: GuardrailStatus = (
+            "guardrail_intervened" if self._is_guardrail_intervention(e) else "guardrail_failed_to_respond"
+        )
+        # For custom_code_guardrail scenario, log as "deny" instead of full exception
+        # Check if this is from custom_code_guardrail by checking the class name
+        guardrail_response: Union[Exception, str] = e
+        if "CustomCodeGuardrail" in self.__class__.__name__:
+            guardrail_response = "deny"
+
         self.add_standard_logging_guardrail_information_to_request_data(
-            guardrail_json_response=e,
+            guardrail_json_response=guardrail_response,
             request_data=request_data,
-            guardrail_status="guardrail_failed_to_respond",
+            guardrail_status=guardrail_status,
             duration=duration,
             start_time=start_time,
             end_time=end_time,
+            event_type=event_type,
         )
         raise e
+
+    def _inputs_were_modified(self, original_inputs: Dict, response: Dict) -> bool:
+        """
+        Compare original inputs with response to determine if content was modified.
+
+        Returns True if the inputs were modified (mask scenario), False otherwise (allow scenario).
+        """
+        # Get all keys from both dictionaries
+        all_keys = set(original_inputs.keys()) | set(response.keys())
+
+        # Compare each key's value
+        for key in all_keys:
+            original_value = original_inputs.get(key)
+            response_value = response.get(key)
+            if original_value != response_value:
+                return True
+
+        # No modifications detected
+        return False
 
     def mask_content_in_string(
         self,
@@ -659,10 +1189,7 @@ class CustomGuardrail(CustomLogger):
         # /responses
         # User/System messages are stored in the "input" key, use litellm transformation to get the messages
         #########################################################
-        if (
-            call_type == CallTypes.responses.value
-            or call_type == CallTypes.aresponses.value
-        ):
+        if call_type == CallTypes.responses.value or call_type == CallTypes.aresponses.value:
             from typing import cast
 
             from litellm.responses.litellm_completion_transformation.transformation import (
@@ -681,6 +1208,41 @@ class CustomGuardrail(CustomLogger):
         return None
 
 
+def _append_slg_to_litellm_params(lp: object, entries: list) -> None:
+    """Merge guardrail entries into a single litellm_params dict."""
+    if not isinstance(lp, dict):
+        return
+    if lp.get("metadata") is None:
+        lp["metadata"] = {}
+    existing = lp["metadata"].setdefault("standard_logging_guardrail_information", [])
+    for entry in entries:
+        if entry not in existing:
+            existing.append(entry)
+
+
+def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object) -> None:
+    """Copy standard_logging_guardrail_information from request_data into logging_obj.
+
+    The @log_guardrail_information decorator writes guardrail info to
+    request_data["metadata"] or request_data["litellm_metadata"].  For
+    passthrough routes (/v1/messages, /v1/responses) the spend-log payload is
+    built from logging_obj.litellm_params["metadata"], which is a separate dict
+    that does not share identity with the one in request_data.  This helper
+    bridges that gap so guardrail_information is non-null in spend logs for all
+    routes, not just /v1/chat/completions.
+    """
+    if logging_obj is None:
+        return
+    meta_src = request_data.get(get_metadata_variable_name_from_kwargs(request_data)) or {}
+    slg_info = meta_src.get("standard_logging_guardrail_information")
+    if not slg_info:
+        return
+    entries: list = slg_info if isinstance(slg_info, list) else [slg_info]
+    mcd = getattr(logging_obj, "model_call_details", None) or {}
+    _append_slg_to_litellm_params(getattr(logging_obj, "litellm_params", None), entries)
+    _append_slg_to_litellm_params(mcd.get("litellm_params"), entries)
+
+
 def log_guardrail_information(func):
     """
     Decorator to add standard logging guardrail information to any function
@@ -690,56 +1252,130 @@ def log_guardrail_information(func):
     Logs for:
         - pre_call
         - during_call
-        - TODO: log post_call. This is more involved since the logs are sent to DD, s3 before the guardrail is even run
+        - post_call
+
+    Some guardrails (e.g. ``block_code_execution``) call
+    ``add_standard_logging_guardrail_information_to_request_data`` directly
+    from inside the wrapped function so they can record a richer payload
+    (structured detections, tracing detail) than this decorator's
+    "allow"/"mask"/raw-response default. To avoid double-recording in that
+    case (which would emit two spans, two Datadog records, two spend-log
+    entries, etc.), a context-local flag records whether the wrapped function
+    appended its own entry; if so, the auto-record is skipped. The flag is a
+    ``ContextVar`` rather than a count of entries in the shared ``request_data``
+    so it stays correct when guardrails run concurrently (asyncio copies the
+    context into each gathered task): counting shared entries would let one
+    guardrail's append hide another guardrail's missing record.
+
+    A guardrail that only records an entry when it actually runs (e.g.
+    ``HeadroomGuardrail``, which returns the inputs untouched on an endpoint
+    whose payload it cannot act on) sets ``records_own_guardrail_information =
+    True`` so the auto-record is skipped even on the return paths where it
+    recorded nothing; otherwise a no-op early return would be logged as an
+    "allow"/"success" run even though the guardrail did nothing. The exception
+    branch below still records so a genuine failure is not lost.
     """
-    import asyncio
     import functools
+    import inspect
+
+    def _infer_event_type_from_function_name(
+        func_name: str,
+    ) -> Optional[GuardrailEventHooks]:
+        """Infer the actual event type from the function name"""
+        if func_name == "async_pre_call_hook":
+            return GuardrailEventHooks.pre_call
+        elif func_name == "async_moderation_hook":
+            return GuardrailEventHooks.during_call
+        elif func_name in (
+            "async_post_call_success_hook",
+            "async_post_call_streaming_hook",
+        ):
+            return GuardrailEventHooks.post_call
+        return None
 
     @functools.wraps(func)
     async def async_wrapper(*args, **kwargs):
         start_time = datetime.now()  # Move start_time inside the wrapper
         self: CustomGuardrail = args[0]
         request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
+        event_type = _infer_event_type_from_function_name(func.__name__)
+
+        # Store original inputs for comparison (for apply_guardrail functions)
+        original_inputs = None
+        if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
+            original_inputs = kwargs.get("inputs")
+
+        logging_obj = kwargs.get("logging_obj")
+        self_recorded_token = _guardrail_self_recorded.set(False)
         try:
             response = await func(*args, **kwargs)
+            if self.records_own_guardrail_information or _guardrail_self_recorded.get():
+                return response
             return self._process_response(
                 response=response,
                 request_data=request_data,
                 start_time=start_time.timestamp(),
                 end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
+                event_type=event_type,
+                original_inputs=original_inputs,
             )
         except Exception as e:
+            if _guardrail_self_recorded.get():
+                raise
             return self._process_error(
                 e=e,
                 request_data=request_data,
                 start_time=start_time.timestamp(),
                 end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
+                event_type=event_type,
             )
+        finally:
+            _guardrail_self_recorded.reset(self_recorded_token)
+            _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
     @functools.wraps(func)
     def sync_wrapper(*args, **kwargs):
         start_time = datetime.now()  # Move start_time inside the wrapper
         self: CustomGuardrail = args[0]
         request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
+        event_type = _infer_event_type_from_function_name(func.__name__)
+
+        # Store original inputs for comparison (for apply_guardrail functions)
+        original_inputs = None
+        if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
+            original_inputs = kwargs.get("inputs")
+
+        logging_obj = kwargs.get("logging_obj")
+        self_recorded_token = _guardrail_self_recorded.set(False)
         try:
             response = func(*args, **kwargs)
+            if self.records_own_guardrail_information or _guardrail_self_recorded.get():
+                return response
             return self._process_response(
                 response=response,
                 request_data=request_data,
                 duration=(datetime.now() - start_time).total_seconds(),
+                event_type=event_type,
+                original_inputs=original_inputs,
             )
         except Exception as e:
+            if _guardrail_self_recorded.get():
+                raise
             return self._process_error(
                 e=e,
                 request_data=request_data,
                 duration=(datetime.now() - start_time).total_seconds(),
+                event_type=event_type,
             )
+        finally:
+            _guardrail_self_recorded.reset(self_recorded_token)
+            _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        if asyncio.iscoroutinefunction(func):
+        if inspect.iscoroutinefunction(func):
             return async_wrapper(*args, **kwargs)
         return sync_wrapper(*args, **kwargs)
 

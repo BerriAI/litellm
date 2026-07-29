@@ -18,6 +18,7 @@ class StabilityImageGenerationRequest(TypedDict, total=False):
     - /v2beta/stable-image/generate/ultra
     - /v2beta/stable-image/generate/core
     """
+
     prompt: str  # Required - text prompt for image generation
     negative_prompt: Optional[str]  # What to avoid in the image
     aspect_ratio: Optional[str]  # e.g., "1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "9:21"
@@ -30,10 +31,21 @@ class StabilityImageGenerationRequest(TypedDict, total=False):
     style_preset: Optional[str]  # Style preset name
 
 
+class StabilityImageEditRequest(StabilityImageGenerationRequest):
+    """
+    Request parameters for Stability AI image edit endpoint.
+
+    Endpoint: /v2beta/stable-image/edit/inpaint
+    """
+
+    mask: Optional[str]  # Base64-encoded mask (white = edit, black = keep)
+
+
 class StabilityImageGenerationResponse(TypedDict, total=False):
     """
     Response from Stability AI image generation endpoints.
     """
+
     image: str  # Base64-encoded image
     finish_reason: str  # "SUCCESS", "CONTENT_FILTERED", etc.
     seed: int  # The seed used for generation
@@ -48,6 +60,7 @@ class StabilityUpscaleRequest(TypedDict, total=False):
     - /v2beta/stable-image/upscale/conservative
     - /v2beta/stable-image/upscale/creative
     """
+
     image: str  # Required - Base64-encoded image to upscale
     prompt: Optional[str]  # Text prompt (required for creative upscale)
     negative_prompt: Optional[str]  # What to avoid
@@ -62,6 +75,7 @@ class StabilityInpaintRequest(TypedDict, total=False):
 
     Endpoint: /v2beta/stable-image/edit/inpaint
     """
+
     image: str  # Required - Base64-encoded image to edit
     prompt: str  # Required - Description of desired changes
     mask: Optional[str]  # Base64-encoded mask (white = edit, black = keep)
@@ -77,6 +91,7 @@ class StabilityOutpaintRequest(TypedDict, total=False):
 
     Endpoint: /v2beta/stable-image/edit/outpaint
     """
+
     image: str  # Required - Base64-encoded image to expand
     prompt: Optional[str]  # Description of content to generate
     negative_prompt: Optional[str]  # What to avoid
@@ -95,6 +110,7 @@ class StabilityEraseRequest(TypedDict, total=False):
 
     Endpoint: /v2beta/stable-image/edit/erase
     """
+
     image: str  # Required - Base64-encoded image
     mask: Optional[str]  # Base64-encoded mask (white = erase)
     seed: Optional[int]  # Random seed
@@ -108,6 +124,7 @@ class StabilitySearchReplaceRequest(TypedDict, total=False):
 
     Endpoint: /v2beta/stable-image/edit/search-and-replace
     """
+
     image: str  # Required - Base64-encoded image
     prompt: str  # Required - Description of object to add
     search_prompt: str  # Required - Description of object to find and replace
@@ -123,6 +140,7 @@ class StabilityRemoveBackgroundRequest(TypedDict, total=False):
 
     Endpoint: /v2beta/stable-image/edit/remove-background
     """
+
     image: str  # Required - Base64-encoded image
     output_format: Optional[Literal["png", "webp"]]  # Output format (no jpeg - needs transparency)
 
@@ -136,6 +154,7 @@ class StabilityControlRequest(TypedDict, total=False):
     - /v2beta/stable-image/control/structure
     - /v2beta/stable-image/control/style
     """
+
     image: str  # Required - Base64-encoded control image (sketch/structure/style reference)
     prompt: str  # Required - Description of desired output
     negative_prompt: Optional[str]  # What to avoid
@@ -148,6 +167,7 @@ class StabilityEditResponse(TypedDict, total=False):
     """
     Response from Stability AI edit/upscale/control endpoints.
     """
+
     image: str  # Base64-encoded result image
     finish_reason: str  # "SUCCESS", "CONTENT_FILTERED", etc.
     seed: int  # The seed used
@@ -197,16 +217,12 @@ STABILITY_EDIT_ENDPOINTS = {
     "search-and-replace": "/v2beta/stable-image/edit/search-and-replace",
     "search-and-recolor": "/v2beta/stable-image/edit/search-and-recolor",
     "remove-background": "/v2beta/stable-image/edit/remove-background",
-}
-
-STABILITY_UPSCALE_ENDPOINTS = {
+    "replace-background-and-relight": "/v2beta/stable-image/edit/replace-background-and-relight",
     "fast": "/v2beta/stable-image/upscale/fast",
     "conservative": "/v2beta/stable-image/upscale/conservative",
     "creative": "/v2beta/stable-image/upscale/creative",
-}
-
-STABILITY_CONTROL_ENDPOINTS = {
     "sketch": "/v2beta/stable-image/control/sketch",
     "structure": "/v2beta/stable-image/control/structure",
     "style": "/v2beta/stable-image/control/style",
+    "style-transfer": "/v2beta/stable-image/control/style-transfer",
 }

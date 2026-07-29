@@ -5,7 +5,8 @@ RSpec.describe 'OpenAI Assistants Passthrough' do
   let(:client) do
     OpenAI::Client.new(
       access_token: "sk-1234",
-      uri_base: "http://0.0.0.0:4000/openai"
+      uri_base: "http://0.0.0.0:4000/openai",
+      request_timeout: 600
     )
   end
 

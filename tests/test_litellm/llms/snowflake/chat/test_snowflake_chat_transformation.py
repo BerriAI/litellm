@@ -1,18 +1,22 @@
 """
 Unit tests for Snowflake chat transformation
-Tests tool calling request/response transformations
+Tests tool calling request/response transformations and chat completions
 """
 
+import asyncio
 import os
 import copy
 import json
+from typing import Any, Dict, List
 
-from unittest.mock import patch
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, patch, Mock, MagicMock
 
 import httpx
+import pytest
 
 import litellm
+from litellm import completion, acompletion
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.snowflake.chat.transformation import SnowflakeConfig
 from litellm.types.utils import ModelResponse
 
@@ -22,11 +26,13 @@ class TestSnowflakeToolTransformation:
 
     def test_transform_request_with_tools(self):
         """
-        Test that OpenAI tool format is correctly transformed to Snowflake's tool_spec format.
+        Test that OpenAI tool format is passed through as-is to the native endpoint.
+
+        The native /chat/completions endpoint accepts standard OpenAI tool format
+        directly — no Snowflake-specific tool_spec transformation needed.
         """
         config = SnowflakeConfig()
 
-        # OpenAI format tools
         tools = [
             {
                 "type": "function",
@@ -54,58 +60,45 @@ class TestSnowflakeToolTransformation:
         optional_params = {"tools": tools}
 
         transformed_request = config.transform_request(
-            model="claude-3-5-sonnet",
+            model="llama3.1-70b",
             messages=[{"role": "user", "content": "What's the weather?"}],
             optional_params=optional_params,
             litellm_params={},
             headers={},
         )
 
-        # Verify tools were transformed to Snowflake format
         assert "tools" in transformed_request
         assert len(transformed_request["tools"]) == 1
-
-        snowflake_tool = transformed_request["tools"][0]
-        assert "tool_spec" in snowflake_tool
-        assert snowflake_tool["tool_spec"]["type"] == "generic"
-        assert snowflake_tool["tool_spec"]["name"] == "get_weather"
-        assert (
-            snowflake_tool["tool_spec"]["description"]
-            == "Get the current weather in a given location"
-        )
-        assert "input_schema" in snowflake_tool["tool_spec"]
-        assert snowflake_tool["tool_spec"]["input_schema"]["type"] == "object"
-        assert "location" in snowflake_tool["tool_spec"]["input_schema"]["properties"]
+        assert transformed_request["tools"] == tools
+        assert "tool_spec" not in json.dumps(transformed_request)
 
     def test_transform_request_with_tool_choice(self):
         """
-        Test that OpenAI tool_choice format is correctly transformed to Snowflake format.
+        Test that OpenAI tool_choice format is passed through as-is to the native endpoint.
         """
         config = SnowflakeConfig()
 
-        # OpenAI format tool_choice
         tool_choice = {"type": "function", "function": {"name": "get_weather"}}
 
         optional_params = {"tool_choice": tool_choice}
 
         transformed_request = config.transform_request(
-            model="claude-3-5-sonnet",
+            model="llama3.1-70b",
             messages=[{"role": "user", "content": "What's the weather?"}],
             optional_params=optional_params,
             litellm_params={},
             headers={},
         )
 
-        # Verify tool_choice was transformed to Snowflake format
         assert "tool_choice" in transformed_request
-        assert transformed_request["tool_choice"]["type"] == "tool"
-        assert transformed_request["tool_choice"]["name"] == [
-            "get_weather"
-        ]  # Array format
+        assert transformed_request["tool_choice"] == tool_choice
 
     def test_transform_request_with_string_tool_choice(self):
         """
-        Test that string tool_choice values pass through unchanged.
+        Test that string tool_choice values are passed through as-is to the native endpoint.
+
+        The native /chat/completions endpoint accepts OpenAI-style string
+        tool_choice values directly ("auto", "required", "none").
         """
         config = SnowflakeConfig()
 
@@ -113,41 +106,48 @@ class TestSnowflakeToolTransformation:
             optional_params = {"tool_choice": value}
 
             transformed_request = config.transform_request(
-                model="claude-3-5-sonnet",
+                model="llama3.1-70b",
                 messages=[{"role": "user", "content": "Test"}],
                 optional_params=optional_params,
                 litellm_params={},
                 headers={},
             )
 
-            assert transformed_request["tool_choice"] == value
+            assert transformed_request["tool_choice"] == value, (
+                f"tool_choice='{value}' should pass through unchanged, "
+                f"got {transformed_request['tool_choice']}"
+            )
 
     def test_transform_response_with_tool_calls(self):
         """
-        Test that Snowflake's content_list with tool_use is transformed to OpenAI format.
+        Test that standard OpenAI tool_calls response format is parsed correctly.
+
+        The native /chat/completions endpoint returns standard OpenAI format.
         """
         config = SnowflakeConfig()
 
-        # Mock Snowflake response with tool call
-        mock_snowflake_response = {
+        mock_response = {
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "model": "llama3.1-70b",
             "choices": [
                 {
+                    "index": 0,
                     "message": {
-                        "content_list": [
-                            {"type": "text", "text": ""},
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
                             {
-                                "type": "tool_use",
-                                "tool_use": {
-                                    "tool_use_id": "tooluse_abc123",
+                                "id": "call_abc123",
+                                "type": "function",
+                                "function": {
                                     "name": "get_weather",
-                                    "input": {
-                                        "location": "Paris, France",
-                                        "unit": "celsius",
-                                    },
+                                    "arguments": json.dumps({"location": "Paris, France", "unit": "celsius"}),
                                 },
-                            },
-                        ]
-                    }
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
                 }
             ],
             "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
@@ -155,7 +155,7 @@ class TestSnowflakeToolTransformation:
 
         response = httpx.Response(
             status_code=200,
-            json=mock_snowflake_response,
+            json=mock_response,
             headers={"Content-Type": "application/json"},
         )
 
@@ -166,7 +166,7 @@ class TestSnowflakeToolTransformation:
         logging_obj = MagicMock()
 
         result = config.transform_response(
-            model="claude-3-5-sonnet",
+            model="llama3.1-70b",
             raw_response=response,
             model_response=model_response,
             logging_obj=logging_obj,
@@ -177,61 +177,50 @@ class TestSnowflakeToolTransformation:
             encoding={},
         )
 
-        # General assertions
         assert isinstance(result, ModelResponse)
         assert len(result.choices) == 1
 
-        choice = result.choices[0]
-        assert isinstance(choice, litellm.Choices)
-
-        # Message and tool_calls assertions
-        message = choice.message
-        assert isinstance(message, litellm.Message)
-        assert hasattr(message, "tool_calls")
-        assert isinstance(message.tool_calls, list)
+        message = result.choices[0].message
+        assert message.tool_calls is not None
         assert len(message.tool_calls) == 1
 
-        # Specific tool_call assertions
         tool_call = message.tool_calls[0]
-        assert isinstance(tool_call, litellm.utils.ChatCompletionMessageToolCall)
-        assert tool_call.id == "tooluse_abc123"
+        assert tool_call.id == "call_abc123"
         assert tool_call.type == "function"
         assert tool_call.function.name == "get_weather"
 
-        # Verify arguments are properly JSON serialized
         arguments = json.loads(tool_call.function.arguments)
         assert arguments["location"] == "Paris, France"
         assert arguments["unit"] == "celsius"
 
-        # Verify content_list was removed and content was set
-        assert message.content == ""
-
     def test_transform_response_with_mixed_content(self):
         """
-        Test that responses with both text and tool calls are handled correctly.
+        Test that responses with both text content and tool calls are parsed correctly.
         """
         config = SnowflakeConfig()
 
-        # Mock Snowflake response with text and tool call
-        mock_snowflake_response = {
+        mock_response = {
+            "id": "chatcmpl-456",
+            "object": "chat.completion",
+            "model": "llama3.1-70b",
             "choices": [
                 {
+                    "index": 0,
                     "message": {
-                        "content_list": [
+                        "role": "assistant",
+                        "content": "Let me check the weather for you.",
+                        "tool_calls": [
                             {
-                                "type": "text",
-                                "text": "Let me check the weather for you. ",
-                            },
-                            {
-                                "type": "tool_use",
-                                "tool_use": {
-                                    "tool_use_id": "tooluse_xyz789",
+                                "id": "call_xyz789",
+                                "type": "function",
+                                "function": {
                                     "name": "get_weather",
-                                    "input": {"location": "Tokyo, Japan"},
+                                    "arguments": json.dumps({"location": "Tokyo, Japan"}),
                                 },
-                            },
-                        ]
-                    }
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
                 }
             ],
             "usage": {"prompt_tokens": 15, "completion_tokens": 25, "total_tokens": 40},
@@ -239,7 +228,7 @@ class TestSnowflakeToolTransformation:
 
         response = httpx.Response(
             status_code=200,
-            json=mock_snowflake_response,
+            json=mock_response,
             headers={"Content-Type": "application/json"},
         )
 
@@ -250,7 +239,7 @@ class TestSnowflakeToolTransformation:
         logging_obj = MagicMock()
 
         result = config.transform_response(
-            model="claude-3-5-sonnet",
+            model="llama3.1-70b",
             raw_response=response,
             model_response=model_response,
             logging_obj=logging_obj,
@@ -261,11 +250,8 @@ class TestSnowflakeToolTransformation:
             encoding={},
         )
 
-        # Verify text content was extracted
         message = result.choices[0].message
-        assert message.content == "Let me check the weather for you. "
-
-        # Verify tool call was also extracted
+        assert message.content == "Let me check the weather for you."
         assert len(message.tool_calls) == 1
         assert message.tool_calls[0].function.name == "get_weather"
 
@@ -324,7 +310,7 @@ class TestSnowflakeToolTransformation:
         Test that tools and tool_choice are in supported params.
         """
         config = SnowflakeConfig()
-        supported_params = config.get_supported_openai_params("claude-3-5-sonnet")
+        supported_params = config.get_supported_openai_params("llama3.1-70b")
 
         assert "tools" in supported_params
         assert "tool_choice" in supported_params
@@ -375,8 +361,8 @@ class TestSnowFlakeCompletion:
         assert "00000" in post_kwargs["headers"]["Authorization"]
         # account id was used
         assert "AAAA-BBBB" in post_kwargs["url"]
-        # is completion
-        assert post_kwargs["url"].endswith("cortex/inference:complete")
+        # uses native endpoint
+        assert post_kwargs["url"].endswith("cortex/v1/chat/completions")
 
     @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
     def test_snowflake_pat_key_account_id(self, mock_post):
@@ -425,3 +411,177 @@ class TestSnowFlakeCompletion:
 
         os.environ.pop("SNOWFLAKE_ACCOUNT_ID", None)
         os.environ.pop("SNOWFLAKE_JWT", None)
+
+
+FAKE_API_BASE = "https://fake-snowflake.example.com/api/v2/cortex/inference:chat"
+
+
+def _make_mock_response(json_data: Dict[str, Any]) -> MagicMock:
+    mock = MagicMock(spec=httpx.Response)
+    mock.status_code = 200
+    mock.headers = {"content-type": "application/json"}
+    mock.json.return_value = json_data
+    mock.text = json.dumps(json_data)
+    return mock
+
+
+def _chat_response() -> Dict[str, Any]:
+    return {
+        "id": "chatcmpl-snowflake-123",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "mistral-7b",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The sky above is painted blue,\nWith clouds of white and morning dew.",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 30,
+            "total_tokens": 40,
+        },
+    }
+
+
+def _streaming_chunks() -> List[str]:
+    base = {
+        "id": "chatcmpl-snowflake-stream-123",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "mistral-7b",
+    }
+    deltas = [
+        {"role": "assistant", "content": "The"},
+        {"content": " sky"},
+        {"content": " is blue"},
+    ]
+    chunks = []
+    for i, delta in enumerate(deltas):
+        finish = "stop" if i == len(deltas) - 1 else None
+        chunks.append(
+            json.dumps(
+                {
+                    **base,
+                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+                }
+            )
+        )
+    return chunks
+
+
+class TestSnowflakeChatCompletion:
+    """End-to-end chat completion tests (mocked HTTP)."""
+
+    messages = [{"role": "user", "content": "Write me a poem about the blue sky"}]
+
+    @pytest.mark.parametrize("sync_mode", [True, False])
+    def test_chat_completion_snowflake(self, sync_mode):
+        mock_resp = _make_mock_response(_chat_response())
+
+        if sync_mode:
+            with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post:
+                response = completion(
+                    model="snowflake/mistral-7b",
+                    messages=self.messages,
+                    api_key="fake-jwt",
+                    account_id="FAKE-ACCOUNT",
+                    api_base=FAKE_API_BASE,
+                )
+                mock_post.assert_called_once()
+        else:
+            with patch.object(
+                AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp
+            ) as mock_post:
+                response = asyncio.run(
+                    acompletion(
+                        model="snowflake/mistral-7b",
+                        messages=self.messages,
+                        api_key="fake-jwt",
+                        account_id="FAKE-ACCOUNT",
+                        api_base=FAKE_API_BASE,
+                    )
+                )
+                mock_post.assert_called_once()
+
+        assert response is not None
+        assert response.choices[0].message.content is not None
+        assert "sky" in response.choices[0].message.content.lower()
+        assert response.usage.prompt_tokens == 10
+        assert response.usage.completion_tokens == 30
+
+    @pytest.mark.parametrize("sync_mode", [True, False])
+    def test_chat_completion_snowflake_stream(self, sync_mode):
+        raw_chunks = _streaming_chunks()
+
+        if sync_mode:
+
+            def _iter_lines():
+                for chunk in raw_chunks:
+                    yield f"data: {chunk}"
+                yield "data: [DONE]"
+
+            mock_resp = MagicMock()
+            mock_resp.iter_lines.return_value = _iter_lines()
+            mock_resp.status_code = 200
+            mock_resp.headers = {"content-type": "text/event-stream"}
+
+            with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post:
+                response = completion(
+                    model="snowflake/mistral-7b",
+                    messages=self.messages,
+                    max_tokens=100,
+                    stream=True,
+                    api_key="fake-jwt",
+                    account_id="FAKE-ACCOUNT",
+                    api_base=FAKE_API_BASE,
+                )
+                chunks_received = list(response)
+                mock_post.assert_called_once()
+        else:
+
+            async def _aiter_lines():
+                for chunk in raw_chunks:
+                    yield f"data: {chunk}"
+                yield "data: [DONE]"
+
+            mock_resp = MagicMock()
+            mock_resp.aiter_lines.return_value = _aiter_lines()
+            mock_resp.status_code = 200
+            mock_resp.headers = {"content-type": "text/event-stream"}
+
+            async def _run():
+                with patch.object(
+                    AsyncHTTPHandler,
+                    "post",
+                    new_callable=AsyncMock,
+                    return_value=mock_resp,
+                ) as mock_post:
+                    resp = await acompletion(
+                        model="snowflake/mistral-7b",
+                        messages=self.messages,
+                        max_tokens=100,
+                        stream=True,
+                        api_key="fake-jwt",
+                        account_id="FAKE-ACCOUNT",
+                        api_base=FAKE_API_BASE,
+                    )
+                    received = []
+                    async for chunk in resp:
+                        received.append(chunk)
+                    mock_post.assert_called_once()
+                    return received
+
+            chunks_received = asyncio.run(_run())
+
+        assert len(chunks_received) > 0
+        content = "".join(
+            c.choices[0].delta.content
+            for c in chunks_received
+            if c.choices[0].delta.content
+        )

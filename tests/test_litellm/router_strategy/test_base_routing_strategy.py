@@ -20,7 +20,7 @@ from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 
 
 @pytest.fixture
-def mock_dual_cache():
+async def mock_dual_cache():
     dual_cache = MagicMock(spec=DualCache)
     dual_cache.in_memory_cache = MagicMock()
     dual_cache.redis_cache = MagicMock()
@@ -47,7 +47,7 @@ def mock_dual_cache():
 
 
 @pytest.fixture
-def base_strategy(mock_dual_cache):
+async def base_strategy(mock_dual_cache):
     return BaseRoutingStrategy(
         dual_cache=mock_dual_cache,
         should_batch_redis_writes=False,
@@ -137,7 +137,8 @@ async def test_sync_in_memory_spend_with_redis(base_strategy, mock_dual_cache):
     assert len(base_strategy.in_memory_keys_to_update) == 1
 
 
-def test_cache_keys_management(base_strategy):
+@pytest.mark.asyncio
+async def test_cache_keys_management(base_strategy):
     # Test adding and getting cache keys
     base_strategy.add_to_in_memory_keys_to_update("key1")
     base_strategy.add_to_in_memory_keys_to_update("key2")

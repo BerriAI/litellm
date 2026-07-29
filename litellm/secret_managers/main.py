@@ -1,9 +1,12 @@
 import ast
+import base64
 import os
+import time
 import traceback
 from typing import Optional, Union
 
 import httpx
+from pydantic import BaseModel, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -15,6 +18,95 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
 from litellm.secret_managers.secret_manager_handler import get_secret_from_manager
 
 oidc_cache = DualCache()
+
+
+_OIDC_TOKEN_EXPIRY_MARGIN_SECONDS = 60
+
+
+class _OidcTokenClaims(BaseModel):
+    exp: float | None = None
+
+
+def _oidc_token_cache_ttl(oidc_token: str, max_ttl: int) -> int:
+    """Cache TTL for a fetched OIDC token: ``max_ttl``, capped so the cache entry
+    never outlives the token's own ``exp`` claim (minus a safety margin).
+    Falls back to ``max_ttl`` when the token carries no readable ``exp``."""
+    segments = oidc_token.split(".")
+    if len(segments) != 3:
+        return max_ttl
+    payload = segments[1]
+    try:
+        decoded = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        claims = _OidcTokenClaims.model_validate_json(decoded)
+        if claims.exp is None:
+            return max_ttl
+        exp = int(claims.exp)
+    except (ValueError, OverflowError, ValidationError):
+        return max_ttl
+    return min(max_ttl, exp - int(time.time()) - _OIDC_TOKEN_EXPIRY_MARGIN_SECONDS)
+
+
+_DEFAULT_OIDC_ALLOWED_CREDENTIAL_DIRS = ("/var/run/secrets", "/run/secrets")
+
+
+def _get_oidc_allowed_credential_dirs() -> list[str]:
+    """
+    Return the absolute, normalized list of directories from which
+    ``oidc/file/`` is permitted to read token files.
+
+    Defaults to standard container credential mount points. Operators can
+    override via the ``LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS`` environment
+    variable (comma-separated list of absolute paths).
+    """
+    override = os.getenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS")
+    raw_dirs = (
+        [d.strip() for d in override.split(",") if d.strip()]
+        if override
+        else list(_DEFAULT_OIDC_ALLOWED_CREDENTIAL_DIRS)
+    )
+    return [os.path.realpath(d) for d in raw_dirs]
+
+
+def _resolve_oidc_file_path(requested_path: str) -> str:
+    """
+    Resolve ``requested_path`` and verify it falls within one of the allowed
+    credential directories. Raises ``ValueError`` otherwise.
+    """
+    if not os.path.isabs(requested_path):
+        raise ValueError(
+            "oidc/file path must be absolute. Use the format "
+            "'oidc/file//var/run/secrets/<name>' (note the leading slash "
+            "after 'oidc/file/')."
+        )
+    resolved = os.path.realpath(requested_path)
+    for allowed in _get_oidc_allowed_credential_dirs():
+        try:
+            if os.path.commonpath([resolved, allowed]) == allowed:
+                return resolved
+        except ValueError:
+            # commonpath raises when paths are on different drives (Windows);
+            # treat as not-matching and continue.
+            continue
+    raise ValueError(
+        "oidc/file path is outside the allowed credential directories. "
+        "Set LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS to extend the allowlist."
+    )
+
+
+def _get_oidc_http_handler(timeout: Optional[httpx.Timeout] = None) -> HTTPHandler:
+    """
+    Factory function to create HTTPHandler for OIDC requests.
+    This function can be mocked in tests.
+
+    Args:
+        timeout: Optional timeout for HTTP requests. Defaults to 600.0 seconds with 5.0 connect timeout.
+
+    Returns:
+        HTTPHandler instance configured for OIDC requests.
+    """
+    if timeout is None:
+        timeout = httpx.Timeout(timeout=600.0, connect=5.0)
+    return HTTPHandler(timeout=timeout)
 
 
 ######### Secret Manager ############################
@@ -58,6 +150,19 @@ def get_secret_str(
     return value
 
 
+def normalize_nonempty_secret_str(val: Optional[str]) -> Optional[str]:
+    """
+    Strip whitespace and treat None, '', and whitespace-only strings as unset.
+
+    Use when pairing secrets (mutual exclusion, optional auth) so whitespace-only
+    values do not count as present.
+    """
+    if val is None:
+        return None
+    stripped = val.strip()
+    return stripped if stripped else None
+
+
 def get_secret_bool(
     secret_name: str,
     default_value: Optional[bool] = None,
@@ -81,7 +186,7 @@ def get_secret_bool(
         return str_to_bool(_secret_value)
 
 
-def get_secret(  # noqa: PLR0915
+def get_secret(
     secret_name: str,
     default_value: Optional[Union[str, bool]] = None,
 ):
@@ -103,7 +208,7 @@ def get_secret(  # noqa: PLR0915
             if oidc_token is not None:
                 return oidc_token
 
-            oidc_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+            oidc_client = _get_oidc_http_handler()
             # https://cloud.google.com/compute/docs/instances/verifying-instance-identity#request_signature
             response = oidc_client.get(
                 "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity",
@@ -112,7 +217,15 @@ def get_secret(  # noqa: PLR0915
             )
             if response.status_code == 200:
                 oidc_token = response.text
-                oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=3600 - 60)
+                ttl = _oidc_token_cache_ttl(oidc_token, 3600 - 60)
+                if ttl > 0:
+                    oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=ttl)
+                else:
+                    verbose_logger.warning(
+                        "Google OIDC token for %s is already expired or expires within %ss; not caching it",
+                        secret_name,
+                        _OIDC_TOKEN_EXPIRY_MARGIN_SECONDS,
+                    )
                 return oidc_token
             else:
                 raise ValueError("Google OIDC provider failed")
@@ -141,7 +254,7 @@ def get_secret(  # noqa: PLR0915
             if oidc_token is not None:
                 return oidc_token
 
-            oidc_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+            oidc_client = _get_oidc_http_handler()
             response = oidc_client.get(
                 actions_id_token_request_url,
                 params={"audience": oidc_aud},
@@ -177,8 +290,9 @@ def get_secret(  # noqa: PLR0915
                 oidc_token = f.read()
                 return oidc_token
         elif oidc_provider == "file":
-            # Load token from a file
-            with open(oidc_aud, "r") as f:
+            # Load token from a file within an allowed credential directory.
+            safe_path = _resolve_oidc_file_path(oidc_aud)
+            with open(safe_path, "r") as f:
                 oidc_token = f.read()
                 return oidc_token
         elif oidc_provider == "env":

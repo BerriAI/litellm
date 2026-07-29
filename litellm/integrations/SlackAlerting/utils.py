@@ -18,7 +18,7 @@ else:
 
 
 def process_slack_alerting_variables(
-    alert_to_webhook_url: Optional[Dict[AlertType, Union[List[str], str]]]
+    alert_to_webhook_url: Optional[Dict[AlertType, Union[List[str], str]]],
 ) -> Optional[Dict[AlertType, Union[List[str], str]]]:
     """
     process alert_to_webhook_url
@@ -34,9 +34,7 @@ def process_slack_alerting_variables(
                 if "os.environ/" in webhook_url:
                     _env_value = get_secret(secret_name=webhook_url)
                     if not isinstance(_env_value, str):
-                        raise ValueError(
-                            f"Invalid webhook url value for: {webhook_url}. Got type={type(_env_value)}"
-                        )
+                        raise ValueError(f"Invalid webhook url value for: {webhook_url}. Got type={type(_env_value)}")
                     _webhook_values.append(_env_value)
                 else:
                     _webhook_values.append(webhook_url)
@@ -47,9 +45,7 @@ def process_slack_alerting_variables(
             if "os.environ/" in webhook_urls:
                 _env_value = get_secret(secret_name=webhook_urls)
                 if not isinstance(_env_value, str):
-                    raise ValueError(
-                        f"Invalid webhook url value for: {webhook_urls}. Got type={type(_env_value)}"
-                    )
+                    raise ValueError(f"Invalid webhook url value for: {webhook_urls}. Got type={type(_env_value)}")
                 _webhook_value_str = _env_value
             else:
                 _webhook_value_str = webhook_urls
@@ -76,10 +72,7 @@ async def _add_langfuse_trace_id_to_alert(
     # Only run if langfuse is added as a callback
     #########################################################
 
-    if (
-        request_data is not None
-        and request_data.get("litellm_logging_obj", None) is not None
-    ):
+    if request_data is not None and request_data.get("litellm_logging_obj", None) is not None:
         trace_id: Optional[str] = None
         litellm_logging_obj: Logging = request_data["litellm_logging_obj"]
 
@@ -89,9 +82,7 @@ async def _add_langfuse_trace_id_to_alert(
                 break
             await asyncio.sleep(3)  # wait 3s before retrying for trace id
         #########################################################
-        langfuse_object = litellm_logging_obj._get_callback_object(
-            service_name="langfuse"
-        )
+        langfuse_object = litellm_logging_obj._get_callback_object(service_name="langfuse")
         if langfuse_object is not None:
             base_url = langfuse_object.Langfuse.base_url
             return f"{base_url}/trace/{trace_id}"

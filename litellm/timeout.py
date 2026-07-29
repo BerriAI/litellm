@@ -70,9 +70,7 @@ def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
             elif "request_timeout" in kwargs and kwargs["request_timeout"] is not None:
                 local_timeout_duration = kwargs["request_timeout"]
             try:
-                value = await asyncio.wait_for(
-                    func(*args, **kwargs), timeout=timeout_duration
-                )
+                value = await asyncio.wait_for(func(*args, **kwargs), timeout=timeout_duration)
                 return value
             except asyncio.TimeoutError:
                 model = args[0] if len(args) > 0 else kwargs["model"]
@@ -90,6 +88,13 @@ def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
 
 
 class _LoopWrapper(Thread):
+    """Daemon thread that owns a dedicated asyncio event loop.
+
+    Used by the sync branch of :func:`timeout` to run a coroutine on a
+    background event loop so the calling thread can wait on it with a
+    timeout via :func:`asyncio.run_coroutine_threadsafe`.
+    """
+
     def __init__(self):
         super().__init__(daemon=True)
         self.loop = asyncio.new_event_loop()

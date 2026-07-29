@@ -18,6 +18,7 @@ from mcp.types import (
 from mcp.types import Tool as MCPTool
 
 from litellm.experimental_mcp_client.tools import (
+    transform_mcp_tool_to_anthropic_tool,
     _get_function_arguments,
     _normalize_mcp_input_schema,
     call_mcp_tool,
@@ -166,52 +167,52 @@ def test_normalize_mcp_input_schema():
     assert _normalize_mcp_input_schema(None) == {
         "type": "object",
         "properties": {},
-        "additionalProperties": False
+        "additionalProperties": False,
     }
-    
+
     assert _normalize_mcp_input_schema({}) == {
         "type": "object",
         "properties": {},
-        "additionalProperties": False
+        "additionalProperties": False,
     }
-    
+
     # Test case 2: Schema with only type should get properties added
     schema_with_type_only = {"type": "object"}
     normalized = _normalize_mcp_input_schema(schema_with_type_only)
     assert normalized == {
         "type": "object",
         "properties": {},
-        "additionalProperties": False
+        "additionalProperties": False,
     }
-    
+
     # Test case 3: Schema missing type should get type added
     schema_missing_type = {"properties": {"param": {"type": "string"}}}
     normalized = _normalize_mcp_input_schema(schema_missing_type)
     assert normalized == {
         "type": "object",
         "properties": {"param": {"type": "string"}},
-        "additionalProperties": False
+        "additionalProperties": False,
     }
-    
+
     # Test case 4: Complete schema should be preserved with additionalProperties added
     complete_schema = {
         "type": "object",
         "properties": {"param": {"type": "string"}},
-        "required": ["param"]
+        "required": ["param"],
     }
     normalized = _normalize_mcp_input_schema(complete_schema)
     assert normalized == {
         "type": "object",
         "properties": {"param": {"type": "string"}},
         "required": ["param"],
-        "additionalProperties": False
+        "additionalProperties": False,
     }
-    
+
     # Test case 5: Schema with existing additionalProperties should be preserved
     schema_with_additional = {
         "type": "object",
         "properties": {"param": {"type": "string"}},
-        "additionalProperties": True
+        "additionalProperties": True,
     }
     normalized = _normalize_mcp_input_schema(schema_with_additional)
     assert normalized["additionalProperties"] == True
@@ -223,9 +224,9 @@ def test_transform_mcp_tool_to_openai_responses_api_tool():
     minimal_tool = MCPTool(
         name="GitMCP-fetch_litellm_documentation",
         description="Fetch entire documentation file from GitHub repository",
-        inputSchema={"type": "object"}  # This was causing the error
+        inputSchema={"type": "object"},  # This was causing the error
     )
-    
+
     openai_tool = transform_mcp_tool_to_openai_responses_api_tool(minimal_tool)
     assert openai_tool["name"] == "GitMCP-fetch_litellm_documentation"
     assert openai_tool["type"] == "function"
@@ -233,7 +234,7 @@ def test_transform_mcp_tool_to_openai_responses_api_tool():
     assert openai_tool["parameters"]["type"] == "object"
     assert openai_tool["parameters"]["properties"] == {}
     assert openai_tool["parameters"]["additionalProperties"] == False
-    
+
     # Test case 2: Tool with complete schema
     complete_tool = MCPTool(
         name="test_tool_complete",
@@ -241,12 +242,102 @@ def test_transform_mcp_tool_to_openai_responses_api_tool():
         inputSchema={
             "type": "object",
             "properties": {"query": {"type": "string", "description": "Search query"}},
-            "required": ["query"]
-        }
+            "required": ["query"],
+        },
     )
-    
+
     openai_tool = transform_mcp_tool_to_openai_responses_api_tool(complete_tool)
     assert openai_tool["parameters"]["type"] == "object"
     assert "query" in openai_tool["parameters"]["properties"]
     assert openai_tool["parameters"]["required"] == ["query"]
     assert openai_tool["parameters"]["additionalProperties"] == False
+
+
+def test_transform_mcp_tool_to_anthropic_tool():
+    """
+    Regression test (LIT-4517): MCP tools must reach /v1/messages in Anthropic's
+    own tool shape.
+
+    Given: An MCP tool
+    When:  It is transformed for the Anthropic Messages API
+    Then:  It carries name/description/input_schema, the shape that endpoint
+           accepts, rather than an OpenAI function block
+
+    /v1/messages rejects an OpenAI-shaped tool outright ("Input tag 'function'
+    does not match any of the expected tags"), so reusing either OpenAI
+    transform here loses every MCP tool.
+    """
+    tool = MCPTool(
+        name="read_wiki_structure",
+        description="Get a list of documentation topics",
+        inputSchema={
+            "type": "object",
+            "properties": {"repoName": {"type": "string"}},
+            "required": ["repoName"],
+        },
+    )
+
+    anthropic_tool = transform_mcp_tool_to_anthropic_tool(tool)
+
+    assert anthropic_tool["name"] == "read_wiki_structure"
+    assert anthropic_tool["description"] == "Get a list of documentation topics"
+    assert anthropic_tool["type"] == "custom"
+    assert anthropic_tool["input_schema"]["type"] == "object"
+    assert "repoName" in anthropic_tool["input_schema"]["properties"]
+    assert anthropic_tool["input_schema"]["required"] == ["repoName"]
+    assert "function" not in anthropic_tool, "Anthropic tools must not carry an OpenAI function block"
+    assert "parameters" not in anthropic_tool, "Anthropic names the schema input_schema, not parameters"
+
+
+def test_transform_mcp_tool_to_anthropic_tool_normalizes_empty_schema():
+    """A tool with no declared arguments must still present a valid object schema."""
+    anthropic_tool = transform_mcp_tool_to_anthropic_tool(
+        MCPTool(name="noargs", description=None, inputSchema={})
+    )
+
+    assert anthropic_tool["name"] == "noargs"
+    assert anthropic_tool["description"] == ""
+    assert anthropic_tool["input_schema"]["type"] == "object"
+    assert anthropic_tool["input_schema"]["properties"] == {}
+
+
+def test_transform_mcp_tool_to_anthropic_tool_strips_keys_anthropic_rejects():
+    """
+    Regression test (LIT-4517): an MCP schema with keys Anthropic does not accept
+    must be sanitized, so the same tool cannot succeed on /chat/completions and 400
+    on /v1/messages.
+
+    Given: An MCP tool whose inputSchema carries $schema, legacy definitions and oneOf
+    When:  It is transformed for the Anthropic Messages API
+    Then:  Only keys in AnthropicInputSchema survive, matching the chat path
+
+    The chat path runs the schema through the same sanitizer, so before this the two
+    routes diverged: a clean-schema server (deepwiki) worked on both, but a server
+    with a richer schema would be rejected only on messages.
+    """
+    from litellm.types.llms.anthropic import AnthropicInputSchema
+
+    tool = MCPTool(
+        name="rich",
+        description="tool with a dirty schema",
+        inputSchema={
+            "type": "object",
+            "properties": {"q": {"type": "string"}},
+            "required": ["q"],
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {"D": {"type": "string"}},
+            "oneOf": [{"required": ["q"]}],
+        },
+    )
+
+    anthropic_tool = transform_mcp_tool_to_anthropic_tool(tool)
+    schema_keys = set(anthropic_tool["input_schema"].keys())
+
+    assert schema_keys <= set(AnthropicInputSchema.__annotations__.keys()), (
+        f"schema must only carry keys Anthropic accepts, got {schema_keys}"
+    )
+    assert "$schema" not in schema_keys
+    assert "definitions" not in schema_keys
+    assert "oneOf" not in schema_keys
+    assert anthropic_tool["input_schema"]["properties"] == {"q": {"type": "string"}}
+    assert anthropic_tool["input_schema"]["required"] == ["q"]

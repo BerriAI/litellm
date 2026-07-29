@@ -25,7 +25,7 @@ model_list = [
     {
         "model_name": "mistral-7b-instruct",
         "litellm_params": {  # params for litellm completion/embedding call
-            "model": "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
+            "model": "together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
             "api_key": os.getenv("TOGETHERAI_API_KEY"),
         },
     },
@@ -49,6 +49,3 @@ def test_multiple_deployments():
     except Exception as e:
         traceback.print_exc()
         pytest.fail(f"An exception occurred: {e}")
-
-
-test_multiple_deployments()

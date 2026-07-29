@@ -1,9 +1,9 @@
 """
-Handles Batching + sending Httpx Post requests to slack 
+Handles Batching + sending Httpx Post requests to slack
 
-Slack alerts are sent every 10s or when events are greater than X events 
+Slack alerts are sent every 10s or when events are greater than X events
 
-see custom_batch_logger.py for more details / defaults 
+see custom_batch_logger.py for more details / defaults
 """
 
 from typing import TYPE_CHECKING, Any
@@ -40,9 +40,7 @@ def squash_payloads(queue):
     return squashed
 
 
-def _print_alerting_payload_warning(
-    payload: dict, slackAlertingInstance: SlackAlertingType
-):
+def _print_alerting_payload_warning(payload: dict, slackAlertingInstance: SlackAlertingType):
     """
     Print the payload to the console when
     slackAlertingInstance.alerting_args.log_to_console is True
@@ -70,12 +68,8 @@ async def send_to_webhook(slackAlertingInstance: SlackAlertingType, item, count)
             data=json.dumps(payload),
         )
         if response.status_code != 200:
-            verbose_proxy_logger.debug(
-                f"Error sending slack alert to url={item['url']}. Error={response.text}"
-            )
+            verbose_proxy_logger.debug(f"Error sending slack alert to url={item['url']}. Error={response.text}")
     except Exception as e:
         verbose_proxy_logger.debug(f"Error sending slack alert: {str(e)}")
     finally:
-        _print_alerting_payload_warning(
-            payload, slackAlertingInstance=slackAlertingInstance
-        )
+        _print_alerting_payload_warning(payload, slackAlertingInstance=slackAlertingInstance)

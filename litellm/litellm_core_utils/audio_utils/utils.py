@@ -53,8 +53,19 @@ def process_audio_file(audio_file: FileTypes) -> ProcessedAudioFile:
         # Raw bytes
         filename = "audio.wav"
         file_content = bytes(audio_file)
-    elif isinstance(audio_file, (str, os.PathLike)):
-        # File path or PathLike
+    elif isinstance(audio_file, str):
+        # Bare strings are rejected — see extract_file_data for the same
+        # rationale: in a proxy request handler the string is
+        # attacker-controlled, and opening it as a path is an arbitrary
+        # file read.
+        raise ValueError(
+            "process_audio_file does not accept bare str inputs. Pass bytes, "
+            "an open file handle, a (filename, content) tuple, or a "
+            "pathlib.Path."
+        )
+    elif isinstance(audio_file, os.PathLike):
+        # File path or PathLike — PathLike is a Python-level type that
+        # HTTP form values can't fabricate.
         file_path = str(audio_file)
         with open(file_path, "rb") as f:
             file_content = f.read()
@@ -66,8 +77,14 @@ def process_audio_file(audio_file: FileTypes) -> ProcessedAudioFile:
             content = audio_file[1]
             if isinstance(content, (bytes, bytearray)):
                 file_content = bytes(content)
-            elif isinstance(content, (str, os.PathLike)):
-                # File path or PathLike
+            elif isinstance(content, str):
+                raise ValueError(
+                    "process_audio_file does not accept bare str tuple "
+                    "contents. Pass bytes, an open file handle, or a "
+                    "pathlib.Path."
+                )
+            elif isinstance(content, os.PathLike):
+                # PathLike: SDK convenience for local-file uploads.
                 with open(str(content), "rb") as f:
                     file_content = f.read()
             elif hasattr(content, "read"):
@@ -79,9 +96,7 @@ def process_audio_file(audio_file: FileTypes) -> ProcessedAudioFile:
                 raise ValueError(f"Unsupported content type in tuple: {type(content)}")
         else:
             raise ValueError("Tuple must have at least 2 elements: (filename, content)")
-    elif hasattr(audio_file, "read") and not isinstance(
-        audio_file, (str, bytes, bytearray, tuple, os.PathLike)
-    ):
+    elif hasattr(audio_file, "read") and not isinstance(audio_file, (str, bytes, bytearray, tuple, os.PathLike)):
         # File-like object (IO) - check this after all other types
         filename = getattr(audio_file, "name", "audio.wav")
         file_content = audio_file.read()  # type: ignore
@@ -105,9 +120,35 @@ def process_audio_file(audio_file: FileTypes) -> ProcessedAudioFile:
             # If extension is not recognized, fallback to audio/wav
             content_type = "audio/wav"
 
-    return ProcessedAudioFile(
-        file_content=file_content, filename=filename, content_type=content_type
-    )
+    return ProcessedAudioFile(file_content=file_content, filename=filename, content_type=content_type)
+
+
+BARE_ISO_639_1_TO_BCP47 = {
+    "en": "en-US",
+    "es": "es-ES",
+    "de": "de-DE",
+    "fr": "fr-FR",
+    "it": "it-IT",
+    "pt": "pt-BR",
+    "ja": "ja-JP",
+    "ko": "ko-KR",
+    "zh": "zh-CN",
+    "ru": "ru-RU",
+    "hi": "hi-IN",
+    "ar": "ar-SA",
+}
+
+
+def normalize_transcription_language_to_bcp47(language: str) -> str:
+    """
+    OpenAI's transcription `language` param accepts bare ISO-639-1 codes like
+    ``en``; speech APIs such as Google Speech-to-Text and NVIDIA Riva require
+    BCP-47 like ``en-US``. Map the most common bare codes and pass through
+    anything already region-qualified (or unknown, for a clear provider error).
+    """
+    if "-" in language:
+        return language
+    return BARE_ISO_639_1_TO_BCP47.get(language.lower(), language)
 
 
 def get_audio_file_name(file_obj: FileTypes) -> str:
@@ -135,7 +176,7 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
     """
     file_content: Optional[bytes] = None
     fallback_filename: Optional[str] = None
-    
+
     if isinstance(file_obj, tuple):
         if len(file_obj) < 2:
             fallback_filename = str(file_obj[0]) if len(file_obj) > 0 else None
@@ -145,11 +186,18 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
     else:
         file_content_obj = file_obj
         fallback_filename = get_audio_file_name(file_obj)
-    
+
     try:
         if isinstance(file_content_obj, (bytes, bytearray)):
             file_content = bytes(file_content_obj)
-        elif isinstance(file_content_obj, (str, os.PathLike)):
+        elif isinstance(file_content_obj, str):
+            # Bare strings are not treated as file paths in this helper —
+            # the cache-key path is reached from request handlers where the
+            # value is attacker-controlled. Fall back to hashing the string
+            # itself rather than opening it.
+            fallback_filename = file_content_obj
+            file_content = None
+        elif isinstance(file_content_obj, os.PathLike):
             try:
                 with open(str(file_content_obj), "rb") as f:
                     file_content = f.read()
@@ -172,20 +220,20 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
             file_content = None
     except Exception:
         file_content = None
-    
+
     if file_content is not None and isinstance(file_content, bytes):
         try:
             hash_object = hashlib.sha256(file_content)
             return hash_object.hexdigest()
         except Exception:
             pass
-    
+
     if fallback_filename:
-        hash_object = hashlib.sha256(fallback_filename.encode('utf-8'))
+        hash_object = hashlib.sha256(fallback_filename.encode("utf-8"))
         return hash_object.hexdigest()
-    
+
     file_obj_str = str(file_obj)
-    hash_object = hashlib.sha256(file_obj_str.encode('utf-8'))
+    hash_object = hashlib.sha256(file_obj_str.encode("utf-8"))
     return hash_object.hexdigest()
 
 
@@ -225,8 +273,15 @@ def calculate_request_duration(file: FileTypes) -> Optional[float]:
         if isinstance(file, (bytes, bytearray)):
             # Raw bytes
             file_content = bytes(file)
-        elif isinstance(file, (str, os.PathLike)):
-            # File path
+        elif isinstance(file, str):
+            # Bare strings are rejected — see extract_file_data.
+            raise ValueError(
+                "calculate_request_duration does not accept bare str inputs. "
+                "Pass bytes, an open file handle, a (filename, content) "
+                "tuple, or a pathlib.Path."
+            )
+        elif isinstance(file, os.PathLike):
+            # File path (PathLike): SDK convenience.
             with open(str(file), "rb") as f:
                 file_content = f.read()
         elif isinstance(file, tuple):
@@ -235,9 +290,7 @@ def calculate_request_duration(file: FileTypes) -> Optional[float]:
                 content = file[1]
                 if isinstance(content, bytes):
                     file_content = content
-                elif hasattr(content, "read") and not isinstance(
-                    content, (str, os.PathLike)
-                ):
+                elif hasattr(content, "read") and not isinstance(content, (str, os.PathLike)):
                     # File-like object in tuple
                     current_pos = getattr(content, "tell", lambda: None)()
                     # Seek to start to ensure we read the entire content

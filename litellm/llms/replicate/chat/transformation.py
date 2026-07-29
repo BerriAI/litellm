@@ -133,9 +133,7 @@ class ReplicateConfig(BaseConfig):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        return ReplicateError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+        return ReplicateError(status_code=status_code, message=error_message, headers=headers)
 
     def get_complete_url(
         self,
@@ -191,9 +189,7 @@ class ReplicateConfig(BaseConfig):
             model_prompt_details = litellm.custom_prompt_dict[model]
             prompt = custom_prompt(
                 role_dict=model_prompt_details.get("roles", {}),
-                initial_prompt_value=model_prompt_details.get(
-                    "initial_prompt_value", ""
-                ),
+                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
                 final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
                 bos_token=model_prompt_details.get("bos_token", ""),
                 eos_token=model_prompt_details.get("eos_token", ""),
@@ -225,8 +221,7 @@ class ReplicateConfig(BaseConfig):
         if ":" in version_id and len(version_id) > REPLICATE_MODEL_NAME_WITH_ID_LENGTH:
             model_parts = version_id.split(":")
             if (
-                len(model_parts) > 1
-                and len(model_parts[1]) == REPLICATE_MODEL_NAME_WITH_ID_LENGTH
+                len(model_parts) > 1 and len(model_parts[1]) == REPLICATE_MODEL_NAME_WITH_ID_LENGTH
             ):  ## checks if model name has a 64 digit code - e.g. "meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3"
                 request_data["version"] = model_parts[1]
 
@@ -256,9 +251,7 @@ class ReplicateConfig(BaseConfig):
         if raw_response_json.get("status") != "succeeded":
             raise ReplicateError(
                 status_code=422,
-                message="LiteLLM Error - prediction not succeeded - {}".format(
-                    raw_response_json
-                ),
+                message="LiteLLM Error - prediction not succeeded - {}".format(raw_response_json),
                 headers=raw_response.headers,
             )
         outputs = raw_response_json.get("output", [])
@@ -299,9 +292,7 @@ class ReplicateConfig(BaseConfig):
         if prediction_url is None:
             raise ReplicateError(
                 status_code=400,
-                message="LiteLLM Error - prediction url is None - {}".format(
-                    response_json
-                ),
+                message="LiteLLM Error - prediction url is None - {}".format(response_json),
                 headers=response.headers,
             )
         return prediction_url

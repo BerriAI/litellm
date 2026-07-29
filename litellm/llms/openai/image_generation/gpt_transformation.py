@@ -15,12 +15,10 @@ if TYPE_CHECKING:
 
 class GPTImageGenerationConfig(BaseImageGenerationConfig):
     """
-    OpenAI gpt-image-1 image generation config
+    OpenAI gpt-image image generation config
     """
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         return [
             "background",
             "moderation",
@@ -83,14 +81,8 @@ class GPTImageGenerationConfig(BaseImageGenerationConfig):
         )
 
         # set optional params
-        image_response.size = optional_params.get(
-            "size", "1024x1024"
-        )  # default is always 1024x1024
-        image_response.quality = optional_params.get(
-            "quality", "high"
-        )  # always hd for dall-e-3
-        image_response.output_format = optional_params.get(
-            "response_format", "png"
-        )  # always png for dall-e-3
+        image_response.size = optional_params.get("size", "1024x1024")  # default is always 1024x1024
+        image_response.quality = optional_params.get("quality", "high")  # always hd for dall-e-3
+        image_response.output_format = optional_params.get("response_format", "png")  # always png for dall-e-3
 
         return image_response

@@ -11,16 +11,16 @@ import httpx
 from httpx import Headers
 
 import litellm
-from litellm.types.utils import all_litellm_params
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.utils import all_litellm_params
 
 from ..common_utils import ElevenLabsException
-
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -105,9 +105,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
                 mapped_voice = self._extract_voice_id(voice_override)
 
         if mapped_voice is None:
-            raise ValueError(
-                "ElevenLabs voice_id is required. Pass `voice` when calling `litellm.speech()`."
-            )
+            raise ValueError("ElevenLabs voice_id is required. Pass `voice` when calling `litellm.speech()`.")
 
         return mapped_voice
 
@@ -175,34 +173,23 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Validate Azure environment and set up authentication headers
         """
-        api_key = (
-            api_key
-            or litellm.api_key
-            or litellm.openai_key
-            or get_secret_str("ELEVENLABS_API_KEY")
-        )
+        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("ELEVENLABS_API_KEY")
 
         if api_key is None:
-            raise ValueError(
-                "ElevenLabs API key is required. Set ELEVENLABS_API_KEY environment variable."
-            )
+            raise ValueError("ElevenLabs API key is required. Set ELEVENLABS_API_KEY environment variable.")
 
         headers.update(
             {
                 "xi-api-key": api_key,
                 "Content-Type": "application/json",
             }
-        )        
-        
-        return headers
-    
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return ElevenLabsException(
-            message=error_message, status_code=status_code, headers=headers
         )
-    
+
+        return headers
+
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+        return ElevenLabsException(message=error_message, status_code=status_code, headers=headers)
+
     def transform_text_to_speech_request(
         self,
         model: str,
@@ -310,20 +297,15 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Construct the ElevenLabs endpoint URL, including path voice_id and query params.
         """
-        base_url = (
-            api_base
-            or get_secret_str("ELEVENLABS_API_BASE")
-            or self.TTS_BASE_URL
-        )
+        base_url = api_base or get_secret_str("ELEVENLABS_API_BASE") or self.TTS_BASE_URL
         base_url = base_url.rstrip("/")
 
         voice_id = litellm_params.get(self.ELEVENLABS_VOICE_ID_KEY)
         if not isinstance(voice_id, str) or not voice_id.strip():
-            raise ValueError(
-                "ElevenLabs voice_id is required. Pass `voice` when calling `litellm.speech()`."
-            )
+            raise ValueError("ElevenLabs voice_id is required. Pass `voice` when calling `litellm.speech()`.")
 
-        url = f"{base_url}{self.TTS_ENDPOINT_PATH}/{voice_id}"
+        encoded_voice_id = encode_url_path_segment(voice_id, field_name="voice_id")
+        url = f"{base_url}{self.TTS_ENDPOINT_PATH}/{encoded_voice_id}"
 
         query_params = litellm_params.get(self.ELEVENLABS_QUERY_PARAMS_KEY, {})
         if query_params:

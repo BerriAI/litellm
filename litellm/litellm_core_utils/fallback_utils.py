@@ -3,7 +3,13 @@ from typing import Optional
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import safe_deep_copy, filter_internal_params
+from litellm.litellm_core_utils.core_helpers import (
+    safe_deep_copy,
+    filter_internal_params,
+)
+from litellm.router_utils.add_retry_fallback_headers import (
+    add_fallback_headers_to_response,
+)
 
 from .asyncify import run_async_function
 
@@ -39,13 +45,14 @@ async def async_completion_with_fallbacks(**kwargs):
 
     # Try each fallback model
     most_recent_exception_str: Optional[str] = None
-    for fallback in fallbacks:
+    for attempted_fallbacks, fallback in enumerate(fallbacks):
         try:
             completion_kwargs = safe_deep_copy(base_kwargs)
             # Handle dictionary fallback configurations
             if isinstance(fallback, dict):
-                model = fallback.pop("model", original_model)
-                completion_kwargs.update(fallback)
+                fallback_config = safe_deep_copy(dict(fallback))
+                model = fallback_config.pop("model", original_model)
+                completion_kwargs.update(fallback_config)
             else:
                 model = fallback
 
@@ -59,12 +66,13 @@ async def async_completion_with_fallbacks(**kwargs):
             )
 
             if response is not None:
-                return response
+                return add_fallback_headers_to_response(
+                    response=response,
+                    attempted_fallbacks=attempted_fallbacks,
+                )
 
         except Exception as e:
-            verbose_logger.exception(
-                f"Fallback attempt failed for model {model}: {str(e)}"
-            )
+            verbose_logger.exception(f"Fallback attempt failed for model {model}: {str(e)}")
             most_recent_exception_str = str(e)
             continue
 

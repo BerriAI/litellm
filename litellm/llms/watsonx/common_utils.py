@@ -26,9 +26,7 @@ iam_token_cache = InMemoryCache()
 
 
 def get_watsonx_iam_url():
-    return (
-        get_secret_str("WATSONX_IAM_URL") or "https://iam.cloud.ibm.com/identity/token"
-    )
+    return get_secret_str("WATSONX_IAM_URL") or "https://iam.cloud.ibm.com/identity/token"
 
 
 def generate_iam_token(api_key=None, **params) -> str:
@@ -42,6 +40,7 @@ def generate_iam_token(api_key=None, **params) -> str:
                 get_secret_str("WX_API_KEY")
                 or get_secret_str("WATSONX_API_KEY")
                 or get_secret_str("WATSONX_APIKEY")
+                or get_secret_str("WATSONX_ZENAPIKEY")
             )
         if api_key is None:
             raise ValueError("API key is required")
@@ -57,9 +56,7 @@ def generate_iam_token(api_key=None, **params) -> str:
             headers,
             data,
         )
-        response = litellm.module_level_client.post(
-            url=iam_token_url, data=data, headers=headers
-        )
+        response = litellm.module_level_client.post(url=iam_token_url, data=data, headers=headers)
         response.raise_for_status()
         json_data = response.json()
 
@@ -80,9 +77,7 @@ def _generate_watsonx_token(api_key: Optional[str], token: Optional[str]) -> str
     return token
 
 
-def _get_api_params(
-    params: dict,
-) -> WatsonXAPIParams:
+def _get_api_params(params: dict, model: Optional[str] = None) -> WatsonXAPIParams:
     """
     Find watsonx.ai credentials in the params or environment variables and return the headers for authentication.
     """
@@ -100,16 +95,10 @@ def _get_api_params(
     # Load auth variables from environment variables
     if project_id is None:
         project_id = (
-            get_secret_str("WATSONX_PROJECT_ID")
-            or get_secret_str("WX_PROJECT_ID")
-            or get_secret_str("PROJECT_ID")
+            get_secret_str("WATSONX_PROJECT_ID") or get_secret_str("WX_PROJECT_ID") or get_secret_str("PROJECT_ID")
         )
     if region_name is None:
-        region_name = (
-            get_secret_str("WATSONX_REGION")
-            or get_secret_str("WX_REGION")
-            or get_secret_str("REGION")
-        )
+        region_name = get_secret_str("WATSONX_REGION") or get_secret_str("WX_REGION") or get_secret_str("REGION")
     if space_id is None:
         space_id = (
             get_secret_str("WATSONX_DEPLOYMENT_SPACE_ID")
@@ -118,10 +107,10 @@ def _get_api_params(
             or get_secret_str("SPACE_ID")
         )
 
-    if project_id is None:
+    if project_id is None and space_id is None and model is not None and not model.startswith("deployment/"):
         raise WatsonXAIError(
             status_code=401,
-            message="Error: Watsonx project_id not set. Set WX_PROJECT_ID in environment variables or pass in as a parameter.",
+            message="Error: Watsonx project_id and space_id not set. Set WX_PROJECT_ID or WX_SPACE_ID in environment variables or pass in as a parameter.",
         )
 
     return WatsonXAPIParams(
@@ -160,9 +149,7 @@ async def _aconvert_watsonx_messages_core(
         if result:
             return result
         # Fallback to default
-        return ptf.prompt_factory(
-            model=model, messages=messages, custom_llm_provider="watsonx"
-        )  # type: ignore
+        return ptf.prompt_factory(model=model, messages=messages, custom_llm_provider="watsonx")  # type: ignore
 
 
 def _convert_watsonx_messages_core(
@@ -194,13 +181,14 @@ def _convert_watsonx_messages_core(
         if result:
             return result
         # Fallback to default
-        return ptf.prompt_factory(
-            model=model, messages=messages, custom_llm_provider="watsonx"
-        )  # type: ignore
+        return ptf.prompt_factory(model=model, messages=messages, custom_llm_provider="watsonx")  # type: ignore
 
 
 async def aconvert_watsonx_messages_to_prompt(
-    model: str, messages: List[AllMessageValues], provider: str, custom_prompt_dict: Dict
+    model: str,
+    messages: List[AllMessageValues],
+    provider: str,
+    custom_prompt_dict: Dict,
 ) -> str:
     """Async version of convert_watsonx_messages_to_prompt"""
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
@@ -215,7 +203,10 @@ async def aconvert_watsonx_messages_to_prompt(
 
 
 def convert_watsonx_messages_to_prompt(
-    model: str, messages: List[AllMessageValues], provider: str, custom_prompt_dict: Dict
+    model: str,
+    messages: List[AllMessageValues],
+    provider: str,
+    custom_prompt_dict: Dict,
 ) -> str:
     """Sync version of convert_watsonx_messages_to_prompt"""
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
@@ -291,9 +282,7 @@ class IBMWatsonXMixin:
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
     ) -> BaseLLMException:
-        return WatsonXAIError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+        return WatsonXAIError(status_code=status_code, message=error_message, headers=headers)
 
     @staticmethod
     def get_watsonx_credentials(
@@ -305,6 +294,7 @@ class IBMWatsonXMixin:
             or get_secret_str("WATSONX_APIKEY")
             or get_secret_str("WATSONX_API_KEY")
             or get_secret_str("WX_API_KEY")
+            or get_secret_str("WATSONX_ZENAPIKEY")
         )
 
         api_base = (
@@ -321,18 +311,14 @@ class IBMWatsonXMixin:
 
         wx_credentials = optional_params.pop(
             "wx_credentials",
-            optional_params.pop(
-                "watsonx_credentials", None
-            ),  # follow {provider}_credentials, same as vertex ai
+            optional_params.pop("watsonx_credentials", None),  # follow {provider}_credentials, same as vertex ai
         )
 
         token: Optional[str] = None
 
         if wx_credentials is not None:
             api_base = wx_credentials.get("url", api_base)
-            api_key = wx_credentials.get(
-                "apikey", wx_credentials.get("api_key", api_key)
-            )
+            api_key = wx_credentials.get("apikey", wx_credentials.get("api_key", api_key))
             token = wx_credentials.get(
                 "token",
                 wx_credentials.get(
@@ -349,16 +335,15 @@ class IBMWatsonXMixin:
                 status_code=401,
                 message="Error: Watsonx API base not set. Set WATSONX_API_BASE in environment variables or pass in as parameter - 'api_base='.",
             )
-        return WatsonXCredentials(
-            api_key=api_key, api_base=api_base, token=cast(Optional[str], token)
-        )
+        return WatsonXCredentials(api_key=api_key, api_base=api_base, token=cast(Optional[str], token))
 
     def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict:
         payload: dict = {}
         if model.startswith("deployment/"):
-            return (
-                {}
-            )  # Deployment models do not support 'space_id' or 'project_id' in their payload
+            return {}  # Deployment models do not support 'space_id' or 'project_id' in their payload
         payload["model_id"] = model
-        payload["project_id"] = api_params["project_id"]
+        if api_params["project_id"] is not None:
+            payload["project_id"] = api_params["project_id"]
+        else:
+            payload["space_id"] = api_params["space_id"]
         return payload

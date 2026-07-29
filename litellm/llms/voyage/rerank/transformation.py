@@ -4,7 +4,7 @@ Transformation logic for Voyage AI's /v1/rerank endpoint.
 Docs - https://docs.voyageai.com/docs/reranker
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
 import httpx
 
@@ -23,7 +23,6 @@ from ..embedding.transformation import VoyageError
 
 
 class VoyageRerankConfig(BaseRerankConfig):
-
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         return ["query", "documents", "top_n", "return_documents"]
 
@@ -34,12 +33,13 @@ class VoyageRerankConfig(BaseRerankConfig):
         drop_params: bool,
         query: str,
         documents: List[Union[str, Dict[str, Any]]],
-        custom_llm_provider: Optional[str] = None,
-        top_n: Optional[int] = None,
-        rank_fields: Optional[List[str]] = None,
-        return_documents: Optional[bool] = True,
-        max_chunks_per_doc: Optional[int] = None,
-        max_tokens_per_doc: Optional[int] = None,
+        custom_llm_provider: str | None = None,
+        top_n: int | None = None,
+        rank_fields: List[str] | None = None,
+        return_documents: bool | None = True,
+        max_chunks_per_doc: int | None = None,
+        max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
     ) -> Dict:
         # Voyage AI uses 'top_k' instead of 'top_n'
         optional_params: Dict[str, Any] = {"query": query, "documents": documents}
@@ -53,9 +53,9 @@ class VoyageRerankConfig(BaseRerankConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        optional_params: Optional[dict] = None,
+        optional_params: dict | None = None,
     ) -> str:
         if api_base is None:
             return "https://api.voyageai.com/v1/rerank"
@@ -68,7 +68,11 @@ class VoyageRerankConfig(BaseRerankConfig):
         return api_base
 
     def transform_rerank_request(
-        self, model: str, optional_rerank_params: Dict, headers: Dict
+        self,
+        model: str,
+        optional_rerank_params: Dict,
+        headers: Dict,
+        litellm_params: dict | None = None,
     ) -> Dict:
         return {"model": model, **optional_rerank_params}
 
@@ -78,15 +82,13 @@ class VoyageRerankConfig(BaseRerankConfig):
         raw_response: httpx.Response,
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: Dict = {},
         optional_params: Dict = {},
         litellm_params: Dict = {},
     ) -> RerankResponse:
         if raw_response.status_code != 200:
-            raise VoyageError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise VoyageError(message=raw_response.text, status_code=raw_response.status_code)
 
         logging_obj.post_call(original_response=raw_response.text)
 
@@ -99,7 +101,7 @@ class VoyageRerankConfig(BaseRerankConfig):
             )
 
         # Voyage AI returns results in "data" key, not "results"
-        _results: Optional[List[dict]] = _json_response.get("data")
+        _results: List[dict] | None = _json_response.get("data")
         if _results is None:
             raise ValueError(f"No results found in the response={_json_response}")
 
@@ -133,23 +135,24 @@ class VoyageRerankConfig(BaseRerankConfig):
         self,
         headers: Dict,
         model: str,
-        api_key: Optional[str] = None,
-        optional_params: Optional[dict] = None,
+        api_key: str | None = None,
+        optional_params: dict | None = None,
     ) -> Dict:
         if api_key is None:
             api_key = get_secret_str("VOYAGE_API_KEY") or get_secret_str("VOYAGE_AI_API_KEY")
         if api_key is None:
-            raise ValueError(
-                "Voyage AI API key is required. Set via `api_key` parameter or `VOYAGE_API_KEY` env var."
-            )
-        return {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
+            raise ValueError("Voyage AI API key is required. Set via `api_key` parameter or `VOYAGE_API_KEY` env var.")
+        return {
+            "Authorization": f"Bearer {api_key}",
+            "content-type": "application/json",
+        }
 
     def calculate_rerank_cost(
         self,
         model: str,
-        custom_llm_provider: Optional[str] = None,
-        billed_units: Optional[RerankBilledUnits] = None,
-        model_info: Optional[ModelInfo] = None,
+        custom_llm_provider: str | None = None,
+        billed_units: RerankBilledUnits | None = None,
+        model_info: ModelInfo | None = None,
     ) -> Tuple[float, float]:
         if (
             model_info is None
@@ -163,7 +166,5 @@ class VoyageRerankConfig(BaseRerankConfig):
             return 0.0, 0.0
         return model_info["input_cost_per_token"] * total_tokens, 0.0
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ):
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]):
         return VoyageError(message=error_message, status_code=status_code, headers=headers)

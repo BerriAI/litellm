@@ -16,6 +16,89 @@ import pytest
 class TestA2AStreamingTransformation:
     """Test the A2A streaming transformation creates proper events."""
 
+    def test_a2a_metadata_forwarded_to_completion_params(self):
+        from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
+            A2ACompletionBridgeTransformation,
+        )
+
+        message = {
+            "role": "user",
+            "parts": [{"text": "Reply to ticket #4823"}],
+            "metadata": {"skillId": "draft_reply"},
+        }
+        openai_messages = (
+            A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
+        )
+        # Metadata is forwarded on the run payload only, not duplicated on messages.
+        assert "metadata" not in openai_messages[0]
+
+        completion_params: dict = {
+            "model": "langgraph/agent",
+            "messages": openai_messages,
+        }
+        A2ACompletionBridgeTransformation.apply_forward_metadata_to_completion_params(
+            completion_params=completion_params,
+            a2a_message=message,
+            params={"metadata": {"trace": "abc"}},
+        )
+        assert completion_params["extra_body"]["metadata"] == {
+            "trace": "abc",
+            "skillId": "draft_reply",
+        }
+
+    def test_configured_metadata_wins_over_forwarded_a2a_metadata(self):
+        from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
+            A2ACompletionBridgeTransformation,
+        )
+
+        # Agent-owner-configured run metadata in ``extra_body``.
+        completion_params: dict = {
+            "model": "langgraph/agent",
+            "messages": [],
+            "extra_body": {
+                "metadata": {"owner_tag": "prod", "trace": "server-set"},
+                "other": "keep",
+            },
+        }
+        # Client tries to overwrite ``trace`` and inject a new key.
+        message = {
+            "role": "user",
+            "parts": [{"text": "hi"}],
+            "metadata": {"trace": "client-spoof", "skillId": "draft_reply"},
+        }
+        A2ACompletionBridgeTransformation.apply_forward_metadata_to_completion_params(
+            completion_params=completion_params,
+            a2a_message=message,
+            params={"metadata": {"trace": "client-spoof-2"}},
+        )
+        assert completion_params["extra_body"]["other"] == "keep"
+        assert completion_params["extra_body"]["metadata"] == {
+            "owner_tag": "prod",
+            "trace": "server-set",
+            "skillId": "draft_reply",
+        }
+
+    def test_langgraph_transform_preserves_message_metadata(self):
+        from litellm.llms.langgraph.chat.transformation import LangGraphConfig
+
+        config = LangGraphConfig()
+        request = config.transform_request(
+            model="langgraph/agent",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Reply to ticket #4823",
+                    "metadata": {"skillId": "draft_reply"},
+                }
+            ],
+            optional_params={},
+            litellm_params={"stream": False},
+            headers={},
+        )
+        assert request["input"]["messages"][-1]["metadata"] == {
+            "skillId": "draft_reply",
+        }
+
     def test_create_task_event(self):
         """Test that create_task_event produces proper A2A task event structure."""
         from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
@@ -91,7 +174,10 @@ class TestA2AStreamingTransformation:
         assert "artifactId" in event["result"]["artifact"]
         assert event["result"]["artifact"]["name"] == "response"
         assert event["result"]["artifact"]["parts"][0]["kind"] == "text"
-        assert event["result"]["artifact"]["parts"][0]["text"] == "Hello, I am an AI assistant."
+        assert (
+            event["result"]["artifact"]["parts"][0]["text"]
+            == "Hello, I am an AI assistant."
+        )
 
 
 @pytest.mark.asyncio
@@ -246,4 +332,3 @@ async def test_handle_non_streaming_forwards_api_key():
         assert call_kwargs["api_key"] == "my-secret-api-key"
         assert call_kwargs["api_base"] == "https://my-azure.com/"
         assert call_kwargs["model"] == "azure_ai/agents/asst_456"
-

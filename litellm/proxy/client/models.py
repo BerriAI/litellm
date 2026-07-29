@@ -148,7 +148,10 @@ class ModelsManagementClient:
             raise
 
     def get(
-        self, model_id: Optional[str] = None, model_name: Optional[str] = None, return_request: bool = False
+        self,
+        model_id: Optional[str] = None,
+        model_name: Optional[str] = None,
+        return_request: bool = False,
     ) -> Union[Dict[str, Any], requests.Request]:
         """
         Get information about a specific model by its ID or name.

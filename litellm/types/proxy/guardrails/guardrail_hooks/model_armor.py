@@ -8,25 +8,24 @@ from .base import GuardrailConfigModel
 class ModelArmorGuardrailConfigModel(GuardrailConfigModel):
     """Configuration parameters for Google Cloud Model Armor guardrail"""
 
-    template_id: Optional[str] = Field(
-        default=None, description="The ID of your Model Armor template"
-    )
-    project_id: Optional[str] = Field(
-        default=None, description="Google Cloud project ID"
-    )
-    location: Optional[str] = Field(
-        default=None, description="Google Cloud location/region (e.g., us-central1)"
-    )
+    template_id: Optional[str] = Field(default=None, description="The ID of your Model Armor template")
+    project_id: Optional[str] = Field(default=None, description="Google Cloud project ID")
+    location: Optional[str] = Field(default=None, description="Google Cloud location/region (e.g., us-central1)")
     credentials: Optional[str] = Field(
         default=None,
         description="Path to Google Cloud credentials JSON file or JSON string",
     )
-    api_endpoint: Optional[str] = Field(
-        default=None, description="Optional custom API endpoint for Model Armor"
-    )
+    api_endpoint: Optional[str] = Field(default=None, description="Optional custom API endpoint for Model Armor")
     fail_on_error: Optional[bool] = Field(
         default=True,
         description="Whether to fail the request if Model Armor encounters an error",
+    )
+    sanitize_error_detail: Optional[bool] = Field(
+        default=True,
+        description=(
+            "Omit the raw Model Armor response from caller-facing errors and logs "
+            "by default. Set False to restore verbose output."
+        ),
     )
 
     @staticmethod

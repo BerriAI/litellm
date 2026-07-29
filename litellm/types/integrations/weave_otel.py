@@ -24,8 +24,7 @@ class WeaveSpanAttributes(str, Enum):
     """
 
     DISPLAY_NAME = "wandb.display_name"
-    
+
     # Thread organization, similar to OpenInference session_id.
     THREAD_ID = "wandb.thread_id"
     IS_TURN = "wandb.is_turn"
-    

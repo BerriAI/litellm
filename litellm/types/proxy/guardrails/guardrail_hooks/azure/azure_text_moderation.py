@@ -19,9 +19,7 @@ class AzureTextModerationRequestBodyOptionalParams(TypedDict, total=False):
     outputType: Literal["FourSeverityLevels", "EightSeverityLevels"]
 
 
-class AzureTextModerationGuardrailRequestBody(
-    AzureTextModerationRequestBodyOptionalParams
-):
+class AzureTextModerationGuardrailRequestBody(AzureTextModerationRequestBodyOptionalParams):
     """Configuration parameters for the Azure Text Moderation guardrail"""
 
     text: Required[str]
@@ -76,7 +74,6 @@ class AzureContentSafetyTextModerationConfigModel(
     AzureContentSafetyConfigModel,
     GuardrailConfigModel[AzureTextModerationOptionalParams],
 ):
-
     optional_params: AzureTextModerationOptionalParams = Field(
         description="Optional parameters for the Azure Content Safety Text Moderation guardrail",
     )

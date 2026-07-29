@@ -1,12 +1,9 @@
 import base64
-import json
 import os
 import sys
-from litellm._uuid import uuid
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
@@ -15,12 +12,7 @@ sys.path.insert(
 from litellm.llms.bedrock.chat.invoke_agent.transformation import (
     AmazonInvokeAgentConfig,
 )
-from litellm.types.llms.bedrock_invoke_agents import (
-    InvokeAgentEvent,
-    InvokeAgentEventHeaders,
-    InvokeAgentUsage,
-)
-from litellm.types.utils import Message, ModelResponse, Usage
+from litellm.types.utils import ModelResponse
 
 
 class TestAmazonInvokeAgentConfig:
@@ -270,3 +262,28 @@ class TestAmazonInvokeAgentConfig:
             "https://bedrock-runtime.us-east-1.amazonaws.com/agents/L1RT58GYRW/agentAliases/MFPSBCXYTW/sessions"
             in result
         )
+
+    @patch(
+        "litellm.llms.bedrock.chat.invoke_agent.transformation.convert_content_list_to_str"
+    )
+    @patch.object(AmazonInvokeAgentConfig, "get_runtime_endpoint")
+    @patch.object(AmazonInvokeAgentConfig, "_get_aws_region_name")
+    def test_get_complete_url_encodes_session_id(
+        self, mock_region, mock_endpoint, mock_convert, config
+    ):
+        """Test get_complete_url encodes session ID path segment."""
+        mock_endpoint.return_value = (
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+            None,
+        )
+        mock_region.return_value = "us-east-1"
+
+        result = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model="agent/L1RT58GYRW/MFPSBCXYTW",
+            optional_params={"sessionID": "../../sessions/other?x=1#frag"},
+            litellm_params={},
+        )
+
+        assert "sessions/..%2F..%2Fsessions%2Fother%3Fx%3D1%23frag/text" in result

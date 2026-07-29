@@ -1,25 +1,15 @@
-import json
-import time
-from typing import AsyncIterator, Iterator, List, Optional, Union
+from typing import List, Optional, Union
 
 import httpx
 
-import litellm
-from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
-from litellm.llms.base_llm.chat.transformation import (
-    BaseConfig,
-    BaseLLMException,
-    LiteLLMLoggingObj,
+from litellm._logging import verbose_logger
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.secret_managers.main import (
+    get_secret_str,
+    normalize_nonempty_secret_str,
 )
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import (
-    ChatCompletionToolCallChunk,
-    ChatCompletionUsageBlock,
-    GenericStreamingChunk,
-    ModelResponse,
-    Usage,
-)
 
 
 class CloudflareError(BaseLLMException):
@@ -33,26 +23,44 @@ class CloudflareError(BaseLLMException):
             message=message,
             request=self.request,
             response=self.response,
-        )  # Call the base class constructor with the parameters it needs
+        )
 
 
-class CloudflareChatConfig(BaseConfig):
-    max_tokens: Optional[int] = None
-    stream: Optional[bool] = None
-
-    def __init__(
+class CloudflareChatConfig(OpenAIGPTConfig):
+    def get_complete_url(
         self,
-        max_tokens: Optional[int] = None,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
-    ) -> None:
-        locals_ = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
+    ) -> str:
+        return super().get_complete_url(
+            api_base=self._resolve_api_base(api_base),
+            api_key=api_key,
+            model=model,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            stream=stream,
+        )
 
-    @classmethod
-    def get_config(cls):
-        return super().get_config()
+    @staticmethod
+    def _resolve_api_base(api_base: Optional[str]) -> str:
+        if not api_base:
+            account_id = normalize_nonempty_secret_str(get_secret_str("CLOUDFLARE_ACCOUNT_ID"))
+            if account_id is None:
+                raise ValueError(
+                    "Missing CLOUDFLARE_ACCOUNT_ID - set CLOUDFLARE_ACCOUNT_ID in the environment or pass api_base explicitly"
+                )
+            return f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
+        trimmed = api_base.rstrip("/")
+        if trimmed.endswith("/ai/run"):
+            verbose_logger.warning(
+                "Cloudflare api_base ending in '/ai/run' is the legacy Workers AI path and no longer serves OpenAI-compatible requests; rewriting to the '/ai/v1' endpoint"
+            )
+            return f"{trimmed[: -len('/ai/run')]}/ai/v1"
+        return api_base
 
     def validate_environment(
         self,
@@ -66,105 +74,17 @@ class CloudflareChatConfig(BaseConfig):
     ) -> dict:
         if api_key is None:
             raise ValueError(
-                "Missing CloudflareError API Key - A call is being made to cloudflare but no key is set either in the environment variables or via params"
+                "Missing Cloudflare API Key - A call is being made to cloudflare but no key is set either in the environment variables or via params"
             )
-        headers = {
-            "accept": "application/json",
-            "content-type": "apbplication/json",
-            "Authorization": "Bearer " + api_key,
-        }
-        return headers
-
-    def get_complete_url(
-        self,
-        api_base: Optional[str],
-        api_key: Optional[str],
-        model: str,
-        optional_params: dict,
-        litellm_params: dict,
-        stream: Optional[bool] = None,
-    ) -> str:
-        if api_base is None:
-            account_id = get_secret_str("CLOUDFLARE_ACCOUNT_ID")
-            api_base = (
-                f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
-            )
-        return api_base + model
-
-    def get_supported_openai_params(self, model: str) -> List[str]:
-        return [
-            "stream",
-            "max_tokens",
-        ]
-
-    def map_openai_params(
-        self,
-        non_default_params: dict,
-        optional_params: dict,
-        model: str,
-        drop_params: bool,
-    ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model=model)
-        for param, value in non_default_params.items():
-            if param == "max_completion_tokens":
-                optional_params["max_tokens"] = value
-            elif param in supported_openai_params:
-                optional_params[param] = value
-        return optional_params
-
-    def transform_request(
-        self,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
-        config = litellm.CloudflareChatConfig.get_config()
-        for k, v in config.items():
-            if k not in optional_params:
-                optional_params[k] = v
-
-        data = {
-            "messages": messages,
-            **optional_params,
-        }
-        return data
-
-    def transform_response(
-        self,
-        model: str,
-        raw_response: httpx.Response,
-        model_response: ModelResponse,
-        logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: str,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
-    ) -> ModelResponse:
-        completion_response = raw_response.json()
-
-        model_response.choices[0].message.content = completion_response["result"][  # type: ignore
-            "response"
-        ]
-
-        prompt_tokens = litellm.utils.get_token_count(messages=messages, model=model)
-        completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+        return super().validate_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=api_key,
+            api_base=api_base,
         )
-
-        model_response.created = int(time.time())
-        model_response.model = "cloudflare/" + model
-        usage = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
-        )
-        setattr(model_response, "usage", usage)
-        return model_response
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
@@ -173,46 +93,3 @@ class CloudflareChatConfig(BaseConfig):
             status_code=status_code,
             message=error_message,
         )
-
-    def get_model_response_iterator(
-        self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
-        sync_stream: bool,
-        json_mode: Optional[bool] = False,
-    ):
-        return CloudflareChatResponseIterator(
-            streaming_response=streaming_response,
-            sync_stream=sync_stream,
-            json_mode=json_mode,
-        )
-
-
-class CloudflareChatResponseIterator(BaseModelResponseIterator):
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
-        try:
-            text = ""
-            tool_use: Optional[ChatCompletionToolCallChunk] = None
-            is_finished = False
-            finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
-            provider_specific_fields = None
-
-            index = int(chunk.get("index", 0))
-
-            if "response" in chunk:
-                text = chunk["response"]
-
-            returned_chunk = GenericStreamingChunk(
-                text=text,
-                tool_use=tool_use,
-                is_finished=is_finished,
-                finish_reason=finish_reason,
-                usage=usage,
-                index=index,
-                provider_specific_fields=provider_specific_fields,
-            )
-
-            return returned_chunk
-
-        except json.JSONDecodeError:
-            raise ValueError(f"Failed to decode JSON from chunk: {chunk}")

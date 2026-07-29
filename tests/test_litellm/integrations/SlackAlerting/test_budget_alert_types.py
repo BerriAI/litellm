@@ -12,7 +12,7 @@ class TestSoftBudgetAlert:
             token=token_value,
             event_group=Litellm_EntityType.KEY,
         )
-        
+
         result = alert.get_id(user_info)
         assert result == token_value
 
@@ -24,7 +24,32 @@ class TestSoftBudgetAlert:
             token=None,
             event_group=Litellm_EntityType.KEY,
         )
-        
+
+        result = alert.get_id(user_info)
+        assert result == "default_id"
+
+    def test_get_id_returns_team_id_for_team_event_group(self):
+        """Team soft budget alerts dedupe by team, not by the calling key's token"""
+        alert = SoftBudgetAlert()
+        user_info = CallInfo(
+            spend=120.0,
+            token="test_token_123",
+            team_id="team_456",
+            event_group=Litellm_EntityType.TEAM,
+        )
+
+        result = alert.get_id(user_info)
+        assert result == "team_456"
+
+    def test_get_id_returns_default_id_for_team_event_group_without_team_id(self):
+        alert = SoftBudgetAlert()
+        user_info = CallInfo(
+            spend=120.0,
+            token="test_token_123",
+            team_id=None,
+            event_group=Litellm_EntityType.TEAM,
+        )
+
         result = alert.get_id(user_info)
         assert result == "default_id"
 
@@ -36,6 +61,6 @@ class TestSoftBudgetAlert:
             token="",
             event_group=Litellm_EntityType.KEY,
         )
-        
+
         result = alert.get_id(user_info)
         assert result == "default_id"

@@ -11,7 +11,7 @@ model_list:
   model_name: azure-model
 - litellm_params:
     api_base: https://gateway.ai.cloudflare.com/v1/0399b10e77ac6668c80404a5ff49eb37/litellm-test/azure-openai/openai-gpt-4-test-v-1
-    api_key: os.environ/AZURE_API_KEY
+    api_key: os.environ/AZURE_AI_API_KEY
     model: azure/gpt-4.1-mini
   model_name: azure-cloudflare-model
 - litellm_params:
@@ -49,8 +49,8 @@ model_list:
     id: 79fc75bf-8e1b-47d5-8d24-9365a854af03
   model_name: test_openai_models
 - litellm_params:
-    api_base: os.environ/AZURE_API_BASE
-    api_key: os.environ/AZURE_API_KEY
+    api_base: os.environ/AZURE_AI_API_BASE
+    api_key: os.environ/AZURE_AI_API_KEY
     api_version: 2023-07-01-preview
     model: azure/text-embedding-ada-002
   model_info:
@@ -94,16 +94,16 @@ model_list:
     mode: image_generation
   model_name: dall-e-3
 - litellm_params:
-    api_base: os.environ/AZURE_API_BASE
-    api_key: os.environ/AZURE_API_KEY
+    api_base: os.environ/AZURE_AI_API_BASE
+    api_key: os.environ/AZURE_AI_API_KEY
     api_version: 2023-06-01-preview
     model: azure/
   model_info:
     mode: image_generation
   model_name: dall-e-2
 - litellm_params:
-    api_base: os.environ/AZURE_API_BASE
-    api_key: os.environ/AZURE_API_KEY
+    api_base: os.environ/AZURE_AI_API_BASE
+    api_key: os.environ/AZURE_AI_API_KEY
     api_version: 2023-07-01-preview
     model: azure/text-embedding-ada-002
   model_info:

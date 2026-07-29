@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+import urllib.parse
 from datetime import datetime
 from typing import Literal, Optional
 from urllib.parse import urlparse
@@ -98,18 +99,14 @@ class AssemblyAIPassthroughLoggingHandler:
         from ..pass_through_endpoints import pass_through_endpoint_logging
 
         model = response_body.get("speech_model", "")
-        verbose_proxy_logger.debug(
-            "response body %s", json.dumps(response_body, indent=4)
-        )
+        verbose_proxy_logger.debug("response body %s", json.dumps(response_body, indent=4))
         kwargs["model"] = model
         kwargs["custom_llm_provider"] = "assemblyai"
         response_cost: Optional[float] = None
 
         transcript_id = response_body.get("id")
         if transcript_id is None:
-            raise ValueError(
-                "Transcript ID is required to log the cost of the transcription"
-            )
+            raise ValueError("Transcript ID is required to log the cost of the transcription")
         transcript_response = self._poll_assembly_for_transcript_response(
             transcript_id=transcript_id, url_route=url_route
         )
@@ -144,9 +141,7 @@ class AssemblyAIPassthroughLoggingHandler:
         )
 
         # pretty print standard logging object
-        verbose_proxy_logger.debug(
-            "standard_logging_object= %s", json.dumps(standard_logging_object, indent=4)
-        )
+        verbose_proxy_logger.debug("standard_logging_object= %s", json.dumps(standard_logging_object, indent=4))
         logging_obj.model_call_details["model"] = model
         logging_obj.model_call_details["custom_llm_provider"] = "assemblyai"
         logging_obj.model_call_details["response_cost"] = response_cost
@@ -154,9 +149,7 @@ class AssemblyAIPassthroughLoggingHandler:
         asyncio.run(
             pass_through_endpoint_logging._handle_logging(
                 logging_obj=logging_obj,
-                standard_logging_response_object=self._get_response_to_log(
-                    transcript_response
-                ),
+                standard_logging_response_object=self._get_response_to_log(transcript_response),
                 result=result,
                 start_time=start_time,
                 end_time=end_time,
@@ -167,9 +160,7 @@ class AssemblyAIPassthroughLoggingHandler:
 
         pass
 
-    def _get_response_to_log(
-        self, transcript_response: Optional[AssemblyAITranscriptResponse]
-    ) -> dict:
+    def _get_response_to_log(self, transcript_response: Optional[AssemblyAITranscriptResponse]) -> dict:
         if transcript_response is None:
             return {}
         return dict(transcript_response)
@@ -192,19 +183,18 @@ class AssemblyAIPassthroughLoggingHandler:
             passthrough_endpoint_router,
         )
 
-        _base_url = (
-            self.assembly_ai_eu_base_url
-            if request_region == "eu"
-            else self.assembly_ai_base_url
-        )
+        _base_url = self.assembly_ai_eu_base_url if request_region == "eu" else self.assembly_ai_base_url
         _api_key = passthrough_endpoint_router.get_credentials(
             custom_llm_provider="assemblyai",
             region_name=request_region,
         )
         if _api_key is None:
             raise ValueError("AssemblyAI API key not found")
+        if any(c in transcript_id for c in ("/", "\\", "#", "?")) or ".." in transcript_id:
+            raise ValueError(f"Invalid transcript_id {transcript_id!r}: contains disallowed characters")
+        safe_transcript_id = urllib.parse.quote(transcript_id, safe="")
         try:
-            url = f"{_base_url}/v2/transcript/{transcript_id}"
+            url = f"{_base_url}/v2/transcript/{safe_transcript_id}"
             headers = {
                 "Authorization": f"Bearer {_api_key}",
                 "Content-Type": "application/json",
@@ -228,21 +218,14 @@ class AssemblyAIPassthroughLoggingHandler:
         """
         Poll the status of the transcript until it is completed or timeout (30 minutes)
         """
-        for _ in range(
-            self.max_polling_attempts
-        ):  # 180 attempts * 10s = 30 minutes max
+        for _ in range(self.max_polling_attempts):  # 180 attempts * 10s = 30 minutes max
             transcript = self._get_assembly_transcript(
-                request_region=AssemblyAIPassthroughLoggingHandler._get_assembly_region_from_url(
-                    url=url_route
-                ),
+                request_region=AssemblyAIPassthroughLoggingHandler._get_assembly_region_from_url(url=url_route),
                 transcript_id=transcript_id,
             )
             if transcript is None:
                 return None
-            if (
-                transcript.get("status") == "completed"
-                or transcript.get("status") == "error"
-            ):
+            if transcript.get("status") == "completed" or transcript.get("status") == "error":
                 return AssemblyAITranscriptResponse(**transcript)
             time.sleep(self.polling_interval)
         return None
@@ -258,10 +241,8 @@ class AssemblyAIPassthroughLoggingHandler:
         _audio_duration = transcript_response.get("audio_duration")
         if _audio_duration is None:
             return None
-        _cost_per_second = (
-            AssemblyAIPassthroughLoggingHandler.get_cost_per_second_for_assembly_model(
-                speech_model=speech_model
-            )
+        _cost_per_second = AssemblyAIPassthroughLoggingHandler.get_cost_per_second_for_assembly_model(
+            speech_model=speech_model
         )
         if _cost_per_second is None:
             return None

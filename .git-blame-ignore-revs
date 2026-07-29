@@ -8,3 +8,12 @@
 
 # Update pydantic code to fix warnings (GH-3600)
 876840e9957bc7e9f7d6a2b58c4d7c53dad16481
+
+# style(ui): run prettier --write across the dashboard (#29622)
+7edf3a9cb55548b143df1692f4ed7c4681d7fcf7
+
+# style: reformat litellm/ with ruff format (#31317)
+17bfd415aeb5a57fb646b5cc67da1c730aa7c50b
+
+# style: unify ruff format width on 120 (#31518)
+48b5a5a0cc5a694a11219416ee0b6eb6e620e74e

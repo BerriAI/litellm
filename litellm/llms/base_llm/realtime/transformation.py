@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
+from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
 from litellm.types.realtime import (
     RealtimeResponseTransformInput,
     RealtimeResponseTypedDict,
@@ -29,9 +30,7 @@ class BaseRealtimeConfig(ABC):
         pass
 
     @abstractmethod
-    def get_complete_url(
-        self, api_base: Optional[str], model: str, api_key: Optional[str] = None
-    ) -> str:
+    def get_complete_url(self, api_base: Optional[str], model: str, api_key: Optional[str] = None) -> str:
         """
         OPTIONAL
 
@@ -59,14 +58,32 @@ class BaseRealtimeConfig(ABC):
     ) -> List[str]:
         pass
 
+    def is_setup_message(self, msg_obj: dict) -> bool:
+        return False
+
+    def is_content_message(self, msg_obj: dict) -> bool:
+        return False
+
     def requires_session_configuration(
         self,
     ) -> bool:  # initial configuration message sent to setup the realtime session
         return False
 
-    def session_configuration_request(
-        self, model: str
-    ) -> Optional[str]:  # message sent to setup the realtime session
+    def session_configuration_request(self, model: str) -> Optional[str]:  # message sent to setup the realtime session
+        return None
+
+    def transform_session_created_event(
+        self,
+        model: str,
+        logging_session_id: str,
+        session_configuration_request: Optional[str] = None,
+    ) -> Optional[Union[dict, OpenAIRealtimeStreamSessionEvents]]:
+        """
+        Optional hook for providers that defer session setup until client `session.update`.
+
+        Return an OpenAI-compatible `session.created` payload when the proxy should
+        emit a synthetic event immediately after backend websocket connection.
+        """
         return None
 
     @abstractmethod

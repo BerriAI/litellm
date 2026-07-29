@@ -29,6 +29,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
+    TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY,
     add_guardrail_to_applied_guardrails_header,
     get_metadata_variable_name_from_kwargs,
 )
@@ -49,9 +50,7 @@ def _encode_json_for_header(data: Any) -> str:
     return quote(json_payload, safe="")
 
 
-def _truncate_evidence_payload(
-    evidence: Any, max_bytes: int = MAX_PILLAR_HEADER_VALUE_BYTES
-) -> Tuple[Any, str, bool]:
+def _truncate_evidence_payload(evidence: Any, max_bytes: int = MAX_PILLAR_HEADER_VALUE_BYTES) -> Tuple[Any, str, bool]:
     """
     Truncate evidence payload so the encoded header value stays within max_bytes.
 
@@ -90,13 +89,9 @@ def _truncate_evidence_payload(
             if evidence_text:
                 step = max(1, len(evidence_text) // 2)
                 while len(encoded.encode("utf-8")) > max_bytes and evidence_text:
-                    evidence_text = (
-                        evidence_text[:-step] if len(evidence_text) > step else evidence_text[:-1]
-                    )
+                    evidence_text = evidence_text[:-step] if len(evidence_text) > step else evidence_text[:-1]
                     step = max(1, step // 2)
-                    truncated_text = (
-                        f"{evidence_text}...[truncated]" if evidence_text else "[truncated]"
-                    )
+                    truncated_text = f"{evidence_text}...[truncated]" if evidence_text else "[truncated]"
                     working_entry["evidence"] = truncated_text
                     working_entry["evidence_truncated"] = True
                     encoded = _encode_json_for_header(truncated)
@@ -132,12 +127,11 @@ def build_pillar_response_headers(metadata_store: Dict[str, Any]) -> Dict[str, s
         headers["x-pillar-evidence"] = encoded_value
 
     if "pillar_session_id_response" in metadata_store:
-        headers["x-pillar-session-id"] = quote(
-            str(metadata_store["pillar_session_id_response"]), safe=""
-        )
+        headers["x-pillar-session-id"] = quote(str(metadata_store["pillar_session_id_response"]), safe="")
 
     if headers:
         metadata_store["pillar_response_headers"] = headers
+        metadata_store[TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY] = True
 
     return headers
 
@@ -164,7 +158,7 @@ class PillarGuardrail(CustomGuardrail):
     using the Pillar Security API.
     """
 
-    SUPPORTED_ON_FLAGGED_ACTIONS = ["block", "monitor"]
+    SUPPORTED_ON_FLAGGED_ACTIONS = ["block", "monitor", "mask"]
     DEFAULT_ON_FLAGGED_ACTION = "monitor"
     SUPPORTED_FALLBACK_ACTIONS = ["allow", "block"]
     DEFAULT_FALLBACK_ACTION = "allow"
@@ -275,16 +269,9 @@ class PillarGuardrail(CustomGuardrail):
                 )
                 self.timeout = self.DEFAULT_TIMEOUT
 
-        # Define supported event hooks
-        supported_event_hooks = [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
-            GuardrailEventHooks.post_call,
-        ]
-
         super().__init__(
             guardrail_name=guardrail_name,
-            supported_event_hooks=supported_event_hooks,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
             **kwargs,
         )
 
@@ -534,7 +521,7 @@ class PillarGuardrail(CustomGuardrail):
         headers: Dict[str, str] = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-        }    
+        }
 
         # Add Pillar-specific headers based on configuration
         self._set_bool_header(headers, "plr_scanners", self.include_scanners)
@@ -773,6 +760,15 @@ class PillarGuardrail(CustomGuardrail):
             verbose_proxy_logger.warning("Pillar Guardrail: Threat detected")
             if self.on_flagged_action == "block":
                 self._raise_pillar_detection_exception(pillar_response)
+            elif self.on_flagged_action == "mask":
+                verbose_proxy_logger.info("Pillar Guardrail: Masking mode - masking flagged content")
+                masked_messages = pillar_response.get("masked_session_messages", [])
+                if masked_messages:
+                    original_data["messages"] = masked_messages
+                else:
+                    verbose_proxy_logger.warning(
+                        "Pillar Guardrail: Masking requested but no masked_session_messages in response"
+                    )
             elif self.on_flagged_action == "monitor":
                 verbose_proxy_logger.info("Pillar Guardrail: Monitoring mode - allowing flagged content to proceed")
 
@@ -788,14 +784,20 @@ class PillarGuardrail(CustomGuardrail):
         Raises:
             HTTPException: Always raises with security detection details
         """
+        pillar_response_dict = {
+            "session_id": pillar_response.get("session_id"),
+        }
+
+        # Conditionally include scanners and evidence based on config
+        if self.include_scanners:
+            pillar_response_dict["scanners"] = pillar_response.get("scanners", {})
+        if self.include_evidence:
+            pillar_response_dict["evidence"] = pillar_response.get("evidence", [])
+
         error_detail = {
             "error": "Blocked by Pillar Security Guardrail",
             "detection_message": "Security threats detected",
-            "pillar_response": {
-                "session_id": pillar_response.get("session_id"),
-                "scanners": pillar_response.get("scanners", {}),
-                "evidence": pillar_response.get("evidence", []),
-            },
+            "pillar_response": pillar_response_dict,
         }
 
         verbose_proxy_logger.warning("Pillar Guardrail: Request blocked - Security threats detected")
@@ -819,3 +821,13 @@ class PillarGuardrail(CustomGuardrail):
         )
 
         return PillarGuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.during_mcp_call,
+        ]

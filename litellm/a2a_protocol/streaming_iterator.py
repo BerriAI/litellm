@@ -11,7 +11,6 @@ from litellm._logging import verbose_logger
 from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
 from litellm.a2a_protocol.utils import A2ARequestUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.thread_pool_executor import executor
 
 if TYPE_CHECKING:
     from a2a.types import SendStreamingMessageRequest, SendStreamingMessageResponse
@@ -128,20 +127,13 @@ class A2AStreamingIterator:
 
             # Call success handlers - they will build standard_logging_object
             asyncio.create_task(
-                self.logging_obj.async_success_handler(
-                    result=result,
+                self.logging_obj.dispatch_success_handlers(
+                    result,
                     start_time=self.start_time,
                     end_time=end_time,
                     cache_hit=None,
+                    prefer_async_handlers=True,
                 )
-            )
-
-            executor.submit(
-                self.logging_obj.success_handler,
-                result=result,
-                cache_hit=None,
-                start_time=self.start_time,
-                end_time=end_time,
             )
 
             verbose_logger.info(
@@ -158,7 +150,7 @@ class A2AStreamingIterator:
         result: Dict[str, Any] = {
             "id": getattr(self.request, "id", "unknown"),
             "jsonrpc": "2.0",
-            "usage": usage.model_dump() if hasattr(usage, "model_dump") else dict(usage),
+            "usage": (usage.model_dump() if hasattr(usage, "model_dump") else dict(usage)),
         }
 
         # Add final chunk result if available
@@ -170,4 +162,3 @@ class A2AStreamingIterator:
                 pass
 
         return result
-

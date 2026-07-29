@@ -16,9 +16,9 @@ def clone_user_api_key_auth_with_team(
     """Return a deep copy of the auth context with a different team id."""
 
     try:
-        cloned_auth = user_api_key_auth.model_copy(deep=True)
+        cloned_auth = user_api_key_auth.model_copy()
     except AttributeError:
-        cloned_auth = user_api_key_auth.copy(deep=True)  # type: ignore[attr-defined]
+        cloned_auth = user_api_key_auth.copy()  # type: ignore[attr-defined]
     cloned_auth.team_id = team_id
     return cloned_auth
 
@@ -28,10 +28,7 @@ async def resolve_ui_session_team_ids(
 ) -> List[str]:
     """Resolve the real team ids backing a UI session token."""
 
-    if (
-        user_api_key_auth.team_id != UI_SESSION_TOKEN_TEAM_ID
-        or not user_api_key_auth.user_id
-    ):
+    if user_api_key_auth.team_id != UI_SESSION_TOKEN_TEAM_ID or not user_api_key_auth.user_id:
         return []
 
     from litellm.proxy.auth.auth_checks import get_user_object
@@ -78,8 +75,5 @@ async def build_effective_auth_contexts(
 
     resolved_team_ids = await resolve_ui_session_team_ids(user_api_key_auth)
     if resolved_team_ids:
-        return [
-            clone_user_api_key_auth_with_team(user_api_key_auth, team_id)
-            for team_id in resolved_team_ids
-        ]
+        return [clone_user_api_key_auth_with_team(user_api_key_auth, team_id) for team_id in resolved_team_ids]
     return [user_api_key_auth]

@@ -23,12 +23,14 @@ Example environment variables:
 See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
 """
 
+import json
 import os
 import sys
 
 sys.path.insert(0, os.path.abspath("../.."))
 
 import pytest
+from unittest.mock import MagicMock
 
 import litellm
 
@@ -44,7 +46,9 @@ async def test_azure_ai_agents_acompletion_non_streaming():
     agent_id = os.environ.get("AZURE_AGENTS_AGENT_ID", "asst_hbnoK9BOCcHhC3lC4MDroVGG")
 
     if not api_base or not api_key:
-        pytest.skip("AZURE_AGENTS_API_BASE and AZURE_AGENTS_API_KEY environment variables required")
+        pytest.skip(
+            "AZURE_AGENTS_API_BASE and AZURE_AGENTS_API_KEY environment variables required"
+        )
 
     response = await litellm.acompletion(
         model=f"azure_ai/agents/{agent_id}",
@@ -79,7 +83,9 @@ async def test_azure_ai_agents_acompletion_streaming():
     agent_id = os.environ.get("AZURE_AGENTS_AGENT_ID", "asst_hbnoK9BOCcHhC3lC4MDroVGG")
 
     if not api_base or not api_key:
-        pytest.skip("AZURE_AGENTS_API_BASE and AZURE_AGENTS_API_KEY environment variables required")
+        pytest.skip(
+            "AZURE_AGENTS_API_BASE and AZURE_AGENTS_API_KEY environment variables required"
+        )
 
     response = await litellm.acompletion(
         model=f"azure_ai/agents/{agent_id}",
@@ -105,7 +111,6 @@ async def test_azure_ai_agents_acompletion_streaming():
     print(f"Streamed response ({len(chunks)} chunks): {full_content}")
 
 
-
 def test_azure_ai_agents_is_agents_route():
     """
     Test the is_azure_ai_agents_route detection method.
@@ -113,9 +118,11 @@ def test_azure_ai_agents_is_agents_route():
     from litellm.llms.azure_ai.agents.transformation import AzureAIAgentsConfig
 
     # Should be recognized as agents route
-    assert AzureAIAgentsConfig.is_azure_ai_agents_route("azure_ai/agents/asst_123") is True
+    assert (
+        AzureAIAgentsConfig.is_azure_ai_agents_route("azure_ai/agents/asst_123") is True
+    )
     assert AzureAIAgentsConfig.is_azure_ai_agents_route("agents/asst_123") is True
-    
+
     # Should NOT be recognized as agents route
     assert AzureAIAgentsConfig.is_azure_ai_agents_route("azure_ai/gpt-4") is False
     assert AzureAIAgentsConfig.is_azure_ai_agents_route("gpt-4") is False
@@ -129,8 +136,10 @@ def test_azure_ai_get_azure_ai_route():
 
     # Should return "agents" for agents routes
     assert AzureFoundryModelInfo.get_azure_ai_route("agents/asst_123") == "agents"
-    assert AzureFoundryModelInfo.get_azure_ai_route("azure_ai/agents/asst_abc") == "agents"
-    
+    assert (
+        AzureFoundryModelInfo.get_azure_ai_route("azure_ai/agents/asst_abc") == "agents"
+    )
+
     # Should return "default" for non-agents routes
     assert AzureFoundryModelInfo.get_azure_ai_route("gpt-4") == "default"
     assert AzureFoundryModelInfo.get_azure_ai_route("claude-3-sonnet") == "default"
@@ -144,7 +153,9 @@ def test_azure_ai_agents_get_agent_id_from_model():
     from litellm.llms.azure_ai.agents.transformation import AzureAIAgentsConfig
 
     # Test with full model name
-    agent_id = AzureAIAgentsConfig.get_agent_id_from_model("azure_ai/agents/asst_abc123")
+    agent_id = AzureAIAgentsConfig.get_agent_id_from_model(
+        "azure_ai/agents/asst_abc123"
+    )
     assert agent_id == "asst_abc123"
 
     # Test with just agents/id
@@ -169,11 +180,15 @@ def test_azure_ai_agents_config_get_agent_id():
     assert agent_id == "asst_abc123"
 
     # Test with optional_params override
-    agent_id = config._get_agent_id("azure_ai/agents/asst_abc123", {"agent_id": "asst_override"})
+    agent_id = config._get_agent_id(
+        "azure_ai/agents/asst_abc123", {"agent_id": "asst_override"}
+    )
     assert agent_id == "asst_override"
 
     # Test with assistant_id in optional_params
-    agent_id = config._get_agent_id("azure_ai/agents/asst_abc123", {"assistant_id": "asst_assistant"})
+    agent_id = config._get_agent_id(
+        "azure_ai/agents/asst_abc123", {"assistant_id": "asst_assistant"}
+    )
     assert agent_id == "asst_assistant"
 
 
@@ -256,7 +271,7 @@ def test_azure_ai_agents_provider_detection():
 def test_azure_ai_agents_validate_environment():
     """
     Test that headers are correctly set up with Bearer token authentication.
-    
+
     Azure Foundry Agents uses Bearer token authentication (Azure AD tokens).
     """
     from litellm.llms.azure_ai.agents.transformation import AzureAIAgentsConfig
@@ -280,7 +295,7 @@ def test_azure_ai_agents_validate_environment():
 def test_azure_ai_agents_handler_url_builders():
     """
     Test the URL building methods in the handler.
-    
+
     Azure Foundry Agents API uses direct paths without /openai/ prefix.
     See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
     """
@@ -298,7 +313,10 @@ def test_azure_ai_agents_handler_url_builders():
 
     # Test messages URL
     messages_url = handler._build_messages_url(api_base, thread_id, api_version)
-    assert messages_url == f"{api_base}/threads/{thread_id}/messages?api-version={api_version}"
+    assert (
+        messages_url
+        == f"{api_base}/threads/{thread_id}/messages?api-version={api_version}"
+    )
 
     # Test runs URL
     runs_url = handler._build_runs_url(api_base, thread_id, api_version)
@@ -306,7 +324,10 @@ def test_azure_ai_agents_handler_url_builders():
 
     # Test run status URL
     status_url = handler._build_run_status_url(api_base, thread_id, run_id, api_version)
-    assert status_url == f"{api_base}/threads/{thread_id}/runs/{run_id}?api-version={api_version}"
+    assert (
+        status_url
+        == f"{api_base}/threads/{thread_id}/runs/{run_id}?api-version={api_version}"
+    )
 
 
 def test_azure_ai_agents_extract_content_from_messages():
@@ -323,33 +344,300 @@ def test_azure_ai_agents_extract_content_from_messages():
             {
                 "id": "msg_123",
                 "role": "assistant",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": {"value": "The answer is 100."}
-                    }
-                ]
+                "content": [{"type": "text", "text": {"value": "The answer is 100."}}],
             },
             {
                 "id": "msg_122",
                 "role": "user",
+                "content": [{"type": "text", "text": {"value": "What is 25 * 4?"}}],
+            },
+        ]
+    }
+
+    content, annotations = handler._extract_content_from_messages(messages_data)
+    assert content == "The answer is 100."
+    assert annotations is None
+
+    # Test empty response
+    empty_data = {"data": []}
+    content, annotations = handler._extract_content_from_messages(empty_data)
+    assert content == ""
+    assert annotations is None
+
+
+def test_azure_ai_agents_extract_content_with_annotations():
+    """
+    Test that annotations (e.g., Bing Search citations) are extracted from
+    Azure Agents message responses and transformed to OpenAI-compatible format.
+
+    Ref: https://github.com/BerriAI/litellm/issues/19126
+    """
+    from litellm.llms.azure_ai.agents.handler import AzureAIAgentsHandler
+
+    handler = AzureAIAgentsHandler()
+
+    messages_data = {
+        "data": [
+            {
+                "id": "msg_abc",
+                "role": "assistant",
                 "content": [
                     {
                         "type": "text",
-                        "text": {"value": "What is 25 * 4?"}
+                        "text": {
+                            "value": "According to sources [1], the answer is yes.",
+                            "annotations": [
+                                {
+                                    "type": "url_citation",
+                                    "text": "[1]",
+                                    "start_index": 22,
+                                    "end_index": 25,
+                                    "url_citation": {
+                                        "url": "https://example.com/source",
+                                        "title": "Example Source",
+                                    },
+                                }
+                            ],
+                        },
                     }
-                ]
+                ],
             }
         ]
     }
 
-    content = handler._extract_content_from_messages(messages_data)
-    assert content == "The answer is 100."
+    content, annotations = handler._extract_content_from_messages(messages_data)
+    assert content == "According to sources [1], the answer is yes."
+    assert annotations is not None
+    assert len(annotations) == 1
+    assert annotations[0]["type"] == "url_citation"
+    assert annotations[0]["url_citation"]["url"] == "https://example.com/source"
+    assert annotations[0]["url_citation"]["title"] == "Example Source"
+    # start/end_index should be moved into url_citation for OpenAI compatibility
+    assert annotations[0]["url_citation"]["start_index"] == 22
+    assert annotations[0]["url_citation"]["end_index"] == 25
 
-    # Test empty response
-    empty_data = {"data": []}
-    content = handler._extract_content_from_messages(empty_data)
-    assert content == ""
+
+def test_azure_ai_agents_build_model_response_with_annotations():
+    """
+    Test that _build_model_response includes annotations in the Message object.
+    """
+    from litellm.llms.azure_ai.agents.handler import AzureAIAgentsHandler
+    from litellm.types.utils import ModelResponse
+
+    handler = AzureAIAgentsHandler()
+    model_response = ModelResponse()
+
+    annotations = [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "url": "https://example.com",
+                "title": "Example",
+                "start_index": 0,
+                "end_index": 5,
+            },
+        }
+    ]
+
+    result = handler._build_model_response(
+        model="azure_ai/agents/asst_123",
+        content="Hello [1]",
+        model_response=model_response,
+        thread_id="thread_abc",
+        messages=[{"role": "user", "content": "test"}],
+        annotations=annotations,
+    )
+
+    assert result.choices[0].message.content == "Hello [1]"
+    assert result.choices[0].message.annotations is not None
+    assert len(result.choices[0].message.annotations) == 1
+    assert result.choices[0].message.annotations[0]["type"] == "url_citation"
+
+
+def test_azure_ai_agents_build_model_response_without_annotations():
+    """
+    Test that _build_model_response works correctly without annotations.
+    """
+    from litellm.llms.azure_ai.agents.handler import AzureAIAgentsHandler
+    from litellm.types.utils import ModelResponse
+
+    handler = AzureAIAgentsHandler()
+    model_response = ModelResponse()
+
+    result = handler._build_model_response(
+        model="azure_ai/agents/asst_123",
+        content="Hello",
+        model_response=model_response,
+        thread_id="thread_abc",
+        messages=[{"role": "user", "content": "test"}],
+    )
+
+    assert result.choices[0].message.content == "Hello"
+    assert getattr(result.choices[0].message, "annotations", None) is None
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_agents_streaming_annotations_from_completed_message():
+    """
+    Test that annotations from thread.message.completed SSE events are collected
+    and attached to the final chunk's delta.
+
+    Ref: https://github.com/BerriAI/litellm/issues/19126
+    """
+    from litellm.llms.azure_ai.agents.handler import AzureAIAgentsHandler
+
+    handler = AzureAIAgentsHandler()
+
+    # SSE lines simulating a stream with annotations in thread.message.completed
+    completed_data = {
+        "content": [
+            {
+                "type": "text",
+                "text": {
+                    "value": "According to [1], the answer is 42.",
+                    "annotations": [
+                        {
+                            "type": "url_citation",
+                            "text": "[1]",
+                            "start_index": 12,
+                            "end_index": 15,
+                            "url_citation": {
+                                "url": "https://example.com/citation",
+                                "title": "Citation Source",
+                            },
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+
+    sse_lines = [
+        "event: thread.created",
+        "",
+        'data: {"id": "thread_stream_123"}',
+        "",
+        "event: thread.message.delta",
+        "",
+        'data: {"delta": {"content": [{"type": "text", "text": {"value": "According to [1], the answer is 42."}}]}}',
+        "",
+        "event: thread.message.completed",
+        "",
+        f"data: {json.dumps(completed_data)}",
+        "",
+        "data: [DONE]",
+    ]
+
+    async def mock_aiter_lines():
+        for line in sse_lines:
+            yield line
+
+    mock_response = MagicMock()
+    mock_response.aiter_lines = MagicMock(return_value=mock_aiter_lines())
+
+    chunks = []
+    async for chunk in handler._process_sse_stream(
+        mock_response, "azure_ai/agents/asst_123"
+    ):
+        chunks.append(chunk)
+
+    # Should have content chunks + final [DONE] chunk
+    assert len(chunks) >= 1
+    final_chunk = chunks[-1]
+    assert final_chunk.choices[0].finish_reason == "stop"
+    assert final_chunk.choices[0].delta.annotations is not None
+    assert len(final_chunk.choices[0].delta.annotations) == 1
+    ann = final_chunk.choices[0].delta.annotations[0]
+    assert ann["type"] == "url_citation"
+    assert ann["url_citation"]["url"] == "https://example.com/citation"
+    assert ann["url_citation"]["title"] == "Citation Source"
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_agents_streaming_accumulates_annotations_from_multiple_text_items():
+    """
+    Test that annotations from multiple text content items in thread.message.completed
+    are accumulated (not overwritten).
+
+    Ref: Greptile review on PR #23849
+    """
+    from litellm.llms.azure_ai.agents.handler import AzureAIAgentsHandler
+
+    handler = AzureAIAgentsHandler()
+
+    # Two text blocks, each with distinct citations
+    completed_data = {
+        "content": [
+            {
+                "type": "text",
+                "text": {
+                    "value": "First source [1].",
+                    "annotations": [
+                        {
+                            "type": "url_citation",
+                            "text": "[1]",
+                            "start_index": 12,
+                            "end_index": 15,
+                            "url_citation": {
+                                "url": "https://example.com/first",
+                                "title": "First",
+                            },
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "text",
+                "text": {
+                    "value": "Second source [2].",
+                    "annotations": [
+                        {
+                            "type": "url_citation",
+                            "text": "[2]",
+                            "start_index": 13,
+                            "end_index": 16,
+                            "url_citation": {
+                                "url": "https://example.com/second",
+                                "title": "Second",
+                            },
+                        }
+                    ],
+                },
+            },
+        ]
+    }
+
+    sse_lines = [
+        "event: thread.created",
+        "",
+        'data: {"id": "thread_multi"}',
+        "",
+        "event: thread.message.completed",
+        "",
+        f"data: {json.dumps(completed_data)}",
+        "",
+        "data: [DONE]",
+    ]
+
+    async def mock_aiter_lines():
+        for line in sse_lines:
+            yield line
+
+    mock_response = MagicMock()
+    mock_response.aiter_lines = MagicMock(return_value=mock_aiter_lines())
+
+    chunks = []
+    async for chunk in handler._process_sse_stream(
+        mock_response, "azure_ai/agents/asst_123"
+    ):
+        chunks.append(chunk)
+
+    final_chunk = chunks[-1]
+    assert final_chunk.choices[0].delta.annotations is not None
+    assert len(final_chunk.choices[0].delta.annotations) == 2
+    urls = [a["url_citation"]["url"] for a in final_chunk.choices[0].delta.annotations]
+    assert "https://example.com/first" in urls
+    assert "https://example.com/second" in urls
 
 
 @pytest.mark.asyncio
@@ -362,7 +650,9 @@ async def test_azure_ai_agents_conversation_continuity():
     agent_id = os.environ.get("AZURE_AGENTS_AGENT_ID", "asst_hbnoK9BOCcHhC3lC4MDroVGG")
 
     if not api_base or not api_key:
-        pytest.skip("AZURE_AGENTS_API_BASE and AZURE_AGENTS_API_KEY environment variables required")
+        pytest.skip(
+            "AZURE_AGENTS_API_BASE and AZURE_AGENTS_API_KEY environment variables required"
+        )
 
     try:
         # First message
@@ -375,12 +665,12 @@ async def test_azure_ai_agents_conversation_continuity():
         )
 
         assert response1 is not None
-        
+
         # Get thread_id for continuity
         thread_id = None
         if hasattr(response1, "_hidden_params") and response1._hidden_params:
             thread_id = response1._hidden_params.get("thread_id")
-        
+
         if thread_id:
             # Second message using the same thread
             response2 = await litellm.acompletion(

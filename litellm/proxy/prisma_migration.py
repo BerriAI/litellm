@@ -5,9 +5,7 @@ import os
 import subprocess
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("./")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("./"))  # Adds the parent directory to the system path
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.proxy_cli import run_server
@@ -23,6 +21,4 @@ exit_code = result.returncode
 
 if exit_code != 0:
     verbose_proxy_logger.info(f"'prisma generate' failed with exit code {exit_code}.")
-    verbose_proxy_logger.error(
-        f"'prisma generate' stderr: {result.stderr}"
-    )  # Log stderr
+    verbose_proxy_logger.error(f"'prisma generate' stderr: {result.stderr}")  # Log stderr

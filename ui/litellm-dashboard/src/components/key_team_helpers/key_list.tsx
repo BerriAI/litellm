@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
-import { keyListCall, Member, Organization } from "../networking";
 import { Setter } from "@/types";
+import { useEffect, useState } from "react";
+import { keyListCall, Member, Organization } from "../networking";
+import type { ObjectPermission } from "../object_permission_types";
 
 export interface Team {
   team_id: string;
@@ -12,8 +13,16 @@ export interface Team {
   rpm_limit: number | null;
   organization_id: string;
   created_at: string;
+  updated_at?: string | null;
   keys: KeyResponse[];
+  keys_count?: number;
+  members_count?: number;
   members_with_roles: Member[];
+  spend: number;
+  access_group_ids?: string[];
+  access_group_models?: string[];
+  access_group_mcp_server_ids?: string[];
+  access_group_agent_ids?: string[];
 }
 
 export interface KeyResponse {
@@ -29,6 +38,7 @@ export interface KeyResponse {
   config: Record<string, unknown>;
   user_id: string;
   team_id: string | null;
+  project_id: string | null;
   max_parallel_requests: number;
   metadata: Record<string, unknown>;
   tpm_limit: number;
@@ -38,6 +48,7 @@ export interface KeyResponse {
   budget_reset_at: string;
   allowed_cache_controls: string[];
   allowed_routes: string[];
+  key_type: string | null;
   permissions: Record<string, unknown>;
   model_spend: Record<string, number>;
   model_max_budget: Record<string, number>;
@@ -45,8 +56,11 @@ export interface KeyResponse {
   blocked: boolean;
   litellm_budget_table: Record<string, unknown>;
   organization_id: string | null;
+  org_id?: string | null;
   created_at: string;
+  created_by?: string;
   updated_at: string;
+  last_active: string | null;
   team_spend: number;
   team_alias: string;
   team_tpm_limit: number;
@@ -77,20 +91,25 @@ export interface KeyResponse {
   user_tpm_limit: number;
   user_rpm_limit: number;
   user_email: string;
-  object_permission?: {
-    object_permission_id: string;
-    mcp_servers: string[];
-    mcp_access_groups?: string[];
-    mcp_tool_permissions?: Record<string, string[]>;
-    vector_stores: string[];
-    agents?: string[];
-    agent_access_groups?: string[];
-  };
+  object_permission?: ObjectPermission | null;
+  access_group_ids?: string[];
+  budget_fallbacks?: Record<string, string[]>;
+  budget_limits?: Array<{ budget_duration: string; max_budget: number; reset_at?: string }>;
   auto_rotate?: boolean;
   rotation_interval?: string;
   last_rotation_at?: string;
   key_rotation_at?: string;
   next_rotation_at?: string;
+  user?: {
+    user_id: string;
+    user_email: string;
+    user_alias: string | null;
+  };
+  created_by_user?: {
+    user_id: string;
+    user_email: string;
+    user_alias: string | null;
+  };
 }
 
 interface KeyListResponse {
@@ -106,6 +125,7 @@ interface UseKeyListProps {
   selectedKeyAlias: string | null;
   accessToken: string;
   createClicked: boolean;
+  expand?: string[];
 }
 
 interface PaginationData {
@@ -129,6 +149,7 @@ const useKeyList = ({
   selectedKeyAlias,
   accessToken,
   createClicked,
+  expand = [],
 }: UseKeyListProps): UseKeyListReturn => {
   const [keyData, setKeyData] = useState<KeyListResponse>({
     keys: [],
@@ -141,9 +162,7 @@ const useKeyList = ({
 
   const fetchKeys = async (params: Record<string, unknown> = {}): Promise<void> => {
     try {
-      console.log("calling fetchKeys");
       if (!accessToken) {
-        console.log("accessToken", accessToken);
         return;
       }
       setIsLoading(true);
@@ -151,8 +170,19 @@ const useKeyList = ({
       const page = typeof params.page === "number" ? params.page : 1;
       const pageSize = typeof params.pageSize === "number" ? params.pageSize : 100;
 
-      const data = await keyListCall(accessToken, null, null, null, null, null, page, pageSize);
-      console.log("data", data);
+      const data = await keyListCall(
+        accessToken,
+        null,
+        null,
+        null,
+        null,
+        null,
+        page,
+        pageSize,
+        null,
+        null,
+        expand.join(","),
+      );
       setKeyData(data);
       setError(null);
     } catch (err) {
@@ -164,16 +194,6 @@ const useKeyList = ({
 
   useEffect(() => {
     fetchKeys();
-    console.log(
-      "selectedTeam",
-      selectedTeam,
-      "currentOrg",
-      currentOrg,
-      "accessToken",
-      accessToken,
-      "selectedKeyAlias",
-      selectedKeyAlias,
-    );
   }, [selectedTeam, currentOrg, accessToken, selectedKeyAlias, createClicked]);
 
   const setKeys = (newKeysOrUpdater: KeyResponse[] | ((prevKeys: KeyResponse[]) => KeyResponse[])) => {

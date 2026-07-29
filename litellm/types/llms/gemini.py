@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional
 
 from typing_extensions import Required, TypedDict
 
@@ -103,9 +103,7 @@ class BidiGenerateContentRealtimeInput(TypedDict, total=False):
 StartOfSpeechSensitivityEnum = Literal[
     "START_SENSITIVITY_UNSPECIFIED", "START_SENSITIVITY_HIGH", "START_SENSITIVITY_LOW"
 ]
-EndOfSpeechSensitivityEnum = Literal[
-    "END_SENSITIVITY_UNSPECIFIED", "END_SENSITIVITY_HIGH", "END_SENSITIVITY_LOW"
-]
+EndOfSpeechSensitivityEnum = Literal["END_SENSITIVITY_UNSPECIFIED", "END_SENSITIVITY_HIGH", "END_SENSITIVITY_LOW"]
 
 
 class AutomaticActivityDetection(TypedDict, total=False):
@@ -133,7 +131,7 @@ class BidiGenerateContentSetup(TypedDict, total=False):
     tools: List[Tools]
     """The tools to be used for the realtime session."""
 
-    realtimeInputConfig: dict
+    realtimeInputConfig: BidiGenerateContentRealtimeInputConfig
     """The realtime config to be used for the realtime session."""
 
     sessionResumption: dict
@@ -158,82 +156,95 @@ from pydantic import BaseModel
 
 class GeminiImageGenerationInstance(TypedDict):
     """Instance data for Gemini image generation request"""
+
     prompt: str
 
 
 class GeminiImageGenerationParameters(BaseModel):
     """Parameters for Gemini image generation request"""
+
     sampleCount: Optional[int] = None
     """Number of images to generate (maps to OpenAI 'n' parameter)"""
-    
+
     aspectRatio: Optional[str] = None
     """Aspect ratio for generated images (e.g., '1:1', '16:9', '9:16', '4:3', '3:4')"""
-    
+
+    imageSize: Optional[str] = None
+    """Image size for generated images (e.g., '1K', '2K')"""
+
     personGeneration: Optional[str] = None
     """Controls person generation in images"""
-    
+
     # Additional parameters that might be passed through
     background: Optional[str] = None
     """Background specification"""
-    
+
     input_fidelity: Optional[str] = None
     """Input fidelity specification"""
-    
+
     moderation: Optional[str] = None
     """Moderation settings"""
-    
+
     output_compression: Optional[str] = None
     """Output compression settings"""
-    
+
     output_format: Optional[str] = None
     """Output format specification"""
-    
+
     quality: Optional[str] = None
     """Quality settings"""
-    
+
     response_format: Optional[str] = None
     """Response format specification"""
-    
+
     style: Optional[str] = None
     """Style specification"""
-    
+
     user: Optional[str] = None
     """User specification"""
 
 
 class GeminiImageGenerationRequest(BaseModel):
     """Complete request body for Gemini image generation"""
+
     instances: List[GeminiImageGenerationInstance]
     parameters: GeminiImageGenerationParameters
 
 
 class GeminiGeneratedImage(TypedDict):
     """Individual generated image data from Gemini response"""
+
     bytesBase64Encoded: str
     """Base64 encoded image data"""
 
 
 class GeminiImageGenerationPrediction(TypedDict):
     """Prediction object containing generated images"""
+
     generatedImages: List[GeminiGeneratedImage]
 
 
 class GeminiImageGenerationResponse(TypedDict):
     """Complete response body from Gemini image generation API"""
+
     predictions: List[GeminiImageGenerationPrediction]
 
+
 # Video Generation Types
-class GeminiVideoGenerationInstance(TypedDict):
+class GeminiVideoGenerationInstance(TypedDict, total=False):
     """Instance data for Gemini video generation request"""
-    prompt: str
+
+    prompt: Required[str]
+    image: Dict[str, Any]
 
 
 class GeminiVideoGenerationParameters(BaseModel):
     """
     Parameters for Gemini video generation request.
-    
+
     See: Veo 3/3.1 parameter guide.
     """
+
     aspectRatio: Optional[str] = None
     """Aspect ratio for generated video (e.g., '16:9', '9:16')."""
 
@@ -251,11 +262,6 @@ class GeminiVideoGenerationParameters(BaseModel):
 
     negativePrompt: Optional[str] = None
     """Text describing what not to include in the video."""
-
-    image: Optional[Any] = None
-    """
-    An initial image to animate (Image object).
-    """
 
     lastFrame: Optional[Any] = None
     """
@@ -286,6 +292,7 @@ class GeminiVideoGenerationParameters(BaseModel):
 
 class GeminiVideoGenerationRequest(BaseModel):
     """Complete request body for Gemini video generation"""
+
     instances: List[GeminiVideoGenerationInstance]
     parameters: Optional[GeminiVideoGenerationParameters] = None
 
@@ -293,30 +300,35 @@ class GeminiVideoGenerationRequest(BaseModel):
 # Video Generation Operation Response Types
 class GeminiVideoUri(BaseModel):
     """Video URI in the generated sample"""
+
     uri: str
     """File URI of the generated video (e.g., 'files/abc123...')"""
 
 
 class GeminiGeneratedVideoSample(BaseModel):
     """Individual generated video sample"""
+
     video: GeminiVideoUri
     """Video object containing the URI"""
 
 
 class GeminiGenerateVideoResponse(BaseModel):
     """Generate video response containing the samples"""
+
     generatedSamples: List[GeminiGeneratedVideoSample]
     """List of generated video samples"""
 
 
 class GeminiOperationResponse(BaseModel):
     """Response object in the operation when done"""
+
     generateVideoResponse: GeminiGenerateVideoResponse
     """Video generation response"""
 
 
 class GeminiOperationMetadata(BaseModel):
     """Metadata for the operation"""
+
     createTime: Optional[str] = None
     """Creation timestamp"""
     model: Optional[str] = None
@@ -326,20 +338,21 @@ class GeminiOperationMetadata(BaseModel):
 class GeminiLongRunningOperationResponse(BaseModel):
     """
     Complete response for a long-running operation.
-    
+
     Used when polling operation status and extracting results.
     """
+
     name: str
     """Operation name (e.g., 'operations/generate_1234567890')"""
-    
+
     done: bool = False
     """Whether the operation is complete"""
-    
+
     metadata: Optional[GeminiOperationMetadata] = None
     """Operation metadata"""
-    
+
     response: Optional[GeminiOperationResponse] = None
     """Response object when operation is complete"""
-    
+
     error: Optional[Dict[str, Any]] = None
     """Error details if operation failed"""

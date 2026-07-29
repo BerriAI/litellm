@@ -31,7 +31,7 @@ from ..vertex_llm_base import VertexBase
 
 class VertexAIGemmaModels(VertexBase):
     def __init__(self) -> None:
-        pass
+        super().__init__()
 
     def completion(
         self,
@@ -62,9 +62,6 @@ class VertexAIGemmaModels(VertexBase):
         try:
             import vertexai
 
-            from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-                VertexLLM,
-            )
             from litellm.llms.vertex_ai.vertex_gemma_models.transformation import (
                 VertexGemmaConfig,
             )
@@ -74,19 +71,15 @@ class VertexAIGemmaModels(VertexBase):
                 message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
             )
 
-        if not (
-            hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")
-        ):
+        if not (hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")):
             raise VertexAIError(
                 status_code=400,
                 message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
             )
         try:
-            
             model = get_vertex_base_model_name(model=model)
-            vertex_httpx_logic = VertexLLM()
 
-            access_token, project_id = vertex_httpx_logic._ensure_access_token(
+            access_token, project_id = self._ensure_access_token(
                 credentials=vertex_credentials,
                 project_id=vertex_project,
                 custom_llm_provider="vertex_ai",
@@ -143,4 +136,3 @@ class VertexAIGemmaModels(VertexBase):
             if hasattr(e, "status_code"):
                 raise e
             raise VertexAIError(status_code=500, message=str(e))
-

@@ -1,7 +1,9 @@
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { Modal, Form, Button, Select, Tooltip } from "antd";
-import debounce from "lodash/debounce";
+import { UserAddOutlined } from "@ant-design/icons";
+import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { userFilterUICall } from "@/components/networking";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 interface User {
   user_id: string;
   user_email: string;
@@ -29,11 +31,12 @@ interface FormValues {
 interface UserSearchModalProps {
   isVisible: boolean;
   onCancel: () => void;
-  onSubmit: (values: FormValues) => void;
+  onSubmit: (values: FormValues) => void | Promise<void>;
   accessToken: string | null;
   title?: string;
   roles?: Role[];
   defaultRole?: string;
+  teamId?: string;
 }
 
 const UserSearchModal: React.FC<UserSearchModalProps> = ({
@@ -51,11 +54,13 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     { label: "user", value: "user", description: "User role. Can view team info, but not manage it." },
   ],
   defaultRole = "user",
+  teamId,
 }) => {
   const [form] = Form.useForm<FormValues>();
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [selectedField, setSelectedField] = useState<"user_email" | "user_id">("user_email");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const fetchUsers = async (searchText: string, fieldName: "user_email" | "user_id"): Promise<void> => {
     if (!searchText) {
@@ -67,6 +72,9 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     try {
       const params = new URLSearchParams();
       params.append(fieldName, searchText);
+      if (teamId) {
+        params.append("team_id", teamId);
+      }
       if (accessToken == null) {
         return;
       }
@@ -86,9 +94,9 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     }
   };
 
-  const debouncedSearch = useCallback(
-    debounce((text: string, fieldName: "user_email" | "user_id") => fetchUsers(text, fieldName), 300),
-    [],
+  const debouncedSearch = useDebouncedCallback(
+    (text: string, fieldName: "user_email" | "user_id") => fetchUsers(text, fieldName),
+    { wait: DEBOUNCE_WAIT_MS },
   );
 
   const handleSearch = (value: string, fieldName: "user_email" | "user_id"): void => {
@@ -105,6 +113,15 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     });
   };
 
+  const handleSubmit = async (values: FormValues): Promise<void> => {
+    setIsSubmitting(true);
+    try {
+      await onSubmit(values);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleClose = (): void => {
     form.resetFields();
     setUserOptions([]);
@@ -112,10 +129,10 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   };
 
   return (
-    <Modal title={title} open={isVisible} onCancel={handleClose} footer={null} width={800}>
+    <Modal title={title} open={isVisible} onCancel={handleClose} footer={null} width={800} maskClosable={!isSubmitting}>
       <Form<FormValues>
         form={form}
-        onFinish={onSubmit}
+        onFinish={handleSubmit}
         labelCol={{ span: 8 }}
         wrapperCol={{ span: 16 }}
         labelAlign="left"
@@ -134,6 +151,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
             options={selectedField === "user_email" ? userOptions : []}
             loading={loading}
             allowClear
+            data-testid="member-email-search"
           />
         </Form.Item>
 
@@ -167,8 +185,8 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
         </Form.Item>
 
         <div className="text-right mt-4">
-          <Button type="default" htmlType="submit">
-            Add Member
+          <Button type="primary" htmlType="submit" icon={<UserAddOutlined />} loading={isSubmitting}>
+            {isSubmitting ? "Adding..." : "Add Member"}
           </Button>
         </div>
       </Form>

@@ -1,17 +1,20 @@
 """
 Search Tool Registry for managing search tool configurations.
 """
+
 from datetime import datetime, timezone
 from typing import List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.table_repositories import SearchToolsRepository
 from litellm.types.search import SearchTool
 
 
 class SearchToolRegistry:
-    """    
+    """
     Handles adding, removing, and getting search tools in DB + in memory.
     """
 
@@ -22,10 +25,10 @@ class SearchToolRegistry:
     def _convert_prisma_to_dict(prisma_obj) -> dict:
         """
         Convert Prisma result to dict with datetime objects as ISO format strings.
-        
+
         Args:
             prisma_obj: Prisma model instance
-            
+
         Returns:
             Dict with datetime fields converted to ISO strings
         """
@@ -40,17 +43,15 @@ class SearchToolRegistry:
     ###########################################################
     ########### DB management helpers for search tools ########
     ###########################################################
-    
-    async def add_search_tool_to_db(
-        self, search_tool: SearchTool, prisma_client: PrismaClient
-    ):
+
+    async def add_search_tool_to_db(self, search_tool: SearchTool, prisma_client: PrismaClient):
         """
         Add a search tool to the database.
-        
+
         Args:
             search_tool: Search tool configuration
             prisma_client: Prisma client instance
-            
+
         Returns:
             Dict with created search tool data
         """
@@ -60,7 +61,7 @@ class SearchToolRegistry:
             search_tool_info: str = safe_dumps(search_tool.get("search_tool_info", {}))
 
             # Create search tool in DB
-            created_search_tool = await prisma_client.db.litellm_searchtoolstable.create(
+            created_search_tool = await SearchToolsRepository(prisma_client).table.create(
                 data={
                     "search_tool_name": search_tool_name,
                     "litellm_params": litellm_params,
@@ -81,32 +82,28 @@ class SearchToolRegistry:
             verbose_proxy_logger.exception(f"Error adding search tool to DB: {str(e)}")
             raise Exception(f"Error adding search tool to DB: {str(e)}")
 
-    async def delete_search_tool_from_db(
-        self, search_tool_id: str, prisma_client: PrismaClient
-    ):
+    async def delete_search_tool_from_db(self, search_tool_id: str, prisma_client: PrismaClient):
         """
         Delete a search tool from the database.
-        
+
         Args:
             search_tool_id: ID of search tool to delete
             prisma_client: Prisma client instance
-            
+
         Returns:
             Dict with success message
         """
         try:
             # Get search tool before deletion for response
-            existing_tool = await prisma_client.db.litellm_searchtoolstable.find_unique(
+            existing_tool = await SearchToolsRepository(prisma_client).table.find_unique(
                 where={"search_tool_id": search_tool_id}
             )
-            
+
             if not existing_tool:
                 raise Exception(f"Search tool with ID {search_tool_id} not found")
-            
+
             # Delete from DB
-            await prisma_client.db.litellm_searchtoolstable.delete(
-                where={"search_tool_id": search_tool_id}
-            )
+            await SearchToolsRepository(prisma_client).table.delete(where={"search_tool_id": search_tool_id})
 
             return {
                 "message": f"Search tool {search_tool_id} deleted successfully",
@@ -116,17 +113,15 @@ class SearchToolRegistry:
             verbose_proxy_logger.exception(f"Error deleting search tool from DB: {str(e)}")
             raise Exception(f"Error deleting search tool from DB: {str(e)}")
 
-    async def update_search_tool_in_db(
-        self, search_tool_id: str, search_tool: SearchTool, prisma_client: PrismaClient
-    ):
+    async def update_search_tool_in_db(self, search_tool_id: str, search_tool: SearchTool, prisma_client: PrismaClient):
         """
         Update a search tool in the database.
-        
+
         Args:
             search_tool_id: ID of search tool to update
             search_tool: Updated search tool configuration
             prisma_client: Prisma client instance
-            
+
         Returns:
             Dict with updated search tool data
         """
@@ -136,7 +131,7 @@ class SearchToolRegistry:
             search_tool_info: str = safe_dumps(search_tool.get("search_tool_info", {}))
 
             # Update in DB
-            updated_search_tool = await prisma_client.db.litellm_searchtoolstable.update(
+            updated_search_tool = await SearchToolsRepository(prisma_client).table.update(
                 where={"search_tool_id": search_tool_id},
                 data={
                     "search_tool_name": search_tool_name,
@@ -158,18 +153,20 @@ class SearchToolRegistry:
     ) -> List[SearchTool]:
         """
         Get all search tools from the database.
-        
+
         Args:
             prisma_client: Prisma client instance
-            
+
         Returns:
             List of search tool configurations
         """
         try:
-            search_tools_from_db = (
-                await prisma_client.db.litellm_searchtoolstable.find_many(
+            search_tools_from_db = await call_with_db_reconnect_retry(
+                prisma_client,
+                lambda: SearchToolsRepository(prisma_client).table.find_many(
                     order={"created_at": "desc"},
-                )
+                ),
+                reason="get_all_search_tools_from_db_lookup_failure",
             )
 
             search_tools: List[SearchTool] = []
@@ -188,16 +185,16 @@ class SearchToolRegistry:
     ) -> Optional[SearchTool]:
         """
         Get a search tool by its ID from the database.
-        
+
         Args:
             search_tool_id: ID of search tool to retrieve
             prisma_client: Prisma client instance
-            
+
         Returns:
             Search tool configuration or None if not found
         """
         try:
-            search_tool = await prisma_client.db.litellm_searchtoolstable.find_unique(
+            search_tool = await SearchToolsRepository(prisma_client).table.find_unique(
                 where={"search_tool_id": search_tool_id}
             )
 
@@ -216,16 +213,16 @@ class SearchToolRegistry:
     ) -> Optional[SearchTool]:
         """
         Get a search tool by its name from the database.
-        
+
         Args:
             search_tool_name: Name of search tool to retrieve
             prisma_client: Prisma client instance
-            
+
         Returns:
             Search tool configuration or None if not found
         """
         try:
-            search_tool = await prisma_client.db.litellm_searchtoolstable.find_unique(
+            search_tool = await SearchToolsRepository(prisma_client).table.find_unique(
                 where={"search_tool_name": search_tool_name}
             )
 
@@ -238,4 +235,3 @@ class SearchToolRegistry:
         except Exception as e:
             verbose_proxy_logger.exception(f"Error getting search tool from DB: {str(e)}")
             raise Exception(f"Error getting search tool from DB: {str(e)}")
-

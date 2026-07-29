@@ -1,11 +1,12 @@
 # What is this?
 ## Helper utilities
+import copy
 from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union
 
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -17,9 +18,7 @@ else:
     Span = Any
 
 
-def safe_divide_seconds(
-    seconds: float, denominator: float, default: Optional[float] = None
-) -> Optional[float]:
+def safe_divide_seconds(seconds: float, denominator: float, default: Optional[float] = None) -> Optional[float]:
     """
     Safely divide seconds by denominator, handling zero division.
 
@@ -38,18 +37,18 @@ def safe_divide_seconds(
 
 
 def safe_divide(
-    numerator: Union[int, float], 
-    denominator: Union[int, float], 
-    default: Union[int, float] = 0
+    numerator: Union[int, float],
+    denominator: Union[int, float],
+    default: Union[int, float] = 0,
 ) -> Union[int, float]:
     """
     Safely divide two numbers, returning a default value if denominator is zero.
-    
+
     Args:
         numerator: The number to divide
         denominator: The number to divide by
         default: Value to return if denominator is zero (defaults to 0)
-    
+
     Returns:
         The result of numerator/denominator, or default if denominator is zero
     """
@@ -58,43 +57,88 @@ def safe_divide(
     return numerator / denominator
 
 
-def map_finish_reason(
-    finish_reason: str,
-):  # openai supports 5 stop sequences - 'stop', 'length', 'function_call', 'content_filter', 'null'
-    # anthropic mapping
-    if finish_reason == "stop_sequence":
+def coerce_token_limit(value: object) -> int | None:
+    """
+    Coerce a max_input_tokens / max_output_tokens value to an int, treating a
+    malformed value as absent.
+
+    A deployment's model_info is registered into litellm.model_cost verbatim, so a
+    config value like "128,000" or "" reaches the /v1/models listing uncoerced from
+    both the router index and the cost map. Returning None omits that one limit
+    instead of failing the whole listing.
+
+    Args:
+        value: The raw configured or cost-map value
+
+    Returns:
+        The value as an int, or None if it is missing or not a usable number.
+        Bools are rejected because True/False is never a meaningful token limit.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (str, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return None
+
+
+_FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
+    # Anthropic
+    "stop_sequence": "stop",
+    "end_turn": "stop",
+    "max_tokens": "length",
+    "tool_use": "tool_calls",
+    "refusal": "content_filter",
+    "compaction": "length",
+    # Cohere
+    "COMPLETE": "stop",
+    "ERROR_TOXIC": "content_filter",
+    "ERROR": "stop",
+    # HuggingFace / Together AI
+    "eos_token": "stop",
+    "eos": "stop",
+    # Gemini / Vertex AI
+    "STOP": "stop",
+    "MAX_TOKENS": "length",
+    "SAFETY": "content_filter",
+    "RECITATION": "content_filter",
+    "FINISH_REASON_UNSPECIFIED": "stop",
+    "MALFORMED_FUNCTION_CALL": "stop",
+    "LANGUAGE": "content_filter",
+    "OTHER": "content_filter",
+    "BLOCKLIST": "content_filter",
+    "PROHIBITED_CONTENT": "content_filter",
+    "SPII": "content_filter",
+    "IMAGE_SAFETY": "content_filter",
+    "IMAGE_PROHIBITED_CONTENT": "content_filter",
+    "TOO_MANY_TOOL_CALLS": "stop",
+    "MALFORMED_RESPONSE": "stop",
+    # Zhipu GLM
+    "network_error": "stop",
+    "sensitive": "content_filter",
+    # Bedrock
+    "guardrail_intervened": "content_filter",
+    # OpenAI passthrough
+    "stop": "stop",
+    "length": "length",
+    "tool_calls": "tool_calls",
+    "function_call": "function_call",
+    "content_filter": "content_filter",
+    # Anthropic Sonnet 4
+    "content_filtered": "content_filter",
+}
+
+
+def map_finish_reason(finish_reason: str) -> OpenAIChatCompletionFinishReason:
+    mapped = _FINISH_REASON_MAP.get(finish_reason)
+    if mapped is None:
+        verbose_logger.warning("Unmapped finish_reason '%s', defaulting to 'stop'", finish_reason)
         return "stop"
-    # cohere mapping - https://docs.cohere.com/reference/generate
-    elif finish_reason == "COMPLETE":
-        return "stop"
-    elif finish_reason == "MAX_TOKENS":  # cohere + vertex ai
-        return "length"
-    elif finish_reason == "ERROR_TOXIC":
-        return "content_filter"
-    elif (
-        finish_reason == "ERROR"
-    ):  # openai currently doesn't support an 'error' finish reason
-        return "stop"
-    # huggingface mapping https://huggingface.github.io/text-generation-inference/#/Text%20Generation%20Inference/generate_stream
-    elif finish_reason == "eos_token" or finish_reason == "stop_sequence":
-        return "stop"
-    elif (
-        finish_reason == "FINISH_REASON_UNSPECIFIED" or finish_reason == "STOP"
-    ):  # vertex ai - got from running `print(dir(response_obj.candidates[0].finish_reason))`: ['FINISH_REASON_UNSPECIFIED', 'MAX_TOKENS', 'OTHER', 'RECITATION', 'SAFETY', 'STOP',]
-        return "stop"
-    elif finish_reason == "SAFETY" or finish_reason == "RECITATION":  # vertex ai
-        return "content_filter"
-    elif finish_reason == "STOP":  # vertex ai
-        return "stop"
-    elif finish_reason == "end_turn" or finish_reason == "stop_sequence":  # anthropic
-        return "stop"
-    elif finish_reason == "max_tokens":  # anthropic
-        return "length"
-    elif finish_reason == "tool_use":  # anthropic
-        return "tool_calls"
-    elif finish_reason == "content_filtered":
-        return "content_filter"
-    return finish_reason
+    return mapped
 
 
 def remove_index_from_tool_calls(
@@ -105,9 +149,7 @@ def remove_index_from_tool_calls(
             _tool_calls = message.get("tool_calls")
             if _tool_calls is not None and isinstance(_tool_calls, list):
                 for tool_call in _tool_calls:
-                    if (
-                        isinstance(tool_call, dict) and "index" in tool_call
-                    ):  # Type guard to ensure it's a dict
+                    if isinstance(tool_call, dict) and "index" in tool_call:  # Type guard to ensure it's a dict
                         tool_call.pop("index", None)
 
     return
@@ -122,9 +164,7 @@ def remove_items_at_indices(items: Optional[List[Any]], indices: Iterable[int]) 
             items.pop(index)
 
 
-def add_missing_spend_metadata_to_litellm_metadata(
-    litellm_metadata: dict, metadata: dict
-) -> dict:
+def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: dict) -> dict:
     """
     Helper to get litellm metadata for spend tracking
 
@@ -153,7 +193,27 @@ def get_metadata_variable_name_from_kwargs(
     - LiteLLM is now moving to using `litellm_metadata` for our metadata
     """
     return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
-    
+
+
+def get_or_create_metadata_bucket(
+    request_data: dict,
+) -> tuple[Literal["metadata", "litellm_metadata"], dict]:
+    """
+    Return the proxy-internal metadata bucket for this request, creating it if absent.
+
+    Batch/file routes store proxy state in ``litellm_metadata`` so the OpenAI
+    ``metadata`` field can remain provider-safe (string values only). Every writer and
+    reader of proxy-internal metadata resolves the bucket through here, so a caller that
+    supplies its own ``metadata`` field cannot split them across two dicts.
+    """
+    metadata_key = get_metadata_variable_name_from_kwargs(request_data)
+    metadata_bucket = request_data.get(metadata_key)
+    if not isinstance(metadata_bucket, dict):
+        metadata_bucket = {}
+        request_data[metadata_key] = metadata_bucket
+    return metadata_key, metadata_bucket
+
+
 def get_litellm_metadata_from_kwargs(kwargs: dict):
     """
     Helper to get litellm metadata from all litellm request kwargs
@@ -165,15 +225,32 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
         metadata = litellm_params.get("metadata", {})
         litellm_metadata = litellm_params.get("litellm_metadata", {})
         if litellm_metadata and metadata:
-            litellm_metadata = add_missing_spend_metadata_to_litellm_metadata(
-                litellm_metadata, metadata
-            )
+            litellm_metadata = add_missing_spend_metadata_to_litellm_metadata(litellm_metadata, metadata)
         if litellm_metadata:
             return litellm_metadata
         elif metadata:
             return metadata
 
     return {}
+
+
+def reconstruct_model_name(
+    model_name: str,
+    custom_llm_provider: Optional[str],
+    metadata: dict,
+) -> str:
+    """Reconstruct full model name with provider prefix for logging."""
+    # Check if deployment model name from router metadata is available (has original prefix)
+    deployment_model_name = metadata.get("deployment")
+    if deployment_model_name and "/" in deployment_model_name:
+        # Use the deployment model name which preserves the original provider prefix
+        return deployment_model_name
+    elif custom_llm_provider and model_name and "/" not in model_name:
+        # Only add prefix for Bedrock (not for direct Anthropic API)
+        # This ensures Bedrock models get the prefix while direct Anthropic models don't
+        if custom_llm_provider == "bedrock":
+            return f"{custom_llm_provider}/{model_name}"
+    return model_name
 
 
 # Helper functions used for OTEL logging
@@ -197,14 +274,31 @@ def _get_parent_otel_span_from_kwargs(
             return kwargs["litellm_parent_otel_span"]
         return None
     except Exception as e:
-        verbose_logger.exception(
-            "Error in _get_parent_otel_span_from_kwargs: " + str(e)
-        )
+        verbose_logger.exception("Error in _get_parent_otel_span_from_kwargs: " + str(e))
         return None
 
 
-def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> dict:
+def process_response_headers(
+    response_headers: Union[httpx.Headers, dict],
+    preserve_litellm_internal_headers: bool = False,
+) -> dict:
+    """
+    `preserve_litellm_internal_headers` must only be True when the input is a
+    LiteLLM-owned dict (e.g. `_hidden_params["additional_headers"]` that has
+    already been through one round of processing).  For raw upstream provider
+    headers — whether passed as `httpx.Headers` or a plain dict — it must
+    remain False, otherwise a malicious provider returning `x-litellm-*` could
+    spoof LiteLLM-internal markers (e.g. `x-litellm-attempted-fallbacks`).
+
+    When the input is an `httpx.Headers` object the flag is always treated as
+    False regardless of what the caller requested, because `httpx.Headers` is
+    always a raw provider response and can never be LiteLLM-owned.
+    """
     from litellm.types.utils import OPENAI_RESPONSE_HEADERS
+
+    # Raw httpx.Headers objects come directly from provider HTTP responses and
+    # must never be treated as LiteLLM-owned, regardless of caller intent.
+    _preserve = preserve_litellm_internal_headers and isinstance(response_headers, dict)
 
     openai_headers = {}
     processed_headers = {}
@@ -213,9 +307,13 @@ def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> di
     for k, v in response_headers.items():
         if k in OPENAI_RESPONSE_HEADERS:  # return openai-compatible headers
             openai_headers[k] = v
-        if k.startswith(
-            "llm_provider-"
-        ):  # return raw provider headers (incl. openai-compatible ones)
+        if k.startswith("llm_provider-"):  # return raw provider headers (incl. openai-compatible ones)
+            processed_headers[k] = v
+        elif _preserve and k.startswith("x-litellm-"):
+            # LiteLLM's own internal headers (e.g. x-litellm-attempted-fallbacks,
+            # x-litellm-model-group) are not LLM provider headers and must not be
+            # prefixed. Downstream consumers (proxy override, callers checking
+            # whether a fallback happened) look up the bare key.
             processed_headers[k] = v
         else:
             additional_headers["{}-{}".format("llm_provider", k)] = v
@@ -246,8 +344,8 @@ def safe_deep_copy(data):
     Safe Deep Copy
 
     The LiteLLM request may contain objects that cannot be pickled/deep-copied
-    (e.g., tracing spans, locks, clients). 
-    
+    (e.g., tracing spans, locks, clients).
+
     This helper deep-copies each top-level key independently; on failure keeps
     original ref
     """
@@ -266,13 +364,8 @@ def safe_deep_copy(data):
         if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
             litellm_parent_otel_span = data["metadata"].pop("litellm_parent_otel_span")
             data["metadata"]["litellm_parent_otel_span"] = "placeholder"
-        if (
-            "litellm_metadata" in data
-            and "litellm_parent_otel_span" in data["litellm_metadata"]
-        ):
-            litellm_parent_otel_span = data["litellm_metadata"].pop(
-                "litellm_parent_otel_span"
-            )
+        if "litellm_metadata" in data and "litellm_parent_otel_span" in data["litellm_metadata"]:
+            litellm_parent_otel_span = data["litellm_metadata"].pop("litellm_parent_otel_span")
             data["litellm_metadata"]["litellm_parent_otel_span"] = "placeholder"
 
     # Step 2: Per-key deepcopy with fallback
@@ -293,47 +386,42 @@ def safe_deep_copy(data):
     if isinstance(data, dict) and litellm_parent_otel_span is not None:
         if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
             data["metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
-        if (
-            "litellm_metadata" in data
-            and "litellm_parent_otel_span" in data["litellm_metadata"]
-        ):
-            data["litellm_metadata"][
-                "litellm_parent_otel_span"
-            ] = litellm_parent_otel_span
+        if "litellm_metadata" in data and "litellm_parent_otel_span" in data["litellm_metadata"]:
+            data["litellm_metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
     return new_data
 
 
 def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
     """
     Recursively filter out Exception objects and callable objects from dicts/lists.
-    
+
     This is a defensive utility to prevent deepcopy failures when exception objects
     are accidentally stored in parameter dictionaries (e.g., optional_params).
     Also filters callable objects (functions) to prevent JSON serialization errors.
     Exceptions and callables should not be stored in params - this function removes them.
-    
+
     Args:
         data: The data structure to filter (dict, list, or any other type)
         max_depth: Maximum recursion depth to prevent infinite loops
-        
+
     Returns:
         Filtered data structure with Exception and callable objects removed, or None if the
         entire input was an Exception or callable
     """
     if max_depth <= 0:
         return data
-    
+
     # Skip exception objects
     if isinstance(data, Exception):
         return None
     # Skip callable objects (functions, methods, lambdas) but not classes (type objects)
     if callable(data) and not isinstance(data, type):
         return None
-    # Skip known non-serializable object types (Logging, etc.)
+    # Skip known non-serializable object types (Logging, Router, etc.)
     obj_type_name = type(data).__name__
-    if obj_type_name in ["Logging", "LiteLLMLoggingObj"]:
+    if obj_type_name in ["Logging", "LiteLLMLoggingObj", "Router"]:
         return None
-    
+
     if isinstance(data, dict):
         result: dict[str, Any] = {}
         for k, v in data.items():
@@ -369,34 +457,69 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
 def filter_internal_params(data: dict, additional_internal_params: Optional[set] = None) -> dict:
     """
     Filter out LiteLLM internal parameters that shouldn't be sent to provider APIs.
-    
+
     This removes internal/MCP-related parameters that are used by LiteLLM internally
     but should not be included in API requests to providers.
-    
+
     Args:
         data: Dictionary of parameters to filter
         additional_internal_params: Optional set of additional internal parameter names to filter
-        
+
     Returns:
         Filtered dictionary with internal parameters removed
     """
     if not isinstance(data, dict):
         return data
-    
+
     # Known internal parameters that should never be sent to provider APIs
     internal_params = {
         "skip_mcp_handler",
         "mcp_handler_context",
         "_skip_mcp_handler",
     }
-    
+
     # Add any additional internal params if provided
     if additional_internal_params:
         internal_params.update(additional_internal_params)
-    
+
     # Filter out internal parameters
-    return {
-        k: v
-        for k, v in data.items()
-        if k not in internal_params
-    }
+    return {k: v for k, v in data.items() if k not in internal_params}
+
+
+def redact_nested_match_and_regex_keys(
+    payload: Union[dict, List[Any], str, None],
+) -> Union[dict, List[Any], str, None]:
+    """
+    Deep-copy `payload` and replace every `match` / `regex` string field with
+    "[REDACTED]" anywhere in nested dict/list structures.
+
+    Used for guardrail spend/compliance logging so raw spans are not persisted.
+    """
+    if payload is None or isinstance(payload, str):
+        return payload
+    try:
+        redacted: Union[dict, List[Any], str, None] = copy.deepcopy(payload)
+    except Exception:
+        return payload
+
+    # Iterative traversal; `seen` guards against cyclic refs preserved by deepcopy.
+    try:
+        seen: set = set()
+        stack: List[Any] = [redacted]
+        while stack:
+            node = stack.pop()
+            node_id = id(node)
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            if isinstance(node, dict):
+                if "match" in node:
+                    node["match"] = "[REDACTED]"
+                if "regex" in node:
+                    node["regex"] = "[REDACTED]"
+                stack.extend(node.values())
+            elif isinstance(node, list):
+                stack.extend(node)
+    except Exception:
+        return payload
+    return redacted

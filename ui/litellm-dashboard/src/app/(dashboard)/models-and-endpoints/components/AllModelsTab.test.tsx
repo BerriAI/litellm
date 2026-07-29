@@ -1,267 +1,364 @@
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
-import * as useTeamsModule from "@/app/(dashboard)/hooks/useTeams";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
 import AllModelsTab from "./AllModelsTab";
+import { STATUS_COLUMN_ID, toServerSortField } from "./ModelsTableColumns";
+
+const mockModelDeleteCall = vi.fn().mockResolvedValue({});
+const mockModelPatchUpdateCall = vi.fn().mockResolvedValue({});
+vi.mock("@/components/networking", () => ({
+  modelDeleteCall: (...args: unknown[]) => mockModelDeleteCall(...args),
+  modelPatchUpdateCall: (...args: unknown[]) => mockModelPatchUpdateCall(...args),
+}));
+
+vi.mock("@/components/molecules/notifications_manager", () => ({
+  default: { success: vi.fn(), fromBackend: vi.fn() },
+}));
+
+vi.mock("@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal", () => ({
+  default: function ModelSettingsModalMock({ isVisible }: { isVisible: boolean }) {
+    return isVisible ? <div data-testid="model-settings-modal" /> : null;
+  },
+}));
+
+const mockInvalidateQueries = vi.fn();
+vi.mock("@tanstack/react-query", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-query")>();
+  return { ...actual, useQueryClient: () => ({ invalidateQueries: mockInvalidateQueries }) };
+});
+
+interface ModelsInfoArgs {
+  page?: number;
+  size?: number;
+  search?: string;
+  teamId?: string;
+  sortBy?: string;
+  sortOrder?: string;
+}
+
+const modelsInfoCalls: ModelsInfoArgs[] = [];
+const mockRefetch = vi.fn();
+let modelsInfoResult: Record<string, unknown> = {};
+
+type UseModelsInfoArgs = [
+  page?: number,
+  size?: number,
+  search?: string,
+  modelId?: string,
+  teamId?: string,
+  sortBy?: string,
+  sortOrder?: string,
+];
+
+vi.mock("../../hooks/models/useModels", () => ({
+  useModelsInfo: (...args: UseModelsInfoArgs) => {
+    const [page, size, search, , teamId, sortBy, sortOrder] = args;
+    const call: ModelsInfoArgs = { page, size, search, teamId, sortBy, sortOrder };
+    modelsInfoCalls.push(call);
+    return { ...modelsInfoResult, refetch: mockRefetch };
+  },
+}));
+
+vi.mock("../../hooks/models/useModelCostMap", () => ({
+  useModelCostMap: () => ({ data: { "gpt-4": { litellm_provider: "openai" } }, isLoading: false, error: null }),
+}));
+
+const mockTeams = [{ team_id: "team-1", team_alias: "Engineering" }];
+vi.mock("../../hooks/teams/useTeams", () => ({
+  useTeams: () => ({ data: mockTeams, isLoading: false, error: null, refetch: vi.fn() }),
+}));
+
+const BASE_MODEL_INFO = {
+  id: "model-1",
+  db_model: true,
+  created_by: "user-123",
+  created_at: "2024-01-01T00:00:00Z",
+  updated_at: "2024-01-02T00:00:00Z",
+  team_id: "team-1",
+  access_groups: [],
+};
+
+const makeRow = (overrides: Record<string, unknown> = {}) => ({
+  model_name: "gpt-4",
+  litellm_params: { model: "openai/gpt-4", custom_llm_provider: "openai" },
+  model_info: { ...BASE_MODEL_INFO, ...((overrides.model_info as Record<string, unknown>) ?? {}) },
+});
+
+const setModelsInfo = (rows: Record<string, unknown>[], totalCount = rows.length, isLoading = false) => {
+  modelsInfoResult = {
+    data: { data: rows, total_count: totalCount, current_page: 1, total_pages: 1, size: 50 },
+    isLoading,
+    isFetching: false,
+    error: null,
+  };
+};
+
+const lastModelsInfoCall = (): ModelsInfoArgs => modelsInfoCalls[modelsInfoCalls.length - 1];
+
+const SEARCH_SETTLE_MS = 400;
+
+const MOCK_AUTHORIZED = {
+  isLoading: false,
+  isAuthorized: true,
+  token: "mock-token",
+  accessToken: "mock-access-token",
+  userId: "user-123",
+  userEmail: "test@example.com",
+  userRole: "Admin",
+  premiumUser: true,
+  disabledPersonalKeyCreation: false,
+  showSSOBanner: false,
+};
+
+const mockSetSelectedModelGroup = vi.fn();
+const mockSetSelectedModelId = vi.fn();
+const mockSetSelectedTeamId = vi.fn();
+
+const defaultProps = {
+  selectedModelGroup: "all",
+  setSelectedModelGroup: mockSetSelectedModelGroup,
+  availableModelGroups: ["gpt-4", "gpt-3.5-turbo"],
+  availableModelAccessGroups: ["sales-team"],
+  setSelectedModelId: mockSetSelectedModelId,
+  setSelectedTeamId: mockSetSelectedTeamId,
+};
 
 describe("AllModelsTab", () => {
-  const mockSetSelectedModelGroup = vi.fn();
-  const mockSetSelectedModelId = vi.fn();
-  const mockSetSelectedTeamId = vi.fn();
-  const mockSetEditModel = vi.fn();
-
-  const defaultProps = {
-    selectedModelGroup: "all",
-    setSelectedModelGroup: mockSetSelectedModelGroup,
-    availableModelGroups: ["gpt-4", "gpt-3.5-turbo"],
-    availableModelAccessGroups: ["sales-team", "engineering-team"],
-    setSelectedModelId: mockSetSelectedModelId,
-    setSelectedTeamId: mockSetSelectedTeamId,
-    setEditModel: mockSetEditModel,
-    modelData: {
-      data: [],
-    },
-  };
-
-  const mockUseAuthorized = {
-    token: "mock-token",
-    accessToken: "mock-access-token",
-    userId: "user-123",
-    userEmail: "test@example.com",
-    userRole: "Admin",
-    premiumUser: true,
-    disabledPersonalKeyCreation: false,
-    showSSOBanner: false,
-  };
-
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(useAuthorizedModule, "default").mockReturnValue(mockUseAuthorized);
+    modelsInfoCalls.length = 0;
+    setModelsInfo([makeRow()]);
+    vi.spyOn(useAuthorizedModule, "default").mockReturnValue(MOCK_AUTHORIZED);
   });
 
-  it("should render with empty data", () => {
-    vi.spyOn(useTeamsModule, "default").mockReturnValue({
-      teams: [],
-      setTeams: vi.fn(),
-    });
-
+  it("renders the fetched models and the server row count", async () => {
+    setModelsInfo([makeRow()], 137);
     render(<AllModelsTab {...defaultProps} />);
-    expect(screen.getByText("Current Team:")).toBeInTheDocument();
+
+    expect(await screen.findByText("gpt-4")).toBeInTheDocument();
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 137");
   });
 
-  it("should filter models by direct team access when current team is selected", async () => {
-    const mockTeams = [
-      {
-        team_id: "team-456",
-        team_alias: "Engineering Team",
-        models: ["gpt-4"],
-        max_budget: null,
-        budget_duration: null,
-        tpm_limit: null,
-        rpm_limit: null,
-        organization_id: "org-123",
-        created_at: "2024-01-01",
-        keys: [],
-        members_with_roles: [],
-      },
+  it("does not re-query after the mount-time debounced search settles unchanged", async () => {
+    render(<AllModelsTab {...defaultProps} />);
+    const callsAfterMount = modelsInfoCalls.length;
+
+    await new Promise((resolve) => setTimeout(resolve, SEARCH_SETTLE_MS));
+
+    expect(modelsInfoCalls.length).toBe(callsAfterMount);
+  });
+
+  it("shows the empty state when the proxy returns no models", () => {
+    setModelsInfo([], 0);
+    render(<AllModelsTab {...defaultProps} />);
+
+    expect(screen.getByText("No models found")).toBeInTheDocument();
+  });
+
+  it("shows the loading skeleton while the first page is in flight", () => {
+    setModelsInfo([], 0, true);
+    render(<AllModelsTab {...defaultProps} />);
+
+    expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
+    expect(screen.queryByText("No models found")).not.toBeInTheDocument();
+  });
+
+  describe("server sort contract", () => {
+    const sortHeader = (columnId: string): HTMLElement => screen.getByTestId(`sort-header-${columnId}`);
+
+    const expectIndicator = async (columnId: string, state: "asc" | "desc" | "none") => {
+      await waitFor(() => {
+        expect(sortHeader(columnId).querySelector(`[data-sort-indicator="${state}"]`)).not.toBeNull();
+      });
+    };
+
+    const cases: [string, string, string, "asc" | "desc"][] = [
+      ["Model Information", "model_name", "model_name", "asc"],
+      ["Created By", "model_info_created_by", "created_at", "asc"],
+      ["Updated At", "model_info_updated_at", "updated_at", "asc"],
+      ["Costs", "input_cost", "costs", "desc"],
     ];
 
-    vi.spyOn(useTeamsModule, "default").mockReturnValue({
-      teams: mockTeams,
-      setTeams: vi.fn(),
+    it.each(cases)("sorts %s using the server field %s", async (_label, columnId, serverField, firstDirection) => {
+      const user = userEvent.setup();
+      render(<AllModelsTab {...defaultProps} />);
+
+      await user.click(sortHeader(columnId));
+      await expectIndicator(columnId, firstDirection);
+
+      expect(lastModelsInfoCall().sortBy).toBe(serverField);
+      expect(lastModelsInfoCall().sortOrder).toBe(firstDirection);
     });
 
-    const modelData = {
-      data: [
-        {
-          model_name: "gpt-4-accessible",
-          model_info: {
-            id: "model-1",
-            access_via_team_ids: ["team-456"],
-            access_groups: [],
-          },
-        },
-        {
-          model_name: "gpt-3.5-turbo-blocked",
-          model_info: {
-            id: "model-2",
-            access_via_team_ids: ["team-789"],
-            access_groups: [],
-          },
-        },
-      ],
-    };
-
-    render(<AllModelsTab {...defaultProps} modelData={modelData} />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Showing 0 results")).toBeInTheDocument();
-    });
-  });
-
-  it("should filter models by access group matching when team models match model access groups", async () => {
-    const mockTeams = [
-      {
-        team_id: "team-sales",
-        team_alias: "Sales Team",
-        models: ["sales-model-group"],
-        max_budget: null,
-        budget_duration: null,
-        tpm_limit: null,
-        rpm_limit: null,
-        organization_id: "org-123",
-        created_at: "2024-01-01",
-        keys: [],
-        members_with_roles: [],
-      },
-    ];
-
-    vi.spyOn(useTeamsModule, "default").mockReturnValue({
-      teams: mockTeams,
-      setTeams: vi.fn(),
+    it("maps the hidden Status column to the server field status", () => {
+      expect(toServerSortField(STATUS_COLUMN_ID)).toBe("status");
     });
 
-    const modelData = {
-      data: [
-        {
-          model_name: "gpt-4-sales",
-          model_info: {
-            id: "model-sales-1",
-            access_via_team_ids: [],
-            access_groups: ["sales-model-group"],
-          },
-        },
-        {
-          model_name: "gpt-4-engineering",
-          model_info: {
-            id: "model-eng-1",
-            access_via_team_ids: [],
-            access_groups: ["engineering-model-group"],
-          },
-        },
-      ],
-    };
+    it("cycles a sorted column back to unsorted", async () => {
+      const user = userEvent.setup();
+      render(<AllModelsTab {...defaultProps} />);
 
-    render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+      await user.click(sortHeader("model_info_updated_at"));
+      await expectIndicator("model_info_updated_at", "asc");
+      expect(lastModelsInfoCall().sortOrder).toBe("asc");
 
-    await waitFor(() => {
-      expect(screen.getByText("Showing 0 results")).toBeInTheDocument();
+      await user.click(sortHeader("model_info_updated_at"));
+      await expectIndicator("model_info_updated_at", "desc");
+      expect(lastModelsInfoCall().sortOrder).toBe("desc");
+
+      await user.click(sortHeader("model_info_updated_at"));
+      await expectIndicator("model_info_updated_at", "none");
+      expect(lastModelsInfoCall().sortBy).toBeUndefined();
     });
   });
 
-  it("should filter models by direct_access for personal team", async () => {
-    vi.spyOn(useTeamsModule, "default").mockReturnValue({
-      teams: [],
-      setTeams: vi.fn(),
-    });
+  it("queries the selected team and resets to the first page", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
 
-    const modelData = {
-      data: [
-        {
-          model_name: "gpt-4-personal",
-          model_info: {
-            id: "model-personal-1",
-            direct_access: true,
-            access_via_team_ids: [],
-            access_groups: [],
-          },
-        },
-        {
-          model_name: "gpt-4-team-only",
-          model_info: {
-            id: "model-team-1",
-            direct_access: false,
-            access_via_team_ids: ["team-123"],
-            access_groups: [],
-          },
-        },
-      ],
-    };
+    expect(lastModelsInfoCall().teamId).toBeUndefined();
 
-    render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+    await user.click(screen.getByTestId("models-team-select"));
+    await user.click(await screen.findByRole("option", { name: "Engineering" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
+      expect(lastModelsInfoCall().teamId).toBe("team-1");
+    });
+    expect(lastModelsInfoCall().page).toBe(1);
+  });
+
+  it("debounces the model name search into the server query", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
+
+    await user.type(screen.getByTestId("datatable-search"), "claude");
+
+    await waitFor(() => {
+      expect(lastModelsInfoCall().search).toBe("claude");
     });
   });
 
-  it("should show config model status for models defined in configs", async () => {
-    vi.spyOn(useTeamsModule, "default").mockReturnValue({
-      teams: [],
-      setTeams: vi.fn(),
-    });
+  it("applies a public model name filter through the drawer", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
 
-    const modelData = {
-      data: [
-        {
-          model_name: "gpt-4-config",
-          litellm_model_name: "gpt-4-config",
-          provider: "openai",
-          model_info: {
-            id: "model-config-1",
-            db_model: false,
-            direct_access: true,
-            access_via_team_ids: [],
-            access_groups: [],
-            created_by: "user-123",
-            created_at: "2024-01-01",
-            updated_at: "2024-01-01",
-          },
-        },
-        {
-          model_name: "gpt-4-db",
-          litellm_model_name: "gpt-4-db",
-          provider: "openai",
-          model_info: {
-            id: "model-db-1",
-            db_model: true,
-            direct_access: true,
-            access_via_team_ids: [],
-            access_groups: [],
-            created_by: "user-123",
-            created_at: "2024-01-01",
-            updated_at: "2024-01-01",
-          },
-        },
-      ],
-    };
-
-    render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    await user.click(await screen.findByPlaceholderText("Filter by Public Model Name"));
+    await user.click(await screen.findByRole("option", { name: "gpt-3.5-turbo" }));
+    await user.click(screen.getByTestId("filter-drawer-apply"));
 
     await waitFor(() => {
-      expect(screen.getByText("Config Model")).toBeInTheDocument();
-      expect(screen.getByText("DB Model")).toBeInTheDocument();
+      expect(mockSetSelectedModelGroup).toHaveBeenCalledWith("gpt-3.5-turbo");
     });
   });
 
-  it("should show 'Defined in config' for models defined in configs", async () => {
-    vi.spyOn(useTeamsModule, "default").mockReturnValue({
-      teams: [],
-      setTeams: vi.fn(),
+  it("filters the fetched page down to the selected model group", () => {
+    setModelsInfo([makeRow(), { ...makeRow(), model_name: "claude-opus" }], 2);
+    render(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
+
+    const table = screen.getByRole("table");
+    expect(within(table).getByText("claude-opus")).toBeInTheDocument();
+    expect(within(table).queryByText("gpt-4")).not.toBeInTheDocument();
+  });
+
+  it("resets search, filters, team and sorting from the drawer reset button", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} selectedModelGroup="gpt-4" />);
+
+    await user.click(screen.getByTestId("models-team-select"));
+    await user.click(await screen.findByRole("option", { name: "Engineering" }));
+    await waitFor(() => expect(lastModelsInfoCall().teamId).toBe("team-1"));
+
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    await user.click(await screen.findByTestId("filter-drawer-reset"));
+
+    expect(mockSetSelectedModelGroup).toHaveBeenCalledWith("all");
+    await waitFor(() => {
+      expect(lastModelsInfoCall().teamId).toBeUndefined();
+    });
+  });
+
+  it("opens the delete modal from the row and deletes the model", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
+
+    await user.click(await screen.findByTestId("model-delete-model-1"));
+    expect(await screen.findByText("Delete Model")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+
+    await waitFor(() => {
+      expect(mockModelDeleteCall).toHaveBeenCalledWith("mock-access-token", "model-1");
+    });
+  });
+
+  it("pauses a model through the row toggle", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
+
+    await user.click(await screen.findByTestId("model-pause-toggle-model-1"));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalledWith("mock-access-token", { blocked: true }, "model-1");
+    });
+  });
+
+  it("opens the model settings modal from the toolbar", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
+
+    expect(screen.queryByTestId("model-settings-modal")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("models-settings-trigger"));
+    expect(screen.getByTestId("model-settings-modal")).toBeInTheDocument();
+  });
+
+  it("opens the model detail view from the model ID cell", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
+
+    await user.click(await screen.findByTestId("model-id-model-1"));
+
+    expect(mockSetSelectedModelId).toHaveBeenCalledWith("model-1");
+  });
+
+  it("opens the team detail view from the team ID cell", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
+
+    await user.click(await screen.findByTestId("model-team-id-model-1"));
+
+    expect(mockSetSelectedTeamId).toHaveBeenCalledWith("team-1");
+  });
+
+  describe("virtual key hint", () => {
+    it("explains personal key creation while viewing current team models", () => {
+      render(<AllModelsTab {...defaultProps} />);
+
+      expect(screen.getByText(/create a Virtual Key without selecting a team/i)).toBeInTheDocument();
     });
 
-    const modelData = {
-      data: [
-        {
-          model_name: "gpt-4-config-model",
-          litellm_model_name: "gpt-4-config-model",
-          provider: "openai",
-          model_info: {
-            id: "model-config-defined",
-            db_model: false,
-            direct_access: true,
-            access_via_team_ids: [],
-            access_groups: [],
-            created_by: "user-123",
-            created_at: "2024-01-01",
-            updated_at: "2024-01-01",
-          },
-        },
-      ],
-    };
+    it("names the selected team in the hint", async () => {
+      const user = userEvent.setup();
+      render(<AllModelsTab {...defaultProps} />);
 
-    render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+      await user.click(screen.getByTestId("models-team-select"));
+      await user.click(await screen.findByRole("option", { name: "Engineering" }));
 
-    expect(screen.getByText("Defined in config")).toBeInTheDocument();
+      expect(await screen.findByText(/select Team as "Engineering"/i)).toBeInTheDocument();
+    });
+
+    it("hides the hint when viewing all available models", async () => {
+      const user = userEvent.setup();
+      render(<AllModelsTab {...defaultProps} />);
+
+      await user.click(screen.getByTestId("models-view-select"));
+      await user.click(await screen.findByRole("option", { name: "All Available Models" }));
+
+      await waitFor(() => {
+        expect(screen.queryByText(/create a Virtual Key/i)).not.toBeInTheDocument();
+      });
+    });
   });
 });

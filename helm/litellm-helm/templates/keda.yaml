@@ -1,0 +1,37 @@
+{{- if and .Values.keda.enabled (not .Values.autoscaling.enabled) }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "litellm.fullname" . }}
+  labels:
+    {{- include "litellm.labels" . | nindent 4 }}
+  {{- if .Values.keda.scaledObject.annotations }}
+  annotations: {{ toYaml .Values.keda.scaledObject.annotations | nindent 4 }}
+  {{- end }}
+spec:
+  scaleTargetRef:
+    name: {{ include "litellm.fullname" . }}
+  pollingInterval: {{ .Values.keda.pollingInterval }}
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+  minReplicaCount: {{ .Values.keda.minReplicas }}
+  maxReplicaCount: {{ .Values.keda.maxReplicas }}
+{{- with .Values.keda.fallback }}
+  fallback:
+    failureThreshold: {{ .failureThreshold | default 3 }}
+    replicas: {{ .replicas | default $.Values.keda.maxReplicas }}
+{{- end }}
+  triggers:
+{{- with .Values.keda.triggers }}
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+  advanced:
+    restoreToOriginalReplicaCount: {{ .Values.keda.restoreToOriginalReplicaCount }}
+{{- if .Values.keda.behavior }}
+    horizontalPodAutoscalerConfig:
+      behavior:
+{{- with .Values.keda.behavior }}
+{{- toYaml . | nindent 8 }}
+{{- end }}
+
+{{- end }}
+{{- end }}

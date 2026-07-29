@@ -4,6 +4,8 @@ Helper functions for health check calls.
 
 from typing import TYPE_CHECKING, Callable, Dict, Literal, Optional
 
+from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
@@ -12,7 +14,6 @@ TEST_PDF_URL = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9U
 
 
 class HealthCheckHelpers:
-
     @staticmethod
     async def ahealth_check_wildcard_models(
         model: str,
@@ -26,23 +27,19 @@ class HealthCheckHelpers:
         )
 
         # this is a wildcard model, we need to pick a random model from the provider
-        cheapest_models = pick_cheapest_chat_models_from_llm_provider(
-            custom_llm_provider=custom_llm_provider, n=3
-        )
+        cheapest_models = pick_cheapest_chat_models_from_llm_provider(custom_llm_provider=custom_llm_provider, n=3)
         if len(cheapest_models) == 0:
             raise Exception(
                 f"Unable to health check wildcard model for provider {custom_llm_provider}. Add a model on your config.yaml or contribute here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
             )
         if len(cheapest_models) > 1:
-            fallback_models = cheapest_models[
-                1:
-            ]  # Pick the last 2 models from the shuffled list
+            fallback_models = cheapest_models[1:]  # Pick the last 2 models from the shuffled list
         else:
             fallback_models = None
         model_params["model"] = cheapest_models[0]
         model_params["litellm_logging_obj"] = litellm_logging_obj
         model_params["fallbacks"] = fallback_models
-        model_params["max_tokens"] = 10  # gpt-5-nano throws errors for max_tokens=1
+        model_params["max_tokens"] = model_params.get("max_tokens", 16)  # GPT-5 models require max_output_tokens >= 16
         await acompletion(**model_params)
         return {}
 
@@ -83,6 +80,38 @@ class HealthCheckHelpers:
         }
 
     @staticmethod
+    async def _batch_health_check(
+        custom_llm_provider: str,
+        model_params: dict,
+        filtered_model_params: dict,
+    ) -> dict:
+        """
+        Health check for batch mode.
+
+        Calls list_batches for providers that support it (openai, hosted_vllm, azure,
+        vertex_ai). For all other providers (e.g. bedrock) the batch API surface doesn't
+        include list_batches, so we fall back to acompletion to verify connectivity and
+        credential validity instead.
+        """
+        import litellm
+
+        logging_obj = filtered_model_params.get("litellm_logging_obj")
+        if logging_obj is not None:
+            api_base = filtered_model_params.get("api_base")
+            logging_obj.update_from_kwargs(
+                kwargs=filtered_model_params,
+                model=filtered_model_params.get("model"),
+                user=None,
+                optional_params={},
+                litellm_params={"api_base": api_base} if api_base else None,
+            )
+
+        if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS:
+            return await litellm.alist_batches(**filtered_model_params)
+        else:
+            return await litellm.acompletion(**model_params)
+
+    @staticmethod
     def get_mode_handlers(
         model: str,
         custom_llm_provider: str,
@@ -107,7 +136,7 @@ class HealthCheckHelpers:
         Callable,
     ]:
         """
-        Returns a dictionary of mode handlers for health check calls. 
+        Returns a dictionary of mode handlers for health check calls.
 
         Mode Handlers are Callables that need to be run for execution of the health check call.
 
@@ -143,12 +172,7 @@ class HealthCheckHelpers:
             "audio_speech": lambda: litellm.aspeech(
                 **{
                     **_filter_model_params(model_params=model_params),
-                    **(
-                        {"voice": "alloy"}
-                        if "voice"
-                        not in _filter_model_params(model_params=model_params)
-                        else {}
-                    ),
+                    **({"voice": "alloy"} if "voice" not in _filter_model_params(model_params=model_params) else {}),
                 },
                 input=prompt or "test",
             ),
@@ -175,9 +199,12 @@ class HealthCheckHelpers:
                 api_base=model_params.get("api_base", None),
                 api_key=model_params.get("api_key", None),
                 api_version=model_params.get("api_version", None),
+                model_params=model_params,
             ),
-            "batch": lambda: litellm.alist_batches(
-                **_filter_model_params(model_params=model_params),
+            "batch": lambda: HealthCheckHelpers._batch_health_check(
+                custom_llm_provider=custom_llm_provider,
+                model_params=model_params,
+                filtered_model_params=_filter_model_params(model_params=model_params),
             ),
             "responses": lambda: litellm.aresponses(
                 **_filter_model_params(model_params=model_params),

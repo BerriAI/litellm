@@ -3,9 +3,11 @@ Common utility functions used for translating messages across providers
 """
 
 import io
+import json
 import mimetypes
 import re
 from os import PathLike
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -19,6 +21,8 @@ from typing import (
     cast,
 )
 
+import litellm
+from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -38,15 +42,12 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:  # newer pattern to avoid importing pydantic objects on __init__.py
+    from litellm.types.llms.anthropic import AnthropicInputSchema
     from litellm.types.llms.openai import ChatCompletionImageObject
 
-DEFAULT_USER_CONTINUE_MESSAGE = ChatCompletionUserMessage(
-    content="Please continue.", role="user"
-)
+DEFAULT_USER_CONTINUE_MESSAGE = ChatCompletionUserMessage(content="Please continue.", role="user")
 
-DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
-    content="Please continue.", role="assistant"
-)
+DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(content="Please continue.", role="assistant")
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LoggingClass
@@ -103,6 +104,7 @@ def strip_name_from_message(message: AllMessageValues, allowed_name_roles: List[
         msg_copy.pop("name", None)  # type: ignore
     return msg_copy
 
+
 def strip_name_from_messages(
     messages: List[AllMessageValues], allowed_name_roles: List[str] = ["user"]
 ) -> List[AllMessageValues]:
@@ -126,6 +128,39 @@ def strip_none_values_from_message(message: AllMessageValues) -> AllMessageValue
     return cast(AllMessageValues, {k: v for k, v in message.items() if v is not None})
 
 
+def extract_search_results_text(search_results: object) -> str:
+    """
+    Extract model-visible text from OpenAI tool-message ``search_results``.
+
+    Used by token estimators and TPM limiters so large search result payloads
+    cannot bypass preflight checks via a small ``content`` field.
+
+    Counts every string field forwarded on Bedrock ``SearchResultBlock``:
+    ``source``, ``title``, ``content[].text``, and ``citations``.
+    """
+    if not isinstance(search_results, list):
+        return ""
+    texts = ""
+    for result in search_results:
+        if not isinstance(result, dict):
+            continue
+        for key in ("source", "title"):
+            value = result.get(key)
+            if isinstance(value, str):
+                texts += value
+        content = result.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    text = block.get("text")
+                    if isinstance(text, str):
+                        texts += text
+        citations = result.get("citations")
+        if citations is not None:
+            texts += json.dumps(citations, separators=(",", ":"))
+    return texts
+
+
 def convert_content_list_to_str(
     message: Union[AllMessageValues, ChatCompletionResponseMessage],
 ) -> str:
@@ -146,6 +181,7 @@ def convert_content_list_to_str(
         elif message_content is not None and isinstance(message_content, str):
             texts = message_content
 
+    texts += extract_search_results_text(message.get("search_results"))
     return texts
 
 
@@ -161,9 +197,7 @@ def get_str_from_messages(messages: List[AllMessageValues]) -> str:
 
 def is_non_content_values_set(message: AllMessageValues) -> bool:
     ignore_keys = ["content", "role", "name"]
-    return any(
-        message.get(key, None) is not None for key in message if key not in ignore_keys
-    )
+    return any(message.get(key, None) is not None for key in message if key not in ignore_keys)
 
 
 def _audio_or_image_in_message_content(message: AllMessageValues) -> bool:
@@ -191,13 +225,9 @@ def convert_openai_message_to_only_content_messages(
     user_roles = ["user", "tool", "function"]
     for message in messages:
         if message.get("role") in user_roles:
-            converted_messages.append(
-                {"role": "user", "content": convert_content_list_to_str(message)}
-            )
+            converted_messages.append({"role": "user", "content": convert_content_list_to_str(message)})
         elif message.get("role") == "assistant":
-            converted_messages.append(
-                {"role": "assistant", "content": convert_content_list_to_str(message)}
-            )
+            converted_messages.append({"role": "assistant", "content": convert_content_list_to_str(message)})
     return converted_messages
 
 
@@ -252,6 +282,15 @@ def detect_first_expected_role(
     return None
 
 
+def _counts_for_alternation(message: AllMessageValues) -> bool:
+    role = message.get("role")
+    if role == "user":
+        return True
+    if role == "assistant":
+        return not bool(message.get("tool_calls"))
+    return False
+
+
 def _insert_user_continue_message(
     messages: List[AllMessageValues],
     user_continue_message: Optional[ChatCompletionUserMessage],
@@ -264,8 +303,8 @@ def _insert_user_continue_message(
     2. Final assistant message
     3. Consecutive assistant messages
 
-    Only inserts messages between consecutive assistant messages,
-    ignoring all other role types.
+    Skips tool messages and assistant messages with tool calls in the
+    alternation check, matching strict templates like llama.cpp.
     """
     if not messages:
         return messages
@@ -273,25 +312,39 @@ def _insert_user_continue_message(
     result_messages = messages.copy()  # Don't modify the input list
     continue_message = user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE
 
-    # Handle first message if it's an assistant message
+    # Handle first message if it's an assistant message — always prepend
+    # user_continue regardless of tool_calls, to preserve backward compatibility.
     if result_messages[0]["role"] == "assistant":
         result_messages.insert(0, continue_message)
 
-    # Handle consecutive assistant messages and final message
-    i = 1  # Start from second message since we handled first message
+    # Handle consecutive assistant messages in the counted sequence
+    i = 1
     while i < len(result_messages):
         curr_message = result_messages[i]
-        prev_message = result_messages[i - 1]
-
-        # Only check for consecutive assistant messages
-        # Ignore all other role types
-        if curr_message["role"] == "assistant" and prev_message["role"] == "assistant":
-            result_messages.insert(i, continue_message)
-            i += 2  # Skip over the message we just inserted
-        else:
+        inserted_continue_message = False
+        if _counts_for_alternation(curr_message) and curr_message["role"] == "assistant":
+            # Preserve old behavior for malformed adjacent assistant sequences like
+            # assistant(tool_calls) -> assistant(no-tool-calls) with no tool message.
+            if i > 0 and result_messages[i - 1].get("role") == "assistant":
+                result_messages.insert(i, continue_message)
+                i += 2
+                inserted_continue_message = True
+            else:
+                j = i - 1
+                while j >= 0:
+                    previous_message = result_messages[j]
+                    if _counts_for_alternation(previous_message):
+                        if previous_message["role"] == "assistant":
+                            result_messages.insert(i, continue_message)
+                            i += 2
+                            inserted_continue_message = True
+                        break
+                    j -= 1
+        if not inserted_continue_message:
             i += 1
 
-    # Handle final message
+    # Handle final message — append user_continue after any trailing assistant,
+    # including ones with tool_calls, to preserve backward compatibility.
     if result_messages[-1]["role"] == "assistant" and ensure_alternating_roles:
         result_messages.append(continue_message)
 
@@ -306,34 +359,35 @@ def _insert_assistant_continue_message(
     """
     Add assistant continuation messages between consecutive user messages.
 
-    Args:
-        messages: List of message dictionaries
-        assistant_continue_message: Optional custom assistant message
-        ensure_alternating_roles: Whether to enforce alternating roles
-
-    Returns:
-        Modified list of messages with inserted assistant messages
+    Skips tool messages and assistant messages with tool calls in the
+    alternation check, matching strict templates like llama.cpp.
     """
     if not ensure_alternating_roles or len(messages) <= 1:
         return messages
 
-    # Create a new list to store modified messages
+    continue_message = assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
+
+    # Find indexes where assistant_continue should be inserted (before that index)
+    insert_before_indexes: set = set()
+
+    for i in range(len(messages)):
+        curr = messages[i]
+        if _counts_for_alternation(curr) and curr["role"] == "user":
+            # Look backwards for the previous counted message
+            j = i - 1
+            while j >= 0:
+                if _counts_for_alternation(messages[j]):
+                    if messages[j]["role"] == "user":
+                        insert_before_indexes.add(i)
+                    break
+                j -= 1
+
+    # Build the result with assistant_continue inserted at the right positions
     modified_messages: List[AllMessageValues] = []
-
     for i, message in enumerate(messages):
-        modified_messages.append(message)
-
-        # Check if we need to insert an assistant message
-        if (
-            i < len(messages) - 1  # Not the last message
-            and message.get("role") == "user"  # Current is user
-            and messages[i + 1].get("role") == "user"
-        ):  # Next is user
-            # Insert assistant message
-            continue_message = (
-                assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
-            )
+        if i in insert_before_indexes:
             modified_messages.append(continue_message)
+        modified_messages.append(message)
 
     return modified_messages
 
@@ -355,14 +409,10 @@ def get_completion_messages(
         return messages.copy()
 
     ## INSERT USER CONTINUE MESSAGE
-    messages = _insert_user_continue_message(
-        messages, user_continue_message, ensure_alternating_roles
-    )
+    messages = _insert_user_continue_message(messages, user_continue_message, ensure_alternating_roles)
 
     ## INSERT ASSISTANT CONTINUE MESSAGE
-    messages = _insert_assistant_continue_message(
-        messages, assistant_continue_message, ensure_alternating_roles
-    )
+    messages = _insert_assistant_continue_message(messages, assistant_continue_message, ensure_alternating_roles)
     return messages
 
 
@@ -381,9 +431,7 @@ def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
         return None
     try:
         transformed_file_id = convert_b64_uid_to_unified_uid(file_id)
-        if transformed_file_id.startswith(
-            SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value
-        ):
+        if transformed_file_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
             match = re.match(
                 f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}:(.*?);unified_id",
                 transformed_file_id,
@@ -398,11 +446,16 @@ def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
 
 def update_messages_with_model_file_ids(
     messages: List[AllMessageValues],
-    model_id: str,
+    model_id: str | None,
     model_file_id_mapping: Dict[str, Dict[str, str]],
 ) -> List[AllMessageValues]:
     """
     Updates messages with model file ids.
+
+    For managed files (unified file IDs), uses model_file_id_mapping if it
+    resolves the id, otherwise decodes the base64-encoded unified file ID
+    and extracts the llm_output_file_id directly. Mirrors the Responses-API
+    sibling `update_responses_input_with_model_file_ids`.
 
     model_file_id_mapping: Dict[str, Dict[str, str]] = {
         "litellm_proxy/file_id": {
@@ -410,6 +463,10 @@ def update_messages_with_model_file_ids(
         }
     }
     """
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        _is_base64_encoded_unified_file_id,
+        convert_b64_uid_to_unified_uid,
+    )
 
     for message in messages:
         if message.get("role") == "user":
@@ -418,20 +475,36 @@ def update_messages_with_model_file_ids(
                 if isinstance(content, str):
                     continue
                 for c in content:
-                    if c["type"] == "file":
+                    if not isinstance(c, dict):
+                        # Content list items aren't always dicts. e.g.
+                        # text_completion forwards a token-ids list/list-of-
+                        # lists through this path. Skip non-dict items
+                        # instead of indexing into them.
+                        continue
+                    if c.get("type") == "file":
                         file_object = cast(ChatCompletionFileObject, c)
-                        file_object_file_field = file_object["file"]
+                        file_object_file_field = file_object.get("file")
+                        if not isinstance(file_object_file_field, dict):
+                            # Content block has `type: "file"` but not the
+                            # OpenAI Chat Completions shape (e.g. a LangChain
+                            # v1 standardized file block, or a provider-native
+                            # shape that also uses `type: "file"`). Nothing to
+                            # remap here, so skip instead of crashing.
+                            continue
                         file_id = file_object_file_field.get("file_id")
-                        format = file_object_file_field.get(
-                            "format", get_format_from_file_id(file_id)
-                        )
+                        format = file_object_file_field.get("format", get_format_from_file_id(file_id))
 
                         if file_id:
                             provider_file_id = (
                                 model_file_id_mapping.get(file_id, {}).get(model_id)
-                                or file_id
+                                if model_file_id_mapping and model_id is not None
+                                else None
                             )
-                            file_object_file_field["file_id"] = provider_file_id
+                            if not provider_file_id and _is_base64_encoded_unified_file_id(file_id):
+                                unified_file_id = convert_b64_uid_to_unified_uid(file_id)
+                                if "llm_output_file_id," in unified_file_id:
+                                    provider_file_id = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
+                            file_object_file_field["file_id"] = provider_file_id or file_id
                         if format:
                             file_object_file_field["format"] = format
     return messages
@@ -439,31 +512,39 @@ def update_messages_with_model_file_ids(
 
 def update_responses_input_with_model_file_ids(
     input: Any,
+    model_id: Optional[str] = None,
+    model_file_id_mapping: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> Union[str, List[Dict[str, Any]]]:
     """
     Updates responses API input with provider-specific file IDs.
     File IDs are always inside the content array, not as direct input_file items.
-    
-    For managed files (unified file IDs), decodes the base64-encoded unified file ID
-    and extracts the llm_output_file_id directly.
+
+    For managed files (unified file IDs), uses model_file_id_mapping if provided,
+    otherwise decodes the base64-encoded unified file ID and extracts the llm_output_file_id directly.
+
+    Args:
+        input: The responses API input parameter
+        model_id: The model ID to use for looking up provider-specific file IDs
+        model_file_id_mapping: Dictionary mapping litellm file IDs to provider file IDs
+                               Format: {"litellm_file_id": {"model_id": "provider_file_id"}}
     """
     from litellm.proxy.openai_files_endpoints.common_utils import (
         _is_base64_encoded_unified_file_id,
         convert_b64_uid_to_unified_uid,
     )
-    
+
     if isinstance(input, str):
         return input
-    
+
     if not isinstance(input, list):
         return input
-    
+
     updated_input = []
     for item in input:
         if not isinstance(item, dict):
             updated_input.append(item)
             continue
-        
+
         updated_item = item.copy()
         content = item.get("content")
         if isinstance(content, list):
@@ -472,29 +553,196 @@ def update_responses_input_with_model_file_ids(
                 if isinstance(content_item, dict) and content_item.get("type") == "input_file":
                     file_id = content_item.get("file_id")
                     if file_id:
-                        # Check if this is a managed file ID (base64-encoded unified file ID)
-                        is_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
-                        if is_unified_file_id:
-                            unified_file_id = convert_b64_uid_to_unified_uid(file_id)
-                            if "llm_output_file_id," in unified_file_id:
-                                provider_file_id = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
-                            else:
-                                # Fallback: keep original if we can't extract
-                                provider_file_id = file_id
+                        provider_file_id = file_id  # Default to original
+
+                        # Check if we have a mapping for this file ID
+                        if model_file_id_mapping and model_id and file_id in model_file_id_mapping:
+                            # Use the model-specific file ID from mapping
+                            provider_file_id = model_file_id_mapping.get(file_id, {}).get(model_id) or file_id
                             updated_content_item = content_item.copy()
                             updated_content_item["file_id"] = provider_file_id
                             updated_content.append(updated_content_item)
                         else:
-                            updated_content.append(content_item)
+                            # Check if this is a base64-encoded unified file ID without mapping
+                            is_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
+                            if is_unified_file_id:
+                                # Fallback: decode unified file ID
+                                unified_file_id = convert_b64_uid_to_unified_uid(file_id)
+                                if "llm_output_file_id," in unified_file_id:
+                                    provider_file_id = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
+
+                                updated_content_item = content_item.copy()
+                                updated_content_item["file_id"] = provider_file_id
+                                updated_content.append(updated_content_item)
+                            else:
+                                # Not a managed file, keep as-is
+                                updated_content.append(content_item)
                     else:
                         updated_content.append(content_item)
                 else:
                     updated_content.append(content_item)
             updated_item["content"] = updated_content
-        
+
         updated_input.append(updated_item)
-    
+
     return updated_input
+
+
+def _decode_vector_store_ids_in_tools(
+    tools: Optional[List[Dict[str, Any]]],
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Decodes unified (LiteLLM-managed) vector_store_ids in file_search tools to
+    provider-native IDs.  Non-unified IDs are passed through unchanged.
+
+    This runs unconditionally — no file-ID mapping is required.
+    """
+    if not tools or not isinstance(tools, list):
+        return tools
+
+    from litellm.llms.base_llm.managed_resources.utils import (
+        is_base64_encoded_unified_id,
+        parse_unified_id,
+    )
+
+    updated_tools = []
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "file_search":
+            updated_tools.append(tool)
+            continue
+
+        vector_store_ids = tool.get("vector_store_ids")
+        if not isinstance(vector_store_ids, list):
+            updated_tools.append(tool)
+            continue
+
+        decoded_ids = []
+        for vs_id in vector_store_ids:
+            if not isinstance(vs_id, str) or not is_base64_encoded_unified_id(vs_id):
+                decoded_ids.append(vs_id)
+                continue
+
+            parsed = parse_unified_id(vs_id)
+            provider_resource_id = parsed.get("provider_resource_id") if parsed else None
+
+            if not provider_resource_id:
+                verbose_logger.warning(
+                    "file_search tool contains unified vector_store_id '%s' that could "
+                    "not be decoded to a provider resource ID — passing original ID. "
+                    "Ensure the vector store was created via LiteLLM.",
+                    vs_id,
+                )
+                decoded_ids.append(vs_id)
+            else:
+                decoded_ids.append(provider_resource_id)
+
+        updated_tools.append({**tool, "vector_store_ids": decoded_ids})
+
+    return updated_tools
+
+
+def update_responses_tools_with_model_file_ids(
+    tools: Optional[List[Dict[str, Any]]],
+    model_id: Optional[str] = None,
+    model_file_id_mapping: Optional[Dict[str, Dict[str, str]]] = None,
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Updates responses API tools with provider-specific file IDs.
+
+    Pass 1 (always): decode unified vector_store_ids in file_search tools.
+    Pass 2 (needs mapping): map code_interpreter container file_ids to provider IDs.
+
+    Args:
+        tools: The responses API tools parameter
+        model_id: The model ID to use for looking up provider-specific file IDs
+        model_file_id_mapping: Dictionary mapping litellm file IDs to provider file IDs
+                               Format: {"litellm_file_id": {"model_id": "provider_file_id"}}
+    """
+    if not tools or not isinstance(tools, list):
+        return tools
+
+    # Pass 1: decode unified vector_store_ids (no mapping needed)
+    tools = _decode_vector_store_ids_in_tools(tools) or tools
+
+    # Pass 2: map code_interpreter file IDs (requires mapping)
+    if not model_file_id_mapping or not model_id:
+        return tools
+
+    updated_tools = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            updated_tools.append(tool)
+            continue
+
+        updated_tool = tool.copy()
+
+        # Handle code_interpreter with container file_ids
+        if tool.get("type") == "code_interpreter":
+            container = tool.get("container")
+            if isinstance(container, dict):
+                container_file_ids = container.get("file_ids")
+                if isinstance(container_file_ids, list):
+                    updated_file_ids = []
+                    for file_id in container_file_ids:
+                        if isinstance(file_id, str):
+                            # Check if we have a mapping for this file ID
+                            if file_id in model_file_id_mapping:
+                                # Map to provider-specific file ID
+                                provider_file_id = model_file_id_mapping.get(file_id, {}).get(model_id) or file_id
+                                updated_file_ids.append(provider_file_id)
+                            else:
+                                updated_file_ids.append(file_id)
+                        else:
+                            updated_file_ids.append(file_id)
+
+                    # Update the tool with new file IDs
+                    updated_container = container.copy()
+                    updated_container["file_ids"] = updated_file_ids
+                    updated_tool["container"] = updated_container
+
+        updated_tools.append(updated_tool)
+
+    return updated_tools
+
+
+def extract_file_metadata(file_data: FileTypes) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Resolve (filename, content_type) without reading the file body.
+
+    Mirrors extract_file_data's metadata resolution but never calls .read(), so
+    it stays O(1) on large uploads. Use this when only metadata is needed (batch
+    detection, GCS object naming) and the body must remain a streamable Path/handle.
+    """
+    filename: Optional[str] = None
+    content_type: Optional[str] = None
+    file_content: Any = None
+
+    if isinstance(file_data, tuple):
+        if len(file_data) == 2:
+            filename, file_content = file_data
+        elif len(file_data) == 3:
+            filename, file_content, content_type = file_data
+        elif len(file_data) == 4:
+            filename, file_content, content_type, _ = file_data
+    elif isinstance(file_data, InMemoryFile):
+        filename = file_data.name
+        content_type = file_data.content_type
+    else:
+        file_content = file_data
+
+    if filename is None:
+        if isinstance(file_content, PathLike):
+            filename = Path(file_content).name
+        elif isinstance(file_content, io.IOBase):
+            name_attr = getattr(file_content, "name", None)
+            if isinstance(name_attr, str):
+                filename = Path(name_attr).name
+
+    if not content_type:
+        guessed = mimetypes.guess_type(filename)[0] if filename else None
+        content_type = guessed or "application/octet-stream"
+
+    return filename, content_type
 
 
 def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
@@ -531,12 +779,33 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
     else:
         file_content = file_data
     # Convert content to bytes
-    if isinstance(file_content, (str, PathLike)):
-        # If it's a path, open and read the file
+    if isinstance(file_content, str):
+        # Bare string inputs are rejected: when this helper runs in a proxy
+        # request handler the string came from an attacker-controlled form
+        # field, and opening it as a path is an arbitrary file read on the
+        # proxy host. SDK callers who want to upload from a path should
+        # either pass a pathlib.Path (a PathLike instance — see the branch
+        # below) or open the file themselves and pass the handle / bytes.
+        raise ValueError(
+            "extract_file_data does not accept bare str inputs. Pass bytes, "
+            "an open file handle, a (filename, content) tuple, or a "
+            "pathlib.Path. To upload a local file from a path, call "
+            "open(path, 'rb') yourself."
+        )
+    if isinstance(file_content, PathLike):
+        # PathLike (pathlib.Path) is a Python-level type that HTTP form
+        # values can't fabricate. Treat as a local file path for SDK
+        # convenience.
+        if filename is None:
+            filename = Path(file_content).name
         with open(file_content, "rb") as f:
             content = f.read()
     elif isinstance(file_content, io.IOBase):
         # If it's a file-like object
+        # Try to get filename from file handle if not already set
+        if not filename and hasattr(file_content, "name"):
+            filename = Path(file_content.name).name
+
         content = file_content.read()
 
         if isinstance(content, str):
@@ -550,11 +819,11 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
 
     # Use provided content type or guess based on filename
     if not content_type:
-        content_type = (
-            mimetypes.guess_type(filename)[0]
-            if filename
-            else "application/octet-stream"
-        )
+        if filename:
+            guessed_type = mimetypes.guess_type(filename)[0]
+            content_type = guessed_type if guessed_type else "application/octet-stream"
+        else:
+            content_type = "application/octet-stream"
 
     return ExtractedFileData(
         filename=filename,
@@ -569,7 +838,47 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
 # ---------------------------------------------------------------------------
 
 
-def unpack_defs(schema: dict, defs: dict) -> None:
+def _estimate_json_bytes(obj: Any) -> int:
+    """Estimate the JSON-serialised byte size of ``obj`` without materialising
+    JSON. Walks iteratively (no recursion stack risk).
+
+    String length is read via ``len()`` (O(1) on Python ``str``) so a target
+    containing a 100MB description costs ~one walk step, not a 100MB
+    serialisation. Escape sequences are not counted exactly, so this is an
+    approximation -- but always within a small constant factor of the real
+    serialised size, which is what a schema-bomb budget needs.
+    """
+    total = 0
+    stack: list = [obj]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, dict):
+            total += 2  # `{}`
+            for k, v in x.items():
+                total += len(str(k)) + 4  # `"k":,`
+                stack.append(v)
+        elif isinstance(x, list):
+            total += 2  # `[]`
+            total += max(0, len(x) - 1)  # commas between items
+            stack.extend(x)
+        elif isinstance(x, str):
+            total += len(x) + 2
+        elif isinstance(x, bool):  # bool subclasses int -- check first
+            total += 4 if x else 5
+        elif x is None:
+            total += 4
+        elif isinstance(x, (int, float)):
+            total += 24  # generous upper bound for stringified numbers
+        else:
+            total += 24
+    return total
+
+
+def unpack_defs(
+    schema: dict,
+    defs: dict,
+    max_inlined_bytes: Optional[int] = None,
+) -> None:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
     This utility walks the entire schema tree (dicts and lists) so it naturally
@@ -579,6 +888,15 @@ def unpack_defs(schema: dict, defs: dict) -> None:
     It mutates *schema* in-place and does **not** return anything.  The helper
     keeps memory overhead low by resolving nodes as it encounters them rather
     than materialising a fully dereferenced copy first.
+
+    ``max_inlined_bytes`` caps the cumulative JSON-byte size of every target
+    that has been inlined and is checked *before* each ``copy.deepcopy``, so
+    an oversized expansion is rejected without first materialising it. A byte
+    bound is the universal measure of expansion -- it simultaneously caps
+    ref-count fan-out, node-count amplification, and scalar-byte amplification
+    (a target containing a large string, ``const``, or ``enum`` entry).
+    Defaults to ``None`` (unbounded) so existing callers are unaffected;
+    raises ``ValueError`` on overflow.
     """
 
     import copy
@@ -595,9 +913,10 @@ def unpack_defs(schema: dict, defs: dict) -> None:
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
-    queue: deque[
-        tuple[Any, Union[dict, list, None], Union[str, int, None], dict, set]
-    ] = deque([(schema, None, None, root_defs, set())])
+    queue: deque[tuple[Any, Union[dict, list, None], Union[str, int, None], dict, set]] = deque(
+        [(schema, None, None, root_defs, set())]
+    )
+    inlined_bytes = 0
 
     while queue:
         node, parent, key, active_defs, ref_chain = queue.popleft()
@@ -617,6 +936,16 @@ def unpack_defs(schema: dict, defs: dict) -> None:
                 # Unknown reference – leave untouched
                 if target_schema is None:
                     continue
+
+                if max_inlined_bytes is not None:
+                    inlined_bytes += _estimate_json_bytes(target_schema)
+                    if inlined_bytes > max_inlined_bytes:
+                        raise ValueError(
+                            f"unpack_defs: inlined schema exceeded the "
+                            f"{max_inlined_bytes:,}-byte budget. Refusing to "
+                            f"deep-copy further to prevent schema-bomb "
+                            f"resource exhaustion."
+                        )
 
                 # Merge defs from the target to capture nested definitions
                 child_defs = {
@@ -665,6 +994,84 @@ def unpack_defs(schema: dict, defs: dict) -> None:
                 queue.append((item, node, idx, active_defs, ref_chain))
 
 
+def _has_legacy_defs(schema: object) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    components = schema.get("components")
+    return "definitions" in schema or (isinstance(components, dict) and isinstance(components.get("schemas"), dict))
+
+
+# Schema-bomb budget for ``unpack_legacy_defs``: cap the cumulative JSON-byte
+# size of every inlined target. A byte cap is the universal measure of
+# expansion -- it simultaneously bounds ref-count fan-out, node-count
+# amplification, and scalar-byte amplification (large ``description`` /
+# ``const`` / ``enum`` values). Real-world MCP / OpenAPI-derived tool schemas
+# inline well under 1MB; 10MB sits two orders of magnitude above that, well
+# below memory-pressure territory, and rejects request-supplied bombs before
+# the proxy materialises them.
+_LEGACY_DEFS_MAX_INLINED_BYTES = 10_000_000
+
+
+def unpack_legacy_defs(
+    schema: dict,
+    *,
+    copy: bool = False,
+    max_inlined_bytes: int = _LEGACY_DEFS_MAX_INLINED_BYTES,
+) -> dict:
+    """Inline ``$ref``s backed by draft-04 ``definitions`` / OpenAPI
+    ``components.schemas``. ``$defs`` is left untouched.
+
+    Anthropic and Fireworks tool-schema resolvers only recognise ``$defs``;
+    legacy / OpenAPI def blocks are otherwise silently dropped and leave
+    dangling pointers. See https://github.com/BerriAI/litellm/issues/26692.
+
+    Mutates ``schema`` in place and returns it. Pass ``copy=True`` to deep-copy
+    first (only when there is actually work to do). ``max_inlined_bytes``
+    bounds the cumulative JSON-byte size of inlined targets so request-supplied
+    schemas cannot expand into a schema-bomb before reaching the upstream
+    provider -- raises ``ValueError`` on overflow.
+    """
+    if not _has_legacy_defs(schema):
+        return schema
+    if copy:
+        import copy as _copy
+
+        schema = _copy.deepcopy(schema)
+    # On key collision, ``definitions`` wins over ``components.schemas`` --
+    # ``unpack_defs`` keys refs by last path segment so a single name can only
+    # resolve to one body, and ``definitions`` is the JSON-Schema-native
+    # namespace.
+    defs = schema.pop("components", {}).get("schemas") or {}
+    defs.update(schema.pop("definitions", None) or {})
+    unpack_defs(schema, defs, max_inlined_bytes=max_inlined_bytes)
+    return schema
+
+
+def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSchema":
+    """Coerce an arbitrary tool input_schema into the shape Anthropic accepts.
+
+    Anthropic requires ``type == "object"``, only recognises ``$defs`` (legacy
+    ``definitions`` / OpenAPI ``components.schemas`` refs must be inlined first),
+    and rejects keys outside ``AnthropicInputSchema``. Both the chat
+    (``AnthropicConfig._map_tool_helper``) and Anthropic Messages MCP paths run
+    a schema through here so an external MCP schema cannot succeed on one route
+    and 400 on the other.
+    """
+    from litellm.types.llms.anthropic import AnthropicInputSchema
+
+    normalized = dict(input_schema) if input_schema else {}
+    if normalized.get("type") != "object":
+        normalized["type"] = "object"
+    if "properties" not in normalized:
+        normalized["properties"] = {}
+
+    normalized = unpack_legacy_defs(normalized, copy=True)
+
+    allowed_keys = set(AnthropicInputSchema.__annotations__.keys())
+    filtered = {key: value for key, value in normalized.items() if key in allowed_keys}
+    return AnthropicInputSchema(**filtered)
+
+
 def _get_image_mime_type_from_url(url: str) -> Optional[str]:
     """
     Get mime type for common image URLs
@@ -689,7 +1096,14 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
     video/mpegps
     video/flv
     """
+    from urllib.parse import urlparse
+
     url = url.lower()
+
+    # Parse URL to extract path without query parameters
+    # This handles URLs like: https://example.com/image.jpg?signature=...
+    parsed = urlparse(url)
+    path = parsed.path
 
     # Map file extensions to mime types
     mime_types = {
@@ -717,7 +1131,7 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
 
     # Check each extension group against the URL
     for extensions, mime_type in mime_types.items():
-        if any(url.endswith(ext) for ext in extensions):
+        if any(path.endswith(ext) for ext in extensions):
             return mime_type
 
     return None
@@ -730,28 +1144,28 @@ def infer_content_type_from_url_and_content(
 ) -> str:
     """
     Infer content type from URL extension and binary content when content-type header is missing or generic.
-    
+
     This helper implements a fallback strategy for determining MIME types when HTTP headers
     are missing or provide generic values (like binary/octet-stream). It's commonly used
     when processing images and documents from various sources (S3, URLs, etc.).
-    
+
     Fallback Strategy:
     1. If current_content_type is valid (not None and not generic octet-stream), return it
     2. Try to infer from URL extension (handles query parameters)
     3. Try to detect from binary content signature (magic bytes)
     4. Raise ValueError if all methods fail
-    
+
     Args:
         url: The URL of the content (used to extract file extension)
         content: The binary content (first ~100 bytes are sufficient for detection)
         current_content_type: The current content-type from headers (may be None or generic)
-    
+
     Returns:
         str: The inferred MIME type (e.g., "image/png", "application/pdf")
-        
+
     Raises:
         ValueError: If content type cannot be determined by any method
-        
+
     Example:
         >>> content_type = infer_content_type_from_url_and_content(
         ...     url="https://s3.amazonaws.com/bucket/image.png?AWSAccessKeyId=123",
@@ -762,14 +1176,14 @@ def infer_content_type_from_url_and_content(
         "image/png"
     """
     from litellm.litellm_core_utils.token_counter import get_image_type
-    
+
     # If we have a valid content type that's not generic, use it
     if current_content_type and current_content_type not in [
         "binary/octet-stream",
         "application/octet-stream",
     ]:
         return current_content_type
-    
+
     # Extension to MIME type mapping
     # Supports images, documents, and other common file types
     extension_to_mime = {
@@ -790,14 +1204,14 @@ def infer_content_type_from_url_and_content(
         "txt": "text/plain",
         "md": "text/markdown",
     }
-    
+
     # Try to infer from URL extension
     if url:
         extension = url.split(".")[-1].lower().split("?")[0]  # Remove query params
         inferred_type = extension_to_mime.get(extension)
         if inferred_type:
             return inferred_type
-    
+
     # Try to detect from binary content signature (magic bytes)
     if content:
         detected_type = get_image_type(content[:100])
@@ -811,12 +1225,9 @@ def infer_content_type_from_url_and_content(
             }
             if detected_type in type_to_mime:
                 return type_to_mime[detected_type]
-    
+
     # If all fallbacks failed, raise error
-    raise ValueError(
-        f"Unable to determine content type from URL: {url}. "
-        f"Response content-type: {current_content_type}"
-    )
+    raise ValueError(f"Unable to determine content type from URL: {url}. Response content-type: {current_content_type}")
 
 
 def get_tool_call_names(tools: List[ChatCompletionToolParam]) -> List[str]:
@@ -855,7 +1266,12 @@ def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
                 for c in content:
                     if c["type"] == "file":
                         file_object = cast(ChatCompletionFileObject, c)
-                        file_object_file_field = file_object["file"]
+                        file_object_file_field = file_object.get("file")
+                        if not isinstance(file_object_file_field, dict):
+                            # Content block has `type: "file"` but not the
+                            # OpenAI Chat Completions shape. No file_id to
+                            # extract, so skip instead of raising KeyError.
+                            continue
                         file_id = file_object_file_field.get("file_id")
                         if file_id:
                             file_ids.append(file_id)
@@ -867,9 +1283,7 @@ def check_is_function_call(logging_obj: "LoggingClass") -> bool:
         is_function_call,
     )
 
-    if hasattr(logging_obj, "optional_params") and isinstance(
-        logging_obj.optional_params, dict
-    ):
+    if hasattr(logging_obj, "optional_params") and isinstance(logging_obj.optional_params, dict):
         if is_function_call(logging_obj.optional_params):
             return True
 
@@ -913,9 +1327,16 @@ def migrate_file_to_image_url(
         ChatCompletionImageUrlObject,
     )
 
-    file_id = message["file"].get("file_id")
-    file_data = message["file"].get("file_data")
-    format = message["file"].get("format")
+    file_sub = message.get("file")
+    if file_sub is None:
+        raise litellm.BadRequestError(
+            message="Content block has type='file' but is missing the required 'file' field",
+            model=None,
+            llm_provider=None,
+        )
+    file_id = file_sub.get("file_id")
+    file_data = file_sub.get("file_data")
+    format = file_sub.get("format")
     if not file_id and not file_data:
         raise ValueError("file_id and file_data are both None")
     image_url_object = ChatCompletionImageObject(
@@ -939,12 +1360,8 @@ def get_last_user_message(messages: List[AllMessageValues]) -> Optional[str]:
         {"role": "assistant", "content": "I'm good, thank you!"},
         {"role": "user", "content": "What is the weather in Tokyo?"},
     ]
-    get_user_prompt(messages) -> "What is the weather in Tokyo?"
+    get_last_user_message(messages) -> "What is the weather in Tokyo?"
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-        convert_content_list_to_str,
-    )
-
     if not messages:
         return None
 
@@ -972,9 +1389,7 @@ def get_last_user_message(messages: List[AllMessageValues]) -> Optional[str]:
     return result if result else None
 
 
-def set_last_user_message(
-    messages: List[AllMessageValues], content: str
-) -> List[AllMessageValues]:
+def set_last_user_message(messages: List[AllMessageValues], content: str) -> List[AllMessageValues]:
     """
     Set the last user message
 
@@ -989,14 +1404,48 @@ def set_last_user_message(
             # Stop when we hit a non-user message
             break
     if idx_to_remove:
-        messages = [
-            message
-            for idx, message in enumerate(reversed(messages))
-            if idx not in idx_to_remove
-        ]
+        messages = [message for idx, message in enumerate(reversed(messages)) if idx not in idx_to_remove]
         messages.reverse()
     messages.append({"role": "user", "content": content})
     return messages
+
+
+def add_system_prompt_to_messages(
+    messages: List[AllMessageValues],
+    system_prompt: str,
+    merge_with_first_system: bool = False,
+) -> List[AllMessageValues]:
+    """
+    Add a system prompt to the messages list.
+
+    Args:
+        messages: List of chat completion messages
+        system_prompt: The system prompt content to add. If empty or None, returns messages unchanged.
+        merge_with_first_system: If True and the first message is already a system message,
+            prepends the new prompt to that message's content. If False, adds a new system
+            message at the beginning.
+
+    Returns:
+        New list of messages with the system prompt added
+    """
+    if not system_prompt:
+        return list(messages)
+
+    if merge_with_first_system and messages and messages[0].get("role") == "system":
+        first = dict(messages[0])
+        existing_content = first.get("content", "")
+        merged_content: Union[str, List[Dict[str, str]]]
+        if isinstance(existing_content, str):
+            merged_content = f"{system_prompt.strip()}\n\n{existing_content}"
+        elif isinstance(existing_content, list):
+            merged_content = [{"type": "text", "text": system_prompt.strip()}] + list(existing_content)
+        else:
+            merged_content = [{"type": "text", "text": system_prompt.strip()}]
+        first["content"] = merged_content
+        return [cast(AllMessageValues, first)] + list(messages[1:])
+
+    system_message: AllMessageValues = {"role": "system", "content": system_prompt}
+    return [system_message, *messages]
 
 
 def convert_prefix_message_to_non_prefix_messages(
@@ -1049,9 +1498,9 @@ def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[s
     """
     message_content = message.get("content")
     if "reasoning_content" in message:
-        return message["reasoning_content"], message["content"]
+        return message["reasoning_content"], message_content
     elif "reasoning" in message:
-        return message["reasoning"], message["content"]
+        return message["reasoning"], message_content
     elif isinstance(message_content, str):
         return _parse_content_for_reasoning(message_content)
     return None, message_content
@@ -1071,7 +1520,9 @@ def _parse_content_for_reasoning(
         return None, message_text
 
     reasoning_match = re.match(
-        r"<(?:think|thinking|budget:thinking)>(.*?)</(?:think|thinking|budget:thinking)>(.*)", message_text, re.DOTALL
+        r"<(?:think|thinking|budget:thinking)>(.*?)</(?:think|thinking|budget:thinking)>(.*)",
+        message_text,
+        re.DOTALL,
     )
 
     if reasoning_match:
@@ -1080,9 +1531,35 @@ def _parse_content_for_reasoning(
     return None, message_text
 
 
+def _extract_base64_data(image_url: str) -> str:
+    """
+    Extract pure base64 data from an image URL.
+
+    If the URL is a data URL (e.g., "data:image/png;base64,iVBOR..."),
+    extract and return only the base64 data portion.
+    Otherwise, return the original URL unchanged.
+
+    This is needed for providers like Ollama that expect pure base64 data
+    rather than full data URLs.
+
+    Args:
+        image_url: The image URL or data URL to process
+
+    Returns:
+        The base64 data if it's a data URL, otherwise the original URL
+    """
+    if image_url.startswith("data:") and ";base64," in image_url:
+        return image_url.split(";base64,", 1)[1]
+    return image_url
+
+
 def extract_images_from_message(message: AllMessageValues) -> List[str]:
     """
-    Extract images from a message
+    Extract images from a message.
+
+    For data URLs (e.g., "data:image/png;base64,iVBOR..."), only the base64
+    data portion is extracted. This is required for providers like Ollama
+    that expect pure base64 data rather than full data URLs.
     """
     images = []
     message_content = message.get("content")
@@ -1091,7 +1568,179 @@ def extract_images_from_message(message: AllMessageValues) -> List[str]:
             image_url = m.get("image_url")
             if image_url:
                 if isinstance(image_url, str):
-                    images.append(image_url)
+                    images.append(_extract_base64_data(image_url))
                 elif isinstance(image_url, dict) and "url" in image_url:
-                    images.append(image_url["url"])
+                    images.append(_extract_base64_data(image_url["url"]))
     return images
+
+
+def _attempt_json_repair(s: str) -> Optional[Any]:
+    """
+    Attempt to repair truncated JSON produced by LLM tool calls.
+
+    Handles the most common truncation patterns where the model generates
+    valid JSON that is cut short (missing closing brackets/braces).
+
+    Returns the parsed value on success, or None if repair fails.
+    """
+    import json
+
+    stripped = s.rstrip()
+    if not stripped:
+        return None
+
+    # Track the stack of unmatched openers to respect nesting order
+    opener_stack: list = []
+    in_string = False
+    escape_next = False
+
+    for ch in stripped:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            if in_string:
+                escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            opener_stack.append("}")
+        elif ch == "[":
+            opener_stack.append("]")
+        elif ch in ("}", "]"):
+            if opener_stack and opener_stack[-1] == ch:
+                opener_stack.pop()
+
+    if not opener_stack:
+        return None
+
+    # Remove trailing comma before we close brackets
+    candidate = stripped.rstrip(",")
+
+    # Close in reverse order of opening (respects nesting)
+    candidate += "".join(reversed(opener_stack))
+
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        pass
+
+    return None
+
+
+def parse_tool_call_arguments(
+    arguments: Optional[str],
+    tool_name: Optional[str] = None,
+    context: Optional[str] = None,
+) -> Any:
+    """
+    Parse tool call arguments from a JSON string.
+
+    When the JSON is malformed (e.g. truncated by the model), this function
+    attempts a lightweight repair (closing unmatched brackets/braces) before
+    raising an error.  A warning is logged whenever repair succeeds so that
+    callers are aware the arguments were not perfectly formed.
+
+    Args:
+        arguments: The JSON string containing tool arguments, or None.
+        tool_name: Optional name of the tool (for error messages).
+        context: Optional context string (e.g., "Anthropic Messages API").
+
+    Returns:
+        Parsed arguments (usually a dict, but may be any JSON-deserializable
+        type such as list, str, int, float, or None).  Returns empty dict if
+        arguments is None or empty.
+
+    Raises:
+        ValueError: If the arguments string is not valid JSON and cannot be repaired.
+    """
+    import json
+
+    if not arguments or not arguments.strip():
+        return {}
+
+    try:
+        return json.loads(arguments)
+    except json.JSONDecodeError as original_error:
+        repaired = _attempt_json_repair(arguments)
+        if repaired is not None:
+            verbose_logger.warning(
+                "Repaired truncated tool call arguments for tool '%s' (%s). Original (%d chars): %.200s%s",
+                tool_name or "<unknown>",
+                context or "unknown context",
+                len(arguments),
+                arguments,
+                "..." if len(arguments) > 200 else "",
+            )
+            return repaired
+
+        error_parts = ["Failed to parse tool call arguments"]
+
+        if tool_name:
+            error_parts.append(f"for tool '{tool_name}'")
+        if context:
+            error_parts.append(f"({context})")
+
+        error_message = " ".join(error_parts) + f". Error: {str(original_error)}. Arguments: {arguments}"
+
+        raise ValueError(error_message) from original_error
+
+
+def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:
+    """
+    Split a string that contains one or more concatenated JSON objects into
+    a list of parsed dicts.
+
+    LLM providers (notably Bedrock Claude Sonnet 4.5) sometimes return
+    multiple tool-call argument objects concatenated in a single
+    ``arguments`` string, e.g.::
+
+        '{"command":["curl",...]}{"command":["curl",...]}{"command":["curl",...]}'
+
+    ``json.loads()`` fails on this with ``JSONDecodeError: Extra data``.
+    This helper uses ``json.JSONDecoder.raw_decode()`` to walk the string
+    and extract each JSON object individually.
+
+    Returns
+    -------
+    list[dict]
+        A list of parsed dicts – one per JSON object found.  If *raw* is
+        empty or whitespace-only, an empty list is returned.
+
+    Raises
+    ------
+    json.JSONDecodeError
+        If the string contains text that cannot be parsed as JSON at all.
+    """
+    import json
+
+    raw = raw.strip()
+    if not raw:
+        return []
+
+    decoder = json.JSONDecoder()
+    results: List[Dict[str, Any]] = []
+    idx = 0
+    length = len(raw)
+
+    while idx < length:
+        # Skip whitespace between objects
+        while idx < length and raw[idx] in " \t\n\r":
+            idx += 1
+        if idx >= length:
+            break
+
+        obj, end_idx = decoder.raw_decode(raw, idx)
+        if isinstance(obj, dict):
+            results.append(obj)
+        else:
+            # Non-dict JSON value – wrap in empty dict (Bedrock requires
+            # toolUse.input to be an object).
+            results.append({})
+        idx = end_idx
+
+    return results

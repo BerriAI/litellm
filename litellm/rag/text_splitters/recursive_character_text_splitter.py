@@ -37,7 +37,7 @@ class RecursiveCharacterTextSplitter:
 
         if depth > DEFAULT_MAX_RECURSE_DEPTH:
             # Max depth reached, return text as-is split into chunk_size pieces
-            return [text[i:i + self.chunk_size] for i in range(0, len(text), self.chunk_size)]
+            return [text[i : i + self.chunk_size] for i in range(0, len(text), self.chunk_size)]
 
         final_chunks: List[str] = []
 
@@ -132,4 +132,3 @@ class RecursiveCharacterTextSplitter:
             start = end - self.chunk_overlap if end < len(text) else len(text)
 
         return chunks
-

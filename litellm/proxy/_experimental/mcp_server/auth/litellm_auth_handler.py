@@ -20,13 +20,14 @@ class MCPAuthenticatedUser(AuthenticatedUser):
 
     def __init__(
         self,
-        user_api_key_auth: UserAPIKeyAuth,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_auth_header: Optional[str] = None,
         mcp_servers: Optional[List[str]] = None,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         mcp_protocol_version: Optional[str] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
     ):
         self.user_api_key_auth = user_api_key_auth
         self.mcp_auth_header = mcp_auth_header
@@ -35,3 +36,4 @@ class MCPAuthenticatedUser(AuthenticatedUser):
         self.mcp_protocol_version = mcp_protocol_version
         self.oauth2_headers = oauth2_headers
         self.raw_headers = raw_headers
+        self.client_ip = client_ip

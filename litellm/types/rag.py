@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import TypedDict
 
+from litellm.types.utils import ModelResponse
+
 
 class RAGChunkingStrategy(TypedDict, total=False):
     """
@@ -127,9 +129,56 @@ class VertexAIVectorStoreOptions(TypedDict, total=False):
     import_timeout: Optional[int]  # Timeout in seconds (default: 600)
 
 
+class S3VectorsVectorStoreOptions(TypedDict, total=False):
+    """
+    AWS S3 Vectors configuration.
+
+    Example (auto-create):
+        {"custom_llm_provider": "s3_vectors", "vector_bucket_name": "my-embeddings"}
+
+    Example (use existing):
+        {"custom_llm_provider": "s3_vectors", "vector_bucket_name": "my-embeddings",
+         "index_name": "my-index"}
+
+    Example (with credentials):
+        {"custom_llm_provider": "s3_vectors", "vector_bucket_name": "my-embeddings",
+         "litellm_credential_name": "my-aws-creds"}
+
+    Auto-creation creates: S3 vector bucket and vector index (if not provided).
+    Embeddings are generated using LiteLLM's embedding API (supports any provider).
+    """
+
+    custom_llm_provider: Literal["s3_vectors"]
+    vector_bucket_name: str  # Required - S3 vector bucket name
+    index_name: Optional[str]  # Vector index name (auto-creates if not provided)
+
+    # Index configuration (for auto-creation)
+    dimension: Optional[int]  # Vector dimension (auto-detected from embedding model, or default: 1024)
+    distance_metric: Optional[Literal["cosine", "euclidean"]]  # Default: cosine
+    non_filterable_metadata_keys: Optional[List[str]]  # Keys excluded from filtering (e.g., ["source_text"])
+
+    # Credentials (loaded from litellm.credential_list if litellm_credential_name is provided)
+    litellm_credential_name: Optional[str]  # Credential name to load from litellm.credential_list
+
+    # AWS auth (uses BaseAWSLLM)
+    aws_access_key_id: Optional[str]
+    aws_secret_access_key: Optional[str]
+    aws_session_token: Optional[str]
+    aws_region_name: Optional[str]  # default: us-west-2
+    aws_role_name: Optional[str]
+    aws_session_name: Optional[str]
+    aws_profile_name: Optional[str]
+    aws_web_identity_token: Optional[str]
+    aws_sts_endpoint: Optional[str]
+    aws_external_id: Optional[str]
+
+
 # Union type for vector store options
 RAGIngestVectorStoreOptions = Union[
-    OpenAIVectorStoreOptions, BedrockVectorStoreOptions, VertexAIVectorStoreOptions
+    OpenAIVectorStoreOptions,
+    BedrockVectorStoreOptions,
+    VertexAIVectorStoreOptions,
+    S3VectorsVectorStoreOptions,
 ]
 
 
@@ -167,6 +216,7 @@ class RAGIngestOptions(TypedDict, total=False):
     embedding: Optional[RAGIngestEmbeddingOptions]  # Embedding model config
     vector_store: RAGIngestVectorStoreOptions  # OpenAI or Bedrock config
 
+
 class RAGIngestResponse(TypedDict, total=False):
     """Response from RAG ingest API."""
 
@@ -175,7 +225,6 @@ class RAGIngestResponse(TypedDict, total=False):
     vector_store_id: str  # The vector store ID (created or existing)
     file_id: Optional[str]  # The file ID in the vector store
     error: Optional[str]  # Error message if status is "failed"
-
 
 
 class RAGIngestRequest(BaseModel):
@@ -187,3 +236,38 @@ class RAGIngestRequest(BaseModel):
 
     model_config = ConfigDict(extra="allow")  # Allow additional fields
 
+
+class RAGRetrievalConfig(TypedDict, total=False):
+    """Configuration for vector store retrieval."""
+
+    vector_store_id: str
+    custom_llm_provider: str
+    top_k: int  # max results from vector store
+    filters: Optional[Dict[str, Any]]  # optional - vector store filters
+
+
+class RAGRerankConfig(TypedDict, total=False):
+    """Configuration for reranking results."""
+
+    enabled: bool
+    model: str
+    top_n: int  # final number of chunks after reranking
+    return_documents: Optional[bool]
+
+
+class RAGQueryRequest(BaseModel):
+    """Request body for RAG query API."""
+
+    model: str
+    messages: List[Any]
+    retrieval_config: RAGRetrievalConfig
+    rerank: Optional[RAGRerankConfig] = None
+    stream: Optional[bool] = False
+
+    model_config = ConfigDict(extra="allow")
+
+
+class RAGQueryResponse(ModelResponse):
+    """Response from RAG query API."""
+
+    pass

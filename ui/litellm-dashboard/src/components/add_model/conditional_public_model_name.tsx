@@ -98,16 +98,16 @@ const ConditionalPublicModelName: React.FC = () => {
       <div className="mb-2 font-normal">The name you specify in your API calls to LiteLLM Proxy</div>
       <div className="mb-2 font-normal">
         <strong>Example:</strong> If you name your public model{" "}
-        <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">example-name</code>, and choose{" "}
-        <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">openai/qwen-plus-latest</code> as the LiteLLM model
+        <code className="bg-gray-700 px-1 py-0.5 rounded-sm text-xs">example-name</code>, and choose{" "}
+        <code className="bg-gray-700 px-1 py-0.5 rounded-sm text-xs">openai/qwen-plus-latest</code> as the LiteLLM model
       </div>
       <div className="mb-2 font-normal">
         <strong>Usage:</strong> You make an API call to the LiteLLM proxy with{" "}
-        <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">model = &quot;example-name&quot;</code>
+        <code className="bg-gray-700 px-1 py-0.5 rounded-sm text-xs">model = &quot;example-name&quot;</code>
       </div>
       <div className="font-normal">
         <strong>Result:</strong> LiteLLM sends{" "}
-        <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">qwen-plus-latest</code> to the provider
+        <code className="bg-gray-700 px-1 py-0.5 rounded-sm text-xs">qwen-plus-latest</code> to the provider
       </div>
     </>
   );
@@ -129,8 +129,31 @@ const ConditionalPublicModelName: React.FC = () => {
           <TextInput
             value={text}
             onChange={(e) => {
+              const newValue = e.target.value;
               const newMappings = [...form.getFieldValue("model_mappings")];
-              newMappings[index].public_name = e.target.value;
+
+              // Check conditions for Anthropic -1m suffix handling
+              const isAnthropic = selectedProvider === Providers.Anthropic;
+              const endsWith1m = newValue.endsWith("-1m");
+              const litellmParams = form.getFieldValue("litellm_extra_params");
+              const isLitellmParamsEmpty = !litellmParams || litellmParams.trim() === "";
+
+              let finalPublicName = newValue;
+
+              if (isAnthropic && endsWith1m && isLitellmParamsEmpty) {
+                // Set litellm params with extra_headers
+                const litellmParamsValue = JSON.stringify(
+                  { extra_headers: { "anthropic-beta": "context-1m-2025-08-07" } },
+                  null,
+                  2,
+                );
+                form.setFieldValue("litellm_extra_params", litellmParamsValue);
+
+                // Remove -1m suffix from public_name
+                finalPublicName = newValue.slice(0, -3); // Remove "-1m" (3 characters)
+              }
+
+              newMappings[index].public_name = finalPublicName;
               form.setFieldValue("model_mappings", newMappings);
             }}
           />

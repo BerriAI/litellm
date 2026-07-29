@@ -36,12 +36,7 @@ class LangFuseHandler:
 
         """
         temp_langfuse_logger: Optional[LangFuseLogger] = globalLangfuseLogger
-        if (
-            LangFuseHandler._dynamic_langfuse_credentials_are_passed(
-                standard_callback_dynamic_params
-            )
-            is False
-        ):
+        if LangFuseHandler._dynamic_langfuse_credentials_are_passed(standard_callback_dynamic_params) is False:
             return LangFuseHandler._return_global_langfuse_logger(
                 globalLangfuseLogger=globalLangfuseLogger,
                 in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
@@ -61,11 +56,9 @@ class LangFuseHandler:
 
         # if not cached, create a new langfuse logger and cache it
         if temp_langfuse_logger is None:
-            temp_langfuse_logger = (
-                LangFuseHandler._create_langfuse_logger_from_credentials(
-                    credentials=credentials_dict,
-                    in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
-                )
+            temp_langfuse_logger = LangFuseHandler._create_langfuse_logger_from_credentials(
+                credentials=credentials_dict,
+                in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
             )
 
         return temp_langfuse_logger
@@ -88,19 +81,15 @@ class LangFuseHandler:
 
         credentials_dict: Dict[
             str, Any
-        ] = (
-            {}
-        )  # the global langfuse logger uses Environment Variables, there are no dynamic credentials
+        ] = {}  # the global langfuse logger uses Environment Variables, there are no dynamic credentials
         globalLangfuseLogger = in_memory_dynamic_logger_cache.get_cache(
             credentials=credentials_dict,
             service_name="langfuse",
         )
         if globalLangfuseLogger is None:
-            globalLangfuseLogger = (
-                LangFuseHandler._create_langfuse_logger_from_credentials(
-                    credentials=credentials_dict,
-                    in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
-                )
+            globalLangfuseLogger = LangFuseHandler._create_langfuse_logger_from_credentials(
+                credentials=credentials_dict,
+                in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
             )
         return globalLangfuseLogger
 
@@ -117,8 +106,9 @@ class LangFuseHandler:
 
         langfuse_logger = LangFuseLogger(
             langfuse_public_key=credentials.get("langfuse_public_key"),
-            langfuse_secret=credentials.get("langfuse_secret"),
+            langfuse_secret=credentials.get("langfuse_secret") or credentials.get("langfuse_secret_key"),
             langfuse_host=credentials.get("langfuse_host"),
+            allow_env_credentials=credentials.get("langfuse_host") is None,
         )
         in_memory_dynamic_logger_cache.set_cache(
             credentials=credentials,
@@ -143,9 +133,7 @@ class LangFuseHandler:
         return LangfuseLoggingConfig(
             langfuse_secret=standard_callback_dynamic_params.get("langfuse_secret")
             or standard_callback_dynamic_params.get("langfuse_secret_key"),
-            langfuse_public_key=standard_callback_dynamic_params.get(
-                "langfuse_public_key"
-            ),
+            langfuse_public_key=standard_callback_dynamic_params.get("langfuse_public_key"),
             langfuse_host=standard_callback_dynamic_params.get("langfuse_host"),
         )
 

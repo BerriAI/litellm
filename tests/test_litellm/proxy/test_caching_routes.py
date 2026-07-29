@@ -123,33 +123,100 @@ def test_cache_ping_failure(mock_redis_failure):
     assert "message" in error_details
     assert "litellm_cache_params" in error_details
     assert "health_check_cache_params" in error_details
-    assert "traceback" in error_details
 
-    # Verify specific error message
-    assert "invalid username-password pair" in error_details["message"]
+    # Verify generic static message (exception text must not leak to clients)
+    assert error_details["message"] == "Service Unhealthy"
 
 
-def test_cache_ping_no_cache_initialized():
-    """Test cache ping when no cache is initialized"""
-    # Set cache to None
-    original_cache = litellm.cache
-    litellm.cache = None
-
+def test_cache_ping_failure_does_not_expose_traceback(mock_redis_failure):
+    """CWE-209: Stack trace and exception text must not appear in the HTTP 503 response body."""
     response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
     assert response.status_code == 503
 
     data = response.json()
-    print("response data=", json.dumps(data, indent=4))
-    assert "error" in data
-    error = data["error"]
+    error = data.get("error", {})
+    raw_body = json.dumps(data)
 
-    # Verify error contains all expected fields
-    assert "message" in error
+    # The word "traceback" (case-insensitive) must not appear anywhere in the response
+    assert (
+        "traceback" not in raw_body.lower()
+    ), "CWE-209: Python traceback exposed in HTTP 503 response body"
+    # Internal frame paths should not leak either
+    assert (
+        'File "' not in raw_body
+    ), "CWE-209: Python stack frame paths exposed in HTTP 503 response body"
+    # Exception text (e.g. Redis hostnames/IPs) must not leak either
+    assert (
+        "invalid username-password pair" not in raw_body
+    ), "CWE-209: Exception message text exposed in HTTP 503 response body"
+
+    # The error message should be the safe static string
     error_details = json.loads(error["message"])
-    assert "Cache not initialized. litellm.cache is None" in error_details["message"]
+    assert error_details["message"] == "Service Unhealthy"
 
-    # Restore original cache
-    litellm.cache = original_cache
+
+def test_cache_ping_no_cache_initialized():
+    """Test cache ping when no cache is initialized returns 503 with ProxyException envelope.
+
+    Verifies the exact response structure so that regressions in the error format
+    (e.g. message moving to a different field, or extra internal details leaking)
+    are caught immediately.
+    """
+    original_cache = litellm.cache
+    litellm.cache = None
+
+    try:
+        response = client.get(
+            "/cache/ping", headers={"Authorization": "Bearer sk-1234"}
+        )
+        assert response.status_code == 503
+
+        data = response.json()
+        print("response data=", json.dumps(data, indent=4))
+        # ProxyException is serialised as {"error": {"message": "...", "type": ..., ...}}
+        assert "error" in data
+        error_details = json.loads(data["error"]["message"])
+        assert (
+            error_details["message"] == "Cache not initialized. litellm.cache is None"
+        )
+    finally:
+        litellm.cache = original_cache
+
+
+def test_cache_ping_no_cache_does_not_expose_internals():
+    """CWE-209: No-cache 503 must use the ProxyException envelope with no internal details.
+
+    The null-cache path raises ProxyException directly (not HTTPException), so the
+    response is {"error": {"message": "...", ...}} — same envelope as other 503s from
+    this endpoint — with no tracebacks, source paths, or extra fields leaking.
+    """
+    original_cache = litellm.cache
+    litellm.cache = None
+
+    try:
+        response = client.get(
+            "/cache/ping", headers={"Authorization": "Bearer sk-1234"}
+        )
+        assert response.status_code == 503
+
+        raw_body = response.text
+        # No Python traceback or source-file paths must appear in the response
+        assert "traceback" not in raw_body.lower(), (
+            "CWE-209: Python traceback exposed in /cache/ping no-cache response"
+        )
+        assert 'File "' not in raw_body, (
+            "CWE-209: Python stack frame paths exposed in /cache/ping no-cache response"
+        )
+
+        data = response.json()
+        # Response must use the ProxyException envelope
+        assert "error" in data, f"Expected ProxyException envelope, got: {data}"
+        error_details = json.loads(data["error"]["message"])
+        assert (
+            error_details["message"] == "Cache not initialized. litellm.cache is None"
+        )
+    finally:
+        litellm.cache = original_cache
 
 
 def test_cache_ping_health_check_includes_only_cache_attributes(mock_redis_success):

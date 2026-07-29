@@ -10,7 +10,7 @@ def cost_calculator(
 ) -> float:
     """
     RunwayML image generation cost calculator.
-    
+
     RunwayML charges per image generated, not per pixel.
     Pricing is stored in model_prices_and_context_window.json with output_cost_per_image.
     """
@@ -25,7 +25,4 @@ def cost_calculator(
             num_images = len(image_response.data)
         return output_cost_per_image * num_images
     else:
-        raise ValueError(
-            f"image_response must be of type ImageResponse, got type={type(image_response)}"
-        )
-
+        raise ValueError(f"image_response must be of type ImageResponse, got type={type(image_response)}")

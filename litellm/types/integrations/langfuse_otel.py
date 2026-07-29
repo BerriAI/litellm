@@ -11,7 +11,8 @@ else:
 
 class LangfuseOtelConfig(BaseModel):
     otlp_auth_headers: Optional[str] = None
-    protocol: Protocol = "otlp_http" 
+    protocol: Protocol = "otlp_http"
+
 
 class LangfuseSpanAttributes(str, Enum):
     LANGFUSE_ENVIRONMENT = "langfuse.environment"

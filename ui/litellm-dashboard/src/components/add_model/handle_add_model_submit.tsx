@@ -4,8 +4,6 @@ import { provider_map } from "../provider_info_helpers";
 
 export const prepareModelAddRequest = async (formValues: Record<string, any>, accessToken: string, form: any) => {
   try {
-    console.log("handling submit for formValues:", formValues);
-
     // Get model mappings and safely remove from formValues
     const modelMappings = formValues["model_mappings"] || [];
     if ("model_mappings" in formValues) {
@@ -38,17 +36,56 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
       litellmParamsObj["model"] = mapping.litellm_model;
 
       // Handle pricing conversion before processing other fields
-      if (formValues.input_cost_per_token) {
+      // Use explicit checks to allow 0 (zero cost models for budget bypass)
+      if (
+        formValues.input_cost_per_token !== undefined &&
+        formValues.input_cost_per_token !== null &&
+        formValues.input_cost_per_token !== ""
+      ) {
         formValues.input_cost_per_token = Number(formValues.input_cost_per_token) / 1000000;
       }
-      if (formValues.output_cost_per_token) {
+      if (
+        formValues.output_cost_per_token !== undefined &&
+        formValues.output_cost_per_token !== null &&
+        formValues.output_cost_per_token !== ""
+      ) {
         formValues.output_cost_per_token = Number(formValues.output_cost_per_token) / 1000000;
+      }
+
+      // Cache Read Cost: if blank, default to Input Cost (already token-unit converted above)
+      if (
+        formValues.cache_read_input_token_cost !== undefined &&
+        formValues.cache_read_input_token_cost !== null &&
+        formValues.cache_read_input_token_cost !== ""
+      ) {
+        formValues.cache_read_input_token_cost = Number(formValues.cache_read_input_token_cost) / 1000000;
+      } else if (
+        formValues.input_cost_per_token !== undefined &&
+        formValues.input_cost_per_token !== null &&
+        formValues.input_cost_per_token !== ""
+      ) {
+        formValues.cache_read_input_token_cost = Number(formValues.input_cost_per_token);
+      } else {
+        delete formValues.cache_read_input_token_cost;
+      }
+
+      // Cache Write Cost: explicit value if provided, else leave unset so the
+      // backend keeps the model-level default (per-second pricing, model_prices
+      // entries, etc.). Sending 0 here would overwrite that default.
+      // The backend falls back to input_cost_per_token when this key is absent.
+      if (
+        formValues.cache_creation_input_token_cost !== undefined &&
+        formValues.cache_creation_input_token_cost !== null &&
+        formValues.cache_creation_input_token_cost !== ""
+      ) {
+        formValues.cache_creation_input_token_cost = Number(formValues.cache_creation_input_token_cost) / 1000000;
+      } else {
+        delete formValues.cache_creation_input_token_cost;
       }
       // Keep input_cost_per_second as is, no conversion needed
 
       // Iterate through the key-value pairs in formValues
       litellmParamsObj["model"] = mapping.litellm_model;
-      console.log("formValues add deployment:", formValues);
       for (const [key, value] of Object.entries(formValues)) {
         if (value === "") {
           continue;
@@ -60,11 +97,9 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         if (key == "model_name") {
           litellmParamsObj["model"] = value;
         } else if (key == "custom_llm_provider") {
-          console.log("custom_llm_provider:", value);
           const providerKey = value as string;
           const mappingResult = provider_map[providerKey as keyof typeof provider_map] ?? providerKey.toLowerCase();
           litellmParamsObj["custom_llm_provider"] = mappingResult;
-          console.log("custom_llm_provider mappingResult:", mappingResult);
         } else if (key == "model") {
           continue;
         }
@@ -77,7 +112,6 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         } else if (key === "model_access_group") {
           modelInfoObj["access_groups"] = value;
         } else if (key == "mode") {
-          console.log("placing mode in modelInfo");
           modelInfoObj["mode"] = value;
 
           // remove "mode" from litellmParams
@@ -85,11 +119,13 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         } else if (key === "custom_model_name") {
           litellmParamsObj["model"] = value;
         } else if (key == "litellm_extra_params") {
-          console.log("litellm_extra_params:", value);
           let litellmExtraParams = {};
           if (value && value != undefined) {
             try {
               litellmExtraParams = JSON.parse(value);
+              if ("litellm_credential_name" in litellmExtraParams) {
+                delete litellmExtraParams.litellm_credential_name;
+              }
             } catch (error) {
               NotificationManager.fromBackend("Failed to parse LiteLLM Extra Params: " + error);
               throw new Error("Failed to parse litellm_extra_params: " + error);
@@ -99,7 +135,6 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
             }
           }
         } else if (key == "model_info_params") {
-          console.log("model_info_params:", value);
           let modelInfoParams = {};
           if (value && value != undefined) {
             try {
@@ -115,8 +150,14 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         }
 
         // Handle the pricing fields
-        else if (key === "input_cost_per_token" || key === "output_cost_per_token" || key === "input_cost_per_second") {
-          if (value) {
+        else if (
+          key === "input_cost_per_token" ||
+          key === "output_cost_per_token" ||
+          key === "input_cost_per_second" ||
+          key === "cache_read_input_token_cost" ||
+          key === "cache_creation_input_token_cost"
+        ) {
+          if (value !== undefined && value !== null && value !== "") {
             litellmParamsObj[key] = Number(value);
           }
           continue;
@@ -157,7 +198,6 @@ export const handleAddModelSubmit = async (values: any, accessToken: string, for
       };
 
       const response: any = await modelCreateCall(accessToken, new_model);
-      console.log(`response for model create call: ${response["data"]}`);
     }
 
     callback && callback();

@@ -23,11 +23,48 @@ from litellm.types.llms.anthropic_skills import (
     Skill,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, client
 
 # Initialize HTTP handler
 base_llm_http_handler = BaseLLMHTTPHandler()
 DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com/v1"
+
+# Initialize LiteLLM skills handler (lazy - only used when custom_llm_provider="litellm")
+_litellm_skills_handler = None
+
+
+def _get_user_api_key_auth_from_kwargs(kwargs: Dict[str, Any]) -> Optional[Any]:
+    for metadata_key in ("metadata", "litellm_metadata"):
+        metadata = kwargs.get(metadata_key)
+        if isinstance(metadata, dict) and metadata.get("user_api_key_auth") is not None:
+            return metadata["user_api_key_auth"]
+    return None
+
+
+def _get_skill_request_metadata(
+    kwargs: Dict[str, Any],
+    extra_body: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    if extra_body and isinstance(extra_body.get("metadata"), dict):
+        return extra_body["metadata"]
+
+    metadata = kwargs.get("metadata")
+    if isinstance(metadata, dict) and isinstance(metadata.get("requester_metadata"), dict):
+        return metadata["requester_metadata"]
+    return None
+
+
+def _get_litellm_skills_handler():
+    """Lazy initialization of LiteLLM skills handler to avoid import overhead."""
+    global _litellm_skills_handler
+    if _litellm_skills_handler is None:
+        from litellm.llms.litellm_proxy.skills.transformation import (
+            LiteLLMSkillsTransformationHandler,
+        )
+
+        _litellm_skills_handler = LiteLLMSkillsTransformationHandler()
+    return _litellm_skills_handler
 
 
 @client
@@ -43,7 +80,7 @@ async def acreate_skill(
 ) -> Skill:
     """
     Async: Create a new skill
-    
+
     Args:
         files: Files to upload for the skill. All files must be in the same top-level directory and must include a SKILL.md file at the root.
         display_title: Optional display title for the skill
@@ -53,7 +90,7 @@ async def acreate_skill(
         timeout: Request timeout
         custom_llm_provider: Provider name (e.g., 'anthropic')
         **kwargs: Additional parameters
-        
+
     Returns:
         Skill object
     """
@@ -106,7 +143,7 @@ def create_skill(
 ) -> Union[Skill, Coroutine[Any, Any, Skill]]:
     """
     Create a new skill
-    
+
     Args:
         files: Files to upload for the skill. All files must be in the same top-level directory and must include a SKILL.md file at the root.
         display_title: Optional display title for the skill
@@ -116,7 +153,7 @@ def create_skill(
         timeout: Request timeout
         custom_llm_provider: Provider name (e.g., 'anthropic')
         **kwargs: Additional parameters
-        
+
     Returns:
         Skill object
     """
@@ -133,18 +170,6 @@ def create_skill(
         if custom_llm_provider is None:
             custom_llm_provider = "anthropic"
 
-        # Get provider config
-        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
-            ProviderConfigManager.get_provider_skills_api_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
-        )
-
-        if skills_api_provider_config is None:
-            raise ValueError(
-                f"CREATE skill is not supported for {custom_llm_provider}"
-            )
-
         # Build create request
         create_request: CreateSkillRequest = {}
         if display_title is not None:
@@ -156,11 +181,32 @@ def create_skill(
         if extra_body:
             create_request.update(extra_body)  # type: ignore
 
+        # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
+        if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
+            return _get_litellm_skills_handler().create_skill_handler(
+                display_title=display_title,
+                files=files,
+                metadata=_get_skill_request_metadata(kwargs, extra_body),
+                user_id=kwargs.get("user_id"),
+                user_api_key_dict=_get_user_api_key_auth_from_kwargs(kwargs),
+                _is_async=_is_async,
+                logging_obj=litellm_logging_obj,
+                litellm_call_id=litellm_call_id,
+            )
+
+        # Get provider config for external providers (Anthropic, etc.)
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        )
+
+        if skills_api_provider_config is None:
+            raise ValueError(f"CREATE skill is not supported for {custom_llm_provider}")
+
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = skills_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = skills_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         request_body = skills_api_provider_config.transform_create_skill_request(
@@ -173,12 +219,11 @@ def create_skill(
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         api_base = AnthropicModelInfo.get_api_base(litellm_params.api_base)
-        url = skills_api_provider_config.get_complete_url(
-            api_base=api_base, endpoint="skills"
-        )
+        url = skills_api_provider_config.get_complete_url(api_base=api_base, endpoint="skills")
 
         # Pre-call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params=request_body,
             litellm_params={
@@ -226,7 +271,7 @@ async def alist_skills(
 ) -> ListSkillsResponse:
     """
     Async: List all skills
-    
+
     Args:
         limit: Number of results to return per page (max 100, default 20)
         page: Pagination token for fetching a specific page of results
@@ -236,7 +281,7 @@ async def alist_skills(
         timeout: Request timeout
         custom_llm_provider: Provider name (e.g., 'anthropic')
         **kwargs: Additional parameters
-        
+
     Returns:
         ListSkillsResponse object
     """
@@ -289,7 +334,7 @@ def list_skills(
 ) -> Union[ListSkillsResponse, Coroutine[Any, Any, ListSkillsResponse]]:
     """
     List all skills
-    
+
     Args:
         limit: Number of results to return per page (max 100, default 20)
         page: Pagination token for fetching a specific page of results
@@ -299,7 +344,7 @@ def list_skills(
         timeout: Request timeout
         custom_llm_provider: Provider name (e.g., 'anthropic')
         **kwargs: Additional parameters
-        
+
     Returns:
         ListSkillsResponse object
     """
@@ -316,7 +361,18 @@ def list_skills(
         if custom_llm_provider is None:
             custom_llm_provider = "anthropic"
 
-        # Get provider config
+        # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
+        if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
+            return _get_litellm_skills_handler().list_skills_handler(
+                limit=limit or 20,
+                offset=0,
+                user_api_key_dict=_get_user_api_key_auth_from_kwargs(kwargs),
+                _is_async=_is_async,
+                logging_obj=litellm_logging_obj,
+                litellm_call_id=litellm_call_id,
+            )
+
+        # Get provider config for external providers (Anthropic, etc.)
         skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
             ProviderConfigManager.get_provider_skills_api_config(
                 provider=litellm.LlmProviders(custom_llm_provider),
@@ -341,9 +397,7 @@ def list_skills(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = skills_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = skills_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         url, query_params = skills_api_provider_config.transform_list_skills_request(
@@ -353,7 +407,8 @@ def list_skills(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params=query_params,
             litellm_params={
@@ -399,7 +454,7 @@ async def aget_skill(
 ) -> Skill:
     """
     Async: Get a skill by ID
-    
+
     Args:
         skill_id: The ID of the skill to fetch
         extra_headers: Additional headers for the request
@@ -407,7 +462,7 @@ async def aget_skill(
         timeout: Request timeout
         custom_llm_provider: Provider name (e.g., 'anthropic')
         **kwargs: Additional parameters
-        
+
     Returns:
         Skill object
     """
@@ -456,7 +511,7 @@ def get_skill(
 ) -> Union[Skill, Coroutine[Any, Any, Skill]]:
     """
     Get a skill by ID
-    
+
     Args:
         skill_id: The ID of the skill to fetch
         extra_headers: Additional headers for the request
@@ -464,7 +519,7 @@ def get_skill(
         timeout: Request timeout
         custom_llm_provider: Provider name (e.g., 'anthropic')
         **kwargs: Additional parameters
-        
+
     Returns:
         Skill object
     """
@@ -481,7 +536,17 @@ def get_skill(
         if custom_llm_provider is None:
             custom_llm_provider = "anthropic"
 
-        # Get provider config
+        # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
+        if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
+            return _get_litellm_skills_handler().get_skill_handler(
+                skill_id=skill_id,
+                user_api_key_dict=_get_user_api_key_auth_from_kwargs(kwargs),
+                _is_async=_is_async,
+                logging_obj=litellm_logging_obj,
+                litellm_call_id=litellm_call_id,
+            )
+
+        # Get provider config for external providers (Anthropic, etc.)
         skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
             ProviderConfigManager.get_provider_skills_api_config(
                 provider=litellm.LlmProviders(custom_llm_provider),
@@ -493,9 +558,7 @@ def get_skill(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = skills_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = skills_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Get API base
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -511,7 +574,8 @@ def get_skill(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={"skill_id": skill_id},
             litellm_params={
@@ -556,7 +620,7 @@ async def adelete_skill(
 ) -> DeleteSkillResponse:
     """
     Async: Delete a skill by ID
-    
+
     Args:
         skill_id: The ID of the skill to delete
         extra_headers: Additional headers for the request
@@ -564,7 +628,7 @@ async def adelete_skill(
         timeout: Request timeout
         custom_llm_provider: Provider name (e.g., 'anthropic')
         **kwargs: Additional parameters
-        
+
     Returns:
         DeleteSkillResponse object
     """
@@ -613,7 +677,7 @@ def delete_skill(
 ) -> Union[DeleteSkillResponse, Coroutine[Any, Any, DeleteSkillResponse]]:
     """
     Delete a skill by ID
-    
+
     Args:
         skill_id: The ID of the skill to delete
         extra_headers: Additional headers for the request
@@ -621,7 +685,7 @@ def delete_skill(
         timeout: Request timeout
         custom_llm_provider: Provider name (e.g., 'anthropic')
         **kwargs: Additional parameters
-        
+
     Returns:
         DeleteSkillResponse object
     """
@@ -638,7 +702,17 @@ def delete_skill(
         if custom_llm_provider is None:
             custom_llm_provider = "anthropic"
 
-        # Get provider config
+        # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
+        if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
+            return _get_litellm_skills_handler().delete_skill_handler(
+                skill_id=skill_id,
+                user_api_key_dict=_get_user_api_key_auth_from_kwargs(kwargs),
+                _is_async=_is_async,
+                logging_obj=litellm_logging_obj,
+                litellm_call_id=litellm_call_id,
+            )
+
+        # Get provider config for external providers (Anthropic, etc.)
         skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
             ProviderConfigManager.get_provider_skills_api_config(
                 provider=litellm.LlmProviders(custom_llm_provider),
@@ -646,15 +720,11 @@ def delete_skill(
         )
 
         if skills_api_provider_config is None:
-            raise ValueError(
-                f"DELETE skill is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"DELETE skill is not supported for {custom_llm_provider}")
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = skills_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = skills_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Get API base
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -670,7 +740,8 @@ def delete_skill(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={"skill_id": skill_id},
             litellm_params={
@@ -702,4 +773,3 @@ def delete_skill(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
-

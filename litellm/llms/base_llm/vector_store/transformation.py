@@ -5,8 +5,8 @@ import httpx
 
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
-    BaseVectorStoreAuthCredentials,
     VECTOR_STORE_OPENAI_PARAMS,
+    BaseVectorStoreAuthCredentials,
     VectorStoreCreateOptionalRequestParams,
     VectorStoreCreateResponse,
     VectorStoreIndexEndpoints,
@@ -27,10 +27,7 @@ else:
 
 
 class BaseVectorStoreConfig:
-
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[VECTOR_STORE_OPENAI_PARAMS]:
+    def get_supported_openai_params(self, model: str) -> List[VECTOR_STORE_OPENAI_PARAMS]:
         return []
 
     def map_openai_params(
@@ -42,9 +39,7 @@ class BaseVectorStoreConfig:
         return optional_params
 
     @abstractmethod
-    def get_auth_credentials(
-        self, litellm_params: dict
-    ) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         pass
 
     @abstractmethod
@@ -60,9 +55,35 @@ class BaseVectorStoreConfig:
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
-
         pass
+
+    async def atransform_search_vector_store_request(
+        self,
+        vector_store_id: str,
+        query: Union[str, List[str]],
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        api_base: str,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Dict]:
+        """
+        Optional async version of transform_search_vector_store_request.
+        If not implemented, the handler will fall back to the sync version.
+        Providers that need to make async calls (e.g., generating embeddings) should override this.
+        """
+        # Default implementation: call the sync version
+        return self.transform_search_vector_store_request(
+            vector_store_id=vector_store_id,
+            query=query,
+            vector_store_search_optional_params=vector_store_search_optional_params,
+            api_base=api_base,
+            litellm_logging_obj=litellm_logging_obj,
+            litellm_params=litellm_params,
+            extra_body=extra_body,
+        )
 
     @abstractmethod
     def transform_search_vector_store_response(
@@ -79,15 +100,11 @@ class BaseVectorStoreConfig:
         pass
 
     @abstractmethod
-    def transform_create_vector_store_response(
-        self, response: httpx.Response
-    ) -> VectorStoreCreateResponse:
+    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         pass
 
     @abstractmethod
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         return {}
 
     @abstractmethod

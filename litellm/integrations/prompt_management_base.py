@@ -75,7 +75,6 @@ class PromptManagementBase(ABC):
         prompt_version: Optional[int] = None,
         prompt_spec: Optional[PromptSpec] = None,
     ) -> PromptManagementClient:
-
         compiled_prompt_client = self._compile_prompt_helper(
             prompt_id=prompt_id,
             prompt_spec=prompt_spec,
@@ -88,9 +87,7 @@ class PromptManagementBase(ABC):
         try:
             messages = compiled_prompt_client["prompt_template"] + client_messages
         except Exception as e:
-            raise ValueError(
-                f"Error compiling prompt: {e}. Prompt id={prompt_id}, prompt_variables={prompt_variables}, client_messages={client_messages}, dynamic_callback_params={dynamic_callback_params}"
-            )
+            raise ValueError(f"Error compiling prompt: {e}. Prompt id={prompt_id}")
 
         compiled_prompt_client["completed_messages"] = messages
         return compiled_prompt_client
@@ -117,16 +114,12 @@ class PromptManagementBase(ABC):
         try:
             messages = compiled_prompt_client["prompt_template"] + client_messages
         except Exception as e:
-            raise ValueError(
-                f"Error compiling prompt: {e}. Prompt id={prompt_id}, prompt_variables={prompt_variables}, client_messages={client_messages}, dynamic_callback_params={dynamic_callback_params}"
-            )
+            raise ValueError(f"Error compiling prompt: {e}. Prompt id={prompt_id}")
 
         compiled_prompt_client["completed_messages"] = messages
         return compiled_prompt_client
 
-    def _get_model_from_prompt(
-        self, prompt_management_client: PromptManagementClient, model: str
-    ) -> str:
+    def _get_model_from_prompt(self, prompt_management_client: PromptManagementClient, model: str) -> str:
         if prompt_management_client["prompt_template_model"] is not None:
             return prompt_management_client["prompt_template_model"]
         else:
@@ -143,23 +136,15 @@ class PromptManagementBase(ABC):
     ):
         completed_messages = prompt_template["completed_messages"] or messages
 
-        prompt_template_optional_params = (
-            prompt_template["prompt_template_optional_params"] or {}
-        )
+        prompt_template_optional_params = prompt_template["prompt_template_optional_params"] or {}
 
         updated_non_default_params = {
             **non_default_params,
-            **(
-                prompt_template_optional_params
-                if not ignore_prompt_manager_optional_params
-                else {}
-            ),
+            **(prompt_template_optional_params if not ignore_prompt_manager_optional_params else {}),
         }
 
         if not ignore_prompt_manager_model:
-            model = self._get_model_from_prompt(
-                prompt_management_client=prompt_template, model=model
-            )
+            model = self._get_model_from_prompt(prompt_management_client=prompt_template, model=model)
         else:
             model = model
 
@@ -179,7 +164,6 @@ class PromptManagementBase(ABC):
         ignore_prompt_manager_model: Optional[bool] = False,
         ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
-
         if prompt_id is None:
             raise ValueError("prompt_id is required for Prompt Management Base class")
         if not self.should_run_prompt_management(

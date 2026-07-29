@@ -1,37 +1,32 @@
 import os
 import pytest
 from fastapi.testclient import TestClient
-from litellm.proxy.proxy_server import app, ProxyLogging
+from litellm.proxy.proxy_server import app, ProxyLogging, hash_token
 from litellm.caching import DualCache
+
+MASTER_KEY = "sk-1234"
 
 
 @pytest.fixture(autouse=True)
 def override_env_settings(monkeypatch):
-    # Set environment variables only for tests using-monkeypatch (function scope by default).
-    # Use DATABASE_URL from environment (set by CircleCI to local postgres)
     if "DATABASE_URL" not in os.environ:
-        pytest.fail("DATABASE_URL not set - this test requires a local postgres database to be running")
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-1234")
+        pytest.fail(
+            "DATABASE_URL not set - this test requires a postgres database to be running"
+        )
+    monkeypatch.setenv("LITELLM_MASTER_KEY", MASTER_KEY)
     monkeypatch.setenv("LITELLM_LOG", "DEBUG")
 
 
 @pytest.fixture(scope="module")
 def test_client():
-    """
-    This fixture starts up the test client which triggers FastAPI's startup events.
-    Prisma will connect to the DB using the provided DATABASE_URL.
-    """
+    """Starting the test client triggers FastAPI startup, where Prisma connects to the DB."""
     with TestClient(app) as client:
         yield client
 
 
 @pytest.mark.asyncio
 async def test_master_key_not_inserted(test_client):
-    """
-    This test ensures that when the app starts (or when you hit the /health endpoint
-    to trigger startup logic), no unexpected write occurs in the DB.
-    """
-    # Hit an endpoint (like /health) that triggers any startup tasks.
+    """The master key must never be persisted to the verification-token table on startup."""
     response = test_client.get("/health/liveliness")
     assert response.status_code == 200
 
@@ -44,13 +39,22 @@ async def test_master_key_not_inserted(test_client):
         ),
     )
 
-    # Connect directly to the test database to inspect the data.
     await prisma_client.connect()
-    result = await prisma_client.db.litellm_verificationtoken.find_many()
-    print(result)
+    stored_tokens = {
+        row.token
+        for row in await prisma_client.db.litellm_verificationtoken.find_many()
+    }
 
-    # The expectation is that no token (or unintended record) is added on startup.
-    assert len(result) == 0, (
-        "SECURITY ALERT SECURITY ALERT SECURITY ALERT: Expected no record in the litellm_verificationtoken table. On startup - the master key should NOT be Inserted into the DB."
-        "We have found keys in the DB. This is unexpected and should not happen."
-    )
+    for leaked in (hash_token(MASTER_KEY), MASTER_KEY):
+        assert leaked not in stored_tokens, (
+            "SECURITY ALERT: the master key was found in the litellm_verificationtoken "
+            "table. The master key must never be inserted into the DB."
+        )
+
+    # Canary against any other unexpected startup write (default key, rotation
+    # artifact, ...). The job gives each run a fresh DB, so a clean startup must
+    # leave the table empty; if startup ever legitimately seeds a token, narrow
+    # this while keeping the master-key assertion above.
+    assert (
+        not stored_tokens
+    ), f"startup unexpectedly wrote token(s) to litellm_verificationtoken: {stored_tokens}"

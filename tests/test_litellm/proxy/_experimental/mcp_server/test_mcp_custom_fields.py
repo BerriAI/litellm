@@ -3,6 +3,7 @@ Test suite for MCP server custom fields functionality.
 
 Tests that mcp_info can accept arbitrary custom fields in addition to predefined ones.
 """
+
 import pytest
 import sys
 import os
@@ -10,9 +11,7 @@ from unittest.mock import Mock, patch
 from typing import Dict, Any
 
 # Add the path to find the modules
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adjust the path as needed
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adjust the path as needed
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.types.mcp import MCPAuth
@@ -40,8 +39,8 @@ class TestMCPCustomFields:
                     "custom_field_2": {"nested": "value"},
                     "custom_field_3": ["list", "values"],
                     "priority": 10,
-                    "tags": ["production", "api"]
-                }
+                    "tags": ["production", "api"],
+                },
             }
         }
 
@@ -71,28 +70,29 @@ class TestMCPCustomFields:
         manager = MCPServerManager()
 
         # Mock database record with custom fields
-        mock_server = Mock(spec=LiteLLM_MCPServerTable)
-        mock_server.server_id = "test-server-id"
-        mock_server.server_name = "Test Server"
-        mock_server.description = "A test server"
-        mock_server.url = "http://localhost:3000"
-        mock_server.transport = "http"
-        mock_server.auth_type = MCPAuth.bearer_token
-        mock_server.alias = None
-        mock_server.mcp_info = {
-            "server_name": "Test Server",
-            "description": "A test server",
-            "custom_db_field": "database_value",
-            "metadata": {"source": "database"},
-            "version": "1.0.0"
-        }
-        mock_server.command = None
-        mock_server.args = None
-        mock_server.env = None
-        mock_server.mcp_access_groups = None
+        mock_server = LiteLLM_MCPServerTable(
+            server_id="test-server-id",
+            server_name="Test Server",
+            alias=None,
+            description="A test server",
+            url="http://localhost:3000",
+            transport="http",
+            auth_type=MCPAuth.bearer_token,
+            mcp_info={
+                "server_name": "Test Server",
+                "description": "A test server",
+                "custom_db_field": "database_value",
+                "metadata": {"source": "database"},
+                "version": "1.0.0",
+            },
+            command=None,
+            args=[],
+            env={},
+            mcp_access_groups=[],
+        )
 
         # Add server to manager
-        await manager.add_update_server(mock_server)
+        await manager.add_server(mock_server)
 
         # Get the added server
         server = manager.get_mcp_server_by_id("test-server-id")
@@ -118,7 +118,7 @@ class TestMCPCustomFields:
             "test_server": {
                 "url": "http://localhost:3000",
                 "transport": "http",
-                "mcp_info": {}
+                "mcp_info": {},
             }
         }
 
@@ -142,7 +142,7 @@ class TestMCPCustomFields:
             "test_server": {
                 "url": "http://localhost:3000",
                 "transport": "http",
-                "description": "Server description"
+                "description": "Server description",
             }
         }
 
@@ -168,9 +168,7 @@ class TestMCPCustomFields:
                 "url": "http://localhost:3000",
                 "transport": "http",
                 "description": "Config level description",
-                "mcp_info": {
-                    "custom_field": "custom_value"
-                }
+                "mcp_info": {"custom_field": "custom_value"},
             }
         }
 
@@ -196,8 +194,8 @@ class TestMCPCustomFields:
                 "description": "Config level description",
                 "mcp_info": {
                     "description": "MCP info description",
-                    "custom_field": "custom_value"
-                }
+                    "custom_field": "custom_value",
+                },
             }
         }
 
