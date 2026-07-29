@@ -26,7 +26,7 @@ from typing import (
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
+from litellm.constants import DEFAULT_CHARS_PER_TOKEN, DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
@@ -284,7 +284,6 @@ REDIS_NODE_HASHTAG_NAME = "all_keys"
 # When max_tokens is not specified in the request we still need to reserve
 # *some* output budget; these define that fallback estimate.
 DEFAULT_MAX_TOKENS_ESTIMATE = 4096
-DEFAULT_CHARS_PER_TOKEN = 4
 # Fraction of the available output budget reserved as the upfront floor when
 # the request omits max_tokens. Applied to both DEFAULT_MAX_TOKENS_ESTIMATE
 # (baseline floor) and to the smallest configured TPM limit (capped floor for

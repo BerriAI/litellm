@@ -222,61 +222,18 @@ class DeploymentAffinityCheck(CustomLogger):
         return f"{cls.CACHE_KEY_PREFIX}:session:{model_group}:{session_id}"
 
     @staticmethod
-    def _get_user_key_from_metadata_dict(metadata: dict) -> Optional[str]:
-        # NOTE: affinity is keyed on the *API key hash* provided by the proxy (not the
-        # OpenAI `user` parameter, which is an end-user identifier).
-        user_key = metadata.get("user_api_key_hash")
-        if user_key is None:
-            return None
-        return str(user_key)
-
-    @staticmethod
-    def _get_session_id_from_metadata_dict(metadata: dict) -> Optional[str]:
-        session_id = metadata.get("session_id")
-        if session_id is None:
-            return None
-        return str(session_id)
-
-    @staticmethod
-    def _iter_metadata_dicts(request_kwargs: dict) -> List[dict]:
-        """
-        Return all metadata dicts available on the request.
-
-        Depending on the endpoint, Router may populate `metadata` or `litellm_metadata`.
-        Users may also send one or both, so we check both (rather than using `or`).
-        """
-        metadata_dicts: List[dict] = []
-        for key in ("litellm_metadata", "metadata"):
-            md = request_kwargs.get(key)
-            if isinstance(md, dict):
-                metadata_dicts.append(md)
-        return metadata_dicts
-
-    @staticmethod
     def _get_user_key_from_request_kwargs(request_kwargs: dict) -> Optional[str]:
-        """
-        Extract a stable affinity key from request kwargs.
+        """Affinity is keyed on the proxy-provided API key HASH, never the OpenAI ``user`` param
+        (an end-user identifier). Metadata precedence is owned by core_helpers."""
+        from litellm.litellm_core_utils.core_helpers import get_request_metadata_field
 
-        Source (proxy): `metadata.user_api_key_hash`
-
-        Note: the OpenAI `user` parameter is an end-user identifier and is intentionally
-        not used for deployment affinity.
-        """
-        # Check metadata dicts (Proxy usage)
-        for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
-            user_key = DeploymentAffinityCheck._get_user_key_from_metadata_dict(metadata=metadata)
-            if user_key is not None:
-                return user_key
-
-        return None
+        return get_request_metadata_field(request_kwargs, "user_api_key_hash")  # pyright: ignore[reportUnknownArgumentType]  # legacy-untyped call site
 
     @staticmethod
     def _get_session_id_from_request_kwargs(request_kwargs: dict) -> Optional[str]:
-        for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
-            session_id = DeploymentAffinityCheck._get_session_id_from_metadata_dict(metadata=metadata)
-            if session_id is not None:
-                return session_id
-        return None
+        from litellm.litellm_core_utils.core_helpers import get_request_metadata_field
+
+        return get_request_metadata_field(request_kwargs, "session_id")  # pyright: ignore[reportUnknownArgumentType]  # legacy-untyped call site
 
     @staticmethod
     def _find_deployment_by_model_id(healthy_deployments: List[dict], model_id: str) -> Optional[dict]:
@@ -416,7 +373,9 @@ class DeploymentAffinityCheck(CustomLogger):
         - LiteLLM runs async success callbacks via a background logging worker for performance.
         - We want affinity to be immediately available for subsequent requests.
         """
-        metadata_dicts = self._iter_metadata_dicts(kwargs)
+        from litellm.litellm_core_utils.core_helpers import iter_request_metadata_dicts
+
+        metadata_dicts = iter_request_metadata_dicts(kwargs)
 
         # Extract deployment_model_name first — needed for both per-group flag resolution
         # and cache key scoping.

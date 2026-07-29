@@ -1139,6 +1139,125 @@ class LiteLLMProxyRequestSetup:
         return data
 
     @staticmethod
+    def add_key_team_project_metadata(
+        data: dict[str, Any],
+        user_api_key_dict: UserAPIKeyAuth,
+        _metadata_variable_name: str,
+    ) -> dict[str, Any]:
+        """Every key, team and project control derived purely from the resolved identity: cache
+        controls, merged tags, spend_logs_metadata, guardrail opt-outs, disable_fallbacks, the
+        management-endpoint metadata subset, and the budget fields Prometheus reads. Request-free on
+        purpose, so a caller without a FastAPI Request (a cache-warming replay) reaches the same block
+        instead of re-deriving it and drifting from spend attribution."""
+        ### KEY-LEVEL Controls
+        key_metadata = user_api_key_dict.metadata
+        data = LiteLLMProxyRequestSetup.add_key_level_controls(
+            key_metadata=key_metadata,
+            data=data,
+            _metadata_variable_name=_metadata_variable_name,
+        )
+        ## TEAM-LEVEL SPEND LOGS/TAGS
+        team_metadata = user_api_key_dict.team_metadata or {}
+        if "tags" in team_metadata and team_metadata["tags"] is not None:
+            data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+                request_tags=data[_metadata_variable_name].get("tags"),
+                tags_to_add=team_metadata["tags"],
+            )
+        if "disable_global_guardrails" in team_metadata and isinstance(
+            team_metadata["disable_global_guardrails"], bool
+        ):
+            data[_metadata_variable_name]["disable_global_guardrails"] = team_metadata["disable_global_guardrails"]
+        if "opted_out_global_guardrails" in team_metadata and isinstance(
+            team_metadata["opted_out_global_guardrails"], list
+        ):
+            data[_metadata_variable_name]["opted_out_global_guardrails"] = team_metadata["opted_out_global_guardrails"]
+        if "spend_logs_metadata" in team_metadata and isinstance(team_metadata["spend_logs_metadata"], dict):
+            if "spend_logs_metadata" in data[_metadata_variable_name] and isinstance(
+                data[_metadata_variable_name]["spend_logs_metadata"], dict
+            ):
+                for key, value in team_metadata["spend_logs_metadata"].items():
+                    if (
+                        key not in data[_metadata_variable_name]["spend_logs_metadata"]
+                    ):  # don't override k-v pair sent by request (user request)
+                        data[_metadata_variable_name]["spend_logs_metadata"][key] = value
+            else:
+                data[_metadata_variable_name]["spend_logs_metadata"] = team_metadata["spend_logs_metadata"]
+
+        ## PROJECT-LEVEL TAGS
+        project_metadata = user_api_key_dict.project_metadata or {}
+        if "tags" in project_metadata and project_metadata["tags"] is not None:
+            data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+                request_tags=data[_metadata_variable_name].get("tags"),
+                tags_to_add=project_metadata["tags"],
+            )
+
+        ## TEAM-LEVEL METADATA
+        data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
+            data=data,
+            management_endpoint_metadata=team_metadata,
+            _metadata_variable_name=_metadata_variable_name,
+        )
+
+        # Team spend, budget - used by prometheus.py
+        data[_metadata_variable_name]["user_api_key_team_max_budget"] = user_api_key_dict.team_max_budget
+        data[_metadata_variable_name]["user_api_key_team_spend"] = user_api_key_dict.team_spend
+        data[_metadata_variable_name]["user_api_key_request_route"] = user_api_key_dict.request_route
+
+        # API Key spend, budget - used by prometheus.py
+        data[_metadata_variable_name]["user_api_key_spend"] = user_api_key_dict.spend
+        data[_metadata_variable_name]["user_api_key_max_budget"] = user_api_key_dict.max_budget
+        data[_metadata_variable_name]["user_api_key_model_max_budget"] = user_api_key_dict.model_max_budget
+        data[_metadata_variable_name]["user_api_key_end_user_model_max_budget"] = (
+            user_api_key_dict.end_user_model_max_budget
+        )
+
+        # User spend, budget - used by prometheus.py
+        # Follow same pattern as team and API key budgets
+        data[_metadata_variable_name]["user_api_key_user_spend"] = user_api_key_dict.user_spend
+        data[_metadata_variable_name]["user_api_key_user_max_budget"] = user_api_key_dict.user_max_budget
+
+        data[_metadata_variable_name]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
+        data[_metadata_variable_name]["user_api_key_team_metadata"] = strip_callback_config(
+            user_api_key_dict.team_metadata
+        )
+        data[_metadata_variable_name]["user_api_key_object_permission_id"] = getattr(
+            user_api_key_dict, "object_permission_id", None
+        )
+        data[_metadata_variable_name]["user_api_key_team_object_permission_id"] = getattr(
+            user_api_key_dict, "team_object_permission_id", None
+        )
+        return data
+
+    @staticmethod
+    def apply_dynamic_logging_settings(
+        data: dict[str, Any],
+        user_api_key_dict: UserAPIKeyAuth,
+        proxy_config: ProxyConfig,
+    ) -> dict[str, Any]:
+        """Key and team scoped success/failure callbacks with their callback_vars, plus the key's
+        disabled-callback list. Request-free for the same reason as add_key_team_project_metadata:
+        without it a request never reaches the logger its own team configured."""
+        # Team Callbacks controls
+        callback_settings_obj = _get_dynamic_logging_metadata(
+            user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+        )
+        if callback_settings_obj is not None:
+            data["success_callback"] = callback_settings_obj.success_callback
+            data["failure_callback"] = callback_settings_obj.failure_callback
+
+            if callback_settings_obj.callback_vars is not None:
+                # unpack callback_vars in data
+                for k, v in callback_settings_obj.callback_vars.items():
+                    data[k] = v
+
+        # Add disabled callbacks from key metadata
+        if user_api_key_dict.metadata and "litellm_disabled_callbacks" in user_api_key_dict.metadata:
+            disabled_callbacks = user_api_key_dict.metadata["litellm_disabled_callbacks"]
+            if disabled_callbacks and isinstance(disabled_callbacks, list):
+                data["litellm_disabled_callbacks"] = disabled_callbacks
+        return data
+
+    @staticmethod
     def _merge_tags(request_tags: Optional[list], tags_to_add: Optional[list]) -> list:
         """
         Helper function to merge two lists of tags, ensuring no duplicates.
@@ -1606,78 +1725,10 @@ async def add_litellm_data_to_request(
             "global_max_parallel_requests", None
         )
 
-    ### KEY-LEVEL Controls
-    key_metadata = user_api_key_dict.metadata
-    data = LiteLLMProxyRequestSetup.add_key_level_controls(
-        key_metadata=key_metadata,
+    data = LiteLLMProxyRequestSetup.add_key_team_project_metadata(
         data=data,
+        user_api_key_dict=user_api_key_dict,
         _metadata_variable_name=_metadata_variable_name,
-    )
-    ## TEAM-LEVEL SPEND LOGS/TAGS
-    team_metadata = user_api_key_dict.team_metadata or {}
-    if "tags" in team_metadata and team_metadata["tags"] is not None:
-        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
-            request_tags=data[_metadata_variable_name].get("tags"),
-            tags_to_add=team_metadata["tags"],
-        )
-    if "disable_global_guardrails" in team_metadata and isinstance(team_metadata["disable_global_guardrails"], bool):
-        data[_metadata_variable_name]["disable_global_guardrails"] = team_metadata["disable_global_guardrails"]
-    if "opted_out_global_guardrails" in team_metadata and isinstance(
-        team_metadata["opted_out_global_guardrails"], list
-    ):
-        data[_metadata_variable_name]["opted_out_global_guardrails"] = team_metadata["opted_out_global_guardrails"]
-    if "spend_logs_metadata" in team_metadata and isinstance(team_metadata["spend_logs_metadata"], dict):
-        if "spend_logs_metadata" in data[_metadata_variable_name] and isinstance(
-            data[_metadata_variable_name]["spend_logs_metadata"], dict
-        ):
-            for key, value in team_metadata["spend_logs_metadata"].items():
-                if (
-                    key not in data[_metadata_variable_name]["spend_logs_metadata"]
-                ):  # don't override k-v pair sent by request (user request)
-                    data[_metadata_variable_name]["spend_logs_metadata"][key] = value
-        else:
-            data[_metadata_variable_name]["spend_logs_metadata"] = team_metadata["spend_logs_metadata"]
-
-    ## PROJECT-LEVEL TAGS
-    project_metadata = user_api_key_dict.project_metadata or {}
-    if "tags" in project_metadata and project_metadata["tags"] is not None:
-        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
-            request_tags=data[_metadata_variable_name].get("tags"),
-            tags_to_add=project_metadata["tags"],
-        )
-
-    ## TEAM-LEVEL METADATA
-    data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
-        data=data,
-        management_endpoint_metadata=team_metadata,
-        _metadata_variable_name=_metadata_variable_name,
-    )
-
-    # Team spend, budget - used by prometheus.py
-    data[_metadata_variable_name]["user_api_key_team_max_budget"] = user_api_key_dict.team_max_budget
-    data[_metadata_variable_name]["user_api_key_team_spend"] = user_api_key_dict.team_spend
-    data[_metadata_variable_name]["user_api_key_request_route"] = user_api_key_dict.request_route
-
-    # API Key spend, budget - used by prometheus.py
-    data[_metadata_variable_name]["user_api_key_spend"] = user_api_key_dict.spend
-    data[_metadata_variable_name]["user_api_key_max_budget"] = user_api_key_dict.max_budget
-    data[_metadata_variable_name]["user_api_key_model_max_budget"] = user_api_key_dict.model_max_budget
-    data[_metadata_variable_name]["user_api_key_end_user_model_max_budget"] = (
-        user_api_key_dict.end_user_model_max_budget
-    )
-
-    # User spend, budget - used by prometheus.py
-    # Follow same pattern as team and API key budgets
-    data[_metadata_variable_name]["user_api_key_user_spend"] = user_api_key_dict.user_spend
-    data[_metadata_variable_name]["user_api_key_user_max_budget"] = user_api_key_dict.user_max_budget
-
-    data[_metadata_variable_name]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
-    data[_metadata_variable_name]["user_api_key_team_metadata"] = strip_callback_config(user_api_key_dict.team_metadata)
-    data[_metadata_variable_name]["user_api_key_object_permission_id"] = getattr(
-        user_api_key_dict, "object_permission_id", None
-    )
-    data[_metadata_variable_name]["user_api_key_team_object_permission_id"] = getattr(
-        user_api_key_dict, "team_object_permission_id", None
     )
     data[_metadata_variable_name]["headers"] = _headers
     data[_metadata_variable_name]["endpoint"] = str(request.url)
@@ -1752,24 +1803,11 @@ async def add_litellm_data_to_request(
                     tags_to_add=_user_tags,
                 )
 
-    # Team Callbacks controls
-    callback_settings_obj = _get_dynamic_logging_metadata(
-        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+    data = LiteLLMProxyRequestSetup.apply_dynamic_logging_settings(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=proxy_config,
     )
-    if callback_settings_obj is not None:
-        data["success_callback"] = callback_settings_obj.success_callback
-        data["failure_callback"] = callback_settings_obj.failure_callback
-
-        if callback_settings_obj.callback_vars is not None:
-            # unpack callback_vars in data
-            for k, v in callback_settings_obj.callback_vars.items():
-                data[k] = v
-
-    # Add disabled callbacks from key metadata
-    if user_api_key_dict.metadata and "litellm_disabled_callbacks" in user_api_key_dict.metadata:
-        disabled_callbacks = user_api_key_dict.metadata["litellm_disabled_callbacks"]
-        if disabled_callbacks and isinstance(disabled_callbacks, list):
-            data["litellm_disabled_callbacks"] = disabled_callbacks
 
     # Guardrails from key/team metadata and policy engine
     await move_guardrails_to_metadata(
