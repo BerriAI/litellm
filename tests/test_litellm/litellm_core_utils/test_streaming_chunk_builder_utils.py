@@ -160,6 +160,99 @@ def test_get_combined_tool_content():
     ]
 
 
+def test_get_combined_thinking_content_does_not_duplicate_resent_thinking():
+    """Anthropic re-sends a block's whole thinking text alongside its signature.
+
+    ``ModelResponseIterator._handle_content_block_delta`` builds the signature
+    chunk by joining every prior thinking delta, so appending it on top of the
+    parts already accumulated emitted the reasoning twice.
+    """
+    base_chunk = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion.chunk",
+        "created": 1234567890,
+        "model": "claude-sonnet-4-20250514",
+    }
+
+    def make_chunk(**delta_kwargs):
+        return ModelResponseStream(
+            **base_chunk,
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(**delta_kwargs),
+                    finish_reason=None,
+                )
+            ],
+        )
+
+    parts = ["Let me ", "work through ", "this step by step."]
+    chunks = [
+        make_chunk(role="assistant", content=None),
+        *[make_chunk(thinking_blocks=[{"type": "thinking", "thinking": part}]) for part in parts],
+        make_chunk(
+            thinking_blocks=[
+                {
+                    "type": "thinking",
+                    "thinking": "".join(parts),
+                    "signature": "sig_block1",
+                }
+            ]
+        ),
+    ]
+    thinking_chunks = [
+        chunk for chunk in chunks if chunk["choices"][0]["delta"].get("thinking_blocks")
+    ]
+    processor = ChunkProcessor(chunks=chunks)
+
+    result = processor.get_combined_thinking_content(thinking_chunks)
+
+    assert result is not None
+    assert len(result) == 1
+    assert result[0]["thinking"] == "".join(parts)
+    assert result[0]["signature"] == "sig_block1"
+
+
+def test_get_combined_thinking_content_keeps_a_genuine_final_increment():
+    """A provider that sends only the last increment with the signature must
+    still have that increment appended, not swallowed by the de-duplication.
+    """
+    base_chunk = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion.chunk",
+        "created": 1234567890,
+        "model": "claude-sonnet-4-20250514",
+    }
+
+    def make_chunk(**delta_kwargs):
+        return ModelResponseStream(
+            **base_chunk,
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(**delta_kwargs),
+                    finish_reason=None,
+                )
+            ],
+        )
+
+    chunks = [
+        make_chunk(thinking_blocks=[{"type": "thinking", "thinking": "Let me "}]),
+        make_chunk(
+            thinking_blocks=[
+                {"type": "thinking", "thinking": "think.", "signature": "sig_block1"}
+            ]
+        ),
+    ]
+    processor = ChunkProcessor(chunks=chunks)
+
+    result = processor.get_combined_thinking_content(chunks)
+
+    assert result is not None
+    assert len(result) == 1
+    assert result[0]["thinking"] == "Let me think."
+
+
 def test_get_combined_thinking_content_preserves_interleaved_blocks():
     base_chunk = {
         "id": "chatcmpl-123",
