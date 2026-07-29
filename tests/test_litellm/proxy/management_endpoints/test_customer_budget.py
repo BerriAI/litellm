@@ -473,3 +473,40 @@ async def test_update_customer_existing_budget_updates_duration_and_reset_at(
 
     # No new budget row should be created
     assert not mock_prisma_client.db.litellm_budgettable.create.called
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.proxy_server.prisma_client")
+@patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+async def test_update_customer_invalid_budget_duration_returns_400(
+    mock_prisma_client, mock_user_api_key_dict, mock_existing_customer
+):
+    """
+    Test that an unsupported budget_duration (e.g. "fortnightly") is rejected
+    with a 400 instead of being silently persisted with a next-midnight
+    fallback reset (which would schedule an unintended daily reset).
+    """
+    from litellm.proxy._types import ProxyException
+
+    mock_existing_customer.model_dump.return_value = {
+        "user_id": "test-user",
+        "blocked": False,
+        "litellm_budget_table": None,
+    }
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=mock_existing_customer)
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock()
+
+    update_request = UpdateCustomerRequest(
+        user_id="test-user",
+        max_budget=50.0,
+        budget_duration="fortnightly",
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_end_user(update_request, mock_user_api_key_dict)
+
+    assert str(exc_info.value.code) in ("400", "HTTP_400_BAD_REQUEST")
+    assert "budget_duration" in str(exc_info.value.message)
+
+    # No budget row should have been written
+    assert not mock_prisma_client.db.litellm_budgettable.create.called

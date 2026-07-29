@@ -600,6 +600,17 @@ async def update_end_user(
             # first reset time computed (budget_reset_at is server-managed and
             # never user-settable), else reset_budget_job never resets spend
             if budget_table_data.get("budget_duration") is not None:
+                try:
+                    duration_in_seconds(duration=budget_table_data["budget_duration"])
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "Invalid budget_duration '{}'. Expected formats: '30s', '30m', '30h', '30d', '1mo'.".format(
+                                budget_table_data["budget_duration"]
+                            )
+                        },
+                    )
                 budget_table_data["budget_reset_at"] = get_budget_reset_time(
                     budget_duration=budget_table_data["budget_duration"]
                 )
