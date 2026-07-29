@@ -31,7 +31,6 @@ from typing import (
     Generator,
     List,
     Literal,
-    Mapping,
     Optional,
     Set,
     Tuple,
