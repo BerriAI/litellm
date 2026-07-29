@@ -15142,6 +15142,10 @@ async def get_config_list(
         "cancel_on_disconnect": {"type": "Boolean"},
         "skip_user_budget_on_team_key": {"type": "Boolean"},
         "disable_auto_add_proxy_admin_to_teams": {"type": "Boolean"},
+        "background_health_checks": {"type": "Boolean"},
+        "health_check_interval": {"type": "Integer"},
+        "health_check_concurrency": {"type": "Integer"},
+        "health_check_skip_disabled_background_models": {"type": "Boolean"},
     }
 
     return_val = []
