@@ -388,8 +388,7 @@ def _remap_copilot_reasoning_chunk(chunk: Mapping[str, Any]) -> Mapping[str, Any
     return {
         **chunk,
         "choices": [
-            choice if delta is None else {**choice, "delta": delta}
-            for choice, delta in zip(choices, remapped_deltas)
+            choice if delta is None else {**choice, "delta": delta} for choice, delta in zip(choices, remapped_deltas)
         ],
     }
 
