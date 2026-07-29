@@ -144,6 +144,7 @@ class ModelInfo(BaseModel):
 
     base_model: Optional[str] = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     tier: Optional[Literal["free", "paid"]] = None
+    cost_discount: Optional[float] = None
 
     """
     Team Model Specific Fields
@@ -163,6 +164,13 @@ class ModelInfo(BaseModel):
         elif isinstance(id, int):
             id = str(id)
         super().__init__(id=id, **params)
+
+    @field_validator("cost_discount")
+    @classmethod
+    def validate_cost_discount(cls, value: Optional[float]) -> Optional[float]:
+        if value is not None and not 0 <= value <= 1:
+            raise ValueError("cost_discount must be between 0 and 1")
+        return value
 
     model_config = ConfigDict(extra="allow")
 
@@ -409,6 +417,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str]
     ## CUSTOM PRICING ##
+    cost_discount: Optional[float]
     input_cost_per_token: Optional[float]
     output_cost_per_token: Optional[float]
     input_cost_per_second: Optional[float]

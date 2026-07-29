@@ -66,6 +66,7 @@ class TestStripClientPricingOverrides:
         )
         # Sanity: the obvious top-level pricing fields are in the set.
         for field in (
+            "cost_discount",
             "input_cost_per_token",
             "output_cost_per_token",
             "input_cost_per_second",
