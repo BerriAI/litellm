@@ -124,24 +124,28 @@ def await_servable(
     First listing must happen within `timeout`. After that, the model must stay
     listed continuously for `db_sync_seconds` (any miss resets the continuous
     window). `db_sync_seconds=0` returns on the first listing. Each poll's request
-    timeout is clamped to the remaining budget. Clock and sleep are injected."""
+    timeout is clamped to the remaining budget. Sleeps only min(interval, time left)
+    so a final deadline-clamped poll is never skipped just because a full interval
+    does not fit. Clock and sleep are injected."""
     started = now()
     first_seen_at: float | None = None
     last_result: Result[ModelsListResponse] | None = None
     while True:
         t = now()
-        if first_seen_at is None:
-            deadline = started + timeout
-        else:
-            deadline = first_seen_at + db_sync_seconds
-        remaining = deadline - t
-        if remaining <= 0 and last_result is not None:
-            if first_seen_at is not None and db_sync_seconds <= 0:
-                return Servable()
-            if first_seen_at is not None and t - first_seen_at >= db_sync_seconds:
+        phase_deadline = (
+            started + timeout if first_seen_at is None else first_seen_at + db_sync_seconds
+        )
+        remaining = phase_deadline - t
+        if remaining <= 0:
+            if (
+                last_result is not None
+                and first_seen_at is not None
+                and (db_sync_seconds <= 0 or t - first_seen_at >= db_sync_seconds)
+            ):
                 return Servable()
             return NotServable(last_result=last_result)
-        poll_timeout = min(request_timeout, remaining) if remaining > 0 else request_timeout
+
+        poll_timeout = min(request_timeout, remaining)
         last_result = list_models(poll_timeout)
         listed = isinstance(last_result, Success) and any(
             entry.id == model_name for entry in last_result.data.data
@@ -155,16 +159,13 @@ def await_servable(
                 return Servable()
         elif t - first_seen_at >= db_sync_seconds:
             return Servable()
-        if first_seen_at is None:
-            if now() + interval >= started + timeout:
-                return NotServable(last_result=last_result)
-        elif now() + interval >= first_seen_at + db_sync_seconds:
-            # Final stretch: sleep only the remainder of the continuous window.
-            remainder = first_seen_at + db_sync_seconds - now()
-            if remainder > 0:
-                sleep(remainder)
-            continue
-        sleep(interval)
+
+        phase_deadline = (
+            started + timeout if first_seen_at is None else first_seen_at + db_sync_seconds
+        )
+        wait = min(interval, phase_deadline - now())
+        if wait > 0:
+            sleep(wait)
 
 
 def servable_timeout_message(
