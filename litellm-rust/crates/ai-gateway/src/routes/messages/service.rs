@@ -9,7 +9,10 @@ use crate::messages::{MessagesRequest, execute_messages};
 
 pub(crate) enum MessagesResponse {
     Json(Value),
-    Stream(reqwest::Response),
+    Stream {
+        provider: String,
+        response: reqwest::Response,
+    },
 }
 
 pub async fn run(
@@ -57,8 +60,8 @@ pub async fn run(
         .await
         .map(|response| match response {
             crate::messages::MessagesResponse::Json(body) => MessagesResponse::Json(body),
-            crate::messages::MessagesResponse::Stream(upstream) => {
-                MessagesResponse::Stream(upstream)
+            crate::messages::MessagesResponse::Stream { provider, response } => {
+                MessagesResponse::Stream { provider, response }
             }
         })
 }

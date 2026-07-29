@@ -2,6 +2,7 @@ use litellm_core::CoreError;
 use litellm_core::CoreResult;
 use litellm_core::messages::transformation::MessagesAuthStrategy;
 use litellm_core::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
+use serde_json::Value;
 
 use super::common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers};
 use super::types::{MessagesRequest, ProviderMessagesRequest};
@@ -33,15 +34,27 @@ pub(super) fn prepare_messages_call(
     let mut headers = string_headers(request.extra_headers)?;
 
     let auth_strategy = config.auth_strategy();
-    let already_authorized = has_header(&headers, auth_strategy.header_name())
-        || (config.accepts_bearer_auth() && has_bearer_auth(&headers));
-    if !already_authorized {
+    let bearer_token = if matches!(auth_strategy, MessagesAuthStrategy::AwsSigV4) {
+        request
+            .api_key
+            .map(str::to_string)
+            .or_else(|| env_lookup("AWS_BEARER_TOKEN_BEDROCK"))
+            .filter(|token| !token.trim().is_empty())
+    } else {
+        None
+    };
+    let already_authorized = matches!(auth_strategy, MessagesAuthStrategy::AwsSigV4)
+        || !matches!(auth_strategy, MessagesAuthStrategy::AwsSigV4)
+            && (has_header(&headers, auth_strategy.header_name())
+                || (config.accepts_bearer_auth() && has_bearer_auth(&headers)));
+    if !already_authorized && !matches!(auth_strategy, MessagesAuthStrategy::AwsSigV4) {
         let api_key = config.resolve_api_key(request.api_key, &env_lookup)?;
         let auth_header = match auth_strategy {
             MessagesAuthStrategy::Bearer => {
                 ("authorization".to_string(), format!("Bearer {api_key}"))
             }
             MessagesAuthStrategy::Header(name) => (name.to_string(), api_key),
+            MessagesAuthStrategy::AwsSigV4 => unreachable!(),
         };
         headers.push(auth_header);
     }
@@ -52,7 +65,9 @@ pub(super) fn prepare_messages_call(
         }
     }
 
-    let url = config.complete_url(request.api_base, &model, &env_lookup)?;
+    let stream = request.body.get("stream").and_then(Value::as_bool) == Some(true);
+    let url = config.complete_url(request.api_base, &model, stream, &env_lookup)?;
+    let signing_region = config.signing_region(request.api_base, &env_lookup);
     let typed_request = serde_json::from_value(request.body).map_err(|err| {
         CoreError::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
     })?;
@@ -70,6 +85,8 @@ pub(super) fn prepare_messages_call(
         url,
         body,
         upstream_headers: headers,
+        signing_region,
+        bearer_token,
         timeout: request.timeout,
     })
 }

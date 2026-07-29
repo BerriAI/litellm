@@ -2,6 +2,7 @@
 
 mod service;
 
+use aws_smithy_eventstream::frame::{DecodedFrame, MessageFrameDecoder};
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Json, State};
@@ -9,6 +10,9 @@ use axum::http::StatusCode;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
+use bytes::Bytes;
+use futures_util::StreamExt;
+use futures_util::stream::{self, BoxStream};
 use litellm_core::CoreError;
 use serde_json::{Map, Value};
 
@@ -33,16 +37,26 @@ async fn handle(
         .map_err(MessagesRouteError::from)?
     {
         service::MessagesResponse::Json(body) => Ok(Json(body).into_response()),
-        service::MessagesResponse::Stream(upstream) => stream_response(upstream),
+        service::MessagesResponse::Stream { provider, response } => {
+            stream_response(provider, response)
+        }
     }
 }
 
-fn stream_response(upstream: reqwest::Response) -> Result<Response, MessagesRouteError> {
-    let content_type = upstream
-        .headers()
-        .get(CONTENT_TYPE)
-        .cloned()
-        .unwrap_or_else(|| HeaderValue::from_static("text/event-stream"));
+fn stream_response(
+    provider: String,
+    upstream: reqwest::Response,
+) -> Result<Response, MessagesRouteError> {
+    let is_bedrock = provider == "bedrock";
+    let content_type = if is_bedrock {
+        HeaderValue::from_static("text/event-stream")
+    } else {
+        upstream
+            .headers()
+            .get(CONTENT_TYPE)
+            .cloned()
+            .unwrap_or_else(|| HeaderValue::from_static("text/event-stream"))
+    };
     let mut response = Response::builder()
         .status(
             StatusCode::from_u16(upstream.status().as_u16()).map_err(|error| {
@@ -55,13 +69,97 @@ fn stream_response(upstream: reqwest::Response) -> Result<Response, MessagesRout
     if let Some(value) = upstream.headers().get(CACHE_CONTROL) {
         response = response.header(CACHE_CONTROL, value);
     }
+    let upstream_stream = upstream.bytes_stream().boxed();
+    let body_stream = if is_bedrock {
+        bedrock_sse_stream(upstream_stream)
+    } else {
+        upstream_stream
+            .map(|result| result.map_err(|error| std::io::Error::other(error.to_string())))
+            .boxed()
+    };
     response
-        .body(Body::from_stream(upstream.bytes_stream()))
+        .body(Body::from_stream(body_stream))
         .map_err(|error| {
             MessagesRouteError(CoreError::InvalidResponse(format!(
                 "failed to build streaming response: {error}"
             )))
         })
+}
+
+struct EventStreamState {
+    upstream: BoxStream<'static, Result<Bytes, reqwest::Error>>,
+    buffer: bytes::BytesMut,
+    decoder: MessageFrameDecoder,
+}
+
+fn bedrock_sse_stream(
+    upstream: BoxStream<'static, Result<Bytes, reqwest::Error>>,
+) -> BoxStream<'static, Result<Bytes, std::io::Error>> {
+    stream::unfold(
+        EventStreamState {
+            upstream,
+            buffer: bytes::BytesMut::new(),
+            decoder: MessageFrameDecoder::new(),
+        },
+        |mut state| async move {
+            loop {
+                if let Ok(DecodedFrame::Complete(message)) =
+                    state.decoder.decode_frame(&mut state.buffer)
+                {
+                    let bytes = message
+                        .headers()
+                        .iter()
+                        .find(|header| header.name().as_str() == ":message-type")
+                        .and_then(|header| header.value().as_string().ok())
+                        .map_or_else(
+                            || sse_data(message.payload()),
+                            |message_type| {
+                                if message_type.as_str() == "exception"
+                                    || message_type.as_str() == "error"
+                                {
+                                    sse_error(message.payload())
+                                } else {
+                                    sse_data(message.payload())
+                                }
+                            },
+                        );
+                    return Some((Ok(Bytes::from(bytes)), state));
+                }
+                match state.upstream.next().await {
+                    Some(Ok(chunk)) => state.buffer.extend_from_slice(&chunk),
+                    Some(Err(error)) => {
+                        return Some((Err(std::io::Error::other(error.to_string())), state));
+                    }
+                    None => return None,
+                }
+            }
+        },
+    )
+    .boxed()
+}
+
+fn sse_data(payload: &[u8]) -> String {
+    let value = serde_json::from_slice::<serde_json::Value>(payload)
+        .ok()
+        .and_then(|value| value.get("bytes").and_then(serde_json::Value::as_str).map(str::to_string))
+        .and_then(|encoded| {
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).ok()
+        })
+        .and_then(|payload| serde_json::from_slice::<serde_json::Value>(&payload).ok())
+        .unwrap_or_else(|| serde_json::json!({"type": "error", "error": {"type": "invalid_request_error", "message": "invalid Bedrock event"}}));
+    let event = value
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("message");
+    format!("event: {event}\ndata: {value}\n\n")
+}
+
+fn sse_error(payload: &[u8]) -> String {
+    let message = String::from_utf8_lossy(payload);
+    format!(
+        "event: error\ndata: {}\n\n",
+        serde_json::json!({"type": "error", "error": {"type": "api_error", "message": message}})
+    )
 }
 
 fn forwarded_headers(headers: &HeaderMap) -> Result<Option<Map<String, Value>>, CoreError> {
