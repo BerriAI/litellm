@@ -80,6 +80,12 @@ describe("Sidebar (leftnav)", () => {
     collapsed: false,
   };
 
+  it("should link the logo to the UI home route rather than the proxy origin", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.getByRole("link", { name: /litellm home/i })).toHaveAttribute("href", "/ui");
+  });
+
   it("renders all top-level (non-nested) tabs for admin", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 
