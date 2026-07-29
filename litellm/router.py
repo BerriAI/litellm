@@ -308,22 +308,6 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 
 
-def _stream_chunks_have_generated_content(chunks: list[ModelResponseStream]) -> bool:
-    for chunk in chunks:
-        if not chunk.choices:
-            continue
-        delta = chunk.choices[0].delta
-        if (
-            delta.get("content")
-            or delta.get("tool_calls")
-            or delta.get("function_call")
-            or delta.get("reasoning_content")
-            or delta.get("thinking_blocks")
-        ):
-            return True
-    return False
-
-
 class RoutingArgs(enum.Enum):
     ttl = 60  # 1min (RPM/TPM expire key)
 
@@ -2111,11 +2095,6 @@ class Router:
                 async for item in model_response:
                     yield item
             except MidStreamFallbackError as e:
-                if not e.is_pre_first_chunk and (
-                    e.generated_content or _stream_chunks_have_generated_content(model_response.chunks)
-                ):
-                    raise
-
                 from litellm.main import stream_chunk_builder
 
                 complete_response_object = stream_chunk_builder(chunks=model_response.chunks)
@@ -2134,7 +2113,24 @@ class Router:
                         "content_policy_fallbacks", self.content_policy_fallbacks
                     )
                     initial_kwargs["original_function"] = self._acompletion
-                    initial_kwargs["messages"] = messages
+                    if e.is_pre_first_chunk or not e.generated_content:
+                        # No content was generated before the error (e.g. a
+                        # rate-limit 429 on the very first chunk).  Retry with
+                        # the original messages — adding a continuation prompt
+                        # would waste tokens and confuse the model.
+                        initial_kwargs["messages"] = messages
+                    else:
+                        initial_kwargs["messages"] = messages + [
+                            {
+                                "role": "system",
+                                "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
+                            },
+                            {
+                                "role": "assistant",
+                                "content": e.generated_content,
+                                "prefix": True,
+                            },
+                        ]
                     self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
                         e=e,
@@ -2654,11 +2650,6 @@ class Router:
                 for item in model_response:
                     yield item
             except MidStreamFallbackError as e:
-                if not e.is_pre_first_chunk and (
-                    e.generated_content or _stream_chunks_have_generated_content(model_response.chunks)
-                ):
-                    raise
-
                 from litellm.main import stream_chunk_builder
 
                 complete_response_object = stream_chunk_builder(chunks=model_response.chunks)
@@ -2678,7 +2669,20 @@ class Router:
                         router_self.content_policy_fallbacks,
                     )
                     initial_kwargs["original_function"] = router_self._completion
-                    initial_kwargs["messages"] = messages
+                    if e.is_pre_first_chunk or not e.generated_content:
+                        initial_kwargs["messages"] = messages
+                    else:
+                        initial_kwargs["messages"] = messages + [
+                            {
+                                "role": "system",
+                                "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
+                            },
+                            {
+                                "role": "assistant",
+                                "content": e.generated_content,
+                                "prefix": True,
+                            },
+                        ]
                     router_self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
                     fallback_response = router_self.function_with_fallbacks(
                         **initial_kwargs,
