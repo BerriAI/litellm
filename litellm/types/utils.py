@@ -219,6 +219,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_272k_tokens_priority: float | None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None
     cache_read_input_token_cost_above_512k_tokens: float | None
+    cost_discount: float | None
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
     prompt_cache_min_tokens: int | None
@@ -3333,6 +3334,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_second_1080p: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None
+    cost_discount: float | None = None
 
     # Include all ModelInfoBase fields as optional
     # This allows any model_info parameter to be set in litellm_params
@@ -3410,6 +3412,13 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     regional_processing_uplift_multiplier_eu: float | None = None
     regional_processing_uplift_multiplier_us: float | None = None
     regional_endpoint_uplift_multiplier: float | None = None
+
+    @field_validator("cost_discount")
+    @classmethod
+    def validate_cost_discount(cls, value: float | None) -> float | None:
+        if value is not None and not 0 <= value <= 1:
+            raise ValueError("cost_discount must be between 0 and 1")
+        return value
 
     @classmethod
     def strip_custom_pricing_fields(cls, model_info: dict[str, Any]) -> dict[str, Any]:

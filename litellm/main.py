@@ -5283,8 +5283,10 @@ def completion(
 
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if (
-            input_cost_per_token is not None and output_cost_per_token is not None
-        ) or input_cost_per_second is not None:
+            (input_cost_per_token is not None and output_cost_per_token is not None)
+            or input_cost_per_second is not None
+            or kwargs.get("cost_discount") is not None
+        ):
             _register_custom_pricing_for_request(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -6139,7 +6141,11 @@ def embedding(
     )
 
     ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
-    if (input_cost_per_token is not None and output_cost_per_token is not None) or input_cost_per_second is not None:
+    if (
+        (input_cost_per_token is not None and output_cost_per_token is not None)
+        or input_cost_per_second is not None
+        or kwargs.get("cost_discount") is not None
+    ):
         _register_custom_pricing_for_request(
             model=model,
             custom_llm_provider=custom_llm_provider,

@@ -148,6 +148,7 @@ class ModelInfo(MirroredPricingParams):
 
     base_model: str | None = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     tier: Literal["free", "paid"] | None = None
+    cost_discount: float | None = None
 
     """
     Team Model Specific Fields
@@ -208,6 +209,8 @@ class ModelInfo(MirroredPricingParams):
         end: Final = _as_utc(self.ptu_effective_to)
         if start is not None and end is not None and end <= start:
             raise ValueError("ptu_effective_to must be after ptu_effective_from")
+        if self.cost_discount is not None and not 0 <= self.cost_discount <= 1:
+            raise ValueError("cost_discount must be between 0 and 1")
         return self
 
     model_config = ConfigDict(extra="allow")
@@ -482,6 +485,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_second: float | None
     output_cost_per_second_1080p: float | None
     num_retries: int | None
+    cost_discount: float | None
     ## MOCK RESPONSES ##
     mock_response: str | ModelResponse | Exception | None
 

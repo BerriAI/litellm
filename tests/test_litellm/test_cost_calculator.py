@@ -1885,6 +1885,66 @@ def test_cost_discount_not_applied_to_other_providers(monkeypatch):
     print(f"  - Cost remains unchanged: ${cost_with_selective_discount:.6f}")
 
 
+def test_deployment_cost_discount_from_router_model_id_overrides_provider_discount():
+    """
+    Test that deployment-level discounts can be configured without overriding
+    the base model prices, and take precedence over provider-level discounts.
+    """
+    original_discount_config = litellm.cost_discount_config.copy()
+    deployment_model_id = "test-deployment-cost-discount"
+    original_deployment_entry = litellm.model_cost.get(deployment_model_id)
+
+    def _response() -> ModelResponse:
+        return ModelResponse(
+            id="test-id",
+            choices=[],
+            created=1234567890,
+            model="gpt-4o-mini",
+            object="chat.completion",
+            usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        )
+
+    try:
+        litellm.cost_discount_config = {}
+        base_cost = completion_cost(
+            completion_response=_response(),
+            model="gpt-4o-mini",
+            custom_llm_provider="openai",
+        )
+
+        litellm.model_cost[deployment_model_id] = {"cost_discount": 0.8}
+        litellm.cost_discount_config = {"openai": 0.05}
+
+        discounted_cost = completion_cost(
+            completion_response=_response(),
+            model="gpt-4o-mini",
+            custom_llm_provider="openai",
+            custom_pricing=True,
+            router_model_id=deployment_model_id,
+        )
+
+        assert discounted_cost == pytest.approx(base_cost * 0.2, rel=1e-9)
+    finally:
+        litellm.cost_discount_config = original_discount_config
+        if original_deployment_entry is None:
+            litellm.model_cost.pop(deployment_model_id, None)
+        else:
+            litellm.model_cost[deployment_model_id] = original_deployment_entry
+
+
+def test_cost_discount_validation():
+    from litellm.types.router import ModelInfo as RouterModelInfo
+    from litellm.types.utils import CustomPricingLiteLLMParams
+
+    CustomPricingLiteLLMParams(cost_discount=0.8)
+    RouterModelInfo(cost_discount=0.8)
+
+    with pytest.raises(ValueError, match="cost_discount must be between 0 and 1"):
+        CustomPricingLiteLLMParams(cost_discount=1.1)
+    with pytest.raises(ValueError, match="cost_discount must be between 0 and 1"):
+        RouterModelInfo(cost_discount=1.1)
+
+
 def test_cost_margin_percentage(monkeypatch):
     """
     Test that percentage-based cost margin is applied correctly
