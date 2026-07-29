@@ -15666,9 +15666,26 @@ async def reload_model_cost_map(
             get_model_cost_map_source_info,
         )
 
+        current_time = datetime.utcnow()
+        source_info = get_model_cost_map_source_info()
+
+        if source_info["is_env_forced"]:
+            no_op_message = (
+                "Reload was a no-op: LITELLM_LOCAL_MODEL_COST_MAP=true forces the bundled backup "
+                "cost map, so no fresh pricing data was fetched. Unset that env var to reload live data."
+            )
+            verbose_proxy_logger.warning(no_op_message)
+            return {
+                "message": no_op_message,
+                "status": "no_op",
+                "models_count": len(litellm.model_cost) if litellm.model_cost else 0,
+                "source": source_info["source"],
+                "is_env_forced": True,
+                "timestamp": current_time.isoformat(),
+            }
+
         model_cost_map_url = litellm.model_cost_map_url
         new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
-        source_info = get_model_cost_map_source_info()
         litellm.model_cost = new_model_cost_map
         # Invalidate case-insensitive lookup map since model_cost was replaced
         _invalidate_model_cost_lowercase_map()
@@ -15678,7 +15695,6 @@ async def reload_model_cost_map(
 
         # Update pod's in-memory last reload time
         global last_model_cost_map_reload
-        current_time = datetime.utcnow()
         last_model_cost_map_reload = current_time.isoformat()
 
         # Set force reload flag in database for other pods, preserving existing interval_hours
@@ -15702,21 +15718,6 @@ async def reload_model_cost_map(
         await invalidate_config_param("model_cost_map_reload_config")
 
         models_count = len(new_model_cost_map) if new_model_cost_map else 0
-
-        if source_info["is_env_forced"]:
-            no_op_message = (
-                "Reload was a no-op: LITELLM_LOCAL_MODEL_COST_MAP=true forces the bundled backup "
-                "cost map, so no fresh pricing data was fetched. Unset that env var to reload live data."
-            )
-            verbose_proxy_logger.warning(no_op_message)
-            return {
-                "message": no_op_message,
-                "status": "no_op",
-                "models_count": models_count,
-                "source": source_info["source"],
-                "is_env_forced": True,
-                "timestamp": current_time.isoformat(),
-            }
 
         verbose_proxy_logger.info(f"Model cost map reloaded successfully in current pod. Models count: {models_count}")
 
