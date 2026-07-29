@@ -1327,6 +1327,20 @@ def _extract_group_values(value: Any) -> List[str]:
     return group_values
 
 
+def _extract_member_ids_from_path(path: str) -> list[str]:
+    """Return member ids from a SCIM member path filter such as members[value eq "id"]."""
+    match = re.search(r"\[(.+)\]", path)
+    if match is None:
+        return []
+    parsed = _parse_scim_eq_filter(match.group(1))
+    if parsed is None:
+        return []
+    attribute, member_id = parsed
+    if attribute != "value":
+        return []
+    return [member_id]
+
+
 def _handle_displayname_update(op_type: str, value: Any, update_data: Dict[str, Any]) -> None:
     """Handle displayname updates."""
     if op_type == "remove":
@@ -1886,8 +1900,7 @@ async def _process_group_patch_operations(
     metadata = dict(existing_metadata) if existing_metadata else {}
 
     # Track member changes
-    current_members = set(existing_team.members or [])
-    final_members = current_members.copy()
+    final_members = set(await _get_team_member_user_ids_from_team(existing_team))
 
     # Process each patch operation
     for op in patch_ops.Operations:
@@ -1906,34 +1919,29 @@ async def _process_group_patch_operations(
             else:
                 metadata["externalId"] = str(value)
         elif path.startswith("members"):
-            # Handle member operations
-            member_values = _extract_group_values(value)
-            # Check the feature flag
-            scim_upsert_user = await _get_scim_upsert_user_setting()
-            # Validate all users exist or create them based on feature flag
-            valid_members = []
-            for member_id in member_values:
-                # Validate member_id is not empty
-                if not member_id or not member_id.strip():
-                    raise HTTPException(
-                        status_code=400,
-                        detail={"error": "Invalid member: user ID cannot be empty."},
-                    )
+            member_values = _extract_group_values(value) or _extract_member_ids_from_path(op.path or "")
+            if op_type == "remove":
+                final_members = final_members - set(member_values) if member_values else set()
+            else:
+                scim_upsert_user = await _get_scim_upsert_user_setting()
+                valid_members = []
+                for member_id in member_values:
+                    if not member_id or not member_id.strip():
+                        raise HTTPException(
+                            status_code=400,
+                            detail={"error": "Invalid member: user ID cannot be empty."},
+                        )
 
-                user = await UserRepository(prisma_client).table.find_unique(where={"user_id": member_id})
-                if user:
-                    valid_members.append(member_id)
-                else:
-                    if scim_upsert_user:
-                        # Create the user if they don't exist (backward compatible behavior)
+                    user = await UserRepository(prisma_client).table.find_unique(where={"user_id": member_id})
+                    if user:
+                        valid_members.append(member_id)
+                    elif scim_upsert_user:
                         created_user = await _create_user_if_not_exists(
                             user_id=member_id, created_via="scim_group_patch"
                         )
                         if created_user:
                             valid_members.append(member_id)
-                        # If creation failed, user is skipped (logged in helper)
                     else:
-                        # User doesn't exist - reject per SCIM 2.0 protocol
                         raise HTTPException(
                             status_code=400,
                             detail={
@@ -1942,13 +1950,10 @@ async def _process_group_patch_operations(
                             },
                         )
 
-            if op_type == "replace":
-                final_members = set(valid_members)
-            elif op_type == "add":
-                final_members.update(valid_members)
-            elif op_type == "remove":
-                for member_id in valid_members:
-                    final_members.discard(member_id)
+                if op_type == "replace":
+                    final_members = set(valid_members)
+                elif op_type == "add":
+                    final_members = final_members | set(valid_members)
         else:
             # Handle other generic metadata
             if op_type == "remove":

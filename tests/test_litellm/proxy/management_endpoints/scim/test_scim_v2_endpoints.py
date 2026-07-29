@@ -2502,6 +2502,79 @@ async def test_patch_group_recomputes_roles_for_changed_members(mocker):
 
 
 @pytest.mark.asyncio
+async def test_patch_group_removes_only_targeted_member_via_okta_filter_path(mocker):
+    """Okta removes a single member with a filtered path and no value body,
+    e.g. `members[value eq "user1"]`. PATCH /Groups must remove exactly that
+    member from the team and leave the others in place."""
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+    from litellm.proxy.management_endpoints.scim.scim_transformations import (
+        ScimTransformations,
+    )
+
+    group_id = "test-team-123"
+    existing_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Admins",
+        members=["user1", "user2"],
+        members_with_roles=[
+            Member(user_id="user1", role="user"),
+            Member(user_id="user2", role="user"),
+        ],
+        metadata={},
+    )
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="remove", path='members[value eq "user1"]')],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=existing_team
+    )
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(
+        return_value=existing_team
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    patch_membership_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        AsyncMock(),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+    mocker.patch.object(
+        ScimTransformations,
+        "transform_litellm_team_to_scim_group",
+        AsyncMock(
+            return_value=SCIMGroup(
+                schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+                id=group_id,
+                displayName="Admins",
+            )
+        ),
+    )
+
+    await patch_group(group_id=group_id, patch_ops=patch_ops)
+
+    patch_membership_mock.assert_awaited_once_with(
+        user_id="user1",
+        teams_ids_to_add_user_to=[],
+        teams_ids_to_remove_user_from=[group_id],
+    )
+    written_members = set(
+        mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs["data"]["members"]
+    )
+    assert written_members == {"user2"}
+
+
+@pytest.mark.asyncio
 async def test_delete_group_recomputes_roles_for_members(mocker):
     """DELETE /Groups must recompute the global role for the team's members, so
     deleting the admin group demotes everyone who was only admin through it."""
