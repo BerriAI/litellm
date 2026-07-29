@@ -1288,6 +1288,8 @@ class AWSEventStreamDecoder:
         self.response_id: Optional[str] = None
         self.json_mode = json_mode
         self._current_tool_name: Optional[str] = None
+        self.converse_stream_started: bool = False
+        self.converse_stop_reason_seen: bool = False
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -1485,6 +1487,7 @@ class AWSEventStreamDecoder:
             # Capture the conversationId from the first messageStart event
             # and use it as the consistent ID for all subsequent chunks.
             self._initialize_converse_response_id(chunk_data)
+            self.converse_stream_started = True
 
             verbose_logger.debug("\n\nRaw Chunk: {}\n\n".format(chunk_data))
             text = ""
@@ -1517,6 +1520,7 @@ class AWSEventStreamDecoder:
             elif "contentBlockIndex" in chunk_data:  # stop block, no 'start' or 'delta' object
                 tool_use = self._handle_converse_stop_event(content_block_index)
             elif "stopReason" in chunk_data:
+                self.converse_stop_reason_seen = True
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
             elif "usage" in chunk_data:
                 usage = converse_config._transform_usage(chunk_data.get("usage", {}))
@@ -1605,6 +1609,26 @@ class AWSEventStreamDecoder:
             tool_use=None,
         )
 
+    def _raise_if_converse_stream_incomplete(self) -> None:
+        """
+        A Bedrock ConverseStream must end with a terminal 'messageStop' event
+        (carrying stopReason). AWS acknowledges mid-stream faults on cross-region
+        inference profiles where the HTTP stream terminates cleanly after partial
+        content but before messageStop/metadata. Surfacing this as an error lets
+        callers retry a fresh request instead of trusting a truncated response
+        (e.g. a tool call with unparseable arguments) delivered as a success.
+        """
+        if self.converse_stream_started and not self.converse_stop_reason_seen:
+            raise BedrockError(
+                status_code=500,
+                message=(
+                    "Bedrock ConverseStream ended without a terminal 'messageStop' event; "
+                    "the response is incomplete and any tool-call arguments may be truncated. "
+                    "Treating as an error so the request can be retried instead of returning a "
+                    "silently-completed, partial response"
+                ),
+            )
+
     def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[Union[GChunk, ModelResponseStream, dict]]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
@@ -1618,6 +1642,7 @@ class AWSEventStreamDecoder:
                     # sse_event = ServerSentEvent(data=message, event="completion")
                     _data = json.loads(message)
                     yield self._chunk_parser(chunk_data=_data)
+        self._raise_if_converse_stream_incomplete()
 
     async def aiter_bytes(
         self, iterator: AsyncIterator[bytes]
@@ -1633,6 +1658,7 @@ class AWSEventStreamDecoder:
                 if message:
                     _data = json.loads(message)
                     yield self._chunk_parser(chunk_data=_data)
+        self._raise_if_converse_stream_incomplete()
 
     def _parse_message_from_event(self, event) -> Optional[str]:
         response_stream_shape = get_bedrock_response_stream_shape()
