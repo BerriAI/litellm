@@ -35,10 +35,15 @@ from ._logging import verbose_logger
 AZURE_REDIS_SCOPE = "https://redis.azure.com/.default"
 
 
-def _get_redis_kwargs():
-    arg_spec = inspect.getfullargspec(redis.Redis)
+def _named_parameters(client: Callable[..., object]) -> frozenset[str]:
+    # inspect.getfullargspec doesn't work here because redis.Redis.__init__ is
+    # wrapped by @deprecated_args which uses *args/**kwargs internally.
+    # inspect.signature resolves the original function's parameters correctly.
+    variadic = (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+    return frozenset(name for name, param in inspect.signature(client).parameters.items() if param.kind not in variadic)
 
-    # Only allow primitive arguments
+
+def _get_redis_kwargs() -> frozenset[str]:
     exclude_args = {
         "self",
         "connection_pool",
@@ -56,39 +61,20 @@ def _get_redis_kwargs():
         "azure_client_secret",
     }
 
-    available_args = {x for x in arg_spec.args if x not in exclude_args} | include_args
-
-    return available_args
+    return (_named_parameters(redis.Redis) - exclude_args) | include_args
 
 
-def _get_redis_url_kwargs(client=None):
-    if client is None:
-        client = redis.Redis.from_url
-    arg_spec = inspect.getfullargspec(redis.Redis.from_url)
-
-    # Only allow primitive arguments
-    exclude_args = {
-        "self",
-        "connection_pool",
-        "retry",
-    }
-
-    include_args = ["url"]
-
-    available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
-
-    return available_args
+def _get_redis_url_kwargs() -> frozenset[str]:
+    exclude_args = {"self", "connection_pool", "retry"}
+    include_args = {"url"}
+    return (_named_parameters(redis.Redis) - exclude_args) | include_args
 
 
-def _get_redis_cluster_kwargs(client=None):
-    if client is None:
-        client = redis.Redis.from_url
-    arg_spec = inspect.getfullargspec(redis.RedisCluster)
-
-    # Only allow primitive arguments
+def _get_redis_cluster_kwargs(
+    cluster_client: Callable[..., object] = redis.RedisCluster,
+) -> frozenset[str]:
     exclude_args = {"self", "connection_pool", "retry", "host", "port", "startup_nodes"}
-
-    available_args = {x for x in arg_spec.args if x not in exclude_args}
+    available_args = _named_parameters(cluster_client) - exclude_args
     available_args |= {
         "password",
         "username",
@@ -96,7 +82,7 @@ def _get_redis_cluster_kwargs(client=None):
         "ssl_cert_reqs",
         "ssl_check_hostname",
         "ssl_ca_certs",
-        "redis_connect_func",  # Needed for sync clusters and IAM detection
+        "redis_connect_func",
         "gcp_service_account",
         "gcp_ssl_ca_certs",
         "azure_redis_ad_token",
@@ -109,7 +95,6 @@ def _get_redis_cluster_kwargs(client=None):
         "health_check_interval",
         "socket_keepalive",
     }
-
     return available_args
 
 
@@ -117,6 +102,49 @@ def _get_redis_env_kwarg_mapping():
     PREFIX = "REDIS_"
 
     return {f"{PREFIX}{x.upper()}": x for x in _get_redis_kwargs()}
+
+
+def _coerce_redis_kwargs_types(redis_kwargs: dict, client: Callable[..., object] = redis.Redis) -> dict:
+    sig = inspect.signature(client)
+    # Params whose signature default is not a reliable type hint: redis-py 8.x changed
+    # socket_timeout / socket_connect_timeout from None to int 5, which would otherwise
+    # make a fractional value like "5.5" fail int() and be dropped.
+    numeric_param_types: dict[str, type[int] | type[float]] = {
+        "max_connections": int,
+        "socket_timeout": float,
+        "socket_connect_timeout": float,
+    }
+    result = dict(redis_kwargs)
+    for key, value in redis_kwargs.items():
+        if not isinstance(value, str):
+            continue
+        param = sig.parameters.get(key)
+        if param is None:
+            continue
+        explicit_type = numeric_param_types.get(key)
+        if explicit_type is not None:
+            try:
+                result[key] = explicit_type(value)
+            except (ValueError, TypeError):
+                del result[key]
+            continue
+        default = param.default
+        if default is inspect.Parameter.empty:
+            continue
+        # bool must be checked before int since bool subclasses int
+        if isinstance(default, bool):
+            result[key] = value.lower() in ("true", "1", "yes")
+        elif isinstance(default, int):
+            try:
+                result[key] = int(value)
+            except (ValueError, TypeError):
+                del result[key]
+        elif isinstance(default, float):
+            try:
+                result[key] = float(value)
+            except (ValueError, TypeError):
+                del result[key]
+    return result
 
 
 def _redis_kwargs_from_environment():
@@ -444,8 +472,7 @@ def _get_redis_client_logic(**env_overrides):
     elif "host" not in redis_kwargs or redis_kwargs["host"] is None:
         raise ValueError("Either 'host' or 'url' must be specified for redis.")
 
-    # litellm.print_verbose(f"redis_kwargs: {redis_kwargs}")
-    return redis_kwargs
+    return _coerce_redis_kwargs_types(redis_kwargs)
 
 
 def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
@@ -567,7 +594,7 @@ def get_redis_async_client(
     if "startup_nodes" in redis_kwargs:
         from redis.cluster import ClusterNode
 
-        args = _get_redis_cluster_kwargs()
+        args = _get_redis_cluster_kwargs(async_redis.RedisCluster)
         cluster_kwargs = {}
         for arg in redis_kwargs:
             if arg in args:
@@ -614,7 +641,7 @@ def get_redis_async_client(
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         if connection_pool is not None:
             return async_redis.Redis(connection_pool=connection_pool)
-        args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
+        args = _get_redis_url_kwargs()
         url_kwargs = {}
         for arg in redis_kwargs:
             if arg in args:
@@ -662,18 +689,13 @@ def get_redis_connection_pool(
         return None
 
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
-        pool_kwargs = {
+        pool_kwargs: dict = {
             "timeout": REDIS_CONNECTION_POOL_TIMEOUT,
             "url": redis_kwargs["url"],
         }
-        if "max_connections" in redis_kwargs:
-            try:
-                pool_kwargs["max_connections"] = int(redis_kwargs["max_connections"])
-            except (TypeError, ValueError):
-                verbose_logger.warning(
-                    "REDIS: invalid max_connections value %r, ignoring",
-                    redis_kwargs["max_connections"],
-                )
+        max_connections = redis_kwargs.get("max_connections")
+        if max_connections is not None:
+            pool_kwargs["max_connections"] = max_connections
         return async_redis.BlockingConnectionPool.from_url(**pool_kwargs)
 
     # Wrap GCP / Azure AD auth in a CredentialProvider so pool-managed
