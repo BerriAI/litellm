@@ -62,6 +62,19 @@ def convert_messages_to_prompt(messages: List[AllMessageValues]) -> str:
     return "\n".join(conversation_parts)
 
 
+def serialize_a2a_data_part(data: Any) -> str:
+    """
+    Serialize an A2A ``data``-kind part's payload to text.
+
+    Used both to build the flattened completion text shown to callers and to
+    extract guardrail-scannable text, so the two stay in sync.
+    """
+    try:
+        return json.dumps(data, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(data)
+
+
 def extract_text_from_a2a_message(message: Dict[str, Any], depth: int = 0, max_depth: int = 10) -> str:
     """
     Extract text content from A2A message parts.
@@ -87,10 +100,7 @@ def extract_text_from_a2a_message(message: Dict[str, Any], depth: int = 0, max_d
         elif kind == "data":
             data = part.get("data")
             if data is not None:
-                try:
-                    text_parts.append(json.dumps(data, ensure_ascii=False))
-                except (TypeError, ValueError):
-                    text_parts.append(str(data))
+                text_parts.append(serialize_a2a_data_part(data))
         # Handle nested parts if they exist
         elif "parts" in part:
             nested_text = extract_text_from_a2a_message(part, depth + 1, max_depth)
