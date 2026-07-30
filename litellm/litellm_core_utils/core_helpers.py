@@ -229,6 +229,27 @@ def iter_request_metadata_dicts(request_kwargs: Mapping[str, object]) -> tuple[M
     )
 
 
+def get_caller_scope(request_kwargs: Mapping[str, object]) -> str:
+    """A cache/affinity partition key for the authenticated caller, scoped by the strongest identity the
+    request actually carries. Virtual keys carry a key hash; JWT and other keyless proxy principals do not,
+    so they scope by the tenancy the proxy stamped instead, mirroring how the v3 rate limiter builds an
+    api_key descriptor only when api_key is present and separate descriptors per user, team and organization
+    (parallel_request_limiter_v3.py:1988). Collapsing keyless callers onto one shared literal would merge
+    distinct tenants that reuse a session id into a single partition. "unscoped" is returned only when the
+    request carries no proxy identity at all, which is direct SDK use where there is one tenant by
+    construction."""
+    for prefix, field in (
+        ("key", "user_api_key_hash"),
+        ("user", "user_api_key_user_id"),
+        ("team", "user_api_key_team_id"),
+        ("org", "user_api_key_org_id"),
+    ):
+        value = get_request_metadata_field(request_kwargs, field)
+        if value is not None:
+            return f"{prefix}:{value}"
+    return "unscoped"
+
+
 def get_request_metadata_field(request_kwargs: Mapping[str, object], field: str) -> str | None:
     """First stringified value of ``field`` across the top-level metadata slots."""
     for metadata in iter_request_metadata_dicts(request_kwargs):

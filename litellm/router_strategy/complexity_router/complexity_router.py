@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from litellm._logging import verbose_router_logger
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import get_request_metadata_field
+from litellm.litellm_core_utils.core_helpers import get_caller_scope, get_request_metadata_field
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.utils import ModelResponse
 
@@ -554,7 +554,7 @@ class ComplexityRouter(CustomLogger):
             return None
         from litellm.router_strategy.complexity_router.cache_warming.types import is_cache_fresh
 
-        caller_scope = get_request_metadata_field(request_kwargs, "user_api_key_hash") or "unscoped"
+        caller_scope = get_caller_scope(request_kwargs)
         record_key = store.record_key(self.model_name, caller_scope, session_id)
         record = await store.get_record(record_key)
         if record is None:
@@ -990,7 +990,7 @@ class ComplexityRouter(CustomLogger):
         # same client-supplied session_id can't poison each other's routing pin. Falls
         # back to "unscoped" only when there's no authenticated caller to scope by
         # (e.g. direct Router usage without the proxy layer).
-        caller_scope = get_request_metadata_field(request_kwargs, "user_api_key_hash") or "unscoped"
+        caller_scope = get_caller_scope(request_kwargs)
         return f"complexity_router_session_affinity:v1:{self.model_name}:{caller_scope}:{session_id}"
 
     async def async_pre_routing_hook(

@@ -18,6 +18,7 @@ from litellm.router_strategy.complexity_router.cache_warming.types import (
     compress_payload,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    get_caller_scope,
     get_request_metadata_field,
     iter_request_metadata_dicts,
 )
@@ -210,7 +211,7 @@ async def capture_session(
     store = strategy.get_cache_warming_store()
     if store is None:
         return
-    caller_scope = get_request_metadata_field(request_kwargs, "user_api_key_hash") or "unscoped"
+    caller_scope = get_caller_scope(request_kwargs)
     await store.upsert_session(
         caller_scope=caller_scope,
         session_id=session_id,

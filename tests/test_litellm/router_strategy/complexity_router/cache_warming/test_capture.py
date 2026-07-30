@@ -99,7 +99,7 @@ async def test_second_turn_overwrites_payload_and_preserves_other_model_warmth()
     redis = FakeRedisCache()
     router = _complexity_router(redis)
     await router._capture_session(_kwargs(), MESSAGES, "claude-sonnet-4-5")
-    key = CacheWarmingStore.record_key("smart-router", "hash-1", "sess-1")
+    key = CacheWarmingStore.record_key("smart-router", "key:hash-1", "sess-1")
     first = json.loads(redis.hashes[SESSIONS_KEY][key])
     other_stamp = WarmthStamp(at=123.0, warmed=True).model_dump()
     redis.data[CacheWarmingStore.warmth_key(key, "gpt-5-mini")] = json.dumps(other_stamp)
@@ -177,3 +177,17 @@ async def test_warming_does_not_accept_a_forged_billing_identity():
     record = _stored_records(redis)[0]
     assert record["attribution"]["user_api_key"] == "hash-1"
     assert record["attribution"]["user_api_key_hash"] == "hash-1"
+
+
+def test_keyless_tenants_reusing_a_session_id_do_not_share_a_record():
+    """JWT and other keyless proxy principals carry no key hash. Collapsing them onto one literal would merge
+    distinct tenants that reuse a session id into a single record, so the last writer's payload and
+    attribution would win and later replays could spend under the wrong team."""
+    from litellm.litellm_core_utils.core_helpers import get_caller_scope
+
+    tenant_a = {"litellm_metadata": {"session_id": "shared", "user_api_key_team_id": "team-a"}}
+    tenant_b = {"litellm_metadata": {"session_id": "shared", "user_api_key_team_id": "team-b"}}
+    assert get_caller_scope(tenant_a) != get_caller_scope(tenant_b)
+    assert get_caller_scope({"metadata": {}}) == "unscoped"
+    keyed = {"metadata": {"user_api_key_hash": "hash-1", "user_api_key_team_id": "team-a"}}
+    assert get_caller_scope(keyed) == "key:hash-1"
