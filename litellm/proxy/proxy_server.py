@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     AsyncGenerator,
     Callable,
@@ -16320,6 +16321,52 @@ async def get_adaptive_router_state(
         for tagged in tagged_routers
     ]
     return {"routers": snapshots}
+
+
+@router.get(
+    "/auto_router/benchmarks",
+    tags=["auto_router"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_auto_router_benchmarks(
+    start_date: str,
+    end_date: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """Session-level benchmarks for every configured auto-router.
+
+    Admin-only. For each auto-router alias, reports turns per session, session
+    length, tokens per session, and the dollar savings of the routed model mix
+    versus sending every request to a single baseline model over the window.
+
+    ``start_date`` / ``end_date`` are ``YYYY-MM-DD``; the window is clamped to
+    the most recent ``BENCHMARKS_MAX_WINDOW_DAYS`` days and the response echoes
+    the window actually served. Returns 404 when no auto-router is configured.
+    """
+    from litellm.proxy.spend_tracking.auto_router_benchmarks import auto_router_groups, compute_benchmarks
+
+    if not _user_has_admin_view(user_api_key_dict):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
+    if llm_router is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "No auto_router is configured on this proxy."},
+        )
+    groups = auto_router_groups(llm_router)
+    if not groups:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "No auto_router is configured on this proxy."},
+        )
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+    return await compute_benchmarks(prisma_client, groups, start_date, end_date)
 
 
 @router.get("/routes", dependencies=[Depends(user_api_key_auth)])
