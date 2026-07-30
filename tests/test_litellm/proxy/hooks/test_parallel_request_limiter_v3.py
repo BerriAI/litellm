@@ -18,8 +18,11 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    MAX_PARALLEL_SLOT_ACQUIRED_KEY,
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
+    ParallelSlotAcquisition,
+    _request_stash,
+    get_or_create_request_stash,
+    get_request_stash,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
@@ -50,6 +53,13 @@ def time_controller(monkeypatch):
     controller = TimeController()
     monkeypatch.setattr(time, "time", lambda: controller.now().timestamp())
     return controller
+
+
+@pytest.fixture(autouse=True)
+def _isolated_request_stash():
+    token = _request_stash.set(None)
+    yield
+    _request_stash.reset(token)
 
 
 @pytest.mark.parametrize(
@@ -673,35 +683,36 @@ async def test_async_log_failure_event_v3():
 
     await _seed_max_parallel_requests_slots(local_cache, counter_key, ["slot-a", "slot-b"])
 
-    def kwargs_with_slot(slot_id):
-        return {
-            "metadata": {
-                MAX_PARALLEL_SLOT_ACQUIRED_KEY: {
-                    "slot_id": slot_id,
-                    "counter_keys": [counter_key],
-                }
-            },
-            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
-        }
+    def seed_slot(slot_id):
+        get_or_create_request_stash().parallel_slot = ParallelSlotAcquisition(
+            slot_id=slot_id,
+            counter_keys=[counter_key],
+        )
+
+    kwargs = {"standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}}}
 
     async def in_flight():
         return parallel_request_handler._gauge_in_flight_from_cache_value(
             await local_cache.async_get_cache(key=counter_key)
         )
 
+    seed_slot("slot-a")
     await parallel_request_handler.async_log_failure_event(
-        kwargs=kwargs_with_slot("slot-a"), response_obj=None, start_time=None, end_time=None
+        kwargs=kwargs, response_obj=None, start_time=None, end_time=None
     )
+    assert get_request_stash().parallel_slot is None
     assert await in_flight() == 1
 
     for slot_id in ("slot-a", "slot-unknown", "slot-a"):
+        seed_slot(slot_id)
         await parallel_request_handler.async_log_failure_event(
-            kwargs=kwargs_with_slot(slot_id), response_obj=None, start_time=None, end_time=None
+            kwargs=kwargs, response_obj=None, start_time=None, end_time=None
         )
     assert await in_flight() == 1
 
+    seed_slot("slot-b")
     await parallel_request_handler.async_log_failure_event(
-        kwargs=kwargs_with_slot("slot-b"), response_obj=None, start_time=None, end_time=None
+        kwargs=kwargs, response_obj=None, start_time=None, end_time=None
     )
     assert await in_flight() == 0
 
@@ -803,8 +814,9 @@ async def test_rejected_request_does_not_consume_parallel_slot_v3():
         data=admitted_data,
         call_type="",
     )
-    acquisition = admitted_data["metadata"][MAX_PARALLEL_SLOT_ACQUIRED_KEY]
-    assert isinstance(acquisition, dict)
+    assert "metadata" not in admitted_data
+    acquisition = get_request_stash().parallel_slot
+    assert acquisition is not None
     assert isinstance(acquisition["slot_id"], str) and acquisition["slot_id"]
     assert acquisition["counter_keys"] == [f"{{api_key:{_api_key}}}:max_parallel_requests"]
 
@@ -816,10 +828,10 @@ async def test_rejected_request_does_not_consume_parallel_slot_v3():
                 data={"model": "gpt-3.5-turbo"},
                 call_type="",
             )
+    assert get_request_stash().parallel_slot == acquisition
 
     await handler.async_log_failure_event(
         kwargs={
-            "metadata": {MAX_PARALLEL_SLOT_ACQUIRED_KEY: acquisition},
             "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
         },
         response_obj=None,
@@ -866,8 +878,8 @@ async def test_parallel_gauge_uses_atomic_redis_script_v3():
         data=data,
         call_type="",
     )
-    stashed_acquisition = data["metadata"][MAX_PARALLEL_SLOT_ACQUIRED_KEY]
-    assert isinstance(stashed_acquisition, dict)
+    stashed_acquisition = get_request_stash().parallel_slot
+    assert stashed_acquisition is not None
     stashed_slot_id = stashed_acquisition["slot_id"]
     assert isinstance(stashed_slot_id, str) and stashed_slot_id
     assert stashed_acquisition["counter_keys"] == [counter_key]
@@ -882,7 +894,7 @@ async def test_parallel_gauge_uses_atomic_redis_script_v3():
     )
     gauge_statuses = [
         s
-        for s in data["litellm_proxy_rate_limit_response"]["statuses"]
+        for s in get_request_stash().rate_limit_response["statuses"]
         if s["rate_limit_type"] == "max_parallel_requests"
     ]
     assert gauge_statuses == [
@@ -3102,14 +3114,12 @@ async def test_project_model_rate_limits_not_triggered_for_other_model_v3():
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_does_not_leak_internal_stash_to_request_body():
-    """Regression for #27001: stash keys must stay in metadata, never on
-    the top level of ``data`` (which gets forwarded as the provider body)."""
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        _LITELLM_STASH_KEYS,
-        RATE_LIMIT_DESCRIPTORS_KEY,
-        TPM_RESERVED_TOKENS_KEY,
-    )
+async def test_pre_call_hook_keeps_internal_stash_out_of_request_body():
+    """Regression for #27001 / #35197: the limiter's per-request bookkeeping
+    must never touch the outgoing request body — no top-level keys and no
+    created or mutated ``metadata`` / ``litellm_metadata`` buckets. The
+    reservation must land on the ContextVar stash instead."""
+    import copy
 
     _api_key = hash_token("sk-leak-regression")
     user_api_key_dict = UserAPIKeyAuth(
@@ -3149,6 +3159,7 @@ async def test_pre_call_hook_does_not_leak_internal_stash_to_request_body():
         "messages": [{"role": "user", "content": "hello"}],
         "max_tokens": 10,
     }
+    body_before = copy.deepcopy(data)
 
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict,
@@ -3157,24 +3168,131 @@ async def test_pre_call_hook_does_not_leak_internal_stash_to_request_body():
         call_type="completion",
     )
 
-    leaked = [k for k in _LITELLM_STASH_KEYS if k in data]
-    assert not leaked, f"stash keys leaked to top level: {leaked}"
+    assert data == body_before
 
-    metadata = data.get("metadata") or {}
-    assert metadata.get(TPM_RESERVED_TOKENS_KEY)
-    assert isinstance(metadata.get(RATE_LIMIT_DESCRIPTORS_KEY), list)
+    stash = get_request_stash()
+    assert stash is not None
+    assert stash.reserved_tokens > 0
+    assert stash.reserved_model == "gpt-4o-mini"
+    assert stash.reserved_scopes == frozenset({("api_key", _api_key)})
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_rejects_caller_supplied_stash_values():
-    """Caller cannot pre-populate stash keys in body metadata to drive a
-    later TPM refund against an arbitrary scope."""
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        _LITELLM_STASH_KEYS,
-        RATE_LIMIT_DESCRIPTORS_KEY,
-        TPM_RESERVED_TOKENS_KEY,
+@pytest.mark.parametrize("caller_metadata", [None, {"user_tag": "campaign-42"}])
+async def test_responses_route_body_untouched_by_pre_call_hook(caller_metadata):
+    """Regression for #35197: on routes where ``metadata`` is a provider
+    request parameter (Responses API), the pre-call hook must forward the
+    body byte-identical — creating or adding to ``metadata`` /
+    ``litellm_metadata`` produced upstream HTTP 400s."""
+    import copy
+
+    _api_key = hash_token("sk-responses-regression")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        tpm_limit=1000,
+        rpm_limit=5,
+    )
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
     )
 
+    data: Dict[str, Any] = {
+        "model": "gpt-4o-mini",
+        "input": "hello",
+    }
+    if caller_metadata is not None:
+        data["metadata"] = dict(caller_metadata)
+    body_before = copy.deepcopy(data)
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="aresponses",
+    )
+
+    assert data == body_before
+    if caller_metadata is None:
+        assert "metadata" not in data
+    else:
+        assert data["metadata"] == caller_metadata
+    assert "litellm_metadata" not in data
+
+    stash = get_request_stash()
+    assert stash is not None
+    assert stash.reserved_tokens > 0
+    assert stash.rate_limit_response is not None
+
+
+@pytest.mark.asyncio
+async def test_chat_tpm_refund_and_slot_release_via_context_stash(monkeypatch):
+    """
+    Full chat lifecycle with no body stashing: pre-call reserves TPM tokens
+    and acquires a parallel slot on the ContextVar stash; the failure
+    callback refunds the reservation and frees the slot exactly once — a
+    second failure callback for the same request must not double-refund the
+    :tokens counter or double-release the gauge.
+    """
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    _api_key = hash_token("sk-refund-lifecycle")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        tpm_limit=10_000,
+        max_parallel_requests=2,
+    )
+    tokens_key = handler.create_rate_limit_keys(
+        key="api_key", value=_api_key, rate_limit_type="tokens"
+    )
+    parallel_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 50,
+        },
+        call_type="completion",
+    )
+
+    reserved = get_request_stash().reserved_tokens
+    assert reserved > 0
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == reserved
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=parallel_key)
+    ) == 1
+
+    kwargs = {"standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}}}
+    await handler.async_log_failure_event(
+        kwargs=kwargs, response_obj=None, start_time=None, end_time=None
+    )
+
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == 0
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=parallel_key)
+    ) == 0
+    assert get_request_stash().reservation_released is True
+
+    await handler.async_log_failure_event(
+        kwargs=kwargs, response_obj=None, start_time=None, end_time=None
+    )
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == 0
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=parallel_key)
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_ignores_caller_supplied_stash_values():
+    """Caller-supplied bookkeeping lookalikes in the body must not drive a
+    TPM refund against an arbitrary scope: the ContextVar stash is the only
+    source the refund path reads."""
     user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-no-limits"))
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
@@ -3188,19 +3306,15 @@ async def test_pre_call_hook_rejects_caller_supplied_stash_values():
             "rate_limit": {"tokens_per_unit": 10000, "window_size": 60},
         }
     ]
+    injected = {
+        "_litellm_tpm_reserved_tokens": 9999,
+        "_litellm_rate_limit_descriptors": victim_descriptors,
+    }
     data: Dict[str, Any] = {
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": "hi"}],
-        TPM_RESERVED_TOKENS_KEY: 9999,
-        RATE_LIMIT_DESCRIPTORS_KEY: victim_descriptors,
-        "metadata": {
-            TPM_RESERVED_TOKENS_KEY: 9999,
-            RATE_LIMIT_DESCRIPTORS_KEY: victim_descriptors,
-        },
-        "litellm_metadata": {
-            TPM_RESERVED_TOKENS_KEY: 9999,
-            RATE_LIMIT_DESCRIPTORS_KEY: victim_descriptors,
-        },
+        "metadata": dict(injected),
+        "litellm_metadata": dict(injected),
     }
 
     await handler.async_pre_call_hook(
@@ -3210,13 +3324,25 @@ async def test_pre_call_hook_rejects_caller_supplied_stash_values():
         call_type="completion",
     )
 
-    for channel in (
-        data,
-        data.get("metadata") or {},
-        data.get("litellm_metadata") or {},
-    ):
-        leaked = [k for k in _LITELLM_STASH_KEYS if k in channel]
-        assert not leaked, f"caller-supplied stash survived in {channel!r}: {leaked}"
+    refund_calls = []
+
+    async def spy_increment_pipeline(increment_list, **kwargs):
+        refund_calls.append(increment_list)
+
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = (
+        spy_increment_pipeline
+    )
+
+    await handler.async_post_call_failure_hook(
+        request_data=data,
+        original_exception=Exception("boom"),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert refund_calls == []
+    stash = get_request_stash()
+    assert stash is not None
+    assert stash.reserved_tokens == 0
 
 
 # ----------------------- Per-MCP-server rate limiting (v3) -----------------------
@@ -3511,18 +3637,13 @@ async def test_release_max_parallel_requests_on_disconnect_v3():
         await local_cache.async_get_cache(key=counter_key)
     ) == 1
 
-    await handler.async_release_max_parallel_requests_on_disconnect(
-        user_api_key_dict,
-        request_data={
-            "metadata": {
-                MAX_PARALLEL_SLOT_ACQUIRED_KEY: {
-                    "slot_id": _TEST_SLOT_ID,
-                    "counter_keys": [counter_key],
-                }
-            }
-        },
+    get_or_create_request_stash().parallel_slot = ParallelSlotAcquisition(
+        slot_id=_TEST_SLOT_ID,
+        counter_keys=[counter_key],
     )
+    await handler.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
+    assert get_request_stash().parallel_slot is None
     assert handler._gauge_in_flight_from_cache_value(
         await local_cache.async_get_cache(key=counter_key)
     ) == 0
@@ -3544,16 +3665,12 @@ async def test_release_on_disconnect_works_when_key_config_changed_v3():
     counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
     await _seed_max_parallel_requests_slots(local_cache, counter_key, [_TEST_SLOT_ID])
 
+    get_or_create_request_stash().parallel_slot = ParallelSlotAcquisition(
+        slot_id=_TEST_SLOT_ID,
+        counter_keys=[counter_key],
+    )
     await handler.async_release_max_parallel_requests_on_disconnect(
-        UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=None),
-        request_data={
-            "metadata": {
-                MAX_PARALLEL_SLOT_ACQUIRED_KEY: {
-                    "slot_id": _TEST_SLOT_ID,
-                    "counter_keys": [counter_key],
-                }
-            }
-        },
+        UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=None)
     )
     assert handler._gauge_in_flight_from_cache_value(
         await local_cache.async_get_cache(key=counter_key)
@@ -3601,7 +3718,6 @@ async def test_post_call_failure_hook_releases_parallel_slot_v3():
 
     await handler.async_log_failure_event(
         kwargs={
-            "metadata": admitted_data["metadata"],
             "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
         },
         response_obj=None,
@@ -3649,7 +3765,6 @@ async def test_success_event_releases_parallel_slot_v3(monkeypatch):
 
     await handler.async_log_success_event(
         kwargs={
-            "metadata": admitted_data["metadata"],
             "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
         },
         response_obj=ModelResponse(
@@ -3750,14 +3865,12 @@ async def test_redis_release_script_updates_local_mirror_v3():
 
     handler.parallel_release_script = fake_release
 
+    get_or_create_request_stash().parallel_slot = ParallelSlotAcquisition(
+        slot_id="slot-redis-test",
+        counter_keys=[counter_key],
+    )
     await handler.async_log_failure_event(
         kwargs={
-            "metadata": {
-                MAX_PARALLEL_SLOT_ACQUIRED_KEY: {
-                    "slot_id": "slot-redis-test",
-                    "counter_keys": [counter_key],
-                }
-            },
             "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
         },
         response_obj=None,
@@ -3862,7 +3975,6 @@ async def test_in_memory_fallback_respects_mirrored_redis_count_v3():
 
     await handler.async_log_failure_event(
         kwargs={
-            "metadata": admitted_data["metadata"],
             "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
         },
         response_obj=None,
@@ -3928,19 +4040,15 @@ async def test_async_streaming_data_generator_releases_counter_on_disconnect_v3(
         while True:
             yield ModelResponse()
 
+    get_or_create_request_stash().parallel_slot = ParallelSlotAcquisition(
+        slot_id=_TEST_SLOT_ID,
+        counter_keys=[counter_key],
+    )
     with _override_litellm_callbacks([]):
         gen = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
             response=upstream(),
             user_api_key_dict=user_api_key_dict,
-            request_data={
-                "model": "claude-test",
-                "metadata": {
-                    MAX_PARALLEL_SLOT_ACQUIRED_KEY: {
-                        "slot_id": _TEST_SLOT_ID,
-                        "counter_keys": [counter_key],
-                    }
-                },
-            },
+            request_data={"model": "claude-test"},
             proxy_logging_obj=proxy_logging_obj,
         )
         await gen.__anext__()
@@ -3981,21 +4089,17 @@ async def test_async_data_generator_releases_counter_on_disconnect_v3(disconnect
         while True:
             yield ModelResponse()
 
+    get_or_create_request_stash().parallel_slot = ParallelSlotAcquisition(
+        slot_id=_TEST_SLOT_ID,
+        counter_keys=[counter_key],
+    )
     try:
         with _override_litellm_callbacks([]):
             assert proxy_logging_obj.needs_iterator_wrap() is False
             gen = proxy_server.async_data_generator(
                 response=upstream(),
                 user_api_key_dict=user_api_key_dict,
-                request_data={
-                    "model": "gpt-test",
-                    "metadata": {
-                    MAX_PARALLEL_SLOT_ACQUIRED_KEY: {
-                        "slot_id": _TEST_SLOT_ID,
-                        "counter_keys": [counter_key],
-                    }
-                },
-                },
+                request_data={"model": "gpt-test"},
             )
             await gen.__anext__()
             if disconnect == "cancel":
@@ -4044,21 +4148,17 @@ async def test_async_data_generator_releases_counter_when_wrapped_v3():
         while True:
             yield ModelResponse()
 
+    get_or_create_request_stash().parallel_slot = ParallelSlotAcquisition(
+        slot_id=_TEST_SLOT_ID,
+        counter_keys=[counter_key],
+    )
     try:
         with _override_litellm_callbacks([_PassthroughIteratorOverride()]):
             assert proxy_logging_obj.needs_iterator_wrap() is True
             gen = proxy_server.async_data_generator(
                 response=upstream(),
                 user_api_key_dict=user_api_key_dict,
-                request_data={
-                    "model": "gpt-test",
-                    "metadata": {
-                    MAX_PARALLEL_SLOT_ACQUIRED_KEY: {
-                        "slot_id": _TEST_SLOT_ID,
-                        "counter_keys": [counter_key],
-                    }
-                },
-                },
+                request_data={"model": "gpt-test"},
             )
             await gen.__anext__()
             await gen.aclose()
@@ -4175,12 +4275,7 @@ async def test_pre_call_hook_skips_reservation_when_disabled(monkeypatch):
 
     assert reserve_calls == [], "reservation must be skipped when disabled"
     assert should_rate_limit_calls[0]["skip_tpm_check"] is False
-    # No reservation stash leaks into the request metadata.
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        TPM_RESERVED_TOKENS_KEY,
-    )
-
-    assert TPM_RESERVED_TOKENS_KEY not in (data.get("metadata") or {})
+    assert get_request_stash().reserved_tokens == 0
 
 
 @pytest.mark.asyncio
