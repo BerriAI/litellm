@@ -10,9 +10,7 @@ interface CodeGenMetadata {
 }
 
 interface GenerateCodeParams {
-  apiKeySource: "session" | "custom";
-  accessToken: string | null;
-  apiKey: string;
+  apiKey: string | null;
   inputMessage: string;
   chatHistory: MessageType[];
   selectedTags: string[];
@@ -34,9 +32,7 @@ interface GenerateCodeParams {
 
 export const generateCodeSnippet = (params: GenerateCodeParams): string => {
   const {
-    apiKeySource,
-    accessToken,
-    apiKey,
+    apiKey: effectiveApiKey,
     inputMessage,
     chatHistory,
     selectedTags,
@@ -52,7 +48,6 @@ export const generateCodeSnippet = (params: GenerateCodeParams): string => {
     selectedSdk,
     proxySettings,
   } = params;
-  const effectiveApiKey = apiKeySource === "session" ? accessToken : apiKey;
 
   // Determine base URL with priority: LITELLM_UI_API_DOC_BASE_URL > PROXY_BASE_URL > window.location.origin
   let apiBase = window.location.origin;

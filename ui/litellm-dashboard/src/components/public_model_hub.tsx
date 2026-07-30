@@ -1020,8 +1020,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   <pre className="text-sm">
                     {(() => {
                       const codeSnippet = generateCodeSnippet({
-                        apiKeySource: "custom",
-                        accessToken: null,
                         apiKey: "your_api_key",
                         inputMessage: "Hello, how are you?",
                         chatHistory: [{ role: "user", content: "Hello, how are you?", isImage: false } as MessageType],
@@ -1042,8 +1040,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   <button
                     onClick={() => {
                       const codeSnippet = generateCodeSnippet({
-                        apiKeySource: "custom",
-                        accessToken: null,
                         apiKey: "your_api_key",
                         inputMessage: "Hello, how are you?",
                         chatHistory: [{ role: "user", content: "Hello, how are you?", isImage: false } as MessageType],
