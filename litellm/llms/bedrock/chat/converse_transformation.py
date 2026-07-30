@@ -1140,17 +1140,20 @@ class AmazonConverseConfig(BaseConfig):
             )
         return messages
 
-    @staticmethod
-    def _supports_assistant_prefill(model: str) -> bool:
+    def _supports_assistant_prefill(self, model: str) -> bool:
         """Whether the model accepts a partial assistant turn to continue from.
 
-        Anthropic documents prefill as the way to shape output without a schema.
-        Other Converse families (Llama, DeepSeek, Nova) do not support it, so
-        they keep the previous no-op behaviour rather than getting a request
-        they will reject.
+        Reads the ``supports_assistant_prefill`` flag from ``litellm.model_cost``
+        rather than matching on the model name: the newest Anthropic models
+        (Opus 4.6+, Sonnet 5) reject a prefilled assistant turn, and other
+        Converse families never supported it. Models whose capability cannot be
+        resolved (an opaque application-inference-profile ARN, or an entry with
+        no flag) read as unsupported, so they keep the previous no-op and the
+        warning rather than being sent a request the provider would reject.
         """
-        base_model = BedrockModelInfo.get_base_model(model).lower()
-        return "anthropic" in base_model or "claude" in base_model
+        from litellm.utils import supports_assistant_prefill
+
+        return supports_assistant_prefill(model=model, custom_llm_provider=self.custom_llm_provider)
 
     def update_optional_params_with_thinking_tokens(self, non_default_params: dict, optional_params: dict):
         """

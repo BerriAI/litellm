@@ -293,3 +293,76 @@ def test_make_sync_call_honors_explicit_stream_chunk_size():
 
     response.iter_bytes.assert_called_once_with(chunk_size=2048)
 
+
+
+@pytest.mark.asyncio
+async def test_make_call_restores_json_object_prefill_brace():
+    """Async streaming must restore the prefilled brace, like the sync path does.
+
+    `json_object_prefill` reaches `_transform_response` through this function's
+    `optional_params`; if it is not threaded through, the fake-stream branch
+    hands back a response whose content is missing its opening `{` and no
+    longer parses as JSON.
+    """
+    import json as _json
+
+    body = {
+        "metrics": {"latencyMs": 100.0},
+        "output": {"message": {"role": "assistant", "content": [{"text": '"name": "Claude"}'}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 8, "outputTokens": 3, "totalTokens": 11},
+    }
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = body
+    response.text = _json.dumps(body)
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+
+    completion_stream = await make_call(
+        client=client,
+        api_base="https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+        headers={},
+        data="{}",
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[],
+        logging_obj=MagicMock(),
+        fake_stream=True,
+        json_object_prefill=True,
+    )
+
+    content = completion_stream.model_response.choices[0].message.content
+    assert content.startswith("{")
+    assert _json.loads(content) == {"name": "Claude"}
+
+
+@pytest.mark.asyncio
+async def test_make_call_leaves_content_alone_without_json_object_prefill():
+    """Without the flag the content must be passed through untouched."""
+    import json as _json
+
+    body = {
+        "metrics": {"latencyMs": 100.0},
+        "output": {"message": {"role": "assistant", "content": [{"text": "I'm Claude."}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 8, "outputTokens": 3, "totalTokens": 11},
+    }
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = body
+    response.text = _json.dumps(body)
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+
+    completion_stream = await make_call(
+        client=client,
+        api_base="https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+        headers={},
+        data="{}",
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[],
+        logging_obj=MagicMock(),
+        fake_stream=True,
+    )
+
+    assert completion_stream.model_response.choices[0].message.content == "I'm Claude."

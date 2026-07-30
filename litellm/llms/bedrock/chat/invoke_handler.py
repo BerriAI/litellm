@@ -168,6 +168,7 @@ async def make_call(
     logging_obj: Logging,
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
+    json_object_prefill: bool = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
     stream_chunk_size: Optional[int] = None,
 ):
@@ -200,7 +201,7 @@ async def make_call(
                 model_response=litellm.ModelResponse(),
                 stream=True,
                 logging_obj=logging_obj,
-                optional_params={},
+                optional_params={"json_object_prefill": json_object_prefill},
                 api_key="",
                 data=data,
                 messages=messages,

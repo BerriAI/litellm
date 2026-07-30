@@ -5928,6 +5928,85 @@ def test_json_object_no_prefill_for_non_anthropic_model():
     mock_logger.warning.assert_called_once()
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.anthropic.claude-opus-4-7",
+        "us.anthropic.claude-sonnet-5",
+    ],
+)
+def test_json_object_no_prefill_when_model_declares_prefill_unsupported(model):
+    """Newer Claude models reject a prefilled assistant turn.
+
+    They carry `supports_assistant_prefill: false` in model_prices_and_context_window.json,
+    so matching on "anthropic"/"claude" in the model name would send them a request the
+    provider refuses.
+    """
+    config = AmazonConverseConfig()
+    response_format = {"type": "json_object"}
+
+    with patch.object(litellm, "modify_params", True):
+        with patch.object(
+            litellm.llms.bedrock.chat.converse_transformation, "verbose_logger"
+        ) as mock_logger:
+            result = config._translate_response_format_param(
+                value=response_format,
+                model=model,
+                optional_params={},
+                non_default_params={"response_format": response_format},
+                is_thinking_enabled=False,
+            )
+
+    assert "json_object_prefill" not in result
+    mock_logger.warning.assert_called_once()
+
+
+def test_json_object_prefill_resolved_through_inference_profile_arn():
+    """A named inference-profile ARN still resolves to its underlying model."""
+    config = AmazonConverseConfig()
+    response_format = {"type": "json_object"}
+    model = (
+        "bedrock/converse/arn:aws:bedrock:us-east-1:000000000000:inference-profile/"
+        "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
+
+    with patch.object(litellm, "modify_params", True):
+        result = config._translate_response_format_param(
+            value=response_format,
+            model=model,
+            optional_params={},
+            non_default_params={"response_format": response_format},
+            is_thinking_enabled=False,
+        )
+
+    assert result["json_object_prefill"] is True
+
+
+def test_json_object_no_prefill_for_opaque_application_inference_profile():
+    """An opaque profile ID carries no capability data, so stay with the no-op."""
+    config = AmazonConverseConfig()
+    response_format = {"type": "json_object"}
+    model = (
+        "bedrock/converse/arn:aws:bedrock:us-east-1:000000000000:"
+        "application-inference-profile/abc123opaque"
+    )
+
+    with patch.object(litellm, "modify_params", True):
+        with patch.object(
+            litellm.llms.bedrock.chat.converse_transformation, "verbose_logger"
+        ) as mock_logger:
+            result = config._translate_response_format_param(
+                value=response_format,
+                model=model,
+                optional_params={},
+                non_default_params={"response_format": response_format},
+                is_thinking_enabled=False,
+            )
+
+    assert "json_object_prefill" not in result
+    mock_logger.warning.assert_called_once()
+
+
 def test_json_object_no_prefill_when_tools_are_present():
     """Prefill commits the turn to text, so it would block tool calls."""
     config = AmazonConverseConfig()
