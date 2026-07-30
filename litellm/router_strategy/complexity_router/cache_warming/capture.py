@@ -6,6 +6,11 @@ from typing import TYPE_CHECKING, Literal
 
 from litellm._logging import verbose_router_logger
 from litellm.constants import DEFAULT_CHARS_PER_TOKEN
+from litellm.litellm_core_utils.core_helpers import (
+    get_caller_scope,
+    get_request_metadata_field,
+    iter_request_metadata_dicts,
+)
 from litellm.router_strategy.complexity_router.cache_warming.eligibility import (
     min_prompt_cache_tokens_for_warm_set,
     resolve_warm_models,
@@ -16,11 +21,6 @@ from litellm.router_strategy.complexity_router.cache_warming.types import (
     CacheWarmingAttribution,
     CacheWarmingPayload,
     compress_payload,
-)
-from litellm.litellm_core_utils.core_helpers import (
-    get_caller_scope,
-    get_request_metadata_field,
-    iter_request_metadata_dicts,
 )
 
 if TYPE_CHECKING:
