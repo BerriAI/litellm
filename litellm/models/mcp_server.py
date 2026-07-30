@@ -51,6 +51,10 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     server_name: Optional[str] = None
     alias: Optional[str] = None
     description: Optional[str] = None
+    is_from_config: bool = Field(
+        default=False,
+        description="True if this server is defined in the config file, False if from DB. Config-defined servers cannot be edited via the UI.",
+    )
     url: Optional[str] = None
     spec_path: Optional[str] = None
     transport: MCPTransportType

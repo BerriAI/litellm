@@ -208,3 +208,50 @@ class TestMCPCustomFields:
         # Should use mcp_info description, not config level
         assert mcp_info["description"] == "MCP info description"
         assert mcp_info["custom_field"] == "custom_value"
+
+
+class TestMCPServerIsFromConfig:
+    """The management response must flag config-declared servers so the UI can keep them read-only."""
+
+    async def test_config_server_table_is_from_config_true(self):
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(
+            {
+                "config_server": {
+                    "url": "http://localhost:3000",
+                    "transport": "http",
+                    "mcp_info": {"owning_team": "platform"},
+                }
+            }
+        )
+
+        server = list(manager.config_mcp_servers.values())[0]
+        table = manager._build_mcp_server_table(server)
+
+        assert table.is_from_config is True
+
+    async def test_database_server_table_is_from_config_false(self):
+        manager = MCPServerManager()
+
+        db_server = LiteLLM_MCPServerTable(
+            server_id="db-server-id",
+            server_name="DB Server",
+            alias=None,
+            description="A database server",
+            url="http://localhost:4000",
+            transport="http",
+            auth_type=MCPAuth.bearer_token,
+            mcp_info={"server_name": "DB Server"},
+            command=None,
+            args=[],
+            env={},
+            mcp_access_groups=[],
+        )
+        await manager.add_server(db_server)
+
+        registry_server = manager.get_mcp_server_by_id("db-server-id")
+        assert registry_server is not None
+        table = manager._build_mcp_server_table(registry_server)
+
+        assert table.is_from_config is False

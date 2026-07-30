@@ -11,7 +11,7 @@ import { MCPToolsViewer } from ".";
 import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
 import { getSecureItem } from "@/utils/secureStorage";
 import MCPServerCostDisplay from "./mcp_server_cost_display";
-import { getMaskedAndFullUrl } from "./utils";
+import { getMaskedAndFullUrl, extractCustomMcpInfo } from "./utils";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
 
@@ -59,7 +59,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   // Open the editing Settings tab on first render when returning from the edit OAuth
   // redirect, so the "token fetched" feedback shows where the user left off (Settings=2).
   const returningFromEditOAuth = isReturningFromEditOAuth(isProxyAdmin, mcpServer.server_id);
-  const [editing, setEditing] = useState(isEditing || returningFromEditOAuth);
+  const canEdit = isProxyAdmin && !mcpServer.is_from_config;
+  const [editing, setEditing] = useState((isEditing || returningFromEditOAuth) && canEdit);
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialTabIndex);
@@ -71,6 +72,9 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
 
   const urlValue = mcpServer.url ?? "";
   const { maskedUrl, hasToken } = urlValue ? getMaskedAndFullUrl(urlValue) : { maskedUrl: "—", hasToken: false };
+
+  const customMcpInfo = extractCustomMcpInfo(mcpServer.mcp_info);
+  const hasCustomMcpInfo = Object.keys(customMcpInfo).length > 0;
 
   const renderUrlWithToggle = (url: string | null | undefined, showFull: boolean) => {
     if (!url) return "—";
@@ -213,13 +217,16 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
           <Card className="p-6">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-medium">MCP Server Settings</h2>
-              {editing ? null : (
+              {!editing && canEdit && (
                 <Button variant="outline" onClick={() => setEditing(true)}>
                   Edit Settings
                 </Button>
               )}
+              {!editing && mcpServer.is_from_config && (
+                <span className="text-sm text-muted-foreground">Defined in config.yaml (read-only)</span>
+              )}
             </div>
-            {editing ? (
+            {editing && canEdit ? (
               <MCPServerEdit
                 mcpServer={mcpServer}
                 accessToken={accessToken}
@@ -246,6 +253,18 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   <p className="text-sm font-medium text-muted-foreground">Description</p>
                   <div className="col-span-2 text-sm">
                     {mcpServer.description || <span className="text-muted-foreground">—</span>}
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-4 py-3">
+                  <p className="text-sm font-medium text-muted-foreground">mcp_info</p>
+                  <div className="col-span-2 text-sm">
+                    {hasCustomMcpInfo ? (
+                      <pre className="text-xs bg-muted border border-border rounded-md p-3 overflow-auto whitespace-pre-wrap break-all">
+                        {JSON.stringify(customMcpInfo, null, 2)}
+                      </pre>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-4 py-3">
