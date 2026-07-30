@@ -8812,6 +8812,10 @@ async def ahealth_check(
         )
 
         model_params["cache"] = {"no-cache": True}  # don't used cached responses for making health check calls
+        # chatgpt provider uses the Responses API exclusively; default to "responses" so the
+        # health check doesn't send a Chat Completions payload that the backend rejects.
+        if mode is None and custom_llm_provider == "chatgpt":
+            mode = "responses"
         mode = mode or default_health_check_mode(
             requested_model=requested_model, model=model, custom_llm_provider=custom_llm_provider
         )
