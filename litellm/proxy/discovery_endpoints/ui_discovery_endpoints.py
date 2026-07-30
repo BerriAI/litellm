@@ -13,7 +13,9 @@ router = APIRouter()
 
 
 @router.get("/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)
-@router.get("/litellm/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)  # if mounted at root path
+@router.get(
+    "/litellm/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints
+)  # if mounted at root path
 async def get_ui_config():
     from litellm.proxy.auth.auth_utils import _has_user_setup_sso
     from litellm.proxy.proxy_server import general_settings
@@ -21,7 +23,9 @@ async def get_ui_config():
 
     native_oidc = None
     jwt_auth_settings = general_settings.get("litellm_jwtauth")
-    if general_settings.get("enable_jwt_auth") is True and isinstance(jwt_auth_settings, dict):
+    if general_settings.get("enable_jwt_auth") is True and isinstance(
+        jwt_auth_settings, dict
+    ):
         try:
             native_oidc = NativeOIDCConfig(
                 discovery_url=jwt_auth_settings.get("native_oidc_discovery_url"),

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
@@ -126,6 +126,30 @@ def test_ui_discovery_endpoints_exposes_valid_native_oidc_config():
                 "native_oidc_scopes": ["openid"],
             },
         },
+        {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration\x00",
+                "native_oidc_client_id": "litellm-native",
+                "native_oidc_scopes": ["openid"],
+            },
+        },
+        {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration",
+                "native_oidc_client_id": "client\nid",
+                "native_oidc_scopes": ["openid"],
+            },
+        },
+        {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration",
+                "native_oidc_client_id": "litellm-native",
+                "native_oidc_scopes": ["open\nid"],
+            },
+        },
         {"enable_jwt_auth": True, "litellm_jwtauth": "invalid"},
     ],
 )
@@ -150,7 +174,10 @@ def test_ui_discovery_endpoints_allows_loopback_http_native_oidc_config():
     response = get_discovery_response(settings)
 
     assert response.status_code == 200
-    assert response.json()["native_oidc"]["discovery_url"] == settings["litellm_jwtauth"]["native_oidc_discovery_url"]
+    assert (
+        response.json()["native_oidc"]["discovery_url"]
+        == settings["litellm_jwtauth"]["native_oidc_discovery_url"]
+    )
 
 
 def test_ui_discovery_endpoints_with_defaults():
@@ -459,7 +486,9 @@ def test_ui_discovery_endpoints_is_control_plane_true_when_workers_configured():
 
     mock_config = MagicMock()
     mock_config.worker_registry = [
-        WorkerRegistryEntry(worker_id="team-a", name="Team A", url="https://worker-1:4001"),
+        WorkerRegistryEntry(
+            worker_id="team-a", name="Team A", url="https://worker-1:4001"
+        ),
     ]
 
     with (

@@ -7,6 +7,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 
 
+def _has_control_characters(value: str) -> bool:
+    return any(
+        ord(character) < 32 or 127 <= ord(character) <= 159 for character in value
+    )
+
+
 class NativeOIDCConfig(BaseModel):
     discovery_url: str
     client_id: str
@@ -20,6 +26,7 @@ class NativeOIDCConfig(BaseModel):
         parsed = urlparse(value)
         if (
             not value.strip()
+            or _has_control_characters(value)
             or parsed.scheme not in {"http", "https"}
             or not parsed.hostname
             or parsed.username
@@ -27,27 +34,33 @@ class NativeOIDCConfig(BaseModel):
             or parsed.query
             or parsed.fragment
         ):
-            raise ValueError("must be an absolute OIDC discovery URL without credentials, query, or fragment")
+            raise ValueError(
+                "must be an absolute OIDC discovery URL without credentials, query, or fragment"
+            )
         if parsed.scheme == "http":
             try:
                 is_loopback = ipaddress.ip_address(parsed.hostname).is_loopback
             except ValueError:
                 is_loopback = False
             if not is_loopback:
-                raise ValueError("must use HTTPS unless the host is a loopback IP address")
+                raise ValueError(
+                    "must use HTTPS unless the host is a loopback IP address"
+                )
         return value
 
     @field_validator("client_id")
     @classmethod
     def validate_client_id(cls, value: str) -> str:
-        if not value.strip():
+        if not value.strip() or _has_control_characters(value):
             raise ValueError("must not be blank")
         return value
 
     @field_validator("scopes")
     @classmethod
     def validate_scopes(cls, value: List[str]) -> List[str]:
-        if not value or any(not scope.strip() for scope in value):
+        if not value or any(
+            not scope.strip() or _has_control_characters(scope) for scope in value
+        ):
             raise ValueError("must contain only non-blank scopes")
         return value
 
