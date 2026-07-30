@@ -1,7 +1,7 @@
 import { renderWithProviders, screen, within } from "../../../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
-import GeneralSettings from "./general_settings";
+import { GeneralConfigTab } from "./general_settings";
 import { deleteConfigFieldSetting, getGeneralSettingsCall, updateConfigFieldSetting } from "@/components/networking";
 
 vi.mock("@/components/networking", () => ({
@@ -9,10 +9,6 @@ vi.mock("@/components/networking", () => ({
   updateConfigFieldSetting: vi.fn().mockResolvedValue({}),
   deleteConfigFieldSetting: vi.fn().mockResolvedValue({}),
 }));
-
-vi.mock("@/components/router_settings", () => ({ default: () => null }));
-vi.mock("@/components/Settings/RouterSettings/Fallbacks/Fallbacks", () => ({ default: () => null }));
-vi.mock("@/components/routing_groups", () => ({ default: () => null }));
 
 // Mirrors the /config/list ordering: the two prompt-caching rows sit between the
 // General-tab rows in the unfiltered response but are filtered out of the General
@@ -63,7 +59,7 @@ const settingsRow = async (fieldName: string) => {
   return row as HTMLElement;
 };
 
-describe("GeneralSettings General tab", () => {
+describe("GeneralConfigTab", () => {
   beforeEach(() => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([...SETTINGS_FIXTURE.map((s) => ({ ...s }))]);
     vi.mocked(updateConfigFieldSetting).mockClear();
@@ -72,9 +68,8 @@ describe("GeneralSettings General tab", () => {
 
   it("updates max_ui_session_budget with its own value, not the value at its filtered index", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+    renderWithProviders(<GeneralConfigTab accessToken="token" />);
 
-    await user.click(screen.getByText("General"));
     const row = await settingsRow("max_ui_session_budget");
 
     await user.click(within(row).getByRole("button", { name: /update/i }));
@@ -84,9 +79,8 @@ describe("GeneralSettings General tab", () => {
 
   it("reset shows the field's default value instead of an empty input", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+    renderWithProviders(<GeneralConfigTab accessToken="token" />);
 
-    await user.click(screen.getByText("General"));
     const row = await settingsRow("max_ui_session_budget");
     expect(within(row).getByRole("spinbutton")).toHaveValue("7.50");
 
@@ -97,5 +91,13 @@ describe("GeneralSettings General tab", () => {
 
     expect(deleteConfigFieldSetting).toHaveBeenCalledWith("token", "max_ui_session_budget");
     expect(within(row).getByRole("spinbutton")).toHaveValue("1.00");
+  });
+
+  it("hides prompt-caching-tab rows from the General table", async () => {
+    renderWithProviders(<GeneralConfigTab accessToken="token" />);
+
+    await settingsRow("max_ui_session_budget");
+    expect(screen.queryByText("enable_anthropic_prompt_caching")).not.toBeInTheDocument();
+    expect(screen.queryByText("anthropic_prompt_caching_ttl")).not.toBeInTheDocument();
   });
 });
