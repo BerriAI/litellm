@@ -7,6 +7,7 @@ Source: litellm/llms/chatgpt/responses/transformation.py
 import json
 import os
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -326,3 +327,53 @@ class TestChatGPTResponsesAPITransformation:
 
         assert "ChatGPT upstream failed" in str(exc_info.value)
         assert exc_info.value.status_code == 502
+
+
+class TestChatGPTResponsesMultiAccount:
+    @staticmethod
+    def _write_auth_record(path, token: str, account_id: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "access_token": token,
+                    "account_id": account_id,
+                    "expires_at": time.time() + 3600,
+                }
+            )
+        )
+
+    def test_validate_environment_uses_per_model_auth_file(self, tmp_path, monkeypatch):
+        default_dir = tmp_path / "default"
+        monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(default_dir))
+        monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+        self._write_auth_record(default_dir / "auth.json", "token-default", "acct-default")
+        file_a = tmp_path / "account-a" / "auth.json"
+        file_b = tmp_path / "account-b" / "auth.json"
+        self._write_auth_record(file_a, "token-a", "acct-a")
+        self._write_auth_record(file_b, "token-b", "acct-b")
+
+        config = ChatGPTResponsesAPIConfig()
+
+        headers_a = config.validate_environment(
+            headers={},
+            model="gpt-5.4",
+            litellm_params=GenericLiteLLMParams(chatgpt_auth_file=str(file_a)),
+        )
+        headers_b = config.validate_environment(
+            headers={},
+            model="gpt-5.4",
+            litellm_params=GenericLiteLLMParams(chatgpt_auth_file=str(file_b)),
+        )
+        headers_default = config.validate_environment(
+            headers={},
+            model="gpt-5.4",
+            litellm_params=GenericLiteLLMParams(),
+        )
+
+        assert headers_a["Authorization"] == "Bearer token-a"
+        assert headers_a["ChatGPT-Account-Id"] == "acct-a"
+        assert headers_b["Authorization"] == "Bearer token-b"
+        assert headers_b["ChatGPT-Account-Id"] == "acct-b"
+        assert headers_default["Authorization"] == "Bearer token-default"
+        assert headers_default["ChatGPT-Account-Id"] == "acct-default"

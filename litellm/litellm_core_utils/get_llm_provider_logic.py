@@ -732,7 +732,9 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
             custom_llm_provider,
-        ) = litellm.ChatGPTConfig()._get_openai_compatible_provider_info(model, api_base, api_key, custom_llm_provider)
+        ) = litellm.ChatGPTConfig()._get_openai_compatible_provider_info(
+            model, api_base, api_key, custom_llm_provider, litellm_params
+        )
     elif custom_llm_provider == "novita":
         api_base = api_base or get_secret("NOVITA_API_BASE") or "https://api.novita.ai/v3/openai"  # type: ignore
         dynamic_api_key = api_key or get_secret_str("NOVITA_API_KEY")
