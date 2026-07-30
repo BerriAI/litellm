@@ -4993,6 +4993,37 @@ async def test_budget_checks_only_run_on_llm_api_routes(scope, route, expect_blo
             assert await _run() is True
 
 
+@pytest.mark.parametrize("route", ["/health", "/health/services", "/health/test_connection"])
+@pytest.mark.asyncio
+async def test_spend_capable_non_llm_routes_still_enforce_budget(route):
+    """These routes are not LLM API routes but still reach a provider or an
+    external service: /health and /health/test_connection run litellm.ahealth_check
+    against real deployments, and /health/services fires Slack/email/webhook sends.
+    Exempting them with the other management routes would let an exhausted budget
+    keep spending.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team = LiteLLM_TeamTable(team_id="t1", spend=150.0, max_budget=100.0)
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await common_checks(
+            request_body={},
+            team_object=team,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=AsyncMock(),
+            valid_token=UserAPIKeyAuth(token="k1", team_id="t1"),
+            request=MagicMock(spec=Request),
+        )
+
+
 @pytest.mark.asyncio
 async def test_get_default_end_user_budget_db_fetch_returns_validated_budget(monkeypatch):
     from litellm.proxy.auth.auth_checks import get_default_end_user_budget

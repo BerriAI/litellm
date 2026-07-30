@@ -485,7 +485,13 @@ MODEL_DISCOVERY_ROUTES = frozenset(
     }
 )
 
-BUDGET_ENFORCED_SIDE_EFFECT_ROUTES = frozenset({"/health/services"})
+BUDGET_ENFORCED_SIDE_EFFECT_ROUTES = frozenset(
+    {
+        "/health",
+        "/health/services",
+        "/health/test_connection",
+    }
+)
 
 
 async def common_checks(
