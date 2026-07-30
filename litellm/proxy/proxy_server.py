@@ -333,6 +333,7 @@ from litellm.proxy.common_utils.periodic_reload_schedule import (
     record_manual_reload,
     record_reload_run,
     reload_schedule_status,
+    to_db_precision,
     utc_now,
     write_reload_interval,
 )
@@ -3862,7 +3863,10 @@ class ProxyConfig:
             get_model_cost_map_loaded_at,
         )
 
-        self.model_cost_map_loaded_at: datetime = get_model_cost_map_loaded_at() or utc_now()
+        cost_map_loaded_at = get_model_cost_map_loaded_at()
+        self.model_cost_map_loaded_at: datetime = (
+            to_db_precision(cost_map_loaded_at) if cost_map_loaded_at is not None else utc_now()
+        )
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):

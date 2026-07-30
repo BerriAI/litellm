@@ -80,8 +80,17 @@ class _IntervalConfig(BaseModel):
     interval_hours: int | None = None
 
 
+def to_db_precision(value: datetime) -> datetime:
+    """
+    Drop sub-millisecond digits, matching the TIMESTAMP(3) columns these values round-trip
+    through. Comparing a microsecond-precision stamp against its own truncated copy would
+    read as newer and skip the request it recorded
+    """
+    return value.replace(microsecond=(value.microsecond // 1000) * 1000)
+
+
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return to_db_precision(datetime.now(timezone.utc))
 
 
 def _parse_interval_hours(param_value: object) -> int | None:

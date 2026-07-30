@@ -13,6 +13,8 @@ from litellm.proxy.common_utils.periodic_reload_schedule import (
     record_manual_reload,
     record_reload_run,
     reload_schedule_status,
+    to_db_precision,
+    utc_now,
     write_reload_interval,
 )
 
@@ -131,6 +133,32 @@ def test_pod_reload_is_due(schedule, pod_data_loaded_at, expected):
             description="test",
         )
         is expected
+    )
+
+
+def test_stamps_match_the_precision_they_are_stored_at():
+    """Postgres stores TIMESTAMP(3), so a microsecond-precision pod clock would read as
+    newer than its own persisted copy and skip the request it just recorded"""
+    assert utc_now().microsecond % 1000 == 0
+    assert to_db_precision(datetime(2024, 1, 1, 6, 0, 0, 123456, tzinfo=timezone.utc)) == datetime(
+        2024, 1, 1, 6, 0, 0, 123000, tzinfo=timezone.utc
+    )
+
+
+def test_request_in_the_same_millisecond_is_not_lost_to_truncation():
+    """A pod whose data loaded microseconds before a request must still see it: both sides
+    are floored to the stored resolution, so the request never reads as older than it is"""
+    loaded_at = to_db_precision(datetime(2024, 1, 1, 6, 0, 0, 123400, tzinfo=timezone.utc))
+    requested_at = datetime(2024, 1, 1, 6, 0, 0, 124000, tzinfo=timezone.utc)
+
+    assert (
+        pod_reload_is_due(
+            schedule=ReloadSchedule(reload_requested_at=requested_at),
+            pod_data_loaded_at=loaded_at,
+            current_time=NOW,
+            description="test",
+        )
+        is True
     )
 
 
