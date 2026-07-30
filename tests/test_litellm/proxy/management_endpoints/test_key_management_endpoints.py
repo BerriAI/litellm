@@ -11954,6 +11954,66 @@ class TestAllowedRoutesCallerPermission:
         assert "allowed_routes" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
+    async def test_non_admin_update_key_rejects_default_over_custom_routes(self):
+        """A default preset must not clear an admin-defined route allowlist."""
+        from types import SimpleNamespace
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_update_key_data,
+        )
+
+        data = UpdateKeyRequest(
+            key="sk-test",
+            allowed_routes=[],
+            key_type=LiteLLMKeyType.DEFAULT,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _validate_update_key_data(
+                data=data,
+                existing_key_row=SimpleNamespace(
+                    allowed_routes=["/custom/admin-defined-route"],
+                    max_budget=None,
+                    user_id="internal-user-123",
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="internal-user-123",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                ),
+                llm_router=None,
+                premium_user=True,
+                prisma_client=None,
+                user_api_key_cache=MagicMock(),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "allowed_routes" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_regenerate_key_omitting_key_type_preserves_classification(self):
+        """Regeneration must not materialize the request model's default key type."""
+        from types import SimpleNamespace
+
+        from litellm.proxy._types import RegenerateKeyRequest
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            prepare_key_update_data,
+        )
+
+        data = RegenerateKeyRequest(key="sk-test")
+        assert "key_type" not in data.model_fields_set
+
+        update_data = await prepare_key_update_data(
+            data=data,
+            existing_key_row=SimpleNamespace(
+                metadata={},
+                team_id=None,
+            ),
+        )
+
+        assert "key_type" not in update_data
+        assert "allowed_routes" not in update_data
+
+    @pytest.mark.asyncio
     async def test_non_admin_regenerate_key_explicit_empty_allowed_routes_rejected(self):
         """`regenerate_key_fn` rejects a non-admin when `allowed_routes` is
         present as `[]` in the request body."""

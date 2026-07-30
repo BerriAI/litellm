@@ -495,6 +495,7 @@ describe("KeyEditView", () => {
       expect(onSubmitMock).toHaveBeenCalled();
       const callArgs = onSubmitMock.mock.calls[0][0];
       expect(callArgs.allowed_routes).toEqual([]);
+      expect(callArgs.key_type).toBe("default");
     });
   });
 

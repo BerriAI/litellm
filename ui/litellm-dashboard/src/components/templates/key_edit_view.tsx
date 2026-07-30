@@ -304,6 +304,8 @@ export function KeyEditView({
         [...submittedRoutesSet].every((r) => originalRoutesSet.has(r));
       if (allowedRoutesUnchanged) {
         delete values.allowed_routes;
+      } else {
+        values.key_type = getKeyTypeFromRoutes(values.allowed_routes);
       }
 
       if (neverExpire) {
