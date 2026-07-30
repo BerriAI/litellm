@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -1936,6 +1937,100 @@ class TestAddAndDeleteModelLifecycle:
                     user_api_key_dict=admin_user,
                 )
             assert str(exc_info.value.code) == "400"
+
+
+class TestModelCrudNotifiesOtherPods:
+    """Regression: a model deleted (or added) on one pod stayed in every sibling pod's
+    in-memory router until its next config reload, so the Admin UI kept showing the
+    deleted model on refreshes the load balancer sent to another pod."""
+
+    @pytest.mark.asyncio
+    async def test_add_and_delete_publish_model_change_notifications(self):
+        import fakeredis.aioredis
+
+        from litellm.constants import MODEL_CHANGE_PUBSUB_CHANNEL
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
+            add_new_model,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_model as delete_model_endpoint,
+        )
+        from litellm.proxy.model_change_broadcast import ModelChangeNotification
+
+        class FakeRedisCache:
+            def __init__(self, client: fakeredis.aioredis.FakeRedis) -> None:
+                self._client = client
+
+            def check_and_fix_namespace(self, key: str) -> str:
+                return key
+
+            def init_async_client(self) -> fakeredis.aioredis.FakeRedis:
+                return self._client
+
+        model_id = "notify-siblings-model-1"
+        admin_user = UserAPIKeyAuth(user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="notify-model",
+            litellm_params={"model": "openai/gpt-4.1-nano"},
+            model_info={"id": model_id},
+            created_by="test-admin",
+            updated_by="test-admin",
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.create = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.add_deployment = AsyncMock()
+
+        mock_router = MagicMock()
+        mock_router.get_model_ids.return_value = [model_id]
+
+        redis_cache = FakeRedisCache(fakeredis.aioredis.FakeRedis(server=fakeredis.FakeServer()))
+        sibling_pod = redis_cache.init_async_client().pubsub()
+        await sibling_pod.subscribe(MODEL_CHANGE_PUBSUB_CHANNEL)
+
+        _PS = "litellm.proxy.proxy_server"
+        _ENCRYPT = "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_config", mock_proxy_config),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.general_settings", {}),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", mock_router),
+            patch(f"{_PS}.redis_usage_cache", redis_cache),
+            patch(_ENCRYPT, side_effect=lambda value, **kwargs: value),
+        ):
+            await add_new_model(
+                model_params=Deployment(
+                    model_name="notify-model",
+                    litellm_params=LiteLLM_Params(model="openai/gpt-4.1-nano", api_key="fake-key"),
+                    model_info={"id": model_id},
+                ),
+                user_api_key_dict=admin_user,
+            )
+            await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+
+        notifications = []
+        deadline = asyncio.get_event_loop().time() + 3.0
+        while len(notifications) < 2 and asyncio.get_event_loop().time() < deadline:
+            message = await sibling_pod.get_message(ignore_subscribe_messages=True, timeout=0.05)
+            if message is not None:
+                notifications.append(ModelChangeNotification.model_validate_json(message["data"]))
+
+        assert [notification.operation for notification in notifications] == ["created", "deleted"]
+        assert {notification.model_id for notification in notifications} == {model_id}
 
 
 class TestDeleteTeamBYOKModelGhost:

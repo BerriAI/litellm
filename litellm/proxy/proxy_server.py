@@ -213,7 +213,7 @@ def generate_feedback_box():
 import contextlib
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from functools import lru_cache
+from functools import lru_cache, partial
 
 import litellm
 import litellm._redis
@@ -468,6 +468,7 @@ from litellm.proxy.middleware.billable_request_metrics_middleware import (
     BillableRequestMetricsMiddleware,
     BillingRecorder,
 )
+from litellm.proxy.model_change_broadcast import model_change_subscriber
 from litellm.proxy.plugin_routes import (
     register_plugins_from_config,
 )
@@ -797,6 +798,9 @@ def cleanup_router_config_variables():
 async def proxy_shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+
+    model_change_subscriber.stop()
+
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
@@ -8121,6 +8125,16 @@ class ProxyStartupEvent:
 
             # this will load all existing models on proxy startup
             await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+
+            ### REACT TO MODEL CHANGES MADE ON OTHER PODS ###
+            model_change_subscriber.start(
+                redis_cache=redis_usage_cache,
+                reconcile=partial(
+                    proxy_config.add_deployment,
+                    prisma_client=prisma_client,
+                    proxy_logging_obj=proxy_logging_obj,
+                ),
+            )
 
             ### GET STORED CREDENTIALS ###
             scheduler.add_job(

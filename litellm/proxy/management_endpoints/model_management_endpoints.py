@@ -49,6 +49,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     update_team as _legacy_update_team,
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
+from litellm.proxy.model_change_broadcast import broadcast_model_change
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import ModelTableRepository
@@ -325,6 +326,7 @@ async def patch_model(
         # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
         live_before_reload = live_model_ids_snapshot()
         await clear_cache()
+        await broadcast_model_change(operation="updated", model_id=model_id)
 
         ## CREATE AUDIT LOG ##
         asyncio.create_task(
@@ -430,6 +432,7 @@ async def _set_model_blocked_status(
 
         live_before_reload = live_model_ids_snapshot()
         await clear_cache()
+        await broadcast_model_change(operation="updated", model_id=data.model_id)
 
         asyncio.create_task(
             create_object_audit_log(
@@ -1186,6 +1189,8 @@ async def delete_model(
             if llm_router is not None:
                 llm_router.delete_deployment(id=model_info.id)
 
+            await broadcast_model_change(operation="deleted", model_id=model_info.id)
+
             # Runs after the row delete so the sibling check sees post-delete state.
             if model_params.model_info.team_id is not None:
                 await _remove_unbacked_team_models(
@@ -1370,6 +1375,10 @@ async def add_new_model(
                         prisma_client=prisma_client,
                     )
                 await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+                await broadcast_model_change(
+                    operation="created",
+                    model_id=model_response.model_id if model_response is not None else None,
+                )
                 # don't let failed slack alert block the /model/new response
                 _alerting = general_settings.get("alerting", []) or []
                 if "slack" in _alerting:
@@ -1543,6 +1552,7 @@ async def update_model(
             # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
             live_before_reload = live_model_ids_snapshot()
             await clear_cache()
+            await broadcast_model_change(operation="updated", model_id=_model_id)
             ## CREATE AUDIT LOG ##
             asyncio.create_task(
                 create_object_audit_log(

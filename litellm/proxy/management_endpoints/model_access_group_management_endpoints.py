@@ -22,6 +22,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     reload_serving_verdict,
     clear_cache,
 )
+from litellm.proxy.model_change_broadcast import broadcast_model_change
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.model_repository import ModelRepository
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -419,6 +420,7 @@ async def create_model_group(
         live_before_reload = live_model_ids_snapshot()
 
         await clear_cache()
+        await broadcast_model_change(operation="updated")
         _raise_http_if_reload_degraded_serving(
             before=live_before_reload,
             written_models=updated_pairs,
@@ -679,6 +681,7 @@ async def update_access_group(
         # Clear cache and reload models to pick up the access group changes
         live_before_reload = live_model_ids_snapshot()
         await clear_cache()
+        await broadcast_model_change(operation="updated")
         _raise_http_if_reload_degraded_serving(
             before=live_before_reload,
             written_models=list({**dict(stripped_pairs), **dict(updated_pairs)}.items()),
@@ -781,6 +784,7 @@ async def delete_access_group(
         # Clear cache and reload models to pick up the access group changes
         live_before_reload = live_model_ids_snapshot()
         await clear_cache()
+        await broadcast_model_change(operation="updated")
         _raise_http_if_reload_degraded_serving(
             before=live_before_reload,
             written_models=removed_pairs,
