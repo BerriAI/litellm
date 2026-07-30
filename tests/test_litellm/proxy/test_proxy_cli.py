@@ -21,6 +21,51 @@ from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
 
 @pytest.mark.xdist_group("proxy_cli")
 class TestProxyInitializationHelpers:
+    def test_resolve_ssl_file_paths_materializes_inline_pem(self, monkeypatch):
+        cert_pem = "-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----"
+        key_pem = "-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----"
+        monkeypatch.setenv("LITELLM_SSL_CERT_PEM", cert_pem)
+        monkeypatch.setenv("LITELLM_SSL_KEY_PEM", key_pem)
+
+        cert_path, key_path = ProxyInitializationHelpers._resolve_ssl_file_paths(None, None)
+
+        assert cert_path is not None
+        assert key_path is not None
+        assert Path(cert_path).read_text(encoding="utf-8") == f"{cert_pem}\n"
+        assert Path(key_path).read_text(encoding="utf-8") == f"{key_pem}\n"
+        assert os.stat(cert_path).st_mode & 0o777 == 0o600
+        assert os.stat(key_path).st_mode & 0o777 == 0o600
+
+    def test_resolve_ssl_file_paths_preserves_path_pair(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_SSL_CERT_PEM", raising=False)
+        monkeypatch.delenv("LITELLM_SSL_KEY_PEM", raising=False)
+        assert ProxyInitializationHelpers._resolve_ssl_file_paths(
+            "/tls/cert.pem", "/tls/key.pem"
+        ) == ("/tls/cert.pem", "/tls/key.pem")
+
+    @pytest.mark.parametrize(
+        ("cert_path", "key_path", "cert_pem", "key_pem"),
+        [
+            ("/tls/cert.pem", None, None, None),
+            (None, "/tls/key.pem", None, None),
+            (None, None, "certificate", None),
+            (None, None, None, "private-key"),
+            ("/tls/cert.pem", "/tls/key.pem", "certificate", "private-key"),
+        ],
+    )
+    def test_resolve_ssl_file_paths_rejects_incomplete_or_mixed_sources(
+        self, monkeypatch, cert_path, key_path, cert_pem, key_pem
+    ):
+        monkeypatch.delenv("LITELLM_SSL_CERT_PEM", raising=False)
+        monkeypatch.delenv("LITELLM_SSL_KEY_PEM", raising=False)
+        if cert_pem is not None:
+            monkeypatch.setenv("LITELLM_SSL_CERT_PEM", cert_pem)
+        if key_pem is not None:
+            monkeypatch.setenv("LITELLM_SSL_KEY_PEM", key_pem)
+
+        with pytest.raises(click.ClickException):
+            ProxyInitializationHelpers._resolve_ssl_file_paths(cert_path, key_path)
+
     @patch("importlib.metadata.version")
     @patch("click.echo")
     def test_echo_litellm_version(self, mock_echo, mock_version):
@@ -507,6 +552,10 @@ class TestProxyInitializationHelpers:
         modified_url = append_query_params(None, {"connection_limit": 10})
         assert modified_url == ""
 
+    @patch(
+        "litellm.proxy.proxy_cli.ProxyInitializationHelpers._resolve_ssl_file_paths",
+        return_value=("/tls/resolved.crt", "/tls/resolved.key"),
+    )
     @patch("uvicorn.run")
     @patch("atexit.register")  # critical
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
@@ -514,7 +563,12 @@ class TestProxyInitializationHelpers:
         "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
     )
     def test_skip_server_startup(
-        self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run
+        self,
+        mock_should_update,
+        mock_setup_db,
+        mock_atexit_register,
+        mock_uvicorn_run,
+        mock_resolve_ssl_paths,
     ):
         from click.testing import CliRunner
 
@@ -569,6 +623,7 @@ class TestProxyInitializationHelpers:
             ), f"exit_code={result.exit_code}, output={result.output}"
             assert "Skipping server startup" in result.output
             mock_uvicorn_run.assert_not_called()
+            mock_resolve_ssl_paths.assert_not_called()
 
             # --- normal startup ---
             mock_uvicorn_run.reset_mock()
@@ -579,6 +634,10 @@ class TestProxyInitializationHelpers:
                 result.exit_code == 0
             ), f"exit_code={result.exit_code}, output={result.output}"
             mock_uvicorn_run.assert_called_once()
+            mock_resolve_ssl_paths.assert_called_once_with(None, None)
+            call_kwargs = mock_uvicorn_run.call_args.kwargs
+            assert call_kwargs["ssl_certfile"] == "/tls/resolved.crt"
+            assert call_kwargs["ssl_keyfile"] == "/tls/resolved.key"
 
     @patch("uvicorn.run")
     @patch("atexit.register")

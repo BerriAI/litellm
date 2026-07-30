@@ -44,6 +44,8 @@ _deprioritize_script_dir_in_sys_path()
 sys.path.append(os.getcwd())
 
 config_filename: Final = "litellm.secrets"
+LITELLM_SSL_CERT_PEM: Final = "LITELLM_SSL_CERT_PEM"
+LITELLM_SSL_KEY_PEM: Final = "LITELLM_SSL_KEY_PEM"
 
 litellm_mode: Final = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
@@ -178,6 +180,41 @@ def append_query_params(url: str | None, params: dict) -> str:
 
 
 class ProxyInitializationHelpers:
+    @staticmethod
+    def _resolve_ssl_file_paths(
+        ssl_certfile_path: str | None,
+        ssl_keyfile_path: str | None,
+    ) -> tuple[str | None, str | None]:
+        cert_pem_configured = LITELLM_SSL_CERT_PEM in os.environ
+        key_pem_configured = LITELLM_SSL_KEY_PEM in os.environ
+        path_configured = ssl_certfile_path is not None or ssl_keyfile_path is not None
+        pem_configured = cert_pem_configured or key_pem_configured
+
+        if path_configured and pem_configured:
+            raise click.ClickException(
+                "Configure inbound TLS with either the SSL file paths or "
+                "LITELLM_SSL_CERT_PEM and LITELLM_SSL_KEY_PEM, not both."
+            )
+        if path_configured:
+            if not ssl_certfile_path or not ssl_keyfile_path:
+                raise click.ClickException("Both --ssl_certfile_path and --ssl_keyfile_path are required for SSL.")
+            return ssl_certfile_path, ssl_keyfile_path
+        if not pem_configured:
+            return None, None
+
+        cert_pem = os.getenv(LITELLM_SSL_CERT_PEM)
+        key_pem = os.getenv(LITELLM_SSL_KEY_PEM)
+        if not cert_pem or not key_pem:
+            raise click.ClickException("Both LITELLM_SSL_CERT_PEM and LITELLM_SSL_KEY_PEM are required for SSL.")
+
+        from litellm.proxy.tls_utils import materialize_pem_files
+
+        paths = materialize_pem_files(
+            {"cert.pem": cert_pem, "key.pem": key_pem},
+            directory_prefix="litellm-proxy-tls-",
+        )
+        return paths["cert.pem"], paths["key.pem"]
+
     @staticmethod
     def _echo_litellm_version():
         pkg_version: Final = importlib.metadata.version("litellm")
@@ -1368,6 +1405,11 @@ def run_server(
         if skip_server_startup:
             print("LiteLLM: Setup complete. Skipping server startup as requested.")
             return
+
+        ssl_certfile_path, ssl_keyfile_path = ProxyInitializationHelpers._resolve_ssl_file_paths(
+            ssl_certfile_path,
+            ssl_keyfile_path,
+        )
 
         running_uvicorn: Final = run_gunicorn is False and run_hypercorn is False
         uvicorn_args: Final = ProxyInitializationHelpers._get_default_unvicorn_init_args(

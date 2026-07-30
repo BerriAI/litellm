@@ -265,10 +265,10 @@ def test_load_config_with_inline_pem_disabled_when_unwritable(monkeypatch):
     monkeypatch.setenv(bm.CLIENT_CERT_ENV, _CLIENT_CERT_PEM)
     monkeypatch.setenv(bm.CLIENT_KEY_ENV, _CLIENT_KEY_PEM)
 
-    def _explode(prefix=None):
+    def _explode(files, *, directory_prefix):
         raise OSError("read-only filesystem")
 
-    monkeypatch.setattr(bm.tempfile, "mkdtemp", _explode)
+    monkeypatch.setattr(bm, "materialize_pem_files", _explode)
 
     assert bm.load_billing_metrics_config(license_data=None, litellm_version="1.0") is None
 

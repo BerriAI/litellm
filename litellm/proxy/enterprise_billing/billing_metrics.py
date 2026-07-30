@@ -14,7 +14,6 @@ payload; the secret license key is never sent as an attribute or header.
 """
 
 import os
-import tempfile
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Optional
 
@@ -28,6 +27,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
     BillableCategory,
 )
+from litellm.proxy.tls_utils import materialize_pem_files
 
 if TYPE_CHECKING:
     from litellm.proxy._types import EnterpriseLicenseData
@@ -45,7 +45,6 @@ _METRICS_PATH: Final = "/v1/metrics"
 # values as env content cannot mount them as files, so inline PEM is written out.
 _PEM_PREFIX: Final = "-----BEGIN"
 _PEM_DIR_PREFIX: Final = "litellm-billing-mtls-"
-_PEM_FILE_MODE: Final = 0o600
 _CLIENT_CERT_FILENAME: Final = "client.crt"
 _CLIENT_KEY_FILENAME: Final = "client.key"
 _CA_CERT_FILENAME: Final = "ca.crt"
@@ -157,14 +156,6 @@ def _is_pem_content(value: str) -> bool:
     return value.lstrip().startswith(_PEM_PREFIX)
 
 
-def _write_pem(directory: str, filename: str, pem: str) -> str:
-    path: Final = os.path.join(directory, filename)
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(pem if pem.endswith("\n") else f"{pem}\n")
-    os.chmod(path, _PEM_FILE_MODE)
-    return path
-
-
 def _resolve_credential_paths(*, client_cert: str, client_key: str, ca_cert: str | None) -> _CredentialPaths:
     """
     Accept either a filesystem path or inline PEM content for each credential.
@@ -176,22 +167,26 @@ def _resolve_credential_paths(*, client_cert: str, client_key: str, ca_cert: str
     recorder is built. Raises OSError if that write fails; the caller disables
     metering rather than propagating.
     """
-    inline: Final = tuple(value for value in (client_cert, client_key, ca_cert) if value and _is_pem_content(value))
-    if not inline:
+    inline_files: Final = {
+        filename: value
+        for filename, value in (
+            (_CLIENT_CERT_FILENAME, client_cert),
+            (_CLIENT_KEY_FILENAME, client_key),
+            (_CA_CERT_FILENAME, ca_cert),
+        )
+        if value and _is_pem_content(value)
+    }
+    if not inline_files:
         return _CredentialPaths(client_cert, client_key, ca_cert)
 
-    # mkdtemp is 0o700, so the 0o600 key file it holds is unreachable by other users.
-    directory: Final = tempfile.mkdtemp(prefix=_PEM_DIR_PREFIX)
+    paths: Final = materialize_pem_files(
+        inline_files,
+        directory_prefix=_PEM_DIR_PREFIX,
+    )
     return _CredentialPaths(
-        client_cert_path=(
-            _write_pem(directory, _CLIENT_CERT_FILENAME, client_cert) if _is_pem_content(client_cert) else client_cert
-        ),
-        client_key_path=(
-            _write_pem(directory, _CLIENT_KEY_FILENAME, client_key) if _is_pem_content(client_key) else client_key
-        ),
-        ca_cert_path=(
-            _write_pem(directory, _CA_CERT_FILENAME, ca_cert) if ca_cert and _is_pem_content(ca_cert) else ca_cert
-        ),
+        client_cert_path=paths.get(_CLIENT_CERT_FILENAME, client_cert),
+        client_key_path=paths.get(_CLIENT_KEY_FILENAME, client_key),
+        ca_cert_path=paths.get(_CA_CERT_FILENAME, ca_cert),
     )
 
 
