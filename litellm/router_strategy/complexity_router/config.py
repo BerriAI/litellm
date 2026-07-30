@@ -290,7 +290,9 @@ class CacheWarmingConfig(BaseModel):
     warm_models: tuple[str, ...] | None = Field(
         default=None,
         description=(
-            "Explicit model groups to keep warm; defaults to the first member of each tier pool. "
+            "Restricts warming to these model groups; defaults to every model across the tier pools. "
+            "A session is only ever warmed on models it has actually been served on, so this narrows that "
+            "set rather than pre-warming models the session has not used. "
             "Only Anthropic/Bedrock models that support prompt caching are warmed"
         ),
     )

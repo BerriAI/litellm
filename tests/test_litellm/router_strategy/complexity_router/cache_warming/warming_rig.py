@@ -219,6 +219,7 @@ def seed_session(
     team_id: str | None = None,
     user_id: str | None = None,
     org_id: str | None = None,
+    touched: tuple[str, ...] | None = None,
 ) -> str:
     payload = CacheWarmingPayload(
         model=served_model,
@@ -249,6 +250,10 @@ def seed_session(
     record_key = CacheWarmingStore.record_key("smart-router", caller_scope, session_id)
     redis.hashes.setdefault(store.sessions_key(), {})[record_key] = json.dumps(record.model_dump())
     redis.zsets.setdefault(store.index_key(), {})[record_key] = time.time() + 3600
+    # capture SADDs every served model, so a seeded session carries at least the one it was served on
+    redis.sets.setdefault(CacheWarmingStore.touched_key(record_key), set()).update(
+        touched if touched is not None else (served_model,)
+    )
     for model_group, stamp in (warmth or {}).items():
         redis.data[CacheWarmingStore.warmth_key(record_key, model_group)] = json.dumps(
             WarmthStamp(at=stamp, warmed=True).model_dump()

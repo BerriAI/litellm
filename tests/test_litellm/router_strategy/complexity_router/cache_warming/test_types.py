@@ -11,7 +11,12 @@ from litellm.router_strategy.complexity_router.cache_warming.types import (
 
 @pytest.mark.parametrize(
     "age,fresh",
-    [(0, True), (PROVIDER_PROMPT_CACHE_TTL_SECONDS - 1, True), (PROVIDER_PROMPT_CACHE_TTL_SECONDS, False), (601, False)],
+    [
+        (0, True),
+        (PROVIDER_PROMPT_CACHE_TTL_SECONDS - 1, True),
+        (PROVIDER_PROMPT_CACHE_TTL_SECONDS, False),
+        (601, False),
+    ],
 )
 def test_freshness_is_the_provider_ttl_and_nothing_else(age, fresh):
     """The router's warm-aware pick and the refresher's due-model calculation both read this, so a model can

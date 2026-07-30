@@ -89,30 +89,6 @@ def _stored_records(redis: FakeRedisCache) -> list[dict]:
     return [json.loads(value) for value in redis.hashes.get(SESSIONS_KEY, {}).values()]
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @pytest.mark.asyncio
 async def test_second_turn_overwrites_payload_and_preserves_other_model_warmth():
     redis = FakeRedisCache()
@@ -130,36 +106,6 @@ async def test_second_turn_overwrites_payload_and_preserves_other_model_warmth()
     served_stamp = WarmthStamp.model_validate_json(redis.data[CacheWarmingStore.warmth_key(key, "claude-sonnet-4-5")])
     assert served_stamp.at > 0 and served_stamp.warmed is True
     assert second["payload_sha256"] != first["payload_sha256"]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @pytest.mark.asyncio

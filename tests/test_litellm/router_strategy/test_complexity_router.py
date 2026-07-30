@@ -3340,9 +3340,7 @@ class TestEscalationKeywords:
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={
-                "tiers": {"SIMPLE": "shared", "COMPLEX": "shared", "REASONING": "top"}
-            },
+            complexity_router_config={"tiers": {"SIMPLE": "shared", "COMPLEX": "shared", "REASONING": "top"}},
         )
         assert router._tier_for_model("shared") == ComplexityTier.COMPLEX
         assert router._tier_for_model("top") == ComplexityTier.REASONING
@@ -3501,19 +3499,20 @@ class TestEscalationKeywords:
     def test_blank_escalation_keywords_are_stripped(self):
         """Blank/whitespace-only phrases are dropped so `"" in message` can't escalate
         every request; surrounding whitespace on real phrases is trimmed."""
-        assert ComplexityRouterConfig(
-            tiers={"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
-            escalation_keywords=["", "  "],
-        ).escalation_keywords == []
+        assert (
+            ComplexityRouterConfig(
+                tiers={"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+                escalation_keywords=["", "  "],
+            ).escalation_keywords
+            == []
+        )
         assert ComplexityRouterConfig(
             tiers={"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
             escalation_keywords=["  LITELLM ESCALATE  ", ""],
         ).escalation_keywords == ["LITELLM ESCALATE"]
 
     @pytest.mark.asyncio
-    async def test_blank_escalation_keyword_does_not_escalate_everything(
-        self, mock_router_instance, basic_config
-    ):
+    async def test_blank_escalation_keyword_does_not_escalate_everything(self, mock_router_instance, basic_config):
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
@@ -3533,9 +3532,7 @@ class TestEscalationKeywords:
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={
-                "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": ["o1-a", "o1-b", "o1-c"]}
-            },
+            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": ["o1-a", "o1-b", "o1-c"]}},
         )
         for pinned in ("o1-a", "o1-b", "o1-c"):
             assert router._escalated_pin(pinned) == pinned
@@ -3752,9 +3749,6 @@ class TestWarmAwarePick:
         self._seed(redis, warmth={"smart-claude": time_module.time()}, served_model="fast-claude")
         router = self._router(mock_router_instance, redis, plugins=[ExcludeSmartClaude()])
         picks = {
-            await router._pick_model_for_tier(
-                ComplexityTier.SIMPLE, None, None, self._kwargs()
-            )
-            for _ in range(20)
+            await router._pick_model_for_tier(ComplexityTier.SIMPLE, None, None, self._kwargs()) for _ in range(20)
         }
         assert picks == {"fast-claude"}

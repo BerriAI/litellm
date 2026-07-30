@@ -42,6 +42,9 @@ from tests.test_litellm.router_strategy.complexity_router.cache_warming.warming_
 )
 
 _PAST = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(microsecond=0)
+# warming refreshes only models a session has actually been served on, so a test that expects a replay on
+# the other tier has to seed a session that has already been there
+_VISITED_BOTH_TIERS = ("fast-claude", "smart-claude")
 
 
 @pytest.mark.asyncio
@@ -121,7 +124,7 @@ async def test_every_ceiling_the_request_path_enforces_gates_warming(arm, warmed
     counter_key = f"spend:key:{token}"
     if arm == "over-budget":
         await spend_counter_cache.async_set_cache(key=counter_key, value=100.0)
-    seed_session(redis, user_api_key=token, served_model=served, warmth={served: time.time()})
+    seed_session(redis, user_api_key=token, served_model=served, warmth={served: time.time()}, touched=(served, target))
     keys = FakeKeyDirectory({token: key_state(token=token, **fields)})
     try:
         with registered_callbacks(limiter):
@@ -143,7 +146,7 @@ async def test_warming_does_not_double_charge_a_keys_tpm():
 
     limiter, counters = real_limiter()
     llm_router, redis = warming_rig(redis=FakeRedisCache())
-    seed_session(redis, user_api_key="tpm", warmth={"fast-claude": time.time()})
+    seed_session(redis, user_api_key="tpm", warmth={"fast-claude": time.time()}, touched=_VISITED_BOTH_TIERS)
     keys = FakeKeyDirectory({"tpm": key_state(token="tpm", tpm_limit=100_000)})
     with registered_callbacks(limiter):
         await tick(llm_router, active=refresher(keys=keys, limiter=limiter))
@@ -168,7 +171,7 @@ async def test_warming_does_not_reset_a_keys_rate_limit_window():
     limiter, counters = real_limiter(window_size=3600)
     assert limiter.window_size == 3600
     llm_router, redis = warming_rig(redis=FakeRedisCache())
-    seed_session(redis, user_api_key="hourly", warmth={"fast-claude": time.time()})
+    seed_session(redis, user_api_key="hourly", warmth={"fast-claude": time.time()}, touched=_VISITED_BOTH_TIERS)
     keys = FakeKeyDirectory({"hourly": key_state(token="hourly", rpm_limit=100)})
     opened_at = int(time.time()) - 120
     await counters.async_set_cache(key="{api_key:hourly}:window", value=str(opened_at))
@@ -188,7 +191,7 @@ async def test_warming_does_not_collide_hanging_request_tracking():
     proxy_logging = proxy_logging_with_hooks()
     proxy_logging.alerting = ["slack"]
     llm_router, redis = warming_rig(redis=FakeRedisCache())
-    seed_session(redis)
+    seed_session(redis, touched=_VISITED_BOTH_TIERS)
     await tick(llm_router, active=refresher(proxy_logging=proxy_logging))
     call_ids = [call["litellm_call_id"] for call in llm_router.completion_calls]
     assert len(call_ids) == 2 and len(set(call_ids)) == 2
@@ -202,7 +205,9 @@ async def test_warming_does_not_collide_hanging_request_tracking():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("surface,channel", [("chat_completions", "metadata"), ("anthropic_messages", "litellm_metadata")])
+@pytest.mark.parametrize(
+    "surface,channel", [("chat_completions", "metadata"), ("anthropic_messages", "litellm_metadata")]
+)
 async def test_a_due_session_is_replayed_on_its_own_surface_and_stamped_warm(surface, channel):
     """The replay reaches the surface it was captured from, through that surface's own metadata channel, with
     generation held at the floor and the session_id that lets deployment affinity pin the replay to the same
@@ -210,7 +215,11 @@ async def test_a_due_session_is_replayed_on_its_own_surface_and_stamped_warm(sur
     the system block ride along there. The warmth stamp is what paces the next tick."""
     llm_router, redis = warming_rig(redis=FakeRedisCache())
     record_key = seed_session(
-        redis, call_surface=surface, warmth={"fast-claude": time.time()}, tool_choice={"type": "auto"}
+        redis,
+        call_surface=surface,
+        warmth={"fast-claude": time.time()},
+        touched=_VISITED_BOTH_TIERS,
+        tool_choice={"type": "auto"},
     )
     await tick(llm_router)
     calls = llm_router.anthropic_calls if surface == "anthropic_messages" else llm_router.completion_calls
@@ -239,7 +248,7 @@ async def test_a_replay_the_provider_rejected_is_stamped_cold_and_still_paced():
     failing every replay is retried on the refresh interval rather than on every tick."""
     llm_router, redis = warming_rig(redis=FakeRedisCache())
     llm_router.failing_message_marker = "deployment policy"
-    record_key = seed_session(redis, warmth={"fast-claude": time.time()})
+    record_key = seed_session(redis, warmth={"fast-claude": time.time()}, touched=_VISITED_BOTH_TIERS)
     await tick(llm_router)
     assert llm_router.completion_calls == [] and len(llm_router.failed_calls) == 1
     stamp = warmth_stamp(redis, record_key, "smart-claude")
@@ -255,7 +264,7 @@ async def test_a_replay_refused_by_admission_is_stamped_cold_rather_than_warm():
     own ceilings leaves the cache exactly as cold as a provider failure does."""
     limiter, counters = real_limiter()
     llm_router, redis = warming_rig(redis=FakeRedisCache())
-    record_key = seed_session(redis, user_api_key="k", warmth={"fast-claude": time.time()})
+    record_key = seed_session(redis, user_api_key="k", warmth={"fast-claude": time.time()}, touched=_VISITED_BOTH_TIERS)
     keys = FakeKeyDirectory({"k": key_state(token="k", rpm_limit=1)})
     await counters.async_set_cache(key="{api_key:k}:window", value=str(int(time.time())))
     await counters.async_set_cache(key="{api_key:k}:requests", value=1)
@@ -281,6 +290,7 @@ async def test_session_pacing_bounds_how_often_warming_spends(last_activity_offs
         redis,
         last_activity=now + last_activity_offset if last_activity_offset is not None else None,
         warmth={"fast-claude": now, "smart-claude": now + warmth_offset} if warmth_offset is not None else None,
+        touched=_VISITED_BOTH_TIERS,
     )
     await tick(llm_router)
     assert replayed_models(llm_router) == replayed
@@ -345,8 +355,6 @@ async def test_warmth_is_not_shared_between_two_auto_routers_on_one_redis():
     assert await other.get_warmth(record, ("fast-claude", "smart-claude")) == {}
 
 
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("team_blocked,warmed", [(True, False), (False, True)])
 async def test_a_keyless_proxy_caller_is_authorized_through_its_reconstructed_tenancy(team_blocked, warmed):
@@ -355,15 +363,14 @@ async def test_a_keyless_proxy_caller_is_authorized_through_its_reconstructed_te
     gate binds: a blocked team stops the replays, an open team still warms."""
     llm_router, redis = warming_rig(redis=FakeRedisCache())
     key_cache = DualCache()
-    await key_cache.async_set_cache(
-        key="team_id:jwt-team", value=team("jwt-team", blocked=team_blocked, models=[])
-    )
+    await key_cache.async_set_cache(key="team_id:jwt-team", value=team("jwt-team", blocked=team_blocked, models=[]))
     seed_session(
         redis,
         user_api_key=None,
         caller_scope="jwt-user",
         team_id="jwt-team",
         warmth={"fast-claude": time.time()},
+        touched=_VISITED_BOTH_TIERS,
     )
     await tick(llm_router, active=refresher(keys=FakeKeyDirectory({})), user_api_key_cache=key_cache)
     assert bool(llm_router.completion_calls) is warmed
@@ -375,7 +382,13 @@ async def test_a_keyless_proxy_caller_is_authorized_through_its_reconstructed_te
 async def test_a_direct_sdk_session_with_no_recorded_identity_still_warms_unattributed():
     """No proxy auth object means no tenancy to preserve, so warming stays unattributed as before."""
     llm_router, redis = warming_rig(redis=FakeRedisCache())
-    seed_session(redis, user_api_key=None, caller_scope="unscoped", warmth={"fast-claude": time.time()})
+    seed_session(
+        redis,
+        user_api_key=None,
+        caller_scope="unscoped",
+        warmth={"fast-claude": time.time()},
+        touched=_VISITED_BOTH_TIERS,
+    )
     await tick(llm_router, active=refresher(keys=FakeKeyDirectory({})))
     assert replayed_models(llm_router) == ["smart-claude"]
     assert llm_router.completion_calls[0]["metadata"]["user_api_key_team_id"] is None
@@ -402,7 +415,13 @@ async def test_the_concurrency_bound_bounds_decompressed_payloads_not_just_repla
 
     llm_router, redis = warming_rig(redis=FakeRedisCache(), replay_delay=0.02)
     for index in range(6):
-        seed_session(redis, session_id=f"sess-{index}", caller_scope=f"hash-{index}", user_api_key=f"hash-{index}")
+        seed_session(
+            redis,
+            session_id=f"sess-{index}",
+            caller_scope=f"hash-{index}",
+            user_api_key=f"hash-{index}",
+            touched=_VISITED_BOTH_TIERS,
+        )
     real_decompress = refresher_module.decompress_payload
     inflated_before_first_replay_completed: list[int] = []
     inflated = 0
@@ -423,6 +442,22 @@ async def test_the_concurrency_bound_bounds_decompressed_payloads_not_just_repla
     assert len(llm_router.completion_calls) == 12, "every seeded session should warm both due models"
     assert llm_router.max_concurrent <= 2, "replays in flight must respect the bound"
     assert max(inflated_before_first_replay_completed) <= 2, "payloads inflated must respect the same bound"
+
+
+@pytest.mark.asyncio
+async def test_warming_refreshes_only_the_models_a_session_has_been_served_on():
+    """Warming keeps a session's own caches alive so returning to a tier it has already used is a read; it does
+    not pre-warm tiers on speculation. A session that has only ever been SIMPLE must therefore cost one replay,
+    not one per tier, and the first switch to a new tier is a cold write by design. The second session is the
+    payoff case: having visited both tiers, both stay warm."""
+    llm_router, redis = warming_rig(redis=FakeRedisCache())
+    seed_session(redis, session_id="simple-only", caller_scope="a", served_model="fast-claude")
+    seed_session(redis, session_id="both-tiers", caller_scope="b", touched=_VISITED_BOTH_TIERS)
+    await tick(llm_router)
+    warmed = sorted(replayed_models(llm_router))
+    assert warmed == ["fast-claude", "fast-claude", "smart-claude"], (
+        "the SIMPLE-only session must not pay to warm a tier it has never been routed to"
+    )
 
 
 @pytest.mark.asyncio
