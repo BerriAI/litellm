@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from litellm._logging import verbose_router_logger
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.utils import ModelResponse
 
 from .config import (
@@ -427,13 +428,14 @@ class ComplexityRouter(CustomLogger):
         # attributed to the calling key/team instead of being dropped. Excludes the
         # parent request's budget reservation, which the routed completion (not this
         # internal classifier call) is responsible for reconciling.
-        metadata = _classifier_call_metadata((request_kwargs or {}).get("litellm_metadata"))
+        request_metadata = (request_kwargs or {}).get("litellm_metadata") or (request_kwargs or {}).get("metadata")
+        metadata = _classifier_call_metadata(request_metadata)
 
         proxy_server_request = {
             "body": {
                 "model": llm_config.model,
                 "messages": [{"role": "user", "content": classification_prompt}],
-                "response_format": TierClassification.model_json_schema(),
+                "response_format": type_to_response_format_param(TierClassification),
             }
         }
 
