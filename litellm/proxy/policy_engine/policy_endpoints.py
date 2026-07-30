@@ -136,7 +136,7 @@ async def list_policies(version_status: Optional[str] = None):
             [
                 _config_policy_to_db_response(policy_name, policy)
                 for policy_name, policy in registry.list_config_policies().items()
-                if policy_name not in db_policy_names and registry.get_source(policy_name) != "db"
+                if policy_name not in db_policy_names
             ]
             if include_config
             else []

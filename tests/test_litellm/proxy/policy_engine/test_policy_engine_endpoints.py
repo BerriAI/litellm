@@ -160,6 +160,33 @@ class TestListPoliciesIncludesConfig:
         assert db_entry.version_status == "draft"
 
     @pytest.mark.asyncio
+    async def test_stale_registry_provenance_does_not_hide_config_policy(self, policy_registry, monkeypatch):
+        """
+        Another proxy instance can delete or demote the production DB override
+        between registry syncs. The endpoint's fresh DB query is the source of
+        truth for conflicts; stale in-memory provenance from the last sync must
+        not suppress the config entry once no production override exists.
+        """
+        policy_registry.load_policies({"shared-name": {"guardrails": {"add": ["config-guard"]}}})
+        production_row = _make_policy_row(policy_id="uuid-1", policy_name="shared-name", guardrails_add=["db-guard"])
+        sync_prisma = MagicMock()
+        sync_prisma.db.litellm_policytable.find_many = AsyncMock(side_effect=[[production_row], []])
+        await policy_registry.sync_policies_from_db(sync_prisma)
+        assert policy_registry.get_source("shared-name") == "db"
+
+        fresh_prisma = MagicMock()
+        fresh_prisma.db.litellm_policytable.find_many = AsyncMock(return_value=[])
+        _set_prisma(monkeypatch, fresh_prisma)
+
+        response = await policy_endpoints.list_policies()
+
+        assert response.total_count == 1
+        entry = response.policies[0]
+        assert entry.policy_name == "shared-name"
+        assert entry.definition_location == "config"
+        assert entry.guardrails_add == ["config-guard"]
+
+    @pytest.mark.asyncio
     async def test_version_status_filter_excludes_config_policies(self, policy_registry, monkeypatch):
         row = _make_policy_row(policy_id="uuid-1", policy_name="db-policy", version_status="draft")
         prisma = MagicMock()
