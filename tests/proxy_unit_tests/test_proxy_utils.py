@@ -1785,6 +1785,29 @@ def test_get_temp_budget_increase_non_finite_is_ignored(bad_increase):
     assert _get_temp_budget_increase(token) is None
 
 
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"temp_budget_increase": "not-a-number", "temp_budget_expiry": None},
+        {"temp_budget_increase": None, "temp_budget_expiry": None},
+        {"temp_budget_increase": "5", "temp_budget_expiry": "not-a-date"},
+    ],
+)
+def test_get_temp_budget_increase_malformed_metadata_is_ignored(metadata):
+    """A non-numeric increase or unparseable expiry in raw metadata must fail closed (no boost),
+    not raise. Both multi-window auth and reservation call this now, so an unguarded float()/
+    fromisoformat would turn junk metadata into a 500 instead of enforcing the real budget."""
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import _get_temp_budget_increase
+
+    future_expiry = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    resolved = {k: (future_expiry if k == "temp_budget_expiry" and v is None else v) for k, v in metadata.items()}
+    token = UserAPIKeyAuth(max_budget=100, spend=0, metadata=resolved)
+    assert _get_temp_budget_increase(token) is None
+
+
 def test_update_key_budget_with_temp_budget_increase():
     from datetime import datetime, timedelta
 
@@ -1808,6 +1831,29 @@ def test_update_key_budget_with_temp_budget_increase():
     assert result.max_budget == 200
     assert result is not valid_token
     assert valid_token.max_budget == 100
+
+
+def test_update_key_budget_with_temp_budget_increase_overflow_falls_back():
+    """A finite boost large enough to overflow the sum to inf must leave the finite max_budget
+    unchanged; otherwise every downstream math.isfinite guard skips its over-budget check and
+    the single-max_budget key stops rejecting over-budget requests."""
+    import math
+    from datetime import datetime, timedelta
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import (
+        _update_key_budget_with_temp_budget_increase,
+    )
+
+    expiry_in_isoformat = (datetime.now() + timedelta(days=1)).isoformat()
+    valid_token = UserAPIKeyAuth(
+        max_budget=1e308,
+        spend=0,
+        metadata={"temp_budget_increase": 1e308, "temp_budget_expiry": expiry_in_isoformat},
+    )
+    result = _update_key_budget_with_temp_budget_increase(valid_token)
+    assert result.max_budget == 1e308
+    assert math.isfinite(result.max_budget)
 
 
 @pytest.mark.asyncio
