@@ -3,19 +3,18 @@
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { PaginationState } from "@tanstack/react-table";
-import { PlusOutlined } from "@ant-design/icons";
-import { Button, Space, Typography, message } from "antd";
+import { Plus } from "lucide-react";
 import React, { useCallback, useMemo, useState } from "react";
 
 import { MemoryRow, createMemory, deleteMemory, fetchMemoryList, updateMemory } from "@/components/networking";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
+import MessageManager from "@/components/molecules/message_manager";
+import { Button } from "@/components/ui/button";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 
 import { MemoryDetailDrawer } from "./MemoryDetailDrawer";
 import { MemoryEditModal } from "./MemoryEditModal";
 import { MemoryTable } from "./MemoryTable";
-
-const { Text, Paragraph, Title } = Typography;
 
 interface MemoryViewProps {
   accessToken: string | null;
@@ -62,7 +61,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   // All three write endpoints share the same success/error plumbing:
   //   - on success: invalidate the list query so every cached page
   //     refetches from scratch (pagination + filter-aware).
-  //   - on error: surface the message via antd `message.error`.
+  //   - on error: surface the message via `MessageManager.error`.
 
   const invalidateList = useCallback(
     () => queryClient.invalidateQueries({ queryKey: [MEMORY_LIST_KEY] }),
@@ -75,11 +74,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       return createMemory(accessToken, args);
     },
     onSuccess: (row) => {
-      message.success(`Created ${row.key}`);
+      MessageManager.success(`Created ${row.key}`);
       invalidateList();
     },
     onError: (err: Error) => {
-      message.error(`Save failed: ${err.message}`);
+      MessageManager.error(`Save failed: ${err.message}`);
     },
   });
 
@@ -90,11 +89,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       return updateMemory(accessToken, key, payload);
     },
     onSuccess: (row) => {
-      message.success(`Updated ${row.key}`);
+      MessageManager.success(`Updated ${row.key}`);
       invalidateList();
     },
     onError: (err: Error) => {
-      message.error(`Save failed: ${err.message}`);
+      MessageManager.error(`Save failed: ${err.message}`);
     },
   });
 
@@ -104,11 +103,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       return deleteMemory(accessToken, key).then(() => key);
     },
     onSuccess: (key) => {
-      message.success(`Deleted ${key}`);
+      MessageManager.success(`Deleted ${key}`);
       invalidateList();
     },
     onError: (err: Error) => {
-      message.error(`Delete failed: ${err.message}`);
+      MessageManager.error(`Delete failed: ${err.message}`);
     },
   });
 
@@ -150,7 +149,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       try {
         metadataPayload = JSON.parse(metadataText);
       } catch {
-        message.error("Metadata must be valid JSON (or leave empty).");
+        MessageManager.error("Metadata must be valid JSON (or leave empty).");
         return false;
       }
     }
@@ -177,19 +176,21 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   };
 
   return (
-    <div className="w-full" style={{ padding: 24 }}>
-      <Space direction="vertical" size="large" style={{ width: "100%" }}>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
+    <div className="w-full p-6">
+      <div className="flex flex-col gap-6">
+        <div className="flex items-start justify-between gap-4">
           <div>
-            <Title level={3} style={{ marginBottom: 4 }}>
-              Memory
-            </Title>
-            <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-              Inspect what your agents have stored under <Text code>/v1/memory</Text>. Scoped to memories visible to
-              your user / team (admins see all).
-            </Paragraph>
+            <h1 className="text-2xl font-semibold text-foreground">Memory</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Inspect what your agents have stored under{" "}
+              <code className="rounded-sm border border-border bg-muted px-1 py-0.5 font-mono text-xs text-foreground">
+                /v1/memory
+              </code>
+              . Scoped to memories visible to your user / team (admins see all).
+            </p>
           </div>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsCreateOpen(true)}>
+          <Button onClick={() => setIsCreateOpen(true)}>
+            <Plus />
             New memory
           </Button>
         </div>
@@ -209,7 +210,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
           onEditClick={handleEdit}
           onDeleteClick={handleDelete}
         />
-      </Space>
+      </div>
 
       {/* Detail drawer */}
       <MemoryDetailDrawer row={detailRow} onClose={() => setDetailRow(null)} />

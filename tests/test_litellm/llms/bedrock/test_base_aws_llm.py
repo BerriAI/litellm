@@ -292,21 +292,55 @@ def test_web_identity_token_oidc_reference_still_resolved():
     assert exc.value.status_code == 401
 
 
-def test_web_identity_path_not_cached_in_iam_cache():
+def test_web_identity_credentials_cached_in_iam_cache():
+    """
+    Web identity STS credentials are cached for their STS lifetime, so repeated
+    get_credentials calls (e.g. per-request guardrail auth) reuse the assumed-role
+    credentials instead of replaying the OIDC token to STS on every request.
+    """
     base = BaseAWSLLM()
     with patch.object(
         base,
         "_auth_with_web_identity_token",
-        return_value=(Credentials("wi-ak", "wi-sk", "wi-tok"), None),
+        return_value=(Credentials("wi-ak", "wi-sk", "wi-tok"), 3540),
     ) as mock_wi:
         kwargs = dict(
-            aws_web_identity_token="jwt-token",
+            aws_web_identity_token="oidc/google/https://example.com/",
             aws_role_name="arn:aws:iam::123456789012:role/WebIdentity",
             aws_session_name="web-id-session",
         )
-        base.get_credentials(**kwargs)
-        base.get_credentials(**kwargs)
+        first = base.get_credentials(**kwargs)
+        second = base.get_credentials(**kwargs)
+        assert mock_wi.call_count == 1
+        assert first is second
+
+
+def test_web_identity_cache_is_keyed_on_credential_args():
+    """
+    Two web identity configs that differ in any credential arg (here the role)
+    must not share cached credentials.
+    """
+    base = BaseAWSLLM()
+    with patch.object(
+        base,
+        "_auth_with_web_identity_token",
+        side_effect=[
+            (Credentials("wi-ak-a", "wi-sk-a", "wi-tok-a"), 3540),
+            (Credentials("wi-ak-b", "wi-sk-b", "wi-tok-b"), 3540),
+        ],
+    ) as mock_wi:
+        first = base.get_credentials(
+            aws_web_identity_token="oidc/google/https://example.com/",
+            aws_role_name="arn:aws:iam::123456789012:role/RoleA",
+            aws_session_name="web-id-session",
+        )
+        second = base.get_credentials(
+            aws_web_identity_token="oidc/google/https://example.com/",
+            aws_role_name="arn:aws:iam::123456789012:role/RoleB",
+            aws_session_name="web-id-session",
+        )
         assert mock_wi.call_count == 2
+        assert first.access_key != second.access_key
 
 
 def test_boto3_init_tracer_wrapping():

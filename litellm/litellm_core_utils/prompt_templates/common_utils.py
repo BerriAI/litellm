@@ -17,6 +17,7 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Sequence,
     Tuple,
     Union,
     cast,
@@ -1591,23 +1592,23 @@ def _tool_message_carries_image(message: AllMessageValues) -> bool:
 
 def _split_images_from_tool_message(
     message: AllMessageValues,
-) -> tuple[AllMessageValues, list[ChatCompletionImageObject]]:
+) -> tuple[AllMessageValues, tuple[ChatCompletionImageObject, ...]]:
     content = message.get("content")
     if not isinstance(content, list):
-        return message, []
-    image_parts = [
+        return message, ()
+    image_parts = tuple(
         cast(ChatCompletionImageObject, part)  # cast-ok: shape checked by _is_image_url_part
         for part in content
         if _is_image_url_part(part)
-    ]
+    )
     if not image_parts:
-        return message, []
+        return message, ()
     remaining_parts = [part for part in content if not _is_image_url_part(part)]
     rewritten = {**message, "content": remaining_parts if remaining_parts else TOOL_RESULT_IMAGE_PLACEHOLDER}
     return cast(AllMessageValues, rewritten), image_parts  # cast-ok: dict spread keeps keys like cache_control
 
 
-def _hoist_images_in_tool_message_run(run: list[AllMessageValues]) -> list[AllMessageValues]:
+def _hoist_images_in_tool_message_run(run: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
     split_results = [_split_images_from_tool_message(message) for message in run]
     hoisted_images = [image for _, images in split_results for image in images]
     rewritten_messages = [message for message, _ in split_results]
@@ -1617,7 +1618,7 @@ def _hoist_images_in_tool_message_run(run: list[AllMessageValues]) -> list[AllMe
     return rewritten_messages + [hoisted_user_message]
 
 
-def hoist_images_from_tool_messages(messages: list[AllMessageValues]) -> list[AllMessageValues]:
+def hoist_images_from_tool_messages(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
     """
     Move image content out of role:"tool" messages into a user message inserted
     after the run of consecutive tool messages it belongs to.

@@ -1,13 +1,13 @@
 "use client";
 
 import { SortingState } from "@tanstack/react-table";
-import { Tooltip, Switch } from "antd";
-import { CheckCircleOutlined } from "@ant-design/icons";
-import { Bot } from "lucide-react";
+import { Bot, CircleCheck } from "lucide-react";
 import React, { useMemo, useState } from "react";
 
 import { Agent } from "@/components/agents/types";
 import { DataTable } from "@/components/shared/DataTable";
+import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 import { getAgentsTableColumns } from "./AgentsTableColumns";
 
@@ -67,18 +67,27 @@ const AgentsTable: React.FC<AgentsTableProps> = ({
       size="compact"
       toolbar={() => (
         <div className="flex items-center justify-end">
-          <Tooltip title="When enabled, only agents with reachable URLs are shown">
-            <div className="flex items-center gap-2">
-              <CheckCircleOutlined className={healthCheckEnabled ? "text-green-500" : "text-muted-foreground"} />
-              <span className="text-sm text-muted-foreground">Health Check</span>
-              <Switch
-                size="small"
-                checked={healthCheckEnabled}
-                onChange={onHealthCheckToggle}
-                loading={isHealthCheckLoading}
+          <TooltipProvider delay={300}>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <div className="flex items-center gap-2">
+                    <CircleCheck
+                      className={healthCheckEnabled ? "size-4 text-green-500" : "size-4 text-muted-foreground"}
+                    />
+                    <span className="text-sm text-muted-foreground">Health Check</span>
+                    <Switch
+                      size="sm"
+                      checked={healthCheckEnabled}
+                      onCheckedChange={onHealthCheckToggle}
+                      disabled={isHealthCheckLoading}
+                    />
+                  </div>
+                }
               />
-            </div>
-          </Tooltip>
+              <TooltipContent>When enabled, only agents with reachable URLs are shown</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       )}
     />

@@ -5226,3 +5226,325 @@ async def test_add_litellm_data_to_request_unions_metadata_tags_with_header_tags
     tags = updated["litellm_metadata"]["tags"]
     assert "header-tag" in tags
     assert "body-tag" in tags
+
+
+def _make_chat_request_mock() -> MagicMock:
+    return _make_request_mock("/v1/chat/completions", {"Content-Type": "application/json"})
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_clobbers_caller_supplied_user(monkeypatch):
+    """The flag exists so providers can ban by a tamper-proof id; a caller-chosen
+    `user` must never survive, and the raw sk- key must never be forwarded."""
+    from litellm.proxy._types import hash_token
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    raw_key = "sk-overwrite-user-test-1234"
+    user_api_key_dict = UserAPIKeyAuth(api_key=raw_key)
+    user_api_key_dict.via_virtual_key = True
+    data = {"model": "gpt-4o", "user": "attacker-chosen-id"}
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == hash_token(raw_key)
+    assert updated_data["user"] != "attacker-chosen-id"
+    assert raw_key not in updated_data["user"]
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_sets_user_when_absent(monkeypatch):
+    from litellm.proxy._types import hash_token
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    raw_key = "sk-overwrite-user-test-5678"
+    user_api_key_dict = UserAPIKeyAuth(api_key=raw_key)
+    user_api_key_dict.via_virtual_key = True
+    data = {"model": "gpt-4o"}
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == hash_token(raw_key)
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_disabled_preserves_caller_user():
+    assert litellm.overwrite_user_with_key_hash is False
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-overwrite-user-test-9999")
+    user_api_key_dict.via_virtual_key = True
+    data = {"model": "gpt-4o", "user": "caller-chosen-id"}
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "caller-chosen-id"
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_skips_custom_auth_credential(monkeypatch):
+    """Custom-auth credentials are not sk-prefixed or JWTs, so UserAPIKeyAuth stores
+    them raw; the stamp must skip them entirely so auth material never leaks."""
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    raw_credential = "my-custom-auth-credential-abc123"
+    user_api_key_dict = UserAPIKeyAuth(api_key=raw_credential)
+    assert user_api_key_dict.api_key == raw_credential
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "user": "caller-chosen-id"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "caller-chosen-id"
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_skips_jwt_auth(monkeypatch):
+    """A hashed JWT rotates on every token re-issue, so it is useless as a stable
+    ban id; JWT-authenticated requests are not stamped."""
+    from litellm.proxy._types import hash_token
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    hashed_jwt = f"hashed-jwt-{hash_token('some-jwt-token')}"
+    user_api_key_dict = UserAPIKeyAuth(api_key=hashed_jwt)
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "user": "caller-chosen-id"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "caller-chosen-id"
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_skips_hex_shaped_custom_credential(monkeypatch):
+    """A custom-auth credential that happens to be 64 hex chars is indistinguishable
+    from a key hash by shape alone; only the server-set via_virtual_key marker may
+    authorize stamping, so this raw credential must never be forwarded."""
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    hex_shaped_credential = "a" * 64
+    user_api_key_dict = UserAPIKeyAuth(api_key=hex_shaped_credential)
+    assert user_api_key_dict.api_key == hex_shaped_credential
+    assert user_api_key_dict.via_virtual_key is False
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "user": "caller-chosen-id"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "caller-chosen-id"
+
+
+def test_via_virtual_key_cannot_be_forged_from_validated_input():
+    from_kwargs = UserAPIKeyAuth(api_key="b" * 64, via_virtual_key=True)
+    assert from_kwargs.via_virtual_key is False
+
+    from_dict = UserAPIKeyAuth.model_validate({"api_key": "b" * 64, "via_virtual_key": True})
+    assert from_dict.via_virtual_key is False
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_stamps_master_key_alias(monkeypatch):
+    """Master-key requests carry the stable alias instead of a hash (so the master
+    key never propagates anywhere); the alias is the stampable id for them."""
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    user_api_key_dict = UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS)
+    user_api_key_dict.via_virtual_key = True
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "user": "attacker-chosen-id"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_rejects_alias_without_marker(monkeypatch):
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    user_api_key_dict = UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS)
+    assert user_api_key_dict.via_virtual_key is False
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "user": "caller-chosen-id"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "caller-chosen-id"
+
+
+def test_get_sanitized_user_information_from_key_drops_callback_config():
+    """
+    Regression (LIT-4306): `user_api_key_auth_metadata` lands in the
+    StandardLoggingPayload every integration receives, so the per-key callback
+    config (and the integration credentials inside it) must not ride along.
+    Everything else - notably `priority`, which the dynamic rate limiter reads
+    back off this exact field - has to survive.
+    """
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key-hash",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "langsmith",
+                    "callback_vars": {"langsmith_api_key": "litellm_enc::ciphertext"},
+                }
+            ],
+            "callback_settings": {"callback_vars": {"langfuse_secret_key": "litellm_enc::other"}},
+            "priority": "high",
+        },
+    )
+
+    result = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        user_api_key_dict=user_api_key_dict
+    )
+
+    auth_metadata = result["user_api_key_auth_metadata"]
+    assert "logging" not in auth_metadata
+    assert "callback_settings" not in auth_metadata
+    assert "litellm_enc::" not in json.dumps(auth_metadata)
+    assert auth_metadata["priority"] == "high"
+    # UserAPIKeyAuth is the live auth object; the per-key callbacks are resolved
+    # from it during pre-call, so it must not be mutated by building the log view
+    assert "logging" in (user_api_key_dict.metadata or {})
+
+
+def test_team_alias_targeting_deleted_team_deployment_keeps_requested_model(monkeypatch):
+    """
+    Regression: a team's model_aliases can point at the internal routing key
+    (model_name_{team_id}_{uuid}) of a team deployment that was since deleted,
+    e.g. after an admin replaces per-team duplicates with one gateway-level
+    model. Rewriting to the dead internal name made every request fail with
+    "no healthy deployments for model_name_..." even though the requested
+    public name resolves at the gateway level. The rewrite must be skipped
+    when the alias target has no live deployment.
+    """
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+
+    monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
+    pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
+
+    class _MockRouter:
+        model_name_to_deployment_indices = {"gpt-4": [0]}
+        team_model_to_deployment_indices = {}
+
+    test_data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_key",
+        team_id="team-1",
+        team_model_aliases={"gpt-4": "model_name_team-1_dead-uuid"},
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+        _update_model_if_team_alias_exists(
+            data=test_data, user_api_key_dict=user_api_key_dict
+        )
+
+    assert test_data.get("model") == "gpt-4"
+
+
+def test_team_alias_targeting_live_team_deployment_still_rewrites(monkeypatch):
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+
+    monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
+    pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
+
+    class _MockRouter:
+        model_name_to_deployment_indices = {"model_name_team-1_live-uuid": [0]}
+        team_model_to_deployment_indices = {}
+
+    test_data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_key",
+        team_id="team-1",
+        team_model_aliases={"gpt-4": "model_name_team-1_live-uuid"},
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+        _update_model_if_team_alias_exists(
+            data=test_data, user_api_key_dict=user_api_key_dict
+        )
+
+    assert test_data.get("model") == "model_name_team-1_live-uuid"
+
+
+def test_warn_stale_team_alias_once_logs_once_per_key(monkeypatch):
+    from collections import OrderedDict
+
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+
+    monkeypatch.setattr(pre_call_utils, "_STALE_TEAM_ALIAS_WARNING_KEYS", OrderedDict())
+
+    with patch.object(pre_call_utils.verbose_proxy_logger, "warning") as mock_warning:
+        pre_call_utils._warn_stale_team_alias_once("team-1:gpt-4", "stale alias %s", "gpt-4")
+        pre_call_utils._warn_stale_team_alias_once("team-1:gpt-4", "stale alias %s", "gpt-4")
+
+    assert mock_warning.call_count == 1
+
+
+def test_warn_stale_team_alias_once_evicts_oldest_key_beyond_cap(monkeypatch):
+    from collections import OrderedDict
+
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+
+    monkeypatch.setattr(pre_call_utils, "_STALE_TEAM_ALIAS_WARNING_KEYS", OrderedDict())
+    monkeypatch.setattr(pre_call_utils, "_MAX_STALE_ALIAS_WARNING_KEYS", 2)
+
+    with patch.object(pre_call_utils.verbose_proxy_logger, "warning"):
+        pre_call_utils._warn_stale_team_alias_once("key-1", "stale alias")
+        pre_call_utils._warn_stale_team_alias_once("key-2", "stale alias")
+        pre_call_utils._warn_stale_team_alias_once("key-3", "stale alias")
+
+    assert list(pre_call_utils._STALE_TEAM_ALIAS_WARNING_KEYS) == ["key-2", "key-3"]

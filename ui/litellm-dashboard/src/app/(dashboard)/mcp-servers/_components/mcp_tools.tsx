@@ -19,9 +19,13 @@ import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
 import { TOOLS_OAUTH_UI_STATE_KEY } from "@/hooks/mcpOAuthUtils";
 import { setSecureItem } from "@/utils/secureStorage";
 
-import { Card, Title, Text } from "@tremor/react";
-import { RobotOutlined, ToolOutlined, SearchOutlined, KeyOutlined, LockOutlined } from "@ant-design/icons";
-import { Input, Button as AntdButton } from "antd";
+import { Bot, Wrench, Search, Key, Lock } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { cn } from "@/lib/cva.config";
 
 const MCPToolsViewer = ({
   serverId,
@@ -285,79 +289,75 @@ const MCPToolsViewer = ({
   });
 
   return (
-    <div className="w-full h-screen p-4 bg-white">
-      <Card className="w-full rounded-xl shadow-md overflow-hidden">
-        <div className="flex h-auto w-full gap-4">
+    <div className="w-full p-4">
+      <Card className="w-full overflow-hidden rounded-xl shadow-md">
+        <div className="grid h-auto w-full grid-cols-4 gap-4">
           {/* Left Sidebar with Controls */}
-          <div className="w-1/4 p-4 bg-gray-50 flex flex-col">
-            <Title className="text-xl font-semibold mb-6 mt-2">MCP Tools</Title>
+          <div className="col-span-1 flex flex-col bg-muted p-4">
+            <h2 className="mt-2 mb-6 text-xl font-semibold">MCP Tools</h2>
 
             <div className="flex flex-col flex-1">
               {/* Extra Headers Input Section */}
               {hasExtraHeaders && (
-                <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                  <div className="flex items-center justify-between mb-2">
+                <div className="mb-4 rounded-lg border border-border bg-card p-3">
+                  <div className="mb-2 flex items-center justify-between">
                     <div className="flex items-center">
-                      <KeyOutlined className="text-blue-600 mr-2" />
-                      <Text className="text-sm font-medium text-blue-800">Additional Headers</Text>
+                      <Key className="mr-2 size-4 text-muted-foreground" />
+                      <p className="text-sm font-medium">Additional Headers</p>
                     </div>
-                    <AntdButton
-                      size="small"
-                      type="link"
-                      onClick={() => setShowHeaderInput(!showHeaderInput)}
-                      className="text-blue-700 p-0 h-auto"
-                    >
+                    <Button variant="link" size="sm" onClick={() => setShowHeaderInput(!showHeaderInput)}>
                       {showHeaderInput ? "Hide" : "Configure"}
-                    </AntdButton>
+                    </Button>
                   </div>
 
                   {!showHeaderInput && Object.keys(passthroughHeaders).length === 0 && (
-                    <Text className="text-xs text-blue-700">
+                    <p className="text-xs text-muted-foreground">
                       This server requires additional headers. Click &quot;Configure&quot; to provide values.
-                    </Text>
+                    </p>
                   )}
 
                   {showHeaderInput && (
                     <div className="mt-3 space-y-2">
                       {extraHeaders?.map((headerName) => (
                         <div key={headerName}>
-                          <label className="block text-xs font-medium text-gray-700 mb-1">{headerName}</label>
-                          <Input
-                            size="small"
-                            placeholder={`Enter ${headerName}`}
-                            value={passthroughHeaders[headerName] || ""}
-                            onChange={(e) => {
-                              setPassthroughHeaders({
-                                ...passthroughHeaders,
-                                [headerName]: e.target.value,
-                              });
-                            }}
-                            prefix={<KeyOutlined className="text-gray-400" />}
-                            className="rounded-sm"
-                          />
+                          <label className="mb-1 block text-xs font-medium">{headerName}</label>
+                          <InputGroup className="w-full">
+                            <InputGroupAddon>
+                              <Key className="size-4 text-muted-foreground" />
+                            </InputGroupAddon>
+                            <InputGroupInput
+                              placeholder={`Enter ${headerName}`}
+                              value={passthroughHeaders[headerName] || ""}
+                              onChange={(e) => {
+                                setPassthroughHeaders({
+                                  ...passthroughHeaders,
+                                  [headerName]: e.target.value,
+                                });
+                              }}
+                            />
+                          </InputGroup>
                         </div>
                       ))}
-                      <AntdButton
-                        size="small"
-                        type="primary"
+                      <Button
+                        size="sm"
                         onClick={() => {
                           refetchTools();
                           setShowHeaderInput(false);
                         }}
                         disabled={Object.values(passthroughHeaders).every((v) => !v || !v.trim())}
-                        className="w-full mt-2"
+                        className="mt-2 w-full"
                       >
                         Load Tools
-                      </AntdButton>
+                      </Button>
                     </div>
                   )}
 
                   {!showHeaderInput && Object.keys(passthroughHeaders).length > 0 && (
                     <div className="mt-2">
-                      <Text className="text-xs text-green-700 flex items-center">
-                        <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+                      <p className="flex items-center text-xs text-muted-foreground">
+                        <span className="mr-2 inline-block size-2 rounded-full bg-green-500" />
                         {Object.keys(passthroughHeaders).length} header(s) configured
-                      </Text>
+                      </p>
                     </div>
                   )}
                 </div>
@@ -365,31 +365,29 @@ const MCPToolsViewer = ({
 
               {/* Tool Selection - Show tools first */}
               <div className="flex flex-col flex-1 min-h-0">
-                <Text className="font-medium block mb-3 text-gray-700 flex items-center">
-                  <ToolOutlined className="mr-2" /> Available Tools
+                <p className="mb-3 flex items-center text-sm font-medium">
+                  <Wrench className="mr-2 size-4" /> Available Tools
                   {toolsData.length > 0 && (
-                    <span className="ml-2 bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded-full">
+                    <Badge variant="secondary" className="ml-2">
                       {toolsData.length}
-                    </span>
+                    </Badge>
                   )}
-                </Text>
+                </p>
 
                 {/* Passthrough auth gate — browser session token absent */}
                 {usesBrowserHeldToken && !oauthToken && (
-                  <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
-                    <LockOutlined className="text-2xl text-gray-400 mb-2" />
-                    <p className="text-xs font-medium text-gray-700 mb-1">Authentication required</p>
-                    <p className="text-xs text-gray-500 mb-3">Authenticate to view available tools</p>
-                    <AntdButton
-                      size="small"
-                      type="primary"
-                      loading={oauthStatus === "authorizing" || oauthStatus === "exchanging"}
+                  <div className="rounded-lg border border-border bg-card p-4 text-center">
+                    <Lock className="mx-auto mb-2 size-6 text-muted-foreground" />
+                    <p className="mb-1 text-xs font-medium">Authentication required</p>
+                    <p className="mb-3 text-xs text-muted-foreground">Authenticate to view available tools</p>
+                    <Button
+                      size="sm"
                       onClick={startOAuthFlow}
-                      disabled={!accessToken}
+                      disabled={!accessToken || oauthStatus === "authorizing" || oauthStatus === "exchanging"}
                     >
                       Authorize
-                    </AntdButton>
-                    {oauthError && <p className="text-xs text-red-500 mt-2">{oauthError}</p>}
+                    </Button>
+                    {oauthError && <p className="mt-2 text-xs text-destructive">{oauthError}</p>}
                   </div>
                 )}
 
@@ -399,22 +397,20 @@ const MCPToolsViewer = ({
                     with no usable refresh token). A refreshable token is refreshed
                     on the list call and never trips this gate. */}
                 {(authorizationCodeNeedsAuth || authorizationCodeTokenRejected) && (
-                  <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
-                    <LockOutlined className="text-2xl text-gray-400 mb-2" />
-                    <p className="text-xs font-medium text-gray-700 mb-1">Authentication required</p>
-                    <p className="text-xs text-gray-500 mb-3">
+                  <div className="rounded-lg border border-border bg-card p-4 text-center">
+                    <Lock className="mx-auto mb-2 size-6 text-muted-foreground" />
+                    <p className="mb-1 text-xs font-medium">Authentication required</p>
+                    <p className="mb-3 text-xs text-muted-foreground">
                       Authenticate with the upstream provider to view available tools
                     </p>
-                    <AntdButton
-                      size="small"
-                      type="primary"
-                      loading={dbOAuthStatus === "authorizing" || dbOAuthStatus === "exchanging"}
+                    <Button
+                      size="sm"
                       onClick={startAuthorizationCodeAuthorize}
-                      disabled={!accessToken}
+                      disabled={!accessToken || dbOAuthStatus === "authorizing" || dbOAuthStatus === "exchanging"}
                     >
                       Authorize
-                    </AntdButton>
-                    {dbOAuthError && <p className="text-xs text-red-500 mt-2">{dbOAuthError}</p>}
+                    </Button>
+                    {dbOAuthError && <p className="mt-2 text-xs text-destructive">{dbOAuthError}</p>}
                   </div>
                 )}
 
@@ -423,32 +419,30 @@ const MCPToolsViewer = ({
                   <>
                     {toolsData.length > 0 && (
                       <div className="mb-3">
-                        <Input
-                          placeholder="Search tools..."
-                          prefix={<SearchOutlined className="text-gray-400" />}
-                          value={toolSearchTerm}
-                          onChange={(e) => setToolSearchTerm(e.target.value)}
-                          allowClear
-                          className="rounded-lg"
-                          size="middle"
-                        />
+                        <InputGroup className="w-full">
+                          <InputGroupAddon>
+                            <Search className="size-4 text-muted-foreground" />
+                          </InputGroupAddon>
+                          <InputGroupInput
+                            placeholder="Search tools..."
+                            value={toolSearchTerm}
+                            onChange={(e) => setToolSearchTerm(e.target.value)}
+                          />
+                        </InputGroup>
                       </div>
                     )}
 
                     {/* Loading State */}
                     {toolsAreaLoading && (
-                      <div className="flex flex-col items-center justify-center py-8 bg-white border border-gray-200 rounded-lg">
-                        <div className="relative mb-3">
-                          <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-200"></div>
-                          <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-600 border-t-transparent absolute top-0"></div>
-                        </div>
-                        <p className="text-xs font-medium text-gray-700">Loading tools...</p>
+                      <div className="flex flex-col items-center justify-center rounded-lg border border-border bg-card py-8">
+                        <UiLoadingSpinner className="mb-3 size-6 text-muted-foreground" />
+                        <p className="text-xs font-medium">Loading tools...</p>
                       </div>
                     )}
 
                     {/* Error State */}
                     {(mcpToolsResponse?.error || mcpToolsError) && !toolsAreaLoading && !toolsData.length && (
-                      <div className="p-3 text-xs text-red-800 rounded-lg bg-red-50 border border-red-200">
+                      <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
                         <p className="font-medium">
                           Error: {mcpToolsResponse?.message || (mcpToolsError as Error)?.message}
                         </p>
@@ -460,10 +454,10 @@ const MCPToolsViewer = ({
                       !mcpToolsResponse?.error &&
                       !mcpToolsError &&
                       (!toolsData || toolsData.length === 0) && (
-                        <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
-                          <div className="mx-auto w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center mb-2">
+                        <div className="rounded-lg border border-border bg-card p-4 text-center">
+                          <div className="mx-auto mb-2 flex size-8 items-center justify-center rounded-full bg-muted">
                             <svg
-                              className="w-4 h-4 text-gray-400"
+                              className="size-4 text-muted-foreground"
                               fill="none"
                               stroke="currentColor"
                               viewBox="0 0 24 24"
@@ -476,8 +470,8 @@ const MCPToolsViewer = ({
                               />
                             </svg>
                           </div>
-                          <p className="text-xs font-medium text-gray-700 mb-1">No tools available</p>
-                          <p className="text-xs text-gray-500">No tools found for this server</p>
+                          <p className="mb-1 text-xs font-medium">No tools available</p>
+                          <p className="text-xs text-muted-foreground">No tools found for this server</p>
                         </div>
                       )}
 
@@ -485,28 +479,22 @@ const MCPToolsViewer = ({
                     {!toolsAreaLoading && !mcpToolsResponse?.error && toolsData.length > 0 && (
                       <>
                         {filteredTools.length === 0 ? (
-                          <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
-                            <SearchOutlined className="text-2xl text-gray-400 mb-2" />
-                            <p className="text-xs font-medium text-gray-700 mb-1">No tools found</p>
-                            <p className="text-xs text-gray-500">No tools match &quot;{toolSearchTerm}&quot;</p>
+                          <div className="rounded-lg border border-border bg-card p-4 text-center">
+                            <Search className="mx-auto mb-2 size-6 text-muted-foreground" />
+                            <p className="mb-1 text-xs font-medium">No tools found</p>
+                            <p className="text-xs text-muted-foreground">No tools match &quot;{toolSearchTerm}&quot;</p>
                           </div>
                         ) : (
-                          <div
-                            className="space-y-2 flex-1 overflow-y-auto min-h-0 mcp-tools-scrollable"
-                            style={{
-                              maxHeight: "400px",
-                              scrollbarWidth: "auto",
-                              scrollbarColor: "#cbd5e0 #f7fafc",
-                            }}
-                          >
+                          <div className="mcp-tools-scrollable max-h-100 min-h-0 flex-1 space-y-2 overflow-y-auto">
                             {filteredTools.map((tool: MCPTool) => (
                               <div
                                 key={tool.name}
-                                className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-xs ${
+                                className={cn(
+                                  "cursor-pointer rounded-lg border p-3 transition-all hover:shadow-xs",
                                   selectedTool?.name === tool.name
-                                    ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
-                                    : "border-gray-200 bg-white hover:border-gray-300"
-                                }`}
+                                    ? "border-primary bg-accent ring-1 ring-ring"
+                                    : "border-border bg-card",
+                                )}
                                 onClick={() => {
                                   setSelectedTool(tool);
                                   setToolResult(null);
@@ -522,18 +510,18 @@ const MCPToolsViewer = ({
                                     />
                                   )}
                                   <div className="flex-1 min-w-0">
-                                    <h4 className="font-mono text-xs font-medium text-gray-900 truncate">
-                                      {tool.name}
-                                    </h4>
-                                    <p className="text-xs text-gray-500 truncate">{tool.mcp_info.server_name}</p>
-                                    <p className="text-xs text-gray-600 mt-1 line-clamp-2 leading-relaxed">
+                                    <h4 className="truncate font-mono text-xs font-medium">{tool.name}</h4>
+                                    <p className="truncate text-xs text-muted-foreground">
+                                      {tool.mcp_info.server_name}
+                                    </p>
+                                    <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
                                       {tool.description}
                                     </p>
                                   </div>
                                 </div>
                                 {selectedTool?.name === tool.name && (
-                                  <div className="mt-2 pt-2 border-t border-blue-200">
-                                    <div className="flex items-center text-xs font-medium text-blue-700">
+                                  <div className="mt-2 border-t border-border pt-2">
+                                    <div className="flex items-center text-xs font-medium text-primary">
                                       <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
                                         <path
                                           fillRule="evenodd"
@@ -558,20 +546,20 @@ const MCPToolsViewer = ({
           </div>
 
           {/* Main Testing Area */}
-          <div className="w-3/4 flex flex-col bg-white">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <Title className="text-xl font-semibold mb-0">Tool Testing Playground</Title>
+          <div className="col-span-3 flex flex-col">
+            <div className="flex items-center justify-between border-b border-border p-4">
+              <h2 className="mb-0 text-xl font-semibold">Tool Testing Playground</h2>
             </div>
 
             <div className="flex-1 overflow-auto p-4">
               {!selectedTool ? (
                 /* Empty State */
-                <div className="h-full flex flex-col items-center justify-center text-gray-400">
-                  <RobotOutlined style={{ fontSize: "48px", marginBottom: "16px" }} />
-                  <Text className="text-lg font-medium text-gray-600 mb-2">Select a Tool to Test</Text>
-                  <Text className="text-center text-gray-500 max-w-md">
+                <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
+                  <Bot className="mb-4 size-12" />
+                  <p className="mb-2 text-lg font-medium">Select a Tool to Test</p>
+                  <p className="max-w-md text-center text-sm">
                     Choose a tool from the left sidebar to start testing its functionality with custom inputs.
-                  </Text>
+                  </p>
                 </div>
               ) : (
                 /* Tool Test Panel */

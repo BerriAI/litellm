@@ -12,24 +12,25 @@ from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_reque
 
 
 @pytest.mark.parametrize(
-    "route_type",
+    "route_type, required_body_params",
     [
-        "atext_completion",
-        "acompletion",
-        "aembedding",
-        "aimage_generation",
-        "aspeech",
-        "atranscription",
-        "amoderation",
-        "arerank",
+        ("atext_completion", {}),
+        ("acompletion", {"messages": [{"role": "user", "content": "Hello"}]}),
+        ("aembedding", {"input": "Hello"}),
+        ("aimage_generation", {}),
+        ("aspeech", {}),
+        ("atranscription", {}),
+        ("amoderation", {}),
+        ("arerank", {}),
     ],
 )
 @pytest.mark.asyncio
-async def test_route_request_dynamic_credentials(route_type):
+async def test_route_request_dynamic_credentials(route_type, required_body_params):
     data = {
         "model": "openai/gpt-4o-mini-2024-07-18",
         "api_key": "my-bad-key",
         "api_base": "https://api.openai.com/v1 ",
+        **required_body_params,
     }
     llm_router = MagicMock()
     # Ensure that the dynamic method exists on the llm_router mock.
@@ -887,3 +888,59 @@ async def test_route_request_override_enable_tag_filtering_beats_body_value():
 
     call_kwargs = llm_router.acompletion.call_args[1]
     assert call_kwargs["enable_tag_filtering"] is True
+
+
+@pytest.mark.parametrize(
+    "route_type, param, route",
+    [
+        ("acompletion", "messages", "/chat/completions"),
+        ("aembedding", "input", "/embeddings"),
+    ],
+)
+@pytest.mark.parametrize("data_extra", [{}, {"messages": None, "input": None}])
+def test_raise_if_required_body_param_missing_rejects_missing_param(route_type, param, route, data_extra):
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(route_type=route_type, data={"model": "gpt-4o", **data_extra})
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.param == param
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.detail == {"error": f"{route}: Missing required parameter: '{param}'."}
+
+
+@pytest.mark.parametrize(
+    "route_type, data",
+    [
+        ("acompletion", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}),
+        ("acompletion", {"model": "gpt-4o", "messages": []}),
+        ("atext_completion", {"model": "gpt-4o"}),
+        ("aembedding", {"model": "text-embedding-3-small", "input": "hi"}),
+        ("arerank", {"model": "rerank-model"}),
+        ("aimage_generation", {"model": "dall-e-3"}),
+    ],
+)
+def test_raise_if_required_body_param_missing_allows_valid_requests(route_type, data):
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    raise_if_required_body_param_missing(route_type=route_type, data=data)
+
+
+@pytest.mark.asyncio
+async def test_route_request_rejects_chat_completion_without_messages():
+    """A /chat/completions body without `messages` used to splat into
+    Router.acompletion() and surface the resulting TypeError as a 500."""
+    from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
+
+    llm_router = MagicMock()
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        await route_request({"model": "gpt-4o"}, llm_router, None, "acompletion")
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.param == "messages"
+    llm_router.acompletion.assert_not_called()

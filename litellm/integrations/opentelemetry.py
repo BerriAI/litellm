@@ -27,6 +27,7 @@ from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     OTELSemconvCategory,
     parse_semconv_opt_in,
 )
+from litellm.integrations.otel.model.semconv import Metric
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
@@ -597,32 +598,32 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         meter = meter_provider.get_meter(__name__)
 
         self._operation_duration_histogram = meter.create_histogram(
-            name="gen_ai.client.operation.duration",  # Replace with semconv constant in otel 1.38
+            name=Metric.OPERATION_DURATION,
             description="GenAI operation duration",
             unit="s",
         )
         self._token_usage_histogram = meter.create_histogram(
-            name="gen_ai.client.token.usage",  # Replace with semconv constant in otel 1.38
+            name=Metric.TOKEN_USAGE,
             description="GenAI token usage",
             unit="{token}",
         )
         self._cost_histogram = meter.create_histogram(
-            name="gen_ai.client.token.cost",
+            name=Metric.TOKEN_COST,
             description="GenAI request cost",
             unit="USD",
         )
         self._time_to_first_token_histogram = meter.create_histogram(
-            name="gen_ai.client.response.time_to_first_token",
+            name=Metric.TIME_TO_FIRST_TOKEN,
             description="Time to first token for streaming requests",
             unit="s",
         )
         self._time_per_output_token_histogram = meter.create_histogram(
-            name="gen_ai.client.response.time_per_output_token",
+            name=Metric.TIME_PER_OUTPUT_TOKEN,
             description="Average time per output token (generation time / completion tokens)",
             unit="s",
         )
         self._response_duration_histogram = meter.create_histogram(
-            name="gen_ai.client.response.duration",
+            name=Metric.RESPONSE_DURATION,
             description="Total LLM API generation time (excludes LiteLLM overhead)",
             unit="s",
         )
@@ -883,8 +884,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         request_data: dict,
         parent_span: Optional[Any],
     ) -> None:
-        """Emit ``guardrail`` spans from ``request_data["metadata"]
-        ["standard_logging_guardrail_information"]``.
+        """Emit ``guardrail`` spans from the request's proxy-internal metadata bucket
+        (``standard_logging_guardrail_information``).
 
         Routed through ``_create_guardrail_span`` so the dedupe state in
         ``_otel_internal`` is honoured — if ``_handle_failure`` already
@@ -892,7 +893,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         """
         from opentelemetry import trace as _trace
 
-        metadata = (request_data or {}).get("metadata") or {}
+        from litellm.litellm_core_utils.core_helpers import (
+            get_metadata_variable_name_from_kwargs,
+        )
+
+        request_data = request_data or {}
+        metadata = request_data.get(get_metadata_variable_name_from_kwargs(request_data)) or {}
         guardrail_information = metadata.get("standard_logging_guardrail_information")
         if not guardrail_information:
             return
@@ -2975,10 +2981,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     def _get_metric_reader(self):
         """
         Get the appropriate metric reader based on the configuration.
+
+        Histograms keep the SDK's default cumulative temporality: Prometheus-backed
+        OTLP receivers reject delta histograms and drop the whole batch, while
+        backends that prefer delta still accept cumulative.
         """
-        from opentelemetry.sdk.metrics import Histogram
         from opentelemetry.sdk.metrics.export import (
-            AggregationTemporality,
             ConsoleMetricExporter,
             PeriodicExportingMetricReader,
         )
@@ -3009,7 +3017,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             exporter = OTLPMetricExporter(
                 endpoint=normalized_endpoint,
                 headers=_split_otel_headers,
-                preferred_temporality={Histogram: AggregationTemporality.DELTA},
             )
             return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
 
@@ -3027,7 +3034,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             exporter = OTLPMetricExporter(
                 endpoint=normalized_endpoint,
                 headers=_split_otel_headers,
-                preferred_temporality={Histogram: AggregationTemporality.DELTA},
             )
             return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
 

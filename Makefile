@@ -176,6 +176,8 @@ lint-ruff-FULL-dev: install-dev
 	if [ -n "$$files" ]; then echo "$$files" | xargs $(UV_RUN) ruff check; \
 	else echo "No changed .py files to check."; fi
 
+lint-basedpyright lint-basedpyright-budget-update: export NODE_OPTIONS := --max-old-space-size=12288
+
 lint-basedpyright: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --base origin/litellm_internal_staging
 

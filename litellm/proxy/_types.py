@@ -629,6 +629,10 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/logs/v2",
         "/spend/logs/ui",
         "/spend/logs/session/ui",
+        # Reads end users out of spend logs, scoped to the caller's own rows and
+        # permitted teams exactly like /spend/logs/ui — it belongs to the same
+        # access tier, not to customer management.
+        "/management/v1/spend_logs/end_users",
         "/cost/estimate",
     ]
 
@@ -819,10 +823,12 @@ class LiteLLMRoutes(enum.Enum):
             # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
             "/customer/list",
             "/customer/info",
-            # UI Logs page detail drawer (single + session). The list endpoint
-            # `/spend/logs/ui` is covered via spend_tracking_routes below.
+            # UI Logs page detail drawer (single + session) and the end-user filter
+            # facet. The list endpoint `/spend/logs/ui` is covered via
+            # spend_tracking_routes below.
             "/spend/logs/ui/{logId}",
             "/spend/logs/session/ui",
+            "/management/v1/spend_logs/end_users",
             # Settings / observability read endpoints exposed in admin-only
             # sidebar groups (Logging & Alerts, Admin Settings, Budgets,
             # Invitations).
@@ -1163,7 +1169,6 @@ class GenerateKeyResponse(KeyRequestBase):
 class UpdateKeyRequest(KeyRequestBase):
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
-    key: str  # type: ignore
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
@@ -1178,6 +1183,12 @@ class UpdateKeyRequest(KeyRequestBase):
         if self.temp_budget_increase is not None or self.temp_budget_expiry is not None:
             if self.temp_budget_increase is None or self.temp_budget_expiry is None:
                 raise ValueError("temp_budget_increase and temp_budget_expiry must be set together")
+        return self
+
+    @model_validator(mode="after")
+    def validate_key_identifier(self) -> "UpdateKeyRequest":
+        if self.key is None and self.key_alias is None:
+            raise ValueError("either key or key_alias must be provided")
         return self
 
 
@@ -2616,6 +2627,17 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # key off. Server-only and stripped from validated input for the same reason as the marker
     # above: a forged entry would let a caller pick which team's rpm bucket it is charged against.
     mcp_source_team_rpm_limits: dict[str, dict[str, int]] | None = Field(default=None, exclude=True)
+    via_virtual_key: bool = Field(
+        default=False,
+        exclude=True,
+        description=(
+            "Server-only marker set exclusively by the DB virtual-key and master-key auth paths via "
+            "post-construction assignment. Stripped from validated input so custom auth handlers, JWT "
+            "claims, or key metadata cannot forge it. Gates overwrite_user_with_key_hash stamping: only "
+            "a credential the proxy itself validated as a key may be forwarded as the provider-facing "
+            "user id."
+        ),
+    )
     budget_reservation: Optional[Dict[str, Any]] = Field(default=None, exclude=True)
     budget_throttle_pct: Optional[float] = Field(default=None, exclude=True)
     user: Optional[Any] = None  # Expanded user object when expand=user is used
@@ -2641,6 +2663,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         # kwargs, model_validate, a JWT/key claim splat) so it can never be forged from caller data.
         values.pop("mcp_admitted_user_subject", None)
         values.pop("mcp_source_team_rpm_limits", None)
+        values.pop("via_virtual_key", None)
         if values.get("api_key") is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
             if isinstance(values.get("api_key"), str):
@@ -3621,6 +3644,13 @@ DB_CONNECTION_ERROR_TYPES = (
     httpx.ReadTimeout,
 )
 
+# What a NON-IDEMPOTENT write (increment upsert) may retry: only ConnectError
+# proves the statements never reached the database. Post-send errors are
+# ambiguous; a stalled statement can leave its transaction open on the pooled
+# connection, where a retry stacks a second increment set into the same commit.
+# Idempotent writes (create_many with skip_duplicates) may retry the full tuple.
+DB_RETRY_SAFE_ERROR_TYPES = (httpx.ConnectError,)
+
 
 class SSOUserDefinedValues(TypedDict):
     models: List[str]
@@ -4305,7 +4335,13 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     team_id_upsert: bool = False
     team_ids_jwt_field: Optional[str] = None
     upsert_sso_user_to_team: bool = False
-    team_allowed_routes: List[str] = ["openai_routes", "info_routes", "mcp_routes"]
+    team_allowed_routes: List[str] = [
+        "openai_routes",
+        "info_routes",
+        "mcp_routes",
+        "/v1/messages",
+        "/v1/messages/count_tokens",
+    ]
     team_id_default: Optional[str] = Field(
         default=None,
         description="If no team_id given, default permissions/spend-tracking to this team.s",

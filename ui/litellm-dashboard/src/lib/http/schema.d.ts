@@ -4356,25 +4356,9 @@ export interface paths {
         };
         /**
          * Get Global Activity
-         * @description Get number of cache hits, vs misses
-         *
-         *     {
-         *         "daily_data": [
-         *                 const chartdata = [
-         *                 {
-         *                     date: 'Jan 22',
-         *                     cache_hits: 10,
-         *                     llm_api_calls: 2000
-         *                 },
-         *                 {
-         *                     date: 'Jan 23',
-         *                     cache_hits: 10,
-         *                     llm_api_calls: 12
-         *                 },
-         *         ],
-         *         "sum_cache_hits": 20,
-         *         "sum_llm_api_calls": 2012
-         *     }
+         * @description Cache activity for the Admin UI cache dashboard, aggregated per call_type:
+         *     cache hits vs successful LLM API requests vs failed requests, plus totals
+         *     for the stat cards and the available key-alias/model filter options.
          */
         get: operations["get_global_activity_global_activity_cache_hits_get"];
         put?: never;
@@ -6935,8 +6919,8 @@ export interface paths {
          * @description Update an existing API key's parameters.
          *
          *     Parameters:
-         *     - key: str - The key to update
-         *     - key_alias: Optional[str] - User-friendly key alias
+         *     - key: Optional[str] - The key to update. Either key or key_alias must be provided.
+         *     - key_alias: Optional[str] - User-friendly key alias. If key is omitted, also identifies the key to update (must match exactly one key, same as /key/delete's key_aliases)
          *     - user_id: Optional[str] - User ID associated with key
          *     - team_id: Optional[str] - Team ID associated with key
          *     - agent_id: Optional[str] - The agent id associated with the key.
@@ -7179,6 +7163,40 @@ export interface paths {
         put?: never;
         /** Login */
         post: operations["login_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/spend_logs/end_users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Spend Log End Users
+         * @description The distinct end users appearing in spend logs over a time window, for the logs
+         *     page filter dropdown.
+         *
+         *     Scoped like `/spend/logs/ui`: a proxy admin sees every end user in the window,
+         *     anyone else sees only end users from their own requests or from teams they
+         *     administer (or hold the `/spend/logs` permission on).
+         *
+         *     The window is required and the inner scan is capped at SPEND_LOGS_FACET_SCAN_CAP
+         *     rows, so the query cannot degrade into a full-table scan the way
+         *     `/global/all_end_users` does.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/spend_logs/end_users?filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=2026-07-24T00:00:00Z&page_size=50&q=acme'         --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["list_spend_log_end_users_management_v1_spend_logs_end_users_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -12808,6 +12826,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sso/saml/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Saml Callback
+         * @description Assertion Consumer Service. Validates the IdP assertion and issues a UI session.
+         */
+        post: operations["saml_callback_sso_saml_callback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sso/saml/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Saml Login
+         * @description SP-initiated SAML login. Redirects the user to the configured IdP.
+         */
+        get: operations["saml_login_sso_saml_login_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sso/saml/metadata": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Saml Metadata
+         * @description Service Provider metadata XML, for registering this proxy at the IdP.
+         */
+        get: operations["saml_metadata_sso_saml_metadata_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tag/daily/activity": {
         parameters: {
             query?: never;
@@ -17900,6 +17978,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tool/spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tool Spend
+         * @description Spend attributed to each tool over a date range, for the Cost Optimization dashboard.
+         *
+         *     Reads the ``LiteLLM_DailyToolSpend`` rollup, written at request time from invoked
+         *     tools only (MCP tool calls and response tool_calls; declaring a tool without
+         *     invoking it does not count). A request that invoked multiple tools counts its
+         *     full spend toward each of them, so per-tool numbers are attributions and do not
+         *     sum to a deduplicated total.
+         *
+         *     ``by_tool`` is the top ``TOOL_SPEND_TOP_TOOLS`` tools by spend, aggregated in
+         *     SQL, and ``daily`` covers only those tools, so the response is bounded by
+         *     days x TOOL_SPEND_TOP_TOOLS regardless of the requested range or how many
+         *     distinct tool names exist.
+         */
+        get: operations["get_tool_spend_v1_tool_spend_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tool/{tool_name}": {
         parameters: {
             query?: never;
@@ -17949,7 +18058,8 @@ export interface paths {
         };
         /**
          * Get Tool Usage Logs
-         * @description Return paginated spend logs for requests that used this tool (from SpendLogToolIndex).
+         * @description Return paginated spend logs for requests that invoked this tool (from SpendLogToolIndex).
+         *     Declaring a tool in a request body without the model invoking it does not create an entry.
          */
         get: operations["get_tool_usage_logs_v1_tool__tool_name__logs_get"];
         put?: never;
@@ -21616,6 +21726,48 @@ export interface components {
             /** Total Requested */
             total_requested: number;
         };
+        /** CacheActivityFilterOptions */
+        CacheActivityFilterOptions: {
+            /** Key Aliases */
+            key_aliases: string[];
+            /** Models */
+            models: string[];
+        };
+        /** CacheActivityGroup */
+        CacheActivityGroup: {
+            /** Api Requests */
+            api_requests: number;
+            /** Cache Hits */
+            cache_hits: number;
+            /** Cached Completion Tokens */
+            cached_completion_tokens: number;
+            /** Call Type */
+            call_type: string;
+            /** Failed Requests */
+            failed_requests: number;
+            /** Generated Completion Tokens */
+            generated_completion_tokens: number;
+        };
+        /** CacheActivityResponse */
+        CacheActivityResponse: {
+            filter_options: components["schemas"]["CacheActivityFilterOptions"];
+            /** Groups */
+            groups: components["schemas"]["CacheActivityGroup"][];
+            totals: components["schemas"]["CacheActivityTotals"];
+        };
+        /** CacheActivityTotals */
+        CacheActivityTotals: {
+            /** Api Requests */
+            api_requests: number;
+            /** Cache Hit Ratio */
+            cache_hit_ratio: number;
+            /** Cache Hits */
+            cache_hits: number;
+            /** Cached Completion Tokens */
+            cached_completion_tokens: number;
+            /** Failed Requests */
+            failed_requests: number;
+        };
         /** CachePingResponse */
         CachePingResponse: {
             /** Cache Type */
@@ -23744,6 +23896,16 @@ export interface components {
             }[];
             /** Updated At */
             updated_at?: number | null;
+        };
+        /**
+         * FacetListResponse
+         * @description The distinct values one column takes over a filtered query. `data` holds bare values, not entity rows.
+         */
+        FacetListResponse: {
+            /** Data */
+            data: string[];
+            links: components["schemas"]["PageLinks"];
+            meta: components["schemas"]["PageMeta"];
         };
         /**
          * FailedKeyUpdate
@@ -28705,6 +28867,30 @@ export interface components {
             tpm_limit?: number | null;
         };
         /**
+         * PageLinks
+         * @description Hypermedia for a paginated list. No `first`/`last`: without a total count the last page is unknown.
+         */
+        PageLinks: {
+            /** Next */
+            next?: string | null;
+            /** Prev */
+            prev?: string | null;
+            /** Self */
+            self: string;
+        };
+        /**
+         * PageMeta
+         * @description `has_more` rather than `total_count`, which would need a COUNT(*) over the whole match set per keystroke.
+         */
+        PageMeta: {
+            /** Has More */
+            has_more: boolean;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /**
          * PaginatedAuditLogResponse
          * @description Response model for paginated audit logs
          */
@@ -30892,6 +31078,26 @@ export interface components {
             proxy_base_url?: string | null;
             /** @description Configuration for mapping SSO groups to LiteLLM roles based on group claims in the SSO token */
             role_mappings?: components["schemas"]["RoleMappings"] | null;
+            /**
+             * Saml Allow Unsolicited
+             * @description 'true' to accept IdP-initiated (unsolicited) SAML responses, which cannot be browser-bound against login CSRF
+             */
+            saml_allow_unsolicited?: string | null;
+            /**
+             * Saml Idp Metadata Url
+             * @description URL of the SAML IdP metadata to fetch and parse for SSO authentication
+             */
+            saml_idp_metadata_url?: string | null;
+            /**
+             * Saml Idp Metadata Xml
+             * @description Inline SAML IdP metadata XML, used when a metadata URL is not available
+             */
+            saml_idp_metadata_xml?: string | null;
+            /**
+             * Saml Sp Entity Id
+             * @description SAML Service Provider entityID; defaults to the proxy's /sso/saml/metadata URL
+             */
+            saml_sp_entity_id?: string | null;
             /** @description Configuration for mapping SSO JWT fields to team IDs. Takes precedence over config file settings. */
             team_mappings?: components["schemas"]["TeamMappings"] | null;
             /**
@@ -31979,6 +32185,61 @@ export interface components {
             updated: boolean;
         };
         /**
+         * ToolSpendDailyEntry
+         * @description Spend attributed to one tool on one UTC day.
+         */
+        ToolSpendDailyEntry: {
+            /**
+             * Call Count
+             * @default 0
+             */
+            call_count: number;
+            /** Date */
+            date: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Tool Name */
+            tool_name: string;
+        };
+        /**
+         * ToolSpendEntry
+         * @description Total spend attributed to one tool over the requested window.
+         */
+        ToolSpendEntry: {
+            /**
+             * Call Count
+             * @default 0
+             */
+            call_count: number;
+            /**
+             * Spend
+             * @description Attributed spend: a request that used several tools counts its full spend toward each of them
+             * @default 0
+             */
+            spend: number;
+            /** Tool Name */
+            tool_name: string;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+        };
+        /** ToolSpendResponse */
+        ToolSpendResponse: {
+            /** By Tool */
+            by_tool?: components["schemas"]["ToolSpendEntry"][];
+            /** Daily */
+            daily?: components["schemas"]["ToolSpendDailyEntry"][];
+            /** End Date */
+            end_date?: string | null;
+            /** Start Date */
+            start_date?: string | null;
+        };
+        /**
          * ToolUsageLogEntry
          * @description One spend log row for a tool call (for UI "recent logs" table).
          */
@@ -32202,7 +32463,7 @@ export interface components {
             /** Guardrails */
             guardrails?: string[] | null;
             /** Key */
-            key: string;
+            key?: string | null;
             /** Key Alias */
             key_alias?: string | null;
             /** Max Budget */
@@ -40378,11 +40639,15 @@ export interface operations {
     };
     get_global_activity_global_activity_cache_hits_get: {
         parameters: {
-            query?: {
+            query: {
                 /** @description Time from which to start viewing spend */
-                start_date?: string | null;
+                start_date: string;
                 /** @description Time till which to view spend */
-                end_date?: string | null;
+                end_date: string;
+                /** @description Only include spend from these key aliases */
+                key_aliases?: string[] | null;
+                /** @description Only include spend for these models */
+                models?: string[] | null;
             };
             header?: never;
             path?: never;
@@ -40396,7 +40661,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                    "application/json": components["schemas"]["CacheActivityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -43151,6 +43416,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_spend_log_end_users_management_v1_spend_logs_end_users_get: {
+        parameters: {
+            query: {
+                /** @description Window start (UTC when no offset is given) */
+                "filter[startTime][gte]": string;
+                /** @description Window end (UTC when no offset is given) */
+                "filter[startTime][lte]": string;
+                /** @description Case-insensitive partial match on the end user id */
+                q?: string | null;
+                /** @description Page number */
+                page?: number;
+                /** @description Page size */
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -49679,6 +49984,77 @@ export interface operations {
             };
         };
     };
+    saml_callback_sso_saml_callback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    saml_login_sso_saml_login_get: {
+        parameters: {
+            query?: {
+                return_to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    saml_metadata_sso_saml_metadata_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_tag_daily_activity_tag_daily_activity_get: {
         parameters: {
             query?: {
@@ -56172,6 +56548,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ToolPolicyOptionsResponse"];
+                };
+            };
+        };
+    };
+    get_tool_spend_v1_tool_spend_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD (defaults to 30 days ago) */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD (defaults to today) */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolSpendResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

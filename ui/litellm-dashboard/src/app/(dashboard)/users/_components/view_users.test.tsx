@@ -27,7 +27,6 @@ vi.mock("@/components/networking", () => ({
     DEFAULT_TEAM_DISABLED: false,
     SSO_ENABLED: false,
   }),
-  getInternalUserSettings: vi.fn().mockResolvedValue({}),
 }));
 
 // The detail view has its own test; stub it so this file covers the parent's swap.
