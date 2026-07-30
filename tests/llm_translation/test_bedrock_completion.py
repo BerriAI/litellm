@@ -3573,6 +3573,50 @@ def test_bedrock_openai_model_id_extraction():
     print(f"✓ Model ID extracted and encoded: {model_id}")
 
 
+def test_bedrock_openai_response_parsing():
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
+    )
+
+    openai_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": "The capital of France is Paris.",
+                    "role": "assistant",
+                },
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18},
+    }
+
+    mock_response = Mock()
+    mock_response.json.return_value = openai_response
+    mock_response.text = json.dumps(openai_response)
+    mock_response.status_code = 200
+    mock_response.headers = {}
+
+    result = AmazonBedrockOpenAIConfig().transform_response(
+        model="openai/arn:aws:bedrock:us-east-1:123:imported-model/test",
+        raw_response=mock_response,
+        model_response=ModelResponse(),
+        logging_obj=Mock(),
+        request_data={},
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.choices[0].message.content == "The capital of France is Paris."
+    assert result.choices[0].finish_reason == "stop"
+    assert result.usage.prompt_tokens == 10
+    assert result.usage.completion_tokens == 8
+    assert result.usage.total_tokens == 18
+
+
 def test_bedrock_openai_request_transformation():
     """
     Test that the request is correctly transformed for OpenAI models.
@@ -3760,6 +3804,23 @@ def test_bedrock_openai_multiple_message_types():
             assert isinstance(request_body["messages"][2]["content"], list)
 
             print("✓ Multiple message types handled correctly")
+
+
+def test_bedrock_openai_error_handling():
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
+    )
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    error = AmazonBedrockOpenAIConfig().get_error_class(
+        error_message="ValidationException: bad request",
+        status_code=422,
+        headers={},
+    )
+
+    assert isinstance(error, BedrockError)
+    assert error.status_code == 422
+    assert "ValidationException: bad request" in str(error)
 
 
 # ============================================================================
