@@ -71,6 +71,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     coerce_token_limit,
     get_metadata_variable_name_from_kwargs,
+    get_or_create_metadata_bucket,
 )
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -210,8 +211,10 @@ from litellm.types.utils import (
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import (
+    PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     ModelResponseStream,
     StandardLoggingPayload,
+    StandardLoggingRoutingDecision,
     Usage,
 )
 from litellm.utils import (
@@ -11158,6 +11161,7 @@ class Router:
 
         router_strategy = self._select_pre_routing_strategy(model=model, request_kwargs=request_kwargs)
         if router_strategy is None:
+            self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
             return None
 
         pre_routing_hook_response = await router_strategy.async_pre_routing_hook(
@@ -11166,6 +11170,10 @@ class Router:
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
+        )
+        self._record_routing_decision(
+            request_kwargs=request_kwargs,
+            routing_decision=(pre_routing_hook_response.routing_decision if pre_routing_hook_response else None),
         )
 
         # `model` (the alias, e.g. "smart-router") is never the deployment actually
@@ -11184,6 +11192,68 @@ class Router:
                         request_kwargs.setdefault(key, value)
 
         return pre_routing_hook_response
+
+    @staticmethod
+    def _record_routing_decision(
+        request_kwargs: dict,
+        routing_decision: StandardLoggingRoutingDecision | None,
+    ) -> None:
+        """Make the request's metadata describe THIS routing attempt, and only this one.
+
+        Fallbacks re-enter the hook with the same `request_kwargs`, so an attempt that
+        picks a plain model group after an auto-router group failed must clear the
+        earlier decision; leaving it would attribute the first router's tier and cause
+        to the deployment that actually served the request. Every attempt therefore
+        writes or clears, never just writes.
+        """
+        if routing_decision is None:
+            for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata")):
+                if isinstance(bucket, dict):
+                    bucket.pop("routing_decision", None)
+            return
+
+        # `get_or_create_metadata_bucket` is the single owner of "which dict holds
+        # proxy-internal metadata": it picks `litellm_metadata` when present (so the
+        # decision never lands in the `metadata` dict that routes like /v1/messages
+        # forward to the provider) and replaces a non-dict value rather than silently
+        # skipping the write.
+        _, metadata_bucket = get_or_create_metadata_bucket(request_kwargs)
+        metadata_bucket["routing_decision"] = Router._redact_prompt_text_if_needed(
+            request_kwargs=request_kwargs, routing_decision=routing_decision
+        )
+
+    @staticmethod
+    def _redact_prompt_text_if_needed(
+        request_kwargs: Mapping[str, Any],
+        routing_decision: StandardLoggingRoutingDecision,
+    ) -> StandardLoggingRoutingDecision:
+        """Drop verbatim prompt text from the record when message logging is redacted.
+
+        An operator who turns message logging off has said prompt content must not reach
+        the logs, so the fields that quote the prompt (the matched keywords, and the
+        signals that name them) are omitted. Derived values are kept, because a tier, a
+        cause, a score or an escalation flag aggregates the prompt rather than
+        reproducing any of it, and dropping them would leave the row unexplainable for
+        no privacy gain. Applied here rather than in each strategy so a strategy added
+        later cannot bypass it.
+        """
+        from litellm.litellm_core_utils.redact_messages import (
+            should_redact_message_logging,
+        )
+
+        if not should_redact_message_logging(
+            {
+                "litellm_params": request_kwargs,
+                "standard_callback_dynamic_params": request_kwargs.get("standard_callback_dynamic_params"),
+            }
+        ):
+            return routing_decision
+        kept = {
+            field: value
+            for field, value in routing_decision.items()
+            if field not in PROMPT_QUOTING_ROUTING_DECISION_FIELDS
+        }
+        return cast(StandardLoggingRoutingDecision, kept)  # cast-ok: dropping optional keys preserves the type
 
     def get_available_deployment(
         self,
