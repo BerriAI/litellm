@@ -137,6 +137,38 @@ async def test_ahealth_check_supports_image_edit_mode():
 
     assert "error" not in result
     assert "Mode image_edit not supported" not in str(result)
+@pytest.mark.asyncio
+async def test_ahealth_check_uses_provider_mode_and_responses_message_input():
+    mock_response = MagicMock()
+    mock_response._hidden_params = {}
+    mock_aresponses = AsyncMock(return_value=mock_response)
+    mock_acompletion = AsyncMock()
+
+    with (
+        patch(
+            "litellm.main.get_llm_provider",
+            return_value=("gpt-5.6-sol", "chatgpt", None, None),
+        ),
+        patch.object(
+            HealthCheckHelpers,
+            "_update_model_params_with_health_check_tracking_information",
+            side_effect=lambda model_params: model_params,
+        ),
+        patch("litellm.aresponses", new=mock_aresponses),
+        patch("litellm.acompletion", new=mock_acompletion),
+    ):
+        result = await ahealth_check(
+            model_params={"model": "chatgpt/gpt-5.6-sol"},
+            mode=None,
+            prompt="health check",
+        )
+
+    assert "error" not in result
+    mock_aresponses.assert_awaited_once()
+    assert mock_aresponses.await_args.kwargs["input"] == [
+        {"role": "user", "content": "health check"}
+    ]
+    mock_acompletion.assert_not_awaited()
 
 
 def test_update_model_params_with_health_check_tracking_information():

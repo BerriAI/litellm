@@ -243,7 +243,9 @@ class HealthCheckHelpers:
             ),
             "responses": lambda: litellm.aresponses(
                 **_filter_model_params(model_params=model_params),
-                input=[{"role": "user", "content": prompt or "test"}],
+                input=[  # mutable-ok: Responses API requires a JSON message list
+                    {"role": "user", "content": prompt or "test"},  # mutable-ok: JSON message object
+                ],
             ),
             "ocr": lambda: litellm.aocr(
                 **_filter_model_params(model_params=model_params),

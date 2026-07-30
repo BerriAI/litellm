@@ -68,6 +68,9 @@ class BaseConfig(ABC):
     def __init__(self):
         pass
 
+    def get_health_check_mode(self) -> str | None:
+        return None
+
     @classmethod
     def get_config(cls):
         return {
