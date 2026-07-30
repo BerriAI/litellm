@@ -1169,7 +1169,6 @@ class GenerateKeyResponse(KeyRequestBase):
 class UpdateKeyRequest(KeyRequestBase):
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
-    key: str  # type: ignore
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
@@ -1184,6 +1183,12 @@ class UpdateKeyRequest(KeyRequestBase):
         if self.temp_budget_increase is not None or self.temp_budget_expiry is not None:
             if self.temp_budget_increase is None or self.temp_budget_expiry is None:
                 raise ValueError("temp_budget_increase and temp_budget_expiry must be set together")
+        return self
+
+    @model_validator(mode="after")
+    def validate_key_identifier(self) -> "UpdateKeyRequest":
+        if self.key is None and self.key_alias is None:
+            raise ValueError("either key or key_alias must be provided")
         return self
 
 
@@ -4330,7 +4335,13 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     team_id_upsert: bool = False
     team_ids_jwt_field: Optional[str] = None
     upsert_sso_user_to_team: bool = False
-    team_allowed_routes: List[str] = ["openai_routes", "info_routes", "mcp_routes"]
+    team_allowed_routes: List[str] = [
+        "openai_routes",
+        "info_routes",
+        "mcp_routes",
+        "/v1/messages",
+        "/v1/messages/count_tokens",
+    ]
     team_id_default: Optional[str] = Field(
         default=None,
         description="If no team_id given, default permissions/spend-tracking to this team.s",

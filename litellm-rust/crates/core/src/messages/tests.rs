@@ -1,14 +1,16 @@
 use std::time::Duration;
 
-use litellm_core::error::CoreError;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::error::CoreError;
+
 use super::common_utils::{
     has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
 };
-use super::{MessagesRequest, messages};
+use super::messages;
+use super::types::MessagesRequest;
 
 async fn read_http_request(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();
@@ -152,8 +154,8 @@ async fn messages_round_trip_builds_azure_request_and_passes_response_through() 
     .await
     .expect("messages request succeeds");
 
-    assert_eq!(response["content"][0]["text"], "hi");
-    assert_eq!(response["stop_reason"], "end_turn");
+    assert_eq!(response.content[0]["text"], "hi");
+    assert_eq!(response.stop_reason.as_deref(), Some("end_turn"));
 
     let request = server.await.expect("server task completes");
     let (head, body) = request.split_once("\r\n\r\n").expect("has body");
@@ -208,8 +210,8 @@ async fn messages_round_trip_builds_native_anthropic_request() {
     .await
     .expect("messages request succeeds");
 
-    assert_eq!(response["content"][0]["text"], "hi");
-    assert_eq!(response["stop_reason"], "end_turn");
+    assert_eq!(response.content[0]["text"], "hi");
+    assert_eq!(response.stop_reason.as_deref(), Some("end_turn"));
 
     let request = server.await.expect("server task completes");
     let (head, _) = request.split_once("\r\n\r\n").expect("has body");

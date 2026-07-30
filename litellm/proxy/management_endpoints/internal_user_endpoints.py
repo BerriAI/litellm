@@ -513,7 +513,7 @@ async def new_user(
 
         response_dict["key"] = response.get("token", "")
 
-        new_user_response = NewUserResponse(**response_dict)
+        new_user_response = NewUserResponse.model_validate(response_dict)
 
         #########################################################
         ########## USER CREATED HOOK ################
@@ -879,7 +879,7 @@ async def _check_user_info_v2_access(
             # Get all teams the caller belongs to
             teams = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": caller_user.teams}})
             for team in teams:
-                team_obj = LiteLLM_TeamTable(**team.model_dump())
+                team_obj = LiteLLM_TeamTable.model_validate(team.model_dump())
                 if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
                     # Check if target user is in this team
                     if team.team_id in (target_user.teams or []):
@@ -1013,11 +1013,11 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
     for key in _keys_in_db:
         if key.get("models") is None:
             key["models"] = []
-        keys_in_db.append(LiteLLM_VerificationToken(**key))
+        keys_in_db.append(LiteLLM_VerificationToken.model_validate(key))
 
     # cast all teams to LiteLLM_TeamTable
     _teams_in_db: list = results[0]["teams"] or []
-    _teams_in_db = [LiteLLM_TeamTable(**team) for team in _teams_in_db]
+    _teams_in_db = [LiteLLM_TeamTable.model_validate(team) for team in _teams_in_db]
     _teams_in_db.sort(key=lambda x: getattr(x, "team_alias", "") or "")
     returned_keys = _process_keys_for_user_info(keys=keys_in_db, all_teams=_teams_in_db)
 
@@ -1146,7 +1146,7 @@ async def _schedule_user_update_audit_log(
     try:
         updated_user_row = await UserRepository(prisma_client).table.find_first(where={"user_id": response["user_id"]})
         if updated_user_row:
-            user_row_typed = LiteLLM_UserTable(**updated_user_row.model_dump(exclude_none=True))
+            user_row_typed = LiteLLM_UserTable.model_validate(updated_user_row.model_dump(exclude_none=True))
             asyncio.create_task(
                 UserManagementEventHooks.create_internal_user_audit_log(
                     user_id=user_row_typed.user_id,
@@ -1172,7 +1172,7 @@ def _check_user_update_authz(
         raise HTTPException(status_code=403, detail="Only proxy admins can modify user roles.")
 
     if existing_user_row is not None:
-        typed_row = LiteLLM_UserTable(**existing_user_row.model_dump(exclude_none=True))
+        typed_row = LiteLLM_UserTable.model_validate(existing_user_row.model_dump(exclude_none=True))
         if not can_user_call_user_update(user_api_key_dict=user_api_key_dict, user_info=typed_row):
             raise HTTPException(
                 status_code=403,
@@ -1248,7 +1248,7 @@ async def _update_single_user_helper(
     _check_user_update_authz(user_request, user_api_key_dict, existing_user_row)
 
     if existing_user_row is not None:
-        existing_user_row = LiteLLM_UserTable(**existing_user_row.model_dump(exclude_none=True))
+        existing_user_row = LiteLLM_UserTable.model_validate(existing_user_row.model_dump(exclude_none=True))
 
     # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
     # must not be able to raise their own budget/spend fields.
@@ -1998,7 +1998,11 @@ async def get_users(
         for user in users:
             user_dump = user.model_dump()
             user_dump["metadata"] = _redact_scim_enterprise_metadata(user_dump.get("metadata"))
-            user_list.append(LiteLLM_UserTableWithKeyCount(**user_dump, key_count=user_key_counts.get(user.user_id, 0)))
+            user_list.append(
+                LiteLLM_UserTableWithKeyCount.model_validate(
+                    {**user_dump, "key_count": user_key_counts.get(user.user_id, 0)}
+                )
+            )
     else:
         user_list = []
 
@@ -2157,7 +2161,7 @@ async def delete_user(
         teams_to_update = []
         for team in fetch_all_teams:
             is_member_in_team, new_team_members = _cleanup_members_with_roles(
-                existing_team_row=LiteLLM_TeamTable(**team.model_dump()),
+                existing_team_row=LiteLLM_TeamTable.model_validate(team.model_dump()),
                 data=TeamMemberDeleteRequest(
                     team_id=team.team_id,
                     user_id=user_row.user_id,
@@ -2438,7 +2442,7 @@ async def ui_view_users(
         if not users:
             return []
 
-        return [LiteLLM_UserTableFiltered(**user.model_dump()) for user in users]
+        return [LiteLLM_UserTableFiltered.model_validate(user.model_dump()) for user in users]
 
     except HTTPException:
         raise
