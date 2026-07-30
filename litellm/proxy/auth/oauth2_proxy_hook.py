@@ -1,4 +1,5 @@
-from typing import Any, Dict, FrozenSet
+from collections.abc import Mapping
+from typing import Dict, FrozenSet, List, Union
 
 from fastapi import Request
 
@@ -83,21 +84,17 @@ async def handle_oauth2_proxy_request(request: Request) -> UserAPIKeyAuth:
             "(signature-validated) instead of header-trust."
         )
 
-    auth_data: Dict[str, Any] = {}
-    for key, header in oauth2_config_mappings.items():
-        value = request.headers.get(header)
-        if not value:
-            continue
-        if key == "models":
-            auth_data[key] = [model.strip() for model in value.split(",")]
-        else:
-            auth_data[key] = value
+    auth_data: Mapping[str, Union[str, List[str]]] = {
+        key: [model.strip() for model in value.split(",")] if key == "models" else value
+        for key, header in oauth2_config_mappings.items()
+        if (value := request.headers.get(header))
+    }
 
     verbose_proxy_logger.debug(
         "Auth data before creating UserAPIKeyAuth object: keys=%s",
         list(auth_data.keys()),
     )
-    user_api_key_auth = UserAPIKeyAuth(**auth_data)
+    user_api_key_auth = UserAPIKeyAuth.model_validate(auth_data)
     verbose_proxy_logger.debug(
         "UserAPIKeyAuth object created with keys: %s",
         list(user_api_key_auth.__fields_set__),
