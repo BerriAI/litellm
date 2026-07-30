@@ -7,7 +7,7 @@
 import asyncio
 import json
 import os
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, AsyncGenerator, List, Optional, Type, Union
 
 from pydantic import BaseModel
 from websockets.asyncio.client import ClientConnection, connect
@@ -26,6 +26,7 @@ from litellm.proxy.guardrails._content_utils import (
     build_inspection_messages,
     has_non_string_content,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     CallTypesLiteral,
     Choices,
@@ -44,7 +45,16 @@ class AimGuardrailMissingSecrets(Exception):
 
 
 class AimGuardrail(CustomGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs):
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         ssl_verify = kwargs.pop("ssl_verify", None)
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -93,11 +103,10 @@ class AimGuardrail(CustomGuardrail):
             user_email=user_email,
             litellm_call_id=call_id,
         )
-        # Covers multimodal list content + Responses-API input.
         response = await self.async_handler.post(
             f"{self.api_base}/fw/v1/analyze",
             headers=headers,
-            json={"messages": build_inspection_messages(data)},
+            json={"messages": self._build_aim_inspection_messages(data)},
         )
         response.raise_for_status()
         res = response.json()
@@ -115,6 +124,15 @@ class AimGuardrail(CustomGuardrail):
         else:
             verbose_proxy_logger.error(f"Aim: {action_type} action")
         return data
+
+    @staticmethod
+    def _build_aim_inspection_messages(data: dict) -> list[dict[str, str]]:
+        """AIM validates against the OpenAI chat schema. Bare ``role: "tool"``
+        without ``tool_call_id`` and bare ``role: "function"`` without ``name``
+        are rejected; the flatten drops those fields, so any role outside
+        ``{system, user, assistant}`` collapses to ``user`` for the AIM POST."""
+        safe_roles = {"system", "user", "assistant"}
+        return [{**m, "role": "user"} if m["role"] not in safe_roles else m for m in build_inspection_messages(data)]
 
     @staticmethod
     def _rejection(message: str, *, openai_code: str | None = None) -> ProxyException:
@@ -177,7 +195,10 @@ class AimGuardrail(CustomGuardrail):
                 user_email=user_email,
                 litellm_call_id=call_id,
             ),
-            json={"messages": build_inspection_messages(request_data) + [{"role": "assistant", "content": output}]},
+            json={
+                "messages": self._build_aim_inspection_messages(request_data)
+                + [{"role": "assistant", "content": output}]
+            },
         )
         response.raise_for_status()
         res = response.json()

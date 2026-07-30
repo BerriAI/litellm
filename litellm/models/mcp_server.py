@@ -79,20 +79,32 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+    issuer: Optional[str] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
+    # Token Exchange (OBO) fields — RFC 8693. ``audience`` is named for the RFC's
+    # request parameter (token-exchange only); RFC 8707 resource indicators are a
+    # separate concept named ``resource`` in the v2 egress types. A null
+    # ``subject_token_type`` means DEFAULT_SUBJECT_TOKEN_TYPE (litellm.types.mcp),
+    # applied at the egress build sites.
+    token_exchange_endpoint: Optional[str] = None
+    audience: Optional[str] = None
+    subject_token_type: Optional[str] = None
+    token_exchange_profile: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
+    dcr_bridge: Optional[bool] = None
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     has_user_credential: Optional[bool] = None
     source_url: Optional[str] = None
     timeout: Optional[float] = None
+    max_concurrent_requests: Optional[int] = None
     approval_status: Optional[str] = Field(
         default="active",
         description="Approval status: 'pending_review', 'active', 'rejected'",

@@ -325,7 +325,7 @@ class ToolConfigBlock(TypedDict, total=False):
 class GuardrailConfigBlock(TypedDict, total=False):
     guardrailIdentifier: str
     guardrailVersion: str
-    trace: Literal["enabled", "disabled"]
+    trace: Literal["enabled", "disabled", "enabled_full"]
 
 
 class InferenceConfig(TypedDict, total=False):
@@ -985,6 +985,11 @@ class BedrockOutputDataConfig(TypedDict):
     s3OutputDataConfig: BedrockS3OutputDataConfig
 
 
+class BedrockTag(TypedDict):
+    key: str
+    value: str
+
+
 class BedrockCreateBatchRequest(TypedDict, total=False):
     """
     Request structure for creating a Bedrock batch inference job.
@@ -999,7 +1004,7 @@ class BedrockCreateBatchRequest(TypedDict, total=False):
     outputDataConfig: BedrockOutputDataConfig
     timeoutDurationInHours: Optional[int]
     clientRequestToken: Optional[str]
-    tags: Optional[List[dict]]
+    tags: Optional[List[BedrockTag]]
 
 
 BedrockBatchJobStatus = Literal["Submitted", "InProgress", "Completed", "Failed", "Stopping", "Stopped"]

@@ -2,7 +2,7 @@
 Type definitions for Compression Interception integration.
 """
 
-from typing import Any, Dict, Optional, TypedDict
+from typing import Any, Dict, Literal, Optional, TypedDict
 
 
 class CompressionInterceptionConfig(TypedDict, total=False):
@@ -25,3 +25,15 @@ class CompressionInterceptionConfig(TypedDict, total=False):
     compression_target: Optional[int]
     embedding_model: Optional[str]
     embedding_model_params: Optional[Dict[str, Any]]
+
+
+class CompressionSavingsMetadata(TypedDict):
+    """
+    Per-request prompt-compression savings recorded into the spend-log metadata
+    JSON so daily spend aggregates can track tokens saved by compression.
+    """
+
+    tokens_before: int
+    tokens_after: int
+    tokens_saved: int
+    source: Literal["compression_interception"]

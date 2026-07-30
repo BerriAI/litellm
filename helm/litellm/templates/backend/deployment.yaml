@@ -44,12 +44,23 @@ spec:
             - name: CONFIG_FILE_PATH
               value: /app/config/config.yaml
             {{- end }}
+            {{- if .Values.billingMetrics.enabled }}
+            {{- include "litellm.billingMetricsEnv" . | nindent 12 }}
+            {{- end }}
           {{- include "litellm.envFrom" .Values.backend | nindent 10 }}
-          {{- if .Values.gateway.config.create }}
+          {{- if or .Values.gateway.config.create .Values.backend.volumeMounts .Values.billingMetrics.enabled }}
           volumeMounts:
+            {{- if .Values.gateway.config.create }}
             - name: gateway-config
               mountPath: /app/config/config.yaml
               subPath: config.yaml
+            {{- end }}
+            {{- if .Values.billingMetrics.enabled }}
+            {{- include "litellm.billingMetricsVolumeMounts" . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.backend.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           {{- with .Values.backend.livenessProbe }}
           livenessProbe:
@@ -61,11 +72,19 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}
-      {{- if .Values.gateway.config.create }}
+      {{- if or .Values.gateway.config.create .Values.backend.volumes .Values.billingMetrics.enabled }}
       volumes:
+        {{- if .Values.gateway.config.create }}
         - name: gateway-config
           configMap:
             name: {{ include "litellm.gateway.fullname" . }}-config
+        {{- end }}
+        {{- if .Values.billingMetrics.enabled }}
+        {{- include "litellm.billingMetricsVolumes" . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.backend.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
       {{- with .Values.backend.nodeSelector }}
       nodeSelector:
@@ -77,6 +96,10 @@ spec:
       {{- end }}
       {{- with .Values.backend.tolerations }}
       tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.backend.topologySpreadConstraints }}
+      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
 {{- end }}

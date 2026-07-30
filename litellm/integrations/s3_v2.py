@@ -54,6 +54,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_strip_base64_files: bool = False,
         s3_use_key_prefix: bool = False,
         s3_use_virtual_hosted_style: bool = False,
+        s3_server_side_encryption: Optional[str] = None,
         s3_callback_params_override: Optional[dict] = None,
         **kwargs,
     ):
@@ -92,6 +93,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_strip_base64_files=s3_strip_base64_files,
                 s3_use_key_prefix=s3_use_key_prefix,
                 s3_use_virtual_hosted_style=s3_use_virtual_hosted_style,
+                s3_server_side_encryption=s3_server_side_encryption,
             )
             verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
 
@@ -145,6 +147,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_strip_base64_files: bool = False,
         s3_use_key_prefix: bool = False,
         s3_use_virtual_hosted_style: bool = False,
+        s3_server_side_encryption: Optional[str] = None,
         params_source: Optional[dict] = None,
     ):
         """
@@ -193,6 +196,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         self.s3_use_virtual_hosted_style = (
             bool(params.get("s3_use_virtual_hosted_style", False)) or s3_use_virtual_hosted_style
         )
+
+        self.s3_server_side_encryption = params.get("s3_server_side_encryption") or s3_server_side_encryption
 
         return
 
@@ -273,6 +278,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
     async def async_upload_data_to_s3(self, batch_logging_element: s3BatchLoggingElement):
         try:
+            import base64
             import hashlib
 
             import requests
@@ -317,14 +323,23 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             # Calculate SHA256 hash of the content
             content_hash = hashlib.sha256(json_string.encode("utf-8")).hexdigest()
+            content_md5 = base64.b64encode(
+                hashlib.md5(json_string.encode("utf-8"), usedforsecurity=False).digest()
+            ).decode()
 
             # Prepare the request
             headers = {
                 "Content-Type": "application/json",
+                "Content-MD5": content_md5,
                 "x-amz-content-sha256": content_hash,
                 "Content-Language": "en",
                 "Content-Disposition": f'inline; filename="{batch_logging_element.s3_object_download_filename}"',
                 "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
+                **(
+                    {"x-amz-server-side-encryption": self.s3_server_side_encryption}
+                    if self.s3_server_side_encryption
+                    else {}
+                ),
             }
             req = requests.Request("PUT", url, data=json_string, headers=headers)
             prepped = req.prepare()
@@ -447,6 +462,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
     def upload_data_to_s3(self, batch_logging_element: s3BatchLoggingElement):
         try:
+            import base64
             import hashlib
 
             import requests
@@ -482,14 +498,23 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             # Calculate SHA256 hash of the content
             content_hash = hashlib.sha256(json_string.encode("utf-8")).hexdigest()
+            content_md5 = base64.b64encode(
+                hashlib.md5(json_string.encode("utf-8"), usedforsecurity=False).digest()
+            ).decode()
 
             # Prepare the request
             headers = {
                 "Content-Type": "application/json",
+                "Content-MD5": content_md5,
                 "x-amz-content-sha256": content_hash,
                 "Content-Language": "en",
                 "Content-Disposition": f'inline; filename="{batch_logging_element.s3_object_download_filename}"',
                 "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
+                **(
+                    {"x-amz-server-side-encryption": self.s3_server_side_encryption}
+                    if self.s3_server_side_encryption
+                    else {}
+                ),
             }
             req = requests.Request("PUT", url, data=json_string, headers=headers)
             prepped = req.prepare()

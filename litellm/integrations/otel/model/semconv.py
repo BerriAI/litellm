@@ -69,6 +69,7 @@ class GenAI:
     RESPONSE_ID: Final = "gen_ai.response.id"
     RESPONSE_MODEL: Final = "gen_ai.response.model"
     RESPONSE_FINISH_REASONS: Final = "gen_ai.response.finish_reasons"
+    RESPONSE_TIME_TO_FIRST_CHUNK: Final = "gen_ai.response.time_to_first_chunk"
     # usage
     USAGE_INPUT_TOKENS: Final = "gen_ai.usage.input_tokens"
     USAGE_OUTPUT_TOKENS: Final = "gen_ai.usage.output_tokens"
@@ -143,7 +144,24 @@ class Client:
 
 
 class Error:
+    """OTel-defined error attribute keys, from the semconv ``error.*`` registry.
+    ``MESSAGE`` is marked *Deprecated* upstream in favor of domain-specific
+    error message keys plus ``exception.message`` on the exception event, but
+    litellm still stamps it."""
+
     TYPE: Final = "error.type"
+    MESSAGE: Final = "error.message"
+
+
+class LiteLLMError:
+    """Detail keys for the mapped provider exception of a failed LLM call.
+    OTel semconv does not define these, so they live under the ``litellm.*``
+    vendor namespace rather than squatting on the semconv-owned ``error.*``
+    namespace."""
+
+    CODE: Final = "litellm.provider.error.code"
+    STACK_TRACE: Final = "litellm.provider.error.stack_trace"
+    LLM_PROVIDER: Final = "litellm.provider.error.llm_provider"
 
 
 class ExceptionEvent:
@@ -159,6 +177,19 @@ class ExceptionEvent:
     NAME: Final = "exception"
     TYPE: Final = "exception.type"
     MESSAGE: Final = "exception.message"
+    STACKTRACE: Final = "exception.stacktrace"
+
+
+class GenAIEvent:
+    """GenAI semconv event names, from the GenAI registry's *events* section.
+
+    ``gen_ai.client.operation.exception`` is defined as a log-based event
+    (severity WARN) carrying the ``exception.*`` trio, correlated to the failed
+    span via the trace/span ids — the semconv-compliant home for GenAI failure
+    details, unlike the deprecated ``error.message`` span attribute.
+    """
+
+    OPERATION_EXCEPTION: Final = "gen_ai.client.operation.exception"
 
 
 class Server:
@@ -226,13 +257,27 @@ class LiteLLM:
 
 
 class Metric:
-    """GenAI metric instrument names."""
+    """GenAI metric instrument names.
+
+    Every name here that a convention or a backend defines uses that name, so a
+    consumer charting GenAI telemetry finds litellm's series where it looks for
+    them. ``TOKEN_USAGE``, ``OPERATION_DURATION``, ``TIME_TO_FIRST_TOKEN`` and
+    ``TIME_PER_OUTPUT_TOKEN`` are semconv instruments, defined in the GenAI
+    conventions; the ``gen_ai.client.response.*`` spellings litellm used for the
+    latter two are not conventions at all, so nothing downstream could chart
+    them. Cost has no semconv instrument, so it takes ``gen_ai.usage.cost``, the
+    name backends already query for spend.
+
+    ``RESPONSE_DURATION`` keeps its vendor spelling deliberately: the closest
+    convention, ``gen_ai.server.request.duration``, would collide in meaning with
+    ``OPERATION_DURATION``, which litellm already emits for the whole operation.
+    """
 
     TOKEN_USAGE: Final = "gen_ai.client.token.usage"
     OPERATION_DURATION: Final = "gen_ai.client.operation.duration"
-    TOKEN_COST: Final = "gen_ai.client.token.cost"
-    TIME_TO_FIRST_TOKEN: Final = "gen_ai.client.response.time_to_first_token"
-    TIME_PER_OUTPUT_TOKEN: Final = "gen_ai.client.response.time_per_output_token"
+    TOKEN_COST: Final = "gen_ai.usage.cost"
+    TIME_TO_FIRST_TOKEN: Final = "gen_ai.server.time_to_first_token"
+    TIME_PER_OUTPUT_TOKEN: Final = "gen_ai.server.time_per_output_token"
     RESPONSE_DURATION: Final = "gen_ai.client.response.duration"
 
 

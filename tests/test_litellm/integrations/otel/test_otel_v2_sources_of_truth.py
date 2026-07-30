@@ -144,11 +144,11 @@ def _all_constants(cls):
 
 
 def test_attribute_keys_are_unique_across_namespaces():
-    from litellm.integrations.otel import MCP, Client, JsonRpc, Network
+    from litellm.integrations.otel import MCP, Client, JsonRpc, LiteLLMError, Network
 
     # prefixes are allowed to be substrings; exact keys must not collide.
     exact = set()
-    for cls in (GenAI, Error, Server, HTTP, DB, MCP, JsonRpc, Network, Client):
+    for cls in (GenAI, Error, LiteLLMError, Server, HTTP, DB, MCP, JsonRpc, Network, Client):
         for key in _all_constants(cls):
             assert key not in exact, f"duplicate attribute key {key}"
             exact.add(key)
@@ -340,6 +340,47 @@ def test_llm_call_adapter_failure_path():
     assert data.error is not None
     assert data.error.error_type == "RateLimitError"
     assert data.error.message == "429 slow down"
+
+
+def test_llm_call_adapter_carries_error_detail_fields():
+    """``_parse_error`` threads the full detail set from ``error_information``
+    (``error_code``, ``traceback``, ``llm_provider``) onto ``SpanError`` so the
+    emitter can stamp them as span attributes."""
+    payload = _sample_payload(
+        status="failure",
+        error_information={
+            "error_class": "BadRequestError",
+            "error_message": "400 violated moderation policy",
+            "error_code": "400",
+            "traceback": "File proxy_server.py line 8570 ...",
+            "llm_provider": "openai",
+        },
+    )
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    assert data.error is not None
+    assert data.error.error_type == "BadRequestError"
+    assert data.error.message == "400 violated moderation policy"
+    assert data.error.code == "400"
+    assert data.error.stack_trace == "File proxy_server.py line 8570 ..."
+    assert data.error.llm_provider == "openai"
+
+
+def test_llm_call_adapter_error_details_default_to_none_when_absent():
+    """Guardrail-shape payloads carry only ``error_class`` + ``error_message``.
+    The detail fields must stay ``None`` so the emitter's ``if error.code:``
+    guards skip stamping empty attributes."""
+    payload = _sample_payload(
+        status="failure",
+        error_information={
+            "error_class": "ContentFilter",
+            "error_message": "guardrail rejected",
+        },
+    )
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    assert data.error is not None
+    assert data.error.code is None
+    assert data.error.stack_trace is None
+    assert data.error.llm_provider is None
 
 
 def test_adapter_is_resilient_to_minimal_payload():

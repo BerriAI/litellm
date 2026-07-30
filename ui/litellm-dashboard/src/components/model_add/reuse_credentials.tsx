@@ -21,8 +21,6 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
 }) => {
   const [form] = Form.useForm();
 
-  console.log(`existingCredential in add credentials tab: ${JSON.stringify(existingCredential)}`);
-
   const handleSubmit = (values: any) => {
     onAddCredential(values);
     form.resetFields();

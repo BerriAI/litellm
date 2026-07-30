@@ -158,6 +158,54 @@ class TestClaudePlatformActionsCovered:
         )
 
 
+class TestBedrockMantleActionsCovered:
+    """LIT-3859: bedrock_mantle inference authorizes against the
+    ``bedrock-mantle`` action namespace, so the session-policy ceiling
+    must include it or every Mantle request via OIDC/WIF auth denies
+    with "no session policy allows the bedrock-mantle:CreateInference
+    action" even when the role's identity policy grants it."""
+
+    def test_bedrock_mantle_create_inference_present(self):
+        policy = _captured_policy()
+        all_actions: set = set()
+        for stmt in policy["Statement"]:
+            stmt_actions = stmt.get("Action")
+            if isinstance(stmt_actions, str):
+                all_actions.add(stmt_actions)
+            elif isinstance(stmt_actions, list):
+                all_actions.update(stmt_actions)
+        assert "bedrock-mantle:CreateInference" in all_actions, (
+            "bedrock-mantle:CreateInference missing from session policy — "
+            "bedrock_mantle/* requests will 403 on OIDC/WIF auth"
+        )
+
+    def test_bedrock_mantle_statement_allows(self):
+        policy = _captured_policy()
+        stmt = _statement_by_sid(policy, "BedrockMantleLiteLLM")
+        assert stmt["Effect"] == "Allow"
+        assert stmt["Resource"] == "*"
+
+    def test_no_bedrock_mantle_wildcard(self):
+        policy = _captured_policy()
+        stmt = _statement_by_sid(policy, "BedrockMantleLiteLLM")
+        actions = stmt["Action"]
+        if isinstance(actions, str):
+            actions = [actions]
+        assert "bedrock-mantle:*" not in actions, (
+            "session policy must not grant bedrock-mantle:* — "
+            "the ceiling should match the documented action set"
+        )
+
+    def test_bedrock_mantle_statement_carries_secure_transport_condition(self):
+        policy = _captured_policy()
+        stmt = _statement_by_sid(policy, "BedrockMantleLiteLLM")
+        cond = stmt.get("Condition") or {}
+        assert cond.get("Bool", {}).get("aws:SecureTransport") == "true", (
+            "BedrockMantleLiteLLM must require aws:SecureTransport=true "
+            "to keep parity with the bedrock statement"
+        )
+
+
 def _make_jwt(payload: dict) -> str:
     def _segment(data: dict) -> str:
         return base64.urlsafe_b64encode(json.dumps(data).encode()).rstrip(b"=").decode()

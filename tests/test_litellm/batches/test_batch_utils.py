@@ -733,3 +733,215 @@ def test_total_usage_vertex_disable_transform_path(monkeypatch):
 
     usage = bu._get_batch_job_total_usage_from_file_content([], custom_llm_provider="vertex_ai", model_name="gemini-x")
     assert usage.total_tokens == 3
+
+
+def _anthropic_usage(input_tokens, output_tokens, cache_creation=0, cache_read=0):
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_creation_input_tokens": cache_creation,
+        "cache_read_input_tokens": cache_read,
+    }
+
+
+def _anthropic_succeeded_row(model="claude-sonnet-4-5-20250929", usage=None):
+    return {
+        "custom_id": "req-1",
+        "result": {
+            "type": "succeeded",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": usage or _anthropic_usage(10, 5),
+            },
+        },
+    }
+
+
+def _anthropic_errored_row():
+    return {
+        "custom_id": "req-2",
+        "result": {
+            "type": "errored",
+            "error": {"type": "invalid_request_error", "message": "bad request"},
+        },
+    }
+
+
+_ANTHROPIC_MODEL_INFO = {
+    "input_cost_per_token": 3e-6,
+    "output_cost_per_token": 15e-6,
+    "cache_read_input_token_cost": 3e-7,
+    "cache_creation_input_token_cost": 3.75e-6,
+}
+
+
+@pytest.mark.parametrize(
+    "row,expected",
+    [
+        (_anthropic_succeeded_row(), True),
+        (_anthropic_errored_row(), False),
+        ({"custom_id": "x", "result": {"type": "canceled"}}, False),
+        ({"custom_id": "x", "result": {"type": "expired"}}, False),
+        ({"custom_id": "x"}, False),
+        ({"custom_id": "x", "result": None}, False),
+    ],
+)
+def test_anthropic_result_line_success_check(row, expected):
+    """
+    LIT-4008 regression: anthropic batch results JSONL lines are not
+    OpenAI-shaped; success is result.type == "succeeded", not
+    response.status_code == 200. Pre-fix every anthropic line parsed as
+    unsuccessful, so completed batches were billed $0 forever.
+    """
+    assert bu._batch_response_was_successful(row, custom_llm_provider="anthropic") is expected
+
+
+def test_anthropic_response_body_is_result_message():
+    row = _anthropic_succeeded_row(model="claude-sonnet-4-5-20250929")
+    body = bu._get_response_from_batch_job_output_file(row, custom_llm_provider="anthropic")
+    assert body["model"] == "claude-sonnet-4-5-20250929"
+    assert body["usage"] == _anthropic_usage(10, 5)
+
+
+def test_anthropic_usage_conversion_includes_cache_tokens():
+    body = {"model": "claude-sonnet-4-5-20250929", "usage": _anthropic_usage(1000, 200, cache_creation=2000, cache_read=8000)}
+    usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="anthropic")
+    assert usage.prompt_tokens == 11000
+    assert usage.completion_tokens == 200
+    assert usage.total_tokens == 11200
+    assert usage.prompt_tokens_details.cached_tokens == 8000
+    assert usage.prompt_tokens_details.cache_creation_tokens == 2000
+
+
+def test_bedrock_model_output_line_success_check():
+    row = {
+        "recordId": "1",
+        "modelOutput": {"model": "claude-sonnet-4-6", "usage": {"input_tokens": 13, "output_tokens": 5}},
+    }
+    assert bu._batch_response_was_successful(row, custom_llm_provider="bedrock") is True
+    assert bu._get_response_from_batch_job_output_file(row, custom_llm_provider="bedrock")["model"] == "claude-sonnet-4-6"
+
+
+def test_bedrock_cost_uses_deployment_model_name():
+    row = {
+        "recordId": "1",
+        "modelOutput": {"model": "claude-sonnet-4-6", "usage": {"input_tokens": 13, "output_tokens": 5}},
+    }
+    cost = bu._get_batch_job_cost_from_file_content(
+        file_content_dictionary=[row],
+        custom_llm_provider="bedrock",
+        model_name="us.anthropic.claude-sonnet-4-6",
+        model_info={},
+    )
+    assert cost > 0
+
+
+def test_anthropic_total_usage_sums_succeeded_only():
+    rows = [
+        _anthropic_succeeded_row(usage=_anthropic_usage(10, 5)),
+        _anthropic_errored_row(),
+        _anthropic_succeeded_row(usage=_anthropic_usage(20, 10, cache_read=100)),
+    ]
+    usage = bu._get_batch_job_total_usage_from_file_content(rows, custom_llm_provider="anthropic")
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (130, 15, 145)
+
+
+def test_anthropic_total_usage_aggregates_cache_token_details():
+    rows = [
+        _anthropic_succeeded_row(usage=_anthropic_usage(1000, 200, cache_creation=2000, cache_read=8000)),
+        _anthropic_errored_row(),
+        _anthropic_succeeded_row(usage=_anthropic_usage(50, 20, cache_creation=300, cache_read=700)),
+    ]
+    usage = bu._get_batch_job_total_usage_from_file_content(rows, custom_llm_provider="anthropic")
+    assert usage.prompt_tokens_details.cached_tokens == 8700
+    assert usage.prompt_tokens_details.cache_creation_tokens == 2300
+    assert usage.cache_read_input_tokens == 8700
+    assert usage.cache_creation_input_tokens == 2300
+
+
+def test_total_usage_without_cache_tokens_has_no_prompt_details():
+    rows = [
+        {
+            "custom_id": "req-1",
+            "response": {"status_code": 200, "body": {"model": "gpt-5.2", "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}},
+        }
+    ]
+    usage = bu._get_batch_job_total_usage_from_file_content(rows, custom_llm_provider="openai")
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (10, 5, 15)
+    assert usage.prompt_tokens_details is None
+
+
+def test_anthropic_cost_applies_batch_discount_and_cache_pricing():
+    """Anthropic batches bill at 50% of the regular rate for base input,
+    cache reads, cache writes, and output tokens alike."""
+    rows = [
+        _anthropic_succeeded_row(usage=_anthropic_usage(1000, 200, cache_creation=2000, cache_read=8000)),
+        _anthropic_errored_row(),
+    ]
+
+    total = bu._get_batch_job_cost_from_file_content(
+        rows,
+        custom_llm_provider="anthropic",
+        model_info=_ANTHROPIC_MODEL_INFO,  # type: ignore[arg-type]
+    )
+
+    expected_half_price = (1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3.75e-6 + 200 * 15e-6) / 2
+    assert total == pytest.approx(expected_half_price)
+
+
+def test_anthropic_cost_without_model_info_uses_batch_cost_calculator(monkeypatch):
+    import litellm.cost_calculator as cc
+
+    seen = []
+
+    def _fake_batch_cost_calculator(**kw):
+        seen.append(kw)
+        return (0.1, 0.2)
+
+    monkeypatch.setattr(cc, "batch_cost_calculator", _fake_batch_cost_calculator)
+    monkeypatch.setattr(
+        litellm,
+        "completion_cost",
+        lambda **kw: pytest.fail("anthropic rows must not go through completion_cost"),
+    )
+
+    total = bu._get_batch_job_cost_from_file_content(
+        [_anthropic_succeeded_row()], custom_llm_provider="anthropic"
+    )
+
+    assert total == pytest.approx(0.3)
+    assert seen[0]["model"] == "claude-sonnet-4-5-20250929"
+    assert seen[0]["custom_llm_provider"] == "anthropic"
+    assert seen[0]["usage"].prompt_tokens == 10
+
+
+def test_anthropic_batch_models_collected_from_succeeded_rows():
+    rows = [
+        _anthropic_succeeded_row(model="claude-sonnet-4-5-20250929"),
+        _anthropic_errored_row(),
+    ]
+    assert bu._get_batch_models_from_file_content(rows, None, "anthropic") == ["claude-sonnet-4-5-20250929"]
+
+
+@pytest.mark.asyncio
+async def test_calculate_batch_cost_and_usage_anthropic_end_to_end():
+    rows = [
+        _anthropic_succeeded_row(usage=_anthropic_usage(1000, 200, cache_creation=2000, cache_read=8000)),
+        _anthropic_errored_row(),
+    ]
+
+    cost, usage, models = await bu.calculate_batch_cost_and_usage(
+        file_content_dictionary=rows,
+        custom_llm_provider="anthropic",
+        model_name="claude-sonnet-4-5",
+        model_info=_ANTHROPIC_MODEL_INFO,  # type: ignore[arg-type]
+    )
+
+    assert cost == pytest.approx(1000 * 3e-6 / 2 + 8000 * 3e-7 / 2 + 2000 * 3.75e-6 / 2 + 200 * 15e-6 / 2)
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (11000, 200, 11200)
+    assert models == ["claude-sonnet-4-5"]

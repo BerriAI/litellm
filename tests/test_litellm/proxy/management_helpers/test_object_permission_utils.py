@@ -9,13 +9,19 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from litellm.proxy._types import LiteLLM_ObjectPermissionBase, LiteLLM_ObjectPermissionTable, ObjectPermissionDict
+from litellm.proxy._types import (
+    LiteLLM_ObjectPermissionBase,
+    LiteLLM_ObjectPermissionTable,
+    ObjectPermissionDict,
+    SpecialMCPServerName,
+)
 from litellm.proxy.management_helpers.object_permission_utils import (
     _extract_requested_mcp_access_groups,
     _extract_requested_mcp_server_ids,
     _resolve_team_allowed_mcp_servers,
     _rewrite_object_permission_mcp_servers,
     _set_object_permission,
+    enforce_all_proxy_mcp_servers_grant_is_admin_only,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
     validate_key_vector_stores_against_team,
@@ -874,6 +880,172 @@ async def test_resolve_team_allowed_mcp_servers_dict_tool_permissions(
 
     result = await _resolve_team_allowed_mcp_servers(mock_perm)
     assert result == {"server-a"}
+
+
+# ---- Tests for the all-proxy-mcpservers sentinel (team scoped to every server) ----
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_resolve_team_all_proxy_sentinel_resolves_dynamically(mock_access_groups):
+    """A team whose object_permission.mcp_servers holds the all-proxy sentinel
+    resolves to every registered server id, and picks up a server registered
+    later without any change to the team's stored permission (this kills the
+    early-return that maps the sentinel to the live registry)."""
+    registry = {
+        "srv-x": _make_mock_mcp_server("srv-x"),
+        "srv-y": _make_mock_mcp_server("srv-y"),
+    }
+    mock_mgr = MagicMock()
+    mock_mgr.get_registry.return_value = registry
+
+    team_perm = MagicMock(spec=LiteLLM_ObjectPermissionTable)
+    team_perm.mcp_servers = [SpecialMCPServerName.all_proxy_servers.value]
+    team_perm.mcp_access_groups = []
+    team_perm.mcp_tool_permissions = {}
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        mock_mgr,
+    ):
+        assert await _resolve_team_allowed_mcp_servers(team_perm) == {"srv-x", "srv-y"}
+
+        registry["srv-z"] = _make_mock_mcp_server("srv-z")
+        assert await _resolve_team_allowed_mcp_servers(team_perm) == {
+            "srv-x",
+            "srv-y",
+            "srv-z",
+        }
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("srv-x", "srv-y", "srv-z"),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_key_scoped_to_server_added_after_team_all_proxy(
+    mock_access_groups, mock_allow_all
+):
+    """The exact user scenario: a team scoped to the all-proxy sentinel, a server
+    (srv-z) registered afterwards, and a key scoped to just srv-z. Because the
+    team ceiling resolves to every registered server, the key passes validation
+    and keeps srv-z in its normalized permission."""
+    team_obj = _make_team_obj(mcp_servers=[SpecialMCPServerName.all_proxy_servers.value])
+    object_permission = {"mcp_servers": ["srv-z"]}
+    result = await validate_key_mcp_servers_against_team(
+        object_permission=object_permission,
+        team_obj=team_obj,
+    )
+    assert result is not None
+    assert result["mcp_servers"] == ["srv-z"]
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("srv-x", "srv-z"),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_key_scoped_to_server_rejected_when_team_not_all_proxy(
+    mock_access_groups, mock_allow_all
+):
+    """Contrast with the sentinel case: a team scoped to a concrete server list
+    (srv-x, not the sentinel) does NOT unlock srv-z for a key. It is the sentinel
+    specifically, not a blanket allow, that widens the team ceiling."""
+    team_obj = _make_team_obj(mcp_servers=["srv-x"])
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_servers": ["srv-z"]},
+            team_obj=team_obj,
+        )
+    assert exc_info.value.status_code == 403
+    assert "srv-z" in str(exc_info.value.detail)
+
+
+# ---- Tests for the proxy-admin gate on granting a team the all-proxy sentinel ----
+
+
+@pytest.mark.asyncio
+async def test_enforce_all_proxy_mcp_grant_blocks_non_admin_adding_sentinel():
+    """A non-proxy-admin (e.g. a team admin) cannot newly grant a team the all-proxy
+    MCP sentinel. Without this gate a team admin could self-escalate their team to
+    every MCP server on the proxy via team create/update."""
+    with pytest.raises(HTTPException) as exc_info:
+        await enforce_all_proxy_mcp_servers_grant_is_admin_only(
+            requested_mcp_servers=[SpecialMCPServerName.all_proxy_servers.value],
+            existing_object_permission_id=None,
+            is_proxy_admin=False,
+            prisma_client=None,
+        )
+    assert exc_info.value.status_code == 403
+    assert "all-proxy-mcpservers" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_enforce_all_proxy_mcp_grant_allows_proxy_admin():
+    """A proxy admin may grant the sentinel — the intended way to scope a team to all
+    proxy MCP servers."""
+    await enforce_all_proxy_mcp_servers_grant_is_admin_only(
+        requested_mcp_servers=[SpecialMCPServerName.all_proxy_servers.value],
+        existing_object_permission_id=None,
+        is_proxy_admin=True,
+        prisma_client=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_enforce_all_proxy_mcp_grant_allows_non_admin_without_sentinel():
+    """A non-admin scoping a team to concrete servers is unaffected by the gate."""
+    await enforce_all_proxy_mcp_servers_grant_is_admin_only(
+        requested_mcp_servers=["srv-x", "srv-y"],
+        existing_object_permission_id=None,
+        is_proxy_admin=False,
+        prisma_client=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_enforce_all_proxy_mcp_grant_allows_non_admin_when_sentinel_already_set():
+    """The gate blocks only NEW grants: a non-admin editing a team a proxy admin
+    already scoped to all-proxy is not forced to strip the sentinel, so unrelated
+    edits still succeed. The existing permission is read from the DB by id."""
+    existing_row = MagicMock()
+    existing_row.mcp_servers = [SpecialMCPServerName.all_proxy_servers.value]
+    mock_repo = MagicMock()
+    mock_repo.table.find_unique = AsyncMock(return_value=existing_row)
+
+    with patch(
+        "litellm.proxy.management_helpers.object_permission_utils.ObjectPermissionRepository",
+        return_value=mock_repo,
+    ):
+        await enforce_all_proxy_mcp_servers_grant_is_admin_only(
+            requested_mcp_servers=[SpecialMCPServerName.all_proxy_servers.value],
+            existing_object_permission_id="op-1",
+            is_proxy_admin=False,
+            prisma_client=MagicMock(),
+        )
+    mock_repo.table.find_unique.assert_awaited_once()
 
 
 # ---- Tests for validate_key_search_tools_against_team ----

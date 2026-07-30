@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     make_valid_bedrock_tool_name,
 )
 from litellm.llms.anthropic.chat.transformation import (
+    DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING,
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
     AnthropicConfig,
@@ -76,6 +77,7 @@ from litellm.utils import (
 from ..common_utils import (
     BedrockError,
     BedrockModelInfo,
+    bedrock_converse_supports_parallel_tool_use_config,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
     is_claude_4_5_on_bedrock,
@@ -422,6 +424,7 @@ class AmazonConverseConfig(BaseConfig):
             mapped_thinking = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort,
                 model=model,
+                custom_llm_provider="bedrock",
                 llm_provider="bedrock_converse",
             )
             if mapped_thinking is None:
@@ -429,7 +432,7 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params.pop("output_config", None)
             else:
                 optional_params["thinking"] = mapped_thinking
-                if AnthropicConfig._is_adaptive_thinking_model(model):
+                if AnthropicConfig._is_adaptive_thinking_model(model, "bedrock"):
                     mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
                     if mapped_effort is None:
                         AnthropicConfig._raise_invalid_reasoning_effort(
@@ -464,7 +467,7 @@ class AmazonConverseConfig(BaseConfig):
                 model=model,
                 llm_provider="bedrock_converse",
             )
-        error = AnthropicConfig._validate_effort_for_model(model=model, effort=effort)
+        error = AnthropicConfig._validate_effort_for_model(model=model, effort=effort, custom_llm_provider="bedrock")
         if error is not None:
             raise litellm.exceptions.BadRequestError(
                 message=error,
@@ -892,12 +895,32 @@ class AmazonConverseConfig(BaseConfig):
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
             if param == "parallel_tool_calls":
-                disable_parallel = not value
                 optional_params["_parallel_tool_use_config"] = {
-                    "tool_choice": {"disable_parallel_tool_use": disable_parallel}
+                    "tool_choice": {"type": "auto", "disable_parallel_tool_use": not value}
                 }
             if param == "thinking":
-                optional_params["thinking"] = value
+                if (
+                    isinstance(value, dict)
+                    and value.get("type") == "adaptive"
+                    and not AnthropicConfig._is_adaptive_thinking_model(model, "bedrock")
+                ):
+                    max_tokens = non_default_params.get("max_completion_tokens") or non_default_params.get("max_tokens")
+                    legacy_thinking = AnthropicConfig._map_reasoning_effort(
+                        reasoning_effort="medium",
+                        model=model,
+                        custom_llm_provider="bedrock",
+                    )
+                    capped = (
+                        AnthropicConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
+                        if legacy_thinking is not None
+                        else None
+                    )
+                    if capped is not None:
+                        optional_params["thinking"] = capped
+                    else:
+                        litellm.verbose_logger.warning(DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING, model)
+                else:
+                    optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params
@@ -1106,17 +1129,27 @@ class AmazonConverseConfig(BaseConfig):
         if cache_control is None:
             return None
 
-        cache_point = CachePointBlock(type="default")
-        if isinstance(cache_control, dict) and "ttl" in cache_control:
-            ttl = cache_control["ttl"]
-            if ttl in ["5m", "1h"] and model is not None:
-                if is_claude_4_5_on_bedrock(model):
-                    cache_point["ttl"] = ttl
+        cache_point = self._build_cache_point_block(cache_control, model)
 
         if block_type == "system":
             return SystemContentBlock(cachePoint=cache_point)
         else:
             return ContentBlock(cachePoint=cache_point)
+
+    @staticmethod
+    def _build_cache_point_block(control: Optional[dict], model: Optional[str] = None) -> CachePointBlock:
+        """Build a Bedrock ``cachePoint`` block from an OpenAI-style ``cache_control``/``control`` dict.
+
+        ``type`` is always ``"default"`` (the only value Bedrock's Converse API
+        accepts). ``ttl`` is only honored for models that support extended TTL
+        caching (Claude 4.5 family on Bedrock).
+        """
+        cache_point = CachePointBlock(type="default")
+        if isinstance(control, dict) and "ttl" in control:
+            ttl = control["ttl"]
+            if ttl in ["5m", "1h"] and model is not None and is_claude_4_5_on_bedrock(model):
+                cache_point["ttl"] = ttl
+        return cache_point
 
     def _transform_system_message(
         self, messages: List[AllMessageValues], model: Optional[str] = None
@@ -1173,6 +1206,22 @@ class AmazonConverseConfig(BaseConfig):
                 return {"inferenceConfig": {"topK": val_top_k}}
 
         return {}
+
+    @staticmethod
+    def _merge_parallel_tool_use_config(additional_request_params: dict, parallel_tool_use_config: dict) -> dict:
+        merged_entries = {
+            key: (
+                {
+                    **value,
+                    **additional_request_params[key],
+                    **{k: v for k, v in value.items() if k != "type"},
+                }
+                if isinstance(additional_request_params.get(key), dict) and isinstance(value, dict)
+                else value
+            )
+            for key, value in parallel_tool_use_config.items()
+        }
+        return {**additional_request_params, **merged_entries}
 
     def _prepare_request_params(
         self, optional_params: dict, model: str, drop_params: bool = False
@@ -1241,16 +1290,10 @@ class AmazonConverseConfig(BaseConfig):
 
         # Handle parallel_tool_calls configuration
         parallel_tool_use_config = additional_request_params.pop("_parallel_tool_use_config", None)
-        if parallel_tool_use_config is not None and is_claude_4_5_on_bedrock(model):
-            for key, value in parallel_tool_use_config.items():
-                if (
-                    key in additional_request_params
-                    and isinstance(additional_request_params[key], dict)
-                    and isinstance(value, dict)
-                ):
-                    additional_request_params[key].update(value)
-                else:
-                    additional_request_params[key] = value
+        if parallel_tool_use_config is not None and bedrock_converse_supports_parallel_tool_use_config(model):
+            additional_request_params = self._merge_parallel_tool_use_config(
+                additional_request_params, parallel_tool_use_config
+            )
 
         additional_request_params.pop("parallel_tool_calls", None)
 
@@ -1268,7 +1311,7 @@ class AmazonConverseConfig(BaseConfig):
 
         if anthropic_output_config is not None and isinstance(anthropic_output_config, dict):
             if base_model.startswith("anthropic"):
-                if litellm.drop_params is True and not AnthropicConfig._model_supports_effort_param(model):
+                if litellm.drop_params is True and not AnthropicConfig._model_supports_effort_param(model, "bedrock"):
                     litellm.verbose_logger.warning(
                         DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
                         model,
@@ -1411,7 +1454,7 @@ class AmazonConverseConfig(BaseConfig):
             if (
                 isinstance(output_config, dict)
                 and output_config.get("effort") is not None
-                and not AnthropicConfig._is_adaptive_thinking_model(model)
+                and not AnthropicConfig._is_adaptive_thinking_model(model, "bedrock")
             ):
                 from litellm.types.llms.anthropic import (
                     ANTHROPIC_EFFORT_BETA_HEADER,
@@ -1526,7 +1569,8 @@ class AmazonConverseConfig(BaseConfig):
         if cache_injection_points and len(bedrock_tools) > 0:
             for point in cache_injection_points:
                 if point.get("location") == "tool_config":
-                    bedrock_tools.append({"cachePoint": {"type": "default"}})
+                    cache_point = self._build_cache_point_block(point.get("control"), model)
+                    bedrock_tools.append(ToolBlock(cachePoint=cache_point))
                     break
 
         bedrock_tool_config: Optional[ToolConfigBlock] = None

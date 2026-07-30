@@ -17,8 +17,8 @@ from typing import TYPE_CHECKING, Protocol
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
     TokenEndpointAuthConfigError,
-    build_token_endpoint_client_auth,
 )
+from litellm.proxy._experimental.mcp_server.oauth_utils import build_upstream_oauth2_token_request
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
 )
@@ -92,7 +92,8 @@ class AuthorizationCodeRefresher:
             return None
 
         try:
-            client_auth = build_token_endpoint_client_auth(
+            token_request = build_upstream_oauth2_token_request(
+                server,
                 auth_method=server.token_endpoint_auth_method,
                 client_id=server.client_id,
                 client_secret=server.client_secret,
@@ -103,9 +104,9 @@ class AuthorizationCodeRefresher:
         form = {
             "grant_type": "refresh_token",
             "refresh_token": token.refresh_token,
-            **client_auth.body,
+            **token_request.body,
         }
-        body = await self._token_endpoint(server.token_url, form, client_auth.headers)
+        body = await self._token_endpoint(server.token_url, form, token_request.headers)
         if body is None:
             return None
         access_token = body.get("access_token")

@@ -1,5 +1,6 @@
 """Helpers for handling MCP-aware `/chat/completions` requests."""
 
+import logging
 from typing import (
     Any,
     List,
@@ -11,7 +12,7 @@ from typing import (
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
@@ -113,19 +114,13 @@ async def acompletion_with_mcp(
             **kwargs,
         )
 
-    # Extract user_api_key_auth from metadata or kwargs
-    user_api_key_auth = kwargs.get("user_api_key_auth") or ((kwargs.get("metadata", {}) or {}).get("user_api_key_auth"))
-
-    # Extract MCP auth headers before fetching tools (needed for dynamic auth)
-    (
-        mcp_auth_header,
-        mcp_server_auth_headers,
-        oauth2_headers,
-        raw_headers,
-    ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
-        secret_fields=kwargs.get("secret_fields"),
-        tools=tools,
-    )
+    context = MCPRequestContext.resolve(kwargs=kwargs, tools=tools)
+    user_api_key_auth = context.user_api_key_auth
+    request_tags = list(context.request_tags) if context.request_tags else None
+    mcp_auth_header = context.mcp_auth_header
+    mcp_server_auth_headers = context.mcp_server_auth_headers
+    oauth2_headers = context.oauth2_headers
+    raw_headers = context.raw_headers
 
     # Process MCP tools (pass auth headers for dynamic auth)
     (
@@ -137,6 +132,7 @@ async def acompletion_with_mcp(
         litellm_trace_id=kwargs.get("litellm_trace_id"),
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
+        request_tags=request_tags,
     )
 
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
@@ -218,6 +214,7 @@ async def acompletion_with_mcp(
                 litellm_trace_id,
                 openai_tools,
                 base_call_args,
+                request_tags,
             ):
                 self.stream_wrapper = stream_wrapper
                 self.messages = messages
@@ -231,6 +228,7 @@ async def acompletion_with_mcp(
                 self.litellm_trace_id = litellm_trace_id
                 self.openai_tools = openai_tools
                 self.base_call_args = base_call_args
+                self.request_tags = request_tags
                 self.collected_chunks: List[ModelResponseStream] = []
                 self.tool_calls: Optional[List] = None
                 self.tool_results: Optional[List] = None
@@ -303,6 +301,17 @@ async def acompletion_with_mcp(
 
                 return chunk
 
+            async def _drain_inner_stream(self):
+                try:
+                    while True:
+                        await self._stream_iterator.__anext__()
+                except StopAsyncIteration:
+                    pass
+                except Exception:
+                    logging.getLogger("LiteLLM").exception(
+                        "Error draining inner MCP stream after final chunk; spend logging may be incomplete"
+                    )
+
             async def __anext__(self):
                 # Phase 1: Collect and yield initial stream chunks
                 if not self.stream_exhausted:
@@ -332,15 +341,16 @@ async def acompletion_with_mcp(
                         )
 
                         if is_final:
-                            # This is the final chunk, mark stream as exhausted
                             self.stream_exhausted = True
-                            # Process tool calls after we've collected all chunks
                             await self._process_tool_calls()
-                            # Apply MCP metadata (tool_calls and tool_results) to final chunk
                             chunk = self._add_mcp_tool_metadata_to_final_chunk(chunk)
-                            # If we have tool results, prepare follow-up call immediately
                             if self.tool_results and self.complete_response:
                                 await self._prepare_follow_up_call()
+                            # Drain inner stream so CustomStreamWrapper fires its
+                            # end-of-stream handler (dispatch_success_handlers →
+                            # _ProxyDBLogger → LiteLLM_SpendLogs).  The CSW may
+                            # yield one usage chunk before raising StopAsyncIteration.
+                            await self._drain_inner_stream()
 
                         return chunk
                     except StopAsyncIteration:
@@ -354,6 +364,7 @@ async def acompletion_with_mcp(
                             # If we have tool results, prepare follow-up call
                             if self.tool_results and self.complete_response:
                                 await self._prepare_follow_up_call()
+                            await self._drain_inner_stream()
                             return final_chunk
 
                 # Phase 2: Yield follow-up stream chunks if available
@@ -426,6 +437,7 @@ async def acompletion_with_mcp(
                             raw_headers=self.raw_headers,
                             litellm_call_id=self.litellm_call_id,
                             litellm_trace_id=self.litellm_trace_id,
+                            request_tags=self.request_tags,
                         )
 
             async def _prepare_follow_up_call(self):
@@ -485,6 +497,7 @@ async def acompletion_with_mcp(
             litellm_trace_id=kwargs.get("litellm_trace_id"),
             openai_tools=openai_tools,
             base_call_args=base_call_args,
+            request_tags=request_tags,
         )
 
         # Create a wrapper class that delegates to our custom iterator
@@ -596,6 +609,7 @@ async def acompletion_with_mcp(
         raw_headers=raw_headers,
         litellm_call_id=kwargs.get("litellm_call_id"),
         litellm_trace_id=kwargs.get("litellm_trace_id"),
+        request_tags=request_tags,
     )
 
     if not tool_results:

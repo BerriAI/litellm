@@ -311,6 +311,28 @@ def get_vertex_base_model_name(model: str) -> str:
     return model
 
 
+def validate_vertex_location(vertex_location: Optional[str]) -> str:
+    """
+    Validate a Vertex AI location before interpolating it into a request host or
+    URL path.
+
+    ``vertex_location`` is client-controllable on the proxy (it flows in from the
+    request body), so it must never be trusted verbatim in a URL or an attacker
+    could point the host at their own server and exfiltrate the admin's Google
+    access token. Allow the special ``global`` control plane and otherwise require
+    a lowercase alphanumeric-plus-hyphen token (e.g. ``us``, ``us-central1``,
+    ``eu``), which rejects host injection like ``attacker.example/`` or
+    ``evil.com#``.
+    """
+    if vertex_location == "global":
+        return vertex_location
+    if vertex_location is None:
+        raise ValueError("vertex_location is required")
+    if not re.match(r"^[a-z][a-z0-9-]*$", vertex_location):
+        raise ValueError("Invalid vertex_location format")
+    return vertex_location
+
+
 def get_vertex_base_url(
     vertex_location: Optional[str],
 ) -> str:
@@ -321,15 +343,12 @@ def get_vertex_base_url(
     - Multi-region geographies (e.g. ``us``, ``eu``) use ``aiplatform.{geo}.rep.googleapis.com``.
     - Regional locations (e.g. ``us-central1``) use ``{region}-aiplatform.googleapis.com``.
     """
-    if vertex_location == "global":
+    validated_location = validate_vertex_location(vertex_location)
+    if validated_location == "global":
         return "https://aiplatform.googleapis.com"
-    if vertex_location is None:
-        raise ValueError("vertex_location is required")
-    if not re.match(r"^[a-z][a-z0-9-]*$", vertex_location):
-        raise ValueError("Invalid vertex_location format")
-    if "-" not in vertex_location:
-        return f"https://aiplatform.{vertex_location}.rep.googleapis.com"
-    return f"https://{vertex_location}-aiplatform.googleapis.com"
+    if "-" not in validated_location:
+        return f"https://aiplatform.{validated_location}.rep.googleapis.com"
+    return f"https://{validated_location}-aiplatform.googleapis.com"
 
 
 def _get_embedding_url(
