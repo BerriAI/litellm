@@ -777,6 +777,7 @@ def test_build_sso_user_update_data_with_valid_role():
         result=sso_result,
         user_email="test@example.com",
         user_id="test-user-123",
+        sso_user_id="test-user-123",
     )
 
     assert update_data["user_email"] == "test@example.com"
@@ -803,10 +804,64 @@ def test_build_sso_user_update_data_without_role():
         result=sso_result,
         user_email="test@example.com",
         user_id="test-user-456",
+        sso_user_id="test-user-456",
     )
 
     assert update_data["user_email"] == "test@example.com"
     assert "user_role" not in update_data
+
+
+def test_build_sso_user_update_data_includes_sso_user_id_when_provided():
+    """
+    Regression: an existing user resolved via SSO must have sso_user_id persisted
+    regardless of which lookup path found them (direct user_id match skips the
+    fuzzy-email-match backfill in auth_checks.py, so this is the only place a
+    user_id-matched existing user's sso_user_id gets set).
+    """
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import _build_sso_user_update_data
+
+    sso_result = CustomOpenID(
+        id="idp-external-id",
+        email="test@example.com",
+        display_name="Test User",
+        provider="microsoft",
+        team_ids=[],
+        user_role=None,
+    )
+
+    update_data = _build_sso_user_update_data(
+        result=sso_result,
+        user_email="test@example.com",
+        user_id="test-user-456",
+        sso_user_id="idp-external-id",
+    )
+
+    assert update_data["sso_user_id"] == "idp-external-id"
+
+
+def test_build_sso_user_update_data_omits_sso_user_id_when_not_resolved():
+    """When no SSO identity id could be resolved, don't overwrite sso_user_id with None."""
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import _build_sso_user_update_data
+
+    sso_result = CustomOpenID(
+        id="idp-external-id",
+        email="test@example.com",
+        display_name="Test User",
+        provider="microsoft",
+        team_ids=[],
+        user_role=None,
+    )
+
+    update_data = _build_sso_user_update_data(
+        result=sso_result,
+        user_email="test@example.com",
+        user_id="test-user-456",
+        sso_user_id=None,
+    )
+
+    assert "sso_user_id" not in update_data
 
 
 def test_normalize_email():
@@ -849,6 +904,7 @@ def test_build_sso_user_update_data_normalizes_email():
         result=sso_result,
         user_email="Test.User@Example.COM",
         user_id="test-user-789",
+        sso_user_id="test-user-789",
     )
 
     # Email should be normalized to lowercase
@@ -1032,6 +1088,66 @@ async def test_upsert_sso_user_no_role_in_sso_response():
     assert call_args.kwargs["where"] == {"user_id": "test-user-789"}
     assert call_args.kwargs["data"]["user_email"] == "new@example.com"
     assert "user_role" not in call_args.kwargs["data"]
+
+
+@pytest.mark.asyncio
+async def test_upsert_sso_user_backfills_sso_user_id_for_existing_user():
+    """
+    Regression: a user provisioned before SSO was enabled (e.g. via /user/new with
+    user_id set to their email) whose user_id happens to match what the IdP presents
+    as the identity id is found by get_user_object's direct user_id lookup, which
+    skips the fuzzy-email-match path in auth_checks.py that would otherwise backfill
+    sso_user_id. Without persisting it here too, count_sso_users() would never count
+    this person despite them authenticating via SSO on every login.
+    """
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+
+    # Pre-existing user, created before SSO was ever configured, whose user_id
+    # collides with the identity id the IdP will present on login.
+    existing_user = LiteLLM_UserTable(
+        user_id="preexisting@example.com",
+        user_email="preexisting@example.com",
+        user_role="internal_user",
+        models=[],
+    )
+
+    sso_result = CustomOpenID(
+        id="preexisting@example.com",
+        email="preexisting@example.com",
+        display_name="Preexisting User",
+        provider="microsoft",
+        team_ids=[],
+        user_role=None,
+    )
+
+    # Matches what get_redirect_response_from_openid builds when it resolves a
+    # user_id from the SSO result.
+    user_defined_values = {
+        "models": [],
+        "user_id": "preexisting@example.com",
+        "user_email": "preexisting@example.com",
+        "user_role": None,
+        "max_budget": None,
+        "budget_duration": None,
+    }
+
+    await SSOAuthenticationHandler.upsert_sso_user(
+        result=sso_result,
+        user_info=existing_user,
+        user_email="preexisting@example.com",
+        user_defined_values=user_defined_values,
+        prisma_client=mock_prisma,
+    )
+
+    mock_prisma.db.litellm_usertable.update_many.assert_called_once()
+    call_args = mock_prisma.db.litellm_usertable.update_many.call_args
+    assert call_args.kwargs["where"] == {"user_id": "preexisting@example.com"}
+    assert call_args.kwargs["data"]["sso_user_id"] == "preexisting@example.com"
 
 
 def test_get_user_email_and_id_extracts_microsoft_role():

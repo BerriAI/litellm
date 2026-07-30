@@ -1679,6 +1679,7 @@ def _build_sso_user_update_data(
     result: Optional[Union["CustomOpenID", OpenID, dict]],
     user_email: Optional[str],
     user_id: Optional[str],
+    sso_user_id: Optional[str],
 ) -> dict:
     """
     Build the update data dictionary for SSO user upsert.
@@ -1687,11 +1688,16 @@ def _build_sso_user_update_data(
         result: The SSO response containing user information
         user_email: The user's email from SSO
         user_id: The user's ID for logging purposes
+        sso_user_id: The resolved SSO identity id, persisted so this user counts as an SSO user
+            on every match path (not just the fuzzy-email-match backfill in auth_checks.py)
 
     Returns:
-        dict: Update data containing user_email and optionally user_role if valid
+        dict: Update data containing user_email, sso_user_id, and optionally user_role if valid
     """
     update_data: dict = {"user_email": normalize_email(user_email)}
+
+    if sso_user_id is not None:
+        update_data["sso_user_id"] = sso_user_id
 
     # Get SSO role from result and include if valid
     sso_role = getattr(result, "user_role", None)
@@ -2978,7 +2984,8 @@ class SSOAuthenticationHandler:
         """
         Connects the SSO Users to the User Table in LiteLLM DB
 
-        - If user on LiteLLM DB, update the user_email and user_role (if SSO provides valid role) with the SSO values
+        - If user on LiteLLM DB, update the user_email, sso_user_id, and user_role (if SSO provides valid role)
+          with the SSO values
         - If user not on LiteLLM DB, insert the user into LiteLLM DB
         """
         try:
@@ -2988,6 +2995,7 @@ class SSOAuthenticationHandler:
                     result=result,
                     user_email=user_email,
                     user_id=user_id,
+                    sso_user_id=(user_defined_values or {}).get("user_id"),
                 )
 
                 await UserRepository(prisma_client).table.update_many(where={"user_id": user_id}, data=update_data)
