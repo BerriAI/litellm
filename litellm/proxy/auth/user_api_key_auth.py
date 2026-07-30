@@ -2695,14 +2695,14 @@ def get_api_key_from_custom_header(request: Request, custom_litellm_key_header_n
     return api_key
 
 
-def _get_temp_budget_increase(valid_token: UserAPIKeyAuth):
+def _get_temp_budget_increase(valid_token: UserAPIKeyAuth) -> Optional[float]:
     valid_token_metadata = valid_token.metadata
     if "temp_budget_increase" in valid_token_metadata and "temp_budget_expiry" in valid_token_metadata:
         expiry = datetime.fromisoformat(valid_token_metadata["temp_budget_expiry"])
         if expiry.tzinfo is None:
             expiry = expiry.replace(tzinfo=timezone.utc)
         if expiry > datetime.now(timezone.utc):
-            return valid_token_metadata["temp_budget_increase"]
+            return float(valid_token_metadata["temp_budget_increase"])
     return None
 
 
