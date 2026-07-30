@@ -283,7 +283,9 @@ class HealthCheckHelpers:
             ),
             "responses": lambda: litellm.aresponses(
                 **_filter_model_params(model_params=model_params),
-                input=[{"role": "user", "content": prompt or "test"}],
+                input=[
+                    {"role": "user", "content": prompt or "test"},
+                ],
             ),
             "anthropic_messages": lambda: litellm.anthropic_messages(
                 **{
