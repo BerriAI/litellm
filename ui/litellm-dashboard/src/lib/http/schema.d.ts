@@ -14806,7 +14806,7 @@ export interface paths {
          *     - duration: Optional[str] - Duration for the key auto-created on `/user/new`. Default is None.
          *     - key_alias: Optional[str] - Alias for the key auto-created on `/user/new`. Default is None.
          *     - sso_user_id: Optional[str] - The id of the user in the SSO provider.
-         *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+         *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
          *     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *     - organizations: List[str] - List of organization id's the user is a member of
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
@@ -14887,7 +14887,7 @@ export interface paths {
          *         - team_id: Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None.
          *         - duration: Optional[str] - [NOT IMPLEMENTED].
          *         - key_alias: Optional[str] - [NOT IMPLEMENTED].
-         *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+         *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
          *         - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *         - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
          */
@@ -33541,6 +33541,7 @@ export interface components {
              * @default []
              */
             models: string[];
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /**
              * Spend
              * @default 0

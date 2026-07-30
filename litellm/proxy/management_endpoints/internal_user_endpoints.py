@@ -45,6 +45,14 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
+from litellm.proxy.common_utils.user_api_key_cache import (
+    object_permission_cache_key,
+    user_object_permission_id_cache_key,
+)
+from litellm.proxy.management_helpers.object_permission_utils import (
+    _set_object_permission,
+    handle_update_object_permission_common,
+)
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -401,7 +409,7 @@ async def new_user(
     - duration: Optional[str] - Duration for the key auto-created on `/user/new`. Default is None.
     - key_alias: Optional[str] - Alias for the key auto-created on `/user/new`. Default is None.
     - sso_user_id: Optional[str] - The id of the user in the SSO provider.
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
     - organizations: List[str] - List of organization id's the user is a member of
     - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
@@ -466,6 +474,10 @@ async def new_user(
 
         data_json = data.json()  # type: ignore
         data_json = _update_internal_new_user_params(data_json, data)
+        # Persist the requested grants as their own row and link it, mirroring key/team creation.
+        # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
+        # the caller sent would be dropped on the floor.
+        data_json = await _set_object_permission(data_json=data_json, prisma_client=prisma_client)
         _hash_password_in_dict(data_json)
         teams = data.teams
         if teams is None:
@@ -852,9 +864,12 @@ async def _check_user_info_v2_access(
     if prisma_client is None:
         return None
 
-    # Helper: fetch the target user row (reused across branches)
+    # Helper: fetch the target user row (reused across branches). object_permission is included so
+    # callers can read the user's MCP/vector-store entitlements without a second round trip.
     async def _fetch_target_user():
-        return await UserRepository(prisma_client).table.find_unique(where={"user_id": target_user_id})
+        return await UserRepository(prisma_client).table.find_unique(
+            where={"user_id": target_user_id}, include={"object_permission": True}
+        )
 
     # Rule 1: Proxy admins — fetch and return the target row directly
     if _user_has_admin_view(user_api_key_dict):
@@ -972,6 +987,7 @@ async def user_info_v2(
             updated_at=user_data.get("updated_at"),
             sso_user_id=user_data.get("sso_user_id"),
             teams=user_data.get("teams") or [],
+            object_permission=user_data.get("object_permission"),
         )
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -1207,6 +1223,48 @@ async def _invalidate_user_spend_counter_if_changed(
         await _invalidate_spend_counter(counter_key=f"spend:user:{non_default_values['user_id']}")
 
 
+def _clears_object_permission(user_request: UpdateUserRequest) -> bool:
+    """Whether the caller explicitly asked to remove this user's object_permission.
+
+    Distinguishes "sent nothing" from "sent an empty grant set". Only the latter clears; an omitted
+    field must leave an existing entitlement alone.
+    """
+    if "object_permission" not in (user_request.fields_set() if hasattr(user_request, "fields_set") else set()):
+        return False
+    sent = user_request.object_permission
+    return sent is None or not sent.model_dump(exclude_unset=True, exclude_none=True)
+
+
+async def _invalidate_cached_user_entitlement(user_id: str | None, object_permission_ids: tuple[str, ...]) -> None:
+    """Drop the cache entries an entitlement change makes stale.
+
+    All three kinds are needed: a permission row is cached under its own id (so re-reading the same
+    link still yields the OLD grants), the ``user_id -> object_permission_id`` link is cached
+    separately (so a user who previously had NO entitlement keeps its "none" sentinel), and the user
+    row itself is cached whole. Leaving any behind means an admin revoking a tool keeps serving it
+    until the management-object TTL expires.
+
+    Both the outgoing and incoming permission ids are passed, because a clear leaves no incoming id
+    at all and an upsert may mint a new row; invalidating only one of the two leaves the other's
+    grants live.
+
+    Each deletion is isolated: one that fails must not skip the others, or a single unreachable key
+    would silently leave the rest of a revocation in place. Best-effort overall, exactly as the caches
+    are everywhere else, since one we cannot clear still expires on its own.
+    """
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    keys = (
+        *(object_permission_cache_key(permission_id) for permission_id in dict.fromkeys(object_permission_ids)),
+        *((user_object_permission_id_cache_key(user_id), user_id) if user_id is not None else ()),
+    )
+    for key in keys:
+        try:
+            await user_api_key_cache.async_delete_cache(key=key)
+        except Exception as e:  # noqa: BLE001  # a cache we cannot clear still expires; never fail the write
+            verbose_proxy_logger.warning(f"Failed to invalidate cached entitlement key {key!r}: {str(e)}")
+
+
 async def _update_single_user_helper(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1259,9 +1317,15 @@ async def _update_single_user_helper(
     )
     _is_self_update = _target_user_id is not None and user_api_key_dict.user_id == _target_user_id
     if _is_self_update and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
-        _protected_fields = ("max_budget", "soft_budget", "spend")
+        # object_permission is a CEILING on what this human may reach, so a self-write is an
+        # escalation path: sending an empty grant list means "no restriction" and would lift a
+        # restriction an admin placed on them. Checked against the fields the caller actually SENT,
+        # because `_update_internal_user_params` drops empty values, and `object_permission: {}` is
+        # precisely the clear-my-own-ceiling case this must refuse.
+        _sent_fields = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
+        _protected_fields = ("max_budget", "soft_budget", "spend", "object_permission")
         for _field in _protected_fields:
-            if _field in non_default_values:
+            if _field in non_default_values or _field in _sent_fields:
                 raise HTTPException(
                     status_code=403,
                     detail={
@@ -1281,6 +1345,22 @@ async def _update_single_user_helper(
 
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(non_default_values.get("spend"))
+
+    # Upsert the grants into their own row and link it, mirroring /key/update and /team/update.
+    # This also removes object_permission from the payload, which is not a column on the user table.
+    if "object_permission" in non_default_values:
+        object_permission_id = await handle_update_object_permission_common(
+            data_json=non_default_values,
+            existing_object_permission_id=getattr(existing_user_row, "object_permission_id", None),
+            prisma_client=prisma_client,
+        )
+        if object_permission_id is not None:
+            non_default_values["object_permission_id"] = object_permission_id
+    elif _clears_object_permission(user_request):
+        # An explicit `{}` or null means "no object permission", which the merge-based upsert cannot
+        # express: merging an empty grant set over the existing row leaves every grant in place. So
+        # the link is dropped instead, which is what makes the documented clear actually clear.
+        non_default_values["object_permission_id"] = None
 
     # Perform the update
     response: dict[str, Any] | None = None
@@ -1325,6 +1405,19 @@ async def _update_single_user_helper(
         )
 
         await _invalidate_user_spend_counter_if_changed(non_default_values)
+
+        if "object_permission_id" in non_default_values:
+            await _invalidate_cached_user_entitlement(
+                user_id=non_default_values.get("user_id"),
+                object_permission_ids=tuple(
+                    permission_id
+                    for permission_id in (
+                        getattr(existing_user_row, "object_permission_id", None),
+                        non_default_values.get("object_permission_id"),
+                    )
+                    if isinstance(permission_id, str)
+                ),
+            )
 
     if response is None:
         raise HTTPException(
@@ -1407,7 +1500,7 @@ async def user_update(
         - team_id: Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None.
         - duration: Optional[str] - [NOT IMPLEMENTED].
         - key_alias: Optional[str] - [NOT IMPLEMENTED].
-        - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+        - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
         - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
         - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
 
