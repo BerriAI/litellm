@@ -13,7 +13,7 @@ import time
 import traceback
 import types
 import uuid
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -1414,6 +1414,54 @@ if MCP_AVAILABLE:
 
         return allowed_mcp_servers
 
+    async def _resolve_scope_name_to_server_ids(
+        server_or_group: str,
+        allowed_mcp_servers: Sequence[MCPServer],
+    ) -> frozenset[str]:
+        """Resolve one caller-supplied scope name (server name, alias, or access group)
+        to the ids it selects out of ``allowed_mcp_servers``."""
+        direct = frozenset(
+            server.server_id
+            for server in allowed_mcp_servers
+            if server
+            and server_or_group.lower() in {prefix.lower() for prefix in iter_known_server_prefixes(server) if prefix}
+        )
+        if direct:
+            return direct
+        try:
+            access_group_server_ids = frozenset(
+                await MCPRequestHandler._get_mcp_servers_from_access_groups([server_or_group])
+            )
+        except Exception as e:  # noqa: BLE001  # access-group lookup is best-effort; an unresolvable name is a no-op
+            verbose_logger.debug(f"Could not resolve '{server_or_group}' as access group: {e}")
+            return frozenset()
+        return frozenset(
+            server.server_id for server in allowed_mcp_servers if server.server_id in access_group_server_ids
+        )
+
+    async def _exclude_mcp_servers_by_names(
+        excluded_servers: Sequence[str] | None,
+        allowed_mcp_servers: Sequence[MCPServer],
+    ) -> tuple[MCPServer, ...]:
+        """Drop the servers named by ``x-mcp-exclude-servers`` from an already authorized set.
+
+        Purely subtractive: names that do not resolve are ignored rather than failing closed,
+        and an empty result is a legitimate "everything was excluded" outcome.
+        """
+        if not excluded_servers:
+            return tuple(allowed_mcp_servers)
+
+        excluded_ids = frozenset[str]().union(
+            *[
+                await _resolve_scope_name_to_server_ids(server_or_group, allowed_mcp_servers)
+                for server_or_group in excluded_servers
+            ]
+        )
+        if not excluded_ids:
+            return tuple(allowed_mcp_servers)
+        verbose_logger.debug("MCP exclude filter: dropping server ids %s", sorted(excluded_ids))
+        return tuple(server for server in allowed_mcp_servers if server.server_id not in excluded_ids)
+
     def _tool_name_matches(tool_name: str, filter_list: list[str]) -> bool:
         """
         Check if a tool name matches any name in the filter list.
@@ -1504,6 +1552,11 @@ if MCP_AVAILABLE:
                 tool.description = description_map[lookup_key]
         return tools
 
+    def _get_excluded_servers_from_context() -> Sequence[str]:
+        """Excluded server names from the request's auth context; empty when unset."""
+        auth_user = get_active_auth_context()
+        return auth_user.mcp_excluded_servers if auth_user else []
+
     def _get_client_ip_from_context() -> str | None:
         """
         Extract client_ip from auth context.
@@ -1576,7 +1629,12 @@ if MCP_AVAILABLE:
                 allowed_mcp_servers=allowed_mcp_servers,
             )
 
-        return allowed_mcp_servers
+        return list(
+            await _exclude_mcp_servers_by_names(
+                excluded_servers=_get_excluded_servers_from_context(),
+                allowed_mcp_servers=allowed_mcp_servers,
+            )
+        )
 
     def _client_has_per_server_auth_header(
         server: MCPServer,
@@ -3020,6 +3078,12 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
                 allowed_mcp_servers=allowed_mcp_servers,
             )
+            allowed_mcp_servers = list(
+                await _exclude_mcp_servers_by_names(
+                    excluded_servers=_get_excluded_servers_from_context(),
+                    allowed_mcp_servers=allowed_mcp_servers,
+                )
+            )
             if not allowed_mcp_servers:
                 raise HTTPException(
                     status_code=403,
@@ -4278,6 +4342,7 @@ if MCP_AVAILABLE:
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                     client_ip=_client_ip,
+                    mcp_excluded_servers=MCPRequestHandler.get_mcp_excluded_servers_from_scope(scope),
                     session_id=session_id if use_stateful else None,
                     touch_last_seen=(scope.get("method") or "").upper() != "DELETE",
                     copy_existing_session_auth_context=is_initialize,
@@ -4419,6 +4484,7 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 client_ip=_sse_client_ip,
+                mcp_excluded_servers=MCPRequestHandler.get_mcp_excluded_servers_from_scope(scope),
             )
 
             if not _SESSION_MANAGERS_INITIALIZED:
@@ -4505,6 +4571,7 @@ if MCP_AVAILABLE:
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
+        mcp_excluded_servers: Sequence[str] | None = None,
     ) -> None:
         auth_user.user_api_key_auth = user_api_key_auth
         auth_user.mcp_auth_header = mcp_auth_header
@@ -4513,6 +4580,7 @@ if MCP_AVAILABLE:
         auth_user.oauth2_headers = oauth2_headers
         auth_user.raw_headers = raw_headers
         auth_user.client_ip = client_ip
+        auth_user.mcp_excluded_servers = mcp_excluded_servers or []
 
     def set_auth_context(
         user_api_key_auth: UserAPIKeyAuth | None,
@@ -4522,6 +4590,7 @@ if MCP_AVAILABLE:
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
+        mcp_excluded_servers: Sequence[str] | None = None,
     ) -> MCPAuthenticatedUser:
         """
         Set the UserAPIKeyAuth in the auth context variable.
@@ -4541,6 +4610,7 @@ if MCP_AVAILABLE:
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             client_ip=client_ip,
+            mcp_excluded_servers=mcp_excluded_servers,
         )
         auth_context_var.set(auth_user)
         return auth_user
@@ -4553,6 +4623,7 @@ if MCP_AVAILABLE:
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
+        mcp_excluded_servers: Sequence[str] | None = None,
         session_id: str | None = None,
         touch_last_seen: bool = True,
         copy_existing_session_auth_context: bool = False,
@@ -4570,6 +4641,7 @@ if MCP_AVAILABLE:
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                     client_ip=client_ip,
+                    mcp_excluded_servers=mcp_excluded_servers,
                 )
             _update_auth_context(
                 auth_user=auth_user,
@@ -4580,6 +4652,7 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
+                mcp_excluded_servers=mcp_excluded_servers,
             )
             auth_context_var.set(auth_user)
             return auth_user
@@ -4591,6 +4664,7 @@ if MCP_AVAILABLE:
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             client_ip=client_ip,
+            mcp_excluded_servers=mcp_excluded_servers,
         )
 
     def _wrap_send_with_stateful_session_auth_context(

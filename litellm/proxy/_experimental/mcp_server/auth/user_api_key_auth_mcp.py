@@ -256,6 +256,19 @@ class MCPRequestHandler:
 
     LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME = SpecialHeaders.mcp_access_groups.value
 
+    LITELLM_MCP_EXCLUDE_SERVERS_HEADER_NAME = SpecialHeaders.mcp_exclude_servers.value
+
+    @staticmethod
+    def get_mcp_excluded_servers_from_scope(scope: Scope) -> "tuple[str, ...]":
+        """Server names, aliases, or access groups the caller asked to drop from the session
+        via ``x-mcp-exclude-servers``. Subtractive only: it can never widen scope beyond what
+        the caller is already allowed, so an unknown name is simply a no-op."""
+        headers = MCPRequestHandler._safe_get_headers_from_scope(scope)
+        raw_value = headers.get(MCPRequestHandler.LITELLM_MCP_EXCLUDE_SERVERS_HEADER_NAME)
+        if raw_value is None:
+            return ()
+        return tuple(name.strip() for name in raw_value.split(",") if name.strip())
+
     @staticmethod
     async def process_mcp_request(
         scope: Scope,
