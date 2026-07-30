@@ -2218,6 +2218,28 @@ class _ScimAwareUserTable:
         )
 
 
+class _SsoAwareUserTable:
+    """Fake LiteLLM_UserTable whose count() applies the sso_user_id filter
+    the way Postgres would, so count_sso_users is checked against an
+    independent model of the filter rather than echoing its own where dict."""
+
+    def __init__(self, sso_user_ids: List[Optional[str]]):
+        self._sso_user_ids = sso_user_ids
+
+    async def count(self, where: Optional[Dict[str, Any]] = None) -> int:
+        if where is None:
+            return len(self._sso_user_ids)
+        sso_filter = where.get("sso_user_id")
+        if sso_filter is None:
+            return len(self._sso_user_ids)
+        if "not" in sso_filter and sso_filter["not"] is None:
+            return sum(1 for sso_user_id in self._sso_user_ids if sso_user_id is not None)
+        if "equals" in sso_filter:
+            expected = sso_filter["equals"]
+            return sum(1 for sso_user_id in self._sso_user_ids if sso_user_id == expected)
+        return len(self._sso_user_ids)
+
+
 class TestCountBillableUsers:
     def _repo(self, metadatas: List[Optional[Dict[str, Any]]]) -> UserRepository:
         client = MockPrismaClient()
@@ -2261,3 +2283,31 @@ class TestCountBillableUsers:
         client.db.litellm_usertable = _RacyTable()
         repo = UserRepository(client)
         assert await repo.count_billable_users() == 0
+
+
+class TestCountSsoUsers:
+    def _repo(self, sso_user_ids: List[Optional[str]]) -> UserRepository:
+        client = MockPrismaClient()
+        client.db.litellm_usertable = _SsoAwareUserTable(sso_user_ids)
+        return UserRepository(client)
+
+    @pytest.mark.asyncio
+    async def test_counts_only_users_with_sso_user_id(self):
+        repo = self._repo([None, "sso-1", None, "sso-2", None])
+        assert await repo.count_sso_users() == 2
+
+    @pytest.mark.asyncio
+    async def test_empty_when_no_sso_users(self):
+        repo = self._repo([None, None, None])
+        assert await repo.count_sso_users() == 0
+
+    @pytest.mark.asyncio
+    async def test_counts_all_when_all_are_sso_users(self):
+        repo = self._repo(["sso-1", "sso-2", "sso-3"])
+        assert await repo.count_sso_users() == 3
+
+    @pytest.mark.asyncio
+    async def test_empty_table_returns_zero(self):
+        repo = self._repo([])
+        assert await repo.count_sso_users() == 0
+

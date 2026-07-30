@@ -45,8 +45,7 @@ async def available_enterprise_users(
             premium_user_data = EnterpriseLicenseData(
                 max_users=5,
             )
-
-    user_count = await UserRepository(prisma_client).count_billable_users()
+    user_count = await UserRepository(prisma_client).count_sso_users()
     team_count = await TeamRepository(prisma_client).count()
 
     if (
@@ -71,3 +70,4 @@ async def available_enterprise_users(
         "total_teams_remaining": (max_teams - team_count if max_teams else None),
         "total_users_remaining": (max_users - user_count if max_users else None),
     }
+

@@ -73,6 +73,14 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         deactivated = await self.count(where={"metadata": {"path": ["scim_active"], "equals": Json(False)}})
         return max(0, total - deactivated)
 
+    async def count_sso_users(self) -> int:
+        """Number of users that signed in via SSO.
+
+        These are the users that count toward the community edition's
+        5-user SSO limit. A user is an SSO user when sso_user_id is set.
+        """
+        return await self.count(where={"sso_user_id": {"not": None}})
+
     async def create_user(
         self,
         user_id: str,
