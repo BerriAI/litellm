@@ -23,6 +23,7 @@ import pytest
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    DEFAULT_MAX_TOKENS_ESTIMATE,
     RATE_LIMIT_DESCRIPTORS_KEY,
     TPM_RESERVATION_RELEASED_KEY,
     TPM_RESERVED_MODEL_KEY,
@@ -31,6 +32,11 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
+from litellm.types.llms.openai import (
+    InputTokensDetails,
+    ResponseAPIUsage,
+    ResponsesAPIResponse,
+)
 from litellm.types.utils import ModelResponse, Usage
 
 
@@ -1190,6 +1196,186 @@ async def test_small_tpm_cap_preserves_explicit_max_tokens(rate_limiter):
     )
 
     assert data["max_tokens"] == 500
+
+
+@pytest.mark.asyncio
+async def test_responses_request_reserves_declared_output_budget(rate_limiter):
+    """
+    A /v1/responses request carries its prompt in `input` and its output cap in
+    `max_output_tokens`. Classifying it as an embedding (any `input` present)
+    zeroed the output budget and reserved a single token, leaving Responses
+    traffic effectively unthrottled.
+    """
+    handler, _cache = rate_limiter
+
+    estimate = handler._estimate_tokens_for_request(
+        data={"model": "gpt-4.1", "input": "abcd" * 4, "max_output_tokens": 4096},
+        call_type="aresponses",
+    )
+
+    assert estimate == 4 + 4096
+
+
+@pytest.mark.asyncio
+async def test_responses_request_without_output_cap_reserves_floor(rate_limiter):
+    """A Responses request that omits max_output_tokens still gets the
+    conservative output floor, same as a chat request."""
+    handler, _cache = rate_limiter
+
+    estimate = handler._estimate_tokens_for_request(
+        data={"model": "gpt-4.1", "input": "abcd" * 4},
+        call_type="aresponses",
+    )
+
+    assert estimate == 4 + DEFAULT_MAX_TOKENS_ESTIMATE // 4
+
+
+@pytest.mark.asyncio
+async def test_embedding_call_type_reserves_input_only(rate_limiter):
+    """Embeddings really do have no output budget; call-type classification
+    must keep that behaviour."""
+    handler, _cache = rate_limiter
+
+    estimate = handler._estimate_tokens_for_request(
+        data={"model": "text-embedding-3-small", "input": "hello world"},
+        call_type="aembedding",
+    )
+
+    assert estimate == 2
+
+
+@pytest.mark.asyncio
+async def test_small_tpm_cap_caps_responses_output_field(rate_limiter):
+    """
+    The small-TPM hard cap must bound generation with the field the Responses
+    API actually honours (`max_output_tokens`), and must apply to Responses
+    requests at all — the old `data.get("input") is not None` embedding test
+    skipped them.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-responses-tpm-cap"),
+        project_id="proj-responses-tpm-cap",
+        project_metadata={
+            "model_tpm_limit": {"gpt-4.1": 1000},
+        },
+    )
+
+    data: dict = {"model": "gpt-4.1", "input": "hello"}
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="aresponses",
+    )
+
+    assert data.get("max_output_tokens") == 1000 // 4
+    assert "max_tokens" not in data
+
+
+@pytest.mark.parametrize(
+    "rate_limit_type, expected",
+    [("input", 123), ("output", 456), ("total", 579)],
+)
+def test_response_api_usage_read_for_every_rate_limit_type(
+    rate_limiter, rate_limit_type, expected
+):
+    """`ResponseAPIUsage` reports input_tokens/output_tokens, so the
+    prompt_tokens/completion_tokens reader saw zero usage for every mode."""
+    handler, _cache = rate_limiter
+
+    usage = ResponseAPIUsage(input_tokens=123, output_tokens=456, total_tokens=579)
+
+    assert (
+        handler._get_total_tokens_from_usage(
+            usage=usage, rate_limit_type=rate_limit_type
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "rate_limit_type, expected",
+    [("input", 23), ("output", 456), ("total", 479)],
+)
+def test_response_api_usage_excludes_cached_input_tokens(
+    rate_limiter, rate_limit_type, expected
+):
+    """Cached input tokens don't count toward provider TPM, so they must be
+    subtracted from input/total for Responses usage too."""
+    handler, _cache = rate_limiter
+
+    usage = ResponseAPIUsage(
+        input_tokens=123,
+        output_tokens=456,
+        total_tokens=579,
+        input_tokens_details=InputTokensDetails(cached_tokens=100),
+    )
+
+    assert (
+        handler._get_total_tokens_from_usage(
+            usage=usage, rate_limit_type=rate_limit_type
+        )
+        == expected
+    )
+
+
+@pytest.mark.asyncio
+async def test_response_api_usage_reconciled_on_success(rate_limiter):
+    """
+    End-to-end reconciliation for /v1/responses: with 100 tokens reserved and
+    579 actually used, the reserved scope must be topped up by +479. Reading
+    `ResponseAPIUsage` as zero instead refunded the whole reservation, so
+    Responses traffic never charged the TPM window.
+    """
+    handler, _cache = rate_limiter
+
+    api_key = hash_token("sk-responses-reconcile")
+
+    mock_kwargs = {
+        "standard_logging_object": {
+            "metadata": {
+                "user_api_key_hash": api_key,
+                TPM_RESERVED_TOKENS_KEY: 100,
+                TPM_RESERVED_SCOPES_KEY: [["api_key", api_key]],
+            }
+        },
+        "model": "gpt-4.1",
+    }
+
+    mock_response = ResponsesAPIResponse(
+        id="resp_test",
+        created_at=int(datetime.now().timestamp()),
+        model="gpt-4.1",
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=123, output_tokens=456, total_tokens=579),
+    )
+
+    increments: list[dict[str, Any]] = []
+
+    async def mock_increment(increment_list, **kwargs):
+        for op in increment_list:
+            increments.append({"key": op["key"], "increment": op["increment_value"]})
+
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = (
+        mock_increment
+    )
+
+    await handler.async_log_success_event(
+        kwargs=mock_kwargs,
+        response_obj=mock_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    token_adjustments = [i for i in increments if "tokens" in i["key"]]
+
+    assert any(i["increment"] == 479 for i in token_adjustments), (
+        f"Expected a +479 token adjustment (579 actual - 100 reserved) but got: "
+        f"{token_adjustments}"
+    )
 
 
 if __name__ == "__main__":
