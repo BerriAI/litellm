@@ -30,7 +30,6 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
-from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
 from litellm.types.router import GenericLiteLLMParams
@@ -125,14 +124,17 @@ class CustomStreamWrapper:
         self.model = model
         self.make_call = make_call
         self.custom_llm_provider = custom_llm_provider
-        self.logging_obj: LiteLLMLoggingObject = logging_obj
+        self.logging_obj: Any = logging_obj
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
         self._stream_created_time: float = time.time()
 
-        litellm_params: GenericLiteLLMParams = GenericLiteLLMParams(
-            **self.logging_obj.model_call_details.get("litellm_params", {})
+        _litellm_params_kwargs = self.logging_obj.model_call_details.get("litellm_params", {})
+        litellm_params: GenericLiteLLMParams = (
+            GenericLiteLLMParams.model_validate(_litellm_params_kwargs)
+            if isinstance(_litellm_params_kwargs, dict)
+            else GenericLiteLLMParams()
         )
         self.merge_reasoning_content_in_choices: bool = litellm_params.merge_reasoning_content_in_choices or False
         self.sent_first_thinking_block = False
@@ -677,7 +679,7 @@ class CustomStreamWrapper:
             if chunk:
                 args.update({k: v for k, v in chunk.items() if k != "stream"})
 
-        model_response = ModelResponseStream(**args)
+        model_response = ModelResponseStream.model_validate(args)
         if self.response_id is not None:
             model_response.id = self.response_id
         if self.system_fingerprint is not None:
@@ -817,7 +819,7 @@ class CustomStreamWrapper:
             _initial_delta = model_response.choices[0].delta.model_dump()
 
             _initial_delta.pop("role", None)
-            model_response.choices[0].delta = Delta(**_initial_delta)
+            model_response.choices[0].delta = Delta.model_validate(_initial_delta)
         return model_response
 
     def _has_special_delta_content(self, model_response: ModelResponseStream) -> bool:
@@ -915,7 +917,7 @@ class CustomStreamWrapper:
                                     choice_json.pop(
                                         "finish_reason", None
                                     )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
-                                    choices.append(StreamingChoices(**choice_json))
+                                    choices.append(StreamingChoices.model_validate(choice_json))
                             except Exception:
                                 choices.append(StreamingChoices())
                         setattr(model_response, "choices", choices)
@@ -946,7 +948,7 @@ class CustomStreamWrapper:
                         self.sent_first_chunk = True
                     if response_obj.get("provider_specific_fields") is not None:
                         completion_obj["provider_specific_fields"] = response_obj["provider_specific_fields"]
-                    model_response.choices[0].delta = Delta(**completion_obj)
+                    model_response.choices[0].delta = Delta.model_validate(completion_obj)
                     _index: Optional[int] = completion_obj.get("index")
                     if _index is not None:
                         model_response.choices[0].index = _index
