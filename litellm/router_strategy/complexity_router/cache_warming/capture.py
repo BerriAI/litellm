@@ -61,12 +61,27 @@ def _capture_allowed(kwargs: Mapping[str, object]) -> bool:
     retained? Honors both halves of the operator's stated policy: the redaction
     opt-out (turn_off_message_logging, including per-request and header forms) and
     the prompt-retention opt-in (store_prompts_in_spend_logs; SDK use without the
-    proxy consents through cache_warming.enabled itself)."""
+    proxy consents through cache_warming.enabled itself).
+
+    should_redact_message_logging reads a model_call_details dict whose shape is
+    implicit: the header and global forms come off litellm_params, but the
+    per-request form is read from standard_callback_dynamic_params at the TOP level,
+    so passing only litellm_params silently loses the caller's own opt-out. That
+    value is owned by the logging object, which initializes it from the request in
+    its constructor, so it is read off the object here rather than re-derived; the
+    key is spelled exactly as the request path spells it when it builds the same
+    dict for the same predicate (litellm_logging.py:565)."""
     from litellm.litellm_core_utils.redact_messages import (
         should_redact_message_logging,  # pyright: ignore[reportUnknownVariableType]  # legacy-untyped helper
     )
 
-    if should_redact_message_logging({"litellm_params": kwargs}):  # mutable-ok: read-only view for the predicate
+    model_call_details = {  # mutable-ok: read-only view for the predicate
+        "litellm_params": kwargs,
+        "standard_callback_dynamic_params": getattr(
+            kwargs.get("litellm_logging_obj"), "standard_callback_dynamic_params", None
+        ),
+    }
+    if should_redact_message_logging(model_call_details):
         return False
     try:
         from litellm.proxy.spend_tracking.spend_tracking_utils import (
