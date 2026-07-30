@@ -22,6 +22,7 @@ from litellm.types.llms.vertex_ai import (
 from ..common_utils import VertexAIError, get_vertex_base_url
 from ..vertex_llm_base import VertexBase
 from .transformation import (
+    cached_messages_end_on_supported_turn,
     separate_cached_messages,
     transform_openai_messages_to_gemini_context_caching,
 )
@@ -308,6 +309,14 @@ class ContextCachingEndpoints(VertexBase):
         if len(cached_messages) == 0:
             return messages, optional_params, None
 
+        if not cached_messages_end_on_supported_turn(cached_messages):
+            verbose_logger.debug(
+                "Vertex AI context caching: cached message block ends on a model turn once "
+                "system messages are extracted, which the cachedContents API rejects. "
+                "Skipping context caching."
+            )
+            return messages, optional_params, None
+
         # Gemini requires a minimum of 1024 tokens for context caching.
         # Skip caching if the cached content is too small to avoid API errors.
         if not is_prompt_caching_valid_prompt(
@@ -457,6 +466,14 @@ class ContextCachingEndpoints(VertexBase):
         cached_messages, non_cached_messages = separate_cached_messages(messages=messages)
 
         if len(cached_messages) == 0:
+            return messages, optional_params, None
+
+        if not cached_messages_end_on_supported_turn(cached_messages):
+            verbose_logger.debug(
+                "Vertex AI context caching: cached message block ends on a model turn once "
+                "system messages are extracted, which the cachedContents API rejects. "
+                "Skipping context caching."
+            )
             return messages, optional_params, None
 
         # Gemini requires a minimum of 1024 tokens for context caching.
