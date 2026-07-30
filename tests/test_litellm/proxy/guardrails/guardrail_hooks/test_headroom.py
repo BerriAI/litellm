@@ -17,10 +17,13 @@ Tests cover:
 - CCR: headroom_retrieve tool injected when compressed messages contain hashes
 - CCR: async_should_run_agentic_loop returns True when response has headroom_retrieve tool calls
 - CCR: async_build_agentic_loop_plan calls retrieve endpoint and builds follow-up messages
+- CCR: streaming /chat/completions is converted to a non-streaming call so the agentic
+  loop resolves the retrieve tool call, then fake-streamed back to the client
 """
 
 import json
 import time
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -38,7 +41,16 @@ from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
+from litellm.types.utils import (
+    CallTypes,
+    ChatCompletionMessageToolCall,
+    Choices,
+    Function,
+    GenericGuardrailAPIInputs,
+    Message,
+    ModelResponse,
+)
 
 FAKE_API_BASE = "https://headroom.example.com"
 FAKE_API_KEY = "test-key"
@@ -1782,3 +1794,125 @@ async def test_fail_open_returns_original_parts_shapes():
 
     messages = result["structured_messages"]
     assert [m["content"] for m in messages] == [m["content"] for m in PARTS_MESSAGES]
+
+
+CCR_HASH = "b573993006976af767214fac"
+
+
+def _retrieve_tool_definition() -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "description": "retrieve compressed content",
+            "parameters": {"type": "object", "properties": {"hash": {"type": "string"}}},
+        },
+    }
+
+
+def _model_response_with_retrieve_call() -> ModelResponse:
+    return ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="call_ccr",
+                            type="function",
+                            function=Function(
+                                name=HEADROOM_RETRIEVE_TOOL_NAME,
+                                arguments=json.dumps({"hash": CCR_HASH}),
+                            ),
+                        )
+                    ],
+                ),
+            )
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "call_type, stream, tools, expect_conversion",
+    [
+        (CallTypes.acompletion, True, [_retrieve_tool_definition()], True),
+        (CallTypes.completion, True, [_retrieve_tool_definition()], True),
+        (CallTypes.acompletion, False, [_retrieve_tool_definition()], False),
+        (CallTypes.acompletion, True, [{"type": "function", "function": {"name": "get_weather"}}], False),
+        (CallTypes.acompletion, True, None, False),
+        (CallTypes.aresponses, True, [_retrieve_tool_definition()], False),
+        (CallTypes.anthropic_messages, True, [_retrieve_tool_definition()], False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_pre_call_deployment_hook_converts_stream_only_for_ccr_chat_completions(
+    guardrail: HeadroomGuardrail,
+    call_type: CallTypes,
+    stream: bool,
+    tools: Optional[list],
+    expect_conversion: bool,
+):
+    kwargs = {"model": "gpt-4o", "stream": stream, "tools": tools}
+
+    result = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=call_type)
+
+    if not expect_conversion:
+        assert result is None
+        assert kwargs["stream"] is stream
+        return
+
+    assert result is not None
+    assert result["stream"] is False
+    assert result[HEADROOM_CONVERTED_STREAM_KEY] is True
+    assert kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_chat_completion_resolves_ccr_retrieval_end_to_end(
+    guardrail: HeadroomGuardrail,
+):
+    """Regression test for streaming /chat/completions: the retrieve tool call the
+    model emits must be resolved by the agentic loop instead of being streamed back
+    to a client that never declared the tool."""
+    original_content = "the full uncompressed document"
+    final_answer = "the document says hello"
+    guardrail._issued_hashes_by_call_id["ccr-call-id"] = (
+        frozenset({CCR_HASH}),
+        time.monotonic() + 999,
+    )
+
+    real_acompletion = litellm.acompletion
+
+    async def acompletion_with_followup_answer(*args, **kwargs):
+        if kwargs.get("_agentic_loop_depth"):
+            kwargs["mock_response"] = final_answer
+        return await real_acompletion(*args, **kwargs)
+
+    saved_callbacks = list(litellm.callbacks)
+    litellm.callbacks = [guardrail]
+    try:
+        with patch.object(
+            guardrail.async_handler,
+            "get",
+            new_callable=AsyncMock,
+            return_value=_make_retrieve_response(original_content),
+        ) as mock_get, patch.object(litellm, "acompletion", new=acompletion_with_followup_answer):
+            response = await litellm.acompletion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": f"summarize hash={CCR_HASH}"}],
+                tools=[_retrieve_tool_definition()],
+                stream=True,
+                litellm_call_id="ccr-call-id",
+                mock_response=_model_response_with_retrieve_call(),
+            )
+            chunks = [chunk async for chunk in response]
+    finally:
+        litellm.callbacks = saved_callbacks
+
+    streamed_text = "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
+    assert streamed_text == final_answer
+    assert not any(chunk.choices and chunk.choices[0].delta.tool_calls for chunk in chunks)
+    mock_get.assert_called_once()
+    assert CCR_HASH in (mock_get.call_args.kwargs.get("url") or mock_get.call_args.args[0])
