@@ -2730,9 +2730,7 @@ class ProxyBaseLLMRequestProcessing:
                     and proxy_logging_obj is not None
                     and user_api_key_dict is not None
                 ):
-                    await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(
-                        user_api_key_dict, request_data
-                    )
+                    await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
 
             if hasattr(response, "aclose"):
                 try:
