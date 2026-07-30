@@ -5,7 +5,7 @@ Why separate file? Make it easy to see how transformation works
 """
 
 import re
-from typing import List, Optional, Tuple, Literal
+from typing import List, Optional, Sequence, Tuple, Literal
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import CachedContentRequestBody
@@ -150,6 +150,17 @@ def separate_cached_messages(
         non_cached_messages = messages
 
     return cached_messages, non_cached_messages
+
+
+def cached_messages_end_on_supported_turn(cached_messages: Sequence[AllMessageValues]) -> bool:
+    """
+    The cachedContents API rejects contents ending on a model turn, which is how it
+    classifies both assistant messages and tool results, with HTTP 400
+    "Requests ending with a model turn are not supported".
+    """
+    if not cached_messages:
+        return False
+    return cached_messages[-1].get("role") not in ("assistant", "tool", "function")
 
 
 def transform_openai_messages_to_gemini_context_caching(
