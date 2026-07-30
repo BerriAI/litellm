@@ -611,8 +611,8 @@ def test_generic_cost_per_token_gpt55_pro():
     [
         ("gpt-5.6", 5e-6, 3e-5, 5e-7, 6.25e-6),
         ("gpt-5.6-sol", 5e-6, 3e-5, 5e-7, 6.25e-6),
-        ("gpt-5.6-terra", 2.5e-6, 1.5e-5, 2.5e-7, 3.125e-6),
-        ("gpt-5.6-luna", 1e-6, 6e-6, 1e-7, 1.25e-6),
+        ("gpt-5.6-terra", 2e-6, 1.2e-5, 2e-7, 2.5e-6),
+        ("gpt-5.6-luna", 2e-7, 1.2e-6, 2e-8, 2.5e-7),
     ],
 )
 def test_generic_cost_per_token_gpt56(

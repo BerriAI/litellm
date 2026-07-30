@@ -7,7 +7,14 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
 GPT_5_6_MODELS = ("gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
 
-STANDARD_PRICING = {
+OPENAI_STANDARD_PRICING = {
+    "gpt-5.6": (5e-06, 3e-05, 5e-07, 6.25e-06),
+    "gpt-5.6-sol": (5e-06, 3e-05, 5e-07, 6.25e-06),
+    "gpt-5.6-terra": (2e-06, 1.2e-05, 2e-07, 2.5e-06),
+    "gpt-5.6-luna": (2e-07, 1.2e-06, 2e-08, 2.5e-07),
+}
+
+AZURE_STANDARD_PRICING = {
     "gpt-5.6": (5e-06, 3e-05, 5e-07, 6.25e-06),
     "gpt-5.6-sol": (5e-06, 3e-05, 5e-07, 6.25e-06),
     "gpt-5.6-terra": (2.5e-06, 1.5e-05, 2.5e-07, 3.125e-06),
@@ -27,7 +34,7 @@ def test_openai_gpt_5_6_model_info(model):
     assert info["litellm_provider"] == "openai"
     assert info["mode"] == "chat"
 
-    input_cost, output_cost, cache_read_cost, cache_write_cost = STANDARD_PRICING[model]
+    input_cost, output_cost, cache_read_cost, cache_write_cost = OPENAI_STANDARD_PRICING[model]
     assert info["input_cost_per_token"] == input_cost
     assert info["output_cost_per_token"] == output_cost
     assert info["cache_read_input_token_cost"] == cache_read_cost
@@ -95,7 +102,7 @@ def test_azure_gpt_5_6_global_model_info(model):
     assert info["litellm_provider"] == "azure"
     assert info["mode"] == "chat"
 
-    input_cost, output_cost, cache_read_cost, _ = STANDARD_PRICING[_tier_key(model)]
+    input_cost, output_cost, cache_read_cost, _ = AZURE_STANDARD_PRICING[_tier_key(model)]
     assert info["input_cost_per_token"] == input_cost
     assert info["output_cost_per_token"] == output_cost
     assert info["cache_read_input_token_cost"] == cache_read_cost
@@ -124,7 +131,7 @@ def test_azure_gpt_5_6_regional_model_info(model):
     assert info["litellm_provider"] == "azure"
     assert info["mode"] == "chat"
 
-    input_cost, output_cost, cache_read_cost, _ = STANDARD_PRICING[_tier_key(model)]
+    input_cost, output_cost, cache_read_cost, _ = AZURE_STANDARD_PRICING[_tier_key(model)]
 
     assert info["input_cost_per_token"] == pytest.approx(input_cost * 1.1)
     assert info["output_cost_per_token"] == pytest.approx(output_cost * 1.1)
