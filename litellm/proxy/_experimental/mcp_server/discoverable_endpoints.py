@@ -1778,10 +1778,12 @@ async def token_endpoint(
 
 
 @router.post("/authorize/complete")
-async def authorize_complete(request: Request, flow: str = Form(...)):
+async def authorize_complete(request: Request, flow: str = Form(...), delivery: str | None = Form(None)):
     """Finish an aggregate connect flow: mint the gateway authorization code for the
-    signed-in user and redirect back to the DCR client. POST plus the per-flow HttpOnly
-    cookie set at /authorize; an anonymous or bad-flow request just 400s."""
+    signed-in user and hand it back to the DCR client, by 303 redirect (default) or, for
+    a loopback client on a different machine, as a copyable callback URL
+    (``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an
+    anonymous or bad-flow request just 400s."""
     from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415  # circular import at module load
 
     return await complete_connect_flow(
@@ -1789,6 +1791,7 @@ async def authorize_complete(request: Request, flow: str = Form(...)):
         flow_handle=flow,
         session_user_id=_session_cookie_user_id(request),
         cache=user_api_key_cache,
+        delivery=delivery,
     )
 
 
