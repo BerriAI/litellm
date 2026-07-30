@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING, Any, Mapping, cast
 
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.otel.model.semconv import resolve_operation
-from litellm.integrations.otel.model.utils import as_str, to_seconds
+from litellm.integrations.otel.model.utils import as_str, as_str_tuple, to_seconds
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
@@ -123,6 +123,50 @@ class RequestIdentity:
 
 
 @dataclass(frozen=True)
+class RequestAnnotations:
+    """The caller-supplied trace annotations of a request, parsed once.
+
+    These are the request's own labels — the conversation/session it belongs to,
+    the name and end-user it should be attributed to, its tags, and whatever
+    free-form metadata the caller sent — as opposed to the proxy-authoritative
+    :class:`RequestIdentity`.
+
+    On the proxy the caller's ``metadata`` is snapshotted verbatim under
+    ``metadata.requester_metadata`` (``StandardLoggingMetadata`` drops every key
+    it doesn't declare), so that snapshot is the only place the named controls
+    survive. ``tags`` instead comes from the payload's ``request_tags``, which
+    already merges request, key/team, and header tags.
+
+    ``requester_metadata`` is carried raw (scalars only, stringified) and is
+    filtered to an operator allowlist by whoever stamps it, so an unconfigured
+    deployment never puts a caller's metadata on a span.
+    """
+
+    session_id: str | None = None
+    trace_name: str | None = None
+    user_id: str | None = None
+    tags: tuple[str, ...] = ()
+    requester_metadata: Mapping[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def from_payload(cls, payload: StandardLoggingPayload) -> RequestAnnotations:
+        metadata = payload.get("metadata")
+        requester = metadata.get("requester_metadata") if metadata else None
+        requester_meta: Mapping[str, object] = requester if isinstance(requester, Mapping) else {}
+        return cls(
+            session_id=as_str(requester_meta.get("session_id")),
+            trace_name=as_str(requester_meta.get("trace_name")),
+            user_id=as_str(requester_meta.get("trace_user_id")),
+            tags=as_str_tuple(payload.get("request_tags")) or (),
+            requester_metadata={
+                key: str(value)
+                for key, value in requester_meta.items()
+                if isinstance(key, str) and isinstance(value, (str, bool, int, float))
+            },
+        )
+
+
+@dataclass(frozen=True)
 class RequestContext:
     """The fully-resolved view of a closed request, parsed once from the payload.
 
@@ -137,6 +181,7 @@ class RequestContext:
     model_id: str | None
     api_base: str | None
     identity: RequestIdentity
+    annotations: RequestAnnotations = field(default_factory=RequestAnnotations)
 
     @property
     def provider_model(self) -> str | None:
@@ -160,6 +205,7 @@ class RequestContext:
             model_id=as_str(payload.get("model_id")) or _model_info_id(raw_meta.get("model_info")),
             api_base=as_str(payload.get("api_base")) or as_str(hidden.get("api_base")),
             identity=RequestIdentity.from_payload(payload),
+            annotations=RequestAnnotations.from_payload(payload),
         )
 
 

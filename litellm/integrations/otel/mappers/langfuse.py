@@ -6,11 +6,18 @@ Langfuse ingests OTLP spans and reads from its own vendor namespace
 
 Every attribute is declared as a ``key -> extractor`` table entry (one callable
 per mapping operation): ``_LLM_CALL_ATTRS`` for scalars and ``_BLOB_ATTRS`` for
-the JSON-serialized payloads. ``_llm_call`` just applies both tables.
+the JSON-serialized payloads. ``_llm_call`` applies both tables, plus the
+caller's allowlisted metadata (``langfuse.trace.metadata.<key>``), which is
+keyed per deployment and so can't live in a class-level table.
+
+The trace-level controls (``user.id``, ``session.id``, ``langfuse.trace.name``,
+``langfuse.trace.tags``) ride the generation span rather than a separate trace
+span: Langfuse derives a trace from whichever observation carries them, which is
+why they are repeated on every observation of the request.
 """
 
 import json
-from typing import Callable
+from typing import Callable, Iterable
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
@@ -26,14 +33,24 @@ from litellm.integrations.otel.model.payloads import (
 )
 
 
+TRACE_METADATA_PREFIX = "langfuse.trace.metadata."
+
+
 class LangfuseMapper:
+    def __init__(self, trace_metadata_keys: Iterable[str] = ()) -> None:
+        self._trace_metadata_keys = frozenset(trace_metadata_keys)
+
     _LLM_CALL_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         "langfuse.observation.type": lambda d: "generation",
         "langfuse.observation.model.name": lambda d: d.request_model or None,
         "langfuse.observation.metadata.provider": lambda d: d.provider or None,
         "langfuse.observation.id": lambda d: d.identity.call_id or None,
-        "langfuse.trace.metadata.team_id": lambda d: d.identity.team_id or None,
-        "langfuse.trace.metadata.team_alias": lambda d: d.identity.team_alias or None,
+        "user.id": lambda d: d.annotations.user_id or d.identity.end_user or None,
+        "session.id": lambda d: d.annotations.session_id or None,
+        "langfuse.trace.name": lambda d: d.annotations.trace_name or None,
+        "langfuse.trace.tags": lambda d: list(d.annotations.tags) or None,
+        f"{TRACE_METADATA_PREFIX}team_id": lambda d: d.identity.team_id or None,
+        f"{TRACE_METADATA_PREFIX}team_alias": lambda d: d.identity.team_alias or None,
     }
 
     # Sub-tables folded into their respective JSON blobs.
@@ -71,9 +88,21 @@ class LangfuseMapper:
             case _:
                 return {}
 
-    @classmethod
-    def _llm_call(cls, data: LLMCallSpanData) -> AttributeMap:
+    def _llm_call(self, data: LLMCallSpanData) -> AttributeMap:
         return {
-            **collect(cls._LLM_CALL_ATTRS, data),
-            **collect(cls._BLOB_ATTRS, data),
+            **collect(self._LLM_CALL_ATTRS, data),
+            **collect(self._BLOB_ATTRS, data),
+            **self._trace_metadata(data),
+        }
+
+    def _trace_metadata(self, data: LLMCallSpanData) -> AttributeMap:
+        """The caller's metadata, restricted to the operator's allowlist.
+
+        Empty unless a deployment allowlists keys, so a request can never push
+        arbitrary metadata of its own into the backend.
+        """
+        return {
+            f"{TRACE_METADATA_PREFIX}{key}": value
+            for key, value in data.annotations.requester_metadata.items()
+            if key in self._trace_metadata_keys
         }
