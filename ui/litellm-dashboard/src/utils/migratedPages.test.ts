@@ -236,4 +236,13 @@ describe("legacyKeyForPathname", () => {
     expect(legacyKeyForPathname("/team-x/ui/api-reference")).toBe("api_ref");
     expect(legacyKeyForPathname("/ui/api-reference")).toBeNull();
   });
+
+  it("resolves a nested tab route to its sidebar key via the first path segment", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { legacyKeyForPathname } = await import("./migratedPages");
+
+    expect(legacyKeyForPathname("/ui/cost-optimization/compression")).toBe("cost-optimization");
+    expect(legacyKeyForPathname("/ui/cost-optimization/caching/")).toBe("cost-optimization");
+    expect(legacyKeyForPathname("/ui/some-legacy-page/nested")).toBeNull();
+  });
 });
