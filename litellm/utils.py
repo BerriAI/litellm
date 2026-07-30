@@ -199,6 +199,7 @@ from litellm.types.utils import (
     SandboxProviders,
     SearchProviders,
     SelectTokenizerResponse,
+    ServiceTier,
     StreamingChoices,
     TextChoices,
     TextCompletionResponse,
@@ -5219,7 +5220,9 @@ def _is_potential_model_name_in_model_cost(
     )
 
 
-_ABOVE_THRESHOLD_COST_KEY = re.compile(r"_above_\d+k?_tokens$")
+_COST_KEY_COMPOSED_AT_REQUEST_TIME = re.compile(
+    r"cost.*(?:_above_\d+k?_tokens|_(?:" + "|".join(st.value for st in ServiceTier) + r"))$"
+)
 
 
 def _get_model_info_helper(
@@ -5535,7 +5538,10 @@ def _get_model_info_helper(
                 supports_image_size=_model_info.get("supports_image_size", None),
             )
             for cost_key, cost_value in _model_info.items():
-                if cost_key not in returned_model_info and _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None:
+                if (
+                    cost_key not in returned_model_info
+                    and _COST_KEY_COMPOSED_AT_REQUEST_TIME.search(cost_key) is not None
+                ):
                     returned_model_info[cost_key] = cost_value  # type: ignore[literal-required]
             return returned_model_info
     except Exception as e:
