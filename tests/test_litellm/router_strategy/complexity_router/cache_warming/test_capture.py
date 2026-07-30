@@ -66,6 +66,25 @@ def _kwargs(**overrides: object) -> dict:
     return {**base, **overrides}
 
 
+def _logging_obj(kwargs: dict) -> object:
+    """The real Logging object the proxy threads into deployment selection, built from the request the way
+    function_setup builds it, so the dynamic params under test are the ones production would carry."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    return Logging(
+        model=str(kwargs.get("model")),
+        messages=MESSAGES,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="capture-test",
+        function_id="capture-test",
+        kwargs=kwargs,
+    )
+
+
 def _stored_records(redis: FakeRedisCache) -> list[dict]:
     return [json.loads(value) for value in redis.hashes.get(SESSIONS_KEY, {}).values()]
 
@@ -144,10 +163,24 @@ async def test_second_turn_overwrites_payload_and_preserves_other_model_warmth()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("opt_out", ["no-retention-consent", "global-redaction", "per-request-redaction"])
+@pytest.mark.parametrize(
+    "opt_out",
+    [
+        "no-retention-consent",
+        "global-redaction",
+        "redaction-header",
+        "per-request-body-root",
+        "per-request-body-metadata",
+        "per-request-body-litellm-metadata",
+        None,
+    ],
+)
 async def test_capture_honors_every_form_of_the_operators_prompt_retention_policy(opt_out, monkeypatch):
     """Capture persists full prompts, so it requires the retention opt-in and respects message redaction in
-    every form it can be expressed."""
+    every form it can be expressed. The per-request cases carry a real Logging object because the caller's own
+    turn_off_message_logging is read from the dynamic params it owns rather than from the request body, so a
+    stub would assert the wiring instead of the policy. The final case is the negative control: with no opt-out
+    expressed anywhere, this same path must still capture, otherwise the gate proves nothing."""
     redis = FakeRedisCache()
     router = _complexity_router(redis)
     kwargs = _kwargs()
@@ -156,10 +189,18 @@ async def test_capture_honors_every_form_of_the_operators_prompt_retention_polic
         monkeypatch.delenv("STORE_PROMPTS_IN_SPEND_LOGS", raising=False)
     elif opt_out == "global-redaction":
         monkeypatch.setattr(litellm, "turn_off_message_logging", True)
-    else:
+    elif opt_out == "redaction-header":
         kwargs["metadata"]["headers"] = {"x-litellm-enable-message-redaction": True}
+    elif opt_out == "per-request-body-root":
+        kwargs["turn_off_message_logging"] = True
+    elif opt_out == "per-request-body-metadata":
+        kwargs["metadata"]["turn_off_message_logging"] = True
+    elif opt_out == "per-request-body-litellm-metadata":
+        kwargs["litellm_metadata"] = {"session_id": "sess-1", "turn_off_message_logging": True}
+    kwargs["litellm_logging_obj"] = _logging_obj(kwargs)
     await router._capture_session(kwargs, MESSAGES, "claude-sonnet-4-5")
-    assert redis.hashes.get(SESSIONS_KEY, {}) == {}
+    stored = redis.hashes.get(SESSIONS_KEY, {})
+    assert stored == {} if opt_out is not None else stored != {}
 
 
 @pytest.mark.asyncio
