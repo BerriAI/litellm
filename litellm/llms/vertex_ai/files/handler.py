@@ -1,7 +1,9 @@
 import asyncio
+import json
+import os
 import time
 from urllib.parse import unquote
-from typing import Any, Coroutine, Optional, Tuple, Union
+from typing import Any, Coroutine, Mapping, Optional, Tuple, Union
 
 import httpx
 
@@ -10,6 +12,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import (
     GCSBucketBase,
     GCSLoggingConfig,
 )
+from litellm.types.utils import StandardCallbackDynamicParams
 from litellm.litellm_core_utils.cloud_storage_security import (
     VERTEX_AI_MANAGED_GCS_PREFIX,
     should_allow_legacy_cloud_file_ids,
@@ -38,6 +41,35 @@ class VertexAIFilesHandler(GCSBucketBase):
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=LlmProviders.VERTEX_AI,
         )
+
+    def _resolve_read_gcs_config(
+        self,
+        litellm_params: Mapping[str, object] | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+    ) -> tuple[str | None, str | None]:
+        """
+        Resolve the GCS bucket and service-account credentials for the read/content path.
+
+        Sources them from the deployment's ``litellm_params`` (``gcs_bucket_name`` /
+        ``bucket_name`` and ``vertex_credentials``), mirroring the write path in
+        ``VertexAIFilesConfig._get_configured_bucket_name``, and falls back to the global
+        ``GCS_BUCKET_NAME`` / ``GCS_PATH_SERVICE_ACCOUNT`` env vars. This lets Vertex batch
+        run entirely at the model-group level, so output written to a per-model bucket is
+        readable without setting the global env vars.
+        """
+        params: Mapping[str, object] = litellm_params or {}
+        bucket_candidate = params.get("gcs_bucket_name") or params.get("bucket_name")
+        configured_bucket_name = bucket_candidate if isinstance(bucket_candidate, str) else os.getenv("GCS_BUCKET_NAME")
+
+        credentials = params.get("vertex_credentials") or vertex_credentials
+        if isinstance(credentials, dict):
+            path_service_account: str | None = json.dumps(credentials)
+        elif isinstance(credentials, str):
+            path_service_account = credentials
+        else:
+            path_service_account = os.getenv("GCS_PATH_SERVICE_ACCOUNT")
+
+        return configured_bucket_name, path_service_account
 
     def _extract_bucket_and_object_from_file_id(
         self,
@@ -91,7 +123,17 @@ class VertexAIFilesHandler(GCSBucketBase):
         if not file_id:
             raise ValueError("file_id is required in file_content_request")
 
-        gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(kwargs={})
+        configured_bucket_name, path_service_account = self._resolve_read_gcs_config(
+            litellm_params=litellm_params,
+            vertex_credentials=vertex_credentials,
+        )
+        dynamic_params = StandardCallbackDynamicParams(
+            gcs_bucket_name=configured_bucket_name,
+            gcs_path_service_account=path_service_account,
+        )
+        gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
+            kwargs={"standard_callback_dynamic_params": dynamic_params}
+        )
         bucket_name, object_path = self._extract_bucket_and_object_from_file_id(
             file_id=file_id,
             configured_bucket_name=gcs_logging_config["bucket_name"],

@@ -25,6 +25,12 @@ if TYPE_CHECKING:
 
 
 class JavelinGuardrail(CustomGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+        ]
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -72,6 +78,7 @@ class JavelinGuardrail(CustomGuardrail):
             self.api_version,
         )
 
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(guardrail_name=guardrail_name, default_on=default_on, **kwargs)
 
     async def call_javelin_guard(

@@ -10,8 +10,9 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
 import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip, Typography } from "antd";
-import debounce from "lodash/debounce";
-import React, { useCallback, useEffect, useState } from "react";
+import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
+import React, { useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import { mapDisplayToInternalNames } from "../callback_info_helpers";
@@ -467,17 +468,21 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       if (
         formValues.allowed_mcp_servers_and_groups &&
         (formValues.allowed_mcp_servers_and_groups.servers?.length > 0 ||
-          formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0)
+          formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0 ||
+          formValues.allowed_mcp_servers_and_groups.toolsets?.length > 0)
       ) {
         if (!formValues.object_permission) {
           formValues.object_permission = {};
         }
-        const { servers, accessGroups } = formValues.allowed_mcp_servers_and_groups;
+        const { servers, accessGroups, toolsets } = formValues.allowed_mcp_servers_and_groups;
         if (servers && servers.length > 0) {
           formValues.object_permission.mcp_servers = servers;
         }
         if (accessGroups && accessGroups.length > 0) {
           formValues.object_permission.mcp_access_groups = accessGroups;
+        }
+        if (toolsets && toolsets.length > 0) {
+          formValues.object_permission.mcp_toolsets = toolsets;
         }
         // Remove the original field as it's now part of object_permission
         delete formValues.allowed_mcp_servers_and_groups;
@@ -688,14 +693,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
   };
 
-  const debouncedSearch = useCallback(
-    debounce((text: string) => fetchUsers(text), 300),
-    [accessToken],
-  );
-
-  const handleUserSearch = (value: string): void => {
-    debouncedSearch(value);
-  };
+  const handleUserSearch = useDebouncedCallback((text: string) => fetchUsers(text), { wait: DEBOUNCE_WAIT_MS });
 
   const handleUserSelect = (_value: string, option: UserOption): void => {
     const selectedUser = option.user;
@@ -1646,9 +1644,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         />
                       </div>
                     </AccordionBody>
-                    <Form.Item name="duration" hidden initialValue={null}>
-                      <Input />
-                    </Form.Item>
                   </Accordion>
                   <Accordion className="mt-4 mb-4">
                     <AccordionHeader>

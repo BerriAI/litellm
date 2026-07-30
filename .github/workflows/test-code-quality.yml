@@ -38,7 +38,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
@@ -114,6 +114,9 @@ jobs:
 
       - name: check_fastuuid_usage
         run: uv run --no-sync python ./tests/code_coverage_tests/check_fastuuid_usage.py
+
+      - name: check_e2e_no_raw_requests
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_e2e_no_raw_requests.py
 
       - name: memory_test
         run: uv run --no-sync python ./tests/code_coverage_tests/memory_test.py

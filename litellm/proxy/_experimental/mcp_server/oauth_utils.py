@@ -3,13 +3,21 @@
 
 import os
 from ipaddress import ip_address
-from typing import Any, Dict, List, NoReturn, Optional
-from urllib.parse import ParseResult, urlparse, urlunparse
+from typing import TYPE_CHECKING, Any, Dict, List, NoReturn, Optional
+from urllib.parse import ParseResult, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
+    TokenEndpointClientAuth,
+    build_token_endpoint_client_auth,
+    normalize_token_endpoint_auth_method,
+)
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
+if TYPE_CHECKING:
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 # RFC 6749 §5.1 / OAuth 2.1 draft-15 §4.1.3: token-endpoint responses
 # must not be cached — both success and error bodies may reveal secrets.
@@ -20,6 +28,10 @@ TOKEN_NO_CACHE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 # routinely set X-Forwarded-Port: 443 even when the client URL has no
 # explicit port, which would otherwise break a literal netloc compare).
 _DEFAULT_PORTS = {"http": 80, "https": 443}
+
+# Sentinel ``upstream_resource`` value meaning "derive the RFC 8707 resource identifier from the
+# server's own url". RFC 8707 requires an absolute URI, so this can never be a real resource value.
+UPSTREAM_RESOURCE_AUTO = "auto"
 
 # Env var for ops to allowlist additional redirect_uri origins beyond
 # same-origin + loopback — needed for first-party OAuth clients hosted
@@ -68,6 +80,29 @@ def _oauth_invalid_request(
 def _origin_label(scheme: str, netloc: str) -> str:
     """Human-readable origin for error messages (scheme + host[:port])."""
     return f"{scheme}://{netloc}" if netloc else f"{scheme}://"
+
+
+def _redact_mcp_resource_url(url: Optional[str]) -> Optional[str]:
+    """Reduce an MCP server URL to its origin (scheme + host + port) for logging.
+
+    Everything else is dropped: userinfo (``user:pass@``), the query string, the
+    fragment, and the path, because hosted MCP servers routinely embed the
+    credential in the path (e.g. ``/mcp/s/<token>``) and this value is persisted
+    in spend-log metadata that a caller who can invoke the tool can read back.
+    Returns None when the URL has no host to identify (nothing safe to log).
+    """
+    if not isinstance(url, str) or not url:
+        return None
+    try:
+        parts = urlsplit(url)
+        hostname = parts.hostname
+        port = parts.port
+    except ValueError:
+        return None
+    if not hostname:
+        return None
+    netloc = f"{hostname}:{port}" if port else hostname
+    return urlunsplit((parts.scheme, netloc, "", "", "")) or None
 
 
 def _resolve_proxy_base_url_env() -> Optional[str]:
@@ -129,7 +164,19 @@ def get_request_base_url(request: Request) -> str:
         if x_forwarded_port and ":" not in netloc:
             netloc = f"{netloc}:{x_forwarded_port}"
 
-    return urlunparse((scheme, netloc, parsed.path, "", "", ""))
+    return urlunparse((scheme, _strip_default_port(scheme, netloc), parsed.path, "", "", ""))
+
+
+def well_known_root_suffix() -> str:
+    """The ``SERVER_ROOT_PATH`` segment inserted into a ``.well-known`` path (RFC 8414 / 9728
+    path insertion), empty for a root-mounted proxy or an explicit ``/``.
+
+    The discovery route registrations and the 401 challenges that advertise those routes both
+    derive their path from this one function, so the ``resource_metadata`` URL a client is told
+    to fetch cannot drift from the route that actually serves it.
+    """
+    root = os.getenv("SERVER_ROOT_PATH", "")
+    return "" if root == "/" else root
 
 
 def validate_loopback_redirect_uri(redirect_uri: str) -> None:
@@ -331,8 +378,36 @@ def _parse_redirect_uri_for_validation(redirect_uri: str) -> ParseResult:
         )
 
 
-def _validate_trusted_http_redirect_shape(parsed: ParseResult) -> bool:
-    """Return True when ``parsed`` is an allowlisted native callback (caller may return)."""
+def is_loopback_redirect_host(parsed: ParseResult) -> bool:
+    """True when the redirect host is loopback (RFC 8252 section 7.3).
+
+    Shared by every redirect-URI policy in the MCP OAuth surface so that none of them
+    hand-rolls its own host list: a literal ``("localhost", "127.0.0.1", "::1")`` tuple
+    silently misses the rest of 127.0.0.0/8 and IPv6-mapped forms.
+    """
+    host = (parsed.hostname or "").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_redirect_uri_shape(parsed: ParseResult) -> bool:
+    """Validate redirect-URI *hygiene* and resolve allowlisted native callbacks.
+
+    Returns True when ``parsed`` is an allowlisted native callback (the caller may accept
+    it outright); returns False for http/https, leaving the trust decision to the caller;
+    raises for a URI that no policy should ever accept (bad scheme, fragment, missing
+    host, userinfo, backslash in the host).
+
+    This is deliberately separate from :func:`validate_trusted_redirect_uri`, which adds
+    the *first-party* trust policy (same-origin, loopback, ops allowlist) appropriate to
+    the proxy's own OAuth endpoints. Public dynamic-client registration accepts any https
+    client and relies on PKCE plus the consent screen instead, so it shares this hygiene
+    rule but not that trust policy.
+    """
     if parsed.scheme not in ("http", "https"):
         if _matches_trusted_native_redirect_uri(parsed):
             return True
@@ -384,14 +459,8 @@ def _trusted_redirect_uri_is_allowed(
         ):
             return True
 
-    host = (parsed.hostname or "").lower()
-    if host == "localhost":
+    if is_loopback_redirect_host(parsed):
         return True
-    try:
-        if ip_address(host).is_loopback:
-            return True
-    except ValueError:
-        pass
 
     if parsed.scheme == "https":
         for entry in _parse_trusted_redirect_origins():
@@ -453,7 +522,10 @@ def _raise_trusted_redirect_uri_rejected(
         "Align the proxy public URL with the browser URL. Set PROXY_BASE_URL to your "
         "HTTPS origin (e.g. https://litellm.example.com), or enable "
         "general_settings.use_x_forwarded_for with mcp_trusted_proxy_ranges for your "
-        "ingress. Verify: curl https://<host>/.well-known/oauth-authorization-server "
+        "ingress. If the redirect_uri is a legitimate separate-origin OAuth client "
+        "(e.g. a web app registering with the proxy from another host via dynamic client "
+        f"registration), add its origin to {_TRUSTED_REDIRECT_ORIGINS_ENV}. "
+        "Verify: curl https://<host>/.well-known/oauth-authorization-server "
         "| jq .issuer — issuer must match window.location.origin in the UI."
     )
 
@@ -507,10 +579,119 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
     :func:`validate_loopback_redirect_uri`.
     """
     parsed = _parse_redirect_uri_for_validation(redirect_uri)
-    if _validate_trusted_http_redirect_shape(parsed):
+    if validate_redirect_uri_shape(parsed):
         return
     redirect_netloc = _strip_default_port(parsed.scheme, parsed.netloc)
     proxy_base = _resolve_proxy_base_for_redirect(request)
     if _trusted_redirect_uri_is_allowed(parsed, redirect_netloc, proxy_base):
         return
     _raise_trusted_redirect_uri_rejected(request, redirect_uri, parsed, redirect_netloc, proxy_base)
+
+
+def canonicalize_url_identity(url: str) -> str:
+    """Normalize a URL to a comparable identity: lowercase scheme and host, drop the scheme's default
+    port, and strip userinfo, params, query, fragment and a trailing slash while keeping IPv6
+    brackets. The one URL-canonicalization primitive shared by the RFC 8707 resource emitter and the
+    RFC 8414 issuer/authorize-endpoint comparison, so the default-port and IPv6 rules cannot be
+    present in one and missing in the other. The netloc (not ``parsed.hostname``) carries the
+    authority so ``[::1]:8080`` survives with its brackets intact."""
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    netloc = _strip_default_port(scheme, parsed.netloc.rpartition("@")[2])
+    return urlunparse((scheme, netloc, parsed.path.rstrip("/"), "", "", ""))
+
+
+def _canonical_resource_uri(url: str) -> str | None:
+    """Canonicalize an upstream MCP server URL into an RFC 8707 resource identifier.
+
+    Keeps only the scheme, host, port and path, which is the shape the MCP authorization spec's
+    "Canonical Server URI" section describes and every one of its examples takes; the reference
+    implementation is ``mcp.shared.auth_utils.resource_url_from_server_url``, and this is the stricter
+    variant. The scheme and host are lowercased, the scheme's default port is dropped so
+    ``https://host:443/mcp`` and ``https://host/mcp`` never present as two resources, and a trailing
+    slash is dropped so ``https://host/mcp/`` and ``https://host/mcp`` do not either.
+
+    Userinfo, query and fragment are dropped rather than carried. A transport URL routinely holds
+    credentials in exactly those components (``user:password@``, ``?api_key=``), while a resource
+    indicator names the resource and nothing else; this value is published somewhere the transport
+    URL never goes, into the authorization redirect the browser follows and into token request
+    bodies, so carrying them would disclose them to the authorization server, its logs, and browser
+    history. RFC 8707 forbids a fragment outright and says a resource SHOULD NOT carry a query. An
+    upstream whose identifier genuinely needs more than this is served by setting
+    ``upstream_resource`` explicitly, which is passed through untouched.
+
+    Returns ``None`` when the URL is not absolute, which cannot yield a valid resource identifier.
+    """
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return canonicalize_url_identity(url)
+
+
+def resolve_upstream_resource(mcp_server: "MCPServer") -> str | None:
+    """Resolve the RFC 8707 ``resource`` value this server's upstream OAuth legs must carry.
+
+    The MCP authorization spec requires an MCP client to send ``resource`` on both the
+    authorization request and every token request, naming the canonical URI of the MCP server the
+    token is for. Authorization server temperaments are irreconcilable and undetectable, so this
+    stays an explicit per-server opt-in: most SaaS providers ignore the parameter, some hard-reject
+    it and express audience through scopes instead, and strict or MCP-native ones refuse to mint a
+    correctly scoped token without it (``invalid_target``).
+
+    ``None`` or blank omits the parameter, which is the default and preserves the behavior of every
+    server working today. ``"auto"`` derives the canonical URI from the server's own URL; it is not
+    an absolute URI, so RFC 8707 guarantees it can never collide with a real resource value. Any
+    other value is sent verbatim, because the identifier has to match what the authorization server
+    expects exactly and normalizing it could break that match.
+
+    Every upstream leg for a server resolves through this one function, so the authorize request
+    and the token requests cannot disagree; a token request naming a resource the authorization
+    request never asked for is itself an ``invalid_target`` under RFC 8707.
+    """
+    configured = (mcp_server.upstream_resource or "").strip()
+    if not configured:
+        return None
+    if configured.lower() != UPSTREAM_RESOURCE_AUTO:
+        return configured
+    if not mcp_server.url:
+        verbose_logger.warning(
+            "MCP server %s sets upstream_resource=auto but has no url to derive a resource "
+            "identifier from; omitting the RFC 8707 resource parameter. Set upstream_resource to "
+            "the exact resource identifier the authorization server expects instead.",
+            mcp_server.server_id,
+        )
+        return None
+    canonical = _canonical_resource_uri(mcp_server.url)
+    if canonical is None:
+        verbose_logger.warning(
+            "MCP server %s sets upstream_resource=auto but its url is not an absolute URI, so no "
+            "RFC 8707 resource identifier could be derived; omitting the resource parameter",
+            mcp_server.server_id,
+        )
+    return canonical
+
+
+def build_upstream_oauth2_token_request(
+    mcp_server: "MCPServer",
+    *,
+    auth_method: object,
+    client_id: str | None,
+    client_secret: str | None,
+) -> TokenEndpointClientAuth:
+    """Client auth plus the RFC 8707 ``resource`` for one upstream plain-OAuth2 token request.
+
+    Resolving both in one call is what stops a leg authenticating without naming the resource its
+    sibling legs named; the RFC 8693 legs (OBO, id_jag) carry ``audience`` and stay on
+    ``build_token_endpoint_client_auth``. The client-auth inputs are passed in because a leg may
+    authenticate as the caller's own client rather than the server's; ``resource`` always comes from
+    the server, so no leg can choose or forget it.
+    """
+    client_auth = build_token_endpoint_client_auth(
+        auth_method=normalize_token_endpoint_auth_method(auth_method),
+        client_id=client_id,
+        client_secret=client_secret,
+    )
+    resource = resolve_upstream_resource(mcp_server)
+    if not resource:
+        return client_auth
+    return TokenEndpointClientAuth(headers=client_auth.headers, body={**client_auth.body, "resource": resource})

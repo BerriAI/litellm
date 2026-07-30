@@ -13,13 +13,16 @@ from starlette.datastructures import Headers
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
-from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS, PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     iter_client_callback_metadata_dicts,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
+from litellm.litellm_core_utils.url_utils import (
+    is_url_destination_allowed_by_host,
+    provider_url_destination_candidates,
+)
 from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
@@ -32,6 +35,7 @@ from litellm.proxy._types import (
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     get_metadata_variable_name_from_kwargs,
+    strip_callback_config,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 
@@ -45,6 +49,25 @@ _EXPLICIT_SESSION_HEADERS = frozenset({"x-litellm-trace-id", "x-litellm-session-
 # Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
+
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    """Only proxy-validated keys are stamped, proven by the unforgeable
+    via_virtual_key marker AND a known non-secret shape: the sha256 hex digest
+    UserAPIKeyAuth stores virtual keys in, or the master key's stable alias.
+    Custom-auth credentials arrive raw (never forward auth material) and hashed
+    JWTs rotate on re-issue (useless as a stable ban id), so both are skipped."""
+    api_key = user_api_key_dict.api_key
+    if not user_api_key_dict.via_virtual_key or api_key is None:
+        return None
+    if api_key == LITELLM_PROXY_MASTER_KEY_ALIAS or _SHA256_HEX_RE.fullmatch(api_key):
+        return api_key
+    return None
+
+
+_ANTHROPIC_SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 
 def _sanitize_for_log(value: Any) -> str:
@@ -226,23 +249,26 @@ def _reject_url_valued_destinations(data: Dict[str, Any]) -> None:
     allowed_hosts = getattr(litellm, "provider_url_destination_allowed_hosts", []) or []
     for field in _URL_DESTINATION_REQUEST_FIELDS:
         value = data.get(field)
-        if not isinstance(value, str) or not value.startswith(("http://", "https://")):
+        if not isinstance(value, str):
             continue
-        if is_url_destination_allowed_by_host(value, allowed_hosts):
-            continue
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_request",
-                "param": field,
-                "message": (
-                    f"URL-valued '{field}' is not allowed. Configure custom "
-                    "endpoints with api_base instead, or add the destination "
-                    "host to `provider_url_destination_allowed_hosts` in "
-                    "litellm_settings."
-                ),
-            },
-        )
+        for candidate in provider_url_destination_candidates(value):
+            if not candidate.lower().startswith(("http://", "https://")):
+                continue
+            if is_url_destination_allowed_by_host(candidate, allowed_hosts):
+                continue
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_request",
+                    "param": field,
+                    "message": (
+                        f"URL-valued '{field}' is not allowed. Configure custom "
+                        "endpoints with api_base instead, or add the destination "
+                        "host to `provider_url_destination_allowed_hosts` in "
+                        "litellm_settings."
+                    ),
+                },
+            )
 
 
 def _strip_untrusted_request_header_controls(
@@ -426,18 +452,50 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
     )
 
 
+def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
+    if not isinstance(metadata, dict):
+        return None
+
+    user_id = metadata.get("user_id")
+    if isinstance(user_id, dict):
+        session_id = user_id.get("session_id")
+        if isinstance(session_id, str) and _ANTHROPIC_SESSION_ID_VALUE_RE.fullmatch(session_id):
+            return session_id
+        return None
+    if not isinstance(user_id, str):
+        return None
+
+    session_marker = "_session_"
+    session_marker_index = user_id.rfind(session_marker)
+    if session_marker_index == -1:
+        return None
+
+    session_id = user_id[session_marker_index + len(session_marker) :]
+    if not session_id or not _ANTHROPIC_SESSION_ID_VALUE_RE.fullmatch(session_id):
+        return None
+    return session_id
+
+
 def is_claude_code_user_agent(user_agent: str) -> bool:
     """Claude Code identifies itself as ``claude-cli/<version> ...``; the IDE
     extensions and the Agent SDK run through the same CLI and share that prefix."""
     return user_agent.startswith("claude-cli/")
 
 
-def should_auto_drop_params_for_claude_code(user_agent: str, data: dict, proxy_config: ProxyConfig) -> bool:
-    """drop_params defaults to on for Claude Code so its Anthropic-specific
-    params (e.g. thinking) don't fail requests routed to non-Anthropic
-    providers. An explicit drop_params from the caller or in the operator's
-    ``litellm_settings`` always wins over this default."""
-    if not is_claude_code_user_agent(user_agent):
+def is_codex_user_agent(user_agent: str) -> bool:
+    """Codex identifies itself as ``codex_cli_rs/<version> ...`` (TUI),
+    ``codex_exec/<version> ...`` (exec mode), or ``codex_vscode/<version> ...``
+    (IDE extension); all share the ``codex_`` prefix."""
+    return user_agent.startswith("codex_")
+
+
+def should_auto_drop_params_for_agentic_cli(user_agent: str, data: dict, proxy_config: ProxyConfig) -> bool:
+    """drop_params defaults to on for agentic CLIs so their client-specific
+    params (e.g. Claude Code's thinking, Codex's service_tier) don't fail
+    requests routed to providers that reject them. An explicit drop_params
+    from the caller or in the operator's ``litellm_settings`` always wins
+    over this default."""
+    if not (is_claude_code_user_agent(user_agent) or is_codex_user_agent(user_agent)):
         return False
     if "drop_params" in data:
         return False
@@ -935,6 +993,15 @@ class LiteLLMProxyRequestSetup:
             data["litellm_session_id"] = chain_id
             data["litellm_trace_id"] = chain_id
             verbose_proxy_logger.debug(f"Extracted chain_id from header (trace-id/session-id): {chain_id}")
+        else:
+            body_metadata = data.get("metadata")
+            session_id = _get_anthropic_session_id_from_metadata(body_metadata)
+            if session_id:
+                metadata_from_headers["session_id"] = session_id
+                data["litellm_session_id"] = session_id
+                if isinstance(body_metadata, dict) and isinstance(body_metadata.get("user_id"), dict):
+                    body_metadata["user_id"] = session_id
+                verbose_proxy_logger.debug("Extracted session_id from Anthropic metadata.user_id")
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(metadata_from_headers)
@@ -949,6 +1016,10 @@ class LiteLLMProxyRequestSetup:
             user_api_key_alias=user_api_key_dict.key_alias,
             user_api_key_spend=user_api_key_dict.spend,
             user_api_key_max_budget=user_api_key_dict.max_budget,
+            user_api_key_user_spend=user_api_key_dict.user_spend,
+            user_api_key_user_max_budget=user_api_key_dict.user_max_budget,
+            user_api_key_team_spend=user_api_key_dict.team_spend,
+            user_api_key_team_max_budget=user_api_key_dict.team_max_budget,
             user_api_key_team_id=user_api_key_dict.team_id,
             user_api_key_project_id=user_api_key_dict.project_id,
             user_api_key_project_alias=user_api_key_dict.project_alias,
@@ -962,7 +1033,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_budget_reset_at=(
                 user_api_key_dict.budget_reset_at.isoformat() if user_api_key_dict.budget_reset_at else None
             ),
-            user_api_key_auth_metadata=user_api_key_dict.metadata,
+            user_api_key_auth_metadata=strip_callback_config(user_api_key_dict.metadata),
         )
         return user_api_key_logged_metadata
 
@@ -1395,6 +1466,11 @@ async def add_litellm_data_to_request(
         if "user" not in data:
             data["user"] = user
 
+    if litellm.overwrite_user_with_key_hash is True:
+        stampable_hash = _stampable_key_hash(user_api_key_dict)
+        if stampable_hash is not None:
+            data["user"] = stampable_hash
+
     data["secret_fields"] = SecretFields(raw_headers=_raw_headers)
 
     ## Dynamic api version (Azure OpenAI endpoints) ##
@@ -1595,8 +1671,8 @@ async def add_litellm_data_to_request(
     data[_metadata_variable_name]["user_api_key_user_spend"] = user_api_key_dict.user_spend
     data[_metadata_variable_name]["user_api_key_user_max_budget"] = user_api_key_dict.user_max_budget
 
-    data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
-    data[_metadata_variable_name]["user_api_key_team_metadata"] = user_api_key_dict.team_metadata
+    data[_metadata_variable_name]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
+    data[_metadata_variable_name]["user_api_key_team_metadata"] = strip_callback_config(user_api_key_dict.team_metadata)
     data[_metadata_variable_name]["user_api_key_object_permission_id"] = getattr(
         user_api_key_dict, "object_permission_id", None
     )
@@ -1649,7 +1725,7 @@ async def add_litellm_data_to_request(
         user_agent = request.headers["user-agent"]
     data[_metadata_variable_name]["user_agent"] = user_agent
 
-    if should_auto_drop_params_for_claude_code(user_agent, data, proxy_config):
+    if should_auto_drop_params_for_agentic_cli(user_agent, data, proxy_config):
         data["drop_params"] = True
 
     # Merge caller-supplied tags (x-litellm-tags header, data["tags"] root-level)
@@ -1753,6 +1829,15 @@ async def add_litellm_data_to_request(
     return data
 
 
+def _warn_stale_team_alias_once(warning_key: str, message: str, *args: str) -> None:
+    if warning_key in _STALE_TEAM_ALIAS_WARNING_KEYS:
+        return
+    _STALE_TEAM_ALIAS_WARNING_KEYS[warning_key] = None
+    while len(_STALE_TEAM_ALIAS_WARNING_KEYS) > _MAX_STALE_ALIAS_WARNING_KEYS:
+        _STALE_TEAM_ALIAS_WARNING_KEYS.popitem(last=False)
+    verbose_proxy_logger.warning(message, *args)
+
+
 def _update_model_if_team_alias_exists(
     data: dict,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1772,49 +1857,63 @@ def _update_model_if_team_alias_exists(
     Note: model_aliases for team models are deprecated. This function only applies
     to legacy non-team-scoped aliases. Team-scoped deployments use team_public_model_name
     and are resolved via map_team_model in route_llm_request.
+
+    An alias that targets a team-scoped internal name (``model_name_{team_id}_{uuid}``)
+    with no live deployment behind it is never applied: the deployment was deleted, so
+    the rewrite could only fail with an error naming a model the caller never sent.
+    Keeping the requested model name lets it resolve against the deployments that still
+    exist (e.g. a gateway-level model group shared with the team).
     """
     _model = data.get("model")
-    if _model and user_api_key_dict.team_model_aliases and _model in user_api_key_dict.team_model_aliases:
-        from litellm.proxy.proxy_server import llm_router
+    if not _model or not user_api_key_dict.team_model_aliases or _model not in user_api_key_dict.team_model_aliases:
+        return
 
-        # Skip alias rewrite if this model resolves to team-specific deployments
-        # (team models use team_public_model_name, not model_aliases)
-        aliased_target = user_api_key_dict.team_model_aliases[_model]
+    from litellm.proxy.proxy_server import llm_router
 
-        # Optional bypass for stale aliases from pre-PR deployments:
-        # only enabled via feature flag to preserve backwards compatibility.
-        # Cached at module level to avoid hot-path secret lookups on every request.
-        global _ENABLE_TEAM_STALE_ALIAS_BYPASS
-        if _ENABLE_TEAM_STALE_ALIAS_BYPASS is None:
-            _ENABLE_TEAM_STALE_ALIAS_BYPASS = get_secret_bool("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", False)
-        enable_stale_alias_bypass = _ENABLE_TEAM_STALE_ALIAS_BYPASS
-        # Check if the alias points to a team-scoped UUID name
-        # (format: "model_name_{team_id}_{uuid}")
-        is_stale_team_alias = aliased_target.startswith(f"model_name_{user_api_key_dict.team_id}_")
-        if is_stale_team_alias and llm_router:
-            # This is a stale alias from pre-PR deployments.
-            # Check if current team deployments exist for the public name.
-            key = (user_api_key_dict.team_id, _model)
-            if key in llm_router.team_model_to_deployment_indices:
-                if enable_stale_alias_bypass:
-                    # Team deployments exist; skip stale alias
-                    return
-                warning_key = f"{user_api_key_dict.team_id}:{_model}:{aliased_target}"
-                if warning_key not in _STALE_TEAM_ALIAS_WARNING_KEYS:
-                    _STALE_TEAM_ALIAS_WARNING_KEYS[warning_key] = None
-                    while len(_STALE_TEAM_ALIAS_WARNING_KEYS) > _MAX_STALE_ALIAS_WARNING_KEYS:
-                        _STALE_TEAM_ALIAS_WARNING_KEYS.popitem(last=False)
-                    verbose_proxy_logger.warning(
-                        "Stale team model alias detected for model='%s', team_id='%s'. "
-                        "New sibling deployments may be unreachable. "
-                        "Set LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS=true to enable "
-                        "team-scoped sibling routing.",
-                        _sanitize_for_log(_model),
-                        user_api_key_dict.team_id,
-                    )
+    # Skip alias rewrite if this model resolves to team-specific deployments
+    # (team models use team_public_model_name, not model_aliases)
+    aliased_target = user_api_key_dict.team_model_aliases[_model]
 
-        data["model"] = aliased_target
-    return
+    # Optional bypass for stale aliases from pre-PR deployments:
+    # only enabled via feature flag to preserve backwards compatibility.
+    # Cached at module level to avoid hot-path secret lookups on every request.
+    global _ENABLE_TEAM_STALE_ALIAS_BYPASS
+    if _ENABLE_TEAM_STALE_ALIAS_BYPASS is None:
+        _ENABLE_TEAM_STALE_ALIAS_BYPASS = get_secret_bool("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", False)
+    enable_stale_alias_bypass = _ENABLE_TEAM_STALE_ALIAS_BYPASS
+    # Check if the alias points to a team-scoped UUID name
+    # (format: "model_name_{team_id}_{uuid}")
+    is_stale_team_alias = aliased_target.startswith(f"model_name_{user_api_key_dict.team_id}_")
+    if is_stale_team_alias and llm_router:
+        if aliased_target not in llm_router.model_name_to_deployment_indices:
+            _warn_stale_team_alias_once(
+                f"deleted:{user_api_key_dict.team_id}:{_model}:{aliased_target}",
+                "Team model alias for model='%s', team_id='%s' targets '%s', which has no live "
+                "deployment. Routing with the requested model name instead; remove the stale "
+                "entry from the team's model_aliases to silence this warning.",
+                _sanitize_for_log(_model),
+                _sanitize_for_log(user_api_key_dict.team_id),
+                _sanitize_for_log(aliased_target),
+            )
+            return
+        # This is a stale alias from pre-PR deployments.
+        # Check if current team deployments exist for the public name.
+        key = (user_api_key_dict.team_id, _model)
+        if key in llm_router.team_model_to_deployment_indices:
+            if enable_stale_alias_bypass:
+                # Team deployments exist; skip stale alias
+                return
+            _warn_stale_team_alias_once(
+                f"{user_api_key_dict.team_id}:{_model}:{aliased_target}",
+                "Stale team model alias detected for model='%s', team_id='%s'. "
+                "New sibling deployments may be unreachable. "
+                "Set LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS=true to enable "
+                "team-scoped sibling routing.",
+                _sanitize_for_log(_model),
+                _sanitize_for_log(user_api_key_dict.team_id),
+            )
+
+    data["model"] = aliased_target
 
 
 def _update_model_if_key_alias_exists(

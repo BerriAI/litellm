@@ -78,8 +78,10 @@ class BaseAWSLLM:
     # Storage is in-process memory only: default ``DualCache()`` has no Redis backend unless attached
     # elsewhere. Entry TTL: static access-key + secret + region use ``_get_default_ttl_for_boto3_credentials``
     # (~59 minutes); ambient env (``_auth_with_env_vars`` returns ``ttl=None``) uses ``InMemoryCache``'s
-    # ``default_ttl`` (600 seconds / 10 minutes). AssumeRole, web identity, profiles, and explicit
-    # session-token tuples are not cached — see ``get_credentials`` and ``_get_or_set_cached_credentials``.
+    # ``default_ttl`` (600 seconds / 10 minutes); web identity STS credentials use
+    # ``_get_default_ttl_for_boto3_credentials`` (~59 minutes), keyed on all aws_* credential args
+    # plus ssl_verify. AssumeRole, profiles, and explicit session-token tuples are not cached — see
+    # ``get_credentials`` and ``_get_or_set_cached_credentials``.
     _shared_iam_cache: ClassVar[DualCache] = DualCache()
 
     def __init__(self) -> None:
@@ -136,11 +138,12 @@ class BaseAWSLLM:
         which ``InMemoryCache.set_cache`` resolves to ``default_ttl`` (600 seconds / 10 minutes by
         default).
 
-        Used only for static access-key credentials and ambient credentials from
+        Used for static access-key credentials, ambient credentials from
         ``_auth_with_env_vars`` (including when skipping AssumeRole because the runtime identity
-        already matches ``aws_role_name``).
+        already matches ``aws_role_name``), and web identity STS credentials (plain
+        non-refreshable ``Credentials`` cached ~59 min, inside the 3600s STS session).
 
-        AssumeRole, web identity exchange, profiles, and explicit session-token tuples are not
+        AssumeRole, profiles, and explicit session-token tuples are not
         cached here — shared ``Credentials`` / refresh state must not span logical sessions.
         """
         cache_key = self.get_cache_key(credential_args)
@@ -266,23 +269,26 @@ class BaseAWSLLM:
         #   Credentials - boto3.Credentials
         #   cache ttl - Optional[int]. If None, the credentials are not cached. Some auth flows have no expiry time.
         #
-        # iam_cache: static keys and ambient env only (including skip-AssumeRole path).
-        # Do not cache AssumeRole / web identity / profile / explicit session-token paths here.
+        # iam_cache: static keys, ambient env (including skip-AssumeRole path), and web identity.
+        # Do not cache AssumeRole / profile / explicit session-token paths here.
         #########################################################
         if self._is_auth_with_web_identity_token(
             aws_web_identity_token,
             aws_role_name,
             aws_session_name,
         ):
-            credentials, _cache_ttl = self._auth_with_web_identity_token(
-                aws_web_identity_token=cast(str, aws_web_identity_token),
-                aws_role_name=cast(str, aws_role_name),
-                aws_session_name=cast(str, aws_session_name),
-                aws_region_name=aws_region_name,
-                aws_sts_endpoint=aws_sts_endpoint,
-                aws_external_id=aws_external_id,
+            return self._get_or_set_cached_credentials(
+                args,
+                lambda: self._auth_with_web_identity_token(
+                    aws_web_identity_token=cast(str, aws_web_identity_token),
+                    aws_role_name=cast(str, aws_role_name),
+                    aws_session_name=cast(str, aws_session_name),
+                    aws_region_name=aws_region_name,
+                    aws_sts_endpoint=aws_sts_endpoint,
+                    aws_external_id=aws_external_id,
+                    ssl_verify=ssl_verify,
+                ),
             )
-            return credentials
         elif self._is_auth_with_aws_role(aws_role_name):
             # Same role (IRSA/ECS/EC2): ambient creds via _get_or_set_cached_credentials like the
             # default env branch; never pre-read cache (must run _is_already_running_as_role first).
@@ -873,6 +879,15 @@ class BaseAWSLLM:
                         "aws-external-anthropic:CountTokens",
                         "aws-external-anthropic:Get*",
                         "aws-external-anthropic:List*",
+                    ],
+                    "Resource": "*",
+                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
+                },
+                {
+                    "Sid": "BedrockMantleLiteLLM",
+                    "Effect": "Allow",
+                    "Action": [
+                        "bedrock-mantle:CreateInference",
                     ],
                     "Resource": "*",
                     "Condition": {"Bool": {"aws:SecureTransport": "true"}},

@@ -10,19 +10,22 @@ POST /v1/tool/policy            - Update the input_policy / output_policy for a 
 """
 
 import uuid
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Annotated, Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field, TypeAdapter
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.constants import TOOL_SPEND_TOP_TOOLS
+from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import (
+    DailyToolSpendRepository,
     SpendLogsRepository,
     SpendLogToolIndexRepository,
 )
@@ -39,6 +42,9 @@ from litellm.types.tool_management import (
     ToolPolicyOptionsResponse,
     ToolPolicyUpdateRequest,
     ToolPolicyUpdateResponse,
+    ToolSpendDailyEntry,
+    ToolSpendEntry,
+    ToolSpendResponse,
     ToolUsageLogEntry,
     ToolUsageLogsResponse,
 )
@@ -122,6 +128,113 @@ async def list_tools(
     except Exception as e:
         verbose_proxy_logger.exception("Error listing tools: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _parse_day_start(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid date format: {value}. Expected: 'YYYY-MM-DD'",
+        )
+
+
+class _ToolSpendSums(BaseModel):
+    spend: float = 0.0
+    total_tokens: int = 0
+    request_count: int = 0
+
+
+class _TopToolRow(BaseModel):
+    tool_name: str
+    sums: _ToolSpendSums = Field(alias="_sum")
+
+
+_TOP_TOOL_ROWS = TypeAdapter(list[_TopToolRow])
+
+
+@router.get(
+    "/v1/tool/spend",
+    tags=["tool management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ToolSpendResponse,
+)
+async def get_tool_spend(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    start_date: Annotated[str | None, Query(description="YYYY-MM-DD (defaults to 30 days ago)")] = None,
+    end_date: Annotated[str | None, Query(description="YYYY-MM-DD (defaults to today)")] = None,
+):
+    """
+    Spend attributed to each tool over a date range, for the Cost Optimization dashboard.
+
+    Reads the ``LiteLLM_DailyToolSpend`` rollup, written at request time from invoked
+    tools only (MCP tool calls and response tool_calls; declaring a tool without
+    invoking it does not count). A request that invoked multiple tools counts its
+    full spend toward each of them, so per-tool numbers are attributions and do not
+    sum to a deduplicated total.
+
+    ``by_tool`` is the top ``TOOL_SPEND_TOP_TOOLS`` tools by spend, aggregated in
+    SQL, and ``daily`` covers only those tools, so the response is bounded by
+    days x TOOL_SPEND_TOP_TOOLS regardless of the requested range or how many
+    distinct tool names exist.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admin roles can view tool spend across the deployment",
+        )
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+
+    end_day = _parse_day_start(end_date) or datetime.now(timezone.utc)
+    start_day = _parse_day_start(start_date) or end_day - timedelta(days=30)
+    start_str = start_day.strftime("%Y-%m-%d")
+    end_str = end_day.strftime("%Y-%m-%d")
+    date_window = {"date": {"gte": start_str, "lte": end_str}}
+
+    table = DailyToolSpendRepository(prisma_client).table
+    top_tools = _TOP_TOOL_ROWS.validate_python(
+        await table.group_by(
+            by=["tool_name"],
+            sum={"spend": True, "total_tokens": True, "request_count": True},
+            where=date_window,
+            order={"_sum": {"spend": "desc"}},
+            take=TOOL_SPEND_TOP_TOOLS,
+        )
+        or []
+    )
+    by_tool = [
+        ToolSpendEntry(
+            tool_name=row.tool_name,
+            spend=row.sums.spend,
+            call_count=row.sums.request_count,
+            total_tokens=row.sums.total_tokens,
+        )
+        for row in top_tools
+    ]
+
+    daily_rows = (
+        await table.find_many(
+            where={**date_window, "tool_name": {"in": [row.tool_name for row in top_tools]}},
+            order=[{"date": "asc"}, {"spend": "desc"}],
+        )
+        if top_tools
+        else []
+    )
+    daily = [
+        ToolSpendDailyEntry(date=row.date, tool_name=row.tool_name, spend=row.spend, call_count=row.request_count)
+        for row in daily_rows
+    ]
+    return ToolSpendResponse(by_tool=by_tool, daily=daily, start_date=start_str, end_date=end_str)
 
 
 @router.get(
@@ -222,7 +335,8 @@ async def get_tool_usage_logs(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Return paginated spend logs for requests that used this tool (from SpendLogToolIndex).
+    Return paginated spend logs for requests that invoked this tool (from SpendLogToolIndex).
+    Declaring a tool in a request body without the model invoking it does not create an entry.
     """
     from litellm.proxy.proxy_server import prisma_client
 

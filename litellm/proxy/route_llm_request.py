@@ -1,11 +1,12 @@
 import asyncio
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Optional
 
 import httpx
 from fastapi import HTTPException, status
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.router_utils.common_utils import _is_proxy_admin_request
 
 # Router-internal mock_testing_* flag names — kept in sync with
 # ``litellm.types.router.MockRouterTestingParams`` by the test
@@ -142,6 +143,30 @@ class ProxyModelNotFoundError(HTTPException):
             "error": f"{route}: Invalid model name passed in model={model_name}. Call `/v1/models` to view available models for your key."
         }
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
+REQUIRED_BODY_PARAM_BY_ROUTE: Mapping[str, str] = {
+    "acompletion": "messages",
+    "aembedding": "input",
+}
+
+
+class ProxyMissingRequiredParamError(HTTPException):
+    def __init__(self, route: str, param: str):
+        detail = {"error": f"{route}: Missing required parameter: '{param}'."}
+        super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+        self.type = "invalid_request_error"
+        self.param = param
+
+
+def raise_if_required_body_param_missing(route_type: str, data: Mapping[str, object]) -> None:
+    required_param = REQUIRED_BODY_PARAM_BY_ROUTE.get(route_type)
+    if required_param is None or data.get(required_param) is not None:
+        return
+    raise ProxyMissingRequiredParamError(
+        route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
+        param=required_param,
+    )
 
 
 def get_team_id_from_data(data: dict) -> Optional[str]:
@@ -352,6 +377,8 @@ async def route_request(
     """
     Common helper to route the request
     """
+    raise_if_required_body_param_missing(route_type=route_type, data=data)
+
     await add_shared_session_to_data(data)
 
     # Strip router-internal mock_testing_* flags. Combined with an
@@ -361,8 +388,11 @@ async def route_request(
     for _key in _MOCK_TESTING_KWARG_NAMES:
         data.pop(_key, None)
 
+    data.pop("enable_tag_filtering", None)
+
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
+    is_proxy_admin_without_team = team_id is None and _is_proxy_admin_request(data)
 
     # Preprocess Google GenAI generate content requests
     if route_type in ["agenerate_content", "agenerate_content_stream"]:
@@ -407,6 +437,8 @@ async def route_request(
             "num_retries",
             "timeout",
             "model_group_retry_policy",
+            "routing_strategy",
+            "enable_tag_filtering",
         ]
 
         # Merge override settings into data (only if not already set in request)
@@ -515,6 +547,13 @@ async def route_request(
         team_model_name = llm_router.map_team_model(data["model"], team_id) if team_id is not None else None
         if team_model_name is not None:
             data["model"] = team_model_name
+            return getattr(llm_router, f"{route_type}")(**data)
+
+        elif (
+            is_proxy_admin_without_team
+            and data["model"] not in router_model_names
+            and data["model"] in llm_router.team_public_model_names
+        ):
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif data["model"] in router_model_names or llm_router.has_model_id(data["model"]):

@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use litellm_core::routing_utils::provider::{get_custom_llm_provider, CustomLlmProvider};
+use litellm_core::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::hooks::OcrLifecycleHooks;
 use super::types::{OcrRequest, PreparedOcrRequest};

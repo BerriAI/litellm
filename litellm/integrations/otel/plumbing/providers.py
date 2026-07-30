@@ -2,9 +2,20 @@
 
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
-from opentelemetry import baggage, metrics
+from opentelemetry import _logs, baggage, metrics
+from opentelemetry._events import EventLogger
+from opentelemetry._logs import LoggerProvider, NoOpLoggerProvider
 from opentelemetry.context import Context
 from opentelemetry.metrics import MeterProvider, NoOpMeterProvider
+from opentelemetry.sdk._events import EventLoggerProvider
+from opentelemetry.sdk._logs import LoggerProvider as SDKLoggerProvider
+from opentelemetry.sdk._logs.export import (
+    BatchLogRecordProcessor,
+    ConsoleLogExporter,
+    InMemoryLogExporter,
+    LogExporter,
+    SimpleLogRecordProcessor,
+)
 from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
@@ -18,14 +29,12 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from opentelemetry.trace import Span, SpanKind, Tracer
+from opentelemetry.util.re import parse_env_headers
 
 from litellm._version import version as litellm_version
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.model.semconv import LiteLLM
 from litellm.integrations.otel.model.spans import LiteLLMSpanKind
-
-# Re-exported so ``providers.parse_headers`` remains a stable entry point.
-from litellm.integrations.otel.model.utils import parse_headers as parse_headers
 
 if TYPE_CHECKING:
     from opentelemetry.metrics import Meter
@@ -108,6 +117,23 @@ def _otlp_traces_endpoint(endpoint: str | None) -> str | None:
     return endpoint + "/v1/traces"
 
 
+def parse_headers(raw: str | None) -> dict[str, str]:
+    """Parse an OTLP ``"k=v,k=v"`` header string into a dict.
+
+    ``OTEL_EXPORTER_OTLP_HEADERS`` is W3C Baggage encoded per the OTLP spec, so
+    values are percent-decoded: a vendor that documents
+    ``Authorization=Basic%20<token>`` (Grafana Cloud does, because a bare space
+    is not representable there) has to reach the exporter as ``Basic <token>``,
+    not with a literal ``%20`` that the backend rejects as malformed. The SDK's
+    own parser is used so litellm decodes exactly what the OTLP exporters do
+    when they read the env var themselves; ``liberal`` keeps values that are not
+    percent-encoded (``Authorization=Bearer <token>``) working unchanged.
+    """
+    if not raw:
+        return {}
+    return dict(parse_env_headers(raw, liberal=True))
+
+
 def _exporter_from_spec(spec: ExporterSpec) -> SpanExporter:
     kind = (spec.kind or "console").lower()
     factory = _EXPORTER_FACTORIES.get(kind)
@@ -180,6 +206,13 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
     ``console`` (and any unrecognized kind) exports to the console; ``otlp_http``
     and ``otlp_grpc`` export over OTLP with the configured endpoint/headers. The
     reader exports on a 5s period, matching v1.
+
+    Histograms keep the SDK's default cumulative temporality. Prometheus-backed
+    OTLP receivers (Grafana Cloud / Mimir, and the Prometheus OTLP endpoint)
+    reject delta histograms outright with ``invalid temporality and type
+    combination``, which drops the whole metric batch, while backends that
+    prefer delta still accept cumulative. The enterprise billing exporter
+    already relies on the same default.
     """
     from opentelemetry.sdk.metrics.export import (
         ConsoleMetricExporter,
@@ -191,18 +224,12 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
         from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
             OTLPMetricExporter as HTTPMetricExporter,
         )
-        from opentelemetry.sdk.metrics import Histogram
-        from opentelemetry.sdk.metrics.export import AggregationTemporality
 
         exporter: Any = HTTPMetricExporter(
             endpoint=_otlp_metrics_endpoint(config.endpoint),
             headers=parse_headers(config.headers),
-            preferred_temporality={Histogram: AggregationTemporality.DELTA},
         )
     elif kind in ("otlp_grpc", "grpc"):
-        from opentelemetry.sdk.metrics import Histogram
-        from opentelemetry.sdk.metrics.export import AggregationTemporality
-
         try:
             from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
                 OTLPMetricExporter as GRPCMetricExporter,
@@ -216,12 +243,117 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
         exporter = GRPCMetricExporter(
             endpoint=config.endpoint,
             headers=parse_headers(config.headers),
-            preferred_temporality={Histogram: AggregationTemporality.DELTA},
         )
     else:
         exporter = ConsoleMetricExporter()
 
     return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
+
+
+def _otlp_logs_endpoint(endpoint: str | None) -> str | None:
+    """Point an OTLP/HTTP base endpoint at the ``/v1/logs`` signal path.
+
+    The OTLP/HTTP exporter only appends ``/v1/logs`` when it reads
+    ``OTEL_EXPORTER_OTLP_ENDPOINT`` itself; an explicitly passed endpoint is used
+    verbatim, so a base URL would POST to the root. Mirror ``_otlp_traces_endpoint``
+    for the logs signal (rewriting a sibling signal path when present).
+    """
+    if not endpoint:
+        return endpoint
+    endpoint = endpoint.rstrip("/")
+    if endpoint.endswith("/v1/logs"):
+        return endpoint
+    for other_signal in ("/v1/traces", "/v1/metrics"):
+        if endpoint.endswith(other_signal):
+            return endpoint[: -len(other_signal)] + "/v1/logs"
+    return endpoint + "/v1/logs"
+
+
+def build_log_exporter(config: OpenTelemetryV2Config) -> LogExporter:
+    """Build a log exporter mirroring the exporter selection of the other signals.
+
+    ``console`` (and any unrecognized kind) exports to the console; ``otlp_http``
+    and ``otlp_grpc`` export over OTLP with the configured endpoint/headers;
+    ``in_memory`` buffers for tests. Like GenAI metrics, events ride the
+    single-destination shorthand fields, not the multi-exporter ``exporters`` list.
+    """
+    kind = (config.exporter or "console").lower()
+    if kind in ("in_memory", "inmemory", "memory"):
+        return InMemoryLogExporter()
+    if kind in ("otlp_http", "http", "http/protobuf", "http/json"):
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import (
+            OTLPLogExporter as HTTPLogExporter,
+        )
+
+        return HTTPLogExporter(
+            endpoint=_otlp_logs_endpoint(config.endpoint),
+            headers=parse_headers(config.headers),
+        )
+    if kind in ("otlp_grpc", "grpc"):
+        try:
+            from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+                OTLPLogExporter as GRPCLogExporter,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "OpenTelemetry OTLP gRPC log exporter is not available. Install "
+                "`opentelemetry-exporter-otlp` and `grpcio` (or `litellm[grpc]`)."
+            ) from exc
+
+        return GRPCLogExporter(endpoint=config.endpoint, headers=parse_headers(config.headers))
+    return ConsoleLogExporter()
+
+
+def build_logger_provider(
+    config: OpenTelemetryV2Config,
+    log_exporter: LogExporter | None = None,
+) -> SDKLoggerProvider:
+    """Build the :class:`LoggerProvider` GenAI events export through.
+
+    ``log_exporter`` is an explicit override (tests inject an
+    ``InMemoryLogExporter``); otherwise the exporter is selected from the config's
+    exporter kind via :func:`build_log_exporter`. Console and in-memory exporters
+    get a Simple processor (synchronous export, which tests rely on), everything
+    else a Batch processor — the same split as span processing.
+    """
+    exporter = log_exporter if log_exporter is not None else build_log_exporter(config)
+    provider = SDKLoggerProvider(resource=build_resource(config))
+    use_simple = isinstance(exporter, (ConsoleLogExporter, InMemoryLogExporter))
+    provider.add_log_record_processor(
+        SimpleLogRecordProcessor(exporter) if use_simple else BatchLogRecordProcessor(exporter)
+    )
+    return provider
+
+
+def resolve_logger_provider(
+    config: OpenTelemetryV2Config,
+    logger_provider: SDKLoggerProvider | None = None,
+) -> SDKLoggerProvider | None:
+    """Resolve the :class:`LoggerProvider` GenAI events record through, or ``None``
+    when the operator has opted out of the logs signal.
+
+    Same resolution order as :func:`resolve_meter_provider`: an injected provider
+    wins (DI/tests); an operator-configured SDK global is reused so events ride
+    their pipeline; an explicit ``NoOpLoggerProvider`` global is an opt-out and
+    yields ``None``, so no event is ever built. Only the default placeholder
+    global makes V2 build a provider from the config and publish it as the global.
+    """
+    if logger_provider is not None:
+        return logger_provider
+
+    existing: LoggerProvider = _logs.get_logger_provider()
+    if isinstance(existing, SDKLoggerProvider):
+        return existing
+    if isinstance(existing, NoOpLoggerProvider):
+        return None
+
+    provider = build_logger_provider(config)
+    _logs.set_logger_provider(provider)
+    return provider
+
+
+def get_event_logger(provider: SDKLoggerProvider, name: str = "litellm") -> EventLogger:
+    return EventLoggerProvider(logger_provider=provider).get_event_logger(name, litellm_version)
 
 
 def build_meter_provider(

@@ -11,7 +11,7 @@ collaborators acquire their globals per call, mirroring v1's lazy-import pattern
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from litellm._logging import verbose_logger
@@ -54,7 +54,7 @@ ServerLookup = Callable[[str], "MCPServer | None"]
 StoreBuilder = Callable[[ServerLookup], tuple[InvalidatableOAuthTokenStore, bool]]
 
 
-async def _read_credential(user_id: str, server_id: str) -> dict[str, object] | None:
+async def _read_credential(user_id: str, server_id: str) -> Mapping[str, object] | None:
     from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
         get_user_oauth_credential,
     )

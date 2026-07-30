@@ -1,5 +1,5 @@
 import { renderWithProviders } from "../../../tests/test-utils";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "./key_info_view";
@@ -236,5 +236,90 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     await waitFor(() => {
       expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
     });
+  });
+});
+
+describe("KeyInfoView budget reset visibility", () => {
+  beforeEach(() => {
+    vi.mocked(useTeams).mockReturnValue({ teams: [], setTeams: vi.fn() });
+    vi.mocked(useAuthorized).mockReturnValue(baseAuthorized);
+  });
+
+  const KEY_WITH_RESET = {
+    ...MOCK_KEY_DATA,
+    max_budget: 0.1,
+    budget_duration: "1d",
+    budget_reset_at: "2026-07-22T12:00:00+00:00",
+  } as unknown as KeyResponse;
+
+  it("shows the next budget reset in the overview Spend card when budget_reset_at is set", async () => {
+    renderWithProviders(
+      <KeyInfoView
+        keyData={KEY_WITH_RESET}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/^Resets Jul 22, 2026/)).toBeInTheDocument();
+    });
+  });
+
+  it("omits the reset line from the overview Spend card when budget_reset_at is null", async () => {
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, max_budget: 0.1 } as unknown as KeyResponse}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/of \$0\.10/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/^Resets /)).not.toBeInTheDocument();
+  });
+
+  it("shows the duration and next reset in the Settings tab", async () => {
+    renderWithProviders(
+      <KeyInfoView
+        keyData={KEY_WITH_RESET}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Settings" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    await waitFor(() => {
+      expect(screen.getByText("Budget Reset")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Every 1d, next Jul 22, 2026/)).toBeInTheDocument();
+  });
+
+  it("shows 'Never' in the Settings tab when no reset is scheduled", async () => {
+    renderWithProviders(
+      <KeyInfoView
+        keyData={MOCK_KEY_DATA}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Settings" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    await waitFor(() => {
+      expect(screen.getByText("Budget Reset")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Budget Reset").parentElement).toHaveTextContent("Never");
   });
 });

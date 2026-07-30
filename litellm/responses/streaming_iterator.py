@@ -17,6 +17,7 @@ from litellm.constants import (
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
     STREAM_SSE_DONE_STRING,
 )
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -26,7 +27,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
@@ -45,6 +46,44 @@ def _log_background_task_failure(task: "asyncio.Task[Any]", *, task_name: str) -
     exception = task.exception()
     if exception is not None:
         verbose_logger.error("%s failed: %s", task_name, exception)
+
+
+_CLIENT_ERROR_CODES: frozenset[str] = frozenset(
+    (
+        "invalid_request_error",
+        "context_length_exceeded",
+        "content_policy_violation",
+        "model_not_found",
+    )
+)
+
+
+def _error_event_fields(error_obj: object) -> tuple[str, Optional[str], Optional[str]]:
+    if isinstance(error_obj, dict):
+        raw_message = error_obj.get("message")
+        raw_type = error_obj.get("type")
+        raw_code = error_obj.get("code")
+    elif error_obj is not None:
+        raw_message = getattr(error_obj, "message", None)
+        raw_type = getattr(error_obj, "type", None)
+        raw_code = getattr(error_obj, "code", None)
+    else:
+        raw_message = None
+        raw_type = None
+        raw_code = None
+    message = str(raw_message) if raw_message is not None else "Response API in-stream error"
+    error_type = raw_type if isinstance(raw_type, str) else None
+    code = raw_code if isinstance(raw_code, str) else None
+    return message, error_type, code
+
+
+def _status_code_for_error_fields(error_type: Optional[str], error_code: Optional[str]) -> int:
+    fields = tuple(field for field in (error_type, error_code) if field is not None)
+    if any(field.startswith("rate_limit") or field == "insufficient_quota" for field in fields):
+        return 429
+    if any(field in _CLIENT_ERROR_CODES for field in fields):
+        return 400
+    return 500
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -73,6 +112,8 @@ class BaseResponsesAPIStreamingIterator:
         self.completed_response: Optional[Any] = None
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
+        self._yielded_first_chunk = False
+        self._generated_content = ""
         self._completed_response_cached = False
         self._completed_response_logged = False
         self._completed_response_cache_hit: Optional[bool] = None
@@ -160,6 +201,10 @@ class BaseResponsesAPIStreamingIterator:
 
                 # Encode container_id on streaming events so proxy/UI follow-ups route correctly
                 _event_type = getattr(openai_responses_api_chunk, "type", None)
+                if _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA:
+                    _delta = getattr(openai_responses_api_chunk, "delta", None)
+                    if isinstance(_delta, str):
+                        self._generated_content += _delta
                 _stream_model_id = (
                     self.litellm_metadata.get("model_info", {}).get("id") if self.litellm_metadata else None
                 )
@@ -327,16 +372,65 @@ class BaseResponsesAPIStreamingIterator:
         """
         response_obj = getattr(self.completed_response, "response", None) if self.completed_response else None
         error_info = getattr(response_obj, "error", None) if response_obj else None
-        error_message = "Response failed"
-        if isinstance(error_info, dict):
-            error_message = error_info.get("message", str(error_info))
+        error_message, error_type, error_code = _error_event_fields(error_info)
+        self._record_failed_response_usage(response_obj)
         exception = litellm.APIError(
-            status_code=500,
+            status_code=_status_code_for_error_fields(error_type, error_code),
             message=error_message,
             llm_provider=self.custom_llm_provider or "",
             model=self.model or "",
         )
         self._handle_failure(exception)
+
+    def _record_failed_response_usage(self, response_obj: Optional[Any]) -> None:
+        if response_obj is None or self.logging_obj is None:
+            return
+        usage_obj = getattr(response_obj, "usage", None)
+        if usage_obj is None:
+            return
+        try:
+            self.logging_obj.model_call_details["combined_usage_object"] = (
+                ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage_obj)
+            )
+        except (TypeError, ValueError) as usage_error:
+            verbose_logger.debug(
+                "could not record usage for failed responses stream: %s",
+                usage_error,
+            )
+            return
+        self.logging_obj.model_call_details["response_cost"] = (
+            self.logging_obj._response_cost_calculator(result=response_obj) or 0.0
+        )
+
+    def _maybe_raise_for_error_event(self, result: object) -> None:
+        chunk_type = getattr(result, "type", None)
+        if chunk_type not in ("error", "response.failed"):
+            return
+
+        error_obj: object = (
+            getattr(getattr(result, "response", None), "error", None)
+            if chunk_type == "response.failed"
+            else getattr(result, "error", None)
+        )
+
+        error_message, error_type, error_code = _error_event_fields(error_obj)
+        status_code = _status_code_for_error_fields(error_type, error_code)
+        mapped_exception = litellm.APIError(
+            status_code=status_code,
+            message=error_message,
+            llm_provider=self.custom_llm_provider or "",
+            model=self.model or "",
+        )
+        if 400 <= status_code < 500 and status_code != 429:
+            raise mapped_exception
+        raise MidStreamFallbackError(
+            message=str(mapped_exception),
+            model=self.model or "",
+            llm_provider=self.custom_llm_provider or "",
+            original_exception=mapped_exception,
+            generated_content=self._generated_content,
+            is_pre_first_chunk=not self._yielded_first_chunk,
+        )
 
     def _get_completed_response_object(self) -> Optional[Any]:
         openai_types = _get_openai_response_types()
@@ -611,17 +705,25 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 if self.finished:
                     raise StopAsyncIteration
                 elif result is not None:
+                    self._maybe_raise_for_error_event(result)
                     # Await hook directly instead of run_async_function
                     # (which spawns a thread + event loop per call)
                     result = await self._call_post_streaming_deployment_hook(
                         chunk=result,
                     )
+                    self._yielded_first_chunk = True
                     return result
                 # If result is None, continue the loop to get the next chunk
 
         except StopAsyncIteration:
             # Normal end of stream - don't log as failure
             raise
+        except (httpx.ReadError, httpx.RemoteProtocolError) as e:
+            self.finished = True
+            if self.completed_response is None:
+                self._handle_failure(e)
+                raise
+            raise StopAsyncIteration from e
         except httpx.HTTPError as e:
             # Handle HTTP errors
             self.finished = True
@@ -685,17 +787,25 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 if self.finished:
                     raise StopIteration
                 elif result is not None:
+                    self._maybe_raise_for_error_event(result)
                     # Sync path: use run_async_function for the hook
                     result = run_async_function(
                         async_function=self._call_post_streaming_deployment_hook,
                         chunk=result,
                     )
+                    self._yielded_first_chunk = True
                     return result
                 # If result is None, continue the loop to get the next chunk
 
         except StopIteration:
             # Normal end of stream - don't log as failure
             raise
+        except (httpx.ReadError, httpx.RemoteProtocolError) as e:
+            self.finished = True
+            if self.completed_response is None:
+                self._handle_failure(e)
+                raise
+            raise StopIteration from e
         except httpx.HTTPError as e:
             # Handle HTTP errors
             self.finished = True

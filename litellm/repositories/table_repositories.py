@@ -77,6 +77,10 @@ class MCPUserCredentialsRepository(PrismaTableRepository):
     table_name = "litellm_mcpusercredentials"
 
 
+class MCPServerOAuthClientRepository(PrismaTableRepository):
+    table_name = "litellm_mcpserveroauthclient"
+
+
 class PromptRepository(PrismaTableRepository):
     table_name = "litellm_prompttable"
 
@@ -175,6 +179,10 @@ class DailyTagSpendRepository(PrismaTableRepository):
 
 class SpendLogToolIndexRepository(PrismaTableRepository):
     table_name = "litellm_spendlogtoolindex"
+
+
+class DailyToolSpendRepository(PrismaTableRepository):
+    table_name = "litellm_dailytoolspend"
 
 
 class SpendLogGuardrailIndexRepository(PrismaTableRepository):

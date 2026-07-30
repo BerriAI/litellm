@@ -428,6 +428,7 @@ def test_set_latency_metrics(prometheus_logger):
         model="gpt-5-mini",
         model_id="model-123",
         api_provider="openai",
+        service_tier=None,
     )
     prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels().observe.assert_called_once_with(
         0.5
@@ -447,6 +448,7 @@ def test_set_latency_metrics(prometheus_logger):
         model="gpt-5-mini",
         model_id="model-123",
         api_provider="openai",
+        service_tier=None,
     )
     prometheus_logger.litellm_llm_api_latency_metric.labels().observe.assert_called_once_with(
         1.5
@@ -466,6 +468,7 @@ def test_set_latency_metrics(prometheus_logger):
         model="gpt-5-mini",
         model_id="model-123",
         api_provider="openai",
+        service_tier=None,
     )
     prometheus_logger.litellm_request_total_latency_metric.labels().observe.assert_called_once_with(
         2.0
@@ -634,6 +637,7 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         client_ip=None,
         user_agent=None,
         requested_model=None,
+        service_tier=None,
     )
     prometheus_logger.litellm_spend_metric.labels().inc.assert_called_once_with(0.1)
 
