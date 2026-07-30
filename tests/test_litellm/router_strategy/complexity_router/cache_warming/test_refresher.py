@@ -381,3 +381,18 @@ async def test_a_replay_never_falls_back_to_a_group_warming_did_not_validate():
     await tick(llm_router)
     assert llm_router.completion_calls, "expected a replay"
     assert all(call["disable_fallbacks"] is True for call in llm_router.completion_calls)
+
+
+def test_scim_deactivation_is_one_predicate_shared_with_the_auth_paths():
+    """The gate sat inline at five call sites and warming became the sixth caller without it, so it lives
+    beside get_user_object now and every path calls the same predicate."""
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.auth.auth_checks import user_is_scim_deactivated
+
+    def user(metadata):
+        return LiteLLM_UserTable(user_id="u1", max_budget=None, spend=0.0, metadata=metadata)
+
+    assert user_is_scim_deactivated(user({"scim_active": False})) is True
+    assert user_is_scim_deactivated(user({"scim_active": True})) is False
+    assert user_is_scim_deactivated(user({})) is False
+    assert user_is_scim_deactivated(None) is False

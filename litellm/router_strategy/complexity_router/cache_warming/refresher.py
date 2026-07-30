@@ -733,11 +733,13 @@ class CacheWarmingRefresher:
         those gates unenforced while the cost callback still charged the same scopes. These stay cache-first, so
         they carry the same in-memory staleness a real request on another pod carries; only the key, which is
         the credential warming spends against, is read past the local tier."""
+        from litellm.proxy._types import ProxyErrorTypes, ProxyException
         from litellm.proxy.auth.auth_checks import (
             get_end_user_object,
             get_project_object,
             get_team_object,
             get_user_object,
+            user_is_scim_deactivated,
         )
         from litellm.proxy.auth.user_api_key_auth import (
             _reserve_budget_after_common_checks,  # pyright: ignore[reportPrivateUsage]  # the flow owner; reserve_budget_for_request alone drops the operator settings
@@ -758,6 +760,13 @@ class CacheWarmingRefresher:
             if principal.user_id is not None
             else None
         )
+        if user_is_scim_deactivated(user):
+            raise ProxyException(
+                message=f"User={principal.user_id} has been deactivated via SCIM. Keys owned by this user cannot be used.",
+                type=ProxyErrorTypes.auth_error,
+                param="user_id",
+                code=401,
+            )
         end_user = (
             await get_end_user_object(
                 end_user_id=principal.end_user_id, prisma_client=prisma_client, user_api_key_cache=cache

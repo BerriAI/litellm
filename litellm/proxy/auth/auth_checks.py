@@ -1614,6 +1614,22 @@ async def _get_fuzzy_user_object(
     return response
 
 
+def user_is_scim_deactivated(user_object: Optional[LiteLLM_UserTable]) -> bool:
+    """Whether a user has been explicitly deactivated via SCIM, so keys they own must not be usable.
+
+    Lives beside get_user_object because the resolver returns a live-looking row for a deactivated user and
+    every caller owes this check afterwards; it was previously spelled out inline at five call sites, which is
+    how a sixth caller (background cache warming) ended up without it. Returns a value rather than raising so
+    each caller keeps its own reaction: the primary auth path raises, the MCP paths return 401, the bridge
+    returns a status. Only an explicit False deactivates -- a missing user or absent metadata is not a
+    deactivation, so a lookup failure cannot revoke a live key."""
+    return (
+        user_object is not None
+        and isinstance(user_object.metadata, dict)
+        and user_object.metadata.get("scim_active") is False
+    )
+
+
 @log_db_metrics
 async def get_user_object(
     user_id: Optional[str],

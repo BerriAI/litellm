@@ -54,6 +54,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     is_valid_fallback_model,
     resolve_and_validate_end_user_id,
+    user_is_scim_deactivated,
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_utils import (
@@ -1745,11 +1746,7 @@ async def _user_api_key_auth_builder(
                     )
                     user_obj = None
 
-                if (
-                    user_obj is not None
-                    and isinstance(user_obj.metadata, dict)
-                    and user_obj.metadata.get("scim_active") is False
-                ):
+                if user_is_scim_deactivated(user_obj):
                     raise Exception(
                         f"User={valid_token.user_id} has been deactivated via SCIM. Keys owned by this user cannot be used."
                     )

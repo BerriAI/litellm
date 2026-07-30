@@ -197,6 +197,7 @@ async def _reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | No
     )
     from litellm.proxy.auth.auth_checks import (  # noqa: PLC0415  # inline import avoids a module-load circular import
         get_user_object,
+        user_is_scim_deactivated,
     )
     from litellm.proxy.db.exception_handler import (  # noqa: PLC0415  # inline import avoids a module-load circular import
         PrismaDBExceptionHandler,
@@ -224,7 +225,7 @@ async def _reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | No
         return "no_active_key"
     if user_object is None:
         return "no_active_key"
-    if isinstance(user_object.metadata, dict) and user_object.metadata.get("scim_active") is False:
+    if user_is_scim_deactivated(user_object):
         return "no_active_key"
     return None
 
@@ -239,6 +240,7 @@ async def _key_owner_scim_deactivated(key: "UserAPIKeyAuth") -> bool:
         return False
     from litellm.proxy.auth.auth_checks import (  # noqa: PLC0415  # inline import avoids a module-load circular import
         get_user_object,
+        user_is_scim_deactivated,
     )
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # inline import avoids a module-load circular import
         prisma_client,
@@ -257,7 +259,7 @@ async def _key_owner_scim_deactivated(key: "UserAPIKeyAuth") -> bool:
     except Exception as exc:  # noqa: BLE001  # fail open: a missing owner (get_user_object's wrapped ValueError) or a DB blip must not revoke a live key
         verbose_logger.debug("refresh: key-owner SCIM lookup failed, not revoking (%s)", type(exc).__name__)
         return False
-    return owner is not None and isinstance(owner.metadata, dict) and owner.metadata.get("scim_active") is False
+    return user_is_scim_deactivated(owner)
 
 
 async def _revalidate_active_subject(identity: "EnvelopeIdentity") -> "_KeyResolutionFailure | None":

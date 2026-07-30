@@ -834,7 +834,11 @@ class MCPRequestHandler:
         missing user and a real outage look identical (the cause survives only as ``__context__``).
         ``_raise_503_if_db_unavailable`` walks the cause chain so an outage stays a retryable 503 while any
         other failure fails closed as 401, not an opaque 500; the object-permission load shares that boundary."""
-        from litellm.proxy.auth.auth_checks import get_object_permission, get_user_object
+        from litellm.proxy.auth.auth_checks import (
+            get_object_permission,
+            get_user_object,
+            user_is_scim_deactivated,
+        )
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         if prisma_client is None:
@@ -863,7 +867,7 @@ class MCPRequestHandler:
             raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
         if user_object is None:
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
-        if isinstance(user_object.metadata, dict) and user_object.metadata.get("scim_active") is False:
+        if user_is_scim_deactivated(user_object):
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
         admitted = UserAPIKeyAuth(
             user_id=user_object.user_id,
@@ -1004,7 +1008,7 @@ class MCPRequestHandler:
         keeping parity with how the standard pipeline treats the same lookup failure."""
         if key_object.user_id is None:
             return
-        from litellm.proxy.auth.auth_checks import get_user_object
+        from litellm.proxy.auth.auth_checks import get_user_object, user_is_scim_deactivated
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         try:
@@ -1017,9 +1021,7 @@ class MCPRequestHandler:
         except Exception as e:  # noqa: BLE001  # mirror the builder's fail-open user lookup; DB errors are of any type
             verbose_logger.debug(f"bridge admission: user lookup failed, skipping SCIM gate: {e}")
             user_object = None
-        if user_object is None or not isinstance(user_object.metadata, dict):
-            return
-        if user_object.metadata.get("scim_active") is False:
+        if user_is_scim_deactivated(user_object):
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
 
     @staticmethod
