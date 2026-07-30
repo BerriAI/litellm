@@ -662,6 +662,54 @@ def test_generic_cost_per_token_gpt56(
 
 
 @pytest.mark.parametrize(
+    "model,flex_long_input_cost,flex_long_output_cost",
+    [
+        ("gpt-5.6", 5e-6, 2.25e-5),
+        ("gpt-5.6-sol", 5e-6, 2.25e-5),
+        ("gpt-5.6-terra", 2e-6, 9e-6),
+        ("gpt-5.6-luna", 2e-7, 9e-7),
+    ],
+)
+def test_generic_cost_per_token_gpt56_flex_above_272k(
+    model, flex_long_input_cost, flex_long_output_cost
+):
+    """A >272K flex request bills the flex long-context rate, not the standard one.
+
+    Flex long-context is half the standard long-context rate. Without the
+    ``*_above_272k_tokens_flex`` keys these requests silently fell back to the
+    standard long-context price, billing 2x what OpenAI charges.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    prompt_tokens = 300000
+    completion_tokens = 1000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="flex",
+    )
+
+    assert prompt_cost == pytest.approx(flex_long_input_cost * prompt_tokens)
+    assert completion_cost == pytest.approx(flex_long_output_cost * completion_tokens)
+
+    standard_long_prompt_cost, standard_long_completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier=None,
+    )
+    assert prompt_cost == pytest.approx(standard_long_prompt_cost / 2)
+    assert completion_cost == pytest.approx(standard_long_completion_cost / 2)
+
+
+@pytest.mark.parametrize(
     "model,input_cost,output_cost,cache_read_cost",
     [
         ("azure/gpt-5.6", 5e-6, 3e-5, 5e-7),
