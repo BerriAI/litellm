@@ -176,7 +176,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
     def _transform_response(self, response: dict) -> RerankResponse:
         # Extract usage information
         usage_data = response.get("usage", {})
-        _billed_units = RerankBilledUnits(total_tokens=usage_data.get("total_tokens", 0))
+        _billed_units = RerankBilledUnits(search_units=1, total_tokens=usage_data.get("total_tokens", 0))
         _tokens = RerankTokens(input_tokens=usage_data.get("total_tokens", 0))
         rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
