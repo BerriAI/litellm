@@ -2324,30 +2324,36 @@ async def _validate_update_key_data(
         and data.key_type == LiteLLMKeyType.DEFAULT
         and "allowed_routes" not in data.model_fields_set
     )
-    effective_allowed_routes = [] if default_key_type_clears_routes else data.allowed_routes
+    derived_allowed_routes = handle_key_type(data, {}).get("allowed_routes")
+    target_allowed_routes = (
+        data.allowed_routes
+        if "allowed_routes" in data.model_fields_set
+        else ([] if default_key_type_clears_routes else derived_allowed_routes)
+    )
     safe_key_type_transition = (
-        effective_allowed_routes == []
+        target_allowed_routes
+        in (
+            [],
+            ["llm_api_routes"],
+            ["info_routes"],
+        )
         and "key_type" in data.model_fields_set
-        and (
-            data.key_type
-            in {
-                LiteLLMKeyType.LLM_API,
-                LiteLLMKeyType.READ_ONLY,
-            }
-            or (
-                data.key_type == LiteLLMKeyType.DEFAULT
-                and existing_allowed_routes
-                in (
-                    [],
-                    ["llm_api_routes"],
-                    ["info_routes"],
-                )
-            )
+        and data.key_type
+        in {
+            LiteLLMKeyType.DEFAULT,
+            LiteLLMKeyType.LLM_API,
+            LiteLLMKeyType.READ_ONLY,
+        }
+        and existing_allowed_routes
+        in (
+            [],
+            ["llm_api_routes"],
+            ["info_routes"],
         )
     )
 
     _check_allowed_routes_caller_permission(
-        allowed_routes=effective_allowed_routes,
+        allowed_routes=data.allowed_routes,
         user_api_key_dict=user_api_key_dict,
         allowed_routes_was_provided=(
             ("allowed_routes" in data.model_fields_set or default_key_type_clears_routes)
@@ -2355,9 +2361,9 @@ async def _validate_update_key_data(
         ),
     )
     _check_allowed_routes_caller_permission(
-        allowed_routes=handle_key_type(data, {}).get("allowed_routes"),
+        allowed_routes=derived_allowed_routes,
         user_api_key_dict=user_api_key_dict,
-        allow_safe_presets=True,
+        allow_safe_presets=safe_key_type_transition,
     )
     _check_passthrough_routes_caller_permission(
         data=data,
