@@ -344,3 +344,48 @@ async def test_realtime_health_check_uses_model_level_vertex_params():
         "Authorization": "Bearer model-level-token",
         "x-goog-user-project": "model-level-project",
     }
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_chatgpt_provider_defaults_to_responses_mode():
+    """chatgpt provider models not in model_cost should use 'responses' mode, not 'chat'.
+
+    Regression: chatgpt/gpt-5.6-sol triggered BadRequestError from the ChatGPT backend
+    ('Input must be a list') because the health check fell back to 'chat' mode and sent
+    a Chat Completions payload instead of the Responses API payload the backend requires.
+    """
+    import litellm
+
+    responses_handler_called = False
+
+    async def fake_responses_handler():
+        nonlocal responses_handler_called
+        responses_handler_called = True
+        mock_resp = MagicMock()
+        mock_resp._hidden_params = {"headers": {}}
+        return mock_resp
+
+    fake_handlers = {"responses": fake_responses_handler}
+    mock_get_mode_handlers = MagicMock(return_value=fake_handlers)
+
+    with (
+        patch(
+            "litellm.main.HealthCheckHelpers.get_mode_handlers",
+            mock_get_mode_handlers,
+        ),
+        patch(
+            "litellm.main.HealthCheckHelpers._update_model_params_with_health_check_tracking_information",
+            staticmethod(lambda model_params: model_params),
+        ),
+    ):
+        await litellm.ahealth_check(
+            model_params={
+                "model": "chatgpt/gpt-5.6-sol",
+                "api_key": "test-key",
+            },
+            mode=None,
+        )
+
+    assert responses_handler_called, (
+        "chatgpt provider should default to 'responses' mode when not in model_cost"
+    )
