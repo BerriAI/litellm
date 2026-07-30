@@ -207,7 +207,7 @@ class ResponsesAPIRequestUtils:
         if ResponsesAPIRequestUtils._is_litellm_encoded_response_id(response_id):
             return responses_api_response
 
-        updated_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        updated_id = ResponsesAPIRequestUtils.build_responses_api_response_id(
             model_id=model_id,
             custom_llm_provider=custom_llm_provider,
             response_id=response_id,
@@ -408,7 +408,7 @@ class ResponsesAPIRequestUtils:
         return request_input
 
     @staticmethod
-    def _build_responses_api_response_id(
+    def build_responses_api_response_id(
         custom_llm_provider: Optional[str],
         model_id: Optional[str],
         response_id: str,

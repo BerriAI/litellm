@@ -102,7 +102,7 @@ class TestResponsesAPIRequestUtils:
         original_response_id = "resp_abc123"
 
         # Use the helper method to build an encoded response ID
-        encoded_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        encoded_id = ResponsesAPIRequestUtils.build_responses_api_response_id(
             custom_llm_provider=test_provider,
             model_id=test_model_id,
             response_id=original_response_id,

@@ -310,10 +310,22 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             )
             self._pending_tool_events.append(item_done_event)
 
+    def _build_encoded_response_id(self) -> str:
+        """Build the provider/deployment-encoded id shared by every event of this stream."""
+        metadata: dict[str, object] = cast(dict[str, object], self.litellm_metadata or {})
+        model_info = metadata.get("model_info")
+        raw_model_id = cast(dict[str, object], model_info).get("id") if isinstance(model_info, dict) else None
+        model_id = raw_model_id if isinstance(raw_model_id, str) else None
+        return ResponsesAPIRequestUtils.build_responses_api_response_id(
+            custom_llm_provider=self.custom_llm_provider,
+            model_id=model_id,
+            response_id=f"resp_{uuid.uuid4()}",
+        )
+
     def _default_response_created_event_data(self) -> dict:
         # Use cached response ID if available, otherwise generate a new one
         if self._cached_response_id is None:
-            self._cached_response_id = f"resp_{str(uuid.uuid4())}"
+            self._cached_response_id = self._build_encoded_response_id()
 
         response_created_event_data = {
             "id": self._cached_response_id,
