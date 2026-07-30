@@ -327,7 +327,6 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
 from litellm.proxy.common_utils.periodic_reload_schedule import (
-    ANTHROPIC_BETA_HEADERS_RELOAD_PARAM_NAME,
     MODEL_COST_MAP_RELOAD_PARAM_NAME,
     pod_reload_is_due,
     read_reload_schedule,
@@ -2066,6 +2065,9 @@ celery_app_conn = None
 celery_fn = None  # Redis Queue for handling requests
 
 scheduler = None
+
+# Global variable for anthropic beta headers reload scheduling
+last_anthropic_beta_headers_reload = None
 
 
 ### DB WRITER ###
@@ -3856,8 +3858,11 @@ class ProxyConfig:
         self._last_semantic_filter_config: Optional[Dict[str, Any]] = None
         self._last_hashicorp_vault_config: Optional[Dict[str, Any]] = None
         self.worker_registry: List["WorkerRegistryEntry"] = []
-        self.model_cost_map_loaded_at: datetime = utc_now()
-        self.anthropic_beta_headers_loaded_at: datetime = utc_now()
+        from litellm.litellm_core_utils.get_model_cost_map import (
+            get_model_cost_map_loaded_at,
+        )
+
+        self.model_cost_map_loaded_at: datetime = get_model_cost_map_loaded_at() or utc_now()
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -6197,6 +6202,7 @@ class ProxyConfig:
                     "router_settings",
                     "litellm_settings",
                     "environment_variables",
+                    "anthropic_beta_headers_reload_config",
                 ],
             )
 
@@ -6258,6 +6264,9 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="tools"):
             await self._init_tool_policy_in_db(prisma_client=prisma_client)
+
+        if self._should_load_db_object(object_type="anthropic_beta_headers"):
+            await self._check_and_reload_anthropic_beta_headers(prisma_client=prisma_client)
 
         if self._should_load_db_object(object_type="sso_settings"):
             await self._init_sso_settings_in_db(prisma_client=prisma_client)
@@ -6419,16 +6428,13 @@ class ProxyConfig:
 
     async def check_periodic_reloads(self, prisma_client: PrismaClient):
         """
-        Run the admin-configured periodic reloads (model cost map, Anthropic beta headers).
+        Run the admin-configured periodic model cost map reload.
 
-        Scheduled on its own job so schedules configured from the Admin UI fire whether
+        Scheduled on its own job so a schedule configured from the Admin UI fires whether
         or not `store_model_in_db` is enabled.
         """
         if self._should_load_db_object(object_type="model_cost_map"):
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
-
-        if self._should_load_db_object(object_type="anthropic_beta_headers"):
-            await self._check_and_reload_anthropic_beta_headers(prisma_client=prisma_client)
 
     async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
         """
@@ -6462,35 +6468,96 @@ class ProxyConfig:
     async def _check_and_reload_anthropic_beta_headers(self, prisma_client: PrismaClient):
         """
         Check if anthropic beta headers config needs to be reloaded based on database configuration.
-        Runs on the periodic reload job, independently of `store_model_in_db`.
+        This function runs every 10 seconds as part of _init_non_llm_objects_in_db.
         """
         try:
-            schedule = await read_reload_schedule(prisma_client, ANTHROPIC_BETA_HEADERS_RELOAD_PARAM_NAME)
-            if schedule is None:
-                return
+            # Get anthropic beta headers reload configuration from database
+            config_record = await get_config_param(prisma_client, "anthropic_beta_headers_reload_config")
 
-            current_time = utc_now()
-            if not pod_reload_is_due(
-                schedule=schedule,
-                pod_data_loaded_at=self.anthropic_beta_headers_loaded_at,
-                current_time=current_time,
-                description="Anthropic beta headers",
-            ):
-                return
+            if config_record is None or config_record.param_value is None:
+                return  # No configuration found, skip reload
 
-            from litellm.anthropic_beta_headers_manager import (
-                reload_beta_headers_config,
-            )
+            config = config_record.param_value
+            interval_hours = config.get("interval_hours")
+            force_reload = config.get("force_reload", False)
 
-            new_config = await asyncio.to_thread(reload_beta_headers_config)
+            if interval_hours is None and force_reload is False:
+                return  # No interval configured, skip reload
 
-            self.anthropic_beta_headers_loaded_at = current_time
-            await record_reload_run(prisma_client, ANTHROPIC_BETA_HEADERS_RELOAD_PARAM_NAME, current_time)
+            current_time = datetime.utcnow()
 
-            provider_count = sum(1 for k in new_config.keys() if k != "provider_aliases" and k != "description")
-            verbose_proxy_logger.info(
-                f"Anthropic beta headers config reloaded successfully. Providers: {provider_count}"
-            )
+            # Check if we need to reload based on interval or force reload
+            should_reload = False
+
+            if force_reload:
+                should_reload = True
+                verbose_proxy_logger.info("Anthropic beta headers reload triggered by force reload flag")
+            elif interval_hours is not None:
+                # Use pod's in-memory last reload time
+                global last_anthropic_beta_headers_reload
+                if last_anthropic_beta_headers_reload is not None:
+                    try:
+                        last_reload_time = datetime.fromisoformat(last_anthropic_beta_headers_reload)
+                        time_since_last_reload = current_time - last_reload_time
+                        hours_since_last_reload = time_since_last_reload.total_seconds() / 3600
+
+                        if hours_since_last_reload >= interval_hours:
+                            should_reload = True
+                            verbose_proxy_logger.info(
+                                f"Anthropic beta headers reload triggered by interval. Hours since last reload: {hours_since_last_reload:.2f}, Interval: {interval_hours}"
+                            )
+                    except Exception as e:
+                        verbose_proxy_logger.warning(f"Error parsing last reload time: {e}")
+                        # If we can't parse the last reload time, reload anyway
+                        should_reload = True
+                else:
+                    # No last reload time recorded, reload now
+                    should_reload = True
+                    verbose_proxy_logger.info(
+                        "Anthropic beta headers reload triggered - no previous reload time recorded"
+                    )
+
+            if should_reload:
+                # Perform the reload
+                from litellm.anthropic_beta_headers_manager import (
+                    reload_beta_headers_config,
+                )
+
+                new_config = reload_beta_headers_config()
+
+                # Update pod's in-memory last reload time
+                last_anthropic_beta_headers_reload = current_time.isoformat()
+
+                # Clear force reload flag in database
+                await ConfigRepository(prisma_client).table.upsert(
+                    where={"param_name": "anthropic_beta_headers_reload_config"},
+                    data={
+                        "create": {
+                            "param_name": "anthropic_beta_headers_reload_config",
+                            "param_value": safe_dumps(
+                                {
+                                    "interval_hours": interval_hours,
+                                    "force_reload": False,
+                                }
+                            ),
+                        },
+                        "update": {
+                            "param_value": safe_dumps(
+                                {
+                                    "interval_hours": interval_hours,
+                                    "force_reload": False,
+                                }
+                            )
+                        },
+                    },
+                )
+                await invalidate_config_param("anthropic_beta_headers_reload_config")
+
+                # Count providers in config
+                provider_count = sum(1 for k in new_config.keys() if k != "provider_aliases" and k != "description")
+                verbose_proxy_logger.info(
+                    f"Anthropic beta headers config reloaded successfully. Providers: {provider_count}"
+                )
 
         except Exception as e:
             verbose_proxy_logger.exception(f"Error in _check_and_reload_anthropic_beta_headers: {str(e)}")
@@ -15797,13 +15864,32 @@ async def reload_anthropic_beta_headers(
         # Immediately reload the beta headers config in the current pod
         from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
 
-        new_config = await asyncio.to_thread(reload_beta_headers_config)
+        new_config = reload_beta_headers_config()
 
-        current_time = utc_now()
-        proxy_config.anthropic_beta_headers_loaded_at = current_time
+        # Update pod's in-memory last reload time
+        global last_anthropic_beta_headers_reload
+        current_time = datetime.utcnow()
+        last_anthropic_beta_headers_reload = current_time.isoformat()
 
-        # Stamp the shared last run and the reload request so other pods reload too
-        await record_manual_reload(prisma_client, ANTHROPIC_BETA_HEADERS_RELOAD_PARAM_NAME, current_time)
+        # Set force reload flag in database for other pods, preserving existing interval_hours
+        existing_beta_config = await ConfigRepository(prisma_client).table.find_unique(
+            where={"param_name": "anthropic_beta_headers_reload_config"}
+        )
+        existing_beta_interval = None
+        if existing_beta_config and existing_beta_config.param_value:
+            existing_beta_interval = existing_beta_config.param_value.get("interval_hours")
+
+        await ConfigRepository(prisma_client).table.upsert(
+            where={"param_name": "anthropic_beta_headers_reload_config"},
+            data={
+                "create": {
+                    "param_name": "anthropic_beta_headers_reload_config",
+                    "param_value": safe_dumps({"interval_hours": None, "force_reload": True}),
+                },
+                "update": {"param_value": safe_dumps({"interval_hours": existing_beta_interval, "force_reload": True})},
+            },
+        )
+        await invalidate_config_param("anthropic_beta_headers_reload_config")
 
         provider_count = sum(1 for k in new_config.keys() if k not in ["provider_aliases", "description"])
         verbose_proxy_logger.info(
@@ -15852,7 +15938,18 @@ async def schedule_anthropic_beta_headers_reload(
         if prisma_client is None:
             raise HTTPException(status_code=500, detail="Database connection not available")
 
-        await write_reload_interval(prisma_client, ANTHROPIC_BETA_HEADERS_RELOAD_PARAM_NAME, hours)
+        # Update database with new reload configuration
+        await ConfigRepository(prisma_client).table.upsert(
+            where={"param_name": "anthropic_beta_headers_reload_config"},
+            data={
+                "create": {
+                    "param_name": "anthropic_beta_headers_reload_config",
+                    "param_value": safe_dumps({"interval_hours": hours, "force_reload": False}),
+                },
+                "update": {"param_value": safe_dumps({"interval_hours": hours, "force_reload": False})},
+            },
+        )
+        await invalidate_config_param("anthropic_beta_headers_reload_config")
 
         verbose_proxy_logger.info(f"Anthropic beta headers reload scheduled for every {hours} hours")
 
@@ -15860,7 +15957,7 @@ async def schedule_anthropic_beta_headers_reload(
             "message": f"Anthropic beta headers reload scheduled for every {hours} hours",
             "status": "success",
             "interval_hours": hours,
-            "timestamp": utc_now().isoformat(),
+            "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception as e:
         verbose_proxy_logger.exception(f"Failed to schedule anthropic beta headers reload: {str(e)}")
@@ -15897,17 +15994,15 @@ async def cancel_anthropic_beta_headers_reload(
             raise HTTPException(status_code=500, detail="Database connection not available")
 
         # Remove reload configuration from database
-        await ConfigRepository(prisma_client).table.delete(
-            where={"param_name": ANTHROPIC_BETA_HEADERS_RELOAD_PARAM_NAME}
-        )
-        await invalidate_config_param(ANTHROPIC_BETA_HEADERS_RELOAD_PARAM_NAME)
+        await ConfigRepository(prisma_client).table.delete(where={"param_name": "anthropic_beta_headers_reload_config"})
+        await invalidate_config_param("anthropic_beta_headers_reload_config")
 
         verbose_proxy_logger.info("Anthropic beta headers reload schedule cancelled")
 
         return {
             "message": "Anthropic beta headers reload schedule cancelled",
             "status": "success",
-            "timestamp": utc_now().isoformat(),
+            "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception as e:
         verbose_proxy_logger.exception(f"Failed to cancel anthropic beta headers reload: {str(e)}")
@@ -15939,15 +16034,68 @@ async def get_anthropic_beta_headers_reload_status(
         )
 
     try:
-        global prisma_client
+        global prisma_client, last_anthropic_beta_headers_reload
+
+        verbose_proxy_logger.info(
+            f"Checking anthropic beta headers reload status. Last reload: {last_anthropic_beta_headers_reload}"
+        )
 
         if prisma_client is None:
             verbose_proxy_logger.info("No database connection, returning not scheduled")
-            return reload_schedule_status(None)
+            return {
+                "scheduled": False,
+                "interval_hours": None,
+                "last_run": None,
+                "next_run": None,
+            }
 
-        return reload_schedule_status(
-            await read_reload_schedule(prisma_client, ANTHROPIC_BETA_HEADERS_RELOAD_PARAM_NAME)
+        # Get reload configuration from database
+        config_record = await ConfigRepository(prisma_client).table.find_unique(
+            where={"param_name": "anthropic_beta_headers_reload_config"}
         )
+
+        if config_record is None or config_record.param_value is None:
+            verbose_proxy_logger.info("No anthropic beta headers reload configuration found")
+            return {
+                "scheduled": False,
+                "interval_hours": None,
+                "last_run": None,
+                "next_run": None,
+            }
+
+        config = config_record.param_value
+        interval_hours = config.get("interval_hours")
+
+        if interval_hours is None:
+            verbose_proxy_logger.info("No interval configured, returning not scheduled")
+            return {
+                "scheduled": False,
+                "interval_hours": None,
+                "last_run": None,
+                "next_run": None,
+            }
+
+        current_time = datetime.utcnow()
+        next_run = None
+
+        # Use pod's in-memory last reload time
+        if last_anthropic_beta_headers_reload is not None:
+            try:
+                last_reload_time = datetime.fromisoformat(last_anthropic_beta_headers_reload)
+                time_since_last_reload = current_time - last_reload_time
+                hours_since_last_reload = time_since_last_reload.total_seconds() / 3600
+
+                if hours_since_last_reload < interval_hours:
+                    next_run = (last_reload_time + timedelta(hours=interval_hours)).isoformat()
+            except Exception as e:
+                verbose_proxy_logger.warning(f"Error parsing last reload time: {e}")
+
+        return {
+            "scheduled": True,
+            "interval_hours": interval_hours,
+            "last_run": last_anthropic_beta_headers_reload,
+            "next_run": next_run,
+        }
     except Exception as e:
         verbose_proxy_logger.exception(f"Failed to get anthropic beta headers reload status: {str(e)}")
         raise HTTPException(

@@ -9,9 +9,11 @@ Routes covered:
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 
 from .conftest import VOLATILE_KEYS, normalize
 
@@ -97,24 +99,22 @@ def test_reload_anthropic_beta_headers_admin_success(client, auth_as, monkeypatc
         "providers_count": 2,
         "timestamp": "<VOLATILE>",
     }
+    # And the upsert was actually invoked (force_reload write).
     prisma.db.litellm_config.upsert.assert_awaited_once()
 
 
 def test_reload_anthropic_beta_headers_preserves_existing_interval(
     client, auth_as, monkeypatch
 ):
-    """The manual-reload write only stamps the job-owned timestamp columns; param_value
-    (the admin-owned interval) is not in the payload, so it cannot be clobbered."""
-    from datetime import datetime
-
+    """When an existing reload config has an interval set, the force-reload
+    write must preserve that interval (the route reads it back then upserts
+    with the same number). This pins the read-then-write behaviour."""
     from litellm.proxy._types import LitellmUserRoles
 
     _stub_reload_beta_headers(monkeypatch)
     existing = SimpleNamespace(
         param_name="anthropic_beta_headers_reload_config",
-        param_value={"interval_hours": 12},
-        reload_requested_at=None,
-        last_run_at=None,
+        param_value={"interval_hours": 12, "force_reload": False},
     )
     prisma = _make_prisma_with_config(config_record=existing)
     _install_prisma(monkeypatch, prisma)
@@ -123,12 +123,17 @@ def test_reload_anthropic_beta_headers_preserves_existing_interval(
         response = client.post("/reload/anthropic_beta_headers")
 
     assert response.status_code == 200
+    # The update branch's interval_hours was sourced from the existing record.
     call_kwargs = prisma.db.litellm_config.upsert.await_args.kwargs
-    update_payload = call_kwargs["data"]["update"]
-    assert set(update_payload) == {"last_run_at", "reload_requested_at"}
-    assert isinstance(update_payload["last_run_at"], datetime)
-    assert update_payload["reload_requested_at"] == update_payload["last_run_at"]
-    assert "param_value" not in call_kwargs["data"]["create"]
+    data = call_kwargs["data"]
+    update_payload = data["update"]["param_value"]
+    parsed = (
+        json.loads(update_payload)
+        if isinstance(update_payload, str)
+        else update_payload
+    )
+    assert parsed["interval_hours"] == 12
+    assert parsed["force_reload"] is True
 
 
 def test_reload_anthropic_beta_headers_not_admin_forbidden(client, auth_as):
@@ -286,16 +291,17 @@ def test_get_anthropic_beta_headers_reload_status_scheduled(
 ):
     """When a config row with ``interval_hours`` is present, ``scheduled`` is True
     and ``interval_hours`` echoes the DB value. Pins the full response shape."""
+    from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
     record = SimpleNamespace(
         param_name="anthropic_beta_headers_reload_config",
-        param_value={"interval_hours": 6},
-        reload_requested_at=None,
-        last_run_at=None,
+        param_value={"interval_hours": 6, "force_reload": False},
     )
     prisma = _make_prisma_with_config(config_record=record)
     _install_prisma(monkeypatch, prisma)
+    # No prior reload — next_run stays None.
+    monkeypatch.setattr(ps, "last_anthropic_beta_headers_reload", None)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/schedule/anthropic_beta_headers_reload/status")
@@ -306,35 +312,6 @@ def test_get_anthropic_beta_headers_reload_status_scheduled(
         "interval_hours": 6,
         "last_run": None,
         "next_run": None,
-    }
-
-
-def test_get_anthropic_beta_headers_reload_status_reports_persisted_last_run(
-    client, auth_as, monkeypatch
-):
-    """last_run/next_run come from the DB row, so status survives pod restarts."""
-    from datetime import datetime, timezone
-
-    from litellm.proxy._types import LitellmUserRoles
-
-    record = SimpleNamespace(
-        param_name="anthropic_beta_headers_reload_config",
-        param_value={"interval_hours": 6},
-        reload_requested_at=None,
-        last_run_at=datetime(2024, 1, 1, 6, 0, 0, tzinfo=timezone.utc),
-    )
-    prisma = _make_prisma_with_config(config_record=record)
-    _install_prisma(monkeypatch, prisma)
-
-    with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.get("/schedule/anthropic_beta_headers_reload/status")
-
-    assert response.status_code == 200
-    assert normalize(response.json()) == {
-        "scheduled": True,
-        "interval_hours": 6,
-        "last_run": "2024-01-01T06:00:00+00:00",
-        "next_run": "2024-01-01T12:00:00+00:00",
     }
 
 
@@ -362,15 +339,11 @@ def test_get_anthropic_beta_headers_reload_status_no_interval_unscheduled(
     client, auth_as, monkeypatch
 ):
     """Config row present but ``interval_hours`` is None → unscheduled response."""
-    from datetime import datetime, timezone
-
     from litellm.proxy._types import LitellmUserRoles
 
     record = SimpleNamespace(
         param_name="anthropic_beta_headers_reload_config",
-        param_value={"interval_hours": None},
-        reload_requested_at=datetime(2024, 1, 1, 6, 0, 0, tzinfo=timezone.utc),
-        last_run_at=None,
+        param_value={"interval_hours": None, "force_reload": True},
     )
     prisma = _make_prisma_with_config(config_record=record)
     _install_prisma(monkeypatch, prisma)

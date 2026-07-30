@@ -1,6 +1,6 @@
 """
-Persistence for the admin-configured periodic reload schedules (model cost map,
-Anthropic beta headers) stored in ``LiteLLM_Config``.
+Persistence for the admin-configured periodic model cost map reload schedule stored in
+``LiteLLM_Config``.
 
 Field ownership is split by writer so concurrent writers never overwrite each other:
 the schedule endpoints own the ``param_value`` JSON (``interval_hours``), while the
@@ -34,7 +34,6 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_Config
 
 MODEL_COST_MAP_RELOAD_PARAM_NAME = "model_cost_map_reload_config"
-ANTHROPIC_BETA_HEADERS_RELOAD_PARAM_NAME = "anthropic_beta_headers_reload_config"
 
 
 class _ConfigRowWrite(TypedDict, total=False):
