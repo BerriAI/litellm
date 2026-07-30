@@ -457,9 +457,13 @@ def test_vector_store_management_is_not_labelled_as_chat(call_type, expected):
         assert dp.attributes[OPERATION_KEY] == expected
 
 
-def test_agent_message_is_not_labelled_as_chat():
-    """An A2A agent send records under gen_ai.operation.name=invoke_agent."""
-    metrics = _drive_success(InMemoryMetricReader(), call_type="asend_message")
+@pytest.mark.parametrize("call_type", ["asend_message", "asend_message_streaming"])
+def test_agent_message_is_not_labelled_as_chat(call_type):
+    """An A2A agent send records under gen_ai.operation.name=invoke_agent, streamed or
+    not. The streaming iterator dispatches the same success handlers under its own
+    ``asend_message_streaming`` call type, so an unmapped streaming spelling puts every
+    streamed agent turn's latency and cost back into the chat series."""
+    metrics = _drive_success(InMemoryMetricReader(), call_type=call_type)
 
     for name in (OPERATION_DURATION, TOKEN_COST):
         for dp in metrics[name]:

@@ -2,9 +2,12 @@
 and the typed StandardLoggingPayload adapter. These need no OTel SDK."""
 
 import logging
+import re
+from pathlib import Path
 
 import pytest
 
+import litellm
 from litellm.integrations.otel import (
     BAGGAGE_PROMOTED_KEYS,
     DB,
@@ -265,11 +268,37 @@ def test_vendor_operation_values_are_namespaced():
     assert all(op.value.startswith("litellm.") for op in vendor)
 
 
-@pytest.mark.parametrize("call_type", ["send_message", "asend_message"])
+@pytest.mark.parametrize("call_type", ["send_message", "asend_message", "asend_message_streaming"])
 def test_agent_message_is_an_invoke_agent_operation(call_type):
-    """An agent (A2A) message send is an agent invocation, not a chat completion."""
+    """An agent (A2A) message send is an agent invocation, not a chat completion.
+
+    The streaming spelling counts: ``_build_streaming_logging_obj`` in
+    ``litellm/a2a_protocol/main.py`` stamps ``asend_message_streaming`` on the
+    logging object the streaming iterator dispatches success handlers with, so a
+    missing entry sends every streamed agent turn into the chat series. There is
+    no sync spelling because A2A streaming is async-only.
+    """
     assert resolve_operation(call_type) is GenAIOperation.INVOKE_AGENT
     assert resolve_operation(call_type).value == "invoke_agent"
+
+
+def test_every_call_type_the_a2a_package_stamps_is_an_agent_operation():
+    """Pins the map to the call types the A2A code actually stamps on its logging
+    objects. A new spelling added there without a map entry fails here instead of
+    quietly landing in the chat series, which is how the streaming one was missed."""
+    a2a_package = Path(litellm.__file__).parent / "a2a_protocol"
+    stamped = {
+        call_type
+        for source in a2a_package.rglob("*.py")
+        for call_type in re.findall(r'call_type="([^"]+)"', source.read_text())
+    }
+    assert stamped, "no call_type literals found in litellm/a2a_protocol"
+    unmapped = {
+        call_type: resolve_operation(call_type).value
+        for call_type in stamped
+        if resolve_operation(call_type) is not GenAIOperation.INVOKE_AGENT
+    }
+    assert not unmapped, f"add these to _OPERATION_BY_CALL_TYPE: {unmapped}"
 
 
 def test_unmapped_call_type_falls_back_to_chat_loudly(caplog):

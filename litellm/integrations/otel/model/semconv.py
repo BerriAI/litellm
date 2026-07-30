@@ -341,6 +341,7 @@ _OPERATION_BY_CALL_TYPE: dict[str, GenAIOperation] = {
     "aquery": GenAIOperation.RETRIEVAL,
     "send_message": GenAIOperation.INVOKE_AGENT,
     "asend_message": GenAIOperation.INVOKE_AGENT,
+    "asend_message_streaming": GenAIOperation.INVOKE_AGENT,
     "vector_store_create": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
     "avector_store_create": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
     "vector_store_retrieve": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
