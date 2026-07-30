@@ -147,3 +147,40 @@ async def test_failure_hook_handles_exceptions_gracefully():
         # Should return None (original exception will be used)
         assert result is None
         assert logger.called is True
+
+
+@pytest.mark.asyncio
+async def test_route_surfaces_transformed_exception_to_client():
+    """
+    Test that a proxy route actually sends the transformed error to the client.
+
+    The hook contract is only useful end-to-end: `/chat/completions` honours it via
+    `_handle_llm_api_exception`, but several routes awaited the hook and dropped its
+    return value, so the callback's message never reached the caller.
+    """
+    from fastapi import Response
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+
+    transformer = ErrorTransformerLogger()
+
+    class FailingRequest:
+        """Blows up on the first thing the route does, landing us in `except`."""
+
+        headers: dict = {}
+
+        async def body(self):
+            raise RuntimeError("technical detail the user should never see")
+
+    with patch("litellm.callbacks", [transformer]):
+        with pytest.raises(ProxyException) as exc_info:
+            await proxy_server.moderations(
+                request=FailingRequest(),  # type: ignore[arg-type]
+                fastapi_response=Response(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            )
+
+    assert transformer.called is True
+    assert exc_info.value.message == "User-friendly error: Your request could not be processed."
+    assert exc_info.value.code == "400"
