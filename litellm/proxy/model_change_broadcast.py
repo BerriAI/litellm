@@ -25,7 +25,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     MODEL_CHANGE_PUBSUB_CHANNEL,
-    MODEL_CHANGE_PUBSUB_ENABLED,
     MODEL_CHANGE_PUBSUB_POLL_TIMEOUT_SECONDS,
     MODEL_CHANGE_PUBSUB_RECONNECT_SECONDS,
 )
@@ -84,9 +83,6 @@ async def broadcast_model_change(
     Tell sibling pods that the model table changed. Never raises: the write it
     follows has already succeeded, and the periodic reconcile still converges.
     """
-    if not MODEL_CHANGE_PUBSUB_ENABLED:
-        return
-
     backend = redis_cache if redis_cache is not None else _coordination_redis()
     if backend is None:
         return
@@ -210,7 +206,7 @@ class ModelChangeSubscriberHandle:
         redis_cache: RedisPubSubBackend | None,
         reconcile: Callable[[], Awaitable[None]],
     ) -> None:
-        if not MODEL_CHANGE_PUBSUB_ENABLED or redis_cache is None:
+        if redis_cache is None:
             return
         self.stop()
         subscriber = ModelChangeSubscriber(redis_cache=redis_cache, reconcile=reconcile)
