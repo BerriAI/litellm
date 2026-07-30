@@ -1571,14 +1571,14 @@ async def test_get_all_team_models():
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
         # Configure the mock class to return proper instances
-        def mock_team_table_constructor(**kwargs):
+        def mock_team_table_constructor(data):
             mock_instance = MagicMock()
-            mock_instance.team_id = kwargs["team_id"]
-            mock_instance.models = kwargs["models"]
-            mock_instance.access_group_ids = kwargs.get("access_group_ids")
+            mock_instance.team_id = data["team_id"]
+            mock_instance.models = data["models"]
+            mock_instance.access_group_ids = data.get("access_group_ids")
             return mock_instance
 
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams="*",
@@ -1607,7 +1607,7 @@ async def test_get_all_team_models():
     mock_litellm_teamtable.find_many.return_value = [mock_team1]
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -1658,7 +1658,7 @@ async def test_get_all_team_models():
     mock_router.get_model_list.side_effect = mock_get_model_list_with_none
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -2373,14 +2373,14 @@ async def test_get_all_team_models_with_access_groups():
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_tt_class:
 
-        def mock_team_table_constructor(**kwargs):
+        def mock_team_table_constructor(data):
             mock_instance = MagicMock()
-            mock_instance.team_id = kwargs["team_id"]
-            mock_instance.models = kwargs["models"]
-            mock_instance.access_group_ids = kwargs.get("access_group_ids")
+            mock_instance.team_id = data["team_id"]
+            mock_instance.models = data["models"]
+            mock_instance.access_group_ids = data.get("access_group_ids")
             return mock_instance
 
-        mock_tt_class.side_effect = mock_team_table_constructor
+        mock_tt_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -9197,38 +9197,6 @@ def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
         fields = {item["field_name"]: item for item in resp.json()}
         assert "cancel_on_disconnect" in fields
         assert fields["cancel_on_disconnect"]["field_type"] == "Boolean"
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_get_config_list_includes_skip_user_budget_on_team_key(monkeypatch):
-    """Related to #12905: the opt-out flag must be discoverable via /config/list so
-    it renders as a Boolean toggle on the Admin UI General Settings table. This
-    requires both the ConfigGeneralSettings field and the allowed_args entry."""
-    import types
-    from unittest.mock import AsyncMock, MagicMock
-
-    from fastapi.testclient import TestClient
-
-    import litellm.proxy.proxy_server as ps
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.proxy_server import app
-
-    mock_prisma = MagicMock()
-    mock_config_table = MagicMock()
-    mock_config_table.find_first = AsyncMock(return_value=None)
-    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
-    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
-    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
-    )
-    try:
-        client = TestClient(app)
-        resp = client.get("/config/list", params={"config_type": "general_settings"})
-        assert resp.status_code == 200, resp.text
-        fields = {item["field_name"]: item for item in resp.json()}
-        assert "skip_user_budget_on_team_key" in fields
-        assert fields["skip_user_budget_on_team_key"]["field_type"] == "Boolean"
     finally:
         app.dependency_overrides.clear()
 

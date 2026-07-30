@@ -86,11 +86,16 @@ def is_passthrough_request_using_router_model(request_body: dict, llm_router: Op
         return False
 
 
-def is_passthrough_request_streaming(request_body: dict) -> bool:
+def is_passthrough_request_streaming(request_body: object) -> bool:
     """
-    Returns True if the request is streaming
+    Returns True if the request is streaming.
+
+    A JSON body need not be an object, so a list or scalar can reach here; it
+    carries no streaming flag.
     """
-    return request_body.get("stream", False)
+    if not isinstance(request_body, dict):
+        return False
+    return bool(request_body.get("stream", False))
 
 
 async def llm_passthrough_factory_proxy_route(
@@ -551,8 +556,7 @@ async def is_streaming_request_fn(request: Request) -> bool:
             _request_body = await get_form_data(request)
         else:
             _request_body = await _read_request_body(request)
-        if _request_body.get("stream"):
-            return True
+        return is_passthrough_request_streaming(_request_body)
     return False
 
 
@@ -1755,9 +1759,11 @@ async def _base_vertex_proxy_route(
 
     ## check for streaming
     target = str(updated_url)
-    is_streaming_request = False
-    if "stream" in str(updated_url):
-        is_streaming_request = True
+    if ":rawPredict" in target or ":streamRawPredict" in target:
+        is_streaming_request = await is_streaming_request_fn(request)
+    else:
+        is_streaming_request = "stream" in target
+    if is_streaming_request:
         target += "?alt=sse"
 
     ## CREATE PASS-THROUGH

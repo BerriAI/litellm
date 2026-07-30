@@ -61,23 +61,51 @@ def _get_redis_kwargs():
     return available_args
 
 
-def _get_redis_url_kwargs(client=None):
+def _init_arg_names(cls: type) -> frozenset[str]:
+    """Every ``__init__`` parameter accepted anywhere in a class's MRO.
+
+    Keyword-only parameters are included, and the MRO is walked because redis-py splits a
+    connection's parameters between ``AbstractConnection`` and its concrete subclasses.
+    """
+    return frozenset(
+        name
+        for klass in inspect.getmro(cls)
+        if klass is not object
+        for spec in (inspect.getfullargspec(klass.__init__),)
+        for name in spec.args + spec.kwonlyargs
+    )
+
+
+def _get_redis_url_kwargs(client: Optional[type] = None) -> tuple[str, ...]:
+    """Connection kwargs that redis-py forwards from ``from_url`` down to the connection.
+
+    ``from_url`` is declared as ``(cls, url, **kwargs)``, so introspecting it yields no
+    connection kwargs at all. What it really does is hand its kwargs to the connection
+    class, so that class's signature is the allowlist.
+
+    Taking the client's signature instead would be wrong in both directions: it omits
+    nothing useful, but it admits client-only parameters such as
+    ``single_connection_client`` and ``auto_close_connection_pool``, plus the ``ssl_*``
+    family that only ``SSLConnection`` accepts. Those reach ``AbstractConnection`` and
+    raise ``TypeError`` the first time a connection is created. TLS on a url config is
+    selected by the ``rediss://`` scheme, which picks ``SSLConnection`` on its own.
+    """
     if client is None:
-        client = redis.Redis.from_url
-    arg_spec = inspect.getfullargspec(redis.Redis.from_url)
+        client = redis.Redis
+    connection_cls = async_redis.Connection if client is async_redis.Redis else redis.Connection
+
+    exclude_args = frozenset(
+        {
+            "self",
+            "connection_pool",
+            "retry",
+        }
+    )
 
     # Only allow primitive arguments
-    exclude_args = {
-        "self",
-        "connection_pool",
-        "retry",
-    }
+    include_args = ("url", "max_connections")
 
-    include_args = ["url"]
-
-    available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
-
-    return available_args
+    return tuple(x for x in _init_arg_names(connection_cls) if x not in exclude_args) + include_args
 
 
 def _get_redis_cluster_kwargs(client=None):
@@ -614,7 +642,7 @@ def get_redis_async_client(
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         if connection_pool is not None:
             return async_redis.Redis(connection_pool=connection_pool)
-        args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
+        args = _get_redis_url_kwargs(client=async_redis.Redis)
         url_kwargs = {}
         for arg in redis_kwargs:
             if arg in args:
@@ -662,10 +690,10 @@ def get_redis_connection_pool(
         return None
 
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
-        pool_kwargs = {
-            "timeout": REDIS_CONNECTION_POOL_TIMEOUT,
-            "url": redis_kwargs["url"],
-        }
+        allowed_args = _get_redis_url_kwargs(client=async_redis.Redis)
+        pool_kwargs = {k: v for k, v in redis_kwargs.items() if k in allowed_args and k != "max_connections"}
+        pool_kwargs["timeout"] = REDIS_CONNECTION_POOL_TIMEOUT
+        pool_kwargs["url"] = redis_kwargs["url"]
         if "max_connections" in redis_kwargs:
             try:
                 pool_kwargs["max_connections"] = int(redis_kwargs["max_connections"])
