@@ -1,0 +1,129 @@
+# Build and push LiteLLM images to THIS fork's GHCR.
+name: Publish GHCR (fork)
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Primary image tag (e.g. dev, rc, short sha)
+        required: true
+        type: string
+        default: dev
+      git_ref:
+        description: Git ref to build. Empty uses the branch the workflow runs on.
+        required: false
+        type: string
+        default: ""
+      variants:
+        description: "Comma-separated: litellm,database,non_root"
+        required: false
+        type: string
+        default: litellm
+      dry_run:
+        description: Build only; skip push
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-ghcr-${{ github.event.inputs.image_tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and push ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: litellm
+            dockerfile: Dockerfile
+            image_suffix: litellm
+          - name: database
+            dockerfile: docker/Dockerfile.database
+            image_suffix: litellm-database
+          - name: non_root
+            dockerfile: docker/Dockerfile.non_root
+            image_suffix: litellm-non_root
+    steps:
+      - name: Select variant
+        id: pick
+        shell: bash
+        run: |
+          set -euo pipefail
+          wanted="${{ github.event.inputs.variants }}"
+          name="${{ matrix.name }}"
+          if [[ ",${wanted}," == *",${name},"* ]] || [[ "${wanted}" == "${name}" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.pick.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.git_ref != '' && github.event.inputs.git_ref || github.ref }}
+          fetch-depth: 1
+
+      - name: Set up Docker Buildx
+        if: steps.pick.outputs.run == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: steps.pick.outputs.run == 'true' && github.event.inputs.dry_run != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        if: steps.pick.outputs.run == 'true'
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          tag="${{ github.event.inputs.image_tag }}"
+          sha="$(git rev-parse --short HEAD)"
+          image="ghcr.io/${owner}/${{ matrix.image_suffix }}"
+          {
+            echo "image=${image}"
+            echo "tags=${image}:${tag},${image}:${sha}"
+            echo "sha=${sha}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Will publish: ${image}:${tag} and ${image}:${sha}"
+
+      - name: Build and push
+        if: steps.pick.outputs.run == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: ${{ github.event.inputs.dry_run != 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      - name: Summary
+        if: steps.pick.outputs.run == 'true'
+        shell: bash
+        run: |
+          {
+            echo "### ${{ matrix.name }}"
+            echo ""
+            echo "- image: \`${{ steps.meta.outputs.image }}\`"
+            echo "- tags: \`${{ steps.meta.outputs.tags }}\`"
+            echo "- dry_run: \`${{ github.event.inputs.dry_run }}\`"
+            echo "- sha: \`${{ steps.meta.outputs.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
