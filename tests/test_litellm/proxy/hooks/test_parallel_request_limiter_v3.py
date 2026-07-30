@@ -20,6 +20,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     ParallelSlotAcquisition,
+    RequestRateLimiterStash,
     _request_stash,
     get_or_create_request_stash,
     get_request_stash,
@@ -3343,6 +3344,120 @@ async def test_pre_call_hook_ignores_caller_supplied_stash_values():
     stash = get_request_stash()
     assert stash is not None
     assert stash.reserved_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_log_events_from_nested_calls_leave_owner_stash_alone(monkeypatch):
+    """
+    A nested LiteLLM call made inside the request (LLM-judge guardrail,
+    silent experiment) inherits the request context and fires the same global
+    logging callbacks with a fresh ``litellm_call_id``. Those callbacks must
+    not release the owning request's parallel slot or refund its TPM
+    reservation; only events carrying the owner's call id may.
+    """
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    _api_key = hash_token("sk-nested-guard")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        tpm_limit=10_000,
+        max_parallel_requests=2,
+    )
+    tokens_key = handler.create_rate_limit_keys(
+        key="api_key", value=_api_key, rate_limit_type="tokens"
+    )
+    parallel_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 50,
+            "litellm_call_id": "owner-call-id",
+        },
+        call_type="completion",
+    )
+
+    stash = get_request_stash()
+    assert stash is not None
+    assert stash.owner_litellm_call_id == "owner-call-id"
+    reserved = stash.reserved_tokens
+    assert reserved > 0
+
+    nested_kwargs = {
+        "litellm_call_id": "nested-guardrail-call",
+        "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+    }
+    await handler.async_log_success_event(
+        kwargs=nested_kwargs, response_obj=None, start_time=None, end_time=None
+    )
+    await handler.async_log_failure_event(
+        kwargs=nested_kwargs, response_obj=None, start_time=None, end_time=None
+    )
+
+    assert stash.parallel_slot is not None
+    assert stash.reservation_released is False
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=parallel_key)
+    ) == 1
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == reserved
+
+    owner_kwargs = {
+        "litellm_call_id": "owner-call-id",
+        "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+    }
+    await handler.async_log_failure_event(
+        kwargs=owner_kwargs, response_obj=None, start_time=None, end_time=None
+    )
+
+    assert stash.parallel_slot is None
+    assert stash.reservation_released is True
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=parallel_key)
+    ) == 0
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_stash_applies_when_owner_or_callback_call_id_missing():
+    """
+    The owner guard only rejects a positive mismatch. A stash never claimed
+    by a pre-call hook (no owner id) must stay visible to any callback, and a
+    claimed stash must stay visible to callbacks whose kwargs carry no call
+    id — otherwise reservations and slots would strand on request paths that
+    do not thread ``litellm_call_id`` into their logging kwargs.
+    """
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    unclaimed = get_or_create_request_stash()
+    unclaimed.reserved_tokens = 42
+    await handler.async_log_failure_event(
+        kwargs={"litellm_call_id": "any-id", "standard_logging_object": {}},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    assert unclaimed.reservation_released is True
+
+    claimed = RequestRateLimiterStash(
+        owner_litellm_call_id="owner-1", reserved_tokens=42
+    )
+    _request_stash.set(claimed)
+    await handler.async_log_failure_event(
+        kwargs={"standard_logging_object": {}},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    assert claimed.reservation_released is True
 
 
 # ----------------------- Per-MCP-server rate limiting (v3) -----------------------
