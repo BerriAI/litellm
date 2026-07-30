@@ -1,3 +1,5 @@
+import pytest
+
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_registry import (
     get_guardrail_initializer_from_hooks,
@@ -32,6 +34,44 @@ def test_noma_registry_resolution():
     assert "noma_v2" in guardrail_initializer_registry
 
 
+@pytest.mark.parametrize(
+    "configured, expected",
+    [(None, True), (False, False), (True, True)],
+)
+def test_initialize_guardrail_run_in_parallel_preserves_constructor_default(configured, expected):
+    """
+    A guardrail whose constructor sets run_in_parallel=True must keep that default when
+    the config omits the key; only an explicit config value may override it. The
+    previous code wrote bool(None)==False on every instance, silently disabling the
+    opt-in for such guardrails.
+    """
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    def _initializer(litellm_params, guardrail):
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+            run_in_parallel=True,
+        )
+
+    registry_module.guardrail_initializer_registry["parallel_default_test"] = _initializer
+    try:
+        params = {"guardrail": "parallel_default_test", "mode": "pre_call"}
+        if configured is not None:
+            params["run_in_parallel"] = configured
+
+        handler = InMemoryGuardrailHandler()
+        result = handler.initialize_guardrail(
+            guardrail={"guardrail_name": "cf-parallel-default", "litellm_params": params},
+        )
+
+        stored = handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+        assert stored.run_in_parallel is expected
+    finally:
+        registry_module.guardrail_initializer_registry.pop("parallel_default_test", None)
+
+
 def test_update_in_memory_guardrail():
     handler = InMemoryGuardrailHandler()
     handler.guardrail_id_to_custom_guardrail["123"] = CustomGuardrail(
@@ -44,9 +84,7 @@ def test_update_in_memory_guardrail():
         "123",
         Guardrail(
             guardrail_name="test-guardrail",
-            litellm_params=LitellmParams(
-                guardrail="test-guardrail", mode="pre_call", default_on=True
-            ),
+            litellm_params=LitellmParams(guardrail="test-guardrail", mode="pre_call", default_on=True),
         ),
     )
 
@@ -56,10 +94,7 @@ def test_update_in_memory_guardrail():
         )
         is True
     )
-    assert (
-        handler.guardrail_id_to_custom_guardrail["123"].event_hook
-        is GuardrailEventHooks.pre_call
-    )
+    assert handler.guardrail_id_to_custom_guardrail["123"].event_hook is GuardrailEventHooks.pre_call
 
 
 def _make_guardrail(guardrail_id: str, name: str = "g") -> Guardrail:
@@ -135,6 +170,34 @@ def test_delete_in_memory_guardrail_clears_source_marker():
     assert handler.get_source("a") is None
 
 
+def test_list_config_guardrails_excludes_db_sourced():
+    """LIT-2529: read surfaces union DB rows with config guardrails; db-sourced
+    in-memory entries would double-count (or resurrect stale ones), so exclude them."""
+    handler = InMemoryGuardrailHandler()
+    handler.IN_MEMORY_GUARDRAILS["cfg"] = _make_guardrail("cfg", name="config-one")
+    handler._sources["cfg"] = "config"
+    handler.IN_MEMORY_GUARDRAILS["db"] = _make_guardrail("db", name="db-one")
+    handler._sources["db"] = "db"
+
+    config_guardrails = handler.list_config_guardrails()
+
+    assert [g["guardrail_id"] for g in config_guardrails] == ["cfg"]
+
+
+def test_get_config_guardrail_by_id_returns_config_only():
+    """LIT-2529: the detail/logs fallback must return config-owned guardrails and
+    treat a db-sourced (stale) or missing id as a miss."""
+    handler = InMemoryGuardrailHandler()
+    handler.IN_MEMORY_GUARDRAILS["cfg"] = _make_guardrail("cfg", name="config-one")
+    handler._sources["cfg"] = "config"
+    handler.IN_MEMORY_GUARDRAILS["db"] = _make_guardrail("db", name="db-one")
+    handler._sources["db"] = "db"
+
+    assert handler.get_config_guardrail_by_id("cfg")["guardrail_name"] == "config-one"
+    assert handler.get_config_guardrail_by_id("db") is None
+    assert handler.get_config_guardrail_by_id("missing") is None
+
+
 def test_initialize_guardrail_early_return_updates_source_marker():
     """
     When initialize_guardrail is called for a guardrail that already exists
@@ -152,9 +215,7 @@ def test_initialize_guardrail_early_return_updates_source_marker():
     g = Guardrail(
         guardrail_id="collide",
         guardrail_name="bedrock",
-        litellm_params=LitellmParams(
-            guardrail="bedrock", mode="pre_call", default_on=False
-        ),
+        litellm_params=LitellmParams(guardrail="bedrock", mode="pre_call", default_on=False),
     )
     handler.initialize_guardrail(guardrail=g, source="config")
 
@@ -331,10 +392,7 @@ def test_repeated_db_sync_does_not_accumulate_runner_instances():
     def distinct_runner_instances() -> int:
         seen = set()
         for callback in litellm.logging_callback_manager._get_all_callbacks():
-            if (
-                isinstance(callback, CustomGuardrail)
-                and getattr(callback, "guardrail_name", None) == name
-            ):
+            if isinstance(callback, CustomGuardrail) and getattr(callback, "guardrail_name", None) == name:
                 seen.add(id(callback))
         return len(seen)
 
@@ -346,6 +404,68 @@ def test_repeated_db_sync_does_not_accumulate_runner_instances():
             promote_into_request_lists()
 
         assert distinct_runner_instances() == 1
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def _judge_guardrail(guardrail_id: str) -> Guardrail:
+    return Guardrail(
+        guardrail_id=guardrail_id,
+        guardrail_name="quality-judge",
+        litellm_params={
+            "guardrail": "llm_as_a_judge",
+            "mode": "post_call",
+            "judge_model": "my-judge-alias",
+            "overall_threshold": 80,
+            "on_failure": "log",
+            "criteria": [{"name": "helpfulness", "weight": 100, "description": "helpful?"}],
+        },
+    )
+
+
+def test_db_synced_judge_guardrail_uses_lazy_router_provider():
+    """A judge guardrail created/synced through a DB path must resolve the active
+    Router lazily at call time (issue: UI-created guardrails failed open because the
+    Router was captured at construction; a guardrail created before the Router
+    existed captured None and never recovered). Asserting the default provider is
+    wired guarantees the instance reads the live global rather than a stale value."""
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
+        LLMAsAJudgeGuardrail,
+        _default_router_provider,
+    )
+
+    handler = InMemoryGuardrailHandler()
+
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler.sync_guardrail_from_db(_judge_guardrail("judge-db"))
+
+        instance = handler.guardrail_id_to_custom_guardrail["judge-db"]
+        assert isinstance(instance, LLMAsAJudgeGuardrail)
+        assert instance._router_provider is _default_router_provider
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def test_reinitialized_judge_guardrail_uses_lazy_router_provider():
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
+        LLMAsAJudgeGuardrail,
+        _default_router_provider,
+    )
+
+    handler = InMemoryGuardrailHandler()
+
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler.reinitialize_guardrail(_judge_guardrail("judge-reinit"), source="db")
+
+        instance = handler.guardrail_id_to_custom_guardrail["judge-reinit"]
+        assert isinstance(instance, LLMAsAJudgeGuardrail)
+        assert instance._router_provider is _default_router_provider
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
             cb_list[:] = snapshot

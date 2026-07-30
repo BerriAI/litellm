@@ -190,6 +190,7 @@ class UserAPIKeyLabelNames(Enum):
     ORG_ALIAS = "org_alias"
     MCP_TOOL_NAME = "mcp_tool_name"
     MCP_SERVER_NAME = "mcp_server_name"
+    SERVICE_TIER = "service_tier"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -213,6 +214,8 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_input_audio_tokens_metric",
     "litellm_output_reasoning_tokens_metric",
     "litellm_output_audio_tokens_metric",
+    "litellm_video_duration_seconds_metric",
+    "litellm_images_generated_metric",
     "litellm_deployment_successful_fallbacks",
     "litellm_deployment_failed_fallbacks",
     "litellm_remaining_team_budget_metric",
@@ -284,6 +287,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.SERVICE_TIER.value,
     ]
 
     litellm_llm_api_time_to_first_token_metric = [
@@ -297,6 +301,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.SERVICE_TIER.value,
     ]
 
     litellm_request_total_latency_metric = [
@@ -310,6 +315,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.SERVICE_TIER.value,
     ]
 
     litellm_request_queue_time_seconds = [
@@ -451,6 +457,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.SERVICE_TIER.value,
     ]
 
     litellm_input_tokens_metric = [
@@ -505,6 +512,9 @@ class PrometheusMetricLabels:
     litellm_input_audio_tokens_metric = litellm_input_tokens_metric
     litellm_output_reasoning_tokens_metric = litellm_output_tokens_metric
     litellm_output_audio_tokens_metric = litellm_output_tokens_metric
+
+    litellm_video_duration_seconds_metric = litellm_output_tokens_metric
+    litellm_images_generated_metric = litellm_output_tokens_metric
 
     litellm_deployment_state = [
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
@@ -717,6 +727,8 @@ class PrometheusMetricLabels:
             "litellm_input_tokens_metric",
             "litellm_total_tokens_metric",
             "litellm_output_tokens_metric",
+            "litellm_video_duration_seconds_metric",
+            "litellm_images_generated_metric",
         }
     )
     # Managed batch metrics
@@ -871,6 +883,7 @@ class UserAPIKeyLabelValues:
     org_alias: Optional[str] = None
     mcp_tool_name: Optional[str] = None
     mcp_server_name: Optional[str] = None
+    service_tier: Optional[str] = None
 
     # Added for test compatibility.
     def __init__(self, **kwargs: Any) -> None:

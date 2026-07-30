@@ -18,8 +18,9 @@ from pydantic import BaseModel, Field
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._redis import _redis_kwargs_from_environment
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import (
     AUDIT_ACTIONS,
     LiteLLM_AuditLogs,
@@ -43,6 +44,17 @@ router = APIRouter()
 # (e.g. redis://:secret@host:6379/1).
 _CACHE_SENSITIVE_FIELDS: set = {"password", "sentinel_password", "url"}
 
+# The env fallback resolves the full set of redis.Redis kwargs, which includes
+# credential-bearing params (azure_client_secret, ssl_password, ...) that are
+# not cache UI fields. Only overlay fields the settings page actually renders,
+# so the read never surfaces a credential the UI does not manage.
+_CACHE_SETTINGS_FIELD_NAMES: frozenset = frozenset(field.field_name for field in CACHE_SETTINGS_FIELDS)
+
+# Classifier used, alongside _CACHE_SENSITIVE_FIELDS, to redact any
+# credential-bearing key before it leaves the server (`url` is kept in the
+# explicit set because its name carries no sensitive segment).
+_CREDENTIAL_CLASSIFIER = SensitiveDataMasker()
+
 
 _REDACTED_VALUE = "***REDACTED***"
 
@@ -65,6 +77,165 @@ def _resolve_cache_url_precedence(settings: Mapping[str, Any]) -> dict[str, Any]
     if not has_url or settings.get("redis_startup_nodes"):
         return dict(settings)
     return {k: v for k, v in settings.items() if k not in _URL_OVERRIDDEN_CONNECTION_FIELDS}
+
+
+def _parse_stored_settings(cache_settings_value: object) -> dict[str, Any]:
+    """Normalize a stored cache_settings blob to a dict.
+
+    The prisma column comes back as either a JSON string or an already-parsed
+    dict depending on the client, so callers that json.loads unconditionally
+    silently drop the whole (still-encrypted) row on the dict path.
+    """
+    parsed = json.loads(cache_settings_value) if isinstance(cache_settings_value, str) else cache_settings_value
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _overlay_environment(stored: Mapping[str, Any]) -> dict[str, Any]:
+    """Fill connection fields from the REDIS_* environment the cache actually reads.
+
+    A response cache pointed at Redis resolves host/port/password/etc. from the
+    REDIS_* env vars when the stored config leaves them unset, so a cache
+    configured purely through the environment works while its settings page,
+    which reads only the database row, shows blank. Overlaying the same env
+    kwargs the runtime uses makes the page reflect the effective connection.
+    Stored values win; the environment only fills what the stored config omits.
+    """
+    env_kwargs = {
+        key: value for key, value in _redis_kwargs_from_environment().items() if key in _CACHE_SETTINGS_FIELD_NAMES
+    }
+    if not env_kwargs:
+        return dict(stored)
+    effective = {**env_kwargs, **stored}
+    # the env fallback is a Redis connection, so name the type when the stored
+    # config did not, letting the UI render the Redis fields it just populated
+    effective.setdefault("type", "redis")
+    return effective
+
+
+def _redact_credentials(settings: Mapping[str, Any]) -> dict[str, Any]:
+    """Replace credential-bearing values with a fixed marker, keeping the rest.
+
+    The marker is unambiguous on the way back in: an admin who edits an
+    unrelated field and re-submits sends the marker for the untouched secret,
+    which the update path maps back to the stored value rather than persisting
+    the marker over a working password.
+    """
+    return {
+        key: (_REDACTED_VALUE if value is not None and _is_credential_field(key) else value)
+        for key, value in settings.items()
+    }
+
+
+def _is_credential_field(key: str) -> bool:
+    """Whether a cache setting carries a credential and must be redacted on read."""
+    return key in _CACHE_SENSITIVE_FIELDS or _CREDENTIAL_CLASSIFIER.is_sensitive_key(key)
+
+
+def _has_connection_target(value: object) -> bool:
+    """Whether a payload value names a live discrete connection target."""
+    if isinstance(value, str):
+        return value.strip() != "" and value != _REDACTED_VALUE
+    return value not in (None, [], {})
+
+
+# Every field that identifies which Redis a credential belongs to, across node
+# (host/port/url), cluster (redis_startup_nodes), and sentinel
+# (sentinel_nodes/service_name) modes. A stored secret is bound to these.
+_CONNECTION_TARGET_FIELDS: tuple = (
+    "host",
+    "port",
+    "url",
+    "redis_startup_nodes",
+    "sentinel_nodes",
+    "service_name",
+)
+
+
+def _target_repr(value: object) -> str:
+    """Canonical string form of a connection-target value for equality checks.
+
+    The client may serialize the same target differently from storage (a port as
+    "6379" vs 6379, node lists round-tripped through JSON), so compare normalized
+    forms rather than raw values to avoid treating an unchanged target as a change.
+    """
+    if isinstance(value, (list, dict)):
+        return json.dumps(value, sort_keys=True, default=str)
+    return str(value)
+
+
+def _saved_secret_is_reusable(incoming: Mapping[str, Any], saved: Mapping[str, Any]) -> bool:
+    """Whether a stored credential may be restored for this request.
+
+    A stored secret belongs to the stored connection target, so it is reused only
+    when the request describes that same target on every dimension the stored
+    config pins (host/port, url, cluster nodes, sentinel nodes/service). This
+    prevents credential replay: a caller cannot omit the credential, point at a
+    different (or incomplete) target, and have the proxy send the stored secret
+    to a Redis of their choosing.
+
+    Non-secret target fields (host/port/nodes/service) must be supplied and match
+    in normalized form, so equivalent representations (port "6379" vs 6379) are
+    not seen as a change while an omitted or different value is. ``url`` is the
+    exception: it is itself the secret and the form never re-prefills it, so a
+    redacted or omitted url means "keep the stored url" (same target) and only a
+    different supplied url blocks reuse.
+    """
+    for field in _CONNECTION_TARGET_FIELDS:
+        saved_value = saved.get(field)
+        if saved_value in (None, "", [], {}):
+            continue  # the stored config does not pin this dimension
+        incoming_value = incoming.get(field)
+        if field == "url":
+            if incoming_value in (None, "", _REDACTED_VALUE):
+                continue  # url kept as-is (same target)
+            if _target_repr(incoming_value) != _target_repr(saved_value):
+                return False
+            continue
+        if _target_repr(incoming_value) != _target_repr(saved_value):
+            return False  # a pinned target field is missing or different
+    return True
+
+
+def _merge_over_saved(incoming: Mapping[str, Any], saved: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep the stored secret behind any credential the caller echoed back redacted or omitted.
+
+    GET returns credentials as the marker and the form never re-prefills a
+    secret, so a save that does not touch a credential arrives with the marker
+    or with the field absent. Either way the real secret must survive: it is
+    restored from the stored row, or dropped when there is no stored row (the
+    value is env-sourced and the marker must never be persisted). Non-secret
+    fields are taken from the incoming payload as-is, so clearing one still works.
+
+    ``url`` is the exception: it is credential-bearing (redacted) yet also a
+    connection-mode selector that url-precedence resolves against host/port. If
+    the caller supplies a discrete target (host, cluster, or sentinel nodes), a
+    stored url is a stale mode the caller is leaving, so it is dropped rather
+    than restored, otherwise url-precedence would resurrect it and discard the
+    submitted host/port.
+    """
+    switching_to_discrete_target = (
+        _has_connection_target(incoming.get("host"))
+        or _has_connection_target(incoming.get("redis_startup_nodes"))
+        or _has_connection_target(incoming.get("sentinel_nodes"))
+    )
+    reuse_saved_secret = _saved_secret_is_reusable(incoming, saved)
+    merged = dict(incoming)
+    for field in _CACHE_SENSITIVE_FIELDS:
+        # A value the caller explicitly supplied is honored verbatim: a new
+        # secret, or an empty string / null to clear the stored one. Only an
+        # omitted field or the echoed-back marker triggers preserve-or-drop.
+        if field in incoming and incoming[field] != _REDACTED_VALUE:
+            continue
+        if field == "url" and switching_to_discrete_target:
+            merged.pop(field, None)
+            continue
+        if field in saved and reuse_saved_secret:
+            merged[field] = saved[field]
+        else:
+            # nothing stored to reuse, or the caller is pointing at a different
+            # target: never persist/replay the marker or the stored secret
+            merged.pop(field, None)
+    return merged
 
 
 def _redact_settings(settings: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
@@ -270,34 +441,34 @@ async def get_cache_settings(
         # Get cache settings fields from types file
         cache_fields = [field.model_copy(deep=True) for field in CACHE_SETTINGS_FIELDS]
 
-        # Try to get cache settings from database
-        current_values = {}
+        # Read the stored settings (decrypted); an env-only cache has none.
+        stored: dict[str, Any] = {}
         if prisma_client is not None:
             cache_config = await CacheConfigRepository(prisma_client).table.find_unique(where={"id": "cache_config"})
             if cache_config is not None and cache_config.cache_settings:
-                # Decrypt cache settings
-                cache_settings_json = cache_config.cache_settings
-                if isinstance(cache_settings_json, str):
-                    cache_settings_dict = json.loads(cache_settings_json)
-                else:
-                    cache_settings_dict = cache_settings_json
+                stored = proxy_config._decrypt_db_variables(
+                    variables_dict=_parse_stored_settings(cache_config.cache_settings)
+                )
 
-                # Decrypt environment variables
-                decrypted_settings = proxy_config._decrypt_db_variables(variables_dict=cache_settings_dict)
+        # Fill connection fields from the REDIS_* environment the cache resolves
+        # from when the stored config leaves them unset, then apply url precedence
+        # so a url-mode config does not surface conflicting discrete fields (which
+        # would otherwise let a no-op save silently switch it to host/port).
+        effective = _resolve_cache_url_precedence(_overlay_environment(stored))
 
-                # Derive redis_type for UI based on settings
-                # UI uses redis_type to show/hide fields, backend only stores 'type'
-                if decrypted_settings.get("type") == "redis":
-                    if decrypted_settings.get("redis_startup_nodes"):
-                        decrypted_settings["redis_type"] = "cluster"
-                    elif decrypted_settings.get("sentinel_nodes"):
-                        decrypted_settings["redis_type"] = "sentinel"
-                    else:
-                        decrypted_settings["redis_type"] = "node"
+        # Derive redis_type for UI based on settings
+        # UI uses redis_type to show/hide fields, backend only stores 'type'
+        if effective.get("type") == "redis":
+            if effective.get("redis_startup_nodes"):
+                effective["redis_type"] = "cluster"
+            elif effective.get("sentinel_nodes"):
+                effective["redis_type"] = "sentinel"
+            else:
+                effective["redis_type"] = "node"
 
-                # Mask credential fields so the GET response never carries
-                # plaintext Redis / Sentinel passwords off the server.
-                current_values = mask_sensitive_keys(decrypted_settings, _CACHE_SENSITIVE_FIELDS)
+        # Redact credential fields so the GET response never carries a plaintext
+        # Redis / Sentinel password off the server.
+        current_values = _redact_credentials(effective)
 
         # Update field values with current values
         for field in cache_fields:
@@ -331,10 +502,27 @@ async def test_cache_connection(
     to verify the credentials work without affecting global state.
     """
     from litellm import Cache
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
 
     try:
-        cache_settings = _resolve_cache_url_precedence(request.cache_settings)
-        verbose_proxy_logger.debug("Testing cache connection with settings: %s", cache_settings)
+        # A credential the form left untouched arrives redacted; resolve it back
+        # to the stored secret so the test connects with the real password. A
+        # lookup failure must not block the test, so fall back to no stored row.
+        saved_settings: dict[str, Any] = {}
+        if prisma_client is not None:
+            try:
+                existing_row = await CacheConfigRepository(prisma_client).table.find_unique(
+                    where={"id": "cache_config"}
+                )
+                if existing_row is not None and existing_row.cache_settings:
+                    saved_settings = proxy_config._decrypt_db_variables(
+                        variables_dict=_parse_stored_settings(existing_row.cache_settings)
+                    )
+            except Exception:  # noqa: BLE001 - a saved-settings lookup failure must not block a connection test
+                saved_settings = {}
+        cache_settings = _resolve_cache_url_precedence(_merge_over_saved(request.cache_settings, saved_settings))
+        # cache_settings now carries the resolved plaintext credential; never log it raw
+        verbose_proxy_logger.debug("Testing cache connection with settings: %s", _redact_credentials(cache_settings))
 
         # Only support Redis for now
         if cache_settings.get("type") != "redis":
@@ -400,18 +588,19 @@ async def update_cache_settings(
         )
 
     try:
-        cache_settings = _resolve_cache_url_precedence(request.cache_settings)
-
-        # Snapshot the prior settings (key set only — values get redacted in
-        # the audit row) so the audit-log entry shows which fields changed.
+        # Read the stored row first: its decrypted values back any credential the
+        # caller echoed back redacted, and its key set drives the audit diff.
         existing_row = await CacheConfigRepository(prisma_client).table.find_unique(where={"id": "cache_config"})
         before_settings: Optional[Dict[str, Any]] = None
+        saved_settings: dict[str, Any] = {}
         if existing_row is not None and existing_row.cache_settings:
-            try:
-                before_settings = json.loads(existing_row.cache_settings)
-            except (TypeError, ValueError):
-                before_settings = None
+            before_settings = _parse_stored_settings(existing_row.cache_settings)
+            saved_settings = proxy_config._decrypt_db_variables(variables_dict=before_settings)
         action: AUDIT_ACTIONS = "updated" if existing_row is not None else "created"
+
+        # Preserve stored secrets behind any redacted or omitted credential, then
+        # resolve the url-vs-discrete-fields precedence.
+        cache_settings = _resolve_cache_url_precedence(_merge_over_saved(request.cache_settings, saved_settings))
 
         # Encrypt sensitive fields (keep redis_type for storage)
         encrypted_settings = proxy_config._encrypt_env_variables(environment_variables=cache_settings)
@@ -461,7 +650,7 @@ async def update_cache_settings(
         return {
             "message": "Cache settings updated successfully",
             "status": "success",
-            "settings": cache_settings,
+            "settings": _redact_credentials(cache_settings),
         }
     except Exception as e:
         verbose_proxy_logger.error(f"Error updating cache settings: {str(e)}")

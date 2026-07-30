@@ -1,6 +1,8 @@
 from collections.abc import Mapping
 from typing import Any, Dict, List, Optional, Set
 
+from pydantic import BaseModel
+
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 
 
@@ -151,6 +153,39 @@ _error_masker = SensitiveDataMasker(visible_prefix=4, visible_suffix=0)
 
 def mask_sensitive_structure(data: object) -> object:
     return _error_masker.mask(data)
+
+
+def mask_credentials_in_payload(data: object) -> object:
+    """Return a copy of ``data`` where string values under sensitive-named keys
+    are masked but every other value (``None``, ``int``, ``float``, ``bool``,
+    ``bytes``, ``datetime``, tuples, sets, typed objects) is preserved by
+    identity, and dicts/lists are rebuilt structurally.
+
+    Use this for logging payloads that carry response data through to
+    SpendLogs / OTel / Langfuse, where :meth:`SensitiveDataMasker.mask`'s
+    config-dump semantics (``None`` -> ``"None"``, tuples stringified,
+    objects flattened via ``__dict__``) would silently distort the record.
+
+    Sensitive-key detection is delegated to the shared
+    :class:`SensitiveDataMasker` so pattern updates stay in one place.
+    """
+    return _walk_payload(data, key_is_sensitive=False, depth=0)
+
+
+def _walk_payload(node: object, key_is_sensitive: bool, depth: int) -> object:
+    if depth >= DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER:
+        return node
+    if isinstance(node, Mapping):
+        return {k: _walk_payload(v, _default_masker.is_sensitive_key(k), depth + 1) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_walk_payload(item, key_is_sensitive, depth + 1) for item in node]
+    if isinstance(node, tuple):
+        return tuple(_walk_payload(item, key_is_sensitive, depth + 1) for item in node)
+    if isinstance(node, BaseModel):
+        return _walk_payload(node.model_dump(), key_is_sensitive, depth)
+    if key_is_sensitive and isinstance(node, str) and node:
+        return _default_masker._mask_value(node)
+    return node
 
 
 def mask_sensitive_keys(data: Dict[str, Any], sensitive_fields: Set[str]) -> Dict[str, Any]:

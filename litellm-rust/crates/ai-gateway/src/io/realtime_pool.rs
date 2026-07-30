@@ -28,11 +28,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
-use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::CoreResult;
+use litellm_core::realtime::types::RealtimeEvent;
 
 use crate::io::realtime::{
-    dial_upstream, read_event, resolve_api_key, UpstreamRx, UpstreamTx, UpstreamWs,
+    UpstreamRx, UpstreamTx, UpstreamWs, dial_upstream, read_event, resolve_api_key,
 };
 
 /// Default target warm sockets per key when pooling is enabled.
@@ -473,8 +473,8 @@ pub fn upstream_key(
 /// unhealthy — we'd rather discard and fresh-dial than hand over a socket in an
 /// unexpected state. `Pending` (the healthy case) returns `false`.
 fn is_dead(rx: &mut UpstreamRx) -> bool {
-    use futures_util::task::noop_waker_ref;
     use futures_util::Stream;
+    use futures_util::task::noop_waker_ref;
     use std::pin::Pin;
     use std::task::{Context, Poll};
 
@@ -523,15 +523,15 @@ mod tests {
             ))
             .await;
         while let Some(Ok(msg)) = ws.next().await {
-            if let Message::Text(text) = msg {
-                if text.contains("response.create") {
-                    for frame in [
-                        r#"{"type":"response.created"}"#,
-                        r#"{"type":"response.output_audio.delta","delta":"AAAA"}"#,
-                        r#"{"type":"response.done"}"#,
-                    ] {
-                        let _ = ws.send(Message::Text(frame.to_string())).await;
-                    }
+            if let Message::Text(text) = msg
+                && text.contains("response.create")
+            {
+                for frame in [
+                    r#"{"type":"response.created"}"#,
+                    r#"{"type":"response.output_audio.delta","delta":"AAAA"}"#,
+                    r#"{"type":"response.done"}"#,
+                ] {
+                    let _ = ws.send(Message::Text(frame.to_string())).await;
                 }
             }
         }

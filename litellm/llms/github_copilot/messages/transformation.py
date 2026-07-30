@@ -25,6 +25,10 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         super().__init__()
         self.authenticator = Authenticator()
 
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "github_copilot"
+
     def handles_web_search_natively(self) -> bool:
         """
         Copilot's /v1/messages endpoint does not execute ``web_search`` tools, so
