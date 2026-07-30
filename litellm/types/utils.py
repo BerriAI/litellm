@@ -3296,6 +3296,7 @@ all_litellm_params = (
         "model_file_id_mapping",
         "litellm_logging_obj",
         "litellm_call_id",
+        "_litellm_strip_stream_usage",
         "use_client",
         "id",
         "fallbacks",

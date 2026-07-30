@@ -5111,3 +5111,95 @@ class TestStreamingClientDisconnectBilling:
         )
 
         proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+
+
+def _apply_stream_usage_tracking(data: dict, general_settings: dict, route_type: str) -> None:
+    from litellm.proxy.common_request_processing import _stream_usage_tracking_updates
+
+    data.update(_stream_usage_tracking_updates(data=data, general_settings=general_settings, route_type=route_type))
+
+
+class TestApplyStreamUsageTracking:
+    def test_default_injects_usage_and_marks_strip_for_chat_completions(self):
+        data = {"stream": True, "model": "gpt-5.4-nano"}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"] == {"include_usage": True}
+        assert data["_litellm_strip_stream_usage"] is True
+
+    def test_default_preserves_other_client_stream_options_keys(self):
+        data = {"stream": True, "stream_options": {"include_obfuscation": True}}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"] == {"include_obfuscation": True, "include_usage": True}
+        assert data["_litellm_strip_stream_usage"] is True
+
+    def test_client_requested_usage_is_left_untouched_and_not_stripped(self):
+        data = {"stream": True, "stream_options": {"include_usage": True}}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"] == {"include_usage": True}
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_client_include_usage_false_is_overridden_and_stripped(self):
+        data = {"stream": True, "stream_options": {"include_usage": False}}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"]["include_usage"] is True
+        assert data["_litellm_strip_stream_usage"] is True
+
+    def test_explicit_false_flag_disables_injection_entirely(self):
+        data = {"stream": True}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": False},
+            route_type="acompletion",
+        )
+
+        assert "stream_options" not in data
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_flag_true_injects_without_strip_marker(self):
+        data = {"stream": True}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": True},
+            route_type="acompletion",
+        )
+
+        assert data["stream_options"] == {"include_usage": True}
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_flag_true_respects_client_explicit_include_usage_false(self):
+        data = {"stream": True, "stream_options": {"include_usage": False}}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": True},
+            route_type="acompletion",
+        )
+
+        assert data["stream_options"] == {"include_usage": False}
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_default_does_not_touch_non_chat_completion_routes(self):
+        data = {"stream": True}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="anthropic_messages")
+
+        assert "stream_options" not in data
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_non_streaming_request_is_untouched(self):
+        data = {"model": "gpt-5.4-nano"}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert "stream_options" not in data
+        assert "_litellm_strip_stream_usage" not in data
