@@ -81,7 +81,10 @@ class SupportedGuardrailIntegrations(Enum):
     NOMA_V2 = "noma_v2"
     TOOL_PERMISSION = "tool_permission"
     ZSCALER_AI_GUARD = "zscaler_ai_guard"
-    JAVELIN = "javelin"
+    HIGHFLAME = "highflame"
+    JAVELIN = (
+        "javelin"  # deprecated alias of HIGHFLAME (Javelin was renamed to Highflame)
+    )
     ENKRYPTAI = "enkryptai"
     IBM_GUARDRAILS = "ibm_guardrails"
     LITELLM_CONTENT_FILTER = "litellm_content_filter"
@@ -516,23 +519,54 @@ class ZscalerAIGuardConfigModel(BaseModel):
     )
 
 
+class HighflameGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Highflame (Shield) guardrail"""
+
+    capabilities: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "OWASP-aligned guardrail capabilities to run (e.g. prompt_injection, "
+            "sensitive_information_disclosure). Empty runs all guardrails enabled "
+            "in the Highflame application policy."
+        ),
+    )
+    application: Optional[str] = Field(
+        default=None,
+        description="Highflame application name for policy-scoped guardrails",
+    )
+    shield_mode: Optional[str] = Field(
+        default="enforce",
+        description="Shield evaluation mode: enforce | monitor | alert | modify",
+    )
+    token_url: Optional[str] = Field(
+        default=None,
+        description="OAuth token-exchange URL (defaults to https://auth.highflame.ai/oauth2/token)",
+    )
+    metadata: Optional[Dict] = Field(
+        default=None, description="Additional metadata to send with requests"
+    )
+
+
 class JavelinGuardrailConfigModel(BaseModel):
-    """Configuration parameters for the Javelin guardrail"""
+    """[DEPRECATED] Kept so existing ``guardrail: javelin`` configs still parse.
+    Javelin was renamed to Highflame; the ``javelin`` guardrail now routes to the
+    Highflame guardrail (with a deprecation warning). Migrate to
+    ``guardrail: highflame``."""
 
     guard_name: Optional[str] = Field(
-        default=None, description="Name of the Javelin guard to use"
+        default=None, description="[Deprecated] Name of the Javelin guard to use"
     )
     api_version: Optional[str] = Field(
-        default="v1", description="API version for Javelin service"
+        default="v1", description="[Deprecated] API version for the Javelin service"
     )
     metadata: Optional[Dict] = Field(
         default=None, description="Additional metadata to send with requests"
     )
     application: Optional[str] = Field(
-        default=None, description="Application name for Javelin service"
+        default=None, description="Application name for policy-scoped guardrails"
     )
     config: Optional[Dict] = Field(
-        default=None, description="Additional configuration for the guardrail"
+        default=None, description="[Deprecated] Additional configuration"
     )
 
 
@@ -782,6 +816,7 @@ class LitellmParams(
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel,
     AktoConfigModel,
+    HighflameGuardrailConfigModel,
     JavelinGuardrailConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
