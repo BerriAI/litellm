@@ -2910,7 +2910,38 @@ if MCP_AVAILABLE:
             local_content = await _handle_local_mcp_tool(original_tool_name, arguments)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
-        return response
+        return await _run_post_mcp_call_guardrails(
+            result=response,
+            litellm_logging_obj=litellm_logging_obj,
+            user_api_key_auth=user_api_key_auth,
+            request_data=kwargs,
+        )
+
+    async def _run_post_mcp_call_guardrails(
+        result: CallToolResult,
+        litellm_logging_obj: LiteLLMLoggingObj | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        request_data: Mapping[str, object],
+    ) -> CallToolResult:
+        """Run ``post_mcp_call`` guardrails over an executed tool result.
+
+        Lives on ``execute_mcp_tool``'s return path rather than inside
+        ``_fire_mcp_tool_call_logging`` so enforcement never depends on logging
+        being configured, and so every dispatch route gets it: the MCP protocol
+        handler, the REST endpoint, and tool search all funnel through here.
+        A guardrail that rejects the result raises, matching ``pre_mcp_call``.
+        """
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        if proxy_logging_obj is None:
+            return result
+        return await proxy_logging_obj.post_mcp_call_hook(
+            response=result,
+            request_data=(
+                litellm_logging_obj.model_call_details if litellm_logging_obj is not None else dict(request_data)
+            ),
+            user_api_key_dict=user_api_key_auth,
+        )
 
     _MCP_CREDENTIAL_REQUEST_FIELDS = frozenset(
         {
@@ -2929,8 +2960,14 @@ if MCP_AVAILABLE:
         end_time: datetime,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         request_data: Mapping[str, object] | None = None,
-    ) -> None:
-        """Fire post-call logging for an executed MCP tool call.
+    ) -> CallToolResult:
+        """Fire post-call logging for an executed MCP tool call, returning the result to send.
+
+        The returned result is what the caller must forward to the client: a
+        ``post_mcp_call`` guardrail may rewrite the tool output (e.g. mask
+        sensitive values) or reject it, in which case its exception propagates.
+        Guardrails run before the success/failure logging so the masked text, not
+        the raw one, is what gets logged.
 
         A result with ``isError=True`` is logged as a failure (``status="failure"``
         payload, so OTel marks the span ERROR) while the HTTP wire behavior stays
@@ -2946,6 +2983,8 @@ if MCP_AVAILABLE:
         stripped before the dict is handed to ``post_call_failure_hook``
         callbacks.
         """
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
         logging_obj.post_call(original_response=result)
         await logging_obj.async_post_mcp_tool_call_hook(
             kwargs=logging_obj.model_call_details,
@@ -2957,7 +2996,7 @@ if MCP_AVAILABLE:
         error_message = extract_mcp_tool_result_error_message(result)
         if error_message is None:
             await logging_obj.async_success_handler(result=result, start_time=start_time, end_time=end_time)
-            return
+            return result
 
         logging_obj.has_run_logging(event_type="sync_success")
         logging_obj.has_run_logging(event_type="async_success")
@@ -2966,8 +3005,7 @@ if MCP_AVAILABLE:
         await logging_obj.async_failure_handler(tool_error, "", start_time, end_time)
 
         if user_api_key_auth is None:
-            return
-        from litellm.proxy.proxy_server import proxy_logging_obj
+            return result
 
         if proxy_logging_obj:
             sanitized_request_data = {
@@ -2979,6 +3017,7 @@ if MCP_AVAILABLE:
                 user_api_key_dict=user_api_key_auth,
                 route="/mcp/call_tool",
             )
+        return result
 
     @client
     async def call_mcp_tool(
@@ -3062,7 +3101,7 @@ if MCP_AVAILABLE:
             raise
 
         if litellm_logging_obj:
-            await _fire_mcp_tool_call_logging(
+            response = await _fire_mcp_tool_call_logging(
                 logging_obj=litellm_logging_obj,
                 result=response,
                 start_time=start_time,
