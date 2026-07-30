@@ -14,7 +14,7 @@ def _has_control_characters(value: str) -> bool:
 class NativeOIDCConfig(BaseModel):
     discovery_url: str
     client_id: str
-    scopes: List[str]
+    scopes: tuple[str, ...]
 
     model_config = ConfigDict(extra="forbid")
 
@@ -56,7 +56,7 @@ class NativeOIDCConfig(BaseModel):
 
     @field_validator("scopes")
     @classmethod
-    def validate_scopes(cls, value: List[str]) -> List[str]:
+    def validate_scopes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         if not value or any(not scope.strip() or _has_control_characters(scope) for scope in value):
             raise ValueError("must contain only non-blank scopes")
         return value

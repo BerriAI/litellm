@@ -4394,7 +4394,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     )
     native_oidc_discovery_url: Optional[str] = None
     native_oidc_client_id: Optional[str] = None
-    native_oidc_scopes: Optional[list[str]] = None
+    native_oidc_scopes: Optional[tuple[str, ...]] = None
     # JWT-to-Virtual-Key Mapping
     virtual_key_claim_field: str | None = Field(
         default=None,
