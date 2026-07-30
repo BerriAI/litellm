@@ -1,0 +1,273 @@
+"""Native OIDC credential persistence, verification and refresh.
+
+The stored credential keeps the usable bearer token under the existing `key`
+field so current CLI and SDK integrations keep working unchanged; native-only
+metadata is added alongside it under an explicit `auth_type`.
+
+Never persisted: authorization codes, device codes, user codes, OAuth state,
+PKCE verifiers/challenges, client secrets, raw provider responses, or ID tokens.
+"""
+
+import errno
+import os
+import time
+from contextlib import contextmanager
+from typing import Any, Dict, Optional
+
+import requests
+
+from litellm.litellm_core_utils.cli_token_utils import (
+    get_cli_token_file_path,
+    load_cli_token,
+)
+
+from ..commands.private_json import write_private_json
+from .errors import NativeOIDCAuthRejected, NativeOIDCError
+from .http_client import post_form
+from .metadata import (
+    NativeOIDCMetadata,
+    fetch_native_oidc_metadata,
+    fetch_provider_metadata,
+)
+from .tokens import TokenResponse, describe_token_error, parse_token_response
+
+AUTH_TYPE_NATIVE_OIDC = "native_oidc"
+TOKEN_SCHEMA_VERSION = 2
+
+# Refresh this far ahead of the recorded expiry, absorbing clock skew and the
+# round trip to the provider.
+REFRESH_BUFFER_SECONDS = 120
+
+LOCK_ACQUIRE_TIMEOUT_SECONDS = 30.0
+LOCK_POLL_INTERVAL_SECONDS = 0.1
+LOCK_STALE_AFTER_SECONDS = 60.0
+
+VERIFY_TIMEOUT_SECONDS = 10
+
+
+def is_native_credential(token_data: Optional[Dict[str, Any]]) -> bool:
+    """True for a native OIDC credential.
+
+    A missing `auth_type` means a legacy proxy-minted credential, which stays
+    supported -- it is never treated as an unknown format.
+    """
+    if not token_data:
+        return False
+    return token_data.get("auth_type") == AUTH_TYPE_NATIVE_OIDC
+
+
+def build_native_credential(
+    *,
+    base_url: str,
+    metadata: NativeOIDCMetadata,
+    token: TokenResponse,
+    previous_refresh_token: Optional[str] = None,
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Build the token-file payload for a native OIDC credential.
+
+    Refresh-token rotation: a newly issued refresh token replaces the stored
+    one; when the response validly omits one, the previous token is retained.
+    """
+    current_time = time.time() if now is None else now
+    credential: Dict[str, Any] = {
+        "schema_version": TOKEN_SCHEMA_VERSION,
+        "auth_type": AUTH_TYPE_NATIVE_OIDC,
+        "base_url": base_url.rstrip("/"),
+        "key": token.access_token,
+        "issuer": metadata.issuer,
+        "client_id": metadata.client_id,
+        "scopes": list(metadata.scopes),
+        "token_type": token.token_type,
+        "timestamp": current_time,
+        "expires_at": token.expires_at,
+    }
+    refresh_token = token.refresh_token or previous_refresh_token
+    if refresh_token:
+        credential["refresh_token"] = refresh_token
+    return credential
+
+
+def save_credential(credential: Dict[str, Any]) -> None:
+    """Atomically write the credential with owner-only permissions."""
+    write_private_json(get_cli_token_file_path(), credential)
+
+
+def verify_token_with_litellm(
+    base_url: str,
+    access_token: str,
+    *,
+    get=requests.get,
+) -> None:
+    """Confirm the proxy accepts the access token before it is persisted.
+
+    Uses the same user-accessible `/v1/models` probe the CLI already relies on:
+    no proxy-admin permission required. The token is sent only to the configured
+    origin, and neither the token nor the response body is logged.
+    """
+    url = base_url.rstrip("/") + "/v1/models"
+    try:
+        response = get(
+            url,
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=VERIFY_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as error:
+        raise NativeOIDCError(
+            f"could not reach the LiteLLM proxy at {base_url.rstrip('/')} to verify the token: {type(error).__name__}"
+        ) from error
+
+    if response.status_code in (401, 403):
+        raise NativeOIDCAuthRejected(
+            f"LiteLLM rejected the identity provider's access token (HTTP "
+            f"{response.status_code}). The provider issued a token that this proxy "
+            "does not accept. Check that the proxy trusts the token's issuer and "
+            "signing keys, that the audience matches what the proxy expects, and "
+            "that the required user/team/role claim mapping is configured."
+        )
+    # Any other non-2xx is tolerated: the probe is an auth check, not a health check.
+
+
+@contextmanager
+def refresh_lock(
+    lock_path: Optional[str] = None,
+    *,
+    timeout: float = LOCK_ACQUIRE_TIMEOUT_SECONDS,
+    sleep=time.sleep,
+):
+    """Bounded cross-process lock built on O_CREAT|O_EXCL.
+
+    Standard library only, so it adds no dependency and works on every platform
+    the CLI supports. A lock older than LOCK_STALE_AFTER_SECONDS is reclaimed so
+    a crashed process cannot wedge future logins. The file holds only a pid.
+    """
+    path = lock_path or (get_cli_token_file_path() + ".lock")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    deadline = time.monotonic() + timeout
+    handle = None
+
+    while True:
+        try:
+            handle = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            break
+        except OSError as error:
+            if error.errno != errno.EEXIST:
+                raise NativeOIDCError(f"could not acquire the token refresh lock: {type(error).__name__}") from error
+            _reclaim_if_stale(path)
+            if time.monotonic() >= deadline:
+                raise NativeOIDCError(
+                    f"timed out after {int(timeout)}s waiting for another process to finish refreshing the token"
+                )
+            sleep(LOCK_POLL_INTERVAL_SECONDS)
+
+    try:
+        os.write(handle, str(os.getpid()).encode("ascii"))
+        os.close(handle)
+        handle = None
+        yield
+    finally:
+        if handle is not None:
+            os.close(handle)
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def _reclaim_if_stale(path: str) -> None:
+    try:
+        if time.time() - os.stat(path).st_mtime > LOCK_STALE_AFTER_SECONDS:
+            os.unlink(path)
+    except OSError:
+        pass
+
+
+def native_credential_expires_at(token_data: Dict[str, Any]) -> Optional[float]:
+    expires_at = token_data.get("expires_at")
+    if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)):
+        return None
+    return float(expires_at)
+
+
+def needs_refresh(token_data: Dict[str, Any], *, now: Optional[float] = None) -> bool:
+    """True when a native credential is expired or close enough to warrant refresh."""
+    expires_at = native_credential_expires_at(token_data)
+    if expires_at is None:
+        # Malformed native expiry metadata fails closed.
+        return True
+    current_time = time.time() if now is None else now
+    return current_time >= (expires_at - REFRESH_BUFFER_SECONDS)
+
+
+def _request_refreshed_token(token_endpoint: str, *, refresh_token: str, client_id: str) -> TokenResponse:
+    response = post_form(
+        token_endpoint,
+        {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": client_id,
+        },
+    )
+    if response.status_code != 200 or response.payload is None:
+        raise NativeOIDCError(describe_token_error(response.status_code, response.payload))
+    return parse_token_response(response.payload)
+
+
+def refresh_native_credential(
+    token_data: Dict[str, Any],
+    *,
+    verify=verify_token_with_litellm,
+    fetch_metadata=fetch_native_oidc_metadata,
+    fetch_provider=fetch_provider_metadata,
+) -> Dict[str, Any]:
+    """Refresh a native credential, re-validating the whole trust chain.
+
+    Everything is re-derived from the stored, origin-bound `base_url`: the
+    advertised issuer and client id must still match the stored credential, the
+    provider document is rediscovered and its issuer checked exactly, and the
+    token endpoint used is the freshly validated one -- never a value read back
+    out of the credential file.
+    """
+    stored_refresh_token = token_data.get("refresh_token")
+    if not isinstance(stored_refresh_token, str) or not stored_refresh_token:
+        raise NativeOIDCError("stored credential has no refresh token; run 'lite login'")
+
+    base_url = token_data.get("base_url")
+    if not isinstance(base_url, str) or not base_url:
+        raise NativeOIDCError("stored credential has no base_url; run 'lite login'")
+
+    with refresh_lock():
+        # Another process may have refreshed while we waited for the lock.
+        current = load_cli_token()
+        if (
+            is_native_credential(current)
+            and current is not None
+            and current.get("base_url") == base_url
+            and not needs_refresh(current)
+        ):
+            return current
+
+        metadata = fetch_metadata(base_url)
+        if metadata.issuer != token_data.get("issuer") or metadata.client_id != token_data.get("client_id"):
+            raise NativeOIDCError(
+                "the proxy now advertises a different OIDC issuer or client id than "
+                "the stored credential; run 'lite login' again"
+            )
+
+        provider = fetch_provider(metadata.issuer)
+        token = _request_refreshed_token(
+            provider.require_token_endpoint(),
+            refresh_token=stored_refresh_token,
+            client_id=metadata.client_id,
+        )
+
+        verify(base_url, token.access_token)
+
+        credential = build_native_credential(
+            base_url=base_url,
+            metadata=metadata,
+            token=token,
+            previous_refresh_token=stored_refresh_token,
+        )
+        save_credential(credential)
+        return credential
