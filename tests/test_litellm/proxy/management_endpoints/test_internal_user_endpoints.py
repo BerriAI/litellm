@@ -788,6 +788,98 @@ def test_update_internal_user_params_reset_spend_and_max_budget():
     assert "budget_duration" not in non_default_values  # Should not add default values
 
 
+def test_update_internal_user_params_initializes_budget_limits():
+    data = UpdateUserRequest(
+        user_id="test_user_id",
+        budget_limits=[
+            {
+                "budget_duration": "1d",
+                "max_budget": 10.0,
+            }
+        ],
+    )
+    data_json = data.model_dump(exclude_unset=True)
+
+    non_default_values = _update_internal_user_params(data_json=data_json, data=data)
+
+    written_windows = json.loads(non_default_values["budget_limits"])
+    assert len(written_windows) == 1
+    assert written_windows[0]["budget_duration"] == "1d"
+    assert written_windows[0]["max_budget"] == 10.0
+    assert written_windows[0]["reset_at"] is not None
+
+
+def test_update_internal_user_params_preserves_reset_at_for_unchanged_window_duration():
+    """
+    Regression: updating a user's budget_limits must NOT silently restart the
+    reset clock for windows whose budget_duration is unchanged. Otherwise a
+    routine update (e.g. tweaking max_budget, or even re-submitting the same
+    list) lets a user spend a brand-new window's worth of budget immediately,
+    instead of waiting for the existing reset_at to fire.
+    """
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    preserved_reset = "2099-01-01T00:00:00+00:00"
+    existing = LiteLLM_UserTable(
+        user_id="test_user_id",
+        budget_limits=[
+            {
+                "budget_duration": "1d",
+                "max_budget": 5.0,
+                "reset_at": preserved_reset,
+            }
+        ],
+    )
+
+    data = UpdateUserRequest(
+        user_id="test_user_id",
+        budget_limits=[
+            {"budget_duration": "1d", "max_budget": 10.0},
+        ],
+    )
+    data_json = data.model_dump(exclude_unset=True)
+
+    non_default_values = _update_internal_user_params(data_json=data_json, data=data, existing_user_row=existing)
+
+    written = json.loads(non_default_values["budget_limits"])
+    assert len(written) == 1
+    assert written[0]["budget_duration"] == "1d"
+    assert written[0]["max_budget"] == 10.0
+    assert written[0]["reset_at"] == preserved_reset
+
+
+def test_update_internal_user_params_assigns_fresh_reset_at_for_new_window_duration():
+    """Companion: a window with a *new* duration must get a fresh reset_at."""
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    existing = LiteLLM_UserTable(
+        user_id="test_user_id",
+        budget_limits=[
+            {
+                "budget_duration": "1d",
+                "max_budget": 5.0,
+                "reset_at": "2099-01-01T00:00:00+00:00",
+            }
+        ],
+    )
+
+    data = UpdateUserRequest(
+        user_id="test_user_id",
+        budget_limits=[
+            {"budget_duration": "30d", "max_budget": 100.0},
+        ],
+    )
+    data_json = data.model_dump(exclude_unset=True)
+
+    non_default_values = _update_internal_user_params(data_json=data_json, data=data, existing_user_row=existing)
+
+    written = json.loads(non_default_values["budget_limits"])
+    assert len(written) == 1
+    assert written[0]["budget_duration"] == "30d"
+    assert written[0]["reset_at"] is not None
+    assert written[0]["reset_at"] != "2099-01-01T00:00:00+00:00"
+
+
 @pytest.mark.asyncio
 async def test_new_user_license_over_limit(mocker):
     """
@@ -3381,6 +3473,41 @@ async def test_ghsa_wvg4_non_admin_cannot_self_escalate_spend(mocker):
 
 
 @pytest.mark.asyncio
+async def test_ghsa_wvg4_non_admin_cannot_self_escalate_budget_limits(mocker):
+    """Non-admin must not be able to self-update budget_limits (per-window
+    budget escalation, same threat class as max_budget)."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {
+        "user_id": "user-1",
+        "budget_limits": [{"budget_duration": "1d", "max_budget": 1.0}],
+    }
+    existing_user.user_id = "user-1"
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=existing_user)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    user_request = UpdateUserRequest(
+        user_id="user-1",
+        budget_limits=[{"budget_duration": "1d", "max_budget": 999999.0}],
+    )
+    caller = UserAPIKeyAuth(
+        user_id="user-1",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _update_single_user_helper(user_request=user_request, user_api_key_dict=caller)
+    assert exc.value.status_code == 403
+    assert "budget_limits" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_ghsa_wvg4_proxy_admin_can_update_user_budget(mocker):
     """PROXY_ADMIN must still be able to modify another user's budget."""
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
@@ -3417,6 +3544,93 @@ async def test_ghsa_wvg4_proxy_admin_can_update_user_budget(mocker):
         user_request=user_request, user_api_key_dict=admin_caller
     )
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_processed_users_invalidates_each_user_cache(mocker):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        bulk_update_processed_users,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {
+        "user_id": "user-1",
+        "max_budget": 100.0,
+    }
+    existing_user.user_id = "user-1"
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=existing_user
+    )
+    mock_prisma_client.update_data = mocker.AsyncMock(
+        side_effect=(
+            {"user_id": "user-1", "max_budget": 10.0},
+            {"user_id": "user-2", "max_budget": 20.0},
+        )
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+    mock_user_cache = mocker.MagicMock()
+    mock_user_cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mock_user_cache)
+
+    response = await bulk_update_processed_users(
+        users_to_update=[
+            UpdateUserRequest(user_id="user-1", max_budget=10.0),
+            UpdateUserRequest(user_id="user-2", max_budget=20.0),
+        ],
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    assert response.successful_updates == 2
+    assert mock_user_cache.async_delete_cache.await_args_list == [
+        mocker.call(key="user-1"),
+        mocker.call(key="user-2"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_all_users_invalidates_each_user_cache(mocker):
+    from litellm.proxy._types import UpdateUserRequestNoUserIDorEmail
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        bulk_user_update,
+    )
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BulkUpdateUserRequest,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    users = [
+        SimpleNamespace(user_id="user-1", user_email="one@example.com"),
+        SimpleNamespace(user_id="user-2", user_email="two@example.com"),
+    ]
+    mock_prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(
+        return_value=users
+    )
+    mock_prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+    mock_user_cache = mocker.MagicMock()
+    mock_user_cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mock_user_cache)
+
+    response = await bulk_user_update.__wrapped__(
+        data=BulkUpdateUserRequest(
+            all_users=True,
+            user_updates=UpdateUserRequestNoUserIDorEmail(max_budget=10.0),
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    assert response.successful_updates == 2
+    mock_user_cache.async_delete_cache.assert_has_awaits(
+        [mocker.call(key="user-1"), mocker.call(key="user-2")],
+        any_order=True,
+    )
 
 
 @pytest.mark.asyncio

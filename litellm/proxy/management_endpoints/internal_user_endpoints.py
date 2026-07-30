@@ -15,7 +15,7 @@ These are members of a Team on LiteLLM
 import asyncio
 import json
 import traceback
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any, Optional, cast
 
@@ -1084,7 +1084,78 @@ def _process_keys_for_user_info(
     return returned_keys
 
 
-def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
+def _existing_reset_at_entry(existing_window: object) -> tuple[str, str] | None:
+    window = existing_window.model_dump() if isinstance(existing_window, BaseModel) else existing_window
+    if not isinstance(window, Mapping):
+        return None
+    duration = window.get("budget_duration")
+    reset_at = window.get("reset_at")
+    if not isinstance(duration, str) or not duration or reset_at is None:
+        return None
+    if isinstance(reset_at, datetime):
+        return duration, reset_at.isoformat()
+    if isinstance(reset_at, str) and reset_at:
+        return duration, reset_at
+    return None
+
+
+def _existing_reset_at_by_duration(
+    existing_user_row: BaseModel | None,
+) -> tuple[tuple[str, str], ...]:
+    if existing_user_row is None:
+        return ()
+    existing_limits = getattr(existing_user_row, "budget_limits", None)
+    if isinstance(existing_limits, str):
+        try:
+            existing_limits = json.loads(existing_limits)
+        except (ValueError, TypeError):
+            return ()
+    if not isinstance(existing_limits, list):
+        return ()
+    return tuple(
+        entry for existing_window in existing_limits if (entry := _existing_reset_at_entry(existing_window)) is not None
+    )
+
+
+def _initialize_budget_limit_window(
+    window: BudgetLimitEntry | Mapping[str, object],
+    preserved: Sequence[tuple[str, str]],
+) -> Mapping[str, object]:
+    window_data = {**window} if isinstance(window, Mapping) else window.model_dump()
+    duration = window_data["budget_duration"]
+    if not isinstance(duration, str):
+        raise ValueError("budget_duration must be a string")
+    existing_reset_at = next(
+        (reset_at for existing_duration, reset_at in reversed(preserved) if existing_duration == duration),
+        None,
+    )
+    if existing_reset_at is None:
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+        existing_reset_at = get_budget_reset_time(budget_duration=duration).isoformat()
+    return {**window_data, "reset_at": existing_reset_at}
+
+
+def _initialize_budget_limits_for_update(
+    new_windows: Sequence[BudgetLimitEntry | Mapping[str, object]],
+    existing_user_row: BaseModel | None,
+) -> str:
+    """
+    Stamp `reset_at` on each incoming window. Preserve the existing reset_at
+    when its `budget_duration` is unchanged so a routine update (e.g. tweaking
+    `max_budget`) does not silently restart the user's budget clock and let
+    them spend a fresh window immediately. New durations get a fresh reset.
+    """
+    preserved = _existing_reset_at_by_duration(existing_user_row)
+    initialized = tuple(_initialize_budget_limit_window(window=window, preserved=preserved) for window in new_windows)
+    return json.dumps(initialized)
+
+
+def _update_internal_user_params(
+    data_json: dict,
+    data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail,
+    existing_user_row: BaseModel | None = None,
+) -> dict:
     non_default_values = {}
     fields_set = data.fields_set() if hasattr(data, "fields_set") else set()
 
@@ -1112,6 +1183,12 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
 
         non_default_values["budget_reset_at"] = get_budget_reset_time(
             budget_duration=non_default_values["budget_duration"]
+        )
+
+    if "budget_limits" in non_default_values:
+        non_default_values["budget_limits"] = _initialize_budget_limits_for_update(
+            new_windows=non_default_values["budget_limits"],
+            existing_user_row=existing_user_row,
         )
 
     if "max_budget" not in non_default_values:
@@ -1207,6 +1284,18 @@ async def _invalidate_user_spend_counter_if_changed(
         await _invalidate_spend_counter(counter_key=f"spend:user:{non_default_values['user_id']}")
 
 
+async def _invalidate_user_cache(user_id: str | None) -> None:
+    if user_id is None:
+        return
+
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    try:
+        await user_api_key_cache.async_delete_cache(key=user_id)
+    except Exception as e:  # noqa: BLE001  # Cache failures must not fail a completed database update
+        verbose_proxy_logger.warning("Failed to invalidate user cache for %s: %s", user_id, e)
+
+
 async def _update_single_user_helper(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1231,10 +1320,6 @@ async def _update_single_user_helper(
         user_api_key_dict=user_api_key_dict,
     )
 
-    data_json: dict = user_request.model_dump(exclude_unset=True)
-    non_default_values = _update_internal_user_params(data_json=data_json, data=user_request)
-    _hash_password_in_dict(non_default_values)
-
     existing_user_row: BaseModel | None = None
     if user_request.user_id:
         existing_user_row = await UserRepository(prisma_client).table.find_first(
@@ -1250,6 +1335,16 @@ async def _update_single_user_helper(
     if existing_user_row is not None:
         existing_user_row = LiteLLM_UserTable.model_validate(existing_user_row.model_dump(exclude_none=True))
 
+    data_json: dict = user_request.model_dump(exclude_unset=True)
+    # Pass existing_user_row so budget_limits reset_at can be preserved for
+    # windows whose budget_duration is unchanged.
+    non_default_values = _update_internal_user_params(
+        data_json=data_json,
+        data=user_request,
+        existing_user_row=existing_user_row,
+    )
+    _hash_password_in_dict(non_default_values)
+
     # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
     # must not be able to raise their own budget/spend fields.
     # can_user_call_user_update() already restricts non-admins to self-updates,
@@ -1259,7 +1354,7 @@ async def _update_single_user_helper(
     )
     _is_self_update = _target_user_id is not None and user_api_key_dict.user_id == _target_user_id
     if _is_self_update and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
-        _protected_fields = ("max_budget", "soft_budget", "spend")
+        _protected_fields = ("max_budget", "soft_budget", "spend", "budget_limits")
         for _field in _protected_fields:
             if _field in non_default_values:
                 raise HTTPException(
@@ -1316,6 +1411,10 @@ async def _update_single_user_helper(
             response = await prisma_client.insert_data(data=non_default_values, table_name="user")
 
     if response is not None:
+        updated_user_id = non_default_values.get("user_id")
+        if isinstance(updated_user_id, str):
+            await _invalidate_user_cache(updated_user_id)
+
         await _schedule_user_update_audit_log(
             response=response,
             existing_user_row=existing_user_row,
@@ -1633,6 +1732,7 @@ async def bulk_user_update(
                 where={},
                 data=non_default_values,  # Update all users
             )
+            await asyncio.gather(*(_invalidate_user_cache(user.user_id) for user in all_users_in_db))
 
             # Create individual success results
             for user in all_users_in_db:
