@@ -110,6 +110,7 @@ def test_azure_gpt_5_6_global_model_info(model):
     assert info["max_input_tokens"] == 1050000
     assert info["max_output_tokens"] == 128000
     assert info["supports_reasoning"] is True
+    assert info["supports_non_default_temperature"] is False
 
     routed_model, provider, _, _ = get_llm_provider(model=model)
     assert provider == "azure"
@@ -137,6 +138,7 @@ def test_azure_gpt_5_6_regional_model_info(model):
     assert info["max_input_tokens"] == 1050000
     assert info["max_output_tokens"] == 128000
     assert info["supports_reasoning"] is True
+    assert info["supports_non_default_temperature"] is False
 
     _, provider, _, _ = get_llm_provider(model=model)
     assert provider == "azure"
