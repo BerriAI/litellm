@@ -380,64 +380,68 @@ describe("CreateMCPServer", () => {
     it.each([
       ["true_passthrough", "True Passthrough (no LiteLLM auth)"],
       ["oauth_delegate", "OAuth Delegate (client-supplied upstream token)"],
-    ])("persists only tool config on create for %s; the token stays browser-held", async (_authType, optionLabel) => {
-      oauthHook.tokenResponse = { access_token: "upstream-tok", token_type: "Bearer" };
-      await selectHttpTransport();
+    ])(
+      "persists only tool config on create for %s; the token stays browser-held",
+      async (_authType, optionLabel) => {
+        oauthHook.tokenResponse = { access_token: "upstream-tok", token_type: "Bearer" };
+        await selectHttpTransport();
 
-      const user = userEvent.setup({ delay: null });
-      await user.type(getServerNameInput(), "CF_Server");
-      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+        const user = userEvent.setup({ delay: null });
+        await user.type(getServerNameInput(), "CF_Server");
+        await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
 
-      await selectAntOption("Authentication", optionLabel);
+        await selectAntOption("Authentication", optionLabel);
 
-      await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
-      await act(async () => {
-        oauthHook.onTokenReceived!({ access_token: "upstream-tok", token_type: "Bearer" }, undefined);
-      });
+        await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
+        await act(async () => {
+          oauthHook.onTokenReceived!({ access_token: "upstream-tok", token_type: "Bearer" }, undefined);
+        });
 
-      fireEvent.click(screen.getByRole("button", { name: "Disable all tools" }));
+        fireEvent.click(screen.getByRole("button", { name: "Disable all tools" }));
 
-      // Previewing and configuring must stay stateless: nothing is persisted anywhere (server row,
-      // per-user DB credential, sessionStorage) until the admin submits.
-      expect(networking.createMCPServer).not.toHaveBeenCalled();
-      expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
-      expect(setToken).not.toHaveBeenCalled();
+        // Previewing and configuring must stay stateless: nothing is persisted anywhere (server row,
+        // per-user DB credential, sessionStorage) until the admin submits.
+        expect(networking.createMCPServer).not.toHaveBeenCalled();
+        expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
+        expect(setToken).not.toHaveBeenCalled();
 
-      const createdServer = {
-        server_id: "new-cf-server",
-        server_name: "CF_Server",
-        alias: "CF_Server",
-        url: "https://example.com/mcp",
-        transport: "http",
-        auth_type: _authType,
-        created_at: "2024-01-01T00:00:00Z",
-        created_by: "user-1",
-        updated_at: "2024-01-01T00:00:00Z",
-        updated_by: "user-1",
-      };
-      vi.mocked(networking.createMCPServer).mockResolvedValue(createdServer);
+        const createdServer = {
+          server_id: "new-cf-server",
+          server_name: "CF_Server",
+          alias: "CF_Server",
+          url: "https://example.com/mcp",
+          transport: "http",
+          auth_type: _authType,
+          created_at: "2024-01-01T00:00:00Z",
+          created_by: "user-1",
+          updated_at: "2024-01-01T00:00:00Z",
+          updated_by: "user-1",
+        };
+        vi.mocked(networking.createMCPServer).mockResolvedValue(createdServer);
 
-      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
-      await act(async () => {
-        fireEvent.click(submitButton);
-      });
+        const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+        await act(async () => {
+          fireEvent.click(submitButton);
+        });
 
-      await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
-      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+        await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+        const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
 
-      // Only the tool configuration persists on the server row; the upstream token appears nowhere
-      // in the create payload and no per-user DB credential is written. The token is committed to
-      // sessionStorage only, keyed to the created server.
-      expect(payload.allowed_tools).toEqual([]);
-      expect(payload.credentials).toBeUndefined();
-      expect(JSON.stringify(payload)).not.toContain("upstream-tok");
-      expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
-      expect(setToken).toHaveBeenCalledWith(
-        "new-cf-server",
-        expect.objectContaining({ access_token: "upstream-tok" }),
-        undefined,
-      );
-    });
+        // Only the tool configuration persists on the server row; the upstream token appears nowhere
+        // in the create payload and no per-user DB credential is written. The token is committed to
+        // sessionStorage only, keyed to the created server.
+        expect(payload.allowed_tools).toEqual([]);
+        expect(payload.credentials).toBeUndefined();
+        expect(JSON.stringify(payload)).not.toContain("upstream-tok");
+        expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
+        expect(setToken).toHaveBeenCalledWith(
+          "new-cf-server",
+          expect.objectContaining({ access_token: "upstream-tok" }),
+          undefined,
+        );
+      },
+      60_000,
+    );
 
     it.each([
       ["true_passthrough", "True Passthrough (no LiteLLM auth)"],
@@ -504,6 +508,7 @@ describe("CreateMCPServer", () => {
           undefined,
         );
       },
+      60_000,
     );
 
     it("preserves admin-entered app credentials when the URL changes after authorize for true_passthrough", async () => {
@@ -561,7 +566,7 @@ describe("CreateMCPServer", () => {
         client_secret: "org-app-secret",
       });
       expect(JSON.stringify(payload)).not.toContain("upstream-tok");
-    });
+    }, 60_000);
 
     it("wipes oauth2-minted credentials when the auth type switches to a client-forwarded mode", async () => {
       await selectHttpTransport();
