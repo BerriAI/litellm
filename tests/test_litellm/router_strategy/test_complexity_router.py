@@ -1418,6 +1418,29 @@ class TestLLMClassifier:
         assert call_kwargs["metadata"] == request_metadata
 
     @pytest.mark.asyncio
+    async def test_aclassify_captures_request_body_in_proxy_server_request(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """The classifier call must supply proxy_server_request so its request body is logged.
+
+        proxy_server_request["body"] is populated only by the proxy's HTTP ingress
+        middleware, which never runs for this internally-initiated router.acompletion
+        call. Without it _get_proxy_server_request_for_spend_logs_payload reads nothing
+        and stores "{}" for the request, so the classifier's spend-log row shows a
+        populated response but an empty request and the log cannot show which prompt
+        drove the tier decision. The captured body must carry the classification prompt
+        actually sent, so the classifier model, the classification prompt, and the user
+        text are all asserted here.
+        """
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+        await llm_complexity_router.aclassify("explain quantum tunneling in depth")
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        body = call_kwargs["proxy_server_request"]["body"]
+        assert body["model"] == "haiku-classifier"
+        assert body["messages"] == call_kwargs["messages"]
+        assert "explain quantum tunneling in depth" in body["messages"][0]["content"]
+
+    @pytest.mark.asyncio
     async def test_aclassify_strips_budget_reservation_from_classifier_metadata(
         self, llm_complexity_router, mock_router_instance
     ):
@@ -2168,6 +2191,39 @@ class TestSemanticKeywordTierRules:
         assert fake_router.async_embedding_kwargs, "expected an embedding call for the prompt"
         assert fake_router.async_embedding_kwargs[0]["metadata"] == caller_metadata
         assert fake_router.async_embedding_kwargs[0]["litellm_metadata"] == caller_litellm_metadata
+
+    @pytest.mark.asyncio
+    async def test_semantic_embedding_call_captures_request_body_in_proxy_server_request(self, basic_config):
+        """The query embedding call must supply proxy_server_request so its request is logged.
+
+        Like the LLM classifier, this embedding is fired internally and never passes
+        through the proxy's HTTP ingress middleware, so proxy_server_request is unset and
+        the embedding's spend-log row stores "{}" for the request while its response is
+        captured. The captured body must carry the embedded input so the log shows what
+        was classified.
+        """
+        fake_router = FakeEmbeddingRouter()
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [{"keywords": ["kubernetes deployment"], "tier": "REASONING"}],
+            "semantic_keyword_matching": True,
+            "embedding_model": "fake-embed",
+            "match_threshold": 0.5,
+        }
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=fake_router,
+            complexity_router_config=config,
+        )
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "roll out my k8s cluster"}],
+        )
+        assert fake_router.async_embedding_kwargs, "expected an embedding call for the prompt"
+        body = fake_router.async_embedding_kwargs[0]["proxy_server_request"]["body"]
+        assert body["model"] == "fake-embed"
+        assert body["input"] == ["roll out my k8s cluster"]
 
     @pytest.mark.asyncio
     async def test_semantic_embedding_call_strips_budget_reservation(self, basic_config):
