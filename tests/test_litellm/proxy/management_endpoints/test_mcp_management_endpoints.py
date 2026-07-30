@@ -3624,6 +3624,24 @@ class TestManagementPayloadValidation:
 
         assert payload.alias == "valid_server"
 
+    def test_rejects_missing_server_name_and_alias(self):
+        payload = SimpleNamespace(server_name=None, alias=None)
+
+        with pytest.raises(HTTPException) as exc_info:
+            mgmt_endpoints.validate_and_normalize_mcp_server_payload(payload)
+
+        assert exc_info.value.status_code == 400
+        assert "server_name or alias" in exc_info.value.detail["error"]
+
+    def test_rejects_empty_server_name_and_alias(self):
+        payload = SimpleNamespace(server_name="", alias="")
+
+        with pytest.raises(HTTPException) as exc_info:
+            mgmt_endpoints.validate_and_normalize_mcp_server_payload(payload)
+
+        assert exc_info.value.status_code == 400
+        assert "server_name or alias" in exc_info.value.detail["error"]
+
     @pytest.mark.asyncio
     async def test_health_check_view_all_mode(self):
         """view_all mode should return health info for all MCP servers."""
