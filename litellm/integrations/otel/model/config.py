@@ -203,6 +203,23 @@ class OpenTelemetryV2Config(BaseSettings):
         ),
     )
 
+    langfuse_trace_metadata_keys: Annotated[tuple[str, ...], NoDecode] = Field(
+        default_factory=tuple,
+        validation_alias=AliasChoices(
+            "langfuse_trace_metadata_keys",
+            "LITELLM_OTEL_LANGFUSE_TRACE_METADATA_KEYS",
+        ),
+        description=(
+            "Request-metadata keys the ``langfuse`` mapper stamps as "
+            "``langfuse.trace.metadata.<key>``. Empty by default so none of a "
+            "caller's free-form metadata reaches Langfuse until explicitly "
+            "allowlisted. Configure via the "
+            "``LITELLM_OTEL_LANGFUSE_TRACE_METADATA_KEYS`` env var "
+            "(comma-separated) or ``callback_settings.otel."
+            "langfuse_trace_metadata_keys`` in config.yaml (a YAML list)."
+        ),
+    )
+
     @field_validator("capture_message_content", mode="before")
     @classmethod
     def _normalize_capture_message_content(cls, value: object) -> object:
@@ -221,6 +238,7 @@ class OpenTelemetryV2Config(BaseSettings):
         "baggage_promoted_keys",
         "baggage_metadata_keys",
         "baggage_team_metadata_keys",
+        "langfuse_trace_metadata_keys",
         "mapper_names",
         mode="before",
     )

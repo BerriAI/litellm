@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, ClassVar, Mapping, cast
 from urllib.parse import urlsplit
 
 from litellm.integrations.otel.model.metadata import (
+    RequestAnnotations,
     RequestContext,
     RequestIdentity,
 )
@@ -30,6 +31,7 @@ from litellm.integrations.otel.model.utils import (
 # :mod:`metadata`; re-exported here so existing ``model.payloads`` imports keep
 # resolving it.
 __all__ = [
+    "RequestAnnotations",
     "RequestContext",
     "RequestIdentity",
     "GuardrailSpanData",
@@ -297,6 +299,7 @@ class LLMCallSpanData:
     response_cost: float | None
     server: ServerInfo | None
     identity: RequestIdentity
+    annotations: RequestAnnotations = field(default_factory=RequestAnnotations)
     is_streaming: bool | None = None
     cost: LLMCost = field(default_factory=LLMCost)
     tools: tuple[ToolDefinition, ...] = ()
@@ -351,6 +354,7 @@ class LLMCallSpanData:
             cost=LLMCost.from_breakdown(cast("Mapping[str, object] | None", payload.get("cost_breakdown"))),
             server=ServerInfo.from_api_base(context.api_base),
             identity=context.identity,
+            annotations=context.annotations,
             is_streaming=as_bool(payload.get("stream")),
             tools=_extract_tools(params),
             messages_in=_dicts(payload.get("messages")) if capture_content else (),

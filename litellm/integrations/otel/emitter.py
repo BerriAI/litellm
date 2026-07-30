@@ -122,7 +122,7 @@ class SpanEmitter:
         # The mapper chain is the sole source of span attributes. When not
         # passed in, resolve it from the config so there's one source of truth.
         self._mappers: list[AttributeMapper] = (
-            list(mappers) if mappers is not None else resolve_mappers(config.mapper_names)
+            list(mappers) if mappers is not None else resolve_mappers(config.mapper_names, config)
         )
         # Bounded LRU (ordered by insertion / most-recent touch). Storing keys
         # only — the value is unused — so it behaves like a capped set.

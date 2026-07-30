@@ -179,6 +179,10 @@ nothing here imports outside it:
   `config.yaml` — the latter reach the config through the logger's constructor
   kwargs. `baggage_team_metadata_keys` is empty by default, so none of a team's
   free-form metadata is promoted until each sub-key is explicitly allowlisted.
+  `langfuse_trace_metadata_keys` (`LITELLM_OTEL_LANGFUSE_TRACE_METADATA_KEYS`) is
+  the same kind of allowlist for the caller's own request metadata, which the
+  `langfuse` mapper stamps as `langfuse.trace.metadata.<key>`; also empty by
+  default.
 - [`baggage.py`](./model/baggage.py) — the single definition of which request-identity
   values are promoted into Baggage (so child spans inherit them) and under which
   attribute keys.
@@ -198,7 +202,9 @@ nothing here imports outside it:
   - `legacy` — an additional vocabulary using the older semconv-ai / Traceloop
     attribute key names, for backends that read those.
   - `openinference`, `langfuse`, `weave`, `langtrace` — vendor vocabularies.
-  - `resolve_mappers(names)` turns config names into mapper instances.
+  - `resolve_mappers(names, config)` turns config names into mapper instances,
+    handing each the config so a vocabulary with operator-configurable behaviour
+    (the Langfuse trace-metadata allowlist) reads it from the same place.
 
 ### Plumbing (`plumbing/`)
 

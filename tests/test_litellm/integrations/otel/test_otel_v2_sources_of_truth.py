@@ -549,6 +549,45 @@ def test_request_context_prefers_explicit_dispatched_model():
     assert ctx.provider_model == "azure/my-deployment"
 
 
+def test_request_annotations_parse_caller_trace_controls():
+    """The caller's trace controls survive only in the ``requester_metadata``
+    snapshot (``StandardLoggingMetadata`` drops undeclared keys), and tags come
+    from the already-merged ``request_tags``."""
+    payload = _sample_payload(
+        metadata={
+            "requester_metadata": {
+                "trace_user_id": "user-1",
+                "session_id": "session-1",
+                "trace_name": "chat-request",
+                "tags": ["test"],
+                "environment": "staging",
+            }
+        },
+        request_tags=["test", "user_agent:curl"],
+    )
+    annotations = LLMCallSpanData.from_standard_logging_payload(payload).annotations
+    assert annotations.user_id == "user-1"
+    assert annotations.session_id == "session-1"
+    assert annotations.trace_name == "chat-request"
+    assert annotations.tags == ("test", "user_agent:curl")
+    # scalars only: the ``tags`` list is not a span-safe value here
+    assert annotations.requester_metadata == {
+        "trace_user_id": "user-1",
+        "session_id": "session-1",
+        "trace_name": "chat-request",
+        "environment": "staging",
+    }
+
+
+def test_request_annotations_empty_without_caller_metadata():
+    annotations = LLMCallSpanData.from_standard_logging_payload(_sample_payload()).annotations
+    assert annotations.user_id is None
+    assert annotations.session_id is None
+    assert annotations.trace_name is None
+    assert annotations.tags == ()
+    assert annotations.requester_metadata == {}
+
+
 def test_content_capture_opt_in_retains_bodies():
     payload = _sample_payload(
         messages=[{"role": "user", "content": "secret prompt"}],

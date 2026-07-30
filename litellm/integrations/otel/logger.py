@@ -153,7 +153,7 @@ class OpenTelemetryV2(CustomLogger):
         self._emitter = SpanEmitter(
             self.tracer,
             self.config,
-            mappers=resolve_mappers(self.config.mapper_names),
+            mappers=resolve_mappers(self.config.mapper_names, self.config),
             event_recorder=self._init_events(logger_provider),
         )
         self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
