@@ -839,14 +839,21 @@ async def _initialize_shared_aiohttp_session():
             _build_aiohttp_keepalive_socket_factory,
         )
 
-        connector = TCPConnector(
-            keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
-            ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
-            enable_cleanup_closed=AIOHTTP_NEEDS_CLEANUP_CLOSED,
-            limit=AIOHTTP_CONNECTOR_LIMIT if AIOHTTP_CONNECTOR_LIMIT > 0 else 100,
-            limit_per_host=AIOHTTP_CONNECTOR_LIMIT_PER_HOST if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0 else 0,
-            socket_factory=_build_aiohttp_keepalive_socket_factory(),
-        )
+        connector_kwargs: Dict[str, Any] = {
+            "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
+            "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
+        }
+        if AIOHTTP_NEEDS_CLEANUP_CLOSED:
+            connector_kwargs["enable_cleanup_closed"] = True
+        if AIOHTTP_CONNECTOR_LIMIT > 0:
+            connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
+        if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
+            connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+        socket_factory = _build_aiohttp_keepalive_socket_factory()
+        if socket_factory is not None:
+            connector_kwargs["socket_factory"] = socket_factory
+
+        connector = TCPConnector(**connector_kwargs)
         session = ClientSession(connector=connector)
 
         verbose_proxy_logger.info(
