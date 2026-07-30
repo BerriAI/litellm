@@ -230,6 +230,21 @@ lives in [`plumbing/`](./plumbing):
   cardinality filter, so an `otel.attributes` list cannot merge the failure series
   back into the success series. A proxy-gate rejection (auth / rate limit) records
   nothing, for the same reason it gets no span: no upstream call happened.
+  Both paths cap their attributes at `METRIC_ATTRIBUTE_CEILING` before the
+  operator's own `otel.attributes` filter runs, so the filter can narrow the set
+  but never widen it. The ceiling is what keeps series count bounded by the
+  deployment's own key/team/user/deployment count instead of by its traffic: a
+  label value that moves per request mints a time series per request, which both
+  bills per request on a hosted backend and leaves a histogram that cannot be
+  aggregated. So client-supplied and per-request metadata (`requester_metadata`,
+  `spend_logs_metadata`, `user_api_key_end_user_id`, `requester_ip_address`) is
+  metric-ineligible and stays on the span, where cardinality is free, and the
+  `hidden_params` label carries only `model_id`, the deployment identity a
+  per-deployment panel joins on. `api_base` is excluded despite naming the same
+  deployment, because it is a documented per-call parameter and so is caller-chosen
+  in SDK use. Because the shared validator accepts every span attribute name, a
+  filter that names a metric-ineligible one logs a warning once when the filter
+  resolves rather than silently emitting nothing for it.
 - [`events.py`](./plumbing/events.py) — GenAI client events. Gated on
   `enable_events` (`LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS`), a failed LLM call
   records the semconv `gen_ai.client.operation.exception` log event at severity
