@@ -9,13 +9,18 @@ interface SidebarProviderProps {
   setPage: (page: string) => void;
   defaultSelectedKey: string;
   sidebarCollapsed: boolean;
+  onToggleCollapsed?: () => void;
 }
 
-const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: SidebarProviderProps) => {
+const SidebarProvider = ({
+  setPage,
+  defaultSelectedKey,
+  sidebarCollapsed,
+  onToggleCollapsed,
+}: SidebarProviderProps) => {
   const { accessToken } = useAuthorized();
   const [enabledPagesInternalUsers, setEnabledPagesInternalUsers] = useState<string[] | null>(null);
   const [enableProjectsUI, setEnableProjectsUI] = useState<boolean>(false);
-  const [enableChatUI, setEnableChatUI] = useState<boolean>(false);
   const [disableAgentsForInternalUsers, setDisableAgentsForInternalUsers] = useState<boolean>(false);
   const [allowAgentsForTeamAdmins, setAllowAgentsForTeamAdmins] = useState<boolean>(false);
   const [disableVectorStoresForInternalUsers, setDisableVectorStoresForInternalUsers] = useState<boolean>(false);
@@ -38,10 +43,6 @@ const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: Side
 
         if (settings?.values?.enable_projects_ui !== undefined) {
           setEnableProjectsUI(Boolean(settings.values.enable_projects_ui));
-        }
-
-        if (settings?.values?.enable_chat_ui !== undefined) {
-          setEnableChatUI(Boolean(settings.values.enable_chat_ui));
         }
 
         if (settings?.values?.disable_agents_for_internal_users !== undefined) {
@@ -72,9 +73,9 @@ const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: Side
       setPage={setPage}
       defaultSelectedKey={defaultSelectedKey}
       collapsed={sidebarCollapsed}
+      onToggleCollapsed={onToggleCollapsed}
       enabledPagesInternalUsers={enabledPagesInternalUsers}
       enableProjectsUI={enableProjectsUI}
-      enableChatUI={enableChatUI}
       disableAgentsForInternalUsers={disableAgentsForInternalUsers}
       allowAgentsForTeamAdmins={allowAgentsForTeamAdmins}
       disableVectorStoresForInternalUsers={disableVectorStoresForInternalUsers}

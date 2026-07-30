@@ -661,6 +661,10 @@ def _gemini_convert_messages_with_history(
         vertex_project = litellm_params.get("vertex_project") or litellm_params.get("vertex_ai_project")
         vertex_credentials = litellm_params.get("vertex_credentials") or litellm_params.get("vertex_ai_credentials")
 
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    forward_function_call_id = VertexGeminiConfig._forward_gemini_function_call_id(model or "")
+
     try:
         while msg_i < len(messages):
             user_content: List[PartType] = []
@@ -910,7 +914,7 @@ def _gemini_convert_messages_with_history(
                     gemini_tool_call_parts = convert_to_gemini_tool_call_invoke(
                         assistant_msg,
                         model=model,
-                        custom_llm_provider=custom_llm_provider,
+                        forward_function_call_id=forward_function_call_id,
                     )
                     ## check if gemini_tool_call already exists in assistant_content
                     for gemini_tool_call_part in gemini_tool_call_parts:
@@ -973,8 +977,7 @@ def _gemini_convert_messages_with_history(
                 _part = convert_to_gemini_tool_call_result(
                     messages[msg_i],  # type: ignore
                     last_message_with_tool_calls,  # type: ignore
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
+                    forward_function_call_id=forward_function_call_id,
                 )
                 msg_i += 1
                 # Handle both single part and list of parts (for Computer Use with images)

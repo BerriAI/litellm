@@ -39,9 +39,9 @@ from litellm.integrations.otel.plumbing.providers import (  # noqa: E402
 
 OPERATION_DURATION = "gen_ai.client.operation.duration"
 TOKEN_USAGE = "gen_ai.client.token.usage"
-TOKEN_COST = "gen_ai.client.token.cost"
-TIME_TO_FIRST_TOKEN = "gen_ai.client.response.time_to_first_token"
-TIME_PER_OUTPUT_TOKEN = "gen_ai.client.response.time_per_output_token"
+TOKEN_COST = "gen_ai.usage.cost"
+TIME_TO_FIRST_TOKEN = "gen_ai.server.time_to_first_token"
+TIME_PER_OUTPUT_TOKEN = "gen_ai.server.time_per_output_token"
 RESPONSE_DURATION = "gen_ai.client.response.duration"
 
 ALL_METRICS = frozenset(

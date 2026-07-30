@@ -309,12 +309,12 @@ def _import_keys_to_destination(
             imported_count += 1
 
             key_alias = key.get("key_alias", "N/A")
-            click.echo(f"✓ Imported key: {key_alias}")
+            click.echo(f"Imported key: {key_alias}")
 
         except Exception as e:
             failed_count += 1
             key_alias = key.get("key_alias", "N/A")
-            click.echo(f"✗ Failed to import key {key_alias}: {str(e)}", err=True)
+            click.echo(f"Failed to import key {key_alias}: {str(e)}", err=True)
 
     return imported_count, failed_count
 

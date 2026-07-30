@@ -70,25 +70,33 @@ class TestAgentCoreAcceptHeader:
         """
         End-to-end test: verify Accept header appears in the final HTTP request
         when using JWT auth through litellm.completion().
+
+        No exception swallowing: if completion() raises (for example because the
+        injected client was silently ignored and a real network call was made),
+        the test must fail with that error, not a misleading mock assertion.
         """
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
         client = HTTPHandler()
-        with patch.object(client, "post", return_value=MagicMock()) as mock_post:
-            try:
-                litellm.completion(
-                    model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_runtime",
-                    messages=[{"role": "user", "content": "test"}],
-                    api_key="test-jwt-token",
-                    client=client,
-                )
-            except Exception:
-                pass
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json.return_value = {
+            "result": {"role": "assistant", "content": [{"text": "agent reply"}]}
+        }
 
-            mock_post.assert_called_once()
-            headers = mock_post.call_args.kwargs["headers"]
-            assert "Accept" in headers
-            assert headers["Accept"] == "application/json, text/event-stream"
+        with patch.object(client, "post", return_value=mock_response) as mock_post:
+            response = litellm.completion(
+                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_runtime",
+                messages=[{"role": "user", "content": "test"}],
+                api_key="test-jwt-token",
+                client=client,
+            )
+
+        mock_post.assert_called_once()
+        headers = mock_post.call_args.kwargs["headers"]
+        assert headers["Accept"] == "application/json, text/event-stream"
+        assert response.choices[0].message.content == "agent reply"
 
 
 class TestAgentCoreJsonResponseParsing:

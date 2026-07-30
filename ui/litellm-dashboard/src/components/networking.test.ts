@@ -514,3 +514,83 @@ describe("sessionSpendLogsCall", () => {
     expect(parsed.searchParams.get("page_size")).toBe("100");
   });
 });
+
+describe("buildModelGroupTestRequest", () => {
+  it("builds a chat completion request with NO max_tokens (reasoning models 400 on a tiny cap)", () => {
+    const { path, body } = Networking.buildModelGroupTestRequest("o3", "chat");
+    expect(path).toBe("/v1/chat/completions");
+    expect(body).toEqual({ model: "o3", messages: [{ role: "user", content: "test from litellm" }] });
+    expect(body).not.toHaveProperty("max_tokens");
+    expect(body).not.toHaveProperty("max_completion_tokens");
+  });
+
+  it("builds an embeddings request for embedding mode", () => {
+    const { path, body } = Networking.buildModelGroupTestRequest("text-embedding-3-small", "embedding");
+    expect(path).toBe("/v1/embeddings");
+    expect(body).toEqual({ model: "text-embedding-3-small", input: "test from litellm" });
+  });
+});
+
+describe("testMCPToolsListRequest auth headers", () => {
+  const originalFetch = global.fetch;
+
+  const captureFetch = () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      json: vi.fn().mockResolvedValue({ tools: [] }),
+    } as any);
+    global.fetch = mockFetch as any;
+    return mockFetch;
+  };
+
+  const sentHeaders = (mockFetch: ReturnType<typeof vi.fn>): Record<string, string> =>
+    (mockFetch.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
+
+  afterEach(() => {
+    Networking.setGlobalLitellmHeaderName("Authorization");
+    global.fetch = originalFetch;
+  });
+
+  it("sends the litellm key under a custom litellm_key_header_name even when an upstream OAuth token uses Authorization", async () => {
+    Networking.setGlobalLitellmHeaderName("x-litellm-key");
+    const mockFetch = captureFetch();
+
+    await Networking.testMCPToolsListRequest("sk-key", {}, "upstream-oauth-token");
+
+    const headers = sentHeaders(mockFetch);
+    expect(headers["x-litellm-key"]).toBe("Bearer sk-key");
+    expect(headers["Authorization"]).toBe("Bearer upstream-oauth-token");
+  });
+
+  it("Bearer-prefixes x-litellm-api-key when it is the configured key header (raw values fail _get_bearer_token)", async () => {
+    Networking.setGlobalLitellmHeaderName("x-litellm-api-key");
+    const mockFetch = captureFetch();
+
+    await Networking.testMCPToolsListRequest("sk-key", {}, "upstream-oauth-token");
+
+    const headers = sentHeaders(mockFetch);
+    expect(headers["x-litellm-api-key"]).toBe("Bearer sk-key");
+    expect(headers["Authorization"]).toBe("Bearer upstream-oauth-token");
+  });
+
+  it("never clobbers the upstream OAuth token on default deployments", async () => {
+    const mockFetch = captureFetch();
+
+    await Networking.testMCPToolsListRequest("sk-key", {}, "upstream-oauth-token");
+
+    const headers = sentHeaders(mockFetch);
+    expect(headers["Authorization"]).toBe("Bearer upstream-oauth-token");
+    expect(headers["x-litellm-api-key"]).toBe("sk-key");
+  });
+
+  it("sends the litellm key as the bearer on default deployments without an OAuth token", async () => {
+    const mockFetch = captureFetch();
+
+    await Networking.testMCPToolsListRequest("sk-key", {});
+
+    const headers = sentHeaders(mockFetch);
+    expect(headers["Authorization"]).toBe("Bearer sk-key");
+  });
+});

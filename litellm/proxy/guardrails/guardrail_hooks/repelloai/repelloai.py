@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import AsyncGenerator, Literal
+from typing import AsyncGenerator, List, Literal
 
 from pydantic import TypeAdapter, ValidationError
 from pydantic import BaseModel
@@ -64,6 +64,13 @@ def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isin
 
 
 class RepelloAIGuardrail(CustomGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     @staticmethod
     def _get_field(obj: object, key: str) -> object:
         if _is_object_dict(obj):
@@ -169,6 +176,7 @@ class RepelloAIGuardrail(CustomGuardrail):
             guardrail_name=guardrail_name,
             event_hook=event_hook,
             default_on=default_on,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
         )
 
     async def _call_analyze(
