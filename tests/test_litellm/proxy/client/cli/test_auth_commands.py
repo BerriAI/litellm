@@ -25,6 +25,21 @@ from litellm.proxy.client.cli.commands.auth import (
     save_token,
     whoami,
 )
+from litellm.proxy.client.cli.native_oidc.errors import NativeOIDCUnavailable
+
+
+@pytest.fixture(autouse=True)
+def proxy_without_native_oidc(monkeypatch):
+    """Every test in this file targets a proxy that advertises no native OIDC.
+
+    That is the one condition under which `--flow auto` falls back to the
+    proxy-mediated SSO flow these tests exercise.
+    """
+
+    def unavailable(*args, **kwargs):
+        raise NativeOIDCUnavailable("proxy does not advertise native_oidc")
+
+    monkeypatch.setattr("litellm.proxy.client.cli.commands.auth.run_native_login", unavailable)
 
 
 def _mock_cli_sso_start_response(
