@@ -1,9 +1,12 @@
 import asyncio
 import copy
 import datetime
+import gc
+import logging
 from typing import AsyncGenerator, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import anyio
 import httpx
 import pytest
 from fastapi import HTTPException, Request, Response, status
@@ -15,6 +18,8 @@ from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
+    MIN_SSE_KEEPALIVE_INTERVAL_SECONDS,
+    SSE_KEEPALIVE_COMMENT,
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
     _await_llm_call_cancelling_on_disconnect,
@@ -28,6 +33,7 @@ from litellm.proxy.common_request_processing import (
     _is_azure_model_router_request,
     _override_openai_response_model,
     _parse_event_data_for_error,
+    _resolve_sse_keepalive_interval,
     _should_return_raw_model_name,
     _UpstreamClosingStreamingResponse,
     create_response,
@@ -2778,8 +2784,9 @@ class TestStreamCloseOnDisconnect:
         async def gen():
             yield "data: first\n\n"
 
-        first = await _buffer_first_chunk_honoring_disconnect(gen(), request=None)
+        first, pending = await _buffer_first_chunk_honoring_disconnect(gen(), request=None)
         assert first == "data: first\n\n"
+        assert pending is None
 
     async def test_create_response_prioritizes_disconnect_in_same_scheduler_turn(self):
         """Same-turn race: the first chunk and the disconnect both resolve before
@@ -5111,3 +5118,993 @@ class TestStreamingClientDisconnectBilling:
         )
 
         proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+
+
+class TestSSEKeepalive:
+    @staticmethod
+    def _request_never_disconnects() -> Request:
+        async def receive():
+            await asyncio.Event().wait()
+
+        return Request({"type": "http"}, receive=receive)
+
+    @staticmethod
+    def _request_that_disconnects() -> Request:
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        return Request({"type": "http"}, receive=receive)
+
+    @staticmethod
+    async def _stalling_gen(stall: float, closed: Optional[asyncio.Event] = None):
+        try:
+            await asyncio.sleep(stall)
+            yield "data: first\n\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            if closed is not None:
+                closed.set()
+
+    async def _collect(self, response) -> list:
+        return [chunk async for chunk in response.body_iterator]
+
+    @staticmethod
+    def _pending_tasks_since(before: set) -> list:
+        """Tasks this test started and left running, ignoring the harness's own."""
+        return [t for t in asyncio.all_tasks() if t not in before and t is not asyncio.current_task() and not t.done()]
+
+    async def test_interval_unset_leaves_stream_byte_identical(self, monkeypatch):
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", None, raising=False)
+
+        response = await create_response(
+            generator=self._stalling_gen(0.05),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        assert await self._collect(response) == ["data: first\n\n", "data: [DONE]\n\n"]
+
+    async def test_keepalive_emitted_before_first_chunk(self, monkeypatch):
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        response = await create_response(
+            generator=self._stalling_gen(2.5),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+
+        assert chunks[0] == SSE_KEEPALIVE_COMMENT
+        assert chunks.count(SSE_KEEPALIVE_COMMENT) >= 1
+        assert [c for c in chunks if c != SSE_KEEPALIVE_COMMENT] == [
+            "data: first\n\n",
+            "data: [DONE]\n\n",
+        ]
+
+    async def test_fast_first_chunk_emits_no_keepalive(self, monkeypatch):
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        response = await create_response(
+            generator=self._stalling_gen(0.0),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        assert await self._collect(response) == ["data: first\n\n", "data: [DONE]\n\n"]
+
+    async def test_non_sse_media_type_is_never_wrapped(self, monkeypatch):
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        response = await create_response(
+            generator=self._stalling_gen(2.5),
+            media_type="application/json",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        assert SSE_KEEPALIVE_COMMENT not in await self._collect(response)
+
+    async def test_fast_error_only_stream_still_returns_json_response(self, monkeypatch):
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        async def error_gen():
+            yield 'data: {"error": {"message": "blocked", "code": 400}}\n\n'
+
+        response = await create_response(
+            generator=error_gen(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 400
+
+    async def test_slow_error_only_stream_degrades_to_sse_frame(self, monkeypatch):
+        """Once a keepalive ships the status line, a late error can no longer be
+        downgraded to JSON. Pinned so the trade-off stays a decision."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        async def slow_error_gen():
+            await asyncio.sleep(2.5)
+            yield 'data: {"error": {"message": "blocked", "code": 400}}\n\n'
+
+        response = await create_response(
+            generator=slow_error_gen(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+
+        assert response.status_code == 200
+        assert SSE_KEEPALIVE_COMMENT in chunks
+        assert 'data: {"error": {"message": "blocked", "code": 400}}\n\n' in chunks
+
+    async def test_disconnect_before_timer_still_returns_499_when_keepalive_enabled(
+        self, monkeypatch
+    ):
+        """A disconnect that beats the timer resolves the wait, so keepalive_due is
+        False and the pre-existing 499 path must be reached unchanged."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        closed = asyncio.Event()
+
+        with pytest.raises(_ClientDisconnectedBeforeFirstChunk):
+            await asyncio.wait_for(
+                _buffer_first_chunk_honoring_disconnect(
+                    self._stalling_gen(5.0, closed),
+                    self._request_that_disconnects(),
+                    1.0,
+                ),
+                timeout=5,
+            )
+
+        assert closed.is_set()
+
+    async def test_disconnect_after_timer_hands_back_task_then_closes_upstream(
+        self, monkeypatch
+    ):
+        """The (disconnect, keepalive_due) pair cannot both be true: an elapsed timer
+        means neither task resolved. Pin that the timer arm hands the task back and
+        that a later disconnect still closes the upstream generator."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        closed = asyncio.Event()
+
+        first, pending = await _buffer_first_chunk_honoring_disconnect(
+            self._stalling_gen(5.0, closed),
+            self._request_never_disconnects(),
+            1.0,
+        )
+
+        assert first is None
+        assert pending is not None and not pending.done()
+
+        pending.cancel()
+        try:
+            await pending
+        except BaseException:
+            pass
+        await asyncio.sleep(0)
+
+        assert closed.is_set()
+
+    async def test_upstream_generator_is_not_the_keepalive_wrapper(self, monkeypatch):
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        generator = self._stalling_gen(2.5)
+
+        response = await create_response(
+            generator=generator,
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        assert isinstance(response, _UpstreamClosingStreamingResponse)
+        assert response._upstream_generator is generator
+        assert response._pending_first_chunk is not None
+        await self._collect(response)
+
+    async def test_early_consumer_exit_cancels_pending_and_closes_upstream(
+        self, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        closed = asyncio.Event()
+
+        response = await create_response(
+            generator=self._stalling_gen(5.0, closed),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        body = response.body_iterator
+        assert await body.__anext__() == SSE_KEEPALIVE_COMMENT
+        await body.aclose()
+
+        assert response._pending_first_chunk.done()
+        assert closed.is_set()
+
+    async def test_raising_fetch_outcome_is_consumed_so_asyncio_stays_quiet(
+        self, monkeypatch, caplog
+    ):
+        """A never-iterated response whose upstream raises is the only shape that
+        makes asyncio log an unretrieved task exception."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        async def raises_after_timer():
+            await asyncio.sleep(1.5)
+            raise RuntimeError("upstream broke")
+            yield  # pragma: no cover
+
+        response = await create_response(
+            generator=raises_after_timer(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        task = response._pending_first_chunk
+        assert task is not None
+
+        with caplog.at_level(logging.ERROR, logger="asyncio"):
+            # Never await the task: the callback is the only thing that consumes
+            # the exception, so dropping the task must not tickle asyncio's
+            # unretrieved-exception reporter.
+            while not task.done():
+                await asyncio.sleep(0.1)
+            del response, task
+            gc.collect()
+            await asyncio.sleep(0)
+            gc.collect()
+
+        assert "Task exception was never retrieved" not in caplog.text
+
+    async def test_upstream_exception_during_stall_propagates(self, monkeypatch):
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        async def boom():
+            await asyncio.sleep(2.5)
+            raise ValueError("upstream broke")
+            yield  # pragma: no cover
+
+        response = await create_response(
+            generator=boom(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        with pytest.raises(ValueError, match="upstream broke"):
+            await self._collect(response)
+
+    async def test_empty_stream_during_stall_terminates_cleanly(self, monkeypatch):
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        async def empty_after_stall():
+            await asyncio.sleep(2.5)
+            return
+            yield  # pragma: no cover
+
+        response = await create_response(
+            generator=empty_after_stall(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+
+        assert chunks == [SSE_KEEPALIVE_COMMENT, SSE_KEEPALIVE_COMMENT]
+
+    async def test_teardown_awaits_cancelled_fetch_before_closing_upstream(
+        self, monkeypatch, caplog
+    ):
+        """The cancelled fetch still owns an __anext__ frame on the upstream
+        generator, so aclose() would raise "already running" and defer cleanup
+        past __call__ unless the teardown awaits the cancellation first."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        events = []
+
+        async def upstream():
+            try:
+                await asyncio.sleep(30)
+                yield "data: never\n\n"
+            finally:
+                events.append("upstream_closed")
+
+        response = await create_response(
+            generator=upstream(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        async def send(message):
+            raise anyio.get_cancelled_exc_class()()
+
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+            try:
+                await response({"type": "http"}, receive, send)
+            except BaseException:
+                pass
+            events.append("call_returned")
+
+        assert events == ["upstream_closed", "call_returned"], (
+            f"cleanup escaped __call__: {events}"
+        )
+        assert "asynchronous generator is already running" not in caplog.text
+
+    async def test_chunk_landing_during_disconnect_teardown_is_not_discarded(
+        self, monkeypatch
+    ):
+        """keepalive_due is latched before the finally awaits the disconnect watcher,
+        which suspends. A chunk resolving in that window must still take the normal
+        path, or a 200 ships with no keepalive and Contract A is lost for nothing."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        real_wait = asyncio.wait
+
+        async def wait_then_let_chunk_land(aws, **kwargs):
+            done, pending = await real_wait(aws, **kwargs)
+            if not done:
+                # Simulate the chunk resolving during the finally's suspension point.
+                await real_wait(aws, return_when=asyncio.FIRST_COMPLETED)
+            return done, pending
+
+        async def error_after_timer():
+            await asyncio.sleep(1.2)
+            yield 'data: {"error": {"message": "blocked", "code": 400}}\n\n'
+
+        monkeypatch.setattr(asyncio, "wait", wait_then_let_chunk_land)
+        response = await create_response(
+            generator=error_after_timer(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        monkeypatch.setattr(asyncio, "wait", real_wait)
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 400
+
+    async def test_raise_before_the_timer_keeps_its_status_code(self, monkeypatch):
+        """An exception raised while create_response is still buffering is mapped to
+        its own status, exactly as it is with the feature off."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 2.0, raising=False)
+
+        async def raises_fast():
+            await asyncio.sleep(0.05)
+            raise HTTPException(status_code=400, detail={"error": "blocked"})
+            yield  # pragma: no cover
+
+        response = await create_response(
+            generator=raises_fast(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+
+        assert response.status_code == 400
+        assert SSE_KEEPALIVE_COMMENT not in chunks
+
+    async def test_raise_after_the_timer_loses_its_status_code(self, monkeypatch):
+        """Committing to a response to send a keepalive gives up the ability to map a
+        later exception onto a status code, so it escapes instead. Pinned so the
+        trade-off stays a decision: keep the interval below the time a guardrail
+        needs to reject a request and this stays unreachable."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        async def raises_slow():
+            await asyncio.sleep(2.5)
+            raise HTTPException(status_code=400, detail={"error": "blocked"})
+            yield  # pragma: no cover
+
+        response = await create_response(
+            generator=raises_slow(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        assert response.status_code == 200
+        with pytest.raises(HTTPException):
+            await self._collect(response)
+
+    async def test_disconnect_during_keepalive_window_completes_shielded_cleanup(
+        self, monkeypatch
+    ):
+        """The upstream generator's finally is driven from the cancelled first-chunk
+        task, so its shielded cleanup must survive anyio re-delivering cancellation."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        committed = []
+
+        async def upstream():
+            completed = False
+            try:
+                await asyncio.sleep(30)
+                yield "data: never\n\n"
+                completed = True
+            finally:
+                with anyio.CancelScope(shield=True):
+                    try:
+                        if not completed:
+                            await asyncio.sleep(0)
+                            committed.append("record_499")
+                            await asyncio.sleep(0)
+                            committed.append("release_slot")
+                        await asyncio.sleep(0)
+                        committed.append("close_upstream")
+                    except BaseException:
+                        committed.append("ABORTED")
+
+        response = await create_response(
+            generator=upstream(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        disconnected = asyncio.Event()
+
+        async def send(message):
+            if message["type"] == "http.response.body" and message.get("body"):
+                disconnected.set()
+
+        async def receive():
+            await disconnected.wait()
+            await asyncio.sleep(0.02)
+            return {"type": "http.disconnect"}
+
+        try:
+            await response(
+                {"type": "http", "method": "POST", "path": "/", "headers": []},
+                receive,
+                send,
+            )
+        except BaseException:
+            pass
+        for _ in range(50):
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.1)
+
+        assert committed == ["record_499", "release_slot", "close_upstream"], (
+            f"disconnect accounting was cut short: {committed}"
+        )
+
+    async def test_response_carries_pending_task_so_it_cannot_be_orphaned(
+        self, monkeypatch
+    ):
+        """The body generator's try/finally only runs once someone iterates it, so
+        the response itself must own the in-flight first-chunk task."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        work = {"n": 0}
+        finalized = asyncio.Event()
+
+        async def burning():
+            try:
+                for _ in range(5000):
+                    work["n"] += 1
+                    await asyncio.sleep(0.001)
+                yield "data: first\n\n"
+            finally:
+                finalized.set()
+
+        response = await create_response(
+            generator=burning(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        assert response._pending_first_chunk is not None
+
+        async def send(message):
+            raise RuntimeError("client gone")
+
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        try:
+            await response({"type": "http"}, receive, send)
+        except BaseException:
+            pass
+
+        at_teardown = work["n"]
+        await asyncio.sleep(0.05)
+
+        assert work["n"] == at_teardown
+        assert finalized.is_set()
+        assert response._pending_first_chunk.done()
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), "infinity"])
+    def test_non_finite_interval_is_rejected(self, monkeypatch, value):
+        """A non-finite timeout makes asyncio.wait never fire, which would silently
+        disable the feature instead of protecting the stream."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", value, raising=False)
+        assert _resolve_sse_keepalive_interval() is None
+
+    def test_interval_whose_float_raises_is_rejected(self, monkeypatch):
+        class Hostile:
+            def __float__(self):
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", Hostile(), raising=False)
+        assert _resolve_sse_keepalive_interval() is None
+
+    async def test_cancelled_fetch_is_not_read_as_a_delivered_chunk(self, monkeypatch):
+        """A fetch that reports done only because it was cancelled must fall through
+        to the cancel-and-close path rather than have its result read."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        real_wait = asyncio.wait
+
+        async def cancel_the_fetch(aws, **kwargs):
+            ordered = sorted(aws, key=lambda t: int(t.get_name().rsplit("-", 1)[-1]))
+            fetch = ordered[0]
+            fetch.cancel()
+            try:
+                await fetch
+            except BaseException:
+                pass
+            return {fetch}, set(ordered[1:])
+
+        monkeypatch.setattr(asyncio, "wait", cancel_the_fetch)
+        try:
+            with pytest.raises(_ClientDisconnectedBeforeFirstChunk):
+                await _buffer_first_chunk_honoring_disconnect(
+                    self._stalling_gen(5.0), self._request_never_disconnects(), 1.0
+                )
+        finally:
+            monkeypatch.setattr(asyncio, "wait", real_wait)
+
+    async def test_keepalive_applies_without_a_request_object(self, monkeypatch):
+        """Callers that omit request have no disconnect arm, but a configured
+        interval must still keep their stream alive."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        response = await create_response(
+            generator=self._stalling_gen(2.5),
+            media_type="text/event-stream",
+            headers={},
+        )
+        chunks = await self._collect(response)
+
+        assert chunks[0] == SSE_KEEPALIVE_COMMENT
+        assert [c for c in chunks if c != SSE_KEEPALIVE_COMMENT] == [
+            "data: first\n\n",
+            "data: [DONE]\n\n",
+        ]
+
+    async def test_no_request_and_interval_unset_stays_byte_identical(self, monkeypatch):
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", None, raising=False)
+
+        response = await create_response(
+            generator=self._stalling_gen(0.05),
+            media_type="text/event-stream",
+            headers={},
+        )
+
+        assert await self._collect(response) == ["data: first\n\n", "data: [DONE]\n\n"]
+
+    async def test_no_request_fast_chunk_still_returns_json_error(self, monkeypatch):
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        async def error_gen():
+            yield 'data: {"error": {"message": "blocked", "code": 400}}\n\n'
+
+        response = await create_response(
+            generator=error_gen(),
+            media_type="text/event-stream",
+            headers={},
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 400
+
+    async def test_keepalive_path_keeps_datadog_chunk_spans(self, monkeypatch):
+        """The keepalive path bypasses combined_generator, so it has to carry the
+        per-chunk tracing itself or a stalled stream silently loses every span."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        spans = []
+
+        class FakeSpan:
+            def __enter__(self):
+                spans.append("span")
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class FakeTracer:
+            def trace(self, *args, **kwargs):
+                return FakeSpan()
+
+        import litellm.proxy.common_request_processing as crp
+
+        monkeypatch.setattr(crp, "_DD_STREAMING_TRACE_ENABLED", True, raising=False)
+        monkeypatch.setattr(crp, "tracer", FakeTracer(), raising=False)
+
+        response = await create_response(
+            generator=self._stalling_gen(2.5),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+        real = [c for c in chunks if c != SSE_KEEPALIVE_COMMENT]
+
+        assert len(real) == 2
+        assert len(spans) == len(real)
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            (None, None),
+            (True, None),
+            (False, None),
+            (0, None),
+            (-5, None),
+            ("not-a-number", None),
+            (0.1, MIN_SSE_KEEPALIVE_INTERVAL_SECONDS),
+            (15, 15.0),
+            ("20", 20.0),
+        ],
+    )
+    def test_interval_resolution(self, monkeypatch, value, expected):
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", value, raising=False)
+        assert _resolve_sse_keepalive_interval() == expected
+
+    @staticmethod
+    async def _gen_with_midstream_gap(gap: float, closed: Optional[asyncio.Event] = None):
+        try:
+            yield "data: first\n\n"
+            await asyncio.sleep(gap)
+            yield "data: second\n\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            if closed is not None:
+                closed.set()
+
+    async def test_midstream_gap_after_a_fast_first_chunk_emits_keepalives(self, monkeypatch):
+        """A fast TTFT commits the status line, but a later gap idles out the same
+        edge timeout, so the timer has to re-arm past the first chunk."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        # 4x the interval: at 2.5s a single slow scheduler wake-up pushed the
+        # second expiry past the end of the gap and left only one comment.
+        response = await create_response(
+            generator=self._gen_with_midstream_gap(4.0),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+
+        assert chunks.count(SSE_KEEPALIVE_COMMENT) >= 2
+        assert [c for c in chunks if c != SSE_KEEPALIVE_COMMENT] == [
+            "data: first\n\n",
+            "data: second\n\n",
+            "data: [DONE]\n\n",
+        ]
+        assert chunks.index("data: first\n\n") < chunks.index(SSE_KEEPALIVE_COMMENT)
+
+    async def test_midstream_gap_after_a_slow_first_chunk_keeps_emitting(self, monkeypatch):
+        """Both arms must re-arm: a stream can stall for TTFT *and* mid-body."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        async def stall_then_gap():
+            await asyncio.sleep(2.2)
+            yield "data: first\n\n"
+            await asyncio.sleep(2.2)
+            yield "data: [DONE]\n\n"
+
+        response = await create_response(
+            generator=stall_then_gap(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+        first_at = chunks.index("data: first\n\n")
+
+        assert SSE_KEEPALIVE_COMMENT in chunks[:first_at]
+        assert SSE_KEEPALIVE_COMMENT in chunks[first_at:]
+
+    async def test_midstream_keepalive_is_off_when_interval_unset(self, monkeypatch):
+        """The gap has to out-wait the interval floor, or 'disabled' silently
+        becoming a 1s keepalive would look identical to genuinely disabled."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", None, raising=False)
+
+        response = await create_response(
+            generator=self._gen_with_midstream_gap(MIN_SSE_KEEPALIVE_INTERVAL_SECONDS * 2.5),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        assert await self._collect(response) == [
+            "data: first\n\n",
+            "data: second\n\n",
+            "data: [DONE]\n\n",
+        ]
+
+    async def test_midstream_keepalive_is_off_for_non_sse_media_types(self, monkeypatch):
+        """Only text/event-stream may carry SSE comments — a JSON body would corrupt."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        response = await create_response(
+            generator=self._gen_with_midstream_gap(2.5),
+            media_type="application/json",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        assert await self._collect(response) == [
+            "data: first\n\n",
+            "data: second\n\n",
+            "data: [DONE]\n\n",
+        ]
+
+    async def test_consumer_exit_during_midstream_gap_closes_upstream(self, monkeypatch):
+        """Abandoning the response mid-gap must release the nested fetch and the
+        upstream generator, or the LLM connection leaks until GC."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        closed = asyncio.Event()
+        before = set(asyncio.all_tasks())
+
+        response = await create_response(
+            generator=self._gen_with_midstream_gap(30, closed),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        iterator = response.body_iterator.__aiter__()
+        assert await iterator.__anext__() == "data: first\n\n"
+        assert await iterator.__anext__() == SSE_KEEPALIVE_COMMENT
+        await response.body_iterator.aclose()
+
+        # Deterministic, not GC-dependent: aclose() must have released the nested
+        # fetch and closed upstream by the time it returns, with no pending task
+        # left behind to be reaped later.
+        assert closed.is_set()
+        assert self._pending_tasks_since(before) == []
+
+    async def test_consumer_exit_mid_gap_after_a_slow_first_chunk_closes_upstream(self, monkeypatch):
+        """Same leak as the fast-TTFT case, on the path that stalled for the first
+        token: the nested fetch must be released before the upstream aclose(), or
+        that aclose() raises "asynchronous generator is already running"."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        closed = asyncio.Event()
+        before = set(asyncio.all_tasks())
+
+        async def slow_then_gap():
+            try:
+                await asyncio.sleep(2.2)
+                yield "data: first\n\n"
+                await asyncio.sleep(30)
+                yield "data: [DONE]\n\n"
+            finally:
+                closed.set()
+
+        response = await create_response(
+            generator=slow_then_gap(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        iterator = response.body_iterator.__aiter__()
+        seen = []
+        while "data: first\n\n" not in seen:
+            seen.append(await iterator.__anext__())
+        assert await iterator.__anext__() == SSE_KEEPALIVE_COMMENT
+        await response.body_iterator.aclose()
+
+        assert closed.is_set()
+        assert self._pending_tasks_since(before) == []
+
+    async def test_resolved_interval_is_what_arms_the_timer(self, monkeypatch):
+        """A resolved interval that never reaches the timer would flood the client
+        with comments; nothing else pins the value actually passed to asyncio.wait."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 2.0, raising=False)
+        import litellm.proxy.common_request_processing as crp
+
+        timeouts = []
+        real_wait = asyncio.wait
+
+        async def recording_wait(aws, **kwargs):
+            if "timeout" in kwargs:
+                timeouts.append(kwargs["timeout"])
+            return await real_wait(aws, **kwargs)
+
+        monkeypatch.setattr(crp.asyncio, "wait", recording_wait)
+
+        response = await create_response(
+            generator=self._gen_with_midstream_gap(5.0),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+
+        assert timeouts, "the keepalive timer never armed"
+        assert set(timeouts) == {2.0}
+        # A 5s gap at a 2s interval yields two comments, not a flood.
+        assert 2 <= chunks.count(SSE_KEEPALIVE_COMMENT) <= 3
+
+    async def test_empty_stream_after_a_slow_first_chunk_wait_terminates(self, monkeypatch):
+        """Reaches the body-is-None teardown organically: the fetch resolves as
+        StopAsyncIteration after the keepalive loop, so no body was ever built."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        closed = asyncio.Event()
+
+        async def stall_then_end():
+            try:
+                await asyncio.sleep(2.2)
+                return
+                yield  # pragma: no cover
+            finally:
+                closed.set()
+
+        response = await create_response(
+            generator=stall_then_end(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+
+        assert chunks and set(chunks) == {SSE_KEEPALIVE_COMMENT}
+        assert closed.is_set()
+
+    async def test_midstream_upstream_exception_still_propagates(self, monkeypatch):
+        """The keepalive wrapper must not swallow a mid-stream provider failure."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        async def gap_then_raise():
+            yield "data: first\n\n"
+            await asyncio.sleep(1.5)
+            raise ValueError("upstream died mid-stream")
+
+        response = await create_response(
+            generator=gap_then_raise(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        with pytest.raises(ValueError, match="upstream died mid-stream"):
+            await self._collect(response)
+
+    async def test_midstream_keepalive_keeps_datadog_chunk_spans(self, monkeypatch):
+        """Wrapping the body must not cost the per-chunk spans on the normal path."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        spans = []
+
+        class FakeSpan:
+            def __enter__(self):
+                spans.append("span")
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class FakeTracer:
+            def trace(self, *args, **kwargs):
+                return FakeSpan()
+
+        import litellm.proxy.common_request_processing as crp
+
+        monkeypatch.setattr(crp, "_DD_STREAMING_TRACE_ENABLED", True, raising=False)
+        monkeypatch.setattr(crp, "tracer", FakeTracer(), raising=False)
+
+        response = await create_response(
+            generator=self._gen_with_midstream_gap(2.5),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+        real = [c for c in chunks if c != SSE_KEEPALIVE_COMMENT]
+
+        assert len(real) == 3
+        assert len(spans) == len(real)
+
+    async def test_midstream_keepalives_do_not_open_datadog_chunk_spans(self, monkeypatch):
+        """Keepalives are protocol filler, not model output — tracing them inflates
+        the chunk-span count and skews per-chunk latency stats."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        spans = []
+
+        class FakeSpan:
+            def __enter__(self):
+                spans.append("span")
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class FakeTracer:
+            def trace(self, *args, **kwargs):
+                return FakeSpan()
+
+        import litellm.proxy.common_request_processing as crp
+
+        monkeypatch.setattr(crp, "_DD_STREAMING_TRACE_ENABLED", True, raising=False)
+        monkeypatch.setattr(crp, "tracer", FakeTracer(), raising=False)
+
+        async def stall_then_gap():
+            await asyncio.sleep(2.2)
+            yield "data: first\n\n"
+            await asyncio.sleep(2.2)
+            yield "data: [DONE]\n\n"
+
+        response = await create_response(
+            generator=stall_then_gap(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+
+        assert chunks.count(SSE_KEEPALIVE_COMMENT) >= 2
+        assert len(spans) == len([c for c in chunks if c != SSE_KEEPALIVE_COMMENT]) == 2
+
+    @pytest.mark.parametrize("dd_tracing", [False, True])
+    async def test_none_first_chunk_is_skipped_but_the_body_still_streams(self, monkeypatch, dd_tracing):
+        """A None first chunk must not be emitted as a literal frame, and the
+        keepalive-wrapped body must still be forwarded after it — on both the
+        fast path and the Datadog-traced path."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        import litellm.proxy.common_request_processing as crp
+
+        monkeypatch.setattr(crp, "_DD_STREAMING_TRACE_ENABLED", dd_tracing, raising=False)
+
+        async def none_then_data():
+            yield None
+            yield "data: second\n\n"
+
+        response = await create_response(
+            generator=none_then_data(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        assert await self._collect(response) == ["data: second\n\n"]
+
+    async def test_body_close_failure_does_not_break_teardown(self):
+        """Teardown runs while the client is already gone — a raising aclose() must
+        be logged and swallowed, never propagated into the ASGI layer."""
+        import litellm.proxy.common_request_processing as crp
+
+        class ExplodingBody:
+            async def aclose(self):
+                raise RuntimeError("aclose exploded")
+
+        await crp._aclose_quietly(ExplodingBody())
+        await crp._aclose_quietly(None)
+
+    async def test_error_only_stream_still_becomes_json_with_midstream_wrapper(self, monkeypatch):
+        """Contract A: a fast error-only first chunk keeps its provider status code
+        even though the body is now keepalive-wrapped."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        async def error_first():
+            yield 'data: {"error": {"message": "bad request", "code": "400"}}\n\n'
+
+        response = await create_response(
+            generator=error_first(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 400
