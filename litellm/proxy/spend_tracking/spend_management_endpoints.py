@@ -3364,6 +3364,12 @@ async def ui_view_session_spend_logs(
 
         total_pages = (total_records + page_size - 1) // page_size
 
+        # Every row here shares session_id, so total_records IS each row's session_total_count.
+        # The UI drawer needs this to stay in session mode when a row selected from this endpoint
+        # (rather than /spend/logs/ui) becomes the displayed log.
+        for row in result:
+            row["session_total_count"] = total_records
+
         return {
             "data": result,
             "total": total_records,

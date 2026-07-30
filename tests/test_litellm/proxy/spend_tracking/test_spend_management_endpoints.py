@@ -1583,6 +1583,57 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ui_view_session_spend_logs_includes_session_total_count(client, monkeypatch):
+    """
+    Regression test: /spend/logs/session/ui must stamp session_total_count onto
+    every row it returns. The UI logs drawer falls back to this field to decide
+    whether the currently displayed log belongs to a multi-call session; before
+    this fix the endpoint never set it, so selecting a row from inside an open
+    session (rather than from /spend/logs/ui) silently dropped the drawer out of
+    session mode.
+    """
+    mock_spend_logs = [
+        {"id": "log1", "request_id": "req1", "session_id": "session-123", "startTime": "2024-01-01T00:00:00Z"},
+        {"id": "log2", "request_id": "req2", "session_id": "session-123", "startTime": "2024-01-02T00:00:00Z"},
+    ]
+
+    class MockDB:
+        async def count(self, *args, **kwargs):
+            return len(mock_spend_logs)
+
+        async def query_raw(self, sql_query, session_id, page_size, skip):
+            # page_size=1 deliberately returns fewer rows than the session's real
+            # total, so a naive `len(result)` fallback would get this wrong too.
+            return [mock_spend_logs[0]]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+            self.db.litellm_spendlogs = self.db
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs/session/ui",
+            params={"session_id": "session-123", "page": 1, "page_size": 1},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2
+        assert len(data["data"]) == 1
+        assert data["data"][0]["session_total_count"] == 2
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_session_spend_logs_scopes_non_admin_to_own_logs(client, monkeypatch):
     own_log = {
         "id": "log1",
