@@ -73,6 +73,7 @@ class NetworkError(BaseModel):
 
 class UnauthorizedError(BaseModel):
     kind: Literal["unauthorized"] = "unauthorized"
+    call_id: str | None = None
 
 
 class RateLimitedError(BaseModel):
@@ -93,11 +94,16 @@ class InfraUnavailable(BaseModel):
     """The request never reached a litellm handler: an edge proxy (ALB, nginx,
     envoy) answered instead, or the pod behind it was not accepting traffic.
 
-    Distinct from UnknownApiError because the blame is different. 502/503/504 are
-    emitted by the layer in front of the gateway, not by litellm, so they say
-    nothing about the behavior under test; a run full of them is an unhealthy
-    environment, not a product regression. litellm's own failures surface as 500
-    with a JSON body and stay UnknownApiError.
+    Distinct from UnknownApiError because the blame is different: an edge proxy
+    answering on its own says nothing about the behavior under test, so a run full
+    of these is an unhealthy environment rather than a product regression.
+
+    Status code alone cannot decide this. litellm returns 503 itself ("Database not
+    available", budget reservation) and 504 itself (an MCP handler that did not
+    respond in time), and those are real defects that must stay visible. What
+    separates them is who wrote the body: litellm answers application/json through
+    FastAPI, while an edge proxy emits its own HTML error page. Both signals must
+    agree before blame moves off the product.
     """
 
     kind: Literal["infra_unavailable"] = "infra_unavailable"
@@ -118,10 +124,11 @@ class UnknownApiError(BaseModel):
     call_id: str | None = None
 
 
-#: Statuses an edge proxy returns on its own when it cannot get a usable answer
-#: from the gateway. 500 is excluded: litellm returns 500 for its own unhandled
-#: errors (the "reload it triggered degraded" class of real defect), so folding it
-#: in here would hide product bugs as environment noise.
+#: Statuses an edge proxy returns when it cannot get a usable answer from the
+#: gateway. Necessary but not sufficient (see is_edge_proxy_failure): litellm emits
+#: 503 and 504 itself for real defects. 500 is excluded outright, since litellm
+#: returns it for its own unhandled errors (the "reload it triggered degraded"
+#: class) and no edge proxy in this path invents a 500.
 EDGE_PROXY_STATUS: frozenset[int] = frozenset({502, 503, 504})
 
 #: Marker that opens the failure message for every edge-proxy failure, so a run can
@@ -132,6 +139,70 @@ INFRA_FAILURE_PREFIX = "E2E_INFRA_UNAVAILABLE"
 #: Field name used when a failure message carries the gateway's x-litellm-call-id,
 #: so log tooling has one token to search for instead of a prose variant per site.
 CALL_ID_FIELD = "call_id"
+
+
+#: Gateway-answered statuses that are worth another attempt rather than an
+#: assertion: a request timeout and litellm's own unhandled-error 500.
+TRANSIENT_API_STATUS: frozenset[int] = frozenset({408, 500})
+
+
+def is_transient_failure[R: BaseModel](result: Result[R]) -> bool:
+    """True when a failure is worth retrying rather than asserting on.
+
+    Retry-worthiness follows the variant, not a status list a caller keeps its own
+    copy of: an edge proxy answering 504 is exactly as transient as the gateway
+    answering 500, so both belong here. Callers that need a retry predicate should
+    use this instead of re-deriving one, so adding a variant to Result can never
+    silently shrink someone's retry budget again.
+    """
+    match result:
+        case InfraUnavailable():
+            return True
+        case RateLimitedError():
+            return True
+        case NetworkError():
+            return True
+        case UnknownApiError(status_code=status_code):
+            return status_code in TRANSIENT_API_STATUS
+        case _:
+            return False
+
+
+def is_edge_proxy_failure(
+    status_code: int,
+    *,
+    body: str,
+    content_type: str | None,
+    call_id: str | None = None,
+) -> bool:
+    """True only when nothing in the response could have come from litellm.
+
+    Status code cannot decide this on its own. litellm returns 503 from its own
+    handlers for a paused model, a fail-closed budget check, a guardrail configured
+    to block on error, and an unreachable database, and 504 when an MCP handler
+    times out. Those are product behavior - several of them security-relevant - so
+    calling them environmental would suppress exactly what the suite exists to
+    catch.
+
+    Positive proof that litellm answered:
+      - x-litellm-call-id, which only the gateway mints
+      - a JSON content type, since every FastAPI error response is JSON
+      - a body that names a litellm exception
+    Absent all of those, an edge-proxy status with an HTML error page is the ALB or
+    nginx answering on its own. Anything ambiguous resolves to False, which keeps
+    blame on the product: a false "product bug" costs an investigation, while a
+    false "bad environment" silently discards a real regression.
+    """
+    if status_code not in EDGE_PROXY_STATUS:
+        return False
+    if call_id:
+        return False
+    if content_type is not None and "json" in content_type.lower():
+        return False
+    head = body[:400].lower()
+    if "litellm" in head:
+        return False
+    return "<html" in head
 
 
 type Result[R: BaseModel] = (
@@ -273,7 +344,12 @@ def require_successful_call(result: StreamingResponse) -> None:
     reads as an ordinary upstream failure."""
     if result.ok:
         return
-    if result.status_code in EDGE_PROXY_STATUS:
+    if is_edge_proxy_failure(
+        result.status_code,
+        body=result.body,
+        content_type=result.content_type,
+        call_id=result.call_id,
+    ):
         pytest.fail(
             f"{INFRA_FAILURE_PREFIX}: the request never reached litellm - an edge proxy "
             f"answered {result.status_code}. The environment is unhealthy; this is not a "
@@ -309,10 +385,15 @@ def classify_response[R: BaseModel](
     """
     call_id = _hdr(resp, "x-litellm-call-id")
     if resp.status_code == 401:
-        return UnauthorizedError()
+        return UnauthorizedError(call_id=call_id)
     if resp.status_code == 429:
         return RateLimitedError(body=resp.text, call_id=call_id)
-    if resp.status_code in EDGE_PROXY_STATUS:
+    if is_edge_proxy_failure(
+        resp.status_code,
+        body=resp.text,
+        content_type=_hdr(resp, "content-type"),
+        call_id=call_id,
+    ):
         return InfraUnavailable(status_code=resp.status_code, body=resp.text, call_id=call_id)
     if not resp.ok:
         return UnknownApiError(status_code=resp.status_code, body=resp.text, call_id=call_id)
