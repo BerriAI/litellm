@@ -3013,9 +3013,12 @@ async def test_oauth_protected_resource_uses_request_path_prefix_when_opt_in(mon
     assert response["resource"] == "https://mcp.example.com/tenant-a/mcp/server_a", (
         "resource must include the request path prefix so it matches the URL the client called (RFC 9728 §3)"
     )
-    # authorization_servers is derived from the same base so downstream token /
-    # register endpoints stay reachable under the same routing prefix.
-    assert response["authorization_servers"] == ["https://mcp.example.com/tenant-a/server_a"]
+    # authorization_servers stays on the un-prefixed base — the AS handlers
+    # (authorize / token / register / JWKS) are mounted only at root-relative
+    # paths, so a prefixed advertisement would 404 in the default deployment.
+    # Guarding against a regression that broadens the opt-in scope beyond
+    # what RFC 9728 §3 requires.
+    assert response["authorization_servers"] == ["https://mcp.example.com/server_a"]
 
 
 @pytest.mark.asyncio
@@ -3142,6 +3145,79 @@ def test_get_oauth_discovery_base_url_default_is_get_request_base_url(monkeypatc
     )
 
     assert get_oauth_discovery_base_url(mock_request) == get_request_base_url(mock_request)
+
+
+def test_oauth_authorization_server_ignores_opt_in_env(monkeypatch):
+    """Even when ``MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST=true``, the
+    RFC 8414 authorization-server metadata document must NOT be prefixed.
+
+    The endpoints it advertises (``authorization_endpoint``, ``token_endpoint``,
+    ``registration_endpoint``, ``jwks_uri``) are served by handlers mounted
+    only at root-relative paths; prefixing them would 404 in the default
+    deployment. Only ``resource`` in the protected-resource document derives
+    from the request path (RFC 9728 §3 exact-match). Guards against a
+    regression that broadens the opt-in scope.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_authorization_server_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    _register_oauth2_server("server_a")
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.setenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", "true")
+
+    mock_request = _make_discovery_mock_request(
+        base_url="https://mcp.example.com/",
+        path="/tenant-a/.well-known/oauth-authorization-server/mcp/server_a",
+    )
+
+    try:
+        response = _build_oauth_authorization_server_response(
+            request=mock_request,
+            mcp_server_name="server_a",
+        )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert response["issuer"] == "https://mcp.example.com"
+    assert response["authorization_endpoint"] == "https://mcp.example.com/server_a/authorize"
+    assert response["token_endpoint"] == "https://mcp.example.com/server_a/token"
+    assert response["registration_endpoint"] == "https://mcp.example.com/server_a/register"
+
+
+def test_aggregate_protected_resource_prefixes_resource_only(monkeypatch):
+    """Aggregate ``/mcp`` protected-resource document: opt-in prefixes
+    ``resource`` but leaves ``authorization_servers`` un-prefixed. Same
+    contract as the per-server document; guards against the two fields
+    drifting into a mix of prefixed / un-prefixed states.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_aggregate_protected_resource_response,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.setenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", "true")
+
+    mock_request = _make_discovery_mock_request(
+        base_url="https://mcp.example.com/",
+        path="/tenant-a/.well-known/oauth-protected-resource/mcp",
+    )
+
+    response = _build_aggregate_protected_resource_response(mock_request)
+
+    assert response["resource"] == "https://mcp.example.com/tenant-a/mcp"
+    assert response["authorization_servers"] == ["https://mcp.example.com/mcp"]
 
 
 # -------------------------------------------------------------------

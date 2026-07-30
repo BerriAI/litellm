@@ -2108,7 +2108,15 @@ async def _build_oauth_protected_resource_response(
         global_mcp_server_manager,
     )
 
-    request_base_url = get_oauth_discovery_base_url(request)
+    request_base_url = get_request_base_url(request)
+    # ``resource`` alone is bound by RFC 9728 §3 to exactly match the URL the
+    # client called, so only that value derives from the request path prefix.
+    # ``authorization_servers`` (and, downstream, ``authorization_endpoint`` /
+    # ``token_endpoint`` / ``registration_endpoint``) stay on the un-prefixed
+    # base because those handlers are only mounted at root-relative paths —
+    # advertising them under a request-derived prefix would 404 in the
+    # default deployment.
+    resource_base_url = get_oauth_discovery_base_url(request)
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
 
     # When no server name provided, try to resolve the single OAuth2 server
@@ -2125,12 +2133,12 @@ async def _build_oauth_protected_resource_response(
     if mcp_server_name:
         if use_standard_pattern:
             # Standard MCP pattern: /mcp/{server_name}
-            resource_url = f"{request_base_url}/mcp/{mcp_server_name}"
+            resource_url = f"{resource_base_url}/mcp/{mcp_server_name}"
         else:
             # LiteLLM legacy pattern: /{server_name}/mcp
-            resource_url = f"{request_base_url}/{mcp_server_name}/mcp"
+            resource_url = f"{resource_base_url}/{mcp_server_name}/mcp"
     else:
-        resource_url = f"{request_base_url}/mcp"
+        resource_url = f"{resource_base_url}/mcp"
 
     if mcp_server is not None and mcp_server_name and mcp_server.is_dcr_bridge:
         return {
@@ -2250,10 +2258,14 @@ def _build_aggregate_protected_resource_response(request: Request) -> dict:
     feature and describes the BYOK flow, so it must not be the aggregate
     discovery entry point (same pattern as the per-server documents, which
     advertise ``{base}/{server_name}``)."""
-    request_base_url = get_oauth_discovery_base_url(request)
+    request_base_url = get_request_base_url(request)
+    # Only ``resource`` derives from the request path prefix (RFC 9728 §3
+    # exact-match); ``authorization_servers`` stays on the un-prefixed base
+    # because the AS handlers are mounted only at root-relative paths.
+    resource_base_url = get_oauth_discovery_base_url(request)
     return {
         "authorization_servers": [f"{request_base_url}/mcp"],
-        "resource": f"{request_base_url}/mcp",
+        "resource": f"{resource_base_url}/mcp",
         "scopes_supported": [],
     }
 
@@ -2268,7 +2280,7 @@ def _build_aggregate_authorization_server_response(request: Request) -> dict:
     ``token_endpoint_auth_methods_supported: ["none", ...]`` because DCR
     clients (Claude Desktop, MCP Inspector) register as public clients; PKCE
     S256 is mandatory in the gateway's authorize flow."""
-    request_base_url = get_oauth_discovery_base_url(request)
+    request_base_url = get_request_base_url(request)
     return {
         "issuer": f"{request_base_url}/mcp",
         "authorization_endpoint": f"{request_base_url}/authorize",
@@ -2372,7 +2384,7 @@ def _build_oauth_authorization_server_response(
         global_mcp_server_manager,
     )
 
-    request_base_url = get_oauth_discovery_base_url(request)
+    request_base_url = get_request_base_url(request)
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
 
     # When no server name provided, try to resolve the single OAuth2 server
@@ -2453,7 +2465,7 @@ async def openid_configuration(request: Request):
 
         signer = get_mcp_jwt_signer()
         if signer is not None:
-            request_base_url = get_oauth_discovery_base_url(request)
+            request_base_url = get_request_base_url(request)
             if isinstance(response, dict):
                 response = {
                     **response,

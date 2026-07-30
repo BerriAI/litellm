@@ -209,16 +209,23 @@ def _request_well_known_prefix(request: Request) -> str:
 
 
 def get_oauth_discovery_base_url(request: Request) -> str:
-    """Base URL used to construct values inside an MCP OAuth discovery document.
+    """Base URL used to construct the ``resource`` field in an MCP OAuth
+    protected-resource discovery document (RFC 9728 §3).
 
     Defaults to :func:`get_request_base_url` (unchanged behaviour). When the
     ``MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST`` env var is truthy, the URL path
     prefix the client used (the segments before ``/.well-known/``) is appended
-    to the resolved base — so the ``resource`` value in the RFC 9728 discovery
-    response can name the exact URL the client called even when the same
-    LiteLLM pod fronts multiple MCP origins mounted at distinct URL path
-    prefixes (RFC 9728 §3 requires an exact match; a scalar ``PROXY_BASE_URL``
-    alone can express only one prefix).
+    to the resolved base — so ``resource`` matches the URL the client called
+    even when the same LiteLLM pod fronts multiple MCP origins mounted at
+    distinct URL path prefixes (RFC 9728 §3 requires exact match; a scalar
+    ``PROXY_BASE_URL`` alone can express only one prefix).
+
+    Scope is deliberately narrow: only ``resource`` derives from the request
+    path. ``authorization_servers`` and every URL served by the authorization-
+    server metadata document (``authorization_endpoint``, ``token_endpoint``,
+    ``registration_endpoint``, ``jwks_uri``) stay on the un-prefixed base
+    because those handlers are mounted only at root-relative paths — a
+    prefixed advertisement would 404 in the default deployment.
 
     Opt-in because a reverse proxy that rewrites the request path before
     LiteLLM receives it would produce an incorrect prefix; operators affirm
