@@ -1,21 +1,54 @@
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import AddAutoRouterTab from "./add_auto_router_tab";
 import NotificationManager from "../molecules/notifications_manager";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { getMissingTiersError } from "./build_complexity_router_config";
+import { ModelGroup } from "@/components/llm_calls/fetch_models";
+
+// Every model referenced by both bundled family presets. A caller holding all of these can
+// select either preset; dropping any one greys out the preset that names it.
+const ALL_FAMILY_MODELS: ModelGroup[] = [
+  { model_group: "claude-haiku-4-5", mode: "chat" },
+  { model_group: "claude-sonnet-4-5", mode: "chat" },
+  { model_group: "claude-opus-5", mode: "chat" },
+  { model_group: "gpt-5-nano", mode: "chat" },
+  { model_group: "gpt-5-mini", mode: "chat" },
+  { model_group: "gpt-5", mode: "chat" },
+  { model_group: "o3", mode: "chat" },
+];
+
+const openTemplateDropdown = (): void => {
+  fireEvent.mouseDown(screen.getByTestId("template-selector").querySelector(".ant-select-selector")!);
+};
+
+// The rendered antd option whose text starts with a preset label. Matching on text (not role +
+// accessible name) sidesteps antd's list re-rendering options in place on every state change.
+const optionByLabel = (label: string): HTMLElement | undefined =>
+  Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option")).find((el) =>
+    el.textContent?.startsWith(label),
+  );
+
+// antd marks a disabled option with a class, not aria-disabled.
+const isOptionDisabled = (option: HTMLElement): boolean => option.classList.contains("ant-select-item-option-disabled");
+
+const { mockFetchAvailableModels, mockHandleAddAutoRouterSubmit } = vi.hoisted(() => ({
+  mockFetchAvailableModels: vi.fn(),
+  mockHandleAddAutoRouterSubmit: vi.fn(),
+}));
 
 vi.mock("../networking", () => ({
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
 }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
-  fetchAvailableModels: vi.fn().mockResolvedValue([]),
+  fetchAvailableModels: mockFetchAvailableModels,
 }));
 
 vi.mock("./handle_add_auto_router_submit", () => ({
-  handleAddAutoRouterSubmit: vi.fn(),
+  handleAddAutoRouterSubmit: mockHandleAddAutoRouterSubmit,
 }));
 
 vi.mock("../molecules/notifications_manager", () => ({
@@ -50,6 +83,8 @@ const Harness = () => <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" u
 describe("AddAutoRouterTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFetchAvailableModels.mockResolvedValue([]);
+    mockHandleAddAutoRouterSubmit.mockResolvedValue(undefined);
   });
 
   it("flags every mandatory field when Add Auto Router is clicked with nothing filled", async () => {
@@ -61,6 +96,121 @@ describe("AddAutoRouterTab", () => {
     expect(await screen.findByText("Auto router name is required")).toBeInTheDocument();
     expect(screen.getAllByText("This tier is required")).toHaveLength(4);
     expect(NotificationManager.fromBackend).toHaveBeenCalledWith("Please enter an Auto Router Name");
+  });
+
+  it("renders template selector as the first control", async () => {
+    renderWithProviders(<Harness />);
+
+    const templateSelector = screen.getByTestId("template-selector");
+    expect(templateSelector).toBeInTheDocument();
+
+    const templateLabel = screen.getByText("Template");
+    const nameLabel = screen.getByText("Auto Router Name");
+
+    expect(templateLabel.compareDocumentPosition(nameLabel)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it("enables a preset once every model it references has loaded", async () => {
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+    renderWithProviders(<Harness />);
+    openTemplateDropdown();
+
+    await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false));
+    expect(optionByLabel("Anthropic Family")).not.toHaveTextContent(/Missing:/);
+  });
+
+  it("greys out only the preset whose model the caller is missing", async () => {
+    // Full OpenAI family, but the Anthropic family is short claude-opus-5.
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS.filter((m) => m.model_group !== "claude-opus-5"));
+
+    renderWithProviders(<Harness />);
+    openTemplateDropdown();
+
+    await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true));
+    expect(optionByLabel("Anthropic Family")).toHaveTextContent(/Missing:.*claude-opus-5/);
+    // The other family, fully available, stays selectable.
+    expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(false);
+  });
+
+  // When the model fetch fails, we have no authoritative data to verify presets' models, so
+  // both must be greyed out. This prevents submitting a router with unverifiable models.
+  it("greys out all presets when the model fetch fails", async () => {
+    mockFetchAvailableModels.mockRejectedValue(new Error("boom"));
+
+    renderWithProviders(<Harness />);
+    await waitFor(() => expect(mockFetchAvailableModels).toHaveBeenCalled());
+    openTemplateDropdown();
+
+    await waitFor(() => expect(optionByLabel("Anthropic Family")).toBeTruthy());
+    expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true);
+    expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(true);
+  });
+
+  // The headline behavior: selecting a preset must pre-fill the tier config so the created
+  // router carries the preset's models. Real tier validation runs here (getMissingTiersError is
+  // not stubbed), so if selection stopped pre-filling, the empty tiers would either block the
+  // submit or produce a config that fails the tier assertion below.
+  it("pre-fills the tier config from the chosen preset and carries it into the create payload", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+    renderWithProviders(<Harness />);
+    openTemplateDropdown();
+
+    await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false));
+    fireEvent.click(optionByLabel("Anthropic Family")!);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "anthropic-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(mockHandleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(mockHandleAddAutoRouterSubmit.mock.calls.at(-1)?.[0]).toMatchObject({
+      auto_router_name: "anthropic-router",
+      auto_router_default_model: "claude-sonnet-4-5",
+      complexity_router_config: {
+        tiers: {
+          SIMPLE: ["claude-haiku-4-5"],
+          MEDIUM: ["claude-sonnet-4-5"],
+          COMPLEX: ["claude-opus-5"],
+          REASONING: ["claude-opus-5"],
+        },
+        classifier_type: "heuristic",
+      },
+    });
+  });
+
+  // The load-race both bots flagged: a preset must not be applied before its models are verified.
+  // While the model list is still loading the option is disabled, so a click cannot pre-fill the
+  // tier config. If it could, a later fetch revealing a missing model would leave a stale, invalid
+  // config selected with nothing to clear it, and submit would create an unusable router.
+  it("does not apply a preset while the model list is still loading", async () => {
+    const user = userEvent.setup();
+    let resolveModels: (models: ModelGroup[]) => void = () => undefined;
+    mockFetchAvailableModels.mockReturnValue(
+      new Promise<ModelGroup[]>((resolve) => {
+        resolveModels = resolve;
+      }),
+    );
+
+    renderWithProviders(<Harness />);
+    openTemplateDropdown();
+
+    // Mid-load, the family option is disabled and clicking it must not pre-fill anything.
+    await waitFor(() => expect(optionByLabel("Anthropic Family")).toBeTruthy());
+    expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true);
+    fireEvent.click(optionByLabel("Anthropic Family")!);
+
+    // Resolve the list WITHOUT claude-opus-5, the exact race: had the click applied, the config
+    // would now hold a model the caller lacks. Submit must not carry a preset config through.
+    resolveModels(ALL_FAMILY_MODELS.filter((m) => m.model_group !== "claude-opus-5"));
+    await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true));
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "raced-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    // No preset was applied, so the tiers are empty and tier validation blocks the submit.
+    expect(mockHandleAddAutoRouterSubmit).not.toHaveBeenCalled();
   });
 
   it("offers no team selector to a proxy admin, who may create an unscoped router", () => {

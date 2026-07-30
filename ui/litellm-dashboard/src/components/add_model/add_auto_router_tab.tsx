@@ -14,6 +14,7 @@ import ComplexityRouterConfig, {
   DEFAULT_TIER_DISTANCE_PENALTY,
 } from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
+import { hydrateKeywordTierRules } from "./complexity_router_keywords";
 import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import {
@@ -24,6 +25,32 @@ import {
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import NotificationManager from "../molecules/notifications_manager";
+import { getAllPresets, getPresetByKey, getMissingModelsInPreset, AutoRouterPreset } from "@/lib/autorouter_presets";
+
+type PresetAvailability =
+  | { kind: "available" }
+  | { kind: "loading" }
+  | { kind: "unverifiable" }
+  | { kind: "missing_models"; models: readonly string[] };
+
+// Every non-"available" state disables the option. Selection derives from this same function
+// (see presetAvailability below), so an option a caller can click is always one we can apply.
+const presetDisabledHint = (availability: PresetAvailability): string | null => {
+  switch (availability.kind) {
+    case "available":
+      return null;
+    case "loading":
+      return "Checking model availability...";
+    case "unverifiable":
+      return "Cannot verify these models are available";
+    case "missing_models":
+      return `Missing: ${availability.models.join(", ")}`;
+  }
+};
+
+// "loading"/"unverifiable" are transient system states, not a gap specific to this preset;
+// only a caller-specific missing-model reason gets the alarming red treatment.
+const isPresetHintAlarming = (availability: PresetAvailability): boolean => availability.kind === "missing_models";
 
 interface AddAutoRouterTabProps {
   handleOk: () => void;
@@ -49,6 +76,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [form] = Form.useForm();
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
+  const [modelsLoadState, setModelsLoadState] = useState<"loading" | "loaded" | "error">("loading");
 
   const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
     tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
@@ -68,6 +96,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [connectionTestId, setConnectionTestId] = useState<number>(0);
   const [testTargets, setTestTargets] = useState<AutoRouterTestTarget[]>([]);
 
+  const [selectedPreset, setSelectedPreset] = useState<string | undefined>(undefined);
+
   useEffect(() => {
     const fetchModelAccessGroups = async () => {
       const response = await modelAvailableCall(accessToken, "", "", false, null, true, true);
@@ -81,8 +111,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       try {
         const uniqueModels = await fetchAvailableModels(accessToken);
         setModelInfo(uniqueModels);
+        setModelsLoadState("loaded");
       } catch (error) {
         console.error("Error fetching model info for auto router:", error);
+        setModelsLoadState("error");
       }
     };
     loadModels();
@@ -94,6 +126,69 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     value: model_group,
     label: model_group,
   }));
+
+  const availableModelSet = new Set(modelInfo.map((m) => m.model_group));
+  const presets = getAllPresets();
+
+  // A preset's models can only be trusted against a successfully loaded list. Selection and the
+  // greyed-out state derive from this one function, so a preset that cannot be selected can never
+  // have been applied: while loading we withhold selection rather than let a caller pick a preset
+  // whose models we cannot yet verify, and a failed fetch leaves every preset unverifiable. This
+  // makes the load-race (pick during loading, then discover a missing model) unrepresentable.
+  const presetAvailability = (preset: AutoRouterPreset): PresetAvailability => {
+    if (modelsLoadState === "loading") return { kind: "loading" };
+    if (modelsLoadState === "error") return { kind: "unverifiable" };
+    const missing = getMissingModelsInPreset(preset, availableModelSet);
+    return missing.length > 0 ? { kind: "missing_models", models: missing } : { kind: "available" };
+  };
+
+  const resetToCustom = () => {
+    setComplexityRouterConfig({
+      tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
+      classifier_type: "heuristic",
+    });
+    setCustomTechnicalKeywords([]);
+    setKeywordTierRules([]);
+    setSemanticMatchingEnabled(false);
+    setEmbeddingModel(undefined);
+    setMatchThreshold(DEFAULT_MATCH_THRESHOLD);
+    setEscalationKeywords(DEFAULT_ESCALATION_KEYWORDS);
+  };
+
+  const handlePresetChange = (presetKey: string | undefined) => {
+    if (!presetKey || presetKey === "custom") {
+      setSelectedPreset(presetKey);
+      resetToCustom();
+      return;
+    }
+
+    const preset = getPresetByKey(presetKey);
+    // Refuse to apply a preset whose models are not verified available. The dropdown disables
+    // these options, so this is a guard against a stale click resolving after the list changed.
+    if (!preset || presetAvailability(preset).kind !== "available") return;
+
+    setSelectedPreset(presetKey);
+
+    const config = preset.complexity_router_config;
+    const presetComplexityRouterConfig: ComplexityRouterConfigValue = {
+      tiers: config.tiers,
+      classifier_type: config.classifier_type,
+      classifier_llm_config: config.classifier_llm_config,
+      adaptive: config.adaptive,
+      adaptive_weights: config.adaptive_weights,
+      tier_distance_penalty: config.tier_distance_penalty,
+      adaptive_eligible: config.adaptive_eligible,
+      return_raw_model_name: config.return_raw_model_name,
+    };
+    setComplexityRouterConfig(presetComplexityRouterConfig);
+
+    setCustomTechnicalKeywords(config.custom_technical_keywords || []);
+    setKeywordTierRules(hydrateKeywordTierRules(config.keyword_tier_rules || []));
+    setSemanticMatchingEnabled(config.semantic_keyword_matching || false);
+    setEmbeddingModel(config.embedding_model);
+    setMatchThreshold(config.match_threshold || DEFAULT_MATCH_THRESHOLD);
+    setEscalationKeywords(config.escalation_keywords || DEFAULT_ESCALATION_KEYWORDS);
+  };
 
   const submitRecommendedRouter = (name: string) => {
     const {
@@ -221,6 +316,49 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-gray-900 mb-2">
+              Template <span className="text-red-500">*</span>
+            </label>
+            <AntdSelect
+              value={selectedPreset}
+              onChange={handlePresetChange}
+              placeholder="Choose a template or select Custom to define your own"
+              className="w-full"
+              optionLabelProp="label"
+              data-testid="template-selector"
+            >
+              <AntdSelect.Option value="custom" label="Custom Configuration">
+                <div>
+                  <div className="font-medium">Custom Configuration</div>
+                  <div className="text-xs text-gray-500">Define your auto router from scratch</div>
+                </div>
+              </AntdSelect.Option>
+              {presets.map((preset) => {
+                const availability = presetAvailability(preset);
+                const disabledHint = presetDisabledHint(availability);
+                const isDisabled = disabledHint !== null;
+                const hintClass = isPresetHintAlarming(availability) ? "text-red-500" : "text-gray-400";
+
+                return (
+                  <AntdSelect.Option
+                    key={preset.key}
+                    value={preset.key}
+                    label={preset.label}
+                    disabled={isDisabled}
+                    title={disabledHint ?? preset.description}
+                  >
+                    <div>
+                      <div className="font-medium">{preset.label}</div>
+                      <div className="text-xs text-gray-500">{preset.description}</div>
+                      {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
+                    </div>
+                  </AntdSelect.Option>
+                );
+              })}
+            </AntdSelect>
+          </div>
+
           <Form.Item
             rules={[{ required: true, message: "Auto router name is required" }]}
             label="Auto Router Name"
