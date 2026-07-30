@@ -428,3 +428,46 @@ def test_delete_cache_namespaces_key(namespace, expected, monkeypatch, redis_no_
     redis_cache.redis_client = mock_client
     redis_cache.delete_cache(key="k")
     mock_client.delete.assert_called_once_with(expected)
+
+
+@pytest.mark.asyncio
+async def test_test_connection_with_url_pings_url_target(monkeypatch, redis_no_ping):
+    """A url-mode cache must connect through redis.asyncio.Redis.from_url.
+
+    Building the client with `Redis(**redis_kwargs)` instead blows up with
+    "Redis.__init__() got an unexpected keyword argument 'url'", so the admin
+    UI's "Test Connection" always fails for a redis:// url.
+    """
+    monkeypatch.delenv("REDIS_HOST", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    redis_cache = RedisCache(url="redis://cache-host:6380")
+
+    mock_client = AsyncMock()
+    mock_client.ping.return_value = True
+    with patch(
+        "litellm._redis.async_redis.Redis.from_url", return_value=mock_client
+    ) as mock_from_url:
+        result = await redis_cache.test_connection()
+
+    assert result["status"] == "success"
+    assert mock_from_url.call_args.kwargs["url"] == "redis://cache-host:6380"
+    mock_client.ping.assert_awaited_once()
+    mock_client.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_test_connection_with_host_pings_host_target(monkeypatch, redis_no_ping):
+    """Host-mode configs keep connecting with the discrete host/port kwargs."""
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    redis_cache = RedisCache(host="cache-host", port=6380, password="hunter2")
+
+    mock_client = AsyncMock()
+    mock_client.ping.return_value = True
+    with patch("litellm._redis.async_redis.Redis", return_value=mock_client) as mock_redis:
+        result = await redis_cache.test_connection()
+
+    assert result["status"] == "success"
+    assert mock_redis.call_args.kwargs["host"] == "cache-host"
+    assert mock_redis.call_args.kwargs["port"] == 6380
+    assert mock_redis.call_args.kwargs["password"] == "hunter2"
+    mock_client.ping.assert_awaited_once()
