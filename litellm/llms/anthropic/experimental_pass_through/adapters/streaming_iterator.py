@@ -28,7 +28,7 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
     UsageIteration,
 )
-from litellm.types.utils import AdapterCompletionStreamWrapper
+from litellm.types.utils import AdapterCompletionStreamWrapper, Delta
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelResponseStream
@@ -96,18 +96,14 @@ class _CombinedChunkSplitter:
             or getattr(delta, "thinking_blocks", None)
         )
 
-    @staticmethod
-    def _has_mixed_reasoning_and_text(chunk: Any) -> bool:
-        choices = getattr(chunk, "choices", None)
-        if not choices:
-            return False
-        delta = getattr(choices[0], "delta", None)
-        if delta is None:
-            return False
-        return bool(getattr(delta, "content", None) and getattr(delta, "reasoning_content", None))
+    _PAYLOAD_FIELD_GROUPS: "tuple[tuple[str, ...], ...]" = (
+        ("reasoning_content", "thinking_blocks"),
+        ("content",),
+        ("tool_calls",),
+    )
 
     @staticmethod
-    def _clear_usage(chunk: Any) -> None:
+    def _clear_usage(chunk: "ModelResponseStream") -> None:
         if hasattr(chunk, "usage"):
             chunk.usage = None
         hidden_params = getattr(chunk, "_hidden_params", None)
@@ -115,18 +111,38 @@ class _CombinedChunkSplitter:
             chunk._hidden_params = {key: value for key, value in hidden_params.items() if key != "usage"}
 
     @staticmethod
-    def _split_mixed_reasoning_and_text(chunk: Any) -> list[Any]:
-        if not _CombinedChunkSplitter._has_mixed_reasoning_and_text(chunk):
-            return [chunk]
+    def _split_by_payload_kind(chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        """Return ``(chunk,)``, or one piece per payload kind it carries.
 
-        reasoning_chunk = copy.deepcopy(chunk)
-        reasoning_chunk.choices[0].finish_reason = None
-        reasoning_chunk.choices[0].delta.content = None
-        _CombinedChunkSplitter._clear_usage(reasoning_chunk)
+        Each piece's delta is rebuilt as a fresh ``Delta`` carrying exactly one
+        payload kind (reasoning, text, tool calls), in native Anthropic block
+        order: thinking, then text, then tool_use. Runs downstream of
+        ``_split``, which has already peeled ``finish_reason`` and usage onto
+        their own finish chunk.
+        """
+        choices = getattr(chunk, "choices", None)
+        if not choices:
+            return (chunk,)
+        delta = getattr(choices[0], "delta", None)
+        if delta is None:
+            return (chunk,)
+        present_groups = tuple(
+            group
+            for group in _CombinedChunkSplitter._PAYLOAD_FIELD_GROUPS
+            if any(getattr(delta, field, None) for field in group)
+        )
+        if len(present_groups) <= 1:
+            return (chunk,)
 
-        text_chunk = copy.deepcopy(chunk)
-        text_chunk.choices[0].delta.reasoning_content = None
-        return [reasoning_chunk, text_chunk]
+        pieces = tuple(copy.deepcopy(chunk) for _ in present_groups)
+        for index, (piece, group) in enumerate(zip(pieces, present_groups)):
+            copied_delta = piece.choices[0].delta
+            fields = {field: value for field in group if (value := getattr(copied_delta, field, None))}
+            role = getattr(copied_delta, "role", None) if index == 0 else None
+            piece.choices[0].delta = Delta(role=role, **fields)
+            for extra_choice in piece.choices[1:]:
+                extra_choice.delta = Delta()
+        return pieces
 
     @staticmethod
     def _split(chunk: Any) -> List[Any]:
@@ -163,7 +179,7 @@ class _CombinedChunkSplitter:
         self._buffer.extend(
             split_chunk
             for combined_chunk in self._split(chunk)
-            for split_chunk in self._split_mixed_reasoning_and_text(combined_chunk)
+            for split_chunk in self._split_by_payload_kind(combined_chunk)
         )
         return self._buffer.popleft()
 
@@ -179,7 +195,7 @@ class _CombinedChunkSplitter:
         self._buffer.extend(
             split_chunk
             for combined_chunk in self._split(chunk)
-            for split_chunk in self._split_mixed_reasoning_and_text(combined_chunk)
+            for split_chunk in self._split_by_payload_kind(combined_chunk)
         )
         return self._buffer.popleft()
 
