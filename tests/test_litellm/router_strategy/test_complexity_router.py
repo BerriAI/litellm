@@ -1418,6 +1418,24 @@ class TestLLMClassifier:
         assert call_kwargs["metadata"] == request_metadata
 
     @pytest.mark.asyncio
+    async def test_aclassify_forwards_metadata_key_used_by_chat_completions(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """/v1/chat/completions puts the request metadata under "metadata", not "litellm_metadata".
+
+        Only the routes in LITELLM_METADATA_ROUTES (/v1/messages, /v1/responses, ...) get a
+        "litellm_metadata" bucket; chat completions gets "metadata". Reading only
+        "litellm_metadata" leaves the classifier call unattributed on the most common route,
+        so _should_track_cost_callback drops it and no spend-log row is written at all,
+        which also makes the captured request body unreachable in the Logs UI.
+        """
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        request_metadata = {"user_api_key": "sk-abc", "user_api_key_team_id": "team-1"}
+        await llm_complexity_router.aclassify("hi", request_kwargs={"metadata": request_metadata})
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        assert call_kwargs["metadata"] == request_metadata
+
+    @pytest.mark.asyncio
     async def test_aclassify_captures_request_body_in_proxy_server_request(
         self, llm_complexity_router, mock_router_instance
     ):
@@ -1439,6 +1457,13 @@ class TestLLMClassifier:
         assert body["model"] == "haiku-classifier"
         assert body["messages"] == call_kwargs["messages"]
         assert "explain quantum tunneling in depth" in body["messages"][0]["content"]
+        assert body["response_format"]["type"] == "json_schema"
+        assert body["response_format"]["json_schema"]["schema"]["properties"]["tier"]["enum"] == [
+            "SIMPLE",
+            "MEDIUM",
+            "COMPLEX",
+            "REASONING",
+        ]
 
     @pytest.mark.asyncio
     async def test_aclassify_strips_budget_reservation_from_classifier_metadata(
