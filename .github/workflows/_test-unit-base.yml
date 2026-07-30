@@ -154,6 +154,8 @@ jobs:
           merge-multiple: true
 
       - name: Upload to Codecov
+        env:
+          ACTIONS_ID_TOKEN_REQUEST_URL: http://127.0.0.1:9/simulated-oidc-broker-outage
         uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
         with:
           use_oidc: true
