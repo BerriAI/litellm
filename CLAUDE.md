@@ -61,7 +61,7 @@ Do not add `Co-Authored-By: Claude` or any Claude attribution to commit messages
 
 When working on a PR, keep the PR description in sync with new commits being made
 
-When replying to or rebutting an AI PR review bot (Devin Review, CodeRabbit, Copilot, etc.), keep each reply between 15 and 25 words of plain, human-readable prose; no walls of text, no bullet lists, no restating the bot's comment back at it
+Replies/rebuttals to AI PR review bots must be 15-25 word human-readable replies
 
 Monkeypatching attributes of a class to do testing is an anti-pattern. Prefer dependency-injecting things into classes. That way, at unit test time, you can pass a mocked dependency in
 
