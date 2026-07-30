@@ -17,7 +17,7 @@ permissions:
 jobs:
   check-sync:
     name: Verify schema.d.ts matches the proxy OpenAPI spec
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
       - name: Checkout repository

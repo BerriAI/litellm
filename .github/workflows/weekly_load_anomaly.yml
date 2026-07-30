@@ -11,7 +11,7 @@ permissions:
 jobs:
   weekly-load-anomaly:
     if: github.event_name != 'schedule' || github.repository == 'BerriAI/litellm'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     services:
       postgres:

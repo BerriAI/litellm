@@ -12,7 +12,7 @@ permissions:
 jobs:
   stale:
     if: github.repository == 'BerriAI/litellm'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/stale@1160a2240286f5da8ec72b1c0816ce2481aabf84 # v8
         with:

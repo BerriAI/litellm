@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
 
     steps:
@@ -133,7 +133,7 @@ jobs:
   # must be kept OUT of the branch-protection required-checks list so a justified
   # bump can still be merged by a human who has seen and accepted the red.
   budget-ratchet:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       contents: read
@@ -156,7 +156,7 @@ jobs:
           python scripts/budget_ratchet_check.py --base "$BASE_SHA"
 
   secret-scan:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       contents: read
