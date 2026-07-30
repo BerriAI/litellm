@@ -218,7 +218,8 @@ _STANDARD_LOGGING_METADATA_KEYS: frozenset = frozenset(StandardLoggingMetadata._
 ### GLOBAL VARIABLES ###
 
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
-_CUSTOM_PRICING_KEYS: frozenset = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+_COST_ADJUSTMENT_KEYS: frozenset = frozenset({"cost_discount"})
+_CUSTOM_PRICING_KEYS: frozenset = frozenset(CustomPricingLiteLLMParams.model_fields.keys()) - _COST_ADJUSTMENT_KEYS
 
 sentry_sdk_instance = None
 capture_exception = None
@@ -4482,7 +4483,9 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     """
     Check if the model uses custom pricing
 
-    Returns True if any of `SPECIAL_MODEL_INFO_PARAMS` are present in `litellm_params` or `model_info`
+    Returns True if any custom pricing field is present in `litellm_params` or `model_info`.
+    `cost_discount` is excluded: it adjusts an already-priced cost, it does not define
+    pricing, so it must not override `base_model` during cost-model selection.
     """
     if litellm_params is None:
         return False

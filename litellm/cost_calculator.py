@@ -1039,6 +1039,28 @@ def _apply_deployment_cost_discount(
     return final_cost, cost_discount, discount_amount
 
 
+def _apply_discounts(
+    base_cost: float,
+    custom_llm_provider: "str | None",
+    litellm_logging_obj: "LitellmLoggingObject | None",
+) -> "tuple[float, float, float]":
+    """
+    Apply the deployment-level ``cost_discount`` when present, otherwise fall back to
+    the provider-level ``litellm.cost_discount_config``.
+    Returns (final_cost, discount_percent, discount_amount).
+    """
+    deployment_cost_discount = _get_deployment_cost_discount(litellm_logging_obj)
+    if deployment_cost_discount is not None:
+        return _apply_deployment_cost_discount(
+            base_cost=base_cost,
+            cost_discount=deployment_cost_discount,
+        )
+    return _apply_cost_discount(
+        base_cost=base_cost,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+
 def _apply_cost_margin(
     base_cost: float,
     custom_llm_provider: Optional[str],
@@ -1515,9 +1537,10 @@ def completion_cost(
                         _final_cost,
                         discount_percent,
                         discount_amount,
-                    ) = _apply_cost_discount(
+                    ) = _apply_discounts(
                         base_cost=_final_cost,
                         custom_llm_provider=custom_llm_provider,
+                        litellm_logging_obj=litellm_logging_obj,
                     )
 
                     # Apply margin from module-level config if configured
@@ -1669,28 +1692,15 @@ def completion_cost(
                     _final_cost += sum(additional_costs.values())
 
                 original_cost = _final_cost
-                _deployment_cost_discount = _get_deployment_cost_discount(litellm_logging_obj)
-                if _deployment_cost_discount is not None:
-                    (
-                        _final_cost,
-                        discount_percent,
-                        discount_amount,
-                    ) = _apply_deployment_cost_discount(
-                        base_cost=_final_cost,
-                        cost_discount=_deployment_cost_discount,
-                    )
-                elif litellm.cost_discount_config:
-                    (
-                        _final_cost,
-                        discount_percent,
-                        discount_amount,
-                    ) = _apply_cost_discount(
-                        base_cost=_final_cost,
-                        custom_llm_provider=custom_llm_provider,
-                    )
-                else:
-                    discount_percent = 0.0
-                    discount_amount = 0.0
+                (
+                    _final_cost,
+                    discount_percent,
+                    discount_amount,
+                ) = _apply_discounts(
+                    base_cost=_final_cost,
+                    custom_llm_provider=custom_llm_provider,
+                    litellm_logging_obj=litellm_logging_obj,
+                )
 
                 # Apply margin from module-level config if configured
                 if litellm.cost_margin_config:
@@ -1841,7 +1851,14 @@ def response_cost_calculator(
                     response_object._hidden_params["optional_params"] = optional_params
                     provider_response_cost = get_response_cost_from_hidden_params(response_object._hidden_params)
                     if provider_response_cost is not None:
-                        return provider_response_cost
+                        deployment_cost_discount = _get_deployment_cost_discount(litellm_logging_obj)
+                        if deployment_cost_discount is None:
+                            return provider_response_cost
+                        discounted_provider_cost, _, _ = _apply_deployment_cost_discount(
+                            base_cost=provider_response_cost,
+                            cost_discount=deployment_cost_discount,
+                        )
+                        return discounted_provider_cost
 
             response_cost = completion_cost(
                 completion_response=response_object,

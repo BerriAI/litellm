@@ -203,6 +203,26 @@ def test_use_custom_pricing_not_detected_litellm_metadata_no_pricing():
     assert use_custom_pricing_for_model(litellm_params) is False
 
 
+def test_use_custom_pricing_ignores_cost_discount():
+    """cost_discount adjusts an already-priced cost; alone it must not flag custom pricing,
+    otherwise cost-model selection would bypass base_model."""
+    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+
+    discount_only = {
+        "metadata": {
+            "model_info": {"id": "some-id", "cost_discount": 0.5, "base_model": "azure/gpt-4o"},
+        },
+    }
+    assert use_custom_pricing_for_model(discount_only) is False
+
+    discount_with_pricing = {
+        "metadata": {
+            "model_info": {"id": "some-id", "cost_discount": 0.5, "input_cost_per_token": 0.0003},
+        },
+    }
+    assert use_custom_pricing_for_model(discount_with_pricing) is True
+
+
 def test_response_cost_calculator_uses_router_model_id_from_litellm_metadata():
     """_response_cost_calculator should extract router_model_id from
     litellm_params.litellm_metadata.model_info.id when the result object

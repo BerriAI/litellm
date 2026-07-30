@@ -1954,6 +1954,88 @@ def test_model_info_rejects_out_of_range_cost_discount():
         ModelInfo(id="bad-negative", cost_discount=-0.1)
 
 
+def test_deployment_cost_discount_respects_base_model():
+    """cost_discount must not flip custom-pricing model selection: base_model stays the pricing basis."""
+    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+
+    logging_obj = _StubLoggingObj("gpt-4o-mini", cost_discount=0.5)
+    logging_obj.litellm_params["metadata"]["model_info"]["base_model"] = "gpt-4o"
+    custom_pricing = use_custom_pricing_for_model(logging_obj.litellm_params)
+    assert custom_pricing is False
+
+    base_model_cost = completion_cost(
+        completion_response=_make_response(),
+        model="gpt-4o-mini",
+        custom_llm_provider="openai",
+        base_model="gpt-4o",
+        custom_pricing=False,
+    )
+
+    discounted_cost = completion_cost(
+        completion_response=_make_response(),
+        model="gpt-4o-mini",
+        custom_llm_provider="openai",
+        base_model="gpt-4o",
+        custom_pricing=custom_pricing,
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert base_model_cost > 0
+    assert discounted_cost == pytest.approx(base_model_cost * (1 - 0.5), rel=1e-9)
+
+
+def test_deployment_cost_discount_applied_to_search_path():
+    """The search early-return path applies the deployment discount with the same precedence as the token path."""
+    base_cost = completion_cost(
+        completion_response=None,
+        model="tavily-search",
+        custom_llm_provider="tavily",
+        call_type="search",
+        optional_params={},
+    )
+
+    discounted_cost = completion_cost(
+        completion_response=None,
+        model="tavily-search",
+        custom_llm_provider="tavily",
+        call_type="search",
+        optional_params={},
+        litellm_logging_obj=_StubLoggingObj("tavily-search", cost_discount=0.5),
+    )
+
+    assert base_cost > 0
+    assert discounted_cost == pytest.approx(base_cost * (1 - 0.5), rel=1e-9)
+
+
+def test_deployment_cost_discount_applied_to_provider_reported_cost():
+    """Provider-reported response cost is discounted instead of bypassing the deployment discount."""
+    from litellm.cost_calculator import response_cost_calculator
+
+    def make_response_with_provider_cost():
+        response = _make_response()
+        response._hidden_params = {"additional_headers": {"llm_provider-x-litellm-response-cost": 0.02}}
+        return response
+
+    undiscounted = response_cost_calculator(
+        response_object=make_response_with_provider_cost(),
+        model="gpt-4o-mini",
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+    )
+    assert undiscounted == pytest.approx(0.02, rel=1e-9)
+
+    discounted = response_cost_calculator(
+        response_object=make_response_with_provider_cost(),
+        model="gpt-4o-mini",
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+        litellm_logging_obj=_StubLoggingObj("gpt-4o-mini", cost_discount=0.5),
+    )
+    assert discounted == pytest.approx(0.02 * (1 - 0.5), rel=1e-9)
+
+
 def test_cost_margin_percentage():
     """
     Test that percentage-based cost margin is applied correctly
