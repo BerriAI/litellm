@@ -75,6 +75,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.logging_only,
             GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.post_mcp_call,
         ]
 
     # Class variables or attributes
