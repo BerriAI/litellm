@@ -321,6 +321,9 @@ class RoutingArgs(enum.Enum):
     ttl = 60  # 1min (RPM/TPM expire key)
 
 
+CUSTOM_TIER_PRICING_KEY_PATTERN = re.compile(r"_above_\d+k?_tokens$")
+
+
 class Router:
     model_names: set = set()
     cache_responses: Optional[bool] = False
@@ -7500,6 +7503,25 @@ class Router:
                 if backend_value is not None:
                     model_info[field] = backend_value
 
+    @staticmethod
+    def _extra_custom_pricing_fields(litellm_params: LiteLLM_Params) -> Dict[str, Any]:
+        """Custom tiered-pricing keys the user set on ``litellm_params`` that are not declared
+        on ``CustomPricingLiteLLMParams`` (e.g. ``input_cost_per_token_above_32k_tokens``).
+
+        The runtime cost calculator resolves any ``_above_<N>_tokens`` key generically, so a
+        user can configure an arbitrary threshold, but the fixed ``CustomPricingLiteLLMParams``
+        field list only carries a handful of declared thresholds. Without propagating the rest,
+        the router drops them at registration and requests in that tier bill at the base rate.
+        The shared backend key stays clean because ``shared_backend_model_info`` only keeps
+        cost-map schema fields, so these arbitrary keys never leak onto it.
+        """
+        extra = litellm_params.model_extra or {}
+        return {
+            key: value
+            for key, value in extra.items()
+            if value is not None and CUSTOM_TIER_PRICING_KEY_PATTERN.search(key)
+        }
+
     def _create_deployment(
         self,
         deployment_info: dict,
@@ -7527,6 +7549,9 @@ class Router:
             for field in CustomPricingLiteLLMParams.model_fields.keys():
                 if deployment.litellm_params.get(field) is not None:
                     _model_info[field] = deployment.litellm_params[field]
+            _model_info.update(
+                Router._extra_custom_pricing_fields(deployment.litellm_params)
+            )
 
             if _model_info.get("input_cost_per_token") is not None:
                 Router._inherit_builtin_cache_pricing(
@@ -8277,6 +8302,9 @@ class Router:
             field_value = deployment.litellm_params.get(field)
             if field_value is not None:
                 _model_info_dict[field] = field_value
+        _model_info_dict.update(
+            Router._extra_custom_pricing_fields(deployment.litellm_params)
+        )
 
         if _model_info_dict.get("input_cost_per_token") is not None:
             Router._inherit_builtin_cache_pricing(

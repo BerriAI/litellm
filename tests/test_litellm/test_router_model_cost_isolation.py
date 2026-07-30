@@ -944,3 +944,81 @@ def test_wildcard_zero_cost_request_does_not_poison_named_deployment_pricing():
         assert named_cost == pytest.approx(10 * builtin_input_cost)
     finally:
         _restore_model_cost_entries(model_keys)
+def test_custom_arbitrary_tier_pricing_registered_under_deployment_model_id():
+    """
+    Regression for #34378: a Router/UI deployment configuring an arbitrary custom
+    tiered-pricing key on litellm_params (e.g. input_cost_per_token_above_32k_tokens,
+    a threshold not declared on CustomPricingLiteLLMParams) must survive registration
+    and land in the deployment's model_id cost-map entry, so requests above the
+    threshold are billed at the tier rate rather than the base rate.
+    """
+    backend_model = "vertex_ai/gemini-2.5-flash"
+
+    Router(
+        model_list=[
+            {
+                "model_name": "custom-32k-tier-model",
+                "litellm_params": {
+                    "model": backend_model,
+                    "api_key": "fake-key-tier-1",
+                    "input_cost_per_token": 0.0000004,
+                    "output_cost_per_token": 0.0000012,
+                    "input_cost_per_token_above_32k_tokens": 0.0000008,
+                    "output_cost_per_token_above_32k_tokens": 0.0000024,
+                    "cache_read_input_token_cost_above_32k_tokens": 0.0000001,
+                },
+                "model_info": {"id": "deployment-custom-32k"},
+            },
+        ],
+    )
+
+    entry = litellm.model_cost.get("deployment-custom-32k")
+    assert entry is not None, "Deployment should be registered by model_id"
+    assert entry["input_cost_per_token_above_32k_tokens"] == 0.0000008
+    assert entry["output_cost_per_token_above_32k_tokens"] == 0.0000024
+    assert entry["cache_read_input_token_cost_above_32k_tokens"] == 0.0000001
+
+
+def test_custom_arbitrary_tier_pricing_does_not_pollute_shared_backend_key():
+    """
+    Regression for #34378 combined with the shared-key isolation guarantee: an
+    arbitrary custom tier key set on one deployment must not leak onto the shared
+    backend model key, so a sibling deployment on the same backend keeps built-in
+    pricing (mirrors the existing declared-field isolation tests).
+    """
+    backend_model = "vertex_ai/gemini-2.5-flash"
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "tiered-custom-model",
+                "litellm_params": {
+                    "model": backend_model,
+                    "api_key": "fake-key-tier-2",
+                    "input_cost_per_token": 0.0000004,
+                    "output_cost_per_token": 0.0000012,
+                    "input_cost_per_token_above_32k_tokens": 0.0000008,
+                },
+                "model_info": {"id": "deployment-tiered-custom"},
+            },
+            {
+                "model_name": "sibling-builtin-model",
+                "litellm_params": {
+                    "model": backend_model,
+                    "api_key": "fake-key-tier-3",
+                },
+                "model_info": {"id": "deployment-sibling-builtin"},
+            },
+        ],
+    )
+
+    shared_entry = litellm.model_cost.get(backend_model, {})
+    assert (
+        "input_cost_per_token_above_32k_tokens" not in shared_entry
+    ), "Custom tier key must not pollute the shared backend model key"
+
+    info_custom = router.get_deployment_model_info(
+        model_id="deployment-tiered-custom", model_name=backend_model
+    )
+    assert info_custom is not None
+    assert info_custom["input_cost_per_token_above_32k_tokens"] == 0.0000008
