@@ -212,9 +212,6 @@ async def _get_batch_output_file_content_as_dictionary(
         _is_base64_encoded_unified_file_id,
     )
 
-    if custom_llm_provider == "vertex_ai":
-        raise ValueError("Vertex AI does not support file content retrieval")
-
     if batch.output_file_id is None:
         raise ValueError("Output file id is None cannot retrieve file content")
 
