@@ -233,6 +233,7 @@ class LiteLLM:
     # ``litellm_params.model``), distinct from the user-facing ``gen_ai.request.model``.
     PROVIDER_MODEL: Final = "litellm.provider.model"
     REQUEST_STREAMING: Final = "litellm.request.streaming"
+    TOOLS_DECLARED: Final = "litellm.request.tools.declared"
     GUARDRAIL_NAME: Final = "litellm.guardrail.name"
     GUARDRAIL_MODE: Final = "litellm.guardrail.mode"
     GUARDRAIL_STATUS: Final = "litellm.guardrail.status"
