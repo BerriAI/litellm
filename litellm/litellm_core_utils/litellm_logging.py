@@ -362,6 +362,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.standard_callback_dynamic_params: StandardCallbackDynamicParams = (
             self.initialize_standard_callback_dynamic_params(kwargs)
         )
+        self._init_kwargs = kwargs
 
         # Process dynamic callbacks (after standard_callback_dynamic_params is initialized,
         # so team-scoped credentials are available for callback initialization)
@@ -459,9 +460,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 # pass only the relevant dynamic params as custom_logger_init_args.
                 _custom_logger_init_args: dict | None = None
                 if callback == "datadog":
-                    _custom_logger_init_args = {
-                        k: v for k, v in self.standard_callback_dynamic_params.items() if k.startswith("dd_")
-                    }
+                    # dd_* params are blocked from standard_callback_dynamic_params
+                    # (request-level security), but team callback_vars in kwargs
+                    # are admin-configured and trusted.
+                    _source_items = self._init_kwargs.items() if self._init_kwargs else ()
+                    _custom_logger_init_args = {k: v for k, v in _source_items if k.startswith("dd_")}
 
                 callback_class = _init_custom_logger_compatible_class(
                     callback,  # type: ignore[arg-type]
