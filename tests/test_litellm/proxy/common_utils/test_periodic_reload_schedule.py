@@ -96,30 +96,37 @@ def test_next_run_needs_both_interval_and_last_run():
 
 
 @pytest.mark.parametrize(
-    "schedule, pod_last_reload, expected",
+    "schedule, pod_data_loaded_at, expected",
     [
         (ReloadSchedule(reload_requested_at=datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc)), LAST_RUN, True),
         (
-            ReloadSchedule(interval_hours=6, reload_requested_at=datetime(2024, 1, 1, 11, 30, tzinfo=timezone.utc)),
+            ReloadSchedule(
+                interval_hours=6,
+                reload_requested_at=datetime(2024, 1, 1, 11, 30, tzinfo=timezone.utc),
+                last_run_at=datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc),
+            ),
             datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc),
             True,
         ),
         (ReloadSchedule(reload_requested_at=LAST_RUN), LAST_RUN, False),
         (ReloadSchedule(reload_requested_at=datetime(2024, 1, 1, 5, 0, tzinfo=timezone.utc)), LAST_RUN, False),
-        (ReloadSchedule(interval_hours=6, reload_requested_at=LAST_RUN), LAST_RUN, True),
-        (ReloadSchedule(reload_requested_at=NOW), None, False),
-        (ReloadSchedule(interval_hours=6, reload_requested_at=NOW), None, True),
-        (ReloadSchedule(), None, False),
-        (ReloadSchedule(interval_hours=6), None, True),
-        (ReloadSchedule(interval_hours=6), datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc), False),
-        (ReloadSchedule(interval_hours=6), LAST_RUN, True),
+        (ReloadSchedule(reload_requested_at=LAST_RUN), datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc), False),
+        (ReloadSchedule(interval_hours=6, reload_requested_at=LAST_RUN, last_run_at=LAST_RUN), LAST_RUN, True),
+        (ReloadSchedule(), LAST_RUN, False),
+        (ReloadSchedule(interval_hours=6), datetime(2024, 1, 1, 11, 59, tzinfo=timezone.utc), True),
+        (
+            ReloadSchedule(interval_hours=6, last_run_at=datetime(2024, 1, 1, 6, 30, tzinfo=timezone.utc)),
+            datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc),
+            False,
+        ),
+        (ReloadSchedule(interval_hours=6, last_run_at=LAST_RUN), LAST_RUN, True),
     ],
 )
-def test_pod_reload_is_due(schedule, pod_last_reload, expected):
+def test_pod_reload_is_due(schedule, pod_data_loaded_at, expected):
     assert (
         pod_reload_is_due(
             schedule=schedule,
-            pod_last_reload=pod_last_reload,
+            pod_data_loaded_at=pod_data_loaded_at,
             current_time=NOW,
             description="test",
         )
@@ -127,16 +134,18 @@ def test_pod_reload_is_due(schedule, pod_last_reload, expected):
     )
 
 
-def test_manual_request_reaches_every_pod_that_has_not_seen_it():
+def test_manual_request_reaches_every_pod_with_older_data():
     """Nothing clears reload_requested_at, so each pod reloads exactly once per request:
-    due while its own last reload predates the request, not due afterwards"""
+    due while its data predates the request, not due once refreshed or booted after it"""
     schedule = ReloadSchedule(reload_requested_at=datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc))
 
-    assert pod_reload_is_due(schedule=schedule, pod_last_reload=LAST_RUN, current_time=NOW, description="test") is True
+    assert (
+        pod_reload_is_due(schedule=schedule, pod_data_loaded_at=LAST_RUN, current_time=NOW, description="test") is True
+    )
     assert (
         pod_reload_is_due(
             schedule=schedule,
-            pod_last_reload=datetime(2024, 1, 1, 11, 0, 1, tzinfo=timezone.utc),
+            pod_data_loaded_at=datetime(2024, 1, 1, 11, 0, 1, tzinfo=timezone.utc),
             current_time=NOW,
             description="test",
         )
@@ -145,12 +154,26 @@ def test_manual_request_reaches_every_pod_that_has_not_seen_it():
 
 
 def test_pod_reload_decision_ignores_persisted_last_run():
-    """A pod that has never reloaded must refresh its own copy even when another pod
-    already stamped last_run_at within the interval"""
+    """A pod with stale data must refresh even when another pod already stamped
+    last_run_at within the interval"""
     assert (
         pod_reload_is_due(
             schedule=ReloadSchedule(interval_hours=6, last_run_at=datetime(2024, 1, 1, 11, 59, tzinfo=timezone.utc)),
-            pod_last_reload=None,
+            pod_data_loaded_at=LAST_RUN,
+            current_time=NOW,
+            description="test",
+        )
+        is True
+    )
+
+
+def test_schedule_that_never_ran_fires_immediately():
+    """A fresh schedule must not wait a full interval for its first run, even on a pod
+    whose own data is boot-fresh"""
+    assert (
+        pod_reload_is_due(
+            schedule=ReloadSchedule(interval_hours=6, last_run_at=None),
+            pod_data_loaded_at=datetime(2024, 1, 1, 11, 59, tzinfo=timezone.utc),
             current_time=NOW,
             description="test",
         )

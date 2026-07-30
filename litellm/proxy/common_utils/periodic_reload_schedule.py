@@ -9,8 +9,8 @@ reload job and the manual reload endpoints own the dedicated ``last_run_at`` /
 memory so the Admin UI still reports the last execution after a restart and across pods.
 ``reload_requested_at`` fans a manual reload out to every pod without any pod having to
 write the flag back down, so no pod can starve another of the request. Each pod tracks
-its own last reload in memory and compares it against those timestamps to decide when to
-refresh its in-memory copy of the data.
+only when its own in-memory copy was loaded (seeded at boot) and reloads whenever that
+copy is older than the request or the configured interval.
 """
 
 from collections.abc import Mapping
@@ -127,35 +127,30 @@ def reload_schedule_status(schedule: ReloadSchedule | None) -> ReloadScheduleSta
 def pod_reload_is_due(
     *,
     schedule: ReloadSchedule,
-    pod_last_reload: datetime | None,
+    pod_data_loaded_at: datetime,
     current_time: datetime,
     description: str,
 ) -> bool:
     """
-    Whether this pod should reload now, based on its own last reload rather than the
-    persisted one, so every pod refreshes its in-memory data on the configured interval.
-    A pod that has never reloaded ignores ``reload_requested_at``: whatever it booted with
-    is at least as fresh as the request
+    Whether this pod should reload now: when its in-memory data (loaded at boot or at its
+    last reload) is older than a manual request or the configured interval. A schedule that
+    has never run anywhere fires immediately so the first run is not one interval away
     """
-    if (
-        schedule.reload_requested_at is not None
-        and pod_last_reload is not None
-        and schedule.reload_requested_at > pod_last_reload
-    ):
+    if schedule.reload_requested_at is not None and schedule.reload_requested_at > pod_data_loaded_at:
         verbose_proxy_logger.info("%s reload triggered by manual reload request", description)
         return True
     if schedule.interval_hours is None:
         return False
-    if pod_last_reload is None:
-        verbose_proxy_logger.info("%s reload triggered - no previous reload time recorded", description)
+    if schedule.last_run_at is None:
+        verbose_proxy_logger.info("%s reload triggered - schedule has never run", description)
         return True
-    hours_since_last_reload = (current_time - pod_last_reload).total_seconds() / 3600
-    if hours_since_last_reload < schedule.interval_hours:
+    hours_since_data_loaded = (current_time - pod_data_loaded_at).total_seconds() / 3600
+    if hours_since_data_loaded < schedule.interval_hours:
         return False
     verbose_proxy_logger.info(
-        "%s reload triggered by interval. Hours since last reload: %.2f, Interval: %s",
+        "%s reload triggered by interval. Hours since data loaded: %.2f, Interval: %s",
         description,
-        hours_since_last_reload,
+        hours_since_data_loaded,
         schedule.interval_hours,
     )
     return True

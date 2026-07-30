@@ -3856,8 +3856,8 @@ class ProxyConfig:
         self._last_semantic_filter_config: Optional[Dict[str, Any]] = None
         self._last_hashicorp_vault_config: Optional[Dict[str, Any]] = None
         self.worker_registry: List["WorkerRegistryEntry"] = []
-        self.last_model_cost_map_reload: datetime | None = None
-        self.last_anthropic_beta_headers_reload: datetime | None = None
+        self.model_cost_map_loaded_at: datetime = utc_now()
+        self.anthropic_beta_headers_loaded_at: datetime = utc_now()
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -6443,7 +6443,7 @@ class ProxyConfig:
             current_time = utc_now()
             if not pod_reload_is_due(
                 schedule=schedule,
-                pod_last_reload=self.last_model_cost_map_reload,
+                pod_data_loaded_at=self.model_cost_map_loaded_at,
                 current_time=current_time,
                 description="Model cost map",
             ):
@@ -6451,7 +6451,7 @@ class ProxyConfig:
 
             models_count = await asyncio.to_thread(_reload_model_cost_map_in_process)
 
-            self.last_model_cost_map_reload = current_time
+            self.model_cost_map_loaded_at = current_time
             await record_reload_run(prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME, current_time)
 
             verbose_proxy_logger.info(f"Model cost map reloaded successfully. Models count: {models_count}")
@@ -6472,7 +6472,7 @@ class ProxyConfig:
             current_time = utc_now()
             if not pod_reload_is_due(
                 schedule=schedule,
-                pod_last_reload=self.last_anthropic_beta_headers_reload,
+                pod_data_loaded_at=self.anthropic_beta_headers_loaded_at,
                 current_time=current_time,
                 description="Anthropic beta headers",
             ):
@@ -6484,7 +6484,7 @@ class ProxyConfig:
 
             new_config = await asyncio.to_thread(reload_beta_headers_config)
 
-            self.last_anthropic_beta_headers_reload = current_time
+            self.anthropic_beta_headers_loaded_at = current_time
             await record_reload_run(prisma_client, ANTHROPIC_BETA_HEADERS_RELOAD_PARAM_NAME, current_time)
 
             provider_count = sum(1 for k in new_config.keys() if k != "provider_aliases" and k != "description")
@@ -15570,7 +15570,7 @@ async def reload_model_cost_map(
         models_count = await asyncio.to_thread(_reload_model_cost_map_in_process)
 
         current_time = utc_now()
-        proxy_config.last_model_cost_map_reload = current_time
+        proxy_config.model_cost_map_loaded_at = current_time
 
         # Stamp the shared last run and the reload request so other pods reload too
         await record_manual_reload(prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME, current_time)
@@ -15800,7 +15800,7 @@ async def reload_anthropic_beta_headers(
         new_config = await asyncio.to_thread(reload_beta_headers_config)
 
         current_time = utc_now()
-        proxy_config.last_anthropic_beta_headers_reload = current_time
+        proxy_config.anthropic_beta_headers_loaded_at = current_time
 
         # Stamp the shared last run and the reload request so other pods reload too
         await record_manual_reload(prisma_client, ANTHROPIC_BETA_HEADERS_RELOAD_PARAM_NAME, current_time)

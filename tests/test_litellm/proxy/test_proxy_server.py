@@ -3831,9 +3831,11 @@ class TestPriceDataReloadAPI:
     def test_get_model_cost_map_reload_status_admin_access(self, client_with_auth):
         """
         Regression (LIT-4882): status is served purely from the DB row, so a restarted pod
-        with no in-memory last-reload time still reports the real last/next run
+        (whose in-memory clock only knows its own boot) still reports the real last/next run
         """
-        proxy_server_module.proxy_config.last_model_cost_map_reload = None
+        proxy_server_module.proxy_config.model_cost_map_loaded_at = datetime(
+            2030, 6, 1, tzinfo=timezone.utc
+        )
 
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
             mock_prisma.db.litellm_config.find_unique = AsyncMock(
@@ -3983,10 +3985,11 @@ class TestPriceDataReloadIntegration:
         mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
+        boot_loaded_at = proxy_config.model_cost_map_loaded_at
         asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
         mock_prisma.db.litellm_config.update_many.assert_not_called()
-        assert proxy_config.last_model_cost_map_reload is None
+        assert proxy_config.model_cost_map_loaded_at == boot_loaded_at
 
         frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
         requested_at = datetime(2024, 1, 1, 6, 59, 30, tzinfo=timezone.utc)
@@ -3997,7 +4000,7 @@ class TestPriceDataReloadIntegration:
                 last_run_at=requested_at,
             )
         )
-        proxy_config.last_model_cost_map_reload = frozen_now - timedelta(minutes=1)
+        proxy_config.model_cost_map_loaded_at = frozen_now - timedelta(minutes=1)
 
         original_model_cost = litellm.model_cost.copy()
         try:
@@ -4016,7 +4019,7 @@ class TestPriceDataReloadIntegration:
                 assert litellm.model_cost["gpt-3.5-turbo"] == {
                     "input_cost_per_token": 0.001
                 }
-                assert proxy_config.last_model_cost_map_reload == frozen_now
+                assert proxy_config.model_cost_map_loaded_at == frozen_now
                 assert mock_prisma.db.litellm_config.update_many.call_args[1] == {
                     "data": {"last_run_at": frozen_now},
                     "where": {"param_name": "model_cost_map_reload_config"},
@@ -4044,8 +4047,8 @@ class TestPriceDataReloadIntegration:
             )
         )
         frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
-        pod_last_reload = frozen_now - timedelta(minutes=1)
-        proxy_config.last_model_cost_map_reload = pod_last_reload
+        pod_data_loaded_at = frozen_now - timedelta(minutes=1)
+        proxy_config.model_cost_map_loaded_at = pod_data_loaded_at
 
         original_model_cost = litellm.model_cost.copy()
         try:
@@ -4059,15 +4062,16 @@ class TestPriceDataReloadIntegration:
 
                 mock_get_map.assert_not_called()
                 mock_prisma.db.litellm_config.update_many.assert_not_called()
-                assert proxy_config.last_model_cost_map_reload == pod_last_reload
+                assert proxy_config.model_cost_map_loaded_at == pod_data_loaded_at
         finally:
             litellm.model_cost = original_model_cost
             _invalidate_model_cost_lowercase_map()
 
-    def test_periodic_reload_uses_pod_local_last_reload(self):
+    def test_periodic_reload_uses_pod_local_data_age(self):
         """
-        Each pod decides from its own last reload, so a pod that never reloaded refreshes even
-        when the shared row was just stamped, and stays put while inside the interval
+        Each pod decides from the age of its own data, so a pod holding a stale copy
+        refreshes even when the shared row was just stamped by another pod, and stays
+        put while its copy is inside the interval
         """
         from litellm.proxy.proxy_server import ProxyConfig
 
@@ -4081,6 +4085,9 @@ class TestPriceDataReloadIntegration:
         )
         mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
         frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
+        proxy_config.model_cost_map_loaded_at = datetime(
+            2024, 1, 1, 0, 0, tzinfo=timezone.utc
+        )
 
         original_model_cost = litellm.model_cost.copy()
         try:
@@ -4095,20 +4102,20 @@ class TestPriceDataReloadIntegration:
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
                 assert litellm.model_cost["gpt-4-test"] == {"input_cost_per_token": 0.5}
-                assert proxy_config.last_model_cost_map_reload == frozen_now
+                assert proxy_config.model_cost_map_loaded_at == frozen_now
                 assert mock_prisma.db.litellm_config.update_many.call_args[1][
                     "data"
                 ] == {"last_run_at": frozen_now}
 
                 mock_get_map.reset_mock()
                 mock_prisma.db.litellm_config.update_many.reset_mock()
-                proxy_config.last_model_cost_map_reload = frozen_now - timedelta(hours=1)
+                proxy_config.model_cost_map_loaded_at = frozen_now - timedelta(hours=1)
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
                 mock_get_map.assert_not_called()
                 mock_prisma.db.litellm_config.update_many.assert_not_called()
-                assert proxy_config.last_model_cost_map_reload == frozen_now - timedelta(
+                assert proxy_config.model_cost_map_loaded_at == frozen_now - timedelta(
                     hours=1
                 )
         finally:
@@ -4200,7 +4207,7 @@ class TestPriceDataReloadIntegration:
                     "reload_requested_at": frozen_now,
                 }
                 assert (
-                    proxy_server_module.proxy_config.last_model_cost_map_reload
+                    proxy_server_module.proxy_config.model_cost_map_loaded_at
                     == frozen_now
                 )
         finally:
@@ -4232,7 +4239,7 @@ class TestPriceDataReloadIntegration:
                 proxy_config._check_and_reload_anthropic_beta_headers(mock_prisma)
             )
 
-            assert proxy_config.last_anthropic_beta_headers_reload == frozen_now
+            assert proxy_config.anthropic_beta_headers_loaded_at == frozen_now
             assert mock_prisma.db.litellm_config.update_many.call_args[1] == {
                 "data": {"last_run_at": frozen_now},
                 "where": {"param_name": "anthropic_beta_headers_reload_config"},
@@ -4280,7 +4287,7 @@ class TestPriceDataReloadIntegration:
                 "reload_requested_at": frozen_now,
             }
             assert (
-                proxy_server_module.proxy_config.last_anthropic_beta_headers_reload
+                proxy_server_module.proxy_config.anthropic_beta_headers_loaded_at
                 == frozen_now
             )
 
