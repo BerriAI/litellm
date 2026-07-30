@@ -1710,6 +1710,89 @@ class TestCallToolRestAPI:
         assert captured["allowed_mcp_servers"] == [stub_server]
         fire_logging.assert_awaited_once()
 
+    async def test_returns_guardrail_rewritten_tool_result(self, monkeypatch):
+        """A post_mcp_call guardrail rewrite of the tool result must reach the REST caller,
+        not the raw result the upstream server returned."""
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+            auth_type = None
+
+        stub_server = StubServer()
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        async def fake_execute_mcp_tool(**kwargs):
+            return {"content": [{"type": "text", "text": "jane@example.com"}]}
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.add_litellm_data_to_request",
+            fake_add_litellm_data_to_request,
+            raising=False,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {}, raising=False)
+        monkeypatch.setattr(rest_endpoints, "execute_mcp_tool", fake_execute_mcp_tool, raising=False)
+        masked_result = {"content": [{"type": "text", "text": "<EMAIL_ADDRESS>"}]}
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_fire_mcp_tool_call_logging",
+            AsyncMock(return_value=masked_result),
+            raising=False,
+        )
+
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {}},
+        )
+
+        result = await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=UserAPIKeyAuth())
+
+        assert result == masked_result
+
+    async def test_success_logging_guardrail_rejection_propagates(self, monkeypatch):
+        """A guardrail rejecting the tool result must not be swallowed as a logging failure,
+        otherwise the unguarded result would still be returned to the caller."""
+        from litellm.exceptions import BlockedPiiEntityError
+
+        fire_logging = AsyncMock(
+            side_effect=BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="presidio-mcp")
+        )
+        monkeypatch.setattr(rest_endpoints, "_fire_mcp_tool_call_logging", fire_logging, raising=False)
+
+        with pytest.raises(BlockedPiiEntityError):
+            await rest_endpoints._safe_fire_mcp_tool_call_logging(
+                object(), {"result": "ok"}, datetime.now(), datetime.now()
+            )
+
+        fire_logging.assert_awaited_once()
+
     @pytest.mark.parametrize("upstream_status", [401, 403])
     async def test_call_tool_rest_relays_upstream_auth_failure(self, monkeypatch, upstream_status):
         """A pass-through call that hits an upstream 401/403 (surfaced by the manager as

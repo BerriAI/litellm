@@ -109,6 +109,7 @@ from litellm.litellm_core_utils.core_helpers import coerce_token_limit
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -172,6 +173,7 @@ from litellm.types.proxy.policy_engine.pipeline_types import PipelineExecutionRe
 from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
+    from mcp.types import CallToolResult
     from opentelemetry.trace import Span as _Span
     from prisma.client import TransactionManager
 
@@ -2469,6 +2471,59 @@ class ProxyLogging:
             raise blocking
         if raised:
             raise raised[0]
+
+    async def post_mcp_call_hook(
+        self,
+        response: "CallToolResult",
+        request_data: Mapping[str, Any],
+        user_api_key_dict: UserAPIKeyAuth | None = None,
+    ) -> "CallToolResult":
+        """
+        Run guardrails configured for ``post_mcp_call`` against an MCP tool result.
+
+        The MCP counterpart of ``post_call_success_hook``: guardrails that
+        implement ``apply_guardrail`` see the tool result's text through the
+        unified guardrail seam (``MCPGuardrailTranslationHandler``), so a text
+        guardrail can mask sensitive values in the result without any MCP-specific
+        code of its own. Guardrails that instead implement
+        ``async_post_mcp_tool_call_hook`` are dispatched by
+        ``Logging.async_post_mcp_tool_call_hook`` and are not run here.
+
+        A guardrail that rejects the result raises, and the exception propagates
+        (matching the inbound ``pre_mcp_call`` behavior) rather than being
+        swallowed into an unguarded result.
+        """
+        caps = ProxyLogging._callback_capabilities()
+        if not caps.has_guardrail:
+            return response
+
+        handler_cls = load_guardrail_translation_mappings().get(CallTypes.call_mcp_tool)
+        if handler_cls is None:
+            verbose_proxy_logger.debug("MCP guardrail translation handler unavailable; skipping post_mcp_call hook")
+            return response
+
+        for callback in caps.resolved_callbacks:
+            if not isinstance(callback, CustomGuardrail):
+                continue
+            if "apply_guardrail" not in type(callback).__dict__:
+                continue
+            if (
+                callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_mcp_call)
+                is not True
+            ):
+                continue
+            response = await self._run_guardrail_with_metrics(
+                callback,
+                handler_cls().process_output_response(
+                    response=response,
+                    guardrail_to_apply=callback,
+                    litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                ),
+                "post_mcp_call",
+            )
+        return response
 
     async def post_call_response_headers_hook(
         self,
