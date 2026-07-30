@@ -65,8 +65,7 @@ def _get_guardrails_list_response(
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
 
     name_to_id = {
-        g.get("guardrail_name"): g.get("guardrail_id")
-        for g in IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
+        g.get("guardrail_name"): g.get("guardrail_id") for g in IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
     }
 
     guardrail_configs: List[GuardrailInfoResponse] = []
@@ -1239,9 +1238,7 @@ async def get_guardrail_info(guardrail_id: str):
     try:
         guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.DB
         result = (
-            await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
-                guardrail_id=guardrail_id, prisma_client=prisma_client
-            )
+            await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(guardrail_id=guardrail_id, prisma_client=prisma_client)
             if prisma_client is not None
             else None
         )
