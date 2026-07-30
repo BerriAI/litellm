@@ -58,6 +58,7 @@ _PAST = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(microsecond=0)
         ("key-model-over-budget", False),
         ("over-budget", False),
         ("rate-limited", False),
+        ("scim-deactivated-owner", False),
     ],
 )
 async def test_every_ceiling_the_request_path_enforces_gates_warming(arm, warmed):
@@ -104,6 +105,14 @@ async def test_every_ceiling_the_request_path_enforces_gates_warming(arm, warmed
         fields = {"rpm_limit": 1}
         await counters.async_set_cache(key="{api_key:k}:window", value=str(int(time.time())))
         await counters.async_set_cache(key="{api_key:k}:requests", value=1)
+    elif arm == "scim-deactivated-owner":
+        from litellm.proxy._types import LiteLLM_UserTable
+
+        await key_cache.async_set_cache(
+            key="u",
+            value=LiteLLM_UserTable(user_id="u", max_budget=None, spend=0.0, metadata={"scim_active": False}),
+        )
+        fields = {"user_id": "u"}
 
     priced = arm == "over-budget"
     llm_router = priced_rig(redis) if priced else warming_rig(redis=redis)[0]
@@ -381,21 +390,6 @@ async def test_a_replay_never_falls_back_to_a_group_warming_did_not_validate():
     await tick(llm_router)
     assert llm_router.completion_calls, "expected a replay"
     assert all(call["disable_fallbacks"] is True for call in llm_router.completion_calls)
-
-
-def test_scim_deactivation_is_one_predicate_shared_with_the_auth_paths():
-    """The gate sat inline at five call sites and warming became the sixth caller without it, so it lives
-    beside get_user_object now and every path calls the same predicate."""
-    from litellm.proxy._types import LiteLLM_UserTable
-    from litellm.proxy.auth.auth_checks import user_is_scim_deactivated
-
-    def user(metadata):
-        return LiteLLM_UserTable(user_id="u1", max_budget=None, spend=0.0, metadata=metadata)
-
-    assert user_is_scim_deactivated(user({"scim_active": False})) is True
-    assert user_is_scim_deactivated(user({"scim_active": True})) is False
-    assert user_is_scim_deactivated(user({})) is False
-    assert user_is_scim_deactivated(None) is False
 
 
 @pytest.mark.asyncio
