@@ -8468,6 +8468,10 @@ async def ahealth_check(
             mode = litellm.model_cost[model].get("mode")
 
         model_params["cache"] = {"no-cache": True}  # don't used cached responses for making health check calls
+        # chatgpt provider uses the Responses API exclusively; default to "responses" so the
+        # health check doesn't send a Chat Completions payload that the backend rejects.
+        if mode is None and custom_llm_provider == "chatgpt":
+            mode = "responses"
         mode = mode or "chat"
         if "*" in model:
             return await HealthCheckHelpers.ahealth_check_wildcard_models(

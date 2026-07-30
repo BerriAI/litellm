@@ -243,7 +243,7 @@ class HealthCheckHelpers:
             ),
             "responses": lambda: litellm.aresponses(
                 **_filter_model_params(model_params=model_params),
-                input=prompt or "test",
+                input=[{"role": "user", "content": prompt or "test"}],
             ),
             "ocr": lambda: litellm.aocr(
                 **_filter_model_params(model_params=model_params),
