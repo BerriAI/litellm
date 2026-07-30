@@ -1229,7 +1229,6 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64",
- "colored_json",
  "futures-channel",
  "futures-util",
  "litellm-core",
@@ -1255,6 +1254,7 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-types",
  "bytes",
+ "colored_json",
  "futures-util",
  "rand 0.8.7",
  "reqwest",

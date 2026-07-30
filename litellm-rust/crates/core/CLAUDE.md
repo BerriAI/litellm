@@ -27,8 +27,7 @@ Not allowed:
 - Config file reading or rollout state; the host resolves those and passes them
   in. Env reads are limited to credential fallback in a route's `prepare.rs`.
 - Logging callbacks, tracing spans, spend writes, or customer callbacks.
-- The host-injected debug log sink is the exception; it receives redacted events
-  without env reads, I/O, or callback dispatch in core.
+- The logging module owns the debug sink, renderer env vars, and stderr output.
 - Provider-specific branching that belongs in `providers`.
 - Panics for user/provider-controlled input.
 

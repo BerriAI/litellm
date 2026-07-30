@@ -40,13 +40,6 @@ impl ConsoleDebugHook {
     }
 }
 
-pub fn hook_from_env() -> Option<Arc<dyn LogSink>> {
-    std::env::var("LITELLM_LOG")
-        .ok()
-        .filter(|value| value.eq_ignore_ascii_case("DEBUG"))
-        .map(|_| Arc::new(ConsoleDebugHook::from_env()) as Arc<dyn LogSink>)
-}
-
 pub fn hook(enabled: bool) -> Option<Arc<dyn LogSink>> {
     enabled.then(|| Arc::new(ConsoleDebugHook::from_env()) as Arc<dyn LogSink>)
 }
@@ -150,9 +143,9 @@ mod tests {
 
     use serde_json::json;
 
-    use super::*;
-    use litellm_core::logging::{LogEvent, ProviderRequestEvent};
+    use crate::logging::ProviderRequestEvent;
 
+    use super::*;
     struct Buffer(Arc<Mutex<Vec<u8>>>);
 
     impl Write for Buffer {

@@ -1,5 +1,6 @@
 mod redaction;
 
+pub mod console;
 pub mod events;
 pub mod http;
 pub mod stream;
