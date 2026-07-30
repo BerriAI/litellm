@@ -4218,6 +4218,7 @@ class TestWarmAwarePick:
         import json
         import time as time_module
 
+        from litellm.litellm_core_utils.core_helpers import get_caller_scope
         from litellm.router_strategy.complexity_router.cache_warming.store import CacheWarmingStore
         from litellm.router_strategy.complexity_router.cache_warming.types import (
             CACHE_WARMING_RECORD_SCHEMA_VERSION,
@@ -4245,7 +4246,7 @@ class TestWarmAwarePick:
             auto_router_model_name="warm-router",
         )
         store = CacheWarmingStore(redis_cache=redis, auto_router_model_name="warm-router")
-        key = store.record_key("warm-router", "hash-w", "warm-sess")
+        key = store.record_key("warm-router", get_caller_scope(TestWarmAwarePick._kwargs()), "warm-sess")
         redis.hashes.setdefault(store.sessions_key(), {})[key] = json.dumps(record.model_dump())
         for model_group, stamp in warmth.items():
             redis.data[CacheWarmingStore.warmth_key(key, model_group)] = json.dumps(
