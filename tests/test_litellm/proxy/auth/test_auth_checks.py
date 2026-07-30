@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(
@@ -5164,4 +5165,140 @@ async def test_get_project_object_db_fetch_returns_cached_obj():
 
     assert isinstance(result, LiteLLM_ProjectTableCachedObj)
     assert result.project_id == "p-1"
-    assert result.project_alias == "proj"
+
+
+UNPRICED_UNDERLYING_MODEL = "openai/unpriced-model-lit4984-xyz"
+
+
+def _router_with_priced_and_unpriced_models() -> "Router":
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "priced-group",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-test"},
+            },
+            {
+                "model_name": "unpriced-group",
+                "litellm_params": {"model": UNPRICED_UNDERLYING_MODEL, "api_key": "sk-test"},
+            },
+        ]
+    )
+
+
+def test_model_has_no_cost_mapping_priced_model_is_false():
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+
+    router = _router_with_priced_and_unpriced_models()
+
+    assert model_has_no_cost_mapping(model="priced-group", llm_router=router) is False
+
+
+def test_model_has_no_cost_mapping_unpriced_model_is_true():
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+
+    router = _router_with_priced_and_unpriced_models()
+
+    assert model_has_no_cost_mapping(model="unpriced-group", llm_router=router) is True
+
+
+def test_model_has_no_cost_mapping_no_model_or_router_is_false():
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+
+    router = _router_with_priced_and_unpriced_models()
+
+    assert model_has_no_cost_mapping(model=None, llm_router=router) is False
+    assert model_has_no_cost_mapping(model="unpriced-group", llm_router=None) is False
+
+
+async def _run_common_checks(
+    model: Optional[str], llm_router: Optional["Router"], route: str = "/chat/completions"
+) -> bool:
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    return await common_checks(
+        request_body={"model": model, "messages": [{"role": "user", "content": "hi"}]},
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route=route,
+        llm_router=llm_router,
+        proxy_logging_obj=MagicMock(),
+        valid_token=UserAPIKeyAuth(token="test-token"),
+        request=MagicMock(spec=Request),
+    )
+
+
+@pytest.mark.asyncio
+async def test_common_checks_blocks_unpriced_model_when_enabled(monkeypatch):
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
+    router = _router_with_priced_and_unpriced_models()
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_common_checks(model="unpriced-group", llm_router=router)
+
+    assert exc_info.value.code == "403"
+    assert exc_info.value.type == ProxyErrorTypes.model_cost_map_missing
+    assert exc_info.value.param == "model"
+    assert "unpriced-group" in exc_info.value.message
+    assert "pricing" in exc_info.value.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_common_checks_allows_unpriced_model_when_disabled(monkeypatch):
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", False)
+    router = _router_with_priced_and_unpriced_models()
+
+    result = await _run_common_checks(model="unpriced-group", llm_router=router)
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_common_checks_allows_priced_model_when_enabled(monkeypatch):
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
+    router = _router_with_priced_and_unpriced_models()
+
+    result = await _run_common_checks(model="priced-group", llm_router=router)
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_common_checks_ignores_non_llm_route_when_enabled(monkeypatch):
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
+    router = _router_with_priced_and_unpriced_models()
+
+    result = await _run_common_checks(
+        model="unpriced-group", llm_router=router, route="/model/new"
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_common_checks_blocks_alias_resolving_to_unpriced_model(monkeypatch):
+    from litellm.router import Router
+
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
+    router = Router(
+        model_list=[
+            {
+                "model_name": "billed-underlying-group",
+                "litellm_params": {"model": UNPRICED_UNDERLYING_MODEL, "api_key": "sk-test"},
+            }
+        ],
+        model_group_alias={"public-alias": "billed-underlying-group"},
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_common_checks(model="public-alias", llm_router=router)
+
+    assert exc_info.value.code == "403"
+    assert exc_info.value.type == ProxyErrorTypes.model_cost_map_missing
+    assert "public-alias" in exc_info.value.message

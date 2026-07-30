@@ -500,3 +500,59 @@ class TestResolveModelForCostLookup:
 
         assert resolved_model == "openai/gpt-4"
         assert provider is None
+
+
+class TestBlockRequestsForModelsWithoutPricing:
+    """Test suite for the block_requests_for_models_without_pricing toggle endpoints"""
+
+    @pytest.mark.asyncio
+    async def test_get_reflects_in_memory_flag(self):
+        with patch.object(litellm, "block_requests_for_models_without_pricing", True):
+            response = client.get(
+                "/config/block_requests_for_models_without_pricing",
+                headers={"Authorization": "Bearer sk-1234"},
+            )
+
+        assert response.status_code == 200
+        assert response.json() == {"enabled": True}
+
+    @pytest.mark.asyncio
+    async def test_patch_persists_and_updates_flag(self):
+        mock_proxy_config = AsyncMock()
+        mock_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": {}})
+        mock_proxy_config.save_config = AsyncMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch.object(litellm, "block_requests_for_models_without_pricing", False),
+        ):
+            response = client.patch(
+                "/config/block_requests_for_models_without_pricing",
+                headers={"Authorization": "Bearer sk-1234"},
+                json={"enabled": True},
+            )
+
+            assert response.status_code == 200
+            assert response.json() == {"enabled": True}
+            assert litellm.block_requests_for_models_without_pricing is True
+
+        saved_config = mock_proxy_config.save_config.call_args.kwargs["new_config"]
+        assert saved_config["litellm_settings"]["block_requests_for_models_without_pricing"] is True
+
+    @pytest.mark.asyncio
+    async def test_patch_requires_store_model_in_db(self):
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_config", AsyncMock()),
+            patch("litellm.proxy.proxy_server.store_model_in_db", False),
+        ):
+            response = client.patch(
+                "/config/block_requests_for_models_without_pricing",
+                headers={"Authorization": "Bearer sk-1234"},
+                json={"enabled": True},
+            )
+
+        assert response.status_code == 500
+        assert "error" in response.json()["detail"]
