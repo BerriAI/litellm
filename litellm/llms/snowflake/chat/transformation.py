@@ -22,9 +22,9 @@ from litellm.types.utils import (
     GenericStreamingChunk,
     Message,
     ModelResponse,
-    Usage,
 )
 
+from ...anthropic.chat.transformation import AnthropicConfig
 from ...base_llm.base_model_iterator import BaseModelResponseIterator
 from ...openai_like.chat.transformation import OpenAIGPTConfig
 from ..utils import SnowflakeBaseConfig
@@ -428,11 +428,10 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             message=message,
         )
 
-        usage_data = response_json.get("usage", {})
-        usage = Usage(
-            prompt_tokens=usage_data.get("input_tokens", 0),
-            completion_tokens=usage_data.get("output_tokens", 0),
-            total_tokens=usage_data.get("input_tokens", 0) + usage_data.get("output_tokens", 0),
+        usage = AnthropicConfig().calculate_usage(
+            usage_object=response_json.get("usage", {}),
+            reasoning_content=None,
+            completion_response=response_json,
         )
 
         model_response.choices = [choice]

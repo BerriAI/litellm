@@ -422,6 +422,41 @@ class TestAnthropicConfigResponse:
         assert result.usage.completion_tokens == 5
         assert result.usage.total_tokens == 15
 
+    def test_prompt_cache_tokens_mapped(self):
+        body = {
+            "id": "msg_cache",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-4-5",
+            "content": [{"type": "text", "text": "Hello!"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 2,
+                "output_tokens": 256,
+                "cache_creation_input_tokens": 1024,
+                "cache_read_input_tokens": 2048,
+            },
+        }
+        result = self.cfg.transform_response(
+            model="snowflake/claude-opus-4-5",
+            raw_response=httpx.Response(200, json=body),
+            model_response=ModelResponse(),
+            logging_obj=_mock_logging(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+        usage = result.usage
+        assert usage.cache_creation_input_tokens == 1024
+        assert usage.cache_read_input_tokens == 2048
+        assert usage.prompt_tokens == 2 + 1024 + 2048
+        assert usage.total_tokens == 2 + 1024 + 2048 + 256
+        assert usage.prompt_tokens_details.cached_tokens == 2048
+        assert usage.prompt_tokens_details.cache_creation_tokens == 1024
+        assert usage.prompt_tokens_details.text_tokens == 2
+
     def test_stop_reason_end_turn_maps_to_stop(self):
         raw = _make_anthropic_response()
         result = self.cfg.transform_response(
