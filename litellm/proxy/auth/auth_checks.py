@@ -74,6 +74,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
+    object_permission_cache_key,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
@@ -2609,7 +2610,7 @@ async def get_object_permission(
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
     # check if in cache
-    key = "object_permission_id:{}".format(object_permission_id)
+    key = object_permission_cache_key(object_permission_id)
     deserialized_perm = await user_api_key_cache.async_get_cache(
         key=key,
         model_type=LiteLLM_ObjectPermissionTable,
