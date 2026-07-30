@@ -6115,6 +6115,55 @@ def test_transform_request_keeps_prefill_as_final_turn():
     assert "json_object_prefill" not in json.dumps(data)
 
 
+@pytest.mark.asyncio
+async def test_async_transform_request_keeps_prefill_as_final_turn():
+    """The async transform is the path acompletion takes, so it needs the prefill too."""
+    config = AmazonConverseConfig()
+
+    with patch.object(litellm, "modify_params", True):
+        data = await config._async_transform_request(
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=[{"role": "user", "content": "Who are you?"}],
+            optional_params={"json_object_prefill": True, "json_mode": True},
+            litellm_params={},
+        )
+
+    assert data["messages"][-1]["role"] == "assistant"
+    assert data["messages"][-1]["content"] == [{"text": "{"}]
+    assert "json_object_prefill" not in json.dumps(data)
+
+
+def test_add_json_object_prefill_merges_into_list_content_assistant_turn():
+    """A trailing assistant turn holding content blocks gets the brace appended."""
+    messages = [
+        {"role": "user", "content": "Who are you?"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Sure:"}]},
+    ]
+
+    result = AmazonConverseConfig._add_json_object_prefill(messages)
+
+    assert len(result) == 2
+    assert result[-1]["content"] == [
+        {"type": "text", "text": "Sure:"},
+        {"type": "text", "text": "{"},
+    ]
+    assert result[-1]["prefix"] is True
+
+
+def test_add_json_object_prefill_handles_empty_assistant_turn():
+    """An assistant turn with no content becomes just the brace, not "None{"."""
+    messages = [
+        {"role": "user", "content": "Who are you?"},
+        {"role": "assistant", "content": None},
+    ]
+
+    result = AmazonConverseConfig._add_json_object_prefill(messages)
+
+    assert len(result) == 2
+    assert result[-1]["content"] == "{"
+    assert result[-1]["prefix"] is True
+
+
 def test_transform_response_prepends_prefilled_brace():
     """The model continues from the brace, so it must be added back."""
     response_json = {
