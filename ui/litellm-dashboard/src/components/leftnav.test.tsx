@@ -73,6 +73,16 @@ vi.mock("@/app/(dashboard)/hooks/useLogout", () => ({
 const collectNavKeys = (): string[] =>
   menuGroups.flatMap((group) => group.items.flatMap((item) => [item.key, ...(item.children ?? []).map((c) => c.key)]));
 
+// Every place a page id appears in the nav, as "GROUP" for a top-level item or
+// "GROUP > parentKey" for a child.
+const placementsOf = (page: string): string[] =>
+  menuGroups.flatMap((group) => [
+    ...group.items.filter((item) => item.page === page).map(() => group.groupLabel),
+    ...group.items.flatMap((item) =>
+      (item.children ?? []).filter((child) => child.page === page).map(() => `${group.groupLabel} > ${item.key}`),
+    ),
+  ]);
+
 describe("Sidebar (leftnav)", () => {
   const defaultProps = {
     setPage: vi.fn(),
@@ -129,6 +139,13 @@ describe("Sidebar (leftnav)", () => {
       expect(screen.getByText("Search Tools")).toBeInTheDocument();
     });
   });
+  it("keeps Router Settings as a single Settings child", () => {
+    // Router Settings is admin-only, so getAvailablePages() filters it out entirely and the
+    // page_utils duplicate-key guard cannot see it. Walk menuGroups directly, otherwise a
+    // stray duplicate placement ships silently.
+    expect(placementsOf("router-settings")).toEqual(["SETTINGS > settings"]);
+  });
+
   it("has no duplicate keys among all menu items and their children", () => {
     // React keys must be unique across the whole nav config, otherwise the
     // active-item highlight and group expansion collide.
@@ -271,6 +288,10 @@ describe("getBreadcrumb", () => {
 
   it("resolves a nested child page to its parent section", () => {
     expect(getBreadcrumb("search-tools")).toEqual({ section: "AI Gateway", title: "Search Tools" });
+  });
+
+  it("resolves router-settings under the Settings section", () => {
+    expect(getBreadcrumb("router-settings")).toEqual({ section: "Settings", title: "Router Settings" });
   });
 
   it("falls back to a prettified title with no section for unknown pages", () => {

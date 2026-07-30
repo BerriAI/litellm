@@ -11827,6 +11827,22 @@ def _sort_models(
         return all_models
 
 
+def _is_auto_router_model(model: Mapping[str, object]) -> bool:
+    """
+    True for any auto-router deployment, i.e. every `auto_router/*` strategy
+    (semantic, complexity, adaptive, quality).
+
+    Router._is_auto_router_deployment is deliberately narrower; it answers "is this the
+    *semantic* auto-router strategy" and returns False for the complexity and adaptive
+    prefixes, so it is not reusable here.
+    """
+    litellm_params = model.get("litellm_params")
+    if not isinstance(litellm_params, Mapping):
+        return False
+    litellm_model = litellm_params.get("model")
+    return isinstance(litellm_model, str) and litellm_model.startswith("auto_router/")
+
+
 def _paginate_models_response(
     all_models: List[Dict[str, Any]],
     page: int,
@@ -12121,6 +12137,15 @@ async def model_info_v2(
         "asc",
         description="Sort order. Options: asc, desc",
     ),
+    exclude_auto_routers: bool | None = fastapi.Query(
+        False,
+        description=(
+            "Omit auto-router deployments (litellm model prefixed `auto_router/`). "
+            "They select among deployments rather than being deployments themselves, so a "
+            "caller rendering a deployment list can leave them out. Defaults to false, so "
+            "existing callers are unaffected"
+        ),
+    ),
 ):
     """
     Paginated model metadata for proxy deployments (pricing, provider, team access).
@@ -12287,6 +12312,11 @@ async def model_info_v2(
         models=all_models,
         user_api_key_dict=user_api_key_dict,
     )
+
+    # `is True` because direct-call tests bypass FastAPI, so the Query default arrives as a
+    # truthy sentinel object rather than False.
+    if exclude_auto_routers is True:
+        all_models = [m for m in all_models if not _is_auto_router_model(m)]
 
     # Update total count to include agents
     search_total_count = len(all_models)
