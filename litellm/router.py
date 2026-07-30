@@ -19,6 +19,7 @@ import threading
 import time
 import traceback
 from collections import defaultdict
+from collections.abc import Mapping
 from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
@@ -108,6 +109,9 @@ from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
+)
+from litellm.router_utils.auto_router_model_naming import (
+    classify_strategy_router_model,
 )
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient
 from litellm.router_utils.clientside_credential_handler import (
@@ -268,6 +272,43 @@ def _cost_value_as_float(value: Union[str, int, float, None]) -> Optional[float]
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def model_info_is_active_for_environment(model_info: Mapping[str, object] | None) -> bool:
+    """Single owner of the environment-gating rule: a deployment whose model_info names
+    `supported_environments` loads only on pods whose LITELLM_ENVIRONMENT is in that list.
+    `Router.deployment_is_active_for_environment` delegates here, and the model-write
+    endpoints consult the same rule to tell a deliberately inactive model from one that
+    was dropped by a failed reload."""
+    if model_info is None:
+        return True
+    supported_environments = model_info.get("supported_environments")
+    if supported_environments is None:
+        return True
+    if not isinstance(supported_environments, (list, tuple)):
+        raise ValueError(
+            f"supported_environments must be a list of {VALID_LITELLM_ENVIRONMENTS}. "
+            f"but set as: {supported_environments} for model_info: {model_info}"
+        )
+    litellm_environment = get_secret_str(secret_name="LITELLM_ENVIRONMENT")
+    if litellm_environment is None:
+        raise ValueError("Set 'supported_environments' for model but not 'LITELLM_ENVIRONMENT' set in .env")
+
+    if litellm_environment not in VALID_LITELLM_ENVIRONMENTS:
+        raise ValueError(
+            f"LITELLM_ENVIRONMENT must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {litellm_environment}"
+        )
+
+    for _env in supported_environments:
+        if _env not in VALID_LITELLM_ENVIRONMENTS:
+            raise ValueError(
+                f"supported_environments must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {_env} "
+                f"for model_info: {model_info}"
+            )
+
+    if litellm_environment in supported_environments:
+        return True
+    return False
 
 
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
@@ -7585,15 +7626,7 @@ class Router:
         but NOT "auto_router/complexity_router" or "auto_router/adaptive_router"
         (which use the complexity-router and adaptive-router strategies).
         """
-        if litellm_params.model.startswith("auto_router/complexity_router"):
-            return False  # This is handled by complexity_router
-        if litellm_params.model.startswith("auto_router/adaptive_router"):
-            return False  # This is handled by adaptive_router
-        if litellm_params.model.startswith("auto_router/quality_router"):
-            return False  # This is handled by quality_router
-        if litellm_params.model.startswith("auto_router/"):
-            return True
-        return False
+        return classify_strategy_router_model(litellm_params.model) == "semantic"
 
     @staticmethod
     def _deployment_tags(deployment: Deployment) -> tuple[str, ...]:
@@ -7648,9 +7681,7 @@ class Router:
 
         Returns True if the litellm_params model starts with "auto_router/complexity_router"
         """
-        if litellm_params.model.startswith("auto_router/complexity_router"):
-            return True
-        return False
+        return classify_strategy_router_model(litellm_params.model) == "complexity"
 
     def init_complexity_router_deployment(self, deployment: Deployment):
         """
@@ -7700,7 +7731,7 @@ class Router:
 
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
-        return litellm_params.model.startswith("auto_router/adaptive_router")
+        return classify_strategy_router_model(litellm_params.model) == "adaptive"
 
     def _deployment_participates_in_adaptive_routing(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment owns an `adaptive_routers` entry once finalized:
@@ -7926,9 +7957,7 @@ class Router:
 
         Returns True if the litellm_params model starts with "auto_router/quality_router".
         """
-        if litellm_params.model.startswith("auto_router/quality_router"):
-            return True
-        return False
+        return classify_strategy_router_model(litellm_params.model) == "quality"
 
     def init_quality_router_deployment(self, deployment: Deployment):
         """
@@ -7982,30 +8011,7 @@ class Router:
         - ValueError: If LITELLM_ENVIRONMENT is not set in .env or not one of the valid values
         - ValueError: If supported_environments is not set in model_info or not one of the valid values
         """
-        if (
-            deployment.model_info is None
-            or "supported_environments" not in deployment.model_info
-            or deployment.model_info["supported_environments"] is None
-        ):
-            return True
-        litellm_environment = get_secret_str(secret_name="LITELLM_ENVIRONMENT")
-        if litellm_environment is None:
-            raise ValueError("Set 'supported_environments' for model but not 'LITELLM_ENVIRONMENT' set in .env")
-
-        if litellm_environment not in VALID_LITELLM_ENVIRONMENTS:
-            raise ValueError(
-                f"LITELLM_ENVIRONMENT must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {litellm_environment}"
-            )
-
-        for _env in deployment.model_info["supported_environments"]:
-            if _env not in VALID_LITELLM_ENVIRONMENTS:
-                raise ValueError(
-                    f"supported_environments must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {_env} for deployment: {deployment}"
-                )
-
-        if litellm_environment in deployment.model_info["supported_environments"]:
-            return True
-        return False
+        return model_info_is_active_for_environment(model_info=deployment.model_info)
 
     def set_model_list(self, model_list: list):
         original_model_list = copy.deepcopy(model_list)
@@ -8630,6 +8636,33 @@ class Router:
                     raise Exception("Model Name invalid - {}".format(type(model)))
         return None
 
+    @staticmethod
+    def _deployment_usable_by_team(model: Union[Mapping, Deployment], team_id: str | None) -> bool:
+        """
+        A team-scoped deployment (``model_info.team_id`` set) is only usable by
+        callers from that same team; deployments without a team owner are shared.
+        """
+        model_info = model.get("model_info") if isinstance(model, dict) else model.model_info
+        owner_team_id = model_info.get("team_id") if model_info is not None else None
+        return owner_team_id is None or owner_team_id == team_id
+
+    def _get_model_group_deployment_usable_by_team(
+        self, model_group_name: str, team_id: str | None
+    ) -> Deployment | None:
+        """
+        Like ``get_deployment_by_model_group_name``, but skips deployments owned
+        by other teams so a shared model name never resolves another team's
+        credentials.
+        """
+        indices = self.model_name_to_deployment_indices.get(model_group_name) or ()
+        usable = (
+            self.model_list[idx] for idx in indices if self._deployment_usable_by_team(self.model_list[idx], team_id)
+        )
+        first_usable = next(usable, None)
+        if first_usable is None:
+            return None
+        return Deployment(**first_usable) if isinstance(first_usable, dict) else first_usable
+
     def get_configured_token_limits(self, model_name: str) -> "tuple[int | None, int | None]":
         """
         Return (max_input_tokens, max_output_tokens) explicitly configured in a concrete
@@ -8664,7 +8697,10 @@ class Router:
             model_id: Model ID or model name from model_list (e.g., "gpt-4o-litellm")
             team_id: Optional team id of the caller. When set, team-scoped
                 deployments (indexed by team public model name, including team
-                wildcard models like "openai/*") are also considered.
+                wildcard models like "openai/*") are also considered. Name and
+                wildcard lookups never resolve a deployment owned by a
+                different team, so shared model names can't leak another
+                team's credentials.
 
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
@@ -8681,7 +8717,7 @@ class Router:
 
         # If not found, try by model_group_name
         if deployment is None:
-            deployment = self.get_deployment_by_model_group_name(model_group_name=model_id)
+            deployment = self._get_model_group_deployment_usable_by_team(model_group_name=model_id, team_id=team_id)
 
         # If not found, check team-scoped deployments whose team public model
         # name exactly matches model_id (wildcard team names are matched via
@@ -8698,7 +8734,12 @@ class Router:
         if deployment is None:
             team_pattern_router = self.team_pattern_routers.get(team_id) if team_id is not None else None
             team_wildcard_models = (team_pattern_router.route(model_id) or []) if team_pattern_router else []
-            potential_wildcard_models = team_wildcard_models or self.pattern_router.route(model_id) or []
+            global_wildcard_models = [
+                wildcard_model
+                for wildcard_model in (self.pattern_router.route(model_id) or [])
+                if self._deployment_usable_by_team(wildcard_model, team_id)
+            ]
+            potential_wildcard_models = team_wildcard_models or global_wildcard_models
             if potential_wildcard_models:
                 # Use the first matching wildcard deployment
                 deployment_dict = potential_wildcard_models[0]
@@ -9519,7 +9560,12 @@ class Router:
             return None
 
         # Strategy 1: Check if model_id directly matches a model_name or deployment ID
-        if model_id in self.model_names or self.has_model_id(model_id):
+        if model_id in self.model_names:
+            return model_id
+        if self.has_model_id(model_id):
+            deployment = self.get_deployment(model_id=model_id)
+            if deployment is not None and deployment.model_name:
+                return deployment.model_name
             return model_id
 
         # Strategy 2: Search through router's model_list to find by litellm_params.model

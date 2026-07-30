@@ -1,12 +1,9 @@
-use litellm_core::CoreError;
-use litellm_core::CoreResult;
-use litellm_core::messages::transformation::MessagesAuthStrategy;
-use litellm_core::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
-use serde_json::Value;
+use crate::error::{CoreError, CoreResult};
+use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers};
+use super::transformation::MessagesAuthStrategy;
 use super::types::{MessagesRequest, ProviderMessagesRequest};
-use crate::constants::BEDROCK_MESSAGES_PROVIDER;
 
 pub(super) fn prepare_messages_call(
     request: MessagesRequest<'_>,
@@ -34,45 +31,18 @@ pub(super) fn prepare_messages_call(
 
     let mut headers = string_headers(request.extra_headers)?;
 
-    let is_bedrock = provider == BEDROCK_MESSAGES_PROVIDER;
-    let auth_strategy = if is_bedrock {
-        MessagesAuthStrategy::Header("authorization")
-    } else {
-        config.auth_strategy()
-    };
-    let bearer_token = if is_bedrock {
-        request
-            .api_key
-            .map(str::to_string)
-            .or_else(|| env_lookup("AWS_BEARER_TOKEN_BEDROCK"))
-            .filter(|token| !token.trim().is_empty())
-    } else {
-        None
-    };
-    let auth_header = match auth_strategy {
-        MessagesAuthStrategy::Bearer
-            if has_header(&headers, "authorization")
-                || (config.accepts_bearer_auth() && has_bearer_auth(&headers)) =>
-        {
-            None
-        }
-        MessagesAuthStrategy::Header(name)
-            if has_header(&headers, name)
-                || (config.accepts_bearer_auth() && has_bearer_auth(&headers)) =>
-        {
-            None
-        }
-        MessagesAuthStrategy::Bearer => {
-            let api_key = config.resolve_api_key(request.api_key, &env_lookup)?;
-            Some(("authorization".to_string(), format!("Bearer {api_key}")))
-        }
-        MessagesAuthStrategy::Header(name) => {
-            let api_key = config.resolve_api_key(request.api_key, &env_lookup)?;
-            Some((name.to_string(), api_key))
-        }
-    };
-    if let Some(header) = auth_header {
-        headers.push(header);
+    let auth_strategy = config.auth_strategy();
+    let already_authorized = has_header(&headers, auth_strategy.header_name())
+        || (config.accepts_bearer_auth() && has_bearer_auth(&headers));
+    if !already_authorized {
+        let api_key = config.resolve_api_key(request.api_key, &env_lookup)?;
+        let auth_header = match auth_strategy {
+            MessagesAuthStrategy::Bearer => {
+                ("authorization".to_string(), format!("Bearer {api_key}"))
+            }
+            MessagesAuthStrategy::Header(name) => (name.to_string(), api_key),
+        };
+        headers.push(auth_header);
     }
 
     for (name, value) in config.default_headers() {
@@ -81,9 +51,7 @@ pub(super) fn prepare_messages_call(
         }
     }
 
-    let _stream = request.body.get("stream").and_then(Value::as_bool) == Some(true);
     let url = config.complete_url(request.api_base, &model, &env_lookup)?;
-    let signing_region = config.signing_region(request.api_base, &env_lookup);
     let typed_request = serde_json::from_value(request.body).map_err(|err| {
         CoreError::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
     })?;
@@ -101,8 +69,6 @@ pub(super) fn prepare_messages_call(
         url,
         body,
         upstream_headers: headers,
-        signing_region,
-        bearer_token,
         timeout: request.timeout,
     })
 }
