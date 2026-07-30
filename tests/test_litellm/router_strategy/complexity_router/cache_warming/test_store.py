@@ -64,18 +64,14 @@ class FakeRedisCache:
                 return 0
 
             return compare_and_delete
-        if "SMEMBERS" in script:
-
-            async def touched_models(keys: list, args: list) -> list:
-                return [member.encode("utf-8") for member in sorted(self.sets.get(self._namespaced(keys[0]), set()))]
-
-            return touched_models
         if "HGET" in script:
 
-            async def get_record(keys: list, args: list) -> str | None:
-                return self.hashes.get(self._namespaced(keys[0]), {}).get(str(args[0]))
+            async def get_session(keys: list, args: list) -> list:
+                record = self.hashes.get(self._namespaced(keys[0]), {}).get(str(args[0]))
+                touched = sorted(self.sets.get(self._namespaced(keys[1]), set()))
+                return [record, [member.encode("utf-8") for member in touched]]
 
-            return get_record
+            return get_session
         if "HSET" in script:
 
             async def capture(keys: list, args: list) -> int:

@@ -43,8 +43,8 @@ redis.call('EXPIREAT', touched_key, math.ceil(expires_at))
 return 1
 """
 
-_TOUCHED_MODELS_SCRIPT = """
-return redis.call('SMEMBERS', KEYS[1])
+_GET_SESSION_SCRIPT = """
+return {redis.call('HGET', KEYS[1], ARGV[1]), redis.call('SMEMBERS', KEYS[2])}
 """
 
 _LIST_LIVE_SESSIONS_SCRIPT = """
@@ -52,10 +52,6 @@ local index_key = KEYS[1]
 local now = tonumber(ARGV[1])
 local limit = tonumber(ARGV[2])
 return redis.call('ZRANGEBYSCORE', index_key, '(' .. now, '+inf', 'LIMIT', 0, limit)
-"""
-
-_GET_RECORD_SCRIPT = """
-return redis.call('HGET', KEYS[1], ARGV[1])
 """
 
 _MEMBERS_ADAPTER: TypeAdapter[tuple[str | bytes, ...]] = TypeAdapter(tuple[str | bytes, ...])
@@ -121,8 +117,7 @@ class CacheWarmingStore:
         self._list_live: Callable[..., Awaitable[object]] | None = (
             register(_LIST_LIVE_SESSIONS_SCRIPT) if register else None
         )
-        self._get: Callable[..., Awaitable[object]] | None = register(_GET_RECORD_SCRIPT) if register else None
-        self._touched: Callable[..., Awaitable[object]] | None = register(_TOUCHED_MODELS_SCRIPT) if register else None
+        self._get: Callable[..., Awaitable[object]] | None = register(_GET_SESSION_SCRIPT) if register else None
 
     @staticmethod
     def record_key(auto_router_model_name: str, caller_scope: str, session_id: str) -> str:
@@ -158,21 +153,23 @@ class CacheWarmingStore:
             return None
         return self.redis_cache
 
-    async def get_record(self, key: str) -> CacheWarmingRecord | None:
+    async def get_session(self, key: str) -> "tuple[CacheWarmingRecord | None, tuple[str, ...]]":
+        """A session's record and the models it has been served on, in one round trip. The refresher needs
+        both for every live session on every tick, so reading them separately would double the sequential
+        round trips against the cap."""
         if self._require_redis() is None or self._get is None:
-            return None
-        raw = await self._get(keys=[self.sessions_key()], args=[key])
-        return _parse_record(raw)
-
-    async def get_touched_models(self, key: str) -> tuple[str, ...]:
-        if self._require_redis() is None or self._touched is None:
-            return ()
-        raw = await self._touched(keys=[self.touched_key(key)], args=[])
+            return (None, ())
+        raw = await self._get(keys=[self.sessions_key(), self.touched_key(key)], args=[key])
+        record_raw, touched_raw = raw if isinstance(raw, (list, tuple)) and len(raw) == 2 else (None, ())
         try:
-            members = _MEMBERS_ADAPTER.validate_python(raw)
+            members = _MEMBERS_ADAPTER.validate_python(touched_raw)
         except ValidationError:
-            return ()
-        return tuple(member.decode() if isinstance(member, bytes) else member for member in members)
+            members = ()
+        touched = tuple(member.decode() if isinstance(member, bytes) else member for member in members)
+        return (_parse_record(record_raw), touched)
+
+    async def get_record(self, key: str) -> CacheWarmingRecord | None:
+        return (await self.get_session(key))[0]
 
     async def upsert_session(
         self,

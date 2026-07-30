@@ -508,27 +508,33 @@ class CacheWarmingRefresher:
                 config.max_sessions,
             )
         now = time.time()
-        records = tuple([(key, await store.get_record(key)) for key in session_keys])
+        sessions = tuple([(key, *await store.get_session(key)) for key in session_keys])
         active = tuple(
-            (key, record)
-            for key, record in records
+            (key, record, touched)
+            for key, record, touched in sessions
             if record is not None and now - record.last_activity <= config.idle_timeout_seconds
         )
         if not active:
             return
-        touched = {key: await store.get_touched_models(key) for key, _ in active}
         allowed = frozenset(resolve_warm_models(complexity_router.config))
         warmable = frozenset(
             filter_cache_warmable(
                 llm_router,
-                tuple(dict.fromkeys(model for models in touched.values() for model in models if model in allowed)),
+                tuple(
+                    dict.fromkeys(
+                        model
+                        for _, record, touched in active
+                        for model in (record.served_model, *touched)
+                        if model in allowed
+                    )
+                ),
             )
         )
         if not warmable:
             return
         attributed = frozenset(
             record.attribution.user_api_key
-            for _, record in active
+            for _, record, _ in active
             if record.attribution.user_api_key is not None
             and record.attribution.user_api_key != LITELLM_PROXY_MASTER_KEY_ALIAS
         )
@@ -555,7 +561,7 @@ class CacheWarmingRefresher:
                     session_key=key,
                     record=record,
                     warm_models=tuple(
-                        model for model in dict.fromkeys((record.served_model, *touched[key])) if model in warmable
+                        model for model in dict.fromkeys((record.served_model, *touched)) if model in warmable
                     ),
                     refresh_interval_seconds=config.refresh_interval_seconds,
                     session_ttl_seconds=config.session_ttl_seconds,
@@ -566,7 +572,7 @@ class CacheWarmingRefresher:
                     proxy_logging_obj=proxy_logging_obj,
                     lease_lost=lease_lost,
                 )
-                for key, record in active
+                for key, record, touched in active
                 if record.attribution.user_api_key not in excluded_keys
             ),
             return_exceptions=True,
