@@ -45,6 +45,10 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
+from litellm.proxy.management_helpers.object_permission_utils import (
+    _set_object_permission,
+    handle_update_object_permission_common,
+)
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -466,6 +470,7 @@ async def new_user(
 
         data_json = data.json()  # type: ignore
         data_json = _update_internal_new_user_params(data_json, data)
+        data_json = await _set_object_permission(data_json=data_json, prisma_client=prisma_client)
         _hash_password_in_dict(data_json)
         teams = data.teams
         if teams is None:
@@ -1278,6 +1283,17 @@ async def _update_single_user_helper(
         non_default_values=non_default_values,
         existing_metadata=existing_metadata or {},
     )
+
+    if "object_permission" in non_default_values:
+        user_object_permission_id = await handle_update_object_permission_common(
+            data_json=non_default_values,
+            existing_object_permission_id=(
+                existing_user_row.object_permission_id if isinstance(existing_user_row, LiteLLM_UserTable) else None
+            ),
+            prisma_client=prisma_client,
+        )
+        if user_object_permission_id is not None:
+            non_default_values["object_permission_id"] = user_object_permission_id
 
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(non_default_values.get("spend"))

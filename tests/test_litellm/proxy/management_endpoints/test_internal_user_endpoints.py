@@ -3702,3 +3702,187 @@ async def test_get_user_info_for_proxy_admin_validates_keys_and_teams():
     returned_key = result.keys[0]
     assert returned_key["team_id"] == "team-a"
     assert returned_key["models"] == []
+
+
+class _FakeObjectPermissionTable:
+    """In-memory stand-in for ``litellm_objectpermissiontable``."""
+
+    def __init__(self):
+        self.rows: dict = {}
+
+    async def find_unique(self, where):
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        row = self.rows.get(where["object_permission_id"])
+        return LiteLLM_ObjectPermissionTable(**_deserialized_permission_row(row)) if row is not None else None
+
+    async def create(self, data):
+        from litellm._uuid import uuid
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        record = {"object_permission_id": str(uuid.uuid4()), **data}
+        self.rows[record["object_permission_id"]] = record
+        return LiteLLM_ObjectPermissionTable(**_deserialized_permission_row(record))
+
+    async def upsert(self, where, data):
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        object_permission_id = where["object_permission_id"]
+        record = {**data["create"], "object_permission_id": object_permission_id}
+        self.rows[object_permission_id] = record
+        return LiteLLM_ObjectPermissionTable(**_deserialized_permission_row(record))
+
+
+def _deserialized_permission_row(row: dict) -> dict:
+    """mcp_tool_permissions is written as a JSON string (prisma Json column)."""
+    tool_permissions = row.get("mcp_tool_permissions")
+    if isinstance(tool_permissions, str):
+        return {**row, "mcp_tool_permissions": json.loads(tool_permissions)}
+    return row
+
+
+def _stored_permission_row(fake_table: _FakeObjectPermissionTable, object_permission_id: str) -> dict:
+    return _deserialized_permission_row(fake_table.rows[object_permission_id])
+
+
+@pytest.mark.asyncio
+async def test_user_new_persists_object_permission_to_object_permission_table(mocker):
+    """`/user/new` must write MCP grants to LiteLLM_ObjectPermissionTable and hand the
+    user row only the resulting object_permission_id; `litellm_usertable` has no
+    `object_permission` column, so passing the raw grants through silently drops them."""
+    fake_permission_table = _FakeObjectPermissionTable()
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable = fake_permission_table
+    mock_prisma_client.get_data = mocker.AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.UserRepository.count_billable_users",
+        new_callable=mocker.AsyncMock,
+        return_value=0,
+    )
+
+    captured: dict = {}
+
+    async def stub_generate_key_helper_fn(**kwargs):
+        captured.update(kwargs)
+        return {"user_id": kwargs["user_id"], "token": "sk-1234"}
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        stub_generate_key_helper_fn,
+    )
+
+    await new_user(
+        data=NewUserRequest(
+            user_id="sso-sub-1",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            object_permission={
+                "mcp_servers": ["linear_readonly"],
+                "mcp_tool_permissions": {"linear_readonly": ["list_teams"]},
+            },
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert "object_permission" not in captured
+    object_permission_id = captured["object_permission_id"]
+    stored = _stored_permission_row(fake_permission_table, object_permission_id)
+    assert stored["mcp_servers"] == ["linear_readonly"]
+    assert stored["mcp_tool_permissions"] == {"linear_readonly": ["list_teams"]}
+
+
+@pytest.mark.asyncio
+async def test_user_update_persists_object_permission_to_object_permission_table(mocker):
+    """`/user/update` must upsert LiteLLM_ObjectPermissionTable and link the id, instead
+    of sending `object_permission` to a user row that has no such field."""
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    fake_permission_table = _FakeObjectPermissionTable()
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable = fake_permission_table
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="sso-sub-1", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    )
+
+    async def fake_update_data(user_id, data, table_name):
+        # litellm_usertable has no `object_permission` column; prisma raises on it
+        assert "object_permission" not in data, "raw object_permission must not reach litellm_usertable"
+        return {"user_id": user_id, **data}
+
+    mock_prisma_client.update_data = mocker.AsyncMock(side_effect=fake_update_data)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._schedule_user_update_audit_log",
+        new_callable=mocker.AsyncMock,
+    )
+
+    response = await _update_single_user_helper(
+        user_request=UpdateUserRequest(
+            user_id="sso-sub-1",
+            object_permission={
+                "mcp_servers": ["linear_readonly"],
+                "mcp_tool_permissions": {"linear_readonly": ["list_teams"]},
+            },
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    object_permission_id = response["object_permission_id"]
+    stored = _stored_permission_row(fake_permission_table, object_permission_id)
+    assert stored["mcp_servers"] == ["linear_readonly"]
+    assert stored["mcp_tool_permissions"] == {"linear_readonly": ["list_teams"]}
+
+
+@pytest.mark.asyncio
+async def test_user_update_reuses_existing_object_permission_row(mocker):
+    """A later `/user/update` must edit the user's existing permission row in place, so
+    the id already linked on the user row keeps pointing at the current grants."""
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    fake_permission_table = _FakeObjectPermissionTable()
+    fake_permission_table.rows["existing-perm-id"] = {
+        "object_permission_id": "existing-perm-id",
+        "mcp_servers": ["linear_readonly"],
+        "mcp_tool_permissions": {"linear_readonly": ["list_teams"]},
+    }
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable = fake_permission_table
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=LiteLLM_UserTable(
+            user_id="sso-sub-1",
+            user_role=LitellmUserRoles.INTERNAL_USER.value,
+            object_permission_id="existing-perm-id",
+        )
+    )
+    mock_prisma_client.update_data = mocker.AsyncMock(
+        side_effect=lambda user_id, data, table_name: {"user_id": user_id, **data}
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._schedule_user_update_audit_log",
+        new_callable=mocker.AsyncMock,
+    )
+
+    response = await _update_single_user_helper(
+        user_request=UpdateUserRequest(
+            user_id="sso-sub-1",
+            object_permission={"mcp_tool_permissions": {"linear_readonly": ["list_teams", "list_issues"]}},
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response["object_permission_id"] == "existing-perm-id"
+    assert len(fake_permission_table.rows) == 1
+    stored = _stored_permission_row(fake_permission_table, "existing-perm-id")
+    assert stored["mcp_servers"] == ["linear_readonly"]
+    assert stored["mcp_tool_permissions"] == {"linear_readonly": ["list_teams", "list_issues"]}
