@@ -479,3 +479,18 @@ async def test_a_pooled_tier_warms_the_model_the_session_was_actually_served():
     seed_session(redis, served_model="haiku-b")
     await tick(llm_router)
     assert "haiku-b" in replayed_models(llm_router), "the session's own cache must be kept warm"
+
+
+@pytest.mark.asyncio
+async def test_a_key_removed_from_its_team_does_not_keep_replaying_as_that_team():
+    """The capture stores the tenancy the key had at the time; the tick re-reads the key. When an admin takes
+    a still-valid key out of a team, the fresh row says team_id is None and that is the current truth, so
+    falling back to the captured team would let the replay spend that team's budget, consume its rate limits
+    and reach models it grants, on behalf of a key no longer in it. The request path never merges the two, it
+    reads the loaded row and skips the gate on None, so a loaded row has to win wholesale here too."""
+    llm_router, redis = warming_rig(redis=FakeRedisCache())
+    seed_session(redis, user_api_key="k", team_id="team-A", touched=_VISITED_BOTH_TIERS)
+    keys = FakeKeyDirectory({"k": key_state(token="k")})
+    await tick(llm_router, active=refresher(keys=keys))
+    assert llm_router.completion_calls, "expected a replay"
+    assert all(call["metadata"]["user_api_key_team_id"] is None for call in llm_router.completion_calls)

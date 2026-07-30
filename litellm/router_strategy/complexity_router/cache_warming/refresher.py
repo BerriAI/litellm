@@ -59,6 +59,14 @@ def _replay_principal(key_state: "UserAPIKeyAuth | None", record: CacheWarmingRe
     """A replay's principal must be COMPLETE, because the authorization enumerations resolve tenancy by id and
     a missing field is an absent ceiling rather than a denial. Three shapes of capture, one reconstruction:
 
+    A loaded row wins WHOLESALE, never field by field. A per-field merge cannot tell "this field was never
+    captured" from "this association was deliberately removed", and those need opposite outcomes: a key that
+    an admin took out of a team still loads fine, with team_id correctly None, and falling back to the
+    captured team would let the replay spend that team's budget, consume its rate limits and reach models it
+    grants, on behalf of a key that is no longer in it. The same holds for org, project and user. This is
+    exactly what the request path does, where every gate reads the freshly loaded row and a None simply skips
+    the gate; warming is the only place with a snapshot to be tempted by.
+
     (a) virtual key: key_state was just read authoritatively from the database, so it is already complete
     (b) keyless proxy caller (JWT, and anything else the proxy authenticated without a virtual key, where
         api_key is None): UserAPIKeyAuth is litellm's principal type for those callers too and the proxy
@@ -75,13 +83,15 @@ def _replay_principal(key_state: "UserAPIKeyAuth | None", record: CacheWarmingRe
 
     attribution = record.attribution
     base = key_state if key_state is not None else UserAPIKeyAuth(api_key=attribution.user_api_key)
+    identity = (
+        {}
+        if key_state is not None
+        else {field: getattr(attribution, f"user_api_key_{field}") for field in _RECONSTRUCTED_IDENTITY_FIELDS}
+    )
     return base.model_copy(
         update={  # mutable-ok: pydantic model_copy input, never retained
             "api_key": base.api_key or base.token,
-            **{
-                field: getattr(base, field) or getattr(attribution, f"user_api_key_{field}")
-                for field in _RECONSTRUCTED_IDENTITY_FIELDS
-            },
+            **identity,
             "end_user_id": attribution.user_api_key_end_user_id or base.end_user_id,
             "request_route": route,
             "budget_reservation": None,
