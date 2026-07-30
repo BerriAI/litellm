@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.management_endpoints.logging_exporter_access import is_logging_credential
 from litellm.proxy.management_endpoints.logging_exporter_validation import (
     validate_credential_access,
 )
@@ -65,7 +66,8 @@ async def create_credential(
     """
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
-    validate_credential_access(credential.credential_info)
+    if is_logging_credential(credential.credential_info):
+        validate_credential_access(credential.credential_info)
 
     try:
         if prisma_client is None:
@@ -285,9 +287,12 @@ def update_db_credential(
         merged_credential.credential_values.update(encrypted_params)
 
     if encrypted_credential.credential_info:
-        if merged_credential.credential_info is None:
-            merged_credential.credential_info = {}
-        _merge_credential_info(merged_credential.credential_info, encrypted_credential.credential_info)
+        if is_logging_credential(db_credential.credential_info):
+            if merged_credential.credential_info is None:
+                merged_credential.credential_info = {}
+            _merge_credential_info(merged_credential.credential_info, encrypted_credential.credential_info)
+        else:
+            merged_credential.credential_info = encrypted_credential.credential_info
 
     return merged_credential
 
@@ -344,8 +349,6 @@ async def update_credential(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    validate_credential_access(credential.credential_info)
-
     try:
         if prisma_client is None:
             raise HTTPException(
@@ -356,6 +359,8 @@ async def update_credential(
         db_credential = await credentials_repository.find_by_name(credential_name)
         if db_credential is None:
             raise HTTPException(status_code=404, detail="Credential not found in DB.")
+        if is_logging_credential(db_credential.credential_info) or is_logging_credential(credential.credential_info):
+            validate_credential_access(credential.credential_info)
         merged_credential = update_db_credential(db_credential, _patch_to_credential_item(credential, credential_name))
         credential_object_jsonified = jsonify_object(merged_credential.model_dump())
         await credentials_repository.update_by_name(
@@ -384,10 +389,11 @@ def _sync_in_memory_credential(
     """Mirror the DB write into ``litellm.credential_list``.
 
     Skips when the credential isn't resident in memory (e.g. created on
-    another scaled instance, restored from DB on the next reload). The
-    in-memory ``credential_info`` is merged subfield-by-subfield via
-    ``_merge_credential_info`` so a partial patch can't clobber stored
-    ``access`` subfields it didn't touch.
+    another scaled instance, restored from DB on the next reload). For a
+    logging destination the in-memory ``credential_info`` is merged
+    subfield-by-subfield via ``_merge_credential_info`` so a partial patch
+    can't clobber stored ``access`` subfields it didn't touch; a provider
+    credential keeps the base replace semantics.
     """
     existing_in_memory: CredentialItem | None = None
     for cred in litellm.credential_list:
@@ -402,7 +408,10 @@ def _sync_in_memory_credential(
         in_memory_values.update(patch.credential_values)
     in_memory_info = dict(existing_in_memory.credential_info or {})
     if patch.credential_info:
-        _merge_credential_info(in_memory_info, patch.credential_info)
+        if is_logging_credential(existing_in_memory.credential_info):
+            _merge_credential_info(in_memory_info, patch.credential_info)
+        else:
+            in_memory_info = dict(patch.credential_info)
     updated_in_memory = CredentialItem(
         credential_name=merged.credential_name,
         credential_values=in_memory_values,

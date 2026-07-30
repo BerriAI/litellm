@@ -15,9 +15,31 @@ from litellm.models.credentials import CredentialAccess, CredentialInfo, Credent
 from litellm.proxy.management_endpoints.logging_exporter_access import (
     access_grants,
     identity_scope,
+    is_logging_credential,
     parse_credential_info,
     resolved_logging_exporter_names,
 )
+
+
+# --- is_logging_credential: the access-validation + merge gate ---------------
+
+
+def test_is_logging_credential_true_for_logging_type():
+    assert is_logging_credential({"credential_type": "logging", "description": "arize"}) is True
+
+
+def test_is_logging_credential_true_even_with_malformed_access():
+    """A destination carrying an invalid access shape is still a logging destination.
+    The gate must route it into validate_credential_access (which rejects it), not skip
+    validation because the strict access model can't parse it."""
+    assert is_logging_credential({"credential_type": "logging", "access": {"nonsense_field": True}}) is True
+
+
+def test_is_logging_credential_false_for_provider_and_malformed():
+    assert is_logging_credential({"custom_llm_provider": "openai"}) is False
+    assert is_logging_credential({"custom_llm_provider": "openai", "access": {"global": True}}) is False
+    assert is_logging_credential(None) is False
+    assert is_logging_credential("nope") is False
 
 
 # --- parse_credential_info: fail closed on bad input -----------------------

@@ -10,10 +10,18 @@ scope is the given set of team ids and org ids. The resolver passes a
 one-element scope built with ``identity_scope``.
 """
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
 from litellm.models.credentials import CredentialAccess, CredentialInfo
+
+
+class _LoggingDestinationTag(BaseModel):
+    """Lenient read of just the ``credential_type`` tag, ignoring the rest of
+    ``credential_info`` (including a possibly-malformed ``access``)."""
+
+    model_config = ConfigDict(extra="ignore")
+    credential_type: str | None = None
 
 
 def parse_credential_info(raw: object) -> CredentialInfo | None:
@@ -30,6 +38,23 @@ def parse_credential_info(raw: object) -> CredentialInfo | None:
         return CredentialInfo.model_validate(raw)
     except ValidationError:
         return None
+
+
+def is_logging_credential(raw: object) -> bool:
+    """Whether ``credential_info`` is tagged as an admin-owned logging destination.
+
+    The ``access`` shape validation and the ``credential_info`` subfield merge are
+    scoped to these; a provider credential is left on its base replace-and-accept path.
+
+    This keys off the ``credential_type`` tag alone and does not parse ``access``: a
+    destination carrying a malformed ``access`` is still a logging destination, and the
+    point of the gate is to route it into ``validate_credential_access`` so that bad
+    ``access`` is rejected rather than stored.
+    """
+    try:
+        return _LoggingDestinationTag.model_validate(raw).credential_type == "logging"
+    except ValidationError:
+        return False
 
 
 def identity_scope(team_id: str | None, org_id: str | None) -> tuple[frozenset[str], frozenset[str]]:

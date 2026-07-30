@@ -97,6 +97,80 @@ def test_update_db_credential_preserves_untouched_access_subfields():
     }
 
 
+# --- provider credentials keep base replace semantics (merge is logging-only) ---
+
+def test_update_db_credential_replaces_info_for_provider_credential():
+    """The subfield merge is scoped to logging destinations. A provider credential
+    patch replaces credential_info wholesale (base behavior): omitted keys drop, so a
+    partial patch is a full replace, not a merge -- merging non-destination creds would
+    silently resurrect stale provider metadata the caller meant to remove."""
+    from litellm.proxy.credential_endpoints.endpoints import update_db_credential
+
+    db = CredentialItem(
+        credential_name="openai",
+        credential_values={},
+        credential_info={"custom_llm_provider": "openai", "stale": "keepout"},
+    )
+    patch = CredentialItem(
+        credential_name="openai",
+        credential_values={},
+        credential_info={"custom_llm_provider": "azure"},
+    )
+
+    merged = update_db_credential(db, patch)
+
+    assert merged.credential_info == {"custom_llm_provider": "azure"}
+
+
+# --- access-shape validation is scoped to logging destinations ---------------
+
+@pytest.mark.asyncio
+async def test_create_credential_validates_access_only_for_logging(monkeypatch):
+    """validate_credential_access runs for a logging destination but never for a
+    provider credential. A provider cred carrying an unrelated `access` key must not be
+    rejected by the destination access-shape validator (that would 400 a valid
+    provider credential the validator was never meant to see)."""
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.types.utils import CreateCredentialItem
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None, raising=False)
+
+    class _Validated(Exception):
+        pass
+
+    def _spy(_info):
+        raise _Validated()
+
+    monkeypatch.setattr(endpoints, "validate_credential_access", _spy)
+
+    async def _create(credential):
+        return await endpoints.create_credential(
+            request=MagicMock(),
+            fastapi_response=MagicMock(),
+            credential=credential,
+            user_api_key_dict=_admin(),
+        )
+
+    logging_cred = CreateCredentialItem(
+        credential_name="dest",
+        credential_values={"otel_endpoint": "http://collector:4318"},
+        credential_info={"credential_type": "logging", "description": "generic", "access": {"global": True}},
+    )
+    with pytest.raises(_Validated):
+        await _create(logging_cred)
+
+    provider_cred = CreateCredentialItem(
+        credential_name="openai",
+        credential_values={"api_key": "sk"},
+        credential_info={"custom_llm_provider": "openai", "access": {"bogus": True}},
+    )
+    # Validator is skipped; the handler proceeds and fails on the (None) prisma client,
+    # a 500 -- never the _Validated sentinel.
+    with pytest.raises(Exception) as excinfo:
+        await _create(provider_cred)
+    assert not isinstance(excinfo.value, _Validated)
+
+
 # --- PATCH routing regression ------------------------------------------------
 
 def test_patch_credentials_route_targets_update_credential():
