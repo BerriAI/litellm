@@ -86,3 +86,138 @@ async def test_retry_backoff_uses_current_exception_headers():
     assert captured_backoff_errors[0] is first_error
     assert captured_backoff_errors[1] is second_error
     assert captured_backoff_errors[2] is third_error
+
+
+def test_time_to_sleep_before_retry_default_ignores_retry_after_with_multiple_deployments():
+    """
+    Default behavior (respect_retry_after_with_multiple_deployments=False,
+    the default) is unchanged: instant retry (timeout == 0) when there are
+    healthy sibling deployments, even with an explicit Retry-After header.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-a"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-b"},
+            },
+        ],
+        num_retries=3,
+    )
+
+    error = litellm.RateLimitError(
+        message="Rate limited",
+        model="gpt-3.5-turbo",
+        llm_provider="openai",
+    )
+    error.litellm_response_headers = httpx.Headers({"retry-after": "15"})
+
+    healthy_deployments = [
+        {"model_info": {"id": "dep-a"}},
+        {"model_info": {"id": "dep-b"}},
+    ]
+
+    timeout = router._time_to_sleep_before_retry(
+        e=error,
+        remaining_retries=2,
+        num_retries=3,
+        healthy_deployments=healthy_deployments,
+        all_deployments=healthy_deployments,
+    )
+
+    assert timeout == 0
+
+
+def test_time_to_sleep_before_retry_opt_in_honors_retry_after_with_multiple_deployments():
+    """
+    Regression test for: https://github.com/BerriAI/litellm/issues/34399
+
+    With respect_retry_after_with_multiple_deployments=True, an explicit
+    Retry-After header must be honored even when there are multiple healthy
+    deployments in the model group -- sibling deployments frequently share
+    the same throttled upstream, so instant failover just hammers it.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-a"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-b"},
+            },
+        ],
+        num_retries=3,
+        respect_retry_after_with_multiple_deployments=True,
+    )
+
+    error = litellm.RateLimitError(
+        message="Rate limited",
+        model="gpt-3.5-turbo",
+        llm_provider="openai",
+    )
+    error.litellm_response_headers = httpx.Headers({"retry-after": "15"})
+
+    healthy_deployments = [
+        {"model_info": {"id": "dep-a"}},
+        {"model_info": {"id": "dep-b"}},
+    ]
+
+    timeout = router._time_to_sleep_before_retry(
+        e=error,
+        remaining_retries=2,
+        num_retries=3,
+        healthy_deployments=healthy_deployments,
+        all_deployments=healthy_deployments,
+    )
+
+    assert timeout != 0
+    assert timeout > 0
+
+
+def test_time_to_sleep_before_retry_opt_in_still_instant_without_retry_after():
+    """
+    Sanity check: even with respect_retry_after_with_multiple_deployments=True,
+    multi-deployment groups still get instant failover (timeout == 0) when
+    there is no explicit Retry-After header -- the opt-in only changes
+    behavior when the provider actually sent one.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-a"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-b"},
+            },
+        ],
+        num_retries=3,
+        respect_retry_after_with_multiple_deployments=True,
+    )
+
+    error = litellm.RateLimitError(
+        message="Rate limited, no retry-after header",
+        model="gpt-3.5-turbo",
+        llm_provider="openai",
+    )
+
+    healthy_deployments = [
+        {"model_info": {"id": "dep-a"}},
+        {"model_info": {"id": "dep-b"}},
+    ]
+
+    timeout = router._time_to_sleep_before_retry(
+        e=error,
+        remaining_retries=2,
+        num_retries=3,
+        healthy_deployments=healthy_deployments,
+        all_deployments=healthy_deployments,
+    )
+
+    assert timeout == 0
