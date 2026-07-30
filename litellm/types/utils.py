@@ -1519,6 +1519,9 @@ class PromptTokensDetailsWrapper(
     web_search_requests: Optional[int] = None
     """Number of web search requests made by the tool call. Used for Anthropic to calculate web search cost."""
 
+    web_search_premium_requests: Optional[int] = None
+    """Number of premium web search requests. Used for Mistral to bill web_search_premium calls."""
+
     tool_use_tokens: Optional[int] = None
     """Prompt tokens consumed by server-side tool use (e.g. Gemini grounding via googleSearch)."""
 

@@ -118,7 +118,7 @@ def test_completion_cost_adds_web_search_on_top_of_tokens():
 def test_completion_cost_premium_rate():
     """web_search_premium calls are billed at $0.05 each."""
     response = _conversation_response(connectors={"web_search_premium": 2})
-    assert response.usage.web_search_premium_requests == 2
+    assert response.usage.prompt_tokens_details.web_search_premium_requests == 2
     assert _web_search_surcharge(response) == pytest.approx(0.10)
 
 

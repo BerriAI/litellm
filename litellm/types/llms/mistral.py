@@ -1,6 +1,6 @@
-from typing import Dict, List, Literal, Optional, Union
+from typing import List, Literal, Mapping, Optional, Tuple, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 from typing_extensions import TypedDict
 
 
@@ -44,7 +44,7 @@ class MistralConversationOutput(BaseModel):
     model_config = ConfigDict(extra="allow")
     type: Optional[str] = None
     name: Optional[str] = None
-    content: Optional[Union[str, List[MistralConversationContentChunk]]] = None
+    content: Optional[Union[str, Tuple[MistralConversationContentChunk, ...]]] = None
 
 
 class MistralConversationUsage(BaseModel):
@@ -52,11 +52,11 @@ class MistralConversationUsage(BaseModel):
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
-    connectors: Optional[Dict[str, int]] = None
+    connectors: Optional[Mapping[str, int]] = None
 
 
 class MistralConversationsResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
     conversation_id: Optional[str] = None
-    outputs: List[MistralConversationOutput] = Field(default_factory=list)
+    outputs: Tuple[MistralConversationOutput, ...] = ()
     usage: Optional[MistralConversationUsage] = None
