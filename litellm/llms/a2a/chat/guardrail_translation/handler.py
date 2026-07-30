@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Final, Optional
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.a2a.common_utils import serialize_a2a_data_part
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -34,6 +35,7 @@ class _A2ATextPart(TypedDict, total=False):
 
     kind: ReadOnly[str]
     text: ReadOnly[str]
+    data: ReadOnly[object]
 
 
 class A2AGuardrailHandler(BaseTranslation):
@@ -45,8 +47,10 @@ class A2AGuardrailHandler(BaseTranslation):
     2. Process output responses (post-call hook) - extracts text from A2A response parts
 
     A2A Message Format:
-    - Input: params.message.parts[].text (where kind == "text")
-    - Output: result.message.parts[].text or result.artifacts[].parts[].text
+    - Input: params.message.parts[].text (where kind == "text") or
+      params.message.parts[].data (where kind == "data")
+    - Output: result.message.parts[].text or result.artifacts[].parts[].text,
+      and the "data" equivalents of both
     """
 
     async def process_input_messages(
@@ -78,15 +82,23 @@ class A2AGuardrailHandler(BaseTranslation):
             return data
 
         texts_to_check: Final[list[str]] = []
-        text_part_indices: Final[list[int]] = []  # Track which parts contain text
+        # Track which parts contain scannable content, and which field to write
+        # the guardrailed value back to ("text" or "data")
+        part_mappings: Final[list[tuple[int, str]]] = []
 
-        # Step 1: Extract text from all text parts
+        # Step 1: Extract text from all text parts, and serialized data from all data parts
         for part_idx, part in enumerate(parts):
-            if part.get("kind") == "text":
+            kind = part.get("kind")
+            if kind == "text":
                 text = part.get("text", "")
                 if text:
                     texts_to_check.append(text)
-                    text_part_indices.append(part_idx)
+                    part_mappings.append((part_idx, "text"))
+            elif kind == "data":
+                part_data = part.get("data")
+                if part_data is not None:
+                    texts_to_check.append(serialize_a2a_data_part(part_data))
+                    part_mappings.append((part_idx, "data"))
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check:
@@ -110,9 +122,9 @@ class A2AGuardrailHandler(BaseTranslation):
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
 
             # Step 3: Apply guardrailed text back to original parts
-            if guardrailed_texts and len(guardrailed_texts) == len(text_part_indices):
-                for task_idx, part_idx in enumerate(text_part_indices):
-                    parts[part_idx]["text"] = guardrailed_texts[task_idx]
+            if guardrailed_texts and len(guardrailed_texts) == len(part_mappings):
+                for task_idx, (part_idx, field) in enumerate(part_mappings):
+                    parts[part_idx][field] = guardrailed_texts[task_idx]
 
         verbose_proxy_logger.debug("A2A: Processed input message: %s", message)
 
@@ -164,7 +176,7 @@ class A2AGuardrailHandler(BaseTranslation):
         texts_to_check: Final[list[str]] = []
         # Each mapping is (path_to_parts_list, part_index)
         # path_to_parts_list is a tuple of keys to navigate to the parts list
-        task_mappings: Final[list[tuple[tuple[str, ...], int]]] = []
+        task_mappings: Final[list[tuple[tuple[str, ...], int, str]]] = []
 
         # Extract texts from all possible locations
         self._extract_texts_from_result(
@@ -205,11 +217,12 @@ class A2AGuardrailHandler(BaseTranslation):
 
         # Step 3: Apply guardrailed text back to original response
         if guardrailed_texts and len(guardrailed_texts) == len(task_mappings):
-            for task_idx, (path, part_idx) in enumerate(task_mappings):
+            for task_idx, (path, part_idx, field) in enumerate(task_mappings):
                 self._apply_text_to_path(
                     result=result,
                     path=path,
                     part_idx=part_idx,
+                    field=field,
                     text=guardrailed_texts[task_idx],
                 )
 
@@ -281,8 +294,8 @@ class A2AGuardrailHandler(BaseTranslation):
             result = obj.get("result", {})
             if not isinstance(result, dict):
                 continue
-            texts_in_chunk: list[str] = []
-            mappings: list[tuple[tuple[str, ...], int]] = []
+            texts_in_chunk: Final[list[str]] = []
+            mappings: Final[list[tuple[tuple[str, ...], int, str]]] = []
             self._extract_texts_from_result(
                 result=result,
                 texts_to_check=texts_in_chunk,
@@ -292,20 +305,22 @@ class A2AGuardrailHandler(BaseTranslation):
                 continue
             if orig_i == first_chunk_with_text:
                 # Put full guardrailed text in first text part; clear others
-                for task_idx, (path, part_idx) in enumerate(mappings):
+                for task_idx, (path, part_idx, field) in enumerate(mappings):
                     text = guardrailed_text if task_idx == 0 else ""
                     self._apply_text_to_path(
                         result=result,
                         path=path,
                         part_idx=part_idx,
+                        field=field,
                         text=text,
                     )
             else:
-                for path, part_idx in mappings:
+                for path, part_idx, field in mappings:
                     self._apply_text_to_path(
                         result=result,
                         path=path,
                         part_idx=part_idx,
+                        field=field,
                         text="",
                     )
 
@@ -363,7 +378,7 @@ class A2AGuardrailHandler(BaseTranslation):
         self,
         result: dict[str, Any],
         texts_to_check: list[str],
-        task_mappings: list[tuple[tuple[str, ...], int]],
+        task_mappings: list[tuple[tuple[str, ...], int, str]],
     ) -> None:
         """
         Extract text from all possible locations in an A2A result.
@@ -433,21 +448,28 @@ class A2AGuardrailHandler(BaseTranslation):
         parts: Sequence[_A2ATextPart],
         path: tuple[str, ...],
         texts_to_check: list[str],
-        task_mappings: list[tuple[tuple[str, ...], int]],
+        task_mappings: list[tuple[tuple[str, ...], int, str]],
     ) -> None:
-        """Extract text from message parts."""
+        """Extract text from message parts, and serialized data from data parts."""
         for part_idx, part in enumerate(parts):
-            if part.get("kind") == "text":
+            kind = part.get("kind")
+            if kind == "text":
                 text = part.get("text", "")
                 if text:
                     texts_to_check.append(text)
-                    task_mappings.append((path, part_idx))
+                    task_mappings.append((path, part_idx, "text"))
+            elif kind == "data":
+                data = part.get("data")
+                if data is not None:
+                    texts_to_check.append(serialize_a2a_data_part(data))
+                    task_mappings.append((path, part_idx, "data"))
 
     def _apply_text_to_path(
         self,
         result: dict[str | int, Any],
         path: tuple[str, ...],
         part_idx: int,
+        field: str,
         text: str,
     ) -> None:
         """Apply guardrailed text back to the specified path in the result."""
@@ -460,5 +482,5 @@ class A2AGuardrailHandler(BaseTranslation):
             else:
                 current = current[key]
 
-        # Update the text in the part
-        current[part_idx]["text"] = text
+        # Update the guardrailed value in the part
+        current[part_idx][field] = text
