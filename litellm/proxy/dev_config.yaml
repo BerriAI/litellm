@@ -197,6 +197,15 @@ model_list:
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
 
+# Routes the Assistants API pass-through (/v1/threads, /v1/assistants,
+# /v1/threads/{id}/runs) to the same ai-core-mini-chatbot backend as the
+# "inhouse" model above (same host:port, different API surface).
+assistant_settings:
+  custom_llm_provider: "openai"
+  litellm_params:
+    api_base: "os.environ/INHOUSE_ASSISTANTS_API_BASE"
+    api_key: "os.environ/INHOUSE_ASSISTANTS_API_KEY"
+
 general_settings:
   master_key: sk-1234
   # Opt-in: let CheckBatchCost track cost for unmanaged batches created with a raw
