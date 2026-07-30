@@ -37,6 +37,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Rust toolchain
+        uses: ./.github/actions/setup-rust-toolchain
+
       - name: Set up uv
         uses: ./.github/actions/setup-uv-with-retries
         with:

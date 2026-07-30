@@ -23,6 +23,9 @@ jobs:
         run: |
           jq empty model_prices_and_context_window.json
 
+      - name: Set up Rust toolchain
+        uses: ./.github/actions/setup-rust-toolchain
+
       - name: Set up uv
         uses: ./.github/actions/setup-uv-with-retries
         with:
