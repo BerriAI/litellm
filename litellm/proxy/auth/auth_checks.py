@@ -2434,7 +2434,7 @@ class ExperimentalUIJWTToken:
         if decrypted_token is None:
             return None
         try:
-            return UserAPIKeyAuth(**json.loads(decrypted_token))
+            return UserAPIKeyAuth.model_validate(json.loads(decrypted_token))
         except Exception as e:
             raise Exception(f"Invalid hash key. Hash key={hashed_token}. Decrypted token={decrypted_token}. Error: {e}")
 
@@ -2553,7 +2553,7 @@ async def get_key_object(
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    _response = UserAPIKeyAuth(**_valid_token.model_dump(exclude_none=True))
+    _response = UserAPIKeyAuth.model_validate(_valid_token.model_dump(exclude_none=True))
 
     # Load object_permission if object_permission_id exists but object_permission is not loaded
     if _response.object_permission_id and not _response.object_permission:

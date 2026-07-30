@@ -203,23 +203,32 @@ class TestBaseRepository:
         assert len(budgets) == 1
 
     def test_record_to_dict_branches(self):
-        from litellm.repositories.base_repository import _record_to_dict
+        from litellm.repositories.base_repository import record_to_dict
 
-        assert _record_to_dict({"a": 1}) == {"a": 1}
+        assert record_to_dict({"a": 1}) == {"a": 1}
 
         class WithModelDump:
             def model_dump(self):
                 return {"src": "model_dump"}
 
-        assert _record_to_dict(WithModelDump()) == {"src": "model_dump"}
+        assert record_to_dict(WithModelDump()) == {"src": "model_dump"}
 
         class WithDict:
             def dict(self):
                 return {"src": "dict"}
 
-        assert _record_to_dict(WithDict()) == {"src": "dict"}
+        assert record_to_dict(WithDict()) == {"src": "dict"}
 
-        assert _record_to_dict([("k", "v")]) == {"k": "v"}
+        assert record_to_dict([("k", "v")]) == {"k": "v"}
+
+        class WithBoth:
+            def model_dump(self):
+                return {"src": "model_dump"}
+
+            def dict(self):
+                return {"src": "dict"}
+
+        assert record_to_dict(WithBoth()) == {"src": "model_dump"}
 
 
 class TestBudgetRepository:
