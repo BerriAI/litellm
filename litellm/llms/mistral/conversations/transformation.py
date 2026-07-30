@@ -87,9 +87,11 @@ class MistralConversationsConfig(MistralConfig):
     @property
     def reserved_request_body_keys(self) -> frozenset[str]:
         """Sanitized Conversations fields extra_body may not clobber: ``tools`` is
-        allowlist-checked, ``store`` is pinned to False, and ``inputs`` / ``model``
-        are built from the authenticated request."""
-        return frozenset({"tools", "store", "inputs", "model"})
+        allowlist-checked, ``store`` is pinned to False, ``inputs`` / ``model`` are
+        built from the authenticated request, ``instructions`` is built from the
+        guardrail-inspected system messages, and ``completion_args`` carries
+        proxy-enforced limits such as ``max_tokens``."""
+        return frozenset({"tools", "store", "inputs", "model", "instructions", "completion_args"})
 
     def should_fake_stream(
         self,
