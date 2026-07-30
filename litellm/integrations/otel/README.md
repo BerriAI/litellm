@@ -267,7 +267,10 @@ lives in [`plumbing/`](./plumbing):
 
 - **A new attribute vocabulary for a backend**: add a mapper in `mappers/`
   (a class with a `map(data) -> AttributeMap` method, typically built from
-  `key -> extractor` tables) and register it in `mappers/__init__._MAPPER_BY_NAME`.
+  `key -> extractor` tables) and register it in `mappers/__init__._PLAIN_MAPPERS`.
+  If it spells declared tool definitions out per index, register it in
+  `_TOOL_DEFINITION_MAPPERS` instead and take the shared attribute budget in its
+  constructor, so the family stays bounded span-wide rather than per vocabulary.
 - **A new integration**: add a preset in `presets/` that returns an
   `OpenTelemetryV2Config`, and register it in `presets/__init__.PRESET_BY_CALLBACK`.
   If it supports dynamic credentials, add a header builder to
