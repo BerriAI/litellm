@@ -13,7 +13,9 @@ from typing import (
     Iterator,
     List,
     Literal,
+    Mapping,
     Optional,
+    Sequence,
     Tuple,
     Union,
     cast,
@@ -462,6 +464,82 @@ class MistralConfig(OpenAIGPTConfig):
         return all_expected_values_are_empty
 
     @staticmethod
+    def _is_multi_completion_choice(choice: object) -> bool:
+        return isinstance(choice, dict) and "messages" in choice and "message" not in choice
+
+    @staticmethod
+    def _multi_completion_content_blocks(turn: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
+        content = turn.get("content")
+        if isinstance(content, str):
+            return ({"type": "text", "text": content},)
+        if isinstance(content, list):
+            return tuple(block for block in content if isinstance(block, dict))
+        return ()
+
+    @staticmethod
+    def _flatten_multi_completion_choice(choice: Mapping[str, object]) -> Mapping[str, object]:
+        raw_turns = choice.get("messages")
+        turns = tuple(turn for turn in raw_turns if isinstance(turn, dict)) if isinstance(raw_turns, list) else ()
+        answered_ids = frozenset(
+            turn.get("tool_call_id") for turn in turns if turn.get("role") == "tool" and turn.get("tool_call_id")
+        )
+        assistant_turns = tuple(turn for turn in turns if turn.get("role") == "assistant")
+        tool_calls = [
+            tool_call
+            for turn in assistant_turns
+            for raw_tool_calls in (turn.get("tool_calls"),)
+            if isinstance(raw_tool_calls, list)
+            for tool_call in raw_tool_calls
+            if isinstance(tool_call, dict) and tool_call.get("id") not in answered_ids
+        ]
+        blocks = tuple(
+            block for turn in assistant_turns for block in MistralConfig._multi_completion_content_blocks(turn)
+        )
+        text_parts = [
+            text
+            for block in blocks
+            if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text
+        ]
+        image_urls = tuple(
+            url for block in blocks if block.get("type") == "image_url" and (url := block.get("image_url"))
+        )
+        images = [
+            {"type": "image_url", "image_url": url if isinstance(url, dict) else {"url": url}, "index": index}
+            for index, url in enumerate(image_urls)
+        ]
+        message = {
+            "role": "assistant",
+            "content": "\n".join(text_parts) if text_parts else None,
+            **({"tool_calls": tool_calls} if tool_calls else {}),
+            **({"images": images} if images else {}),
+        }
+        return {**{key: value for key, value in choice.items() if key != "messages"}, "message": message}
+
+    @staticmethod
+    def _handle_multi_completion_response(response_data: Mapping[str, object]) -> Mapping[str, object]:
+        """
+        Mistral's hosted tools on /chat/completions (image_generation, connectors) return
+        ``object: "chat.multi_completion"`` where each choice carries ``messages`` (plural,
+        an array of turns) instead of the OpenAI ``message``. Flatten each such choice into
+        a single assistant message: concatenated text content, generated images mapped into
+        ``message.images``, and only tool calls left unanswered by a tool turn surfaced as
+        ``tool_calls`` (server-executed calls already have their results inlined).
+        """
+        choices = response_data.get("choices")
+        if not isinstance(choices, list) or not any(MistralConfig._is_multi_completion_choice(c) for c in choices):
+            return response_data
+        return {
+            **response_data,
+            "object": "chat.completion",
+            "choices": [
+                MistralConfig._flatten_multi_completion_choice(choice)
+                if MistralConfig._is_multi_completion_choice(choice)
+                else choice
+                for choice in choices
+            ],
+        }
+
+    @staticmethod
     def _handle_empty_content_response(response_data: dict) -> dict:
         """
         Handle Mistral-specific behavior where empty string content should be converted to None.
@@ -583,6 +661,7 @@ class MistralConfig(OpenAIGPTConfig):
         response_data = raw_response.json()
         response_data = self._handle_empty_content_response(response_data)
         response_data = self._handle_content_list_to_str_conversion(response_data)
+        response_data = {**self._handle_multi_completion_response(response_data)}
 
         final_response_obj = cast(
             ModelResponse,
