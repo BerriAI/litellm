@@ -3,6 +3,11 @@ import { describe, expect, it } from "vitest";
 import { autoRouterStrategy, isComplexityRouter } from "@/components/add_model/auto_router_strategies";
 import { toAutoRouterRow, toAutoRouterRows } from "./autoRouterRows";
 
+// Existing cases assert resource classification, so they run as a proxy admin: the actor
+// gate is then a pass-through and canEdit/canDelete still reflect the row itself.
+const ADMIN = { userRole: "Admin", userID: "u-admin" };
+const TEAM_ADMIN = { userRole: "Internal User", userID: "u-team-admin" };
+
 const complexityDeployment = {
   model_name: "tri-tier-router",
   litellm_params: {
@@ -38,7 +43,7 @@ const semanticDeployment = {
 
 describe("autoRouterRows", () => {
   it("classifies a complexity router and unions its tier models as targets", () => {
-    const row = toAutoRouterRow(complexityDeployment, 0);
+    const row = toAutoRouterRow(complexityDeployment, 0, ADMIN, null);
 
     expect(row.kind).toBe("complexity");
     expect(row.typeLabel).toBe("Heuristic");
@@ -49,7 +54,7 @@ describe("autoRouterRows", () => {
   });
 
   it("parses a semantic router whose config arrives as a JSON string", () => {
-    const row = toAutoRouterRow(semanticDeployment, 0);
+    const row = toAutoRouterRow(semanticDeployment, 0, ADMIN, null);
 
     expect(row.kind).toBe("semantic");
     expect(row.typeLabel).toBe("Semantic");
@@ -70,6 +75,8 @@ describe("autoRouterRows", () => {
         },
       },
       0,
+      ADMIN,
+      null,
     );
 
     expect(row.targets).toEqual(["gpt-4o-mini", "anthropic-sonnet-4-6"]);
@@ -85,6 +92,8 @@ describe("autoRouterRows", () => {
         },
       },
       0,
+      ADMIN,
+      null,
     );
 
     expect(row.typeLabel).toBe("LLM Classifier");
@@ -102,6 +111,8 @@ describe("autoRouterRows", () => {
         model_info: { id: "bid-1" },
       },
       0,
+      ADMIN,
+      null,
     );
 
     expect(row.kind).toBe("semantic");
@@ -109,10 +120,14 @@ describe("autoRouterRows", () => {
   });
 
   it("falls back to a stable synthetic id when the deployment has no model_info id", () => {
-    const rows = toAutoRouterRows([
-      { model_name: "a", litellm_params: { model: "auto_router/a" } },
-      { model_name: "b", litellm_params: { model: "auto_router/b" } },
-    ]);
+    const rows = toAutoRouterRows(
+      [
+        { model_name: "a", litellm_params: { model: "auto_router/a" } },
+        { model_name: "b", litellm_params: { model: "auto_router/b" } },
+      ],
+      ADMIN,
+      null,
+    );
 
     expect(rows.map((row) => row.id)).toEqual(["a-0", "b-1"]);
   });
@@ -130,6 +145,8 @@ describe("autoRouterRows", () => {
         model_info: { id: "ad-1" },
       },
       0,
+      ADMIN,
+      null,
     );
 
     expect(row.kind).toBe("adaptive");
@@ -150,6 +167,8 @@ describe("autoRouterRows", () => {
         model_info: { id: "q-1" },
       },
       0,
+      ADMIN,
+      null,
     );
 
     expect(row.kind).toBe("quality");
@@ -170,7 +189,12 @@ describe("autoRouterRows", () => {
   // with no delete control. Live-verified: for a config row PATCH /model/{id}/update 404s
   // and POST /model/delete 400s.
   const rowFor = (model: string, dbModel: boolean) =>
-    toAutoRouterRow({ model_name: "r", litellm_params: { model }, model_info: { id: "x", db_model: dbModel } }, 0);
+    toAutoRouterRow(
+      { model_name: "r", litellm_params: { model }, model_info: { id: "x", db_model: dbModel } },
+      0,
+      ADMIN,
+      null,
+    );
 
   it.each([
     { model: "auto_router/complexity_router", db: true, canEdit: true, canDelete: true, reason: null },
@@ -189,8 +213,50 @@ describe("autoRouterRows", () => {
   });
 
   it("treats a missing db_model as config-defined rather than assuming it is writable", () => {
-    const row = toAutoRouterRow({ ...complexityDeployment, model_info: { id: "unknown-1" } }, 0);
+    const row = toAutoRouterRow({ ...complexityDeployment, model_info: { id: "unknown-1" } }, 0, ADMIN, null);
     expect(row.canEdit).toBe(false);
     expect(row.canDelete).toBe(false);
+  });
+});
+
+describe("autoRouterRows actor gating", () => {
+  const TEAMS = [
+    { team_id: "team-1", members_with_roles: [{ user_id: "u-team-admin", user_email: "t@t", role: "admin" }] },
+  ] as never;
+
+  const rowIn = (actor: { userRole: string; userID: string }, teamId: string | null) =>
+    toAutoRouterRow(
+      { ...complexityDeployment, model_info: { id: "cid-1", db_model: true, team_id: teamId } },
+      0,
+      actor,
+      TEAMS,
+    );
+
+  // Opening the tab to team admins puts rows they cannot act on in the same list: other
+  // teams' routers, and the proxy-level unscoped ones. PATCH and DELETE both 403 those, so
+  // the affordance has to be per row rather than per tab.
+  it("hides write affordances on another team's router", () => {
+    const row = rowIn(TEAM_ADMIN, "other-team");
+    expect(row.canEdit).toBe(false);
+    expect(row.canDelete).toBe(false);
+  });
+
+  it("hides them on an unscoped router a proxy admin owns", () => {
+    const row = rowIn(TEAM_ADMIN, null);
+    expect(row.canEdit).toBe(false);
+    expect(row.canDelete).toBe(false);
+  });
+
+  // Authorizing on created_by would fail this: the API lets any admin of the owning team act.
+  it("keeps them on the team's router regardless of who created it", () => {
+    const row = rowIn(TEAM_ADMIN, "team-1");
+    expect(row.canEdit).toBe(true);
+    expect(row.canDelete).toBe(true);
+  });
+
+  it("lets a proxy admin act on any team's router", () => {
+    const row = rowIn(ADMIN, "other-team");
+    expect(row.canEdit).toBe(true);
+    expect(row.canDelete).toBe(true);
   });
 });

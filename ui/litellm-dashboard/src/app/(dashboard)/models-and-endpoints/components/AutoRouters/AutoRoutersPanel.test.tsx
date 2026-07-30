@@ -108,7 +108,15 @@ const mockDeploymentsPage = () => {
 };
 
 const renderPanel = (canModify = true) =>
-  renderWithProviders(<AutoRoutersPanel accessToken="token" userRole="Admin" canModify={canModify} />);
+  renderWithProviders(
+    <AutoRoutersPanel
+      accessToken="token"
+      userRole="Admin"
+      userID="u-admin"
+      teams={null}
+      createScope={canModify ? "unscoped-ok" : "forbidden"}
+    />,
+  );
 
 describe("AutoRoutersPanel", () => {
   beforeEach(() => {

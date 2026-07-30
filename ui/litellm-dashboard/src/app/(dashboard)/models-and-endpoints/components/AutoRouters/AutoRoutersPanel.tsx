@@ -11,6 +11,8 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 import { modelDeleteCall } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { type ModelWriteScope } from "@/utils/modelPermissions";
+import { Team } from "@/components/networking";
 
 import { AutoRoutersTable } from "./AutoRoutersTable";
 import { AutoRouterRow, toAutoRouterRows } from "./autoRouterRows";
@@ -18,11 +20,14 @@ import { AutoRouterRow, toAutoRouterRows } from "./autoRouterRows";
 interface AutoRoutersPanelProps {
   accessToken: string;
   userRole: string;
-  /** Owned by the page, which knows whether the caller may write. */
-  canModify: boolean;
+  userID: string | null;
+  teams: Team[] | null;
+  /** Owned by the page, which knows how this caller must scope what they create. */
+  createScope: ModelWriteScope;
 }
 
-export function AutoRoutersPanel({ accessToken, userRole, canModify }: AutoRoutersPanelProps) {
+export function AutoRoutersPanel({ accessToken, userRole, userID, teams, createScope }: AutoRoutersPanelProps) {
+  const canCreate = createScope !== "forbidden";
   const { data: deployments, isLoading } = useAutoRouters();
   const invalidateAutoRouters = useInvalidateAutoRouters();
   // Clicking a router opens the same ?model= drill-in the All Models table uses, so an auto
@@ -33,7 +38,10 @@ export function AutoRoutersPanel({ accessToken, userRole, canModify }: AutoRoute
   const [deletingRouter, setDeletingRouter] = useState<AutoRouterRow | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const routers = useMemo(() => toAutoRouterRows(deployments ?? []), [deployments]);
+  const routers = useMemo(
+    () => toAutoRouterRows(deployments ?? [], { userRole, userID }, teams),
+    [deployments, userRole, userID, teams],
+  );
 
   const handleCreated = () => {
     setIsCreating(false);
@@ -65,7 +73,7 @@ export function AutoRoutersPanel({ accessToken, userRole, canModify }: AutoRoute
             so clients keep using a single model name.
           </p>
         </div>
-        {canModify && (
+        {canCreate && (
           <Button onClick={() => setIsCreating(true)} className="shrink-0">
             <Plus />
             Add Auto Router
@@ -76,7 +84,7 @@ export function AutoRoutersPanel({ accessToken, userRole, canModify }: AutoRoute
       <AutoRoutersTable
         routers={routers}
         isLoading={isLoading}
-        canModify={canModify}
+        canModify={canCreate}
         onRouterClick={(row) => openModel(row.id)}
         onDeleteClick={setDeletingRouter}
       />
@@ -92,7 +100,12 @@ export function AutoRoutersPanel({ accessToken, userRole, canModify }: AutoRoute
               using a single model name.
             </DialogDescription>
           </DialogHeader>
-          <AddAutoRouterTab handleOk={handleCreated} accessToken={accessToken} userRole={userRole} />
+          <AddAutoRouterTab
+            handleOk={handleCreated}
+            accessToken={accessToken}
+            userRole={userRole}
+            createScope={createScope}
+          />
         </DialogContent>
       </Dialog>
 

@@ -45,7 +45,7 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
           Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers
-          live on the Router Settings page
+          live under Models + Endpoints, on the Auto-Routers tab
         </p>
       </div>
 

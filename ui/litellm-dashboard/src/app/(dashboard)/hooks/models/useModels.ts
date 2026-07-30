@@ -104,6 +104,7 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
     created_at?: string | null;
     updated_at?: string | null;
     team_id?: string | null;
+    created_by?: string | null;
   } | null;
 }
 

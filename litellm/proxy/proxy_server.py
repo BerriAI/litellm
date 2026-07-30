@@ -12087,8 +12087,9 @@ async def model_info_v2(
         False,
         description=(
             "Omit auto-router deployments (litellm model prefixed `auto_router/`). "
-            "They are routing constructs rather than deployments, and are managed on the "
-            "Router Settings page. Defaults to false, so existing callers are unaffected"
+            "They select among deployments rather than being deployments themselves, so a "
+            "caller rendering a deployment list can leave them out. Defaults to false, so "
+            "existing callers are unaffected"
         ),
     ),
 ):

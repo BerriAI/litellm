@@ -3,6 +3,8 @@ import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } 
 import { TextInput } from "@tremor/react";
 import { modelAvailableCall } from "../networking";
 import { all_admin_roles } from "@/utils/roles";
+import { type ModelWriteScope } from "@/utils/modelPermissions";
+import TeamDropdown from "../common_components/team_dropdown";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import ComplexityRouterConfig, {
@@ -26,11 +28,23 @@ interface AddAutoRouterTabProps {
   handleOk: () => void;
   accessToken: string;
   userRole: string;
+  /**
+   * How this caller must scope what they create. A team admin has to name a team, because
+   * POST /model/new rejects an unscoped create from any non-proxy-admin; without the selector
+   * their submit is a guaranteed 403.
+   */
+  createScope?: ModelWriteScope;
 }
 
 const { Title } = Typography;
 
-const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ handleOk, accessToken, userRole }) => {
+const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
+  handleOk,
+  accessToken,
+  userRole,
+  createScope = "unscoped-ok",
+}) => {
+  const requiresTeamScope = createScope === "team-required";
   const [form] = Form.useForm();
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
@@ -122,7 +136,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ handleOk, accessTok
     });
 
     form
-      .validateFields(["auto_router_name"])
+      .validateFields(requiresTeamScope ? ["auto_router_name", "team_id"] : ["auto_router_name"])
       .then((values) => {
         const complexityRouterConfigParams = {
           tiers,
@@ -208,6 +222,19 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ handleOk, accessTok
           >
             <TextInput placeholder="e.g., smart_router, auto_router_1" />
           </Form.Item>
+
+          {requiresTeamScope && (
+            <Form.Item
+              label="Select Team"
+              name="team_id"
+              rules={[{ required: true, message: "Please select a team to continue" }]}
+              tooltip="Select the team this auto router belongs to. Only keys for this team will be able to call it."
+              labelCol={{ span: 10 }}
+              labelAlign="left"
+            >
+              <TeamDropdown />
+            </Form.Item>
+          )}
 
           <div className="w-full mb-4">
             <ComplexityRouterConfig
