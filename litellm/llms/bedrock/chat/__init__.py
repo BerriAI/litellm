@@ -5,7 +5,6 @@ from .invoke_handler import (
     AmazonAnthropicClaudeStreamDecoder,
     AmazonDeepSeekR1StreamDecoder,
     AWSEventStreamDecoder,
-    BedrockLLM,
 )
 
 

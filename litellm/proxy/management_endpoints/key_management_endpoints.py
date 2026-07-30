@@ -32,6 +32,7 @@ from litellm._uuid import uuid
 from litellm.constants import (
     LENGTH_OF_LITELLM_GENERATED_KEY,
     LITELLM_PROXY_ADMIN_NAME,
+    MINIMUM_CUSTOM_KEY_LENGTH,
     UI_SESSION_TOKEN_TEAM_ID,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
@@ -41,8 +42,11 @@ from litellm.proxy._experimental.mcp_server.db import (
     rotate_mcp_user_credentials_master_key,
     rotate_mcp_user_env_vars_master_key,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    rotate_sso_identity_assertions_master_key,
+)
 from litellm.proxy._types import *
-from litellm.proxy._types import LiteLLM_VerificationToken
+from litellm.proxy._types import LiteLLM_VerificationToken, hash_token
 from litellm.proxy.auth.auth_checks import (
     _delete_cache_key_object,
     can_team_access_model,
@@ -111,6 +115,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router import Router
+from litellm.secret_managers.base_secret_manager import raise_if_unsafe_secret_name
 from litellm.secret_managers.main import get_secret
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
@@ -343,7 +348,7 @@ def _personal_key_membership_check(
     if user_api_key_dict.user_role not in personal_key_generation["allowed_user_roles"]:
         raise HTTPException(
             status_code=400,
-            detail=f"Personal key creation has been restricted by admin. Allowed roles={litellm.key_generation_settings['personal_key_generation']['allowed_user_roles']}. Your role={user_api_key_dict.user_role}",  # type: ignore
+            detail=f"Personal key creation has been restricted by admin. Allowed roles={personal_key_generation['allowed_user_roles']}. Your role={user_api_key_dict.user_role}",
         )
 
     return True
@@ -467,7 +472,10 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
     Handle the key type.
     """
     key_type = data.key_type
-    data_json.pop("key_type", None)
+    if key_type is None:
+        data_json.pop("key_type", None)
+        return data_json
+    data_json["key_type"] = key_type.value
     if key_type == LiteLLMKeyType.LLM_API:
         data_json["allowed_routes"] = ["llm_api_routes"]
     elif key_type == LiteLLMKeyType.MANAGEMENT:
@@ -530,26 +538,33 @@ def _check_allowed_routes_caller_permission(
     allowed_routes: Optional[list],
     user_api_key_dict: UserAPIKeyAuth,
     *,
+    allowed_routes_was_provided: bool = False,
     allow_safe_presets: bool = False,
 ) -> None:
     """
-    Only proxy admins may set `allowed_routes` on a key.
+    Require PROXY_ADMIN when `allowed_routes` is present in the request body,
+    unless the caller went through the `key_type` preset flow.
 
-    `allowed_routes` overrides the standard role-based route gate in
-    RouteChecks.non_proxy_admin_allowed_routes_check, so the field is
-    restricted to admins. Non-admins must instead use `key_type` to pick a
-    preset bucket — that path goes through `handle_key_type` and re-enters
-    this function with `allow_safe_presets=True`, which lets the derived
-    `llm_api_routes` / `info_routes` values through. Raw-body call sites
-    leave `allow_safe_presets=False` so non-admins can't write those values
-    directly.
+    Raw-body call sites pass
+    `allowed_routes_was_provided="allowed_routes" in data.model_fields_set` so a
+    caller that omits the field (model default flows through) is distinct from
+    one that sends any explicit value.
+
+    Post-`handle_key_type` call sites pass `allow_safe_presets=True` with the
+    values derived by `handle_key_type`; those values are not from the request
+    body, so `allowed_routes_was_provided` stays False and the safe-preset
+    carve-out below accepts any list of tokens in
+    `_NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS`.
     """
-    # Empty list is the default on GenerateKeyRequest — treat as "not set".
-    if not allowed_routes:
+    if not allowed_routes_was_provided and not allowed_routes:
         return
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
-    if allow_safe_presets and all(r in _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS for r in allowed_routes):
+    if (
+        allow_safe_presets
+        and allowed_routes
+        and all(r in _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS for r in allowed_routes)
+    ):
         return
     raise HTTPException(
         status_code=403,
@@ -563,24 +578,24 @@ def _check_allowed_routes_caller_permission(
 
 
 def _check_permissions_caller_permission(
-    permissions: Optional[dict],
+    data: GenerateRequestBase,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """
-    Only proxy admins may set the `permissions` dict on a key.
+    Require PROXY_ADMIN when `permissions` is present in the request body.
 
-    The field grants ambient capabilities (e.g. `get_spend_routes` exposes
-    `/global/spend/*`), so it must follow the same admin gate as
-    `allowed_routes`. Without this gate a non-admin can self-grant capabilities
-    they do not hold, including read access to global spend.
+    Presence is detected via `data.model_fields_set` so a caller that
+    omits the field (default flows through) is distinct from one that
+    sends any explicit value.
     """
-    if not permissions:
+    permissions_in_request = "permissions" in data.model_fields_set
+    if not permissions_in_request and not data.permissions:
         return
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
     raise HTTPException(
         status_code=403,
-        detail={"error": "Only proxy admins can set `permissions` on a key."},
+        detail={"error": "Only proxy admins can set `permissions`."},
     )
 
 
@@ -751,6 +766,12 @@ async def _common_key_generation_helper(
         premium_user=premium_user,
     )
 
+    if data.throttle_on_budget_exceeded is True and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins can enable throttle_on_budget_exceeded on a key."},
+        )
+
     if data.metadata is not None and data.metadata.get("service_account_id") is not None and data.team_id is None:
         await validate_team_id_used_in_service_account_request(
             team_id=data.team_id,
@@ -840,7 +861,7 @@ async def _common_key_generation_helper(
         team_table=team_table,
     )
     _check_permissions_caller_permission(
-        permissions=data.permissions,
+        data=data,
         user_api_key_dict=user_api_key_dict,
     )
 
@@ -1005,6 +1026,14 @@ async def _common_key_generation_helper(
             detail={"error": f"Invalid key format. LiteLLM Virtual Key must start with 'sk-'. Received: {_masked}"},
         )
 
+    if data.key is not None and len(data.key) < MINIMUM_CUSTOM_KEY_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid key format. LiteLLM Virtual Key must be at least {MINIMUM_CUSTOM_KEY_LENGTH} characters long."
+            },
+        )
+
     # check org key limits - done here to handle inheriting org id from team
     if data.organization_id is not None:
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
@@ -1049,7 +1078,7 @@ async def _common_key_generation_helper(
 
     response["soft_budget"] = data.soft_budget  # include the user-input soft budget in the response
 
-    response = GenerateKeyResponse(**response)
+    response = GenerateKeyResponse.model_validate(response)
 
     response.token = response.token_id  # remap token to use the hash, and leave the key in the `key` field [TODO]: clean up generate_key_helper_fn to do this
 
@@ -1237,7 +1266,7 @@ async def _check_team_key_limits(
     )
     # Exclude the key being updated to avoid double-counting its limits.
     # data.key may be a raw key (sk-...) or a pre-hashed token_id.
-    if isinstance(data, UpdateKeyRequest):
+    if isinstance(data, UpdateKeyRequest) and data.key is not None:
         hashed_key = _hash_token_if_needed(data.key)
         keys = [key for key in keys if key.token != hashed_key]
     check_team_key_model_specific_limits(
@@ -1419,7 +1448,7 @@ async def _check_org_key_limits(
     )
     # Exclude the key being updated to avoid double-counting its limits.
     # data.key may be a raw key (sk-...) or a pre-hashed token_id.
-    if isinstance(data, UpdateKeyRequest):
+    if isinstance(data, UpdateKeyRequest) and data.key is not None:
         hashed_key = _hash_token_if_needed(data.key)
         keys = [key for key in keys if key.token != hashed_key]
     check_org_key_model_specific_limits(
@@ -1457,7 +1486,7 @@ async def generate_key_fn(
     Parameters:
     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - key_alias: Optional[str] - User defined key alias
-    - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
+    - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
     - user_id: Optional[str] - The user id of the key
     - agent_id: Optional[str] - The agent id associated with the key.
@@ -1476,11 +1505,14 @@ async def generate_key_fn(
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+    - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+    - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
+    - tag_rpm_limit: Optional[dict] - key-specific per-request-tag rpm limit, keyed by request tag. Example - {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; requests whose tag is absent fall back to the key-level rpm limit.
     - tpm_limit_type: Optional[str] - Type of tpm limit. Options: "best_effort_throughput" (no error if we're overallocating tpm), "guaranteed_throughput" (raise an error if we're overallocating tpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
     - rpm_limit_type: Optional[str] - Type of rpm limit. Options: "best_effort_throughput" (no error if we're overallocating rpm), "guaranteed_throughput" (raise an error if we're overallocating rpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
@@ -1566,6 +1598,7 @@ async def generate_key_fn(
         _check_allowed_routes_caller_permission(
             allowed_routes=data.allowed_routes,
             user_api_key_dict=user_api_key_dict,
+            allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
         )
         _check_passthrough_routes_caller_permission(
             data=data,
@@ -1667,7 +1700,7 @@ async def generate_service_account_key_fn(
     Parameters:
     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - key_alias: Optional[str] - User defined key alias
-    - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
+    - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
     - user_id: Optional[str] - [NON-FUNCTIONAL] THIS WILL BE IGNORED. The user id of the key
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
@@ -1683,6 +1716,7 @@ async def generate_service_account_key_fn(
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+    - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
@@ -1736,6 +1770,7 @@ async def generate_service_account_key_fn(
     _check_allowed_routes_caller_permission(
         allowed_routes=data.allowed_routes,
         user_api_key_dict=user_api_key_dict,
+        allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
     )
     _check_passthrough_routes_caller_permission(
         data=data,
@@ -1988,7 +2023,7 @@ def _validate_max_budget(max_budget: Optional[float]) -> None:
 
 
 async def _get_and_validate_existing_key(
-    token: str, prisma_client: Optional[PrismaClient]
+    token: str | None, prisma_client: Optional[PrismaClient], key_alias: str | None = None
 ) -> LiteLLM_VerificationToken:
     """
     Get existing key from database and validate it exists.
@@ -1996,12 +2031,13 @@ async def _get_and_validate_existing_key(
     Args:
         token: The key token to look up
         prisma_client: Prisma client instance
+        key_alias: Alias to look the key up by when token is not provided
 
     Returns:
         LiteLLM_VerificationToken: The existing key row
 
     Raises:
-        ProxyException: 404 if key is not found
+        ProxyException: 404 if key is not found, 400 if the alias matches multiple keys
     """
     if prisma_client is None:
         raise HTTPException(
@@ -2009,19 +2045,65 @@ async def _get_and_validate_existing_key(
             detail={"error": "Database not connected"},
         )
 
-    hashed_token = _hash_token_if_needed(token=token)
+    if token is not None:
+        hashed_token = _hash_token_if_needed(token=token)
 
-    existing_key_row = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": hashed_token})
+        existing_key_row: LiteLLM_VerificationToken | None = await VerificationTokenRepository(
+            prisma_client
+        ).table.find_unique(where={"token": hashed_token})
 
-    if existing_key_row is None:
+        if existing_key_row is None:
+            raise ProxyException(
+                message="Key not found.",
+                type=ProxyErrorTypes.not_found_error,
+                param="key",
+                code=status.HTTP_404_NOT_FOUND,
+            )
+
+        return existing_key_row
+
+    if key_alias is None:
+        raise ProxyException(
+            message="either key or key_alias must be provided",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    rows: list[LiteLLM_VerificationToken] = await VerificationTokenRepository(prisma_client).table.find_many(
+        where={"key_alias": key_alias}, take=2
+    )
+
+    if len(rows) == 0:
+        raise ProxyException(
+            message=f"Key not found. No key with key_alias='{key_alias}'.",
+            type=ProxyErrorTypes.not_found_error,
+            param="key_alias",
+            code=status.HTTP_404_NOT_FOUND,
+        )
+
+    if len(rows) > 1:
+        raise ProxyException(
+            message=f"Multiple keys share key_alias='{key_alias}', so it cannot be used as an identifier.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key_alias",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    return rows[0]
+
+
+def _resolve_token_to_update(data: UpdateKeyRequest, existing_key_row: LiteLLM_VerificationToken) -> str:
+    if data.key is not None:
+        return data.key
+    if existing_key_row.token is None:
         raise ProxyException(
             message="Key not found.",
             type=ProxyErrorTypes.not_found_error,
             param="key",
             code=status.HTTP_404_NOT_FOUND,
         )
-
-    return existing_key_row
+    return existing_key_row.token
 
 
 async def _process_single_key_update(
@@ -2059,6 +2141,11 @@ async def _process_single_key_update(
     """
     # Validate max_budget
     _validate_max_budget(update_key_request.max_budget)
+
+    _check_permissions_caller_permission(
+        data=update_key_request,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # Get and validate existing key
     if existing_key_row is None:
@@ -2231,8 +2318,13 @@ async def _validate_update_key_data(
     _check_allowed_routes_caller_permission(
         allowed_routes=data.allowed_routes,
         user_api_key_dict=user_api_key_dict,
+        allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
     )
     _check_passthrough_routes_caller_permission(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
+    _check_permissions_caller_permission(
         data=data,
         user_api_key_dict=user_api_key_dict,
     )
@@ -2295,6 +2387,16 @@ async def _validate_update_key_data(
         or data.spend is not None
         or "budget_limits" in data.model_fields_set
     )
+
+    _existing_metadata = getattr(existing_key_row, "metadata", None)
+    _existing_throttle = (
+        _existing_metadata.get("throttle_on_budget_exceeded") if isinstance(_existing_metadata, dict) else None
+    )
+    if data.throttle_on_budget_exceeded is True and _existing_throttle is not True and not _is_proxy_admin:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins can enable throttle_on_budget_exceeded on a key."},
+        )
 
     # Personal-key bypass: the caller both created the key AND still owns it
     # (user_id == caller).  Checking only created_by would let a demoted admin
@@ -2453,8 +2555,8 @@ async def update_key_fn(
     Update an existing API key's parameters.
 
     Parameters:
-    - key: str - The key to update
-    - key_alias: Optional[str] - User-friendly key alias
+    - key: Optional[str] - The key to update. Either key or key_alias must be provided.
+    - key_alias: Optional[str] - User-friendly key alias. If key is omitted, also identifies the key to update (must match exactly one key, same as /key/delete's key_aliases)
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
     - agent_id: Optional[str] - The agent id associated with the key.
@@ -2467,6 +2569,7 @@ async def update_key_fn(
     - spend: Optional[float] - Amount spent by key
     - max_budget: Optional[float] - Max budget for key
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+    - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
     - soft_budget: Optional[float] - [TODO] Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
     - max_parallel_requests: Optional[int] - Rate limit for parallel requests
@@ -2475,6 +2578,7 @@ async def update_key_fn(
     - rpm_limit: Optional[int] - Requests per minute limit
     - model_rpm_limit: Optional[dict] - Model-specific RPM limits {"gpt-4": 100, "claude-v1": 200}
     - mcp_rpm_limit: Optional[dict] - Per-MCP-server RPM limits, keyed by MCP server name {"github": 100, "slack": 200}
+    - tag_rpm_limit: Optional[dict] - Per-request-tag RPM limits, keyed by request tag {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; absent tags fall back to the key-level rpm limit.
     - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
@@ -2485,6 +2589,7 @@ async def update_key_fn(
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+    - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - blocked: Optional[bool] - Whether the key is blocked
     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
@@ -2534,14 +2639,14 @@ async def update_key_fn(
                 detail={"error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"},
             )
 
-        data_json: dict = data.model_dump(exclude_unset=True)
-        key = data_json.pop("key")
-
         # get the row from db
         existing_key_row = await _get_and_validate_existing_key(
             token=data.key,
             prisma_client=prisma_client,
+            key_alias=data.key_alias,
         )
+        key = _resolve_token_to_update(data=data, existing_key_row=existing_key_row)
+        data.key = key
 
         await _validate_update_key_data(
             data=data,
@@ -2989,10 +3094,12 @@ async def bulk_update_team_keys(
                 )
 
             # team_id from validated scope, never user payload — drives _check_team_key_limits.
-            update_key_request = UpdateKeyRequest(
-                key=token,
-                team_id=data.team_id,
-                **update_field_dict,
+            update_key_request = UpdateKeyRequest.model_validate(
+                {
+                    "key": token,
+                    "team_id": data.team_id,
+                    **update_field_dict,
+                }
             )
             updated_key_info = await _process_single_key_update(
                 update_key_request=update_key_request,
@@ -3507,9 +3614,11 @@ async def generate_key_helper_fn(
     allowed_cache_controls: Optional[list] = [],
     permissions: Optional[dict] = {},
     model_max_budget: Optional[dict] = {},
+    budget_fallbacks: Optional[dict] = None,
     model_rpm_limit: Optional[dict] = None,
     model_tpm_limit: Optional[dict] = None,
     mcp_rpm_limit: Optional[dict] = None,
+    tag_rpm_limit: Optional[dict] = None,
     guardrails: Optional[list] = None,
     policies: Optional[list] = None,
     prompts: Optional[list] = None,
@@ -3521,6 +3630,7 @@ async def generate_key_helper_fn(
     created_by: Optional[str] = None,
     updated_by: Optional[str] = None,
     allowed_routes: Optional[list] = None,
+    key_type: str | None = None,
     sso_user_id: Optional[str] = None,
     object_permission_id: Optional[str] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
@@ -3583,6 +3693,9 @@ async def generate_key_helper_fn(
     if mcp_rpm_limit is not None:
         metadata = metadata or {}
         metadata["mcp_rpm_limit"] = mcp_rpm_limit
+    if tag_rpm_limit is not None:
+        metadata = metadata or {}
+        metadata["tag_rpm_limit"] = tag_rpm_limit
     if guardrails is not None:
         metadata = metadata or {}
         metadata["guardrails"] = guardrails
@@ -3597,6 +3710,7 @@ async def generate_key_helper_fn(
     metadata_json = json.dumps(metadata)
     validate_model_max_budget(model_max_budget)
     model_max_budget_json = json.dumps(model_max_budget)
+    budget_fallbacks_json = json.dumps(budget_fallbacks or {})
     user_role = user_role
     tpm_limit = tpm_limit
     rpm_limit = rpm_limit
@@ -3649,6 +3763,7 @@ async def generate_key_helper_fn(
             "allowed_cache_controls": allowed_cache_controls,
             "permissions": permissions_json,
             "model_max_budget": model_max_budget_json,
+            "budget_fallbacks": budget_fallbacks_json,
             "organization_id": organization_id,
             "budget_id": budget_id,
             "blocked": blocked,
@@ -3656,6 +3771,7 @@ async def generate_key_helper_fn(
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],
+            "key_type": key_type,
             "object_permission_id": object_permission_id,
             "router_settings": router_settings_json,
             "access_group_ids": access_group_ids or [],
@@ -3722,7 +3838,10 @@ async def generate_key_helper_fn(
                 return user_data
 
             ## CREATE KEY
-            verbose_proxy_logger.debug("prisma_client: Creating Key= %s", key_data)
+            verbose_proxy_logger.debug(
+                "prisma_client: Creating Key= %s",
+                {**key_data, "token": hash_token(token=token)},
+            )
             create_key_response = await prisma_client.insert_data(data=key_data, table_name="key")
 
             key_data["token_id"] = getattr(create_key_response, "token", None)
@@ -3978,12 +4097,14 @@ def _transform_verification_tokens_to_deleted_records(
     records = []
     for key in keys:
         key_payload = key.model_dump()
-        deleted_record = LiteLLM_DeletedVerificationToken(
-            **key_payload,
-            deleted_at=deleted_at,
-            deleted_by=user_api_key_dict.user_id,
-            deleted_by_api_key=user_api_key_dict.api_key,
-            litellm_changed_by=litellm_changed_by,
+        deleted_record = LiteLLM_DeletedVerificationToken.model_validate(
+            {
+                **key_payload,
+                "deleted_at": deleted_at,
+                "deleted_by": user_api_key_dict.user_id,
+                "deleted_by_api_key": user_api_key_dict.api_key,
+                "litellm_changed_by": litellm_changed_by,
+            }
         )
         record = deleted_record.model_dump()
 
@@ -3999,6 +4120,7 @@ def _transform_verification_tokens_to_deleted_records(
             "metadata",
             "model_spend",
             "model_max_budget",
+            "budget_fallbacks",
             "router_settings",
         ]:
             if json_field in record and record[json_field] is not None:
@@ -4174,6 +4296,15 @@ async def _rotate_master_key(
     except Exception as e:
         verbose_proxy_logger.warning("Failed to rotate MCP user env vars: %s", str(e))
 
+    # 4d. process SSO identity assertion table (EMA subject tokens)
+    try:
+        await rotate_sso_identity_assertions_master_key(
+            prisma_client=prisma_client,
+            new_master_key=new_master_key,
+        )
+    except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
+        verbose_proxy_logger.warning("Failed to rotate SSO identity assertions: %s", str(e))
+
     # 5. process credentials table
     try:
         credentials = await CredentialsRepository(prisma_client).table.find_many()
@@ -4297,7 +4428,6 @@ async def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     if data and data.new_key is not None:
         # Reject custom key values if disabled by admin
         await _check_custom_key_allowed(data.new_key)
-        new_token = data.new_key
         if not data.new_key.startswith("sk-"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -4305,6 +4435,12 @@ async def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
                     "error": "New key must start with 'sk-'. This is to distinguish a key hash (used by litellm for logging / internal logic) from the actual key."
                 },
             )
+        if len(data.new_key) < MINIMUM_CUSTOM_KEY_LENGTH:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": f"New key must be at least {MINIMUM_CUSTOM_KEY_LENGTH} characters long."},
+            )
+        new_token = data.new_key
     else:
         new_token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
     return new_token
@@ -4411,7 +4547,7 @@ async def _execute_virtual_key_regeneration(
 
     new_token = await get_new_token(data=data)
     new_token_hash = hash_token(new_token)
-    new_token_key_name = f"sk-...{new_token[-4:]}"
+    new_token_key_name = abbreviate_api_key(api_key=new_token)
     update_data = {"token": new_token_hash, "key_name": new_token_key_name}
 
     non_default_values = {}
@@ -4450,7 +4586,7 @@ async def _execute_virtual_key_regeneration(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    response = GenerateKeyResponse(**updated_token_dict)
+    response = GenerateKeyResponse.model_validate(updated_token_dict)
     asyncio.create_task(
         KeyManagementEventHooks.async_key_rotated_hook(
             data=data,
@@ -4491,7 +4627,7 @@ async def regenerate_key_fn(
     - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
         - key: Optional[str] - The key to regenerate.
         - new_master_key: Optional[str] - The new master key to use, if key is the master key.
-        - new_key: Optional[str] - The new key to use, if key is not the master key. If both set, new_master_key will be used.
+        - new_key: Optional[str] - The new key to use, if key is not the master key. Must start with 'sk-' and be at least 16 characters long. If both set, new_master_key will be used.
         - key_alias: Optional[str] - User-friendly key alias
         - user_id: Optional[str] - User ID associated with key
         - team_id: Optional[str] - Team ID associated with key
@@ -4500,6 +4636,7 @@ async def regenerate_key_fn(
         - spend: Optional[float] - Amount spent by key
         - max_budget: Optional[float] - Max budget for key
         - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+        - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
         - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
         - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
         - max_parallel_requests: Optional[int] - Rate limit for parallel requests
@@ -4547,8 +4684,13 @@ async def regenerate_key_fn(
             _check_allowed_routes_caller_permission(
                 allowed_routes=data.allowed_routes,
                 user_api_key_dict=user_api_key_dict,
+                allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
             )
             _check_passthrough_routes_caller_permission(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+            )
+            _check_permissions_caller_permission(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
             )
@@ -4762,7 +4904,7 @@ async def _check_proxy_or_team_admin_for_key(
     )
 
 
-def _validate_reset_spend_value(reset_to: Any, key_in_db: LiteLLM_VerificationToken) -> float:
+def _validate_reset_spend_value(reset_to: object, key_in_db: LiteLLM_VerificationToken) -> float:
     if not isinstance(reset_to, (int, float)):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -4938,7 +5080,7 @@ async def validate_key_list_check(
             code=status.HTTP_403_FORBIDDEN,
         )
 
-    complete_user_info = LiteLLM_UserTable(**complete_user_info_db_obj.model_dump())
+    complete_user_info = LiteLLM_UserTable.model_validate(complete_user_info_db_obj.model_dump())
 
     # internal user can only see their own keys
     if user_id:
@@ -5011,7 +5153,7 @@ async def _fetch_user_team_objects(
     if teams is None:
         return []
 
-    return [LiteLLM_TeamTable(**team.model_dump()) for team in teams]
+    return [LiteLLM_TeamTable.model_validate(team.model_dump()) for team in teams]
 
 
 def _get_admin_team_ids_from_objects(
@@ -5084,6 +5226,9 @@ async def get_member_team_ids(
     return _get_member_team_ids_from_objects(user_api_key_dict, team_objects)
 
 
+VALID_EXPIRES_FILTER_VALUES = frozenset({"active", "expired"})
+
+
 @router.get(
     "/key/list",
     tags=["key management"],
@@ -5123,6 +5268,10 @@ async def list_keys(
         False,
         description="If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys.",
     ),
+    expires: str | None = Query(
+        None,
+        description="Filter keys by expiration. 'expired' returns keys whose expires is in the past; 'active' returns keys that never expire or expire in the future. Omit to return keys regardless of expiration.",
+    ),
 ) -> KeyListResponseObject:
     """
     List all keys for a given user / team / organization.
@@ -5156,6 +5305,12 @@ async def list_keys(
             raise HTTPException(
                 status_code=400,
                 detail={"error": "Invalid status value. Currently only 'deleted' is supported."},
+            )
+
+        if isinstance(expires, str) and expires not in VALID_EXPIRES_FILTER_VALUES:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Invalid expires value. Supported: 'active', 'expired'."},
             )
 
         complete_user_info = await validate_key_list_check(
@@ -5238,6 +5393,7 @@ async def list_keys(
             access_group_id=access_group_id,
             agent_id=agent_id,
             use_substring_matching=use_substring_matching,
+            expires_filter=expires if isinstance(expires, str) else None,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -5445,6 +5601,12 @@ def _validate_sort_params(sort_by: Optional[str], sort_order: str) -> Optional[D
     return order_by
 
 
+def _build_expires_where_clause(expires_filter: str, now: datetime) -> dict[str, Any]:
+    if expires_filter == "expired":
+        return {"AND": [{"expires": {"not": None}}, {"expires": {"lt": now}}]}
+    return {"OR": [{"expires": None}, {"expires": {"gte": now}}]}
+
+
 def _build_key_filter_conditions(
     user_id: Optional[str],
     team_id: Optional[str],
@@ -5459,6 +5621,7 @@ def _build_key_filter_conditions(
     access_group_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
+    expires_filter: str | None = None,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
     """Build filter conditions for key listing.
 
@@ -5566,6 +5729,8 @@ def _build_key_filter_conditions(
         where = {"AND": [where, {"access_group_ids": {"hasSome": [access_group_id]}}]}
     if agent_id and isinstance(agent_id, str):
         where = {"AND": [where, {"agent_id": agent_id}]}
+    if expires_filter is not None and expires_filter in VALID_EXPIRES_FILTER_VALUES:
+        where = {"AND": [where, _build_expires_where_clause(expires_filter, datetime.now(timezone.utc))]}
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
     return where
@@ -5595,6 +5760,7 @@ async def _list_key_helper(
     access_group_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
+    expires_filter: str | None = None,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -5632,6 +5798,7 @@ async def _list_key_helper(
         access_group_id=access_group_id,
         agent_id=agent_id,
         use_substring_matching=use_substring_matching,
+        expires_filter=expires_filter,
     )
 
     # Calculate skip for pagination
@@ -5735,7 +5902,7 @@ async def _list_key_helper(
         if return_full_object is True or (expand and "user" in expand):
             if use_deleted_table:
                 # Use deleted key type to preserve deleted_at, deleted_by, etc.
-                key_list.append(LiteLLM_DeletedVerificationToken(**key_dict))
+                key_list.append(LiteLLM_DeletedVerificationToken.model_validate(key_dict))
             else:
                 key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
         else:
@@ -6235,8 +6402,13 @@ def _validate_key_alias_format(key_alias: Optional[str]) -> None:
     """
     Validate the format of the key_alias.
 
-    Gated behind ``litellm.enable_key_alias_format_validation`` (default **False**).
-    When disabled, no validation is performed so existing workflows are not broken.
+    A baseline validation always runs, regardless of
+    ``litellm.enable_key_alias_format_validation``.
+
+    The remaining charset/length rules are gated behind
+    ``litellm.enable_key_alias_format_validation`` (default **False**). When disabled,
+    only the baseline validation above is performed, so existing workflows are not
+    broken.
 
     Rules (when enabled):
     - None is OK (no alias).
@@ -6244,10 +6416,20 @@ def _validate_key_alias_format(key_alias: Optional[str]) -> None:
     - start/end with alphanumeric
     - only allow a-zA-Z0-9_-/.@
     """
-    if not litellm.enable_key_alias_format_validation:
+    if key_alias is None:
         return
 
-    if key_alias is None:
+    try:
+        raise_if_unsafe_secret_name(key_alias)
+    except ValueError:
+        raise ProxyException(
+            message="Invalid key_alias",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key_alias",
+            code=400,
+        )
+
+    if not litellm.enable_key_alias_format_validation:
         return
 
     if not _KEY_ALIAS_PATTERN.match(key_alias):

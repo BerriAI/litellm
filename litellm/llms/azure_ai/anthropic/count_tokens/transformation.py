@@ -4,8 +4,6 @@ Azure AI Anthropic CountTokens API transformation logic.
 Extends the base Anthropic CountTokens transformation with Azure authentication.
 """
 
-from typing import Any, Dict, Optional
-
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
@@ -25,8 +23,8 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
     def get_required_headers(
         self,
         api_key: str,
-        litellm_params: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, str]:
+        litellm_params: dict[str, object] | None = None,
+    ) -> dict[str, str]:
         """
         Get the required headers for the Azure AI Anthropic CountTokens API.
 
@@ -53,7 +51,7 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         if "api_key" not in litellm_params:
             litellm_params["api_key"] = api_key
 
-        litellm_params_obj = GenericLiteLLMParams(**litellm_params)
+        litellm_params_obj = GenericLiteLLMParams.model_validate(litellm_params)
 
         # Get Azure auth headers (api-key or Authorization)
         azure_headers = BaseAzureLLM._base_validate_azure_environment(headers={}, litellm_params=litellm_params_obj)

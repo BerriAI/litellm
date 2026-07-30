@@ -10,7 +10,7 @@ import httpx
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 from ..common_utils import (
     A2AError,
@@ -311,6 +311,25 @@ class A2AConfig(BaseConfig):
 
         # Set ID from response
         model_response.id = response_json.get("id", str(uuid.uuid4()))
+
+        # A2A agents don't return token usage; estimate it so per-token pricing
+        # produces real cost and callers don't receive usage of 0/0/0.
+        try:
+            from litellm.utils import token_counter
+
+            prompt_tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+            completion_tokens = token_counter(model="gpt-3.5-turbo", text=text, count_response_tokens=True)
+            setattr(
+                model_response,
+                "usage",
+                Usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
+                ),
+            )
+        except Exception:  # noqa: BLE001 - best-effort estimate; a tokenizer hiccup must not break the response
+            pass
 
         return model_response
 

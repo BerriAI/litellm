@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.grayswan import grayswan as grayswan_module
 from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import (
     GraySwanGuardrail,
     GraySwanGuardrailAPIError,
@@ -70,12 +71,118 @@ def test_prepare_payload_includes_dynamic_metadata(
     assert payload["metadata"] == dynamic_body["metadata"]
 
 
+def test_prepare_payload_forwards_only_scan_id_header(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    messages = [{"role": "user", "content": "hello"}]
+    request_data = {
+        "proxy_server_request": {
+            "headers": {
+                "SHADE_SCAN_ID": "scan-123",
+                "authorization": "Bearer secret",
+            }
+        },
+        "litellm_metadata": {"request_id": "request-123"},
+    }
+
+    payload = grayswan_guardrail._prepare_payload(messages, {}, request_data)
+
+    assert payload["litellm_metadata"] == {
+        "request_id": "request-123",
+        "headers": {"SHADE_SCAN_ID": "scan-123"},
+    }
+
+
+def test_prepare_payload_merges_scan_id_with_existing_metadata_headers(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    messages = [{"role": "user", "content": "hello"}]
+    request_data = {
+        "proxy_server_request": {
+            "headers": {
+                "shade_scan_id": "scan-123",
+            }
+        },
+        "litellm_metadata": {
+            "request_id": "request-123",
+            "headers": {"x-existing": "keep-me"},
+        },
+    }
+
+    payload = grayswan_guardrail._prepare_payload(messages, {}, request_data)
+
+    assert payload["litellm_metadata"] == {
+        "request_id": "request-123",
+        "headers": {
+            "x-existing": "keep-me",
+            "shade_scan_id": "scan-123",
+        },
+    }
+
+
+def test_prepare_payload_sanitizes_headers_when_litellm_metadata_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    messages = [{"role": "user", "content": "hello"}]
+    request_data = {
+        "proxy_server_request": {
+            "headers": {
+                "shade_scan_id": "scan-123",
+            }
+        }
+    }
+
+    monkeypatch.setattr(grayswan_module, "safe_dumps", lambda _data: "{}")
+
+    payload = grayswan_guardrail._prepare_payload(messages, {}, request_data)
+
+    assert "litellm_metadata" not in payload
+
+
+def test_prepare_payload_extracts_headers_from_logging_obj(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    messages = [{"role": "user", "content": "hello"}]
+    request_data = {}
+    logging_obj = type(
+        "LoggingObj",
+        (),
+        {
+            "model_call_details": {
+                "litellm_params": {
+                    "metadata": {
+                        "headers": {
+                            "shade_scan_id": "scan-from-logging",
+                            "authorization": "Bearer secret",
+                        }
+                    }
+                }
+            }
+        },
+    )()
+
+    payload = grayswan_guardrail._prepare_payload(messages, {}, request_data, logging_obj)
+
+    assert payload["litellm_metadata"] == {
+        "headers": {"shade_scan_id": "scan-from-logging"},
+    }
+
+
+def test_prepare_payload_ignores_logging_obj_without_model_call_details(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    messages = [{"role": "user", "content": "hello"}]
+
+    payload = grayswan_guardrail._prepare_payload(messages, {}, {}, object())
+
+    assert "litellm_metadata" not in payload
+
+
 def test_process_response_does_not_block_under_threshold(
     grayswan_guardrail: GraySwanGuardrail,
 ) -> None:
-    grayswan_guardrail._process_grayswan_response(
-        {"violation": 0.3, "violated_rules": []}
-    )
+    grayswan_guardrail._process_grayswan_response({"violation": 0.3, "violated_rules": []})
 
 
 def test_process_response_blocks_when_threshold_exceeded() -> None:
@@ -127,16 +234,12 @@ class _DummyClient:
         self.calls: list[dict] = []
 
     async def post(self, *, url: str, headers: dict, json: dict, timeout: float):
-        self.calls.append(
-            {"url": url, "headers": headers, "json": json, "timeout": timeout}
-        )
+        self.calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
         return _DummyResponse(self.payload)
 
 
 @pytest.mark.asyncio
-async def test_run_guardrail_posts_payload(
-    monkeypatch, grayswan_guardrail: GraySwanGuardrail
-) -> None:
+async def test_run_guardrail_posts_payload(monkeypatch, grayswan_guardrail: GraySwanGuardrail) -> None:
     dummy_client = _DummyClient({"violation": 0.1})
     grayswan_guardrail.async_handler = dummy_client
 
@@ -308,9 +411,7 @@ def test_process_response_passthrough_raises_exception_in_pre_call() -> None:
 
     # Should raise ModifyResponseException
     with pytest.raises(ModifyResponseException) as exc:
-        guardrail._process_grayswan_response(
-            response_json, data, GuardrailEventHooks.pre_call
-        )
+        guardrail._process_grayswan_response(response_json, data, GuardrailEventHooks.pre_call)
 
     assert "Gray Swan Cygnal Guardrail" in exc.value.message
     assert exc.value.model == "gpt-4"
@@ -338,9 +439,7 @@ def test_process_response_passthrough_raises_exception_in_during_call() -> None:
 
     # Should raise ModifyResponseException
     with pytest.raises(ModifyResponseException) as exc:
-        guardrail._process_grayswan_response(
-            response_json, data, GuardrailEventHooks.during_call
-        )
+        guardrail._process_grayswan_response(response_json, data, GuardrailEventHooks.during_call)
 
     assert "Gray Swan Cygnal Guardrail" in exc.value.message
     assert exc.value.model == "gpt-4"
@@ -365,9 +464,7 @@ def test_process_response_passthrough_stores_detection_info_in_post_call() -> No
     }
 
     # Should NOT raise an exception in post_call
-    guardrail._process_grayswan_response(
-        response_json, data, GuardrailEventHooks.post_call
-    )
+    guardrail._process_grayswan_response(response_json, data, GuardrailEventHooks.post_call)
 
     # Verify detection info was stored in metadata
     assert "metadata" in data
@@ -400,9 +497,7 @@ def test_process_response_passthrough_does_not_raise_if_under_threshold() -> Non
     }
 
     # Should not raise an exception since under threshold
-    guardrail._process_grayswan_response(
-        response_json, data, GuardrailEventHooks.pre_call
-    )
+    guardrail._process_grayswan_response(response_json, data, GuardrailEventHooks.pre_call)
 
     # Should not have any detection info since it didn't exceed threshold
     assert "guardrail_detections" not in data.get("metadata", {})
@@ -436,10 +531,7 @@ def test_format_violation_message() -> None:
     assert "Gray Swan Cygnal Guardrail" in message
     assert "the input query has a violation score of 0.85" in message
     assert "violating the rule(s): 1, 3, 5" in message
-    assert (
-        "Mutation effort to make the harmful intention disguised was DETECTED"
-        in message
-    )
+    assert "Mutation effort to make the harmful intention disguised was DETECTED" in message
     # IPI should not be in message since it's False
     assert "Indirect Prompt Injection was DETECTED" not in message
 
@@ -450,10 +542,7 @@ def test_format_violation_message() -> None:
     assert "Gray Swan Cygnal Guardrail" in message
     assert "the model response has a violation score of 0.85" in message
     assert "violating the rule(s): 1, 3, 5" in message
-    assert (
-        "Mutation effort to make the harmful intention disguised was DETECTED"
-        in message
-    )
+    assert "Mutation effort to make the harmful intention disguised was DETECTED" in message
 
 
 def test_prepare_payload_includes_litellm_metadata(

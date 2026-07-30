@@ -193,6 +193,14 @@ class AgenticAnthropicStreamingIterator:
 
         raise StopAsyncIteration
 
+    async def aclose(self) -> None:
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            aclose_if_supported,
+        )
+
+        await aclose_if_supported(self._inner)
+        await aclose_if_supported(self._follow_up_iterator)
+
     async def _process_agentic_hooks(self) -> None:
         """Rebuild the Anthropic response from collected SSE bytes and call hooks."""
         if self._hook_processing_done:

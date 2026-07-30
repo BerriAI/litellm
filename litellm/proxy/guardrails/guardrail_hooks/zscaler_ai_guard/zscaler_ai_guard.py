@@ -4,7 +4,7 @@
 #
 # +-------------------------------------------------------------+
 import os
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, List, Literal, Optional
 
 from fastapi import HTTPException
 
@@ -17,6 +17,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -27,6 +28,13 @@ GUARDRAIL_TIMEOUT = 5
 
 
 class ZscalerAIGuard(CustomGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -37,6 +45,7 @@ class ZscalerAIGuard(CustomGuardrail):
         send_user_api_key_team_id: Optional[bool] = None,
         **kwargs,
     ):
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         self.optional_params = kwargs
         self.zscaler_ai_guard_url = api_base or os.getenv(
             "ZSCALER_AI_GUARD_URL",

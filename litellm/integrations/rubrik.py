@@ -7,7 +7,7 @@ import time
 import urllib.parse
 import uuid
 from collections import Counter
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, List, Literal, Optional
 
 import httpx
 from litellm._logging import verbose_logger
@@ -52,6 +52,10 @@ class _MalformedToolBlockingResponseError(Exception):
 
 
 class RubrikLogger(CustomGuardrail, CustomBatchLogger):
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -69,6 +73,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         kwargs["event_hook"] = kwargs.get("event_hook") or GuardrailEventHooks.post_call
         if kwargs.get("default_on") is None:
             kwargs["default_on"] = True
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(
             flush_lock=self.flush_lock,
             **kwargs,
