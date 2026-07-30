@@ -5398,7 +5398,7 @@ class ProxyConfig:
                 # decrypt values
                 for k, v in _litellm_params.items():
                     _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
-                _litellm_params = LiteLLM_Params(**_litellm_params)
+                _litellm_params = LiteLLM_Params.model_validate(_litellm_params)
 
             else:
                 verbose_proxy_logger.error(
@@ -5429,7 +5429,7 @@ class ProxyConfig:
                 # decrypt values
                 for k, v in _litellm_params.items():
                     _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
-                _litellm_params = LiteLLM_Params(**_litellm_params)
+                _litellm_params = LiteLLM_Params.model_validate(_litellm_params)
             else:
                 verbose_proxy_logger.error(
                     f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
@@ -13063,7 +13063,7 @@ def _get_model_group_info(
         _model_group_info = llm_router.get_model_group_info(model_group=model)
 
         if _model_group_info is not None:
-            model_groups.append(ModelGroupInfoProxy(**_model_group_info.model_dump()))
+            model_groups.append(ModelGroupInfoProxy.model_validate(_model_group_info.model_dump()))
         else:
             model_group_info = ModelGroupInfoProxy(
                 model_group=model,
@@ -14782,7 +14782,7 @@ async def update_config_general_settings(
         )
 
     try:
-        ConfigGeneralSettings(**{data.field_name: data.field_value})
+        ConfigGeneralSettings.model_validate({data.field_name: data.field_value})
     except Exception:
         raise HTTPException(
             status_code=400,

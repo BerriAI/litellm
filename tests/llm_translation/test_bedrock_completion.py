@@ -33,7 +33,7 @@ from litellm import (
     completion_cost,
     embedding,
 )
-from litellm.llms.bedrock.chat import BedrockLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
@@ -225,7 +225,7 @@ def bedrock_session_token_creds():
     aws_region_name = os.environ["AWS_REGION_NAME"]
     aws_session_token = os.environ.get("AWS_SESSION_TOKEN")
 
-    bllm = BedrockLLM()
+    bllm = BaseAWSLLM()
     if aws_session_token is not None:
         # For local testing
         creds = bllm.get_credentials(
@@ -3573,40 +3573,11 @@ def test_bedrock_openai_model_id_extraction():
     print(f"✓ Model ID extracted and encoded: {model_id}")
 
 
-def test_bedrock_openai_convert_messages_to_prompt():
-    """
-    Test that convert_messages_to_prompt returns empty string for OpenAI models.
-    """
-    from litellm.llms.bedrock.chat.invoke_handler import BedrockLLM
-
-    bedrock_llm = BedrockLLM()
-    messages = [
-        {"role": "system", "content": "You are helpful"},
-        {"role": "user", "content": "Hello"},
-    ]
-
-    prompt, chat_history = bedrock_llm.convert_messages_to_prompt(
-        model="test-model", messages=messages, provider="openai", custom_prompt_dict={}
+def test_bedrock_openai_response_parsing():
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
     )
 
-    # OpenAI models use messages directly, no prompt conversion
-    assert prompt == ""
-    assert chat_history is None
-    print("✓ convert_messages_to_prompt returns empty for OpenAI")
-
-
-def test_bedrock_openai_response_parsing():
-    """
-    Test that OpenAI responses are correctly parsed.
-    """
-    from litellm.llms.bedrock.chat.invoke_handler import BedrockLLM
-    from litellm import ModelResponse
-    from unittest.mock import Mock
-    import json
-
-    bedrock_llm = BedrockLLM()
-
-    # Mock OpenAI-style response
     openai_response = {
         "choices": [
             {
@@ -3627,33 +3598,23 @@ def test_bedrock_openai_response_parsing():
     mock_response.status_code = 200
     mock_response.headers = {}
 
-    model_response = ModelResponse()
-    mock_logging = Mock()
-
-    result = bedrock_llm.process_response(
+    result = AmazonBedrockOpenAIConfig().transform_response(
         model="openai/arn:aws:bedrock:us-east-1:123:imported-model/test",
-        response=mock_response,
-        model_response=model_response,
-        stream=False,
-        logging_obj=mock_logging,
-        optional_params={},
-        api_key="",
-        data={},
+        raw_response=mock_response,
+        model_response=ModelResponse(),
+        logging_obj=Mock(),
+        request_data={},
         messages=[{"role": "user", "content": "What is the capital of France?"}],
-        print_verbose=lambda x: None,
+        optional_params={},
+        litellm_params={},
         encoding=None,
     )
 
-    # Verify response content
     assert result.choices[0].message.content == "The capital of France is Paris."
     assert result.choices[0].finish_reason == "stop"
-
-    # Verify usage
     assert result.usage.prompt_tokens == 10
     assert result.usage.completion_tokens == 8
     assert result.usage.total_tokens == 18
-
-    print("✓ OpenAI response parsing works correctly")
 
 
 def test_bedrock_openai_request_transformation():
@@ -3846,43 +3807,20 @@ def test_bedrock_openai_multiple_message_types():
 
 
 def test_bedrock_openai_error_handling():
-    """
-    Test that errors from OpenAI models are properly handled.
-    """
-    from litellm.llms.bedrock.chat.invoke_handler import BedrockLLM
-    from litellm import ModelResponse
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
+    )
     from litellm.llms.bedrock.common_utils import BedrockError
-    from unittest.mock import Mock
-    import json
 
-    bedrock_llm = BedrockLLM()
+    error = AmazonBedrockOpenAIConfig().get_error_class(
+        error_message="ValidationException: bad request",
+        status_code=422,
+        headers={},
+    )
 
-    # Mock error response
-    mock_response = Mock()
-    mock_response.json.side_effect = Exception("Invalid JSON")
-    mock_response.text = "Invalid response"
-    mock_response.status_code = 422
-
-    model_response = ModelResponse()
-    mock_logging = Mock()
-
-    with pytest.raises(BedrockError) as exc_info:
-        bedrock_llm.process_response(
-            model="openai/arn:aws:bedrock:us-east-1:123:imported-model/test",
-            response=mock_response,
-            model_response=model_response,
-            stream=False,
-            logging_obj=mock_logging,
-            optional_params={},
-            api_key="",
-            data={},
-            messages=[],
-            print_verbose=lambda x: None,
-            encoding=None,
-        )
-
-    assert exc_info.value.status_code == 422
-    print("✓ Error handling works correctly")
+    assert isinstance(error, BedrockError)
+    assert error.status_code == 422
+    assert "ValidationException: bad request" in str(error)
 
 
 # ============================================================================

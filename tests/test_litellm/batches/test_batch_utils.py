@@ -18,7 +18,9 @@ import json
 import os
 import sys
 
+import httpx
 import pytest
+import respx
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
@@ -745,6 +747,98 @@ async def test_output_file_content_vertex_unified_file_id_extracts_gcs_uri(monke
 
     assert captured["file_id"] == "gs://litellm-bucket/output/predictions.jsonl"
     assert captured["custom_llm_provider"] == "vertex_ai"
+
+
+def _vertex_predictions_row(custom_id, prompt_tokens, completion_tokens):
+    return {
+        "request": {
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "labels": {"litellm_custom_id": custom_id},
+        },
+        "status": "",
+        "response": {
+            "candidates": [
+                {
+                    "content": {"role": "model", "parts": [{"text": "ok"}]},
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": prompt_tokens,
+                "candidatesTokenCount": completion_tokens,
+                "totalTokenCount": prompt_tokens + completion_tokens,
+            },
+            "modelVersion": "gemini-3.6-flash",
+        },
+        "processed_time": "2026-07-30T00:00:00.000000+00:00",
+    }
+
+
+@pytest.fixture
+def respx_interceptable_httpx_client(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_output_file_content_vertex_managed_uri_accepted_by_real_validation(respx_interceptable_httpx_client):
+    managed_output_uri = (
+        "gs://litellm-bucket/litellm-vertex-files/publishers/google/models/"
+        "gemini-3.6-flash/abc-123/prediction-model/predictions.jsonl"
+    )
+    rows = [
+        _vertex_predictions_row("request-1", 10, 5),
+        _vertex_predictions_row("request-2", 20, 10),
+    ]
+    route = respx.get(url__regex=r"https://storage\.googleapis\.com/storage/v1/b/litellm-bucket/o/.*").mock(
+        return_value=httpx.Response(200, content=_vertex_jsonl(rows))
+    )
+
+    file_content = await bu._fetch_batch_output_file_content(
+        _batch(managed_output_uri),
+        custom_llm_provider="vertex_ai",
+        litellm_params={
+            "api_key": "test-token",
+            "vertex_project": "proj-1",
+            "vertex_location": "us-central1",
+            "gcs_bucket_name": "litellm-bucket",
+        },
+    )
+    result = bu._get_file_content_as_dictionary(file_content)
+
+    assert route.call_count == 1
+    request = route.calls.last.request
+    assert request.url.raw_path == (
+        b"/storage/v1/b/litellm-bucket/o/"
+        b"litellm-vertex-files%2Fpublishers%2Fgoogle%2Fmodels%2Fgemini-3.6-flash"
+        b"%2Fabc-123%2Fprediction-model%2Fpredictions.jsonl?alt=media"
+    )
+    assert [row["custom_id"] for row in result] == ["request-1", "request-2"]
+    assert all(row["response"]["status_code"] == 200 for row in result)
+    assert all(row["response"]["body"]["model"] == "gemini-3.6-flash" for row in result)
+    assert [row["response"]["body"]["usage"]["prompt_tokens"] for row in result] == [10, 20]
+    assert [row["response"]["body"]["usage"]["completion_tokens"] for row in result] == [5, 10]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_output_file_content_vertex_foreign_bucket_rejected_by_real_validation():
+    with pytest.raises(Exception, match="does not match the configured storage bucket"):
+        await bu._fetch_batch_output_file_content(
+            _batch("gs://attacker-bucket/litellm-vertex-files/x/predictions.jsonl"),
+            custom_llm_provider="vertex_ai",
+            litellm_params={
+                "api_key": "test-token",
+                "vertex_project": "proj-1",
+                "vertex_location": "us-central1",
+                "gcs_bucket_name": "litellm-bucket",
+            },
+        )
+
+    assert respx.mock.calls.call_count == 0
 
 
 @pytest.mark.asyncio

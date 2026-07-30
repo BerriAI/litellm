@@ -1626,7 +1626,7 @@ class OpenAIFilesAPI(BaseLLM):
         openai_client: AsyncOpenAI,
     ) -> OpenAIFileObject:
         response = await openai_client.files.create(**create_file_data)  # type: ignore[arg-type]
-        return OpenAIFileObject(**response.model_dump())
+        return OpenAIFileObject.model_validate(response.model_dump())
 
     def create_file(
         self,
@@ -1662,7 +1662,7 @@ class OpenAIFilesAPI(BaseLLM):
                 create_file_data=create_file_data, openai_client=openai_client
             )
         response = cast(OpenAI, openai_client).files.create(**create_file_data)  # type: ignore[arg-type]
-        return OpenAIFileObject(**response.model_dump())
+        return OpenAIFileObject.model_validate(response.model_dump())
 
     async def afile_content(
         self,
@@ -1986,7 +1986,7 @@ class OpenAIBatchesAPI(BaseLLM):
         openai_client: AsyncOpenAI,
     ) -> LiteLLMBatch:
         response = await openai_client.batches.create(**create_batch_data)  # type: ignore[arg-type]
-        return LiteLLMBatch(**response.model_dump())
+        return LiteLLMBatch.model_validate(response.model_dump())
 
     def create_batch(
         self,
@@ -2023,7 +2023,7 @@ class OpenAIBatchesAPI(BaseLLM):
             )
         response = cast(OpenAI, openai_client).batches.create(**create_batch_data)  # type: ignore[arg-type]
 
-        return LiteLLMBatch(**response.model_dump())
+        return LiteLLMBatch.model_validate(response.model_dump())
 
     async def aretrieve_batch(
         self,
@@ -2032,7 +2032,7 @@ class OpenAIBatchesAPI(BaseLLM):
     ) -> LiteLLMBatch:
         verbose_logger.debug("retrieving batch, args= %s", retrieve_batch_data)
         response = await openai_client.batches.retrieve(**retrieve_batch_data)  # type: ignore[arg-type]
-        return LiteLLMBatch(**response.model_dump())
+        return LiteLLMBatch.model_validate(response.model_dump())
 
     def retrieve_batch(
         self,
@@ -2068,7 +2068,7 @@ class OpenAIBatchesAPI(BaseLLM):
                 retrieve_batch_data=retrieve_batch_data, openai_client=openai_client
             )
         response = cast(OpenAI, openai_client).batches.retrieve(**retrieve_batch_data)  # type: ignore[arg-type]
-        return LiteLLMBatch(**response.model_dump())
+        return LiteLLMBatch.model_validate(response.model_dump())
 
     async def acancel_batch(
         self,
@@ -2077,7 +2077,7 @@ class OpenAIBatchesAPI(BaseLLM):
     ) -> LiteLLMBatch:
         verbose_logger.debug("async cancelling batch, args= %s", cancel_batch_data)
         response = await openai_client.batches.cancel(**cancel_batch_data)
-        return LiteLLMBatch(**response.model_dump())
+        return LiteLLMBatch.model_validate(response.model_dump())
 
     def cancel_batch(
         self,
@@ -2117,7 +2117,7 @@ class OpenAIBatchesAPI(BaseLLM):
         if not isinstance(openai_client, OpenAI):
             raise ValueError("OpenAI client is not an instance of OpenAI. Make sure you passed a sync OpenAI client.")
         response = openai_client.batches.cancel(**cancel_batch_data)
-        return LiteLLMBatch(**response.model_dump())
+        return LiteLLMBatch.model_validate(response.model_dump())
 
     async def alist_batches(
         self,
@@ -2477,9 +2477,9 @@ class OpenAIAssistantsAPI(BaseLLM):
         response_obj: Optional[OpenAIMessage] = None
         if getattr(thread_message, "status", None) is None:
             thread_message.status = "completed"
-            response_obj = OpenAIMessage(**thread_message.dict())
+            response_obj = OpenAIMessage.model_validate(thread_message.dict())
         else:
-            response_obj = OpenAIMessage(**thread_message.dict())
+            response_obj = OpenAIMessage.model_validate(thread_message.dict())
         return response_obj
 
     # fmt: off
@@ -2556,9 +2556,9 @@ class OpenAIAssistantsAPI(BaseLLM):
         response_obj: Optional[OpenAIMessage] = None
         if getattr(thread_message, "status", None) is None:
             thread_message.status = "completed"
-            response_obj = OpenAIMessage(**thread_message.dict())
+            response_obj = OpenAIMessage.model_validate(thread_message.dict())
         else:
-            response_obj = OpenAIMessage(**thread_message.dict())
+            response_obj = OpenAIMessage.model_validate(thread_message.dict())
         return response_obj
 
     async def async_get_messages(

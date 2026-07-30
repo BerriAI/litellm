@@ -216,7 +216,7 @@ async def _user_has_admin_privileges(
             teams = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": user_obj.teams}})
 
             for team in teams:
-                team_obj = LiteLLM_TeamTable(**team.model_dump())
+                team_obj = LiteLLM_TeamTable.model_validate(team.model_dump())
                 if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
                     return True
 
@@ -288,7 +288,7 @@ async def _team_admin_can_invite_user(
         for team in teams
         if _is_user_team_admin(
             user_api_key_dict=user_api_key_dict,
-            team_obj=LiteLLM_TeamTable(**team.model_dump()),
+            team_obj=LiteLLM_TeamTable.model_validate(team.model_dump()),
         )
     ]
     if not admin_team_ids:

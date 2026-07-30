@@ -118,7 +118,7 @@ class IdentityStore:
         if from_db is None:
             raise KeyNotFoundError(hashed_token)
 
-        key = UserAPIKeyAuth(**from_db.model_dump(exclude_none=True))
+        key = UserAPIKeyAuth.model_validate(from_db.model_dump(exclude_none=True))
 
         if key.object_permission_id and not key.object_permission:
             try:
