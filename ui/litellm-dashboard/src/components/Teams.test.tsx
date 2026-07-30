@@ -732,6 +732,32 @@ describe("Teams - schema-declared metadata fields in team create", () => {
     expect(screen.getByTestId("metadata-schema-skeleton")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /add key-value pair/i })).not.toBeInTheDocument();
   });
+
+  it("should re-seed declared keys when the create modal is closed and reopened", async () => {
+    await openCreateModal();
+
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText("Key") as HTMLInputElement).value).toBe("cost_center");
+    });
+    fireEvent.click(screen.getByLabelText("Remove key-value pair"));
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText("Key")).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /^close$/i }));
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/team name/i)).not.toBeInTheDocument();
+    });
+
+    const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
+    act(() => {
+      fireEvent.click(createButton);
+    });
+
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText("Key") as HTMLInputElement).value).toBe("cost_center");
+    });
+  });
 });
 
 describe("Teams - models dropdown options", () => {

@@ -10575,3 +10575,34 @@ async def test_get_team_metadata_schema_empty_when_unconfigured():
     result = await get_team_metadata_schema()
 
     assert result.fields == ()
+
+
+def test_get_team_metadata_schema_route_requires_auth():
+    from litellm.proxy.management_helpers.team_metadata_validation import (
+        TEAM_METADATA_SCHEMA_REGISTRY,
+        parse_team_metadata_schema,
+    )
+
+    with patch("litellm.proxy.proxy_server.master_key", "sk-1234"):
+        response = client.get("/team/metadata_schema")
+    assert response.status_code == 401
+
+    TEAM_METADATA_SCHEMA_REGISTRY.set(parse_team_metadata_schema([{"key": "cost_center", "label": "Cost Center"}]))
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1"
+    )
+    try:
+        authed = client.get("/team/metadata_schema")
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+        TEAM_METADATA_SCHEMA_REGISTRY.set(())
+
+    assert authed.status_code == 200
+    assert authed.json() == {"fields": [{"key": "cost_center", "label": "Cost Center"}]}
+
+
+def test_team_metadata_schema_route_is_readable_by_non_admins():
+    from litellm.proxy._types import LiteLLMRoutes
+
+    assert "/team/metadata_schema" in LiteLLMRoutes.info_routes.value
+    assert "/team/metadata_schema" in LiteLLMRoutes.management_routes.value

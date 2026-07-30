@@ -265,4 +265,18 @@ describe("MetadataKeyValueFields with a declared schema", () => {
     expect(screen.getByTestId("metadata-schema-skeleton")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /add key-value pair/i })).not.toBeInTheDocument();
   });
+
+  it("should seed rows when the schema arrives after an initial loading state", async () => {
+    const onFinish = vi.fn();
+    const { rerender } = render(<Harness onFinish={onFinish} schemaLoading />);
+
+    rerender(<Harness onFinish={onFinish} schemaFields={schema} schemaLoading={false} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
+        "cost_center",
+        "app_name",
+      ]);
+    });
+  });
 });
