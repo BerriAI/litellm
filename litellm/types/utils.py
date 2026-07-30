@@ -3320,6 +3320,7 @@ all_litellm_params = (
         "adaptive_router_default_model",
         "quality_router_config",
         "quality_router_default_model",
+        "benchmark_baseline_model",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())

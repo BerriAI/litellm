@@ -2007,6 +2007,39 @@ export const adminSpendLogsCall = async (accessToken: string) => {
   }
 };
 
+export interface AutoRouterGroupBenchmark {
+  model_group: string;
+  router_kind: string;
+  baseline_model: string;
+  sessions: number;
+  turns: number;
+  avg_turns_per_session: number;
+  avg_session_length_seconds: number;
+  total_tokens: number;
+  avg_tokens_per_session: number;
+  actual_spend: number;
+  baseline_spend: number;
+  savings: number;
+  savings_pct: number;
+}
+
+export interface AutoRouterBenchmarksResponse {
+  start_date: string;
+  end_date: string;
+  groups: AutoRouterGroupBenchmark[];
+}
+
+export const autoRouterBenchmarksCall = async (
+  accessToken: string,
+  startDate: string,
+  endDate: string,
+): Promise<AutoRouterBenchmarksResponse> => {
+  return apiClient.get<AutoRouterBenchmarksResponse>(`/auto_router/benchmarks`, {
+    accessToken,
+    query: { start_date: startDate, end_date: endDate },
+  });
+};
+
 export const adminTopKeysCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/keys?limit=5` : `/global/spend/keys?limit=5`;
