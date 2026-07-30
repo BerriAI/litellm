@@ -1046,6 +1046,8 @@ async def test_upsert_sso_user_no_role_in_sso_response():
     Test that upsert_sso_user only updates email when SSO response has no role.
 
     When the SSO provider does not return a role, only the email should be updated.
+    Also covers user_defined_values=None: (user_defined_values or {}).get("user_id")
+    must not raise, and must omit sso_user_id from the update rather than persisting None.
     """
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.management_endpoints.types import CustomOpenID
@@ -1088,6 +1090,7 @@ async def test_upsert_sso_user_no_role_in_sso_response():
     assert call_args.kwargs["where"] == {"user_id": "test-user-789"}
     assert call_args.kwargs["data"]["user_email"] == "new@example.com"
     assert "user_role" not in call_args.kwargs["data"]
+    assert "sso_user_id" not in call_args.kwargs["data"]
 
 
 @pytest.mark.asyncio
