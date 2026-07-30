@@ -33,6 +33,7 @@ from .guardrail_initializers import (
     initialize_lakera_v2,
     initialize_presidio,
     initialize_tool_permission,
+    initialize_veto,
 )
 from .guardrail_hooks.llm_as_a_judge import (
     initialize_guardrail as initialize_llm_as_a_judge,
@@ -47,6 +48,7 @@ guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.TOOL_PERMISSION.value: initialize_tool_permission,
     SupportedGuardrailIntegrations.GRAYSWAN.value: initialize_grayswan,
     SupportedGuardrailIntegrations.LLM_AS_A_JUDGE.value: initialize_llm_as_a_judge,
+    SupportedGuardrailIntegrations.VETO.value: initialize_veto,
 }
 
 guardrail_class_registry: Dict[str, Type[CustomGuardrail]] = {

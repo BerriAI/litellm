@@ -282,4 +282,10 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  veto: {
+    provider: "Veto",
+    guardrailNameSuggestion: "Veto",
+    mode: "pre_call",
+    defaultOn: false,
+  },
 };
