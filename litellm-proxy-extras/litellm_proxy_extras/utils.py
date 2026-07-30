@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Optional
 
 from litellm_proxy_extras._logging import logger
+from litellm_proxy_extras.replica_identity import (
+    REPLICA_IDENTITY_FULL_ENV_VAR,
+    apply_replica_identity_full,
+)
 
 
 def str_to_bool(value: Optional[str]) -> bool:
@@ -677,6 +681,39 @@ class ProxyExtrasDBManager:
             os.chdir(original_dir)
 
     @staticmethod
+    def apply_replica_identity_full_if_requested() -> bool:
+        """
+        Re-assert REPLICA IDENTITY FULL on LiteLLM's tables when the operator
+        opted in via LITELLM_SET_REPLICA_IDENTITY_FULL.
+
+        Prisma leaves new tables at the Postgres default, which logical
+        replication consumers reject, so the setting has to be re-applied after
+        every migration run rather than once by hand.
+
+        Returns:
+            bool: True if the setting was applied, False if it was not
+            requested or could not be applied.
+        """
+        if not str_to_bool(os.getenv(REPLICA_IDENTITY_FULL_ENV_VAR)):
+            return False
+        try:
+            schema_path = ProxyExtrasDBManager._get_prisma_dir() + "/schema.prisma"
+            prisma_command = _get_prisma_command()
+            prisma_env = _get_prisma_env()
+        except OSError as e:
+            logger.error(
+                "Could not resolve the migrations directory for the REPLICA "
+                "IDENTITY FULL step, skipping it. Error: %s",
+                e,
+            )
+            return False
+        return apply_replica_identity_full(
+            schema_path=schema_path,
+            prisma_command=prisma_command,
+            prisma_env=prisma_env,
+        )
+
+    @staticmethod
     def setup_database(
         use_migrate: bool = False, use_v2_resolver: bool = False
     ) -> bool:
@@ -694,6 +731,15 @@ class ProxyExtrasDBManager:
         Returns:
             bool: True if setup was successful, False otherwise
         """
+        migrated = ProxyExtrasDBManager._run_migrations(
+            use_migrate=use_migrate, use_v2_resolver=use_v2_resolver
+        )
+        if migrated:
+            ProxyExtrasDBManager.apply_replica_identity_full_if_requested()
+        return migrated
+
+    @staticmethod
+    def _run_migrations(use_migrate: bool, use_v2_resolver: bool) -> bool:
         if use_v2_resolver:
             logger.info("Using v2 migration resolver (--use_v2_migration_resolver)")
             return ProxyExtrasDBManager._setup_database_v2(use_migrate=use_migrate)
