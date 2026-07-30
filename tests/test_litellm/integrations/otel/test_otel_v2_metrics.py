@@ -22,6 +22,7 @@ dashboard already querying that histogram.
 """
 
 import asyncio
+import json
 from datetime import datetime, timedelta
 
 import pytest
@@ -68,14 +69,13 @@ ALL_METRICS = frozenset(
 TOKEN_TYPE = "gen_ai.token.type"
 MODEL_KEY = "gen_ai.request.model"
 
-# Each is a member of VALID_METRIC_ATTRIBUTE_NAMES and is stamped on the metric
-# by default (proven by the no-filter test below).
-HIGH_CARDINALITY_KEYS = (
+# Keys inside the ceiling that an operator's filter must still be able to remove.
+# Every one is bounded, so it survives the ceiling and only the operator's own
+# exclude_list takes it off; that is what makes the filter tests non-vacuous.
+FILTERABLE_KEYS = (
     "hidden_params",
     "metadata.user_api_key_hash",
-    "metadata.requester_ip_address",
-    "metadata.requester_metadata",
-    "metadata.applied_guardrails",
+    "metadata.user_api_key_team_id",
 )
 
 PROMPT_TOKENS = 137
@@ -103,6 +103,7 @@ def _build_call(stream: bool = True):
         "standard_logging_object": {
             "metadata": {
                 "user_api_key_hash": "hash-abc123",
+                "user_api_key_team_id": "team-1",
                 "requester_ip_address": "10.0.0.7",
                 "requester_metadata": {"team": "alpha", "tier": "gold"},
                 "applied_guardrails": ["pii", "toxicity"],
@@ -215,14 +216,14 @@ def test_metrics_off_by_default_records_nothing():
 
 
 def test_exclude_list_strips_high_cardinality_across_metrics():
-    """exclude_list set AFTER construction (the proxy path) removes every
-    high-cardinality key from more than one metric while the low-cardinality
-    model attribute survives."""
+    """exclude_list set AFTER construction (the proxy path) removes every listed
+    key from more than one metric while the low-cardinality model attribute
+    survives."""
     metrics = _drive_success(
         InMemoryMetricReader(),
-        callback_settings_attributes={"exclude_list": list(HIGH_CARDINALITY_KEYS)},
+        callback_settings_attributes={"exclude_list": list(FILTERABLE_KEYS)},
     )
-    excluded = set(HIGH_CARDINALITY_KEYS)
+    excluded = set(FILTERABLE_KEYS)
 
     for name in (OPERATION_DURATION, TOKEN_USAGE):
         points = metrics[name]
@@ -251,16 +252,130 @@ def test_include_list_allows_only_listed_attributes():
         assert set(dp.attributes.keys()) - {TOKEN_TYPE} == allowed
 
 
-def test_no_filter_keeps_high_cardinality_keys():
-    """Backward compatibility: without an attributes config every high-cardinality
-    key the call carries is still stamped, so the filter tests above prove a real
-    removal rather than a key that was never present."""
+def test_no_filter_still_keeps_the_filterable_keys():
+    """Without an attributes config every key the filter tests remove is present,
+    so those tests prove a real removal rather than a key that was never there."""
     metrics = _drive_success(InMemoryMetricReader())
-    expected = set(HIGH_CARDINALITY_KEYS)
+    expected = set(FILTERABLE_KEYS)
 
     for name in (OPERATION_DURATION, TOKEN_USAGE):
         for dp in metrics[name]:
             assert expected.issubset(set(dp.attributes.keys()))
+
+
+def test_a_metric_ineligible_filter_name_is_reported_not_silently_dropped(caplog):
+    """Naming a metric-ineligible attribute in a filter has to say so.
+
+    The shared validator accepts every span attribute name, so an operator can put
+    one in an ``include_list``, get nothing for it, and have no way to tell that from
+    a value that happened to be absent. The ceiling is deliberate, but silent is what
+    makes it a support ticket.
+    """
+    with caplog.at_level("WARNING"):
+        _drive_success(
+            InMemoryMetricReader(),
+            callback_settings_attributes={
+                "include_list": [MODEL_KEY, "metadata.requester_ip_address"]
+            },
+        )
+
+    reported = [
+        r.getMessage().split(" cannot be a metric attribute")[0].removeprefix("OTel metrics: ")
+        for r in caplog.records
+        if r.levelname == "WARNING" and "cannot be a metric attribute" in r.getMessage()
+    ]
+    assert reported == ["metadata.requester_ip_address"], reported
+
+
+def test_two_calls_differing_only_per_request_share_one_series():
+    """The whole point of the ceiling: metric cardinality must not grow with traffic.
+
+    Every field here moves on every real request -- the response cost, the call id,
+    the cache key, the provider's remaining-rate-limit headers -- and each one used
+    to reach the datapoint inside a single ``hidden_params`` label. A unique label
+    value is a new time series, so each of the six instruments minted one series per
+    request, which is both a Grafana Cloud bill proportional to traffic and a
+    histogram that cannot be aggregated. Identical attribute sets is what "one
+    series" means to the SDK.
+    """
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+
+    for index, cost in enumerate((RESPONSE_COST, RESPONSE_COST * 3)):
+        kwargs, response_obj, start, end = _build_call()
+        kwargs["response_cost"] = cost
+        kwargs["standard_logging_object"]["hidden_params"] = {
+            "model_id": "m-1",
+            # A documented per-call parameter, so it varies here on purpose: the same
+            # deployment reached under a caller-chosen base must not split the series.
+            "api_base": f"https://proxy-{index}.example.com/v1",
+            "litellm_call_id": f"call-{index}",
+            "cache_key": f"cache-{index}",
+            "response_cost": cost,
+            "litellm_overhead_time_ms": 1.5 + index,
+            "usage_object": {"prompt_tokens": index, "completion_tokens": index},
+            "additional_headers": {"x_ratelimit_remaining_requests": 100 - index},
+        }
+        asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    for name in ALL_METRICS:
+        attribute_sets = {
+            tuple(sorted((k, v) for k, v in dp.attributes.items() if k != TOKEN_TYPE))
+            for dp in _metrics_by_name(reader)[name]
+        }
+        assert len(attribute_sets) == 1, f"{name} split into {len(attribute_sets)} series across 2 requests"
+
+
+def test_hidden_params_label_carries_only_bounded_deployment_fields():
+    """``hidden_params`` survives the ceiling, but only as the deployment identity.
+
+    ``model_id`` is the router's deployment id, bounded by the deployment list, and is
+    what a per-deployment dashboard reads. Everything else in the object is
+    per-request or caller-chosen and belongs on the span, which already carries it.
+    ``api_base`` is excluded despite naming the same deployment: it is a documented
+    per-call parameter, so a caller varying it would restore the per-request
+    cardinality this cap exists to remove.
+    """
+    kwargs, response_obj, start, end = _build_call()
+    kwargs["standard_logging_object"]["hidden_params"] = {
+        "model_id": "m-1",
+        "api_base": "https://api.openai.com/v1",
+        "litellm_call_id": "abc",
+        "cache_key": "ck-1",
+        "response_cost": RESPONSE_COST,
+    }
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    label = _metrics_by_name(reader)[OPERATION_DURATION][0].attributes["hidden_params"]
+    assert json.loads(label) == {"model_id": "m-1"}
+
+
+def test_success_attributes_are_capped_at_the_ceiling():
+    """The success path carries exactly the ceiling, no client-supplied attributes.
+
+    The fixture deliberately sets every excluded key, so this asserts a real removal
+    rather than keys that were never present.
+    """
+    kwargs, response_obj, start, end = _build_call()
+    metadata = kwargs["standard_logging_object"]["metadata"]
+    metadata.update(
+        {
+            "spend_logs_metadata": {"cost_center": "abc"},
+            "user_api_key_end_user_id": "end-user-1",
+            "user_api_key_user_email": "someone@example.com",
+        }
+    )
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+    metrics = _metrics_by_name(reader)
+
+    for name in ALL_METRICS:
+        for dp in metrics[name]:
+            leaked = set(dp.attributes) - set(BOUNDED_KEYS) - {TOKEN_TYPE}
+            assert not leaked, f"{name} leaked {leaked}"
 
 
 def test_metrics_reach_operator_configured_global_provider(monkeypatch):
@@ -353,8 +468,7 @@ FAILURE_DURATION_S = 1.0
 # caller (so a caller could mint a fresh series per request, and a failure costs
 # them no provider spend) or varies per request, or is PII duplicating an id that
 # is already on the series.
-UNBOUNDED_FAILURE_KEYS = (
-    "hidden_params",
+UNBOUNDED_KEYS = (
     "metadata.requester_metadata",
     "metadata.requester_ip_address",
     "metadata.spend_logs_metadata",
@@ -362,9 +476,10 @@ UNBOUNDED_FAILURE_KEYS = (
     "metadata.user_api_key_user_email",
 )
 
-# The exact set a failure datapoint may carry: the operation, plus
-# operator-provisioned identity.
-BOUNDED_FAILURE_KEYS = (
+# The exact set a datapoint may carry on either path: the operation, the
+# operator-provisioned identity, and the deployment that served it.
+BOUNDED_KEYS = (
+    "hidden_params",
     "gen_ai.operation.name",
     "gen_ai.system",
     "gen_ai.request.model",
@@ -413,7 +528,11 @@ def _build_failure(
             "requester_metadata": {"trace": "caller-supplied-unique-value"},
             "spend_logs_metadata": {"ticket": "caller-supplied-unique-value"},
         },
-        "hidden_params": {"litellm_call_id": "abc"},
+        "hidden_params": {
+            "litellm_call_id": "abc",
+            "model_id": "m-1",
+            "api_base": "https://api.openai.com/v1",
+        },
     }
     if error_information is not None:
         standard_logging_object["error_information"] = error_information
@@ -519,11 +638,13 @@ def test_failure_attributes_are_a_bounded_allowlist():
     succeeded = next(dp for dp in points if ERROR_TYPE not in dp.attributes)
     failed = next(dp for dp in points if ERROR_TYPE in dp.attributes)
 
-    missing = set(UNBOUNDED_FAILURE_KEYS) - set(succeeded.attributes)
+    supplied = set(kwargs["standard_logging_object"]["metadata"])
+    missing = {key for key in UNBOUNDED_KEYS if key.removeprefix("metadata.") not in supplied}
     assert not missing, f"fixture never carried {missing}, so the exclusion below proves nothing"
-    leaked = set(UNBOUNDED_FAILURE_KEYS) & set(failed.attributes)
+    leaked = set(UNBOUNDED_KEYS) & set(failed.attributes)
     assert not leaked, f"failure datapoint leaked unbounded attributes: {leaked}"
-    assert set(failed.attributes) == set(BOUNDED_FAILURE_KEYS) | {ERROR_TYPE}
+    assert set(failed.attributes) == set(BOUNDED_KEYS) | {ERROR_TYPE}
+    assert json.loads(failed.attributes["hidden_params"]) == {"model_id": "m-1"}
 
 
 def test_operator_filter_can_still_narrow_the_failure_allowlist():

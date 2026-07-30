@@ -10,11 +10,12 @@ identical metrics. The attribute cardinality filter is reused from v1 by import
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Final, FrozenSet, Mapping, Optional
+from typing import Any, Final, FrozenSet, Mapping, Optional, TypeAlias
 
 from opentelemetry.metrics import Histogram, Meter
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.integrations.opentelemetry import (
     METRIC_METADATA_KEYS,
     TOKEN_TYPE_ATTRIBUTE,
@@ -72,20 +73,29 @@ def create_genai_metrics(meter: Meter) -> GenAIMetrics:
     )
 
 
+# A metric datapoint's attributes. Values are the strings the recorder builds, except
+# the request model, which is whatever the caller passed and may be absent.
+MetricAttributes: TypeAlias = Mapping[str, "str | None"]
+
 ERROR_TYPE_FALLBACK: Final = "_OTHER"
 
-# The attributes a failure datapoint may carry: what operation failed, and whose
-# key/team/user it was. Every one is either a fixed enum or an operator-provisioned
-# identifier, so the failure series count is bounded by the deployment's own
-# key/team/user count. Deliberately excluded is everything the *client* supplies or
-# that varies per request -- ``metadata.requester_metadata``,
-# ``metadata.spend_logs_metadata``, ``metadata.user_api_key_end_user_id``,
-# ``metadata.requester_ip_address`` and the ``hidden_params`` blob (which carries the
-# provider's per-request response headers). A failed request costs the caller no
-# provider spend, so nothing would rate-limit a caller who minted a fresh series per
-# request out of a field they control. ``metadata.user_api_key_user_email`` is left
-# out too: it is bounded, but it is PII duplicating the user id already here.
-FAILURE_ATTRIBUTE_KEYS: Final[frozenset[str]] = frozenset(
+# Every attribute a metric datapoint may carry, on either path. A label value that
+# is unique per request is a new time series that will never be written to again, so
+# this set is what keeps the series count bounded by the deployment's own
+# key/team/user/deployment count rather than by its traffic. Each entry is a fixed
+# enum or an operator-provisioned identifier.
+#
+# Deliberately excluded is everything the *client* supplies or that moves per
+# request: ``metadata.requester_metadata`` and ``metadata.spend_logs_metadata`` (both
+# free-form from the request body), ``metadata.user_api_key_end_user_id`` (the body's
+# ``user`` field), and ``metadata.requester_ip_address``. Those stay on the span,
+# where cardinality is free and where they already are.
+# ``metadata.user_api_key_user_email`` is left out too: it is bounded, but it is PII
+# duplicating the user id already here.
+#
+# This is a CEILING, applied before the operator's own include/exclude filter, so an
+# operator can narrow it but never widen it back to an unbounded attribute.
+METRIC_ATTRIBUTE_CEILING: Final[frozenset[str]] = frozenset(
     (
         "gen_ai.operation.name",
         "gen_ai.system",
@@ -97,8 +107,22 @@ FAILURE_ATTRIBUTE_KEYS: Final[frozenset[str]] = frozenset(
         "metadata.user_api_key_team_alias",
         "metadata.user_api_key_org_id",
         "metadata.user_api_key_user_id",
+        "hidden_params",
     )
 )
+
+# The only ``hidden_params`` field that becomes part of the ``hidden_params`` label.
+# The object as a whole is per-request by construction -- ``response_cost``,
+# ``litellm_overhead_time_ms``, ``cache_key``, ``usage_object`` and the provider's
+# ``additional_headers`` rate-limit counters all move on every call -- so dumping it
+# whole made one series per request out of every instrument.
+#
+# ``model_id`` is the router's own deployment id, so it is bounded by the deployment
+# list and is what a per-deployment panel joins on. ``api_base`` is deliberately NOT
+# here even though it names the same thing: it is a documented per-call parameter, so
+# in SDK use it is chosen by the caller rather than provisioned by the operator, and a
+# caller varying it would put the per-request cardinality straight back.
+BOUNDED_HIDDEN_PARAM_KEYS: Final[tuple[str, ...]] = ("model_id",)
 
 
 def resolve_error_type(kwargs: Mapping[str, Any]) -> str:
@@ -147,7 +171,7 @@ class GenAIMetricRecorder:
         start_time: datetime,
         end_time: datetime,
     ) -> None:
-        common_attrs = self._filter_attributes(self._common_attributes(kwargs))
+        common_attrs = self._filter_attributes(self._bounded_attributes(kwargs))
         duration_s = (end_time - start_time).total_seconds()
 
         self._metrics.operation_duration.record(duration_s, attributes=common_attrs)
@@ -177,19 +201,18 @@ class GenAIMetricRecorder:
         zeroes ``response_cost`` on failure. Recording them anyway would put a
         fabricated zero into series that dashboards average.
 
-        The attribute set is the bounded ``FAILURE_ATTRIBUTE_KEYS`` allowlist, not
-        the success path's full set: a failure needs no provider spend, so a caller
-        who can put a unique value into a client-supplied attribute could mint one
-        histogram series per request for free. The operator's own filter still
-        applies on top, so it can narrow this further but never widen it.
+        The attribute set is :data:`METRIC_ATTRIBUTE_CEILING`, the same cap the
+        success path uses. A failure needs no provider spend, so a caller who can put
+        a unique value into a client-supplied attribute could mint one histogram
+        series per request for free; the cap is what makes that impossible on either
+        path.
 
         ``error.type`` is stamped after both filters, exactly like
         ``gen_ai.token.type``, so an operator's include/exclude list cannot strip
         the discriminator and silently merge failures back into the success series.
         """
-        bounded = {k: v for k, v in self._common_attributes(kwargs).items() if k in FAILURE_ATTRIBUTE_KEYS}
         attributes = {
-            **self._filter_attributes(bounded),
+            **self._filter_attributes(self._bounded_attributes(kwargs)),
             Error.TYPE: resolve_error_type(kwargs),
         }
         self._metrics.operation_duration.record((end_time - start_time).total_seconds(), attributes=attributes)
@@ -220,10 +243,24 @@ class GenAIMetricRecorder:
                 common_attrs[f"metadata.{key}"] = str(value)
 
         hidden_params = getattr(std_log, "hidden_params", None) or (std_log or {}).get("hidden_params", {})
-        if hidden_params:
-            common_attrs["hidden_params"] = safe_dumps(hidden_params)
+        bounded_hidden_params = {
+            key: hidden_params[key]
+            for key in BOUNDED_HIDDEN_PARAM_KEYS
+            if isinstance(hidden_params, Mapping) and hidden_params.get(key) is not None
+        }
+        if bounded_hidden_params:
+            common_attrs["hidden_params"] = safe_dumps(bounded_hidden_params)
 
         return common_attrs
+
+    def _bounded_attributes(self, kwargs: Mapping[str, Any]) -> MetricAttributes:
+        """The datapoint attributes, capped at :data:`METRIC_ATTRIBUTE_CEILING`.
+
+        The cap runs BEFORE the operator's include/exclude filter so the filter can
+        only narrow it. An operator who names an excluded attribute in an include
+        list gets nothing for it rather than reintroducing an unbounded label.
+        """
+        return {k: v for k, v in self._common_attributes(kwargs).items() if k in METRIC_ATTRIBUTE_CEILING}
 
     def _ensure_filter(self) -> None:
         if self._filter_resolved:
@@ -241,8 +278,29 @@ class GenAIMetricRecorder:
         # without reconstructing the recorder.
         self._include, self._exclude = _resolve_metric_attribute_filter(attributes)
         self._filter_resolved = True
+        self._warn_about_metric_ineligible_names()
 
-    def _filter_attributes(self, attrs: dict) -> dict:
+    def _warn_about_metric_ineligible_names(self) -> None:
+        """Say so when the operator's filter names an attribute the ceiling removes.
+
+        The shared validator accepts every span attribute name, so a name that is
+        legal on a span but metric-ineligible would otherwise be a silent no-op: an
+        ``include_list`` naming it emits nothing for it and an ``exclude_list`` naming
+        it looks like it worked. Logged once, when the filter resolves, rather than
+        per request.
+        """
+        named = (self._include or frozenset()) | (self._exclude or frozenset())
+        ineligible = sorted(named - METRIC_ATTRIBUTE_CEILING - {TOKEN_TYPE_ATTRIBUTE})
+        if ineligible:
+            verbose_logger.warning(
+                "OTel metrics: %s cannot be a metric attribute and is being ignored; it varies "
+                "per request or is client-supplied, so it would make one time series per request. "
+                "It is still on the span. Metric attributes are limited to: %s",
+                ", ".join(ineligible),
+                ", ".join(sorted(METRIC_ATTRIBUTE_CEILING)),
+            )
+
+    def _filter_attributes(self, attrs: MetricAttributes) -> MetricAttributes:
         self._ensure_filter()
         if self._include is not None:
             return {k: v for k, v in attrs.items() if k in self._include}
