@@ -836,17 +836,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _apply_include_thoughts_override(
-        thinking_config: dict,
+        thinking_config: GeminiThinkingConfig,
         include_thoughts: bool,
         *,
         thoughts_locked_off: bool = False,
-    ) -> dict:
+    ) -> GeminiThinkingConfig:
         """Apply ``include_thoughts`` onto an existing Gemini thinkingConfig.
 
         ``none`` / ``disable`` mappings lock thoughts off and cannot be forced
         back on. Otherwise ``include_thoughts`` overrides ``includeThoughts``.
         """
-        patched = dict(thinking_config)
+        patched: GeminiThinkingConfig = dict(thinking_config)  # mutable-ok: copy before patching includeThoughts
         if thoughts_locked_off:
             patched["includeThoughts"] = False
         else:
