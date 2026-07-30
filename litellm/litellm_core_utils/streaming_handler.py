@@ -1,5 +1,6 @@
 import asyncio
 import collections.abc
+import concurrent.futures
 import datetime
 import json
 import logging
@@ -9,6 +10,7 @@ import traceback
 from dataclasses import dataclass
 from typing import (
     Any,
+    AsyncGenerator,
     AsyncIterator,
     Callable,
     Dict,
@@ -60,21 +62,90 @@ FUNCTION_CALL_ATTRIBUTE = "function_call"
 
 _SYNC_ITER_EXHAUSTED = object()
 
+# Lookahead buffer for _aiter_sync_stream_in_thread. Large enough to decouple
+# the draining thread from consumer/scheduler jitter (the point of the pump),
+# small enough to bound memory and apply backpressure on a slow consumer.
+_SYNC_STREAM_QUEUE_MAXSIZE = 100
+
 _GCHUNK_FIELDS: frozenset = frozenset(GChunk.__annotations__)
 
 
-def _next_sync_or_exhausted(it: Any) -> Any:
-    """
-    Call next(it) from a thread and return _SYNC_ITER_EXHAUSTED on StopIteration.
+@dataclass(frozen=True, slots=True)
+class _SyncStreamError:
+    """Carries an exception raised while draining a synchronous stream across the
+    thread boundary so it can be re-raised on the consuming event loop."""
 
-    asyncio.to_thread re-raises thread exceptions inside a coroutine, where PEP 479
-    converts StopIteration to RuntimeError before any except clause can catch it.
-    Returning a sentinel instead keeps StopIteration out of the coroutine boundary.
+    exc: BaseException
+
+
+async def _aiter_sync_stream_in_thread(sync_stream: Any) -> AsyncGenerator[Any, None]:
     """
+    Drain a synchronous iterator (e.g. a boto3 Bedrock event stream) in a single
+    background thread, delivering items to the event loop through an asyncio.Queue.
+
+    Dispatching one asyncio.to_thread per chunk pays thread-pool scheduling latency
+    on every chunk; during that latency the upstream socket buffers several SSE
+    events that then arrive back-to-back, so clients see stalls followed by bursts.
+    Iterating the whole stream in one thread lets each chunk reach the consumer as
+    soon as the provider emits it, restoring the provider's native cadence.
+
+    A dedicated daemon thread is used rather than a pooled executor so a long-lived
+    stream never occupies a slot in the shared/default thread pool that the rest of
+    the event loop relies on for unrelated blocking work.
+    """
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=_SYNC_STREAM_QUEUE_MAXSIZE)
+    stop = threading.Event()
+
+    def _deliver(item: Any) -> None:
+        """
+        Hand one item to the consumer's loop, blocking this thread while the
+        bounded queue is full so a slow consumer applies backpressure instead of
+        letting the buffer grow without limit. A consumer may abandon the stream
+        (client disconnect) and let its loop close, so bail out on a closed loop
+        and poll the stop flag rather than blocking or crashing the thread.
+        """
+        if stop.is_set():
+            return
+        try:
+            future = asyncio.run_coroutine_threadsafe(queue.put(item), loop)
+        except RuntimeError:
+            stop.set()
+            return
+        while not stop.is_set():
+            try:
+                future.result(timeout=0.5)
+                return
+            except concurrent.futures.TimeoutError:
+                continue
+            except RuntimeError:
+                stop.set()
+                return
+        future.cancel()
+
+    def _drain() -> None:
+        try:
+            for item in sync_stream:
+                if stop.is_set():
+                    break
+                _deliver(item)
+        except Exception as exc:
+            _deliver(_SyncStreamError(exc))
+        finally:
+            _deliver(_SYNC_ITER_EXHAUSTED)
+
+    thread = threading.Thread(target=_drain, daemon=True)
+    thread.start()
     try:
-        return next(it)
-    except StopIteration:
-        return _SYNC_ITER_EXHAUSTED
+        while True:
+            item = await queue.get()
+            if item is _SYNC_ITER_EXHAUSTED:
+                return
+            if isinstance(item, _SyncStreamError):
+                raise item.exc
+            yield item
+    finally:
+        stop.set()
 
 
 def is_async_iterable(obj: Any) -> bool:
@@ -127,6 +198,7 @@ class CustomStreamWrapper:
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj: LiteLLMLoggingObject = logging_obj
         self.completion_stream = completion_stream
+        self._threaded_sync_stream: AsyncGenerator[Any, None] | None = None
         self.sent_first_chunk = False
         self.sent_last_chunk = False
         self._stream_created_time: float = time.time()
@@ -223,6 +295,8 @@ class CustomStreamWrapper:
         return self
 
     async def aclose(self):
+        threaded_sync_stream = self._threaded_sync_stream
+        self._threaded_sync_stream = None
         if self.completion_stream is not None:
             stream_to_close = self.completion_stream
             self.completion_stream = None
@@ -230,6 +304,14 @@ class CustomStreamWrapper:
             # Without this, CancelledError is thrown into every await during
             # task group cancellation, preventing HTTP connection release.
             with anyio.CancelScope(shield=True):
+                if threaded_sync_stream is not None:
+                    try:
+                        await threaded_sync_stream.aclose()
+                    except BaseException as e:
+                        verbose_logger.debug(
+                            "CustomStreamWrapper.aclose: error closing threaded sync stream: %s",
+                            e,
+                        )
                 try:
                     if hasattr(stream_to_close, "aclose"):
                         await stream_to_close.aclose()
@@ -1982,9 +2064,9 @@ class CustomStreamWrapper:
                     if isinstance(self.completion_stream, str) or isinstance(self.completion_stream, bytes):
                         chunk = self.completion_stream
                     else:
-                        chunk = await asyncio.to_thread(_next_sync_or_exhausted, self.completion_stream)  # type: ignore[arg-type]
-                        if chunk is _SYNC_ITER_EXHAUSTED:
-                            raise StopAsyncIteration
+                        if self._threaded_sync_stream is None:
+                            self._threaded_sync_stream = _aiter_sync_stream_in_thread(self.completion_stream)
+                        chunk = await self._threaded_sync_stream.__anext__()
                     if chunk is not None and chunk != b"":
                         processed_chunk = self.chunk_creator(chunk=chunk)
                         if processed_chunk is None:
