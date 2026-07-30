@@ -67,25 +67,33 @@ const getAvailableModelsForKey = (keyData: KeyResponse, teams: any[] | null): st
   return [];
 };
 
-// Helper function to determine key_type display value from allowed_routes
-const getKeyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string => {
+const getExactKeyTypePreset = (allowedRoutes: string[] | null | undefined): string | undefined => {
   if (!allowedRoutes || allowedRoutes.length === 0) {
     return "default";
   }
 
-  if (allowedRoutes.includes("llm_api_routes")) {
+  if (allowedRoutes.length !== 1) {
+    return undefined;
+  }
+
+  if (allowedRoutes[0] === "llm_api_routes") {
     return "llm_api";
   }
 
-  if (allowedRoutes.includes("management_routes")) {
+  if (allowedRoutes[0] === "management_routes") {
     return "management";
   }
 
-  if (allowedRoutes.includes("info_routes")) {
+  if (allowedRoutes[0] === "info_routes") {
     return "read_only";
   }
 
-  return "default";
+  return undefined;
+};
+
+// Helper function to determine key_type display value from allowed_routes
+const getKeyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string => {
+  return getExactKeyTypePreset(allowedRoutes) ?? "default";
 };
 
 export function KeyEditView({
@@ -305,7 +313,12 @@ export function KeyEditView({
       if (allowedRoutesUnchanged) {
         delete values.allowed_routes;
       } else {
-        values.key_type = getKeyTypeFromRoutes(values.allowed_routes);
+        const exactKeyTypePreset = getExactKeyTypePreset(values.allowed_routes);
+        if (exactKeyTypePreset) {
+          values.key_type = exactKeyTypePreset;
+        } else {
+          delete values.key_type;
+        }
       }
 
       if (neverExpire) {

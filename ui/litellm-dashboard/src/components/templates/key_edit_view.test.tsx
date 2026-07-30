@@ -499,6 +499,32 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("should preserve mixed route allowlists without applying a preset", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const allowedRoutesInput = await screen.findByLabelText(/allowed routes/i);
+    await userEvent.clear(allowedRoutesInput);
+    await userEvent.type(allowedRoutesInput, "llm_api_routes, /custom");
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.allowed_routes).toEqual(["llm_api_routes", "/custom"]);
+      expect(callArgs.key_type).toBeUndefined();
+    });
+  });
+
   it("should omit allowed_routes from submit when value is unchanged", async () => {
     const onSubmitMock = vi.fn().mockResolvedValue(undefined);
     const aiApisKeyData = {

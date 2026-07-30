@@ -1887,6 +1887,8 @@ async def prepare_key_update_data(
     data_json: dict = data.model_dump(exclude_unset=True)
     if "key_type" in data.model_fields_set:
         data_json = handle_key_type(data, data_json)
+        if data.key_type == LiteLLMKeyType.DEFAULT and "allowed_routes" not in data.model_fields_set:
+            data_json["allowed_routes"] = []
     data_json.pop("key", None)
     data_json.pop("new_key", None)
     data_json.pop("grace_period", None)  # Request-only param, not a DB column
@@ -2317,8 +2319,14 @@ async def _validate_update_key_data(
 
     _is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     existing_allowed_routes = getattr(existing_key_row, "allowed_routes", None) or []
+    default_key_type_clears_routes = (
+        "key_type" in data.model_fields_set
+        and data.key_type == LiteLLMKeyType.DEFAULT
+        and "allowed_routes" not in data.model_fields_set
+    )
+    effective_allowed_routes = [] if default_key_type_clears_routes else data.allowed_routes
     safe_key_type_transition = (
-        data.allowed_routes == []
+        effective_allowed_routes == []
         and "key_type" in data.model_fields_set
         and (
             data.key_type
@@ -2339,9 +2347,12 @@ async def _validate_update_key_data(
     )
 
     _check_allowed_routes_caller_permission(
-        allowed_routes=data.allowed_routes,
+        allowed_routes=effective_allowed_routes,
         user_api_key_dict=user_api_key_dict,
-        allowed_routes_was_provided=("allowed_routes" in data.model_fields_set and not safe_key_type_transition),
+        allowed_routes_was_provided=(
+            ("allowed_routes" in data.model_fields_set or default_key_type_clears_routes)
+            and not safe_key_type_transition
+        ),
     )
     _check_allowed_routes_caller_permission(
         allowed_routes=handle_key_type(data, {}).get("allowed_routes"),
