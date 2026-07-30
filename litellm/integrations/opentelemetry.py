@@ -118,6 +118,7 @@ TOKEN_TYPE_ATTRIBUTE: str = "gen_ai.token.type"
 VALID_METRIC_ATTRIBUTE_NAMES: FrozenSet[str] = frozenset(
     (
         "gen_ai.operation.name",
+        "gen_ai.provider.name",
         "gen_ai.system",
         "gen_ai.request.model",
         "gen_ai.framework",

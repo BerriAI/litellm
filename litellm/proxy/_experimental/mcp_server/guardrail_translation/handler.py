@@ -13,11 +13,22 @@ payload (name + arguments) so we just build the tool_call.
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from fastapi import HTTPException
 from mcp.types import Tool as MCPTool
 
 from litellm._logging import verbose_proxy_logger
 from litellm.experimental_mcp_client.tools import transform_mcp_tool_to_openai_tool
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.proxy._experimental.mcp_server.utils import (
+    json_string_leaves,
+    json_unrewritable_labels,
+    mcp_content_item_text,
+    mcp_tool_result_content_list,
+    mcp_tool_result_structured_content,
+    set_mcp_tool_result_structured_content,
+    with_json_string_leaves,
+    with_mcp_content_item_text,
+)
 from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
@@ -92,7 +103,93 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         user_api_key_dict: Optional[Any] = None,
         request_data: Optional[dict] = None,
     ) -> Any:
-        verbose_proxy_logger.debug(
-            "MCP Guardrail: Output processing not implemented for MCP tools",
+        """Scan the text content of an MCP tool result and write masked text back.
+
+        The content list is rewritten in place (only the entries the guardrail
+        actually changed) rather than returned as a new result: the same object is
+        already referenced by the logging payload captured before this hook runs,
+        so a copy would leave the unmasked text in the spend log / span. A
+        guardrail that rejects the result raises, and the exception propagates to
+        the caller.
+
+        ``structuredContent`` is scanned and masked too, in the same
+        ``apply_guardrail`` call: it is serialized to the client alongside
+        ``content``, so a value living only there would otherwise reach the
+        client unscanned.
+        """
+        content = mcp_tool_result_content_list(response)
+        text_blocks = (
+            tuple(
+                (index, text) for index, item in enumerate(content) if (text := mcp_content_item_text(item)) is not None
+            )
+            if content is not None
+            else ()
         )
+
+        structured = mcp_tool_result_structured_content(response)
+        structured_leaves = json_string_leaves(structured) if structured is not None else ()
+        structured_labels = json_unrewritable_labels(structured) if structured is not None else ()
+        if structured_leaves is None or structured_labels is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        "Content blocked: MCP tool result structuredContent is nested too deeply to be scanned "
+                        "by the configured guardrail"
+                    )
+                },
+            )
+
+        if not text_blocks and not structured_leaves and not structured_labels:
+            verbose_proxy_logger.debug("MCP Guardrail: tool result has no scannable text, nothing to do")
+            return response
+
+        originals = (
+            tuple(text for _, text in text_blocks) + tuple(text for _, text in structured_leaves) + structured_labels
+        )
+        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=list(originals)),
+            request_data=request_data if request_data is not None else {},
+            input_type="response",
+            logging_obj=litellm_logging_obj,
+        )
+        masked_texts = guardrailed_inputs.get("texts") if guardrailed_inputs else None
+        if masked_texts is None:
+            return response
+        if len(masked_texts) != len(originals):
+            verbose_proxy_logger.warning(
+                "MCP Guardrail: guardrail returned %d texts for %d tool result texts; leaving the result unmasked",
+                len(masked_texts),
+                len(originals),
+            )
+            return response
+
+        split = len(text_blocks)
+        if content is not None:
+            for (index, original), masked in zip(text_blocks, masked_texts[:split]):
+                if masked != original:
+                    content[index] = with_mcp_content_item_text(content[index], masked)
+
+        label_start = split + len(structured_leaves)
+        if any(masked != original for original, masked in zip(structured_labels, masked_texts[label_start:])):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        "Content blocked: MCP tool result matched a masking rule on a non-rewritable field "
+                        "(a structuredContent key or numeric value), which cannot be redacted without changing "
+                        "the payload contract"
+                    )
+                },
+            )
+
+        structured_replacements = {
+            path: masked
+            for (path, original), masked in zip(structured_leaves, masked_texts[split:label_start])
+            if masked != original
+        }
+        if structured_replacements:
+            set_mcp_tool_result_structured_content(
+                response, with_json_string_leaves(structured, structured_replacements)
+            )
         return response
