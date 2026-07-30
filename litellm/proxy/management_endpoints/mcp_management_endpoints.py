@@ -459,7 +459,7 @@ if MCP_AVAILABLE:
         payload_dict: dict[str, Any] = loaded
 
         try:
-            return MCPServer(**payload_dict)
+            return MCPServer.model_validate(payload_dict)
         except Exception as e:
             verbose_proxy_logger.debug(f"Invalid temporary MCP server payload in Redis cache: {str(e)}")
             return None
@@ -704,7 +704,7 @@ if MCP_AVAILABLE:
         except AttributeError:
             payload_dict = payload.dict()  # type: ignore[attr-defined]
         payload_dict["credentials"] = inherited_credentials
-        return NewMCPServerRequest(**payload_dict)
+        return NewMCPServerRequest.model_validate(payload_dict)
 
     def _build_temporary_mcp_server_record(
         payload: NewMCPServerRequest,
