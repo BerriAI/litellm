@@ -7,6 +7,7 @@ use litellm_ai_gateway::io::audio_transcription::{
 use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use litellm_core::error::CoreError;
+use litellm_core::logging::console::hook;
 use litellm_core::messages::messages as run_messages;
 use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -15,7 +16,6 @@ use pyo3::types::{PyAny, PyDict};
 use serde_json::{Map, Value};
 
 mod gil;
-mod logging;
 
 type MarshaledOcrInputs = (
     Value,
@@ -393,7 +393,7 @@ fn messages(
             extra_headers,
             timeout,
             litellm_call_id: None,
-            logging_sink: logging::hook(debug),
+            logging_sink: hook(debug),
         }))
     });
 
@@ -430,7 +430,7 @@ fn amessages(
             extra_headers,
             timeout,
             litellm_call_id: None,
-            logging_sink: logging::hook(debug),
+            logging_sink: hook(debug),
         })
         .await
         .map_err(core_error_to_pyerr)?;

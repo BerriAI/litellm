@@ -68,16 +68,15 @@ async fn main() {
         );
     }
 
+    let debug_logging = std::env::var("LITELLM_LOG")
+        .ok()
+        .is_some_and(|value| value.eq_ignore_ascii_case("DEBUG"));
     let state = AppState {
         router,
         master_key,
         loggers: Arc::new(loggers),
         realtime_pool,
-        logging_sink: std::env::var("LITELLM_LOG")
-            .ok()
-            .is_some_and(|value| value.eq_ignore_ascii_case("DEBUG"))
-            .then(|| hook(true))
-            .flatten(),
+        logging_sink: hook(debug_logging),
     };
 
     let host = std::env::var("HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());
