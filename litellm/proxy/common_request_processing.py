@@ -12,6 +12,7 @@ from typing import (
     Callable,
     Dict,
     Literal,
+    Mapping,
     Optional,
     Tuple,
     Union,
@@ -242,6 +243,32 @@ async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None
             await task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
+
+
+def _stream_usage_tracking_updates(
+    data: Mapping[str, object],
+    general_settings: Mapping[str, object],
+    route_type: str,
+) -> Mapping[str, object]:
+    if data.get("stream", False) is not True:
+        return {}
+    always_include = general_settings.get("always_include_stream_usage")
+    stream_options = data.get("stream_options")
+    if always_include is True:
+        if "stream_options" not in data:
+            return {"stream_options": {"include_usage": True}}
+        if isinstance(stream_options, dict) and "include_usage" not in stream_options:
+            return {"stream_options": {**stream_options, "include_usage": True}}
+        return {}
+    if always_include is False or route_type != "acompletion":
+        return {}
+    if isinstance(stream_options, dict) and stream_options.get("include_usage") is True:
+        return {}
+    merged_stream_options = {**stream_options} if isinstance(stream_options, dict) else {}
+    return {
+        "stream_options": {**merged_stream_options, "include_usage": True},
+        "_litellm_strip_stream_usage": True,
+    }
 
 
 def _serialize_http_exception_detail(
@@ -1232,17 +1259,13 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         ### AUTO STREAM USAGE TRACKING ###
-        # If always_include_stream_usage is enabled and this is a streaming request
-        # automatically add stream_options={'include_usage': True} if not already set
-        if (
-            general_settings.get("always_include_stream_usage", False) is True
-            and self.data.get("stream", False) is True
-        ):
-            # Only set if stream_options is not already provided by the client
-            if "stream_options" not in self.data:
-                self.data["stream_options"] = {"include_usage": True}
-            elif isinstance(self.data["stream_options"], dict) and "include_usage" not in self.data["stream_options"]:
-                self.data["stream_options"]["include_usage"] = True
+        self.data.update(
+            _stream_usage_tracking_updates(
+                data=self.data,
+                general_settings=general_settings,
+                route_type=route_type,
+            )
+        )
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
