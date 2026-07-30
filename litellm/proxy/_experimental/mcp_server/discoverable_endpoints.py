@@ -54,6 +54,7 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     build_upstream_oauth2_token_request,
+    get_oauth_discovery_base_url,
     get_request_base_url,
     resolve_upstream_resource,
     validate_trusted_redirect_uri,
@@ -2107,7 +2108,7 @@ async def _build_oauth_protected_resource_response(
         global_mcp_server_manager,
     )
 
-    request_base_url = get_request_base_url(request)
+    request_base_url = get_oauth_discovery_base_url(request)
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
 
     # When no server name provided, try to resolve the single OAuth2 server
@@ -2249,7 +2250,7 @@ def _build_aggregate_protected_resource_response(request: Request) -> dict:
     feature and describes the BYOK flow, so it must not be the aggregate
     discovery entry point (same pattern as the per-server documents, which
     advertise ``{base}/{server_name}``)."""
-    request_base_url = get_request_base_url(request)
+    request_base_url = get_oauth_discovery_base_url(request)
     return {
         "authorization_servers": [f"{request_base_url}/mcp"],
         "resource": f"{request_base_url}/mcp",
@@ -2267,7 +2268,7 @@ def _build_aggregate_authorization_server_response(request: Request) -> dict:
     ``token_endpoint_auth_methods_supported: ["none", ...]`` because DCR
     clients (Claude Desktop, MCP Inspector) register as public clients; PKCE
     S256 is mandatory in the gateway's authorize flow."""
-    request_base_url = get_request_base_url(request)
+    request_base_url = get_oauth_discovery_base_url(request)
     return {
         "issuer": f"{request_base_url}/mcp",
         "authorization_endpoint": f"{request_base_url}/authorize",
@@ -2371,7 +2372,7 @@ def _build_oauth_authorization_server_response(
         global_mcp_server_manager,
     )
 
-    request_base_url = get_request_base_url(request)
+    request_base_url = get_oauth_discovery_base_url(request)
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
 
     # When no server name provided, try to resolve the single OAuth2 server
@@ -2452,7 +2453,7 @@ async def openid_configuration(request: Request):
 
         signer = get_mcp_jwt_signer()
         if signer is not None:
-            request_base_url = get_request_base_url(request)
+            request_base_url = get_oauth_discovery_base_url(request)
             if isinstance(response, dict):
                 response = {
                     **response,

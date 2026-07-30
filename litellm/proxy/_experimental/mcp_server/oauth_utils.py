@@ -179,6 +179,60 @@ def well_known_root_suffix() -> str:
     return "" if root == "/" else root
 
 
+# Env var: derive the OAuth-discovery base URL from the incoming request path
+# (segments before ``/.well-known/``) in addition to ``PROXY_BASE_URL``. Off by
+# default; opt-in per deployment so a reverse proxy that rewrites the path
+# before LiteLLM sees the request cannot silently corrupt discovery values.
+_OAUTH_DISCOVERY_PATH_FROM_REQUEST_ENV = "MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST"
+
+
+def _oauth_discovery_path_from_request_enabled() -> bool:
+    raw = os.environ.get(_OAUTH_DISCOVERY_PATH_FROM_REQUEST_ENV, "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _request_well_known_prefix(request: Request) -> str:
+    """The URL path segments preceding ``/.well-known/`` in ``request.url.path``.
+
+    Empty when the discovery route is mounted at the root of the URL the client
+    called, or when ``/.well-known/`` is absent from the path (nothing to prefix).
+    """
+    try:
+        path = request.url.path or ""
+    except AttributeError:
+        return ""
+    marker = "/.well-known/"
+    idx = path.find(marker)
+    if idx <= 0:
+        return ""
+    return path[:idx]
+
+
+def get_oauth_discovery_base_url(request: Request) -> str:
+    """Base URL used to construct values inside an MCP OAuth discovery document.
+
+    Defaults to :func:`get_request_base_url` (unchanged behaviour). When the
+    ``MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST`` env var is truthy, the URL path
+    prefix the client used (the segments before ``/.well-known/``) is appended
+    to the resolved base — so the ``resource`` value in the RFC 9728 discovery
+    response can name the exact URL the client called even when the same
+    LiteLLM pod fronts multiple MCP origins mounted at distinct URL path
+    prefixes (RFC 9728 §3 requires an exact match; a scalar ``PROXY_BASE_URL``
+    alone can express only one prefix).
+
+    Opt-in because a reverse proxy that rewrites the request path before
+    LiteLLM receives it would produce an incorrect prefix; operators affirm
+    their topology preserves the client-visible prefix by setting the env var.
+    """
+    base = get_request_base_url(request)
+    if not _oauth_discovery_path_from_request_enabled():
+        return base
+    prefix = _request_well_known_prefix(request)
+    if not prefix:
+        return base
+    return f"{base}{prefix}"
+
+
 def validate_loopback_redirect_uri(redirect_uri: str) -> None:
     """Require a loopback ``redirect_uri`` (OAuth 2.1 §4.1.2.1 + RFC 8252
     §7.3 native-app pattern). MCP clients are native apps that listen on

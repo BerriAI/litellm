@@ -2918,6 +2918,233 @@ def test_get_request_base_url_malformed_proxy_base_url_warning_is_one_shot(monke
 
 
 # -------------------------------------------------------------------
+# Tests for MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST (RFC 9728 resource
+# exact-match under multi-origin / path-prefixed deployments).
+# -------------------------------------------------------------------
+
+
+def _make_discovery_mock_request(*, base_url: str, path: str):
+    """Mock a FastAPI Request suitable for the discovery-doc builders.
+
+    ``base_url`` mirrors what ``request.base_url`` returns (Starlette formats
+    it with a trailing slash). ``path`` is what ``request.url.path`` returns
+    — the request-path component the client actually used, including any
+    routing prefix a reverse proxy left intact.
+    """
+    mock_request = MagicMock()  # not spec=Request so we can assign .url freely
+    mock_request.base_url = base_url
+    mock_request.headers = {}
+    mock_request.url = MagicMock()
+    mock_request.url.path = path
+    return mock_request
+
+
+def _register_oauth2_server(server_name: str):
+    """Register a minimal OAuth2 MCP server on the global registry.
+
+    The discovery-doc builder falls through to the gateway default branch for
+    ``auth_type=oauth2``; this is the same shape the existing scope-supported
+    tests use, so it exercises the same code path with the smallest fixture.
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id=server_name,
+        name=server_name,
+        server_name=server_name,
+        alias=server_name,
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id=f"{server_name}_client",
+        client_secret=f"{server_name}_secret",
+        authorization_url="https://auth.example.com/authorize",
+        token_url="https://auth.example.com/oauth/token",
+        scopes=[],
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+
+
+@pytest.mark.asyncio
+async def test_oauth_protected_resource_uses_request_path_prefix_when_opt_in(monkeypatch):
+    """RFC 9728 §3: the ``resource`` value in the OAuth protected-resource
+    discovery document must exactly match the URL the client called. When
+    ``MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST=true``, the discovery response
+    must include the client-visible URL path prefix (the segments before
+    ``/.well-known/``) even when ``PROXY_BASE_URL`` names only the origin.
+
+    Without this, a single LiteLLM pod that fronts more than one MCP origin
+    mounted at distinct URL path prefixes emits a ``resource`` that matches
+    at most one prefix; every other prefix's client aborts discovery.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_protected_resource_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    _register_oauth2_server("server_a")
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.setenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", "true")
+
+    mock_request = _make_discovery_mock_request(
+        base_url="https://mcp.example.com/",
+        path="/tenant-a/.well-known/oauth-protected-resource/mcp/server_a",
+    )
+
+    try:
+        response = await _build_oauth_protected_resource_response(
+            request=mock_request,
+            mcp_server_name="server_a",
+            use_standard_pattern=True,
+        )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert response["resource"] == "https://mcp.example.com/tenant-a/mcp/server_a", (
+        "resource must include the request path prefix so it matches the URL the client called (RFC 9728 §3)"
+    )
+    # authorization_servers is derived from the same base so downstream token /
+    # register endpoints stay reachable under the same routing prefix.
+    assert response["authorization_servers"] == ["https://mcp.example.com/tenant-a/server_a"]
+
+
+@pytest.mark.asyncio
+async def test_oauth_protected_resource_default_ignores_request_path(monkeypatch):
+    """Backward-compat guard: without the opt-in env var, the ``resource``
+    value is derived from ``PROXY_BASE_URL`` alone — a request path prefix
+    must NOT leak into the response. Existing deployments must emit an
+    identical discovery document with no config change.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_protected_resource_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    _register_oauth2_server("server_a")
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.delenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", raising=False)
+
+    mock_request = _make_discovery_mock_request(
+        base_url="https://mcp.example.com/",
+        path="/tenant-a/.well-known/oauth-protected-resource/mcp/server_a",
+    )
+
+    try:
+        response = await _build_oauth_protected_resource_response(
+            request=mock_request,
+            mcp_server_name="server_a",
+            use_standard_pattern=True,
+        )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert response["resource"] == "https://mcp.example.com/mcp/server_a"
+    assert response["authorization_servers"] == ["https://mcp.example.com/server_a"]
+
+
+@pytest.mark.asyncio
+async def test_oauth_protected_resource_opt_in_with_root_mounted_discovery_is_noop(monkeypatch):
+    """When the discovery route is mounted at the URL root the client used
+    (no segments before ``/.well-known/``), the opt-in env var must not
+    change behaviour. Guards against an empty-prefix regression that would
+    otherwise emit ``resource`` values with a duplicated origin.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_protected_resource_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    _register_oauth2_server("server_a")
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.setenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", "true")
+
+    mock_request = _make_discovery_mock_request(
+        base_url="https://mcp.example.com/",
+        path="/.well-known/oauth-protected-resource/mcp/server_a",
+    )
+
+    try:
+        response = await _build_oauth_protected_resource_response(
+            request=mock_request,
+            mcp_server_name="server_a",
+            use_standard_pattern=True,
+        )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert response["resource"] == "https://mcp.example.com/mcp/server_a"
+
+
+def test_get_oauth_discovery_base_url_prepends_request_prefix_when_opt_in(monkeypatch):
+    """Direct unit test of the opt-in helper — proves the base URL joiner
+    emits ``{PROXY_BASE_URL}{prefix}`` when both are present, and no double
+    slash appears at the join even if one input has a trailing / stripped."""
+    try:
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_oauth_discovery_base_url,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.setenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", "true")
+
+    mock_request = _make_discovery_mock_request(
+        base_url="https://mcp.example.com/",
+        path="/tenant-b/.well-known/oauth-authorization-server/mcp/server_a",
+    )
+
+    assert get_oauth_discovery_base_url(mock_request) == "https://mcp.example.com/tenant-b"
+
+
+def test_get_oauth_discovery_base_url_default_is_get_request_base_url(monkeypatch):
+    """When the opt-in env var is unset the helper is a pass-through to
+    :func:`get_request_base_url`, so callers that swap to the new helper
+    keep today's behaviour by default."""
+    try:
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_oauth_discovery_base_url,
+            get_request_base_url,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.delenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", raising=False)
+
+    mock_request = _make_discovery_mock_request(
+        base_url="https://mcp.example.com/",
+        path="/tenant-b/.well-known/oauth-authorization-server/mcp/server_a",
+    )
+
+    assert get_oauth_discovery_base_url(mock_request) == get_request_base_url(mock_request)
+
+
+# -------------------------------------------------------------------
 # Tests for scopes_supported when mcp_server.scopes is None
 # -------------------------------------------------------------------
 
@@ -8338,6 +8565,8 @@ async def test_authorize_wall_names_the_issuer_for_anchored_servers():
     assert "verify the Issuer" in detail_text
     assert "Servers with no url" not in detail_text
     assert "idp.example.com" not in detail_text
+
+
 def test_passthrough_authorization_code_round_trips_and_rejects_hostile_input():
     """The passthrough gateway code seals and recovers the ephemeral DCR client and upstream code,
     and is total over hostile input: a raw upstream code opens to None, and a tampered or
@@ -8746,7 +8975,9 @@ async def test_mint_ephemeral_dcr_client_unusable_registration_response_is_502(p
     )
     from litellm.types.mcp import MCPAuth
 
-    server = _bridge_server(auth_type=MCPAuth.true_passthrough, dcr_bridge=None, server_id=server_id, server_name=server_id)
+    server = _bridge_server(
+        auth_type=MCPAuth.true_passthrough, dcr_bridge=None, server_id=server_id, server_name=server_id
+    )
     mock_response = MagicMock()
     mock_response.text = json.dumps(payload)
     mock_response.raise_for_status = MagicMock()
@@ -8822,8 +9053,6 @@ async def test_token_exchange_authenticates_with_the_sealed_clients_own_auth_met
         assert "Authorization" not in sent_headers
         assert sent_body["client_id"] == "minted-77"
         assert sent_body["client_secret"] == "mint-secret"
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -9078,7 +9307,9 @@ def test_upstream_resource_auto_keeps_the_path_because_it_identifies_the_server(
     sets ``upstream_resource`` explicitly instead of using ``auto``."""
     from litellm.proxy._experimental.mcp_server.oauth_utils import resolve_upstream_resource
 
-    first = resolve_upstream_resource(_resource_server(url="https://gw.example.com/team-a/mcp", upstream_resource="auto"))
+    first = resolve_upstream_resource(
+        _resource_server(url="https://gw.example.com/team-a/mcp", upstream_resource="auto")
+    )
     second = resolve_upstream_resource(
         _resource_server(url="https://gw.example.com/team-b/mcp", upstream_resource="auto")
     )
