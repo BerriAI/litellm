@@ -3146,31 +3146,45 @@ if MCP_AVAILABLE:
                 detail="User not allowed to read this resource.",
             )
 
-        if len(allowed_mcp_servers) != 1:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Multiple MCP servers configured; read_resource currently supports exactly one allowed server."
-                ),
+        # Try each allowed server until one can serve the requested URI.
+        # Resource URIs are not server-prefixed (unlike prompt names), so we
+        # cannot resolve the owning server from the URI alone.  Iterating is
+        # safe because read_resource is a read-only operation (#34906).
+        last_error: Exception | None = None
+        for server in allowed_mcp_servers:
+            server_auth_header, extra_headers = _prepare_mcp_server_headers(
+                server=server,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                mcp_auth_header=mcp_auth_header,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
             )
 
-        server = allowed_mcp_servers[0]
+            try:
+                return await global_mcp_server_manager.read_resource_from_server(
+                    server=server,
+                    url=url,
+                    mcp_auth_header=server_auth_header,
+                    extra_headers=extra_headers,
+                    raw_headers=raw_headers,
+                )
+            except Exception as e:
+                last_error = e
+                verbose_logger.debug(
+                    "read_resource: server %s could not serve %s: %s",
+                    server.name,
+                    url,
+                    e,
+                )
+                continue
 
-        server_auth_header, extra_headers = _prepare_mcp_server_headers(
-            server=server,
-            mcp_server_auth_headers=mcp_server_auth_headers,
-            mcp_auth_header=mcp_auth_header,
-            oauth2_headers=oauth2_headers,
-            raw_headers=raw_headers,
-            user_api_key_auth=user_api_key_auth,
-        )
-
-        return await global_mcp_server_manager.read_resource_from_server(
-            server=server,
-            url=url,
-            mcp_auth_header=server_auth_header,
-            extra_headers=extra_headers,
-            raw_headers=raw_headers,
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No allowed MCP server could read resource {url}. "
+                f"Last error: {last_error}"
+            ),
         )
 
     def _get_standard_logging_mcp_tool_call(
