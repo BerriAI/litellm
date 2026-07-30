@@ -32,6 +32,8 @@ import {
   isAutoRouterDeployment,
   isComplexityRouter as isComplexityRouterParams,
 } from "./add_model/auto_router_strategies";
+import { canModifyModel } from "@/utils/modelPermissions";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import CacheControlSettings from "./add_model/cache_control_settings";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
@@ -153,6 +155,7 @@ export default function ModelInfoView({
   const { data: rawModelDataResponse, isLoading: isLoadingModel } = useModelsInfo(1, 50, undefined, modelId);
   const { data: modelCostMapData } = useModelCostMap();
   const { data: modelHubData } = useModelHub();
+  const { data: teams } = useTeams();
 
   // Transform the model data
   const getProviderFromModel = (model: string) => {
@@ -175,8 +178,10 @@ export default function ModelInfoView({
   // Keep modelData variable name for backwards compatibility
   const modelData = transformedModelData;
 
-  const canEditModel =
-    (userRole === "Admin" || modelData?.model_info?.created_by === userID) && modelData?.model_info?.db_model;
+  const canEditModel = canModifyModel({ userRole, userID }, teams ?? null, {
+    teamId: modelData?.model_info?.team_id,
+    isDbModel: modelData?.model_info?.db_model === true,
+  });
   const isAdmin = userRole === "Admin";
   // Editor-aware on purpose: an adaptive or quality router must not offer Edit Auto Router.
   const isAutoRouterModel = hasAutoRouterEditor(modelData?.litellm_params);

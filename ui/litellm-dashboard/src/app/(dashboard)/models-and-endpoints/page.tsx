@@ -7,7 +7,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
-import { all_admin_roles, internalUserRoles, isProxyAdminRole, isUserTeamAdminForAnyTeam } from "@/utils/roles";
+import { all_admin_roles, internalUserRoles } from "@/utils/roles";
+import { canCreateModels } from "@/utils/modelPermissions";
 import BetaBadge from "@/components/BetaBadge";
 import CostOptimizationFeedbackBanner from "@/components/molecules/cost_optimization_feedback_banner";
 import ModelInfoView from "@/components/model_info_view";
@@ -83,24 +84,27 @@ export default function ModelsAndEndpointsPage() {
   const [activeKey, setActiveKey] = useState<string>(BASE_TAB_KEY);
   const [lastRefreshed, setLastRefreshed] = useState("");
 
-  const isProxyAdmin = userRole && isProxyAdminRole(userRole);
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
-  const isUserTeamAdmin = userID && isUserTeamAdminForAnyTeam(teams ?? null, userID);
-  const addModelDisabledForInternalUsers =
-    isInternalUser && uiSettings?.values?.disable_model_add_for_internal_users === true;
-  const shouldHideAddModelTab = !isProxyAdmin && (addModelDisabledForInternalUsers || !isUserTeamAdmin);
+  const canCreate = canCreateModels(
+    { userRole, userID },
+    {
+      teams: teams ?? null,
+      disabledForInternalUsers:
+        isInternalUser === true && uiSettings?.values?.disable_model_add_for_internal_users === true,
+    },
+  );
   const isAdmin = all_admin_roles.includes(userRole);
 
   const visibleSlugs = useMemo<Array<"" | ModelTabSlug>>(
     () => [
       "",
-      ...(shouldHideAddModelTab ? [] : (["add"] as const)),
-      ...(isAdmin ? (["auto-routers"] as const) : []),
+      ...(canCreate ? (["add"] as const) : []),
+      ...(isAdmin || canCreate ? (["auto-routers"] as const) : []),
       ...(isAdmin
         ? (["llm-credentials", "pass-through", "health", "retry-settings", "model-group-alias", "price-data"] as const)
         : []),
     ],
-    [shouldHideAddModelTab, isAdmin],
+    [canCreate, isAdmin],
   );
 
   const allModelsLabel = isAdmin ? "All Models" : "Your Models";

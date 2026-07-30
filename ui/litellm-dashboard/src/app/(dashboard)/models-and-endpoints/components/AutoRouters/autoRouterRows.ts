@@ -6,8 +6,13 @@ import {
   autoRouterStrategy,
 } from "@/components/add_model/auto_router_strategies";
 import { normalizeTierModels } from "@/components/add_model/complexity_router_tiers";
+import { Team } from "@/components/networking";
+import { type ModelActor, canModifyModel } from "@/utils/modelPermissions";
 
 export type { AutoRouterKind };
+
+/** Who is looking at the list; decides which rows offer write affordances. */
+export type AutoRouterActor = ModelActor;
 
 export interface AutoRouterRow {
   id: string;
@@ -16,7 +21,11 @@ export interface AutoRouterRow {
   typeLabel: string;
   /** Edit needs an API-created row AND a strategy the dashboard has a form for. */
   canEdit: boolean;
-  /** Delete only needs an API-created row; removing by id never reads the config. */
+  /**
+   * Resource capability ANDed with the caller's standing on this specific row. A team admin
+   * sees rows they cannot delete (another team's, or one a teammate created), and the API
+   * would 403 those, so the affordance has to be per row rather than per tab.
+   */
   canDelete: boolean;
   editBlockedReason: EditBlockedReason | null;
   targets: string[];
@@ -78,19 +87,25 @@ const PRESENTERS: Record<AutoRouterKind, (config: Record<string, unknown>) => Pr
   quality: (config) => configManaged("Quality", config),
 };
 
-export const toAutoRouterRow = (deployment: AutoRouterDeployment, index: number): AutoRouterRow => {
+export const toAutoRouterRow = (
+  deployment: AutoRouterDeployment,
+  index: number,
+  actor: AutoRouterActor,
+  teams: Team[] | null,
+): AutoRouterRow => {
   const params = deployment.litellm_params ?? {};
   const info = deployment.model_info ?? {};
   const name = deployment.model_name ?? "";
   const strategy = autoRouterStrategy(params);
   const { canEdit, canDelete, editBlockedReason } = autoRouterCapabilities(params, info);
+  const mayActOnRow = canModifyModel(actor, teams, { teamId: info.team_id, isDbModel: info.db_model === true });
 
   return {
     id: info.id ?? `${name}-${index}`,
     name,
     kind: strategy.kind,
-    canEdit,
-    canDelete,
+    canEdit: canEdit && mayActOnRow,
+    canDelete: canDelete && mayActOnRow,
     editBlockedReason,
     createdAt: info.created_at ?? null,
     defaultModel: (params[strategy.defaultModelKey] as string | null | undefined) ?? null,
@@ -99,5 +114,8 @@ export const toAutoRouterRow = (deployment: AutoRouterDeployment, index: number)
   };
 };
 
-export const toAutoRouterRows = (deployments: AutoRouterDeployment[]): AutoRouterRow[] =>
-  deployments.map(toAutoRouterRow);
+export const toAutoRouterRows = (
+  deployments: AutoRouterDeployment[],
+  actor: AutoRouterActor,
+  teams: Team[] | null,
+): AutoRouterRow[] => deployments.map((deployment, index) => toAutoRouterRow(deployment, index, actor, teams));
