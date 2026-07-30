@@ -26,14 +26,26 @@ def get_discovery_response(settings):
         return client.get("/.well-known/litellm-ui-config")
 
 
+def native_oidc_settings(**overrides):
+    jwtauth = {
+        "native_oidc_issuer": "https://idp.example.com",
+        "native_oidc_client_id": "litellm-native",
+        "native_oidc_scopes": ["openid"],
+    }
+    jwtauth.update(overrides)
+    return {"enable_jwt_auth": True, "litellm_jwtauth": jwtauth}
+
+
 def test_ui_discovery_endpoints_exposes_valid_native_oidc_config():
     settings = {
         "enable_jwt_auth": True,
         "litellm_jwtauth": {
-            "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration",
+            "native_oidc_issuer": "https://idp.example.com",
             "native_oidc_client_id": "litellm-native",
             "native_oidc_scopes": ["openid", "profile", "offline_access"],
+            # Secrets living alongside the public fields must never be published.
             "client_secret": "must-not-appear",
+            "public_key_ttl_seconds": 600,
         },
     }
 
@@ -41,148 +53,76 @@ def test_ui_discovery_endpoints_exposes_valid_native_oidc_config():
 
     assert response.status_code == 200
     assert response.json()["native_oidc"] == {
-        "discovery_url": "https://idp.example.com/.well-known/openid-configuration",
+        "issuer": "https://idp.example.com",
         "client_id": "litellm-native",
         "scopes": ["openid", "profile", "offline_access"],
     }
     assert "must-not-appear" not in response.text
 
 
+def test_ui_discovery_endpoints_returns_the_issuer_byte_for_byte():
+    """The issuer is a trust anchor compared by exact string equality.
+
+    A trailing slash, an explicit port, or mixed case must survive untouched --
+    the CLI checks this value against the provider document verbatim.
+    """
+    issuer = "https://IdP.Example.com:8443/tenant/"
+    response = get_discovery_response(native_oidc_settings(native_oidc_issuer=issuer))
+
+    assert response.json()["native_oidc"]["issuer"] == issuer
+
+
 @pytest.mark.parametrize(
     "settings",
     [
+        # JWT auth off, or set to something that is not exactly True.
         {"enable_jwt_auth": False, "litellm_jwtauth": {}},
         {"enable_jwt_auth": "true", "litellm_jwtauth": {}},
+        {"enable_jwt_auth": None, "litellm_jwtauth": {}},
+        {"enable_jwt_auth": 1, "litellm_jwtauth": {}},
+        # Nothing configured at all.
         {"enable_jwt_auth": True, "litellm_jwtauth": {}},
-        {
-            "enable_jwt_auth": True,
-            "litellm_jwtauth": {
-                "native_oidc_discovery_url": "",
-                "native_oidc_client_id": "litellm-native",
-                "native_oidc_scopes": ["openid"],
-            },
-        },
-        {
-            "enable_jwt_auth": True,
-            "litellm_jwtauth": {
-                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration",
-                "native_oidc_client_id": "",
-                "native_oidc_scopes": ["openid"],
-            },
-        },
-        {
-            "enable_jwt_auth": True,
-            "litellm_jwtauth": {
-                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration",
-                "native_oidc_client_id": "litellm-native",
-                "native_oidc_scopes": [],
-            },
-        },
-        {
-            "enable_jwt_auth": True,
-            "litellm_jwtauth": {
-                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration",
-                "native_oidc_client_id": "litellm-native",
-                "native_oidc_scopes": [""],
-            },
-        },
-        {
-            "enable_jwt_auth": True,
-            "litellm_jwtauth": {
-                "native_oidc_discovery_url": "idp.example.com/.well-known/openid-configuration",
-                "native_oidc_client_id": "litellm-native",
-                "native_oidc_scopes": ["openid"],
-            },
-        },
-        {
-            "enable_jwt_auth": True,
-            "litellm_jwtauth": {
-                "native_oidc_discovery_url": "http://idp.example.com/.well-known/openid-configuration",
-                "native_oidc_client_id": "litellm-native",
-                "native_oidc_scopes": ["openid"],
-            },
-        },
-        {
-            "enable_jwt_auth": True,
-            "litellm_jwtauth": {
-                "native_oidc_discovery_url": "https://user:pass@idp.example.com/.well-known/openid-configuration",
-                "native_oidc_client_id": "litellm-native",
-                "native_oidc_scopes": ["openid"],
-            },
-        },
-        {
-            "enable_jwt_auth": True,
-            "litellm_jwtauth": {
-                "native_oidc_discovery_url": "https://@idp.example.com/.well-known/openid-configuration",
-                "native_oidc_client_id": "litellm-native",
-                "native_oidc_scopes": ["openid"],
-            },
-        },
-        {
-            "enable_jwt_auth": True,
-            "litellm_jwtauth": {
-                "native_oidc_discovery_url": "https://idp.example.com:not-a-port/.well-known/openid-configuration",
-                "native_oidc_client_id": "litellm-native",
-                "native_oidc_scopes": ["openid"],
-            },
-        },
-        {
-            "enable_jwt_auth": True,
-            "litellm_jwtauth": {
-                "native_oidc_discovery_url": "https://idp.example.com:65536/.well-known/openid-configuration",
-                "native_oidc_client_id": "litellm-native",
-                "native_oidc_scopes": ["openid"],
-            },
-        },
-        {
-            "enable_jwt_auth": True,
-            "litellm_jwtauth": {
-                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid configuration",
-                "native_oidc_client_id": "litellm-native",
-                "native_oidc_scopes": ["openid"],
-            },
-        },
-        {
-            "enable_jwt_auth": True,
-            "litellm_jwtauth": {
-                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration?foo=bar",
-                "native_oidc_client_id": "litellm-native",
-                "native_oidc_scopes": ["openid"],
-            },
-        },
-        {
-            "enable_jwt_auth": True,
-            "litellm_jwtauth": {
-                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration#fragment",
-                "native_oidc_client_id": "litellm-native",
-                "native_oidc_scopes": ["openid"],
-            },
-        },
-        {
-            "enable_jwt_auth": True,
-            "litellm_jwtauth": {
-                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration\x00",
-                "native_oidc_client_id": "litellm-native",
-                "native_oidc_scopes": ["openid"],
-            },
-        },
-        {
-            "enable_jwt_auth": True,
-            "litellm_jwtauth": {
-                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration",
-                "native_oidc_client_id": "client\nid",
-                "native_oidc_scopes": ["openid"],
-            },
-        },
-        {
-            "enable_jwt_auth": True,
-            "litellm_jwtauth": {
-                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration",
-                "native_oidc_client_id": "litellm-native",
-                "native_oidc_scopes": ["open\nid"],
-            },
-        },
         {"enable_jwt_auth": True, "litellm_jwtauth": "invalid"},
+        {"enable_jwt_auth": True, "litellm_jwtauth": None},
+        # Partially configured: every field is required.
+        native_oidc_settings(native_oidc_issuer=None),
+        native_oidc_settings(native_oidc_client_id=None),
+        native_oidc_settings(native_oidc_scopes=None),
+        # Issuer failures.
+        native_oidc_settings(native_oidc_issuer=""),
+        native_oidc_settings(native_oidc_issuer="   "),
+        native_oidc_settings(native_oidc_issuer="idp.example.com"),
+        native_oidc_settings(native_oidc_issuer="ftp://idp.example.com"),
+        native_oidc_settings(native_oidc_issuer="javascript:alert(1)"),
+        # Plaintext HTTP is only allowed against a numeric loopback address.
+        native_oidc_settings(native_oidc_issuer="http://idp.example.com"),
+        native_oidc_settings(native_oidc_issuer="http://localhost:8080"),
+        # Credentials, query, fragment and malformed ports.
+        native_oidc_settings(native_oidc_issuer="https://user:pass@idp.example.com"),
+        native_oidc_settings(native_oidc_issuer="https://@idp.example.com"),
+        native_oidc_settings(native_oidc_issuer="https://idp.example.com:not-a-port"),
+        native_oidc_settings(native_oidc_issuer="https://idp.example.com:65536"),
+        native_oidc_settings(native_oidc_issuer="https://idp.example.com?foo=bar"),
+        native_oidc_settings(native_oidc_issuer="https://idp.example.com#fragment"),
+        native_oidc_settings(native_oidc_issuer="https://idp.example.com/a b"),
+        native_oidc_settings(native_oidc_issuer="https://idp.example.com\x00"),
+        native_oidc_settings(native_oidc_issuer="https://idp.example.com\n"),
+        # Client id failures.
+        native_oidc_settings(native_oidc_client_id=""),
+        native_oidc_settings(native_oidc_client_id="   "),
+        native_oidc_settings(native_oidc_client_id="client\nid"),
+        native_oidc_settings(native_oidc_client_id="client id"),
+        native_oidc_settings(native_oidc_client_id=" litellm-native "),
+        native_oidc_settings(native_oidc_client_id="client\x00id"),
+        # Scope failures: RFC 6749 scope-token excludes space, quote and backslash.
+        native_oidc_settings(native_oidc_scopes=[]),
+        native_oidc_settings(native_oidc_scopes=[""]),
+        native_oidc_settings(native_oidc_scopes=["open\nid"]),
+        native_oidc_settings(native_oidc_scopes=["open id"]),
+        native_oidc_settings(native_oidc_scopes=['open"id']),
+        native_oidc_settings(native_oidc_scopes=["open\\id"]),
+        native_oidc_settings(native_oidc_scopes=["openid", "openid"]),
+        native_oidc_settings(native_oidc_scopes="openid"),
     ],
 )
 def test_ui_discovery_endpoints_omits_invalid_native_oidc_config(settings):
@@ -190,26 +130,47 @@ def test_ui_discovery_endpoints_omits_invalid_native_oidc_config(settings):
 
     assert response.status_code == 200
     assert "native_oidc" not in response.json()
+    # Only native_oidc is dropped -- other optional fields still serialize as null.
     assert response.json()["proxy_base_url"] is None
 
 
-def test_ui_discovery_endpoints_allows_loopback_http_native_oidc_config():
-    settings = {
-        "enable_jwt_auth": True,
-        "litellm_jwtauth": {
-            "native_oidc_discovery_url": "http://127.0.0.1:8080/.well-known/openid-configuration",
-            "native_oidc_client_id": "litellm-native",
-            "native_oidc_scopes": ["openid"],
-        },
-    }
+def test_native_oidc_config_forbids_unknown_fields():
+    """A future field must not ride along into the public document by accident."""
+    from pydantic import ValidationError
 
-    response = get_discovery_response(settings)
+    from litellm.types.proxy.discovery_endpoints.ui_discovery_endpoints import (
+        NativeOIDCConfig,
+    )
+
+    with pytest.raises(ValidationError):
+        NativeOIDCConfig(
+            issuer="https://idp.example.com",
+            client_id="litellm-native",
+            scopes=("openid",),
+            client_secret="must-not-appear",
+        )
+
+
+def test_ui_discovery_endpoints_never_echoes_rejected_values():
+    """The route is unauthenticated, so a rejection must not leak the input."""
+    response = get_discovery_response(
+        native_oidc_settings(
+            native_oidc_issuer="https://user:hunter2@idp.internal.example.com"
+        )
+    )
 
     assert response.status_code == 200
-    assert (
-        response.json()["native_oidc"]["discovery_url"]
-        == settings["litellm_jwtauth"]["native_oidc_discovery_url"]
-    )
+    assert "hunter2" not in response.text
+    assert "idp.internal.example.com" not in response.text
+
+
+@pytest.mark.parametrize("issuer", ["http://127.0.0.1:8080", "http://[::1]:8080"])
+def test_ui_discovery_endpoints_allows_loopback_http_native_oidc_config(issuer):
+    """Plaintext HTTP is permitted for local development, loopback literals only."""
+    response = get_discovery_response(native_oidc_settings(native_oidc_issuer=issuer))
+
+    assert response.status_code == 200
+    assert response.json()["native_oidc"]["issuer"] == issuer
 
 
 def test_ui_discovery_endpoints_with_defaults():
