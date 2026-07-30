@@ -2902,3 +2902,17 @@ async def test_compression_savings_survive_to_spend_log_payload_metadata(monkeyp
         "tokens_saved": 7000,
         "source": "compression_interception",
     }
+
+
+def test_no_routing_decision_key_defaults_to_none_in_spend_log_metadata():
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-no-routing-decision", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["routing_decision"] is None

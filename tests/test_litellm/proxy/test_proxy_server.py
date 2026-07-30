@@ -1571,14 +1571,14 @@ async def test_get_all_team_models():
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
         # Configure the mock class to return proper instances
-        def mock_team_table_constructor(**kwargs):
+        def mock_team_table_constructor(data):
             mock_instance = MagicMock()
-            mock_instance.team_id = kwargs["team_id"]
-            mock_instance.models = kwargs["models"]
-            mock_instance.access_group_ids = kwargs.get("access_group_ids")
+            mock_instance.team_id = data["team_id"]
+            mock_instance.models = data["models"]
+            mock_instance.access_group_ids = data.get("access_group_ids")
             return mock_instance
 
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams="*",
@@ -1607,7 +1607,7 @@ async def test_get_all_team_models():
     mock_litellm_teamtable.find_many.return_value = [mock_team1]
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -1658,7 +1658,7 @@ async def test_get_all_team_models():
     mock_router.get_model_list.side_effect = mock_get_model_list_with_none
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -2373,14 +2373,14 @@ async def test_get_all_team_models_with_access_groups():
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_tt_class:
 
-        def mock_team_table_constructor(**kwargs):
+        def mock_team_table_constructor(data):
             mock_instance = MagicMock()
-            mock_instance.team_id = kwargs["team_id"]
-            mock_instance.models = kwargs["models"]
-            mock_instance.access_group_ids = kwargs.get("access_group_ids")
+            mock_instance.team_id = data["team_id"]
+            mock_instance.models = data["models"]
+            mock_instance.access_group_ids = data.get("access_group_ids")
             return mock_instance
 
-        mock_tt_class.side_effect = mock_team_table_constructor
+        mock_tt_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -2642,6 +2642,11 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
 
     This validates that generate_key_helper_fn is called with table_name="user"
     which should prevent key creation in LiteLLM_VerificationToken table.
+
+    Also guards the row identity: the budget must land on the proxy-wide
+    aggregate row "litellm-proxy-budget" (the one the spend writer increments
+    per request), not the admin user's own row ("default_user_id"). Budgeting
+    the admin row leaves the global budget without a resettable counter.
     """
     from unittest.mock import AsyncMock, patch
 
@@ -2670,7 +2675,7 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
         "litellm.proxy.proxy_server.generate_key_helper_fn", mock_generate_key_helper
     ):
         # Call the function under test
-        ProxyStartupEvent._add_proxy_budget_to_db(litellm_proxy_budget_name)
+        ProxyStartupEvent._add_proxy_budget_to_db()
 
         # Allow async task to complete
         import asyncio
@@ -2696,9 +2701,13 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
     Test that _upsert_proxy_budget_with_reset_at_backfill issues a conditional
     update_many with `WHERE budget_reset_at IS NULL` to backfill the column on
     rows that pre-existed without a reset schedule. Without this, the proxy
-    admin row stays at NULL and reset_budget_for_litellm_users never matches
+    budget row stays at NULL and reset_budget_for_litellm_users never matches
     it (NULL < now() is unknown in SQL), so the global proxy budget never
     resets.
+
+    The same conditional update must zero spend: a row that was never on a
+    reset schedule holds lifetime accrual, which must not gate the first
+    duration window.
     """
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2729,9 +2738,7 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
         ),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
     ):
-        await ProxyStartupEvent._upsert_proxy_budget_with_reset_at_backfill(
-            litellm_proxy_budget_name
-        )
+        await ProxyStartupEvent._upsert_proxy_budget_with_reset_at_backfill()
 
     # Upsert ran with the configured budget
     mock_generate_key_helper.assert_called_once()
@@ -2749,6 +2756,8 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
     backfilled_reset_at = backfill_call.kwargs["data"]["budget_reset_at"]
     assert isinstance(backfilled_reset_at, datetime)
     assert backfilled_reset_at > datetime.now(timezone.utc)
+
+    assert backfill_call.kwargs["data"]["spend"] == 0
 
 
 @pytest.mark.asyncio

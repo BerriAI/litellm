@@ -4356,25 +4356,9 @@ export interface paths {
         };
         /**
          * Get Global Activity
-         * @description Get number of cache hits, vs misses
-         *
-         *     {
-         *         "daily_data": [
-         *                 const chartdata = [
-         *                 {
-         *                     date: 'Jan 22',
-         *                     cache_hits: 10,
-         *                     llm_api_calls: 2000
-         *                 },
-         *                 {
-         *                     date: 'Jan 23',
-         *                     cache_hits: 10,
-         *                     llm_api_calls: 12
-         *                 },
-         *         ],
-         *         "sum_cache_hits": 20,
-         *         "sum_llm_api_calls": 2012
-         *     }
+         * @description Cache activity for the Admin UI cache dashboard, aggregated per call_type:
+         *     cache hits vs successful LLM API requests vs failed requests, plus totals
+         *     for the stat cards and the available key-alias/model filter options.
          */
         get: operations["get_global_activity_global_activity_cache_hits_get"];
         put?: never;
@@ -6935,8 +6919,8 @@ export interface paths {
          * @description Update an existing API key's parameters.
          *
          *     Parameters:
-         *     - key: str - The key to update
-         *     - key_alias: Optional[str] - User-friendly key alias
+         *     - key: Optional[str] - The key to update. Either key or key_alias must be provided.
+         *     - key_alias: Optional[str] - User-friendly key alias. If key is omitted, also identifies the key to update (must match exactly one key, same as /key/delete's key_aliases)
          *     - user_id: Optional[str] - User ID associated with key
          *     - team_id: Optional[str] - Team ID associated with key
          *     - agent_id: Optional[str] - The agent id associated with the key.
@@ -7179,6 +7163,40 @@ export interface paths {
         put?: never;
         /** Login */
         post: operations["login_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/spend_logs/end_users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Spend Log End Users
+         * @description The distinct end users appearing in spend logs over a time window, for the logs
+         *     page filter dropdown.
+         *
+         *     Scoped like `/spend/logs/ui`: a proxy admin sees every end user in the window,
+         *     anyone else sees only end users from their own requests or from teams they
+         *     administer (or hold the `/spend/logs` permission on).
+         *
+         *     The window is required and the inner scan is capped at SPEND_LOGS_FACET_SCAN_CAP
+         *     rows, so the query cannot degrade into a full-table scan the way
+         *     `/global/all_end_users` does.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/spend_logs/end_users?filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=2026-07-24T00:00:00Z&page_size=50&q=acme'         --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["list_spend_log_end_users_management_v1_spend_logs_end_users_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -14788,7 +14806,7 @@ export interface paths {
          *     - duration: Optional[str] - Duration for the key auto-created on `/user/new`. Default is None.
          *     - key_alias: Optional[str] - Alias for the key auto-created on `/user/new`. Default is None.
          *     - sso_user_id: Optional[str] - The id of the user in the SSO provider.
-         *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+         *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
          *     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *     - organizations: List[str] - List of organization id's the user is a member of
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
@@ -14869,7 +14887,7 @@ export interface paths {
          *         - team_id: Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None.
          *         - duration: Optional[str] - [NOT IMPLEMENTED].
          *         - key_alias: Optional[str] - [NOT IMPLEMENTED].
-         *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+         *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
          *         - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *         - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
          */
@@ -17971,11 +17989,16 @@ export interface paths {
          * Get Tool Spend
          * @description Spend attributed to each tool over a date range, for the Cost Optimization dashboard.
          *
-         *     Joins ``LiteLLM_SpendLogToolIndex`` (which tool names ran on which request) to
-         *     ``LiteLLM_SpendLogs`` (what the request cost). A request that used multiple tools
-         *     counts its full spend toward each of those tools, so per-tool numbers are
-         *     attributions. ``total_spend`` is the deduplicated spend of every request that
-         *     called at least one tool in the window, so it never double counts.
+         *     Reads the ``LiteLLM_DailyToolSpend`` rollup, written at request time from invoked
+         *     tools only (MCP tool calls and response tool_calls; declaring a tool without
+         *     invoking it does not count). A request that invoked multiple tools counts its
+         *     full spend toward each of them, so per-tool numbers are attributions and do not
+         *     sum to a deduplicated total.
+         *
+         *     ``by_tool`` is the top ``TOOL_SPEND_TOP_TOOLS`` tools by spend, aggregated in
+         *     SQL, and ``daily`` covers only those tools, so the response is bounded by
+         *     days x TOOL_SPEND_TOP_TOOLS regardless of the requested range or how many
+         *     distinct tool names exist.
          */
         get: operations["get_tool_spend_v1_tool_spend_get"];
         put?: never;
@@ -18035,7 +18058,8 @@ export interface paths {
         };
         /**
          * Get Tool Usage Logs
-         * @description Return paginated spend logs for requests that used this tool (from SpendLogToolIndex).
+         * @description Return paginated spend logs for requests that invoked this tool (from SpendLogToolIndex).
+         *     Declaring a tool in a request body without the model invoking it does not create an entry.
          */
         get: operations["get_tool_usage_logs_v1_tool__tool_name__logs_get"];
         put?: never;
@@ -21702,6 +21726,48 @@ export interface components {
             /** Total Requested */
             total_requested: number;
         };
+        /** CacheActivityFilterOptions */
+        CacheActivityFilterOptions: {
+            /** Key Aliases */
+            key_aliases: string[];
+            /** Models */
+            models: string[];
+        };
+        /** CacheActivityGroup */
+        CacheActivityGroup: {
+            /** Api Requests */
+            api_requests: number;
+            /** Cache Hits */
+            cache_hits: number;
+            /** Cached Completion Tokens */
+            cached_completion_tokens: number;
+            /** Call Type */
+            call_type: string;
+            /** Failed Requests */
+            failed_requests: number;
+            /** Generated Completion Tokens */
+            generated_completion_tokens: number;
+        };
+        /** CacheActivityResponse */
+        CacheActivityResponse: {
+            filter_options: components["schemas"]["CacheActivityFilterOptions"];
+            /** Groups */
+            groups: components["schemas"]["CacheActivityGroup"][];
+            totals: components["schemas"]["CacheActivityTotals"];
+        };
+        /** CacheActivityTotals */
+        CacheActivityTotals: {
+            /** Api Requests */
+            api_requests: number;
+            /** Cache Hit Ratio */
+            cache_hit_ratio: number;
+            /** Cache Hits */
+            cache_hits: number;
+            /** Cached Completion Tokens */
+            cached_completion_tokens: number;
+            /** Failed Requests */
+            failed_requests: number;
+        };
         /** CachePingResponse */
         CachePingResponse: {
             /** Cache Type */
@@ -23830,6 +23896,16 @@ export interface components {
             }[];
             /** Updated At */
             updated_at?: number | null;
+        };
+        /**
+         * FacetListResponse
+         * @description The distinct values one column takes over a filtered query. `data` holds bare values, not entity rows.
+         */
+        FacetListResponse: {
+            /** Data */
+            data: string[];
+            links: components["schemas"]["PageLinks"];
+            meta: components["schemas"]["PageMeta"];
         };
         /**
          * FailedKeyUpdate
@@ -28791,6 +28867,30 @@ export interface components {
             tpm_limit?: number | null;
         };
         /**
+         * PageLinks
+         * @description Hypermedia for a paginated list. No `first`/`last`: without a total count the last page is unknown.
+         */
+        PageLinks: {
+            /** Next */
+            next?: string | null;
+            /** Prev */
+            prev?: string | null;
+            /** Self */
+            self: string;
+        };
+        /**
+         * PageMeta
+         * @description `has_more` rather than `total_count`, which would need a COUNT(*) over the whole match set per keystroke.
+         */
+        PageMeta: {
+            /** Has More */
+            has_more: boolean;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /**
          * PaginatedAuditLogResponse
          * @description Response model for paginated audit logs
          */
@@ -32138,12 +32238,6 @@ export interface components {
             end_date?: string | null;
             /** Start Date */
             start_date?: string | null;
-            /**
-             * Total Spend
-             * @description Deduplicated spend of every request that called at least one tool in the window; less than the sum of per-tool attributed spend whenever multi-tool requests exist
-             * @default 0
-             */
-            total_spend: number;
         };
         /**
          * ToolUsageLogEntry
@@ -32369,7 +32463,7 @@ export interface components {
             /** Guardrails */
             guardrails?: string[] | null;
             /** Key */
-            key: string;
+            key?: string | null;
             /** Key Alias */
             key_alias?: string | null;
             /** Max Budget */
@@ -33447,6 +33541,7 @@ export interface components {
              * @default []
              */
             models: string[];
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /**
              * Spend
              * @default 0
@@ -40545,11 +40640,15 @@ export interface operations {
     };
     get_global_activity_global_activity_cache_hits_get: {
         parameters: {
-            query?: {
+            query: {
                 /** @description Time from which to start viewing spend */
-                start_date?: string | null;
+                start_date: string;
                 /** @description Time till which to view spend */
-                end_date?: string | null;
+                end_date: string;
+                /** @description Only include spend from these key aliases */
+                key_aliases?: string[] | null;
+                /** @description Only include spend for these models */
+                models?: string[] | null;
             };
             header?: never;
             path?: never;
@@ -40563,7 +40662,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                    "application/json": components["schemas"]["CacheActivityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -43318,6 +43417,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_spend_log_end_users_management_v1_spend_logs_end_users_get: {
+        parameters: {
+            query: {
+                /** @description Window start (UTC when no offset is given) */
+                "filter[startTime][gte]": string;
+                /** @description Window end (UTC when no offset is given) */
+                "filter[startTime][lte]": string;
+                /** @description Case-insensitive partial match on the end user id */
+                q?: string | null;
+                /** @description Page number */
+                page?: number;
+                /** @description Page size */
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -57951,6 +58090,8 @@ export interface operations {
                 sortBy?: string | null;
                 /** @description Sort order. Options: asc, desc */
                 sortOrder?: string | null;
+                /** @description Omit auto-router deployments (litellm model prefixed `auto_router/`). They select among deployments rather than being deployments themselves, so a caller rendering a deployment list can leave them out. Defaults to false, so existing callers are unaffected */
+                exclude_auto_routers?: boolean | null;
             };
             header?: never;
             path?: never;

@@ -993,6 +993,7 @@ export interface UserInfoV2Response {
   updated_at: string | null;
   sso_user_id: string | null;
   teams: string[];
+  object_permission?: ObjectPermission | null;
 }
 
 /**
@@ -1570,6 +1571,7 @@ export const modelInfoCall = async (
   teamId?: string,
   sortBy?: string,
   sortOrder?: string,
+  excludeAutoRouters?: boolean,
 ) => {
   /**
    * Get all models on proxy
@@ -1594,6 +1596,9 @@ export const modelInfoCall = async (
     }
     if (sortOrder && sortOrder.trim()) {
       params.append("sortOrder", sortOrder.trim());
+    }
+    if (excludeAutoRouters) {
+      params.append("exclude_auto_routers", "true");
     }
     if (params.toString()) {
       url += `?${params.toString()}`;
@@ -2087,42 +2092,6 @@ export const adminGlobalActivity = async (
       accessToken,
       query: startTime && endTime ? { start_date: startTime, end_date: endTime } : undefined,
     });
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch spend data:", error);
-    throw error;
-  }
-};
-
-export const adminGlobalCacheActivity = async (
-  accessToken: string,
-  startTime: string | undefined,
-  endTime: string | undefined,
-) => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity/cache_hits` : `/global/activity/cache_hits`;
-
-    if (startTime && endTime) {
-      url += `?start_date=${startTime}&end_date=${endTime}`;
-    }
-
-    const requestOptions = {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      },
-    };
-
-    const response = await fetch(url, requestOptions);
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     return data;
   } catch (error) {
     console.error("Failed to fetch spend data:", error);
@@ -4745,45 +4714,6 @@ export const uiSpendLogDetailsCall = async (accessToken: string, logId: string, 
     return data;
   } catch (error) {
     console.error("Failed to fetch log details:", error);
-    throw error;
-  }
-};
-
-export const getInternalUserSettings = async (accessToken: string) => {
-  try {
-    const data = await apiClient.get(`/get/internal_user_settings`, { accessToken });
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch SSO settings:", error);
-    throw error;
-  }
-};
-
-export const updateInternalUserSettings = async (accessToken: string, settings: Record<string, any>) => {
-  try {
-    // Construct base URL
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/update/internal_user_settings` : `/update/internal_user_settings`;
-
-    const response = await fetch(url, {
-      method: "PATCH",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(settings),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error(errorData);
-    }
-
-    const data = await response.json();
-    NotificationsManager.success("Internal user settings updated successfully");
-    return data;
-  } catch (error) {
-    console.error("Failed to update internal user settings:", error);
     throw error;
   }
 };
@@ -7566,7 +7496,6 @@ export interface ToolSpendDailyEntry {
 export interface ToolSpendResponse {
   by_tool: ToolSpendEntry[];
   daily: ToolSpendDailyEntry[];
-  total_spend: number;
   start_date: string | null;
   end_date: string | null;
 }

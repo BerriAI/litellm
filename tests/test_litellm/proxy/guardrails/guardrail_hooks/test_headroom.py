@@ -1551,3 +1551,234 @@ async def test_apply_guardrail_litellm_timeout_fail_open_forwards_uncompressed()
         )
 
     assert result["structured_messages"] == ORIGINAL_MESSAGES
+
+
+
+
+# ---------------------------------------------------------------------------
+# Content-parts flattening (LIT-4795)
+#
+# Anthropic-format requests translate to messages whose content is a list of
+# part dicts. The compression service only rewrites string content, so the
+# guardrail flattens ALL-TEXT part lists on the wire and restores the
+# original shapes afterwards. Rows with non-text parts are never flattened:
+# cache_control breakpoints are positional, and merging text across a
+# non-text part would move a later breakpoint to the other side of it.
+# ---------------------------------------------------------------------------
+
+PARTS_MESSAGES = [
+    {
+        "role": "system",
+        "content": [
+            {"type": "text", "text": "You are Claude Code.", "cache_control": {"type": "ephemeral"}},
+            {
+                "type": "text",
+                "text": "Second system block. " + "B" * 5000,
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            },
+        ],
+    },
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Mixed row text."},
+            {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}},
+        ],
+    },
+    {"role": "tool", "content": "tool output " + "C" * 500},
+]
+
+FLATTENED_SYSTEM_TEXT = "You are Claude Code.\n\nSecond system block. " + "B" * 5000
+
+
+def _parts_copy() -> list:
+    return json.loads(json.dumps(PARTS_MESSAGES))
+
+
+def _echo_wire_view() -> list:
+    """What the service receives (and echoes back when it changes nothing)."""
+    return [
+        {"role": "system", "content": FLATTENED_SYSTEM_TEXT},
+        json.loads(json.dumps(PARTS_MESSAGES[1])),
+        {"role": "tool", "content": "tool output " + "C" * 500},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_flattens_all_text_rows_only(
+    guardrail: HeadroomGuardrail,
+):
+    inputs = GenericGuardrailAPIInputs(
+        texts=["B" * 5000],
+        structured_messages=_parts_copy(),
+    )
+    mock_response = _make_compress_response(_echo_wire_view())
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ) as mock_post:
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={"model": "claude-fable-5"},
+            input_type="request",
+        )
+
+    wire_messages = mock_post.call_args.kwargs["json"]["messages"]
+    assert wire_messages[0]["content"] == FLATTENED_SYSTEM_TEXT
+    # Mixed text+image row is never flattened: merging its text would move a
+    # later cache_control breakpoint across the image part.
+    assert isinstance(wire_messages[1]["content"], list)
+    assert wire_messages[2]["content"] == "tool output " + "C" * 500
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_restores_rewritten_all_text_row(
+    guardrail: HeadroomGuardrail,
+):
+    inputs = GenericGuardrailAPIInputs(
+        texts=["B" * 5000],
+        structured_messages=_parts_copy(),
+    )
+    compressed = _echo_wire_view()
+    compressed[0]["content"] = "compressed system. Retrieve more: hash=b573993006976af767214fac"
+    mock_response = _make_compress_response(compressed)
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={"model": "claude-fable-5"},
+            input_type="request",
+        )
+
+    messages = result["structured_messages"]
+    system_content = messages[0]["content"]
+    # Rewritten all-text row collapses to one part carrying the LAST declared
+    # breakpoint: an Anthropic breakpoint caches the prefix ending at its
+    # part, so after the merge the last one (and its TTL) still describes the
+    # row.
+    assert isinstance(system_content, list)
+    assert len(system_content) == 1
+    assert system_content[0]["text"] == "compressed system. Retrieve more: hash=b573993006976af767214fac"
+    assert system_content[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    # Mixed row passes through byte-identical.
+    assert messages[1]["content"] == PARTS_MESSAGES[1]["content"]
+    # Hashes inside restored parts still drive retrieve-tool injection.
+    assert has_headroom_retrieve_tool(result.get("tools") or [])
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_keeps_originals_when_service_echoes_unchanged(
+    guardrail: HeadroomGuardrail,
+):
+    inputs = GenericGuardrailAPIInputs(
+        texts=["B" * 5000],
+        structured_messages=_parts_copy(),
+    )
+    mock_response = _make_compress_response(_echo_wire_view())
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={"model": "claude-fable-5"},
+            input_type="request",
+        )
+
+    messages = result["structured_messages"]
+    assert [m["content"] for m in messages] == [m["content"] for m in PARTS_MESSAGES]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_adopts_service_output_when_rows_dropped(
+    guardrail: HeadroomGuardrail,
+):
+    inputs = GenericGuardrailAPIInputs(
+        texts=["B" * 5000],
+        structured_messages=_parts_copy(),
+    )
+    dropped = [
+        {"role": "system", "content": FLATTENED_SYSTEM_TEXT},
+        {"role": "user", "content": "B" * 50},
+    ]
+    mock_response = _make_compress_response(dropped)
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={"model": "claude-fable-5"},
+            input_type="request",
+        )
+
+    assert result["structured_messages"] == dropped
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_sends_textless_parts_rows_unflattened(
+    guardrail: HeadroomGuardrail,
+):
+    image_only = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.com/x.png"}}]},
+        {"role": "user", "content": "D" * 5000},
+    ]
+    inputs = GenericGuardrailAPIInputs(
+        texts=["D" * 5000],
+        structured_messages=json.loads(json.dumps(image_only)),
+    )
+    mock_response = _make_compress_response(json.loads(json.dumps(image_only)))
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ) as mock_post:
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={"model": "claude-fable-5"},
+            input_type="request",
+        )
+
+    wire_messages = mock_post.call_args.kwargs["json"]["messages"]
+    assert isinstance(wire_messages[0]["content"], list)
+    assert wire_messages[1]["content"] == "D" * 5000
+
+
+@pytest.mark.asyncio
+async def test_fail_open_returns_original_parts_shapes():
+    guardrail = _make_guardrail(unreachable_fallback="fail_open")
+    inputs = GenericGuardrailAPIInputs(
+        texts=["B" * 5000],
+        structured_messages=_parts_copy(),
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=httpx.ConnectError("boom"),
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="request",
+        )
+
+    messages = result["structured_messages"]
+    assert [m["content"] for m in messages] == [m["content"] for m in PARTS_MESSAGES]

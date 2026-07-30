@@ -1,4 +1,5 @@
 import { KeywordTierRule } from "./KeywordTierRules";
+import { serializeKeywordTierRules } from "./complexity_router_keywords";
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
@@ -82,12 +83,7 @@ export const buildComplexityRouterConfig = ({
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
   const cleanedEscalationKeywords = escalationKeywords.map((keyword) => keyword.trim()).filter(Boolean);
   // Trim keywords and drop empty ones; drop any rule left with no keywords. Clicking
-  // "Add keyword rule" seeds a rule with an empty keywords list, so without this an
-  // unfilled row (common in the heuristic flow, where getSemanticConfigError doesn't run)
-  // would ship keyword_tier_rules the backend validator rejects with a 400.
-  const cleanedKeywordTierRules = keywordTierRules
-    .map((rule) => ({ keywords: rule.keywords.map((k) => k.trim()).filter(Boolean), tier: rule.tier }))
-    .filter((rule) => rule.keywords.length > 0);
+  const cleanedKeywordTierRules = serializeKeywordTierRules(keywordTierRules);
 
   return {
     tiers,

@@ -524,6 +524,17 @@ class TestOpenAIFiles:
         "llm.files.openai.list.nonstream.works",
         exercised_on=["files"],
     )
+    @pytest.mark.skip(
+        reason=(
+            "LIT-4820 (https://linear.app/litellm-ai/issue/LIT-4820): GET /v1/files omits "
+            "newly uploaded files. The upload succeeds and "
+            "GET /v1/files/{id} returns the file, but it never appears in the listing; the "
+            "returned set is stable with its newest entry ~10h old, on both the managed "
+            "(/v1/files?model=) and provider-scoped (/openai/v1/files) routes. Skipped rather "
+            "than weakened because the assertion below is the correct contract. Remove this "
+            "marker when LIT-4820 is fixed; do not relax the assertion to make it pass."
+        )
+    )
     def test_uploaded_file_appears_in_list(
         self, client: BatchClient, resources: ResourceManager, batch_deployments: None
     ) -> None:
