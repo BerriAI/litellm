@@ -14,6 +14,18 @@ from rich.table import Table
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
+from litellm.proxy.client.cli.native_oidc.credentials import (
+    is_native_credential,
+    needs_refresh,
+    refresh_native_credential,
+)
+from litellm.proxy.client.cli.native_oidc.errors import NativeOIDCError, NativeOIDCUnavailable
+from litellm.proxy.client.cli.native_oidc.login import (
+    FLOW_AUTO,
+    FLOW_PROXY,
+    NATIVE_FLOW_CHOICES,
+    run_native_login,
+)
 
 from .private_json import write_private_json
 
@@ -575,14 +587,69 @@ def _render_and_prompt_for_team_selection(teams: list[dict[str, Any]]) -> str | 
             return None
 
 
-@click.command(name="login")
-@click.pass_context
-def login(ctx: click.Context):
-    """Login to LiteLLM proxy using SSO authentication"""
-    from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
+def _report_native_login(credential: Dict[str, Any]) -> None:
+    """Summarise a native login without echoing any part of the token."""
     from litellm.proxy.client.cli.interface import show_commands
 
+    click.echo("\nLogin successful!")
+    click.echo(f"Issuer: {credential['issuer']}")
+    click.echo(f"Scopes: {' '.join(credential['scopes'])}")
+    click.echo("You can now use the CLI without specifying --api-key")
+    click.echo("\n" + "=" * 60)
+    show_commands()
+
+
+@click.command(name="login")
+@click.option(
+    "--flow",
+    type=click.Choice(NATIVE_FLOW_CHOICES),
+    default=FLOW_AUTO,
+    show_default=True,
+    help=(
+        "Login flow. 'auto' uses native OIDC when the proxy advertises it and otherwise falls back to "
+        "proxy-mediated SSO. 'browser' and 'device' force a native OIDC flow. 'proxy' forces the "
+        "proxy-mediated SSO flow."
+    ),
+)
+@click.option(
+    "--no-browser",
+    is_flag=True,
+    default=False,
+    help="Do not open a browser; prefer the device code flow.",
+)
+@click.pass_context
+def login(ctx: click.Context, flow: str, no_browser: bool):
+    """Login to LiteLLM proxy using SSO or native OIDC authentication"""
     base_url = ctx.obj["base_url"]
+
+    if flow != FLOW_PROXY:
+        try:
+            credential = run_native_login(base_url, flow=flow, open_browser=not no_browser)
+        except NativeOIDCUnavailable as unavailable:
+            if flow != FLOW_AUTO:
+                click.echo(f"Native OIDC login is not available: {unavailable}")
+                raise SystemExit(1)
+            click.echo("Proxy does not advertise native OIDC; using proxy-mediated SSO.")
+        except NativeOIDCError as error:
+            # Once a proxy advertises native OIDC, a failure is never downgraded to the
+            # proxy-mediated flow -- that would defeat the point of the CLI holding the
+            # identity provider relationship.
+            click.echo(f"Login failed: {error}")
+            raise SystemExit(1)
+        except KeyboardInterrupt:
+            click.echo("\nAuthentication cancelled by user.")
+            raise SystemExit(1)
+        else:
+            _report_native_login(credential)
+            return
+
+    _run_proxy_sso_login(base_url)
+
+
+def _run_proxy_sso_login(base_url: str) -> None:
+    """The original proxy-mediated SSO flow: the proxy mints and returns a key."""
+    from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
+    from litellm.proxy.client.cli.interface import show_commands
 
     try:
         cli_sso_flow = _start_cli_sso_flow(base_url=base_url)
@@ -662,9 +729,12 @@ def print_token(ctx: click.Context):
 
     Designed to be used as Claude Code's `apiKeyHelper`
     (https://docs.claude.com/en/docs/claude-code/settings): stdout must
-    contain only the token, so all diagnostics go to stderr. The token
-    expires after `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h); once
-    expired, run `lite login` again.
+    contain only the token, so all diagnostics go to stderr.
+
+    A proxy-minted token expires after `LITELLM_CLI_JWT_EXPIRATION_HOURS`
+    (default 24h) and cannot be renewed here; once expired, run `lite login`
+    again. A native OIDC credential carries a refresh token and is refreshed
+    in place, so an unattended `apiKeyHelper` invocation keeps working.
     """
     token_data = load_token()
     if not token_data:
@@ -681,7 +751,20 @@ def print_token(ctx: click.Context):
             click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
             sys.exit(1)
 
-    if not is_cli_token_fresh(token_data):
+    if is_native_credential(token_data):
+        # A native credential carries a refresh token, so an expired access token is
+        # recoverable without user interaction -- which is the whole point of
+        # apiKeyHelper being invoked unattended.
+        if needs_refresh(token_data):
+            try:
+                token_data = refresh_native_credential(token_data)
+            except NativeOIDCError as error:
+                click.echo(
+                    f"Token expired and could not be refreshed ({error}). Run 'lite login' again.",
+                    err=True,
+                )
+                sys.exit(1)
+    elif not is_cli_token_fresh(token_data):
         click.echo("Token expired. Run 'lite login' again.", err=True)
         sys.exit(1)
 
@@ -700,6 +783,21 @@ def whoami():
 
     if not token_data:
         click.echo("Not authenticated. Run 'lite login' to authenticate.")
+        return
+
+    if is_native_credential(token_data):
+        click.echo("Authenticated (native OIDC)")
+        click.echo(f"Proxy: {token_data.get('base_url', 'Unknown')}")
+        click.echo(f"Issuer: {token_data.get('issuer', 'Unknown')}")
+        click.echo(f"Client ID: {token_data.get('client_id', 'Unknown')}")
+        click.echo(f"Scopes: {' '.join(token_data.get('scopes') or []) or 'Unknown'}")
+        # Identity itself is not shown: the CLI never inspects token claims, and the
+        # proxy is the only component entitled to resolve them.
+        if needs_refresh(token_data):
+            if token_data.get("refresh_token"):
+                click.echo("Access token expired; it will be refreshed on next use.")
+            else:
+                click.echo("Access token expired and there is no refresh token. Run 'lite login'.")
         return
 
     click.echo("Authenticated")

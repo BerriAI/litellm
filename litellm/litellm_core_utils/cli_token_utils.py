@@ -73,9 +73,19 @@ def get_litellm_gateway_api_key(
 def is_cli_token_fresh(token_data: dict, buffer_hours: float = 0.1) -> bool:
     """Check whether a cached CLI token (as stored in token.json) is still
     within its expiration window. Used by `lite auth print-token` to fail
-    fast, without a network round trip, once the cached token is past
-    `LITELLM_CLI_JWT_EXPIRATION_HOURS`."""
+    fast, without a network round trip.
+
+    Two credential formats share this file. A proxy-minted token is bounded by
+    `LITELLM_CLI_JWT_EXPIRATION_HOURS`; a native OIDC token carries the identity
+    provider's own `expires_at`, which is typically far shorter, so the two must
+    not be judged by the same clock."""
     from litellm.constants import CLI_JWT_EXPIRATION_HOURS
+
+    if token_data.get("auth_type") == "native_oidc":
+        expires_at = token_data.get("expires_at")
+        if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)):
+            return False
+        return time.time() < (expires_at - buffer_hours * 3600)
 
     timestamp = token_data.get("timestamp")
     if not isinstance(timestamp, (int, float)):
