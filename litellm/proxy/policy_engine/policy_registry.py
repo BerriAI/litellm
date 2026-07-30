@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
+    Literal,
     Optional,
     Protocol,
     TypedDict,
@@ -163,6 +164,7 @@ class PolicyRegistry:
     def __init__(self):
         self._policies: dict[str, Policy] = {}
         self._policies_by_id: dict[str, tuple[str, Policy]] = {}
+        self._config_policies: dict[str, Policy] = {}
         self._initialized: bool = False
 
     def load_policies(self, policies_config: Mapping[str, dict[str, object]]) -> None:
@@ -175,11 +177,13 @@ class PolicyRegistry:
         """
         self._policies = {}
         self._policies_by_id = {}
+        self._config_policies = {}
 
         for policy_name, policy_data in policies_config.items():
             try:
                 policy = self._parse_policy(policy_name, policy_data)
                 self._policies[policy_name] = policy
+                self._config_policies[policy_name] = policy
                 verbose_proxy_logger.debug(f"Loaded policy: {policy_name}")
             except Exception as e:
                 verbose_proxy_logger.error(f"Error loading policy '{policy_name}': {str(e)}")
@@ -299,7 +303,26 @@ class PolicyRegistry:
         Clear all policies from the registry.
         """
         self._policies = {}
+        self._config_policies = {}
         self._initialized = False
+
+    def get_config_policies(self) -> dict[str, Policy]:
+        """
+        Get the policies that came from config.yaml, excluding names a DB row shadows.
+        """
+        return {
+            name: policy for name, policy in self._config_policies.items() if self.get_policy_source(name) == "config"
+        }
+
+    def get_policy_source(self, policy_name: str) -> Literal["config", "db"] | None:
+        """
+        Return the provenance of an in-memory policy, or None if it isn't loaded.
+        """
+        if policy_name not in self._policies:
+            return None
+        if self._policies.get(policy_name) is self._config_policies.get(policy_name):
+            return "config"
+        return "db"
 
     def add_policy(self, policy_name: str, policy: Policy) -> None:
         """
@@ -595,7 +618,7 @@ class PolicyRegistry:
           policy_<uuid> overrides can be resolved without DB access in the hot path.
         """
         try:
-            self._policies = {}
+            self._policies = dict(self._config_policies)
             production = await self.get_all_policies_from_db(prisma_client, version_status="production")
             for policy_response in production:
                 policy = self._parse_policy(
