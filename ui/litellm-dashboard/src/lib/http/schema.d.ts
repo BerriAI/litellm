@@ -9379,7 +9379,10 @@ export interface paths {
         };
         /**
          * List Policy Attachments
-         * @description List all policy attachments from the database.
+         * @description List all policy attachments from the database and config.yaml.
+         *
+         *     Config-defined attachments are returned with definition_location "config" and a
+         *     synthetic attachment_id ("config-<index>").
          *
          *     Example Request:
          *     ```bash
@@ -9487,7 +9490,10 @@ export interface paths {
         };
         /**
          * List Policies
-         * @description List all policies from the database. Optionally filter by version_status.
+         * @description List all policies from the database and config.yaml. Optionally filter by version_status.
+         *
+         *     Config-defined policies are returned with definition_location "config" and are treated
+         *     as production versions. On a name conflict with a DB policy, only the DB policy is returned.
          *
          *     Query params:
          *     - version_status: Optional. One of "draft", "published", "production".
@@ -29380,6 +29386,13 @@ export interface components {
              */
             created_by?: string | null;
             /**
+             * Definition Location
+             * @description Where this attachment is defined: 'db' (database) or 'config' (config.yaml).
+             * @default db
+             * @enum {string}
+             */
+            definition_location: "db" | "config";
+            /**
              * Keys
              * @description Key patterns.
              */
@@ -29510,6 +29523,13 @@ export interface components {
              * @description Who created the policy.
              */
             created_by?: string | null;
+            /**
+             * Definition Location
+             * @description Where this policy is defined: 'db' (database) or 'config' (config.yaml).
+             * @default db
+             * @enum {string}
+             */
+            definition_location: "db" | "config";
             /**
              * Description
              * @description Policy description.
@@ -33116,6 +33136,17 @@ export interface components {
              * @description Model to use for AI chat
              */
             model?: string | null;
+        };
+        /** UsageChartPoint */
+        UsageChartPoint: {
+            /** Blocked */
+            blocked: number;
+            /** Date */
+            date: string;
+            /** Passed */
+            passed: number;
+            /** Score */
+            score?: number | null;
         };
         /** UsageDetailResponse */
         UsageDetailResponse: {
