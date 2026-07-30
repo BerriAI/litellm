@@ -32,6 +32,8 @@ const DEFAULT_PAGINATION: PaginationState = { pageIndex: 0, pageSize: DEFAULT_PA
 interface AllModelsTabProps {
   selectedModelGroup: string | null;
   setSelectedModelGroup: (selectedModelGroup: string) => void;
+  selectedModelAccessGroupFilter: string | null;
+  setSelectedModelAccessGroupFilter: (selectedModelAccessGroupFilter: string | null) => void;
   availableModelGroups: string[];
   availableModelAccessGroups: string[];
   setSelectedModelId: (id: string) => void;
@@ -41,6 +43,8 @@ interface AllModelsTabProps {
 const AllModelsTab = ({
   selectedModelGroup,
   setSelectedModelGroup,
+  selectedModelAccessGroupFilter,
+  setSelectedModelAccessGroupFilter,
   availableModelGroups,
   availableModelAccessGroups,
   setSelectedModelId,
@@ -55,7 +59,6 @@ const AllModelsTab = ({
   const [debouncedSearch, setDebouncedSearch] = useState<string>("");
   const [modelViewMode, setModelViewMode] = useState<ModelViewMode>("current_team");
   const [selectedTeamValue, setSelectedTeamValue] = useState<string>(PERSONAL_TEAM_VALUE);
-  const [selectedModelAccessGroupFilter, setSelectedModelAccessGroupFilter] = useState<string | null>(null);
   const [pagination, setPagination] = useState<PaginationState>(DEFAULT_PAGINATION);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [isModelSettingsModalVisible, setIsModelSettingsModalVisible] = useState(false);

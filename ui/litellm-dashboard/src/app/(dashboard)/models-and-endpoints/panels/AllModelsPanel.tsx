@@ -8,18 +8,27 @@ import { useModelDashboardData } from "@/app/(dashboard)/models-and-endpoints/us
 import { useModelDetailRouting } from "@/app/(dashboard)/models-and-endpoints/detailNavigation";
 import { navigateWithParams } from "@/app/(dashboard)/navigateWithParams";
 
-export default function AllModelsPanel() {
+const useUrlFilter = (paramName: string): [string | null, (value: string | null) => void] => {
   const searchParams = useSearchParams();
-  const selectedModelGroup = searchParams?.get("model_group") ?? null;
-  const setSelectedModelGroup = useCallback((modelGroup: string) => {
-    navigateWithParams((params) => {
-      if (modelGroup && modelGroup !== ALL_MODEL_GROUPS_VALUE) {
-        params.set("model_group", modelGroup);
-      } else {
-        params.delete("model_group");
-      }
-    }, "replace");
-  }, []);
+  const value = searchParams?.get(paramName) ?? null;
+  const setValue = useCallback(
+    (nextValue: string | null) => {
+      navigateWithParams((params) => {
+        if (nextValue && nextValue !== ALL_MODEL_GROUPS_VALUE) {
+          params.set(paramName, nextValue);
+        } else {
+          params.delete(paramName);
+        }
+      }, "replace");
+    },
+    [paramName],
+  );
+  return [value, setValue];
+};
+
+export default function AllModelsPanel() {
+  const [selectedModelGroup, setSelectedModelGroup] = useUrlFilter("model_group");
+  const [selectedModelAccessGroupFilter, setSelectedModelAccessGroupFilter] = useUrlFilter("model_access_group");
   const { availableModelGroups, availableModelAccessGroups } = useModelDashboardData();
   const { openModel, openTeam } = useModelDetailRouting();
 
@@ -27,6 +36,8 @@ export default function AllModelsPanel() {
     <AllModelsTab
       selectedModelGroup={selectedModelGroup}
       setSelectedModelGroup={setSelectedModelGroup}
+      selectedModelAccessGroupFilter={selectedModelAccessGroupFilter}
+      setSelectedModelAccessGroupFilter={setSelectedModelAccessGroupFilter}
       availableModelGroups={availableModelGroups}
       availableModelAccessGroups={availableModelAccessGroups}
       setSelectedModelId={openModel}
