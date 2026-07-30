@@ -282,7 +282,14 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
 
     end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
 
-    api_key = metadata.get("user_api_key", "")
+    # `metadata.get("user_api_key", "")` returns `None` when the key exists
+    # but its value is `None` (e.g. unauthenticated requests that fail auth
+    # before a key is resolved — the auth-exception handler fabricates a
+    # synthetic user record with `api_key=None`). Coerce `None` to "" here
+    # so downstream `or`-chaining and the final `str(api_key)` coercion in
+    # `SpendLogsPayload` don't end up storing the literal string "None".
+    raw_api_key = metadata.get("user_api_key")
+    api_key = raw_api_key if raw_api_key is not None else ""
 
     standard_logging_prompt_tokens: int = 0
     standard_logging_completion_tokens: int = 0
@@ -416,7 +423,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         payload: SpendLogsPayload = SpendLogsPayload(
             request_id=str(id),
             call_type=call_type or "",
-            api_key=str(api_key),
+            api_key=str(api_key) if api_key is not None else "",
             cache_hit=str(cache_hit),
             startTime=_ensure_datetime_utc(start_time),
             endTime=_ensure_datetime_utc(end_time),
