@@ -35,9 +35,15 @@ from ._logging import verbose_logger
 AZURE_REDIS_SCOPE = "https://redis.azure.com/.default"
 
 
-def _get_redis_kwargs():
-    arg_spec = inspect.getfullargspec(redis.Redis)
+def _get_signature_arg_names(obj: Callable) -> List[str]:
+    return [
+        name
+        for name, param in inspect.signature(obj).parameters.items()
+        if param.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+    ]
 
+
+def _get_redis_kwargs():
     # Only allow primitive arguments
     exclude_args = {
         "self",
@@ -56,7 +62,7 @@ def _get_redis_kwargs():
         "azure_client_secret",
     }
 
-    available_args = {x for x in arg_spec.args if x not in exclude_args} | include_args
+    available_args = {x for x in _get_signature_arg_names(redis.Redis) if x not in exclude_args} | include_args
 
     return available_args
 
@@ -64,7 +70,6 @@ def _get_redis_kwargs():
 def _get_redis_url_kwargs(client=None):
     if client is None:
         client = redis.Redis.from_url
-    arg_spec = inspect.getfullargspec(redis.Redis.from_url)
 
     # Only allow primitive arguments
     exclude_args = {
@@ -75,20 +80,19 @@ def _get_redis_url_kwargs(client=None):
 
     include_args = ["url"]
 
-    available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
+    available_args = [x for x in _get_signature_arg_names(client) if x not in exclude_args] + include_args
 
     return available_args
 
 
 def _get_redis_cluster_kwargs(client=None):
     if client is None:
-        client = redis.Redis.from_url
-    arg_spec = inspect.getfullargspec(redis.RedisCluster)
+        client = redis.RedisCluster
 
     # Only allow primitive arguments
     exclude_args = {"self", "connection_pool", "retry", "host", "port", "startup_nodes"}
 
-    available_args = {x for x in arg_spec.args if x not in exclude_args}
+    available_args = {x for x in _get_signature_arg_names(client) if x not in exclude_args}
     available_args |= {
         "password",
         "username",
@@ -567,7 +571,7 @@ def get_redis_async_client(
     if "startup_nodes" in redis_kwargs:
         from redis.cluster import ClusterNode
 
-        args = _get_redis_cluster_kwargs()
+        args = _get_redis_cluster_kwargs(client=async_redis.RedisCluster)
         cluster_kwargs = {}
         for arg in redis_kwargs:
             if arg in args:
