@@ -453,3 +453,14 @@ class TestConfigAttachmentsPreservedAcrossDbSync:
         await registry.sync_attachments_from_db(_prisma_with_attachment_rows([]))
 
         assert len(registry.get_all_attachments()) == 1
+
+    @pytest.mark.asyncio
+    async def test_clear_removes_config_snapshot_so_sync_does_not_resurrect(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments([{"policy": "config-policy", "scope": "*"}])
+
+        registry.clear()
+        await registry.sync_attachments_from_db(_prisma_with_attachment_rows([]))
+
+        assert registry.get_all_attachments() == []
+        assert registry.get_config_attachments() == ()

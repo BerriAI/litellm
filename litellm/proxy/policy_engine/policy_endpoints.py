@@ -80,7 +80,10 @@ async def list_policies(version_status: Optional[str] = None):
     List all policies from the database and config.yaml. Optionally filter by version_status.
 
     Config-defined policies are returned with definition_location "config" and are treated
-    as production versions. On a name conflict with a DB policy, only the DB policy is returned.
+    as production versions. On a name conflict with a production DB policy, only the DB policy
+    is returned, mirroring runtime resolution where only production DB versions override config.
+    A draft or published DB version does not hide the config policy, since the config version
+    is still the one being enforced.
 
     Query params:
     - version_status: Optional. One of "draft", "published", "production".
@@ -125,7 +128,9 @@ async def list_policies(version_status: Optional[str] = None):
             if prisma_client is not None
             else []
         )
-        db_policy_names = {db_policy.policy_name for db_policy in db_policies}
+        db_policy_names = {
+            db_policy.policy_name for db_policy in db_policies if db_policy.version_status == "production"
+        }
         include_config = version_status in (None, "production")
         config_policies = (
             [

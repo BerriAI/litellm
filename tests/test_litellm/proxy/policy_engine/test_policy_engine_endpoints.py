@@ -134,6 +134,32 @@ class TestListPoliciesIncludesConfig:
         assert response.policies[0].guardrails_add == ["db-guard"]
 
     @pytest.mark.asyncio
+    async def test_draft_db_policy_does_not_hide_enforced_config_policy(self, policy_registry, monkeypatch):
+        """
+        Runtime sync only lets production DB versions override a config policy,
+        so a draft or published DB version sharing the name must not suppress
+        the config entry: the config version is still the one being enforced,
+        and hiding it makes the list API disagree with actual enforcement.
+        """
+        row = _make_policy_row(
+            policy_id="uuid-1", policy_name="shared-name", version_status="draft", guardrails_add=["db-guard"]
+        )
+        prisma = MagicMock()
+        prisma.db.litellm_policytable.find_many = AsyncMock(return_value=[row])
+        _set_prisma(monkeypatch, prisma)
+        policy_registry.load_policies({"shared-name": {"guardrails": {"add": ["config-guard"]}}})
+
+        response = await policy_endpoints.list_policies()
+
+        assert response.total_count == 2
+        config_entry = next(p for p in response.policies if p.definition_location == "config")
+        assert config_entry.policy_name == "shared-name"
+        assert config_entry.version_status == "production"
+        assert config_entry.guardrails_add == ["config-guard"]
+        db_entry = next(p for p in response.policies if p.definition_location == "db")
+        assert db_entry.version_status == "draft"
+
+    @pytest.mark.asyncio
     async def test_version_status_filter_excludes_config_policies(self, policy_registry, monkeypatch):
         row = _make_policy_row(policy_id="uuid-1", policy_name="db-policy", version_status="draft")
         prisma = MagicMock()
