@@ -46371,15 +46371,15 @@
     "max_tokens": 128000,
     "max_input_tokens": 922000,
     "max_output_tokens": 128000,
-    "input_cost_per_token": 1.5885000000000001e-06,
-    "output_cost_per_token": 1.5885000000000001e-06,
-    "cache_read_input_token_cost": 1.5885000000000001e-06,
+    "input_cost_per_token": 1.5885e-06,
+    "output_cost_per_token": 1.5885e-06,
+    "cache_read_input_token_cost": 1.5885e-06,
     "litellm_provider": "thegrid",
     "mode": "chat",
     "supports_function_calling": true,
     "supports_reasoning": true,
     "supports_response_schema": true,
-    "supports_vision": false
+    "supports_vision": true
   },
   "thegrid/agent-prime": {
     "max_tokens": 30000,
@@ -46405,7 +46405,7 @@
     "litellm_provider": "thegrid",
     "mode": "chat",
     "supports_function_calling": true,
-    "supports_reasoning": false,
+    "supports_reasoning": true,
     "supports_response_schema": true,
     "supports_vision": false
   },
@@ -46413,15 +46413,15 @@
     "max_tokens": 128000,
     "max_input_tokens": 922000,
     "max_output_tokens": 128000,
-    "input_cost_per_token": 1.7553000000000002e-06,
-    "output_cost_per_token": 1.7553000000000002e-06,
-    "cache_read_input_token_cost": 1.7553000000000002e-06,
+    "input_cost_per_token": 1.7553e-06,
+    "output_cost_per_token": 1.7553e-06,
+    "cache_read_input_token_cost": 1.7553e-06,
     "litellm_provider": "thegrid",
     "mode": "chat",
     "supports_function_calling": true,
     "supports_reasoning": true,
     "supports_response_schema": true,
-    "supports_vision": false
+    "supports_vision": true
   },
   "thegrid/code-prime": {
     "max_tokens": 30000,
@@ -46447,7 +46447,7 @@
     "litellm_provider": "thegrid",
     "mode": "chat",
     "supports_function_calling": true,
-    "supports_reasoning": false,
+    "supports_reasoning": true,
     "supports_response_schema": true,
     "supports_vision": false
   },
@@ -46460,10 +46460,10 @@
     "cache_read_input_token_cost": 1.68e-06,
     "litellm_provider": "thegrid",
     "mode": "chat",
-    "supports_function_calling": false,
+    "supports_function_calling": true,
     "supports_reasoning": true,
     "supports_response_schema": true,
-    "supports_vision": false
+    "supports_vision": true
   },
   "thegrid/text-prime": {
     "max_tokens": 30000,
@@ -46474,7 +46474,7 @@
     "cache_read_input_token_cost": 1.017e-07,
     "litellm_provider": "thegrid",
     "mode": "chat",
-    "supports_function_calling": false,
+    "supports_function_calling": true,
     "supports_reasoning": true,
     "supports_response_schema": true,
     "supports_vision": false
@@ -46488,8 +46488,8 @@
     "cache_read_input_token_cost": 3e-08,
     "litellm_provider": "thegrid",
     "mode": "chat",
-    "supports_function_calling": false,
-    "supports_reasoning": false,
+    "supports_function_calling": true,
+    "supports_reasoning": true,
     "supports_response_schema": true,
     "supports_vision": false
   }
