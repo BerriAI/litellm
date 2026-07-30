@@ -9,6 +9,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 
 import asyncio
 import fnmatch
+import math
 import re
 import secrets
 
@@ -2702,7 +2703,9 @@ def _get_temp_budget_increase(valid_token: UserAPIKeyAuth) -> Optional[float]:
         if expiry.tzinfo is None:
             expiry = expiry.replace(tzinfo=timezone.utc)
         if expiry > datetime.now(timezone.utc):
-            return float(valid_token_metadata["temp_budget_increase"])
+            increase = float(valid_token_metadata["temp_budget_increase"])
+            if math.isfinite(increase):
+                return increase
     return None
 
 

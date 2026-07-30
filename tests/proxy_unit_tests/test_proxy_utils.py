@@ -1763,6 +1763,28 @@ def test_get_temp_budget_increase_tz_aware_expiry():
     assert _get_temp_budget_increase(expired_token) is None
 
 
+@pytest.mark.parametrize("bad_increase", [float("inf"), float("-inf"), float("nan"), "1e999"])
+def test_get_temp_budget_increase_non_finite_is_ignored(bad_increase):
+    """A non-finite boost (inf/nan, or a string like "1e999" that parses to inf) must be
+    treated as no boost. Otherwise `finite_budget + inf` becomes inf, and every enforcement
+    site's `math.isfinite` guard skips the over-budget check, silently disabling the budget."""
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import _get_temp_budget_increase
+
+    future_expiry = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    token = UserAPIKeyAuth(
+        max_budget=100,
+        spend=0,
+        metadata={
+            "temp_budget_increase": bad_increase,
+            "temp_budget_expiry": future_expiry,
+        },
+    )
+    assert _get_temp_budget_increase(token) is None
+
+
 def test_update_key_budget_with_temp_budget_increase():
     from datetime import datetime, timedelta
 
