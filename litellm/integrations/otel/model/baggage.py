@@ -32,19 +32,25 @@ _PROMOTABLE: Final[dict[str, Callable[[RequestIdentity, str | None, tuple[str, .
     ),
     LiteLLM.KEY_HASH: lambda identity, model, team_metadata_keys: identity.key_hash,
     LiteLLM.END_USER: lambda identity, model, team_metadata_keys: identity.end_user,
+    LiteLLM.REQUEST_MODEL: lambda identity, model, team_metadata_keys: model,
     GenAI.REQUEST_MODEL: lambda identity, model, team_metadata_keys: model,
     LiteLLM.PROVIDER_MODEL: lambda identity, model, team_metadata_keys: identity.provider_model,
 }
 
 # Keys promoted by default (a subset of ``_PROMOTABLE``). ``END_USER`` is
 # promotable but off by default — it identifies an individual user, so stamping
-# it onto every span is opt-in via ``config.baggage_promoted_keys``.
+# it onto every span is opt-in via ``config.baggage_promoted_keys``. The
+# requested model is promoted as the vendor ``litellm.request.model``: baggage
+# lands on every span of the request, and canonical ``gen_ai.request.model`` on
+# an HTTP/DB/guardrail span makes GenAI-aware backends (e.g. Langfuse) render
+# that span as an LLM generation. ``GenAI.REQUEST_MODEL`` stays promotable for
+# operators who deliberately want the canonical key everywhere.
 BAGGAGE_PROMOTED_KEYS: Final[tuple[str, ...]] = (
     LiteLLM.TEAM_ID,
     LiteLLM.TEAM_ALIAS,
     LiteLLM.TEAM_METADATA,
     LiteLLM.KEY_HASH,
-    GenAI.REQUEST_MODEL,
+    LiteLLM.REQUEST_MODEL,
     LiteLLM.PROVIDER_MODEL,
 )
 

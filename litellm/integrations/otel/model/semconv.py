@@ -232,6 +232,11 @@ class LiteLLM:
     # The model string litellm actually sent to the provider (the deployment's
     # ``litellm_params.model``), distinct from the user-facing ``gen_ai.request.model``.
     PROVIDER_MODEL: Final = "litellm.provider.model"
+    # The requested model, promoted onto non-GenAI spans (server, DB, guardrail)
+    # for correlation. Canonical ``gen_ai.request.model`` stays on GenAI spans
+    # only, so a GenAI-aware backend can't read an HTTP or DB span as an LLM
+    # generation.
+    REQUEST_MODEL: Final = "litellm.request.model"
     REQUEST_STREAMING: Final = "litellm.request.streaming"
     GUARDRAIL_NAME: Final = "litellm.guardrail.name"
     GUARDRAIL_MODE: Final = "litellm.guardrail.mode"
