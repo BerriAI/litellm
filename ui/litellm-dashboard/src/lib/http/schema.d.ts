@@ -28013,6 +28013,15 @@ export interface components {
              */
             type: "mutualTLS";
         };
+        /** NativeOIDCConfig */
+        NativeOIDCConfig: {
+            /** Client Id */
+            client_id: string;
+            /** Discovery Url */
+            discovery_url: string;
+            /** Scopes */
+            scopes: string[];
+        };
         /**
          * NewCustomerRequest
          * @description Create a new customer, allocate a budget to them
@@ -32493,6 +32502,7 @@ export interface components {
              * @default false
              */
             is_control_plane: boolean;
+            native_oidc?: components["schemas"]["NativeOIDCConfig"] | null;
             /** Proxy Base Url */
             proxy_base_url: string | null;
             /** Server Root Path */
