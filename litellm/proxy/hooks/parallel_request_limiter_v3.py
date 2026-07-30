@@ -16,7 +16,9 @@ from typing import (
     Dict,
     List,
     Literal,
+    Mapping,
     Optional,
+    Sequence,
     Set,
     Tuple,
     TypedDict,
@@ -26,7 +28,10 @@ from typing import (
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
+from litellm.constants import (
+    DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE,
+    RATE_LIMIT_CHECK_ONLY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -65,6 +70,25 @@ if TYPE_CHECKING:
 else:
     Span = Any
     InternalUsageCache = Any
+
+RateLimitIncrement = Union[int, Literal["check_only"]]
+RateLimitIncrementAmounts = Mapping[Literal["requests", "tokens"], RateLimitIncrement]
+
+
+def _resolve_increment(raw: RateLimitIncrement | None) -> int | None:
+    """
+    Map a requested increment onto the Lua/in-memory ARGV increment.
+
+    Returns None when the counter should not be tracked or enforced at all,
+    and 0 when it should be enforced against usage recorded so far without
+    advancing it (`RATE_LIMIT_CHECK_ONLY`).
+    """
+    if isinstance(raw, str):
+        return 0 if raw == RATE_LIMIT_CHECK_ONLY else None
+    if raw is None or raw <= 0:
+        return None
+    return raw
+
 
 BATCH_RATE_LIMITER_SCRIPT = """
 local results = {}
@@ -116,7 +140,7 @@ CHECK_AND_INCREMENT_BY_N_SCRIPT = """
 -- KEYS layout: pairs of (window_key, counter_key), one pair per descriptor.
 -- ARGV layout: per-descriptor 4-tuple, starting at ARGV[1]:
 --     ARGV[(i-1)*4 + 1] = limit
---     ARGV[(i-1)*4 + 2] = increment
+--     ARGV[(i-1)*4 + 2] = increment (0 = check the counter without advancing it)
 --     ARGV[(i-1)*4 + 3] = ttl_seconds (counter TTL when window resets)
 --     ARGV[(i-1)*4 + 4] = window_size_seconds (sliding-window length)
 --
@@ -141,13 +165,18 @@ for i = 1, descriptor_count do
         ((now - tonumber(window_start)) >= window_size)
 
     local current_counter
-    if window_expired then
+    if window_expired and increment > 0 then
         current_counter = 0
     else
         current_counter = tonumber(redis.call('GET', counter_key) or 0)
     end
 
-    if current_counter + increment > limit then
+    local check_increment = increment
+    if check_increment < 1 then
+        check_increment = 1
+    end
+
+    if current_counter + check_increment > limit then
         return { 1, i, current_counter, limit }
     end
 
@@ -166,7 +195,9 @@ for i = 1, descriptor_count do
 
     local window_expired = descriptor_state[i][1]
 
-    if window_expired then
+    if increment == 0 then
+        table.insert(results, descriptor_state[i][2])
+    elseif window_expired then
         redis.call('SET', window_key, tostring(now))
         redis.call('SET', counter_key, increment)
         redis.call('EXPIRE', window_key, window_size)
@@ -1215,7 +1246,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     async def atomic_check_and_increment_by_n(
         self,
         descriptors: List[RateLimitDescriptor],
-        increments: List[Dict[Literal["requests", "tokens"], int]],
+        increments: Sequence[RateLimitIncrementAmounts],
         parent_otel_span: Optional[Span] = None,
     ) -> RateLimitResponse:
         """
@@ -1237,8 +1268,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Args:
             descriptors: rate-limit descriptors to check
             increments: per-descriptor increment amounts, indexed parallel to
-                `descriptors`. Each entry is `{"requests": int, "tokens": int}`
-                — values default to 0 when a descriptor has no matching limit.
+                `descriptors`. Each entry is
+                `{"requests": int | RATE_LIMIT_CHECK_ONLY, "tokens": int | RATE_LIMIT_CHECK_ONLY}`.
+                A missing or non-positive int means "do not track this
+                dimension at all"; `RATE_LIMIT_CHECK_ONLY` means "enforce this dimension
+                against usage already recorded, without advancing it".
 
         Returns:
             RateLimitResponse with one status per (descriptor, rate_limit_type)
@@ -1283,7 +1317,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _build_descriptor_atomic_payload(
         self,
         descriptor: RateLimitDescriptor,
-        increment_amounts: Dict[Literal["requests", "tokens"], int],
+        increment_amounts: RateLimitIncrementAmounts,
     ) -> Tuple[List[str], List[Any], List[Dict[str, Any]]]:
         """
         Build (KEYS, ARGV, per-counter meta) for a single descriptor's Lua
@@ -1305,11 +1339,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             rlt: Literal["requests", "tokens"] = cast(Literal["requests", "tokens"], rate_limit_type)
             if rlt == "requests":
                 limit_value = rate_limit.get("requests_per_unit")
-                inc_amount = int(increment_amounts.get("requests", 0) or 0)
+                inc_amount = _resolve_increment(increment_amounts.get("requests", 0))
             else:
                 limit_value = rate_limit.get("tokens_per_unit")
-                inc_amount = int(increment_amounts.get("tokens", 0) or 0)
-            if limit_value is None or inc_amount <= 0:
+                inc_amount = _resolve_increment(increment_amounts.get("tokens", 0))
+            if limit_value is None or inc_amount is None:
                 continue
             counter_key = self.create_rate_limit_keys(descriptor_key, descriptor_value, rlt)
             # Counter-key TTL and window_size are conceptually distinct
@@ -1402,6 +1436,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return
         for group_meta in applied:
             for entry in group_meta:
+                if entry["increment"] == 0:
+                    continue
                 try:
                     await redis_cache.async_increment(
                         key=entry["counter_key"],
@@ -1492,7 +1528,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             window_expired = window_start is None or (now_int - int(window_start)) >= window_size
             current_counter = (
                 0
-                if window_expired
+                if window_expired and meta["increment"] > 0
                 else int(
                     await self.internal_usage_cache.async_get_cache(
                         key=meta["counter_key"],
@@ -1502,7 +1538,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     or 0
                 )
             )
-            if current_counter + meta["increment"] > meta["current_limit"]:
+            if current_counter + max(meta["increment"], 1) > meta["current_limit"]:
                 return RateLimitResponse(
                     overall_code="OVER_LIMIT",
                     statuses=[
@@ -1520,6 +1556,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # Pass 2: apply increments.
         statuses: List[RateLimitStatus] = []
         for meta, state in zip(per_counter_meta, descriptor_state):
+            if meta["increment"] == 0:
+                statuses.append(
+                    RateLimitStatus(
+                        code="OK",
+                        current_limit=meta["current_limit"],
+                        limit_remaining=max(0, meta["current_limit"] - state["current"]),
+                        rate_limit_type=meta["rate_limit_type"],
+                        descriptor_key=meta["descriptor_key"],
+                    )
+                )
+                continue
             new_counter = meta["increment"] if state["window_expired"] else state["current"] + meta["increment"]
             if state["window_expired"]:
                 await self.internal_usage_cache.async_set_cache(

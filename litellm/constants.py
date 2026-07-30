@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import List, Literal, Optional
+from typing import Final, List, Literal, Optional
 
 from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_or_none
 
@@ -1321,6 +1321,8 @@ DEFAULT_SOFT_BUDGET = float(
 )  # by default all litellm proxy keys have a soft budget of 50.0
 # makes it clear this is a rate limit error for a litellm virtual key
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY = "LiteLLM Virtual Key user_api_key_hash"
+# rate-limit increment marking a counter as enforced but not advanced
+RATE_LIMIT_CHECK_ONLY: Final[Literal["check_only"]] = "check_only"
 
 # Python garbage collection threshold configuration
 # Format: "gen0,gen1,gen2" e.g., "1000,50,50"
