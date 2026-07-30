@@ -242,6 +242,74 @@ class TestAzureAnthropicConfig:
         assert result["max_tokens"] == 100
         assert "messages" in result
 
+    def test_transform_request_strips_output_config_effort_for_unsupported_model(self):
+        """Regression test: Azure AI Foundry returns 400 when output_config.effort is forwarded to a model without supports_output_config in the model map (e.g. Haiku 4.5).
+
+        See: https://github.com/BerriAI/litellm/issues/27168
+        """
+        config = AzureAnthropicConfig()
+
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {"max_tokens": 100}
+        litellm_params = {"api_key": "test-key"}
+        headers = {"api-key": "test-key", "anthropic-version": "2023-06-01"}
+
+        with patch.object(
+            config.__class__.__bases__[0],  # AnthropicConfig
+            "transform_request",
+            return_value={
+                "model": "claude-haiku-4-5",
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+                ],
+                "max_tokens": 100,
+                "output_config": {"effort": "medium"},  # Should be stripped
+            },
+        ):
+            result = config.transform_request(
+                model="claude-haiku-4-5",
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
+
+        assert "output_config" not in result
+        assert result["model"] == "claude-haiku-4-5"
+        assert result["max_tokens"] == 100
+
+    def test_transform_request_preserves_output_config_for_supported_model(self):
+        """output_config must be forwarded for models that advertise supports_output_config (e.g. Sonnet 4.6+)."""
+        config = AzureAnthropicConfig()
+
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {"max_tokens": 100}
+        litellm_params = {"api_key": "test-key"}
+        headers = {"api-key": "test-key", "anthropic-version": "2023-06-01"}
+
+        with patch.object(
+            config.__class__.__bases__[0],  # AnthropicConfig
+            "transform_request",
+            return_value={
+                "model": "claude-sonnet-4-6",
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+                ],
+                "max_tokens": 100,
+                "output_config": {"effort": "medium"},
+            },
+        ):
+            result = config.transform_request(
+                model="claude-sonnet-4-6",
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
+
+        assert "output_config" in result
+        assert result["output_config"] == {"effort": "medium"}
+
     def test_context_management_compact_beta_header(self):
         """Test that context_management with compact adds the correct beta header for Azure AI"""
         config = AzureAnthropicConfig()

@@ -8,6 +8,9 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure_ai.anthropic.output_params_utils import (
+    sanitize_azure_anthropic_output_params,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
@@ -168,4 +171,5 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         )
         self._normalize_system_role_messages(anthropic_messages_request, model=model)
         self._remove_scope_from_cache_control(anthropic_messages_request)
+        sanitize_azure_anthropic_output_params(anthropic_messages_request, model)
         return anthropic_messages_request

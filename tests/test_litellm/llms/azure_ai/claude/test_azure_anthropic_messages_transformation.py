@@ -289,6 +289,61 @@ class TestAzureAnthropicMessagesConfig:
             result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
         )
 
+    def test_transform_anthropic_messages_request_strips_output_config_effort_for_unsupported_model(
+        self,
+    ):
+        """Regression: output_config.effort forwarded via /anthropic/v1/messages to a model without supports_output_config causes 400 on Azure AI Foundry.
+
+        additional_drop_params does not suppress this because it operates on the
+        OpenAI->provider translation layer, not on the Anthropic pass-through path.
+        See: https://github.com/BerriAI/litellm/issues/27168
+        """
+        config = AzureAnthropicMessagesConfig()
+        model = "claude-haiku-4-5"
+        messages = [{"role": "user", "content": "Hello"}]
+        anthropic_messages_optional_request_params = {
+            "max_tokens": 1024,
+            "output_config": {"effort": "medium"},  # Should be stripped
+        }
+        litellm_params = GenericLiteLLMParams()
+        headers = {}
+
+        result = config.transform_anthropic_messages_request(
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        assert "output_config" not in result
+        assert result["max_tokens"] == 1024
+
+    def test_transform_anthropic_messages_request_preserves_output_config_for_supported_model(
+        self,
+    ):
+        """output_config must be forwarded for models that advertise supports_output_config (e.g. Sonnet 4.6+)."""
+        config = AzureAnthropicMessagesConfig()
+        model = "claude-sonnet-4-6"
+        messages = [{"role": "user", "content": "Hello"}]
+        anthropic_messages_optional_request_params = {
+            "max_tokens": 1024,
+            "output_config": {"effort": "medium"},
+        }
+        litellm_params = GenericLiteLLMParams()
+        headers = {}
+
+        result = config.transform_anthropic_messages_request(
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        assert "output_config" in result
+        assert result["output_config"] == {"effort": "medium"}
+
 
 class TestProviderConfigManagerAzureAnthropicMessages:
     """Test ProviderConfigManager returns correct config for Azure AI Anthropic Messages API"""
