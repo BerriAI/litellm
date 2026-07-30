@@ -2447,13 +2447,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 data["litellm_proxy_rate_limit_response"] = response
                 # Mirror into metadata so streaming success logging can find
                 # it via ``kwargs["litellm_params"]["metadata"]``.
-                self._stash_value_in_metadata_channels(
+                self._stash_value_in_metadata_channel(
                     data=data,
                     key=RATE_LIMIT_RESPONSE_KEY,
                     value=response,
                 )
                 if parallel_slot_id is not None:
-                    self._stash_value_in_metadata_channels(
+                    self._stash_value_in_metadata_channel(
                         data=data,
                         key=MAX_PARALLEL_SLOT_ACQUIRED_KEY,
                         value={
@@ -2533,7 +2533,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         requested_model=requested_model,
                     )
                 else:
-                    self._stash_value_in_metadata_channels(
+                    self._stash_value_in_metadata_channel(
                         data=data,
                         key=RATE_LIMIT_DESCRIPTORS_KEY,
                         value=descriptors,
@@ -2566,7 +2566,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         data["litellm_proxy_rate_limit_response"] = tpm_response
                         # Keep the metadata stash in sync when this is the
                         # first snapshot written.
-                        self._stash_value_in_metadata_channels(
+                        self._stash_value_in_metadata_channel(
                             data=data,
                             key=RATE_LIMIT_RESPONSE_KEY,
                             value=tpm_response,
@@ -2803,19 +2803,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return merged
 
     @staticmethod
-    def _stash_value_in_metadata_channels(
+    def _stash_value_in_metadata_channel(
         data: Dict[str, Any],
         key: str,
         value: Any,
     ) -> None:
-        for channel in ("metadata", "litellm_metadata"):
-            existing = data.get(channel)
-            if isinstance(existing, dict):
-                existing[key] = value
-            elif channel == "metadata":
-                # ``litellm_metadata`` is owned by the router; don't conjure
-                # it here.
-                data[channel] = {key: value}
+        channel: Literal["metadata", "litellm_metadata"] = (
+            "litellm_metadata" if "litellm_metadata" in data else "metadata"
+        )
+        existing = data.get(channel)
+        if isinstance(existing, dict):
+            existing[key] = value
+            return
+        data[channel] = {key: value}
 
     @classmethod
     def _stash_reservation_in_data(
@@ -2831,11 +2831,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         scopes_payload: Optional[List[List[str]]] = [[k, v] for k, v in reserved_scopes] if reserved_scopes else None
 
-        cls._stash_value_in_metadata_channels(data=data, key=TPM_RESERVED_TOKENS_KEY, value=estimated_tokens)
+        cls._stash_value_in_metadata_channel(data=data, key=TPM_RESERVED_TOKENS_KEY, value=estimated_tokens)
         if reserved_model:
-            cls._stash_value_in_metadata_channels(data=data, key=TPM_RESERVED_MODEL_KEY, value=reserved_model)
+            cls._stash_value_in_metadata_channel(data=data, key=TPM_RESERVED_MODEL_KEY, value=reserved_model)
         if scopes_payload is not None:
-            cls._stash_value_in_metadata_channels(data=data, key=TPM_RESERVED_SCOPES_KEY, value=scopes_payload)
+            cls._stash_value_in_metadata_channel(data=data, key=TPM_RESERVED_SCOPES_KEY, value=scopes_payload)
 
     @staticmethod
     def _lookup_stashed_value(
@@ -2858,9 +2858,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         return candidate
             litellm_params = kwargs.get("litellm_params")
             if isinstance(litellm_params, dict):
-                lp_metadata = litellm_params.get("metadata")
-                if isinstance(lp_metadata, dict):
-                    candidate = lp_metadata.get(key)
+                for channel in ("metadata", "litellm_metadata"):
+                    channel_dict = litellm_params.get(channel)
+                    if isinstance(channel_dict, dict) and key in channel_dict:
+                        candidate = channel_dict.get(key)
+                        if candidate is not None:
+                            return candidate
         if candidate is None and isinstance(standard_logging_metadata, dict):
             candidate = standard_logging_metadata.get(key)
         return candidate

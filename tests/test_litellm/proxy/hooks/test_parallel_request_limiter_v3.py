@@ -3165,6 +3165,80 @@ async def test_pre_call_hook_does_not_leak_internal_stash_to_request_body():
     assert isinstance(metadata.get(RATE_LIMIT_DESCRIPTORS_KEY), list)
 
 
+@pytest.mark.parametrize(
+    "provider_metadata",
+    [None, {"request_type": "interactive"}],
+)
+@pytest.mark.asyncio
+async def test_responses_rate_limit_stash_uses_litellm_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_metadata: Optional[Dict[str, str]],
+) -> None:
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        RATE_LIMIT_DESCRIPTORS_KEY,
+        RATE_LIMIT_RESPONSE_KEY,
+        TPM_RESERVED_MODEL_KEY,
+        TPM_RESERVED_SCOPES_KEY,
+        TPM_RESERVED_TOKENS_KEY,
+    )
+
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-responses-rate-limit"),
+        rpm_limit=100,
+        tpm_limit=10000,
+    )
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+    data: Dict[str, Any] = {
+        "model": "responses-model",
+        "input": "Reply with OK",
+        "max_tokens": 10,
+        "litellm_metadata": {},
+        **(
+            {"metadata": dict(provider_metadata)}
+            if provider_metadata is not None
+            else {}
+        ),
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="aresponses",
+    )
+
+    if provider_metadata is None:
+        assert "metadata" not in data
+    else:
+        assert data["metadata"] == provider_metadata
+
+    litellm_metadata = data["litellm_metadata"]
+    assert {
+        RATE_LIMIT_DESCRIPTORS_KEY,
+        RATE_LIMIT_RESPONSE_KEY,
+        TPM_RESERVED_MODEL_KEY,
+        TPM_RESERVED_SCOPES_KEY,
+        TPM_RESERVED_TOKENS_KEY,
+    }.issubset(litellm_metadata)
+    assert (
+        handler._lookup_stashed_value(
+            kwargs={
+                "litellm_params": {
+                    "metadata": data.get("metadata", {}),
+                    "litellm_metadata": litellm_metadata,
+                }
+            },
+            standard_logging_metadata=None,
+            key=RATE_LIMIT_RESPONSE_KEY,
+        )
+        == litellm_metadata[RATE_LIMIT_RESPONSE_KEY]
+    )
+
+
 @pytest.mark.asyncio
 async def test_pre_call_hook_rejects_caller_supplied_stash_values():
     """Caller cannot pre-populate stash keys in body metadata to drive a
