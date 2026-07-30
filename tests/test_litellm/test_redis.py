@@ -737,3 +737,52 @@ def test_connection_pool_env_redis_ssl_false_uses_plain_connection(monkeypatch):
     assert pool is not None
     assert pool.connection_class is async_redis.Connection
     assert "ssl" not in pool.connection_kwargs
+
+
+def test_connection_pool_drops_ssl_options_for_plain_connection(monkeypatch):
+    """
+    ssl_* options must not reach a plain Connection.
+
+    The admin UI cache settings form always posts ssl_check_hostname, so a
+    non-TLS deployment ends up with ssl=False plus ssl_* kwargs; forwarding
+    those to redis.asyncio.Connection raises
+    "AbstractConnection.__init__() got an unexpected keyword argument
+    'ssl_check_hostname'" on every cache write.
+    """
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("REDIS_SSL", raising=False)
+    monkeypatch.delenv("REDIS_CLUSTER_NODES", raising=False)
+
+    pool = get_redis_connection_pool(
+        host="plain-host",
+        port=6379,
+        ssl=False,
+        ssl_check_hostname=False,
+        ssl_cert_reqs="required",
+        ssl_ca_certs="/tmp/ca.pem",
+    )
+
+    assert pool is not None
+    assert pool.connection_class is async_redis.Connection
+    assert not [k for k in pool.connection_kwargs if k.startswith("ssl")]
+    assert pool.connection_class(**pool.connection_kwargs) is not None
+
+
+def test_connection_pool_keeps_ssl_options_for_tls_connection(monkeypatch):
+    """ssl=True must keep the ssl_* options that SSLConnection understands."""
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("REDIS_SSL", raising=False)
+    monkeypatch.delenv("REDIS_CLUSTER_NODES", raising=False)
+
+    pool = get_redis_connection_pool(
+        host="tls-host",
+        port=6380,
+        ssl=True,
+        ssl_check_hostname=True,
+        ssl_cert_reqs="required",
+    )
+
+    assert pool is not None
+    assert pool.connection_class is async_redis.SSLConnection
+    assert pool.connection_kwargs["ssl_check_hostname"] is True
+    assert pool.connection_kwargs["ssl_cert_reqs"] == "required"

@@ -690,6 +690,8 @@ def get_redis_connection_pool(
 
     if redis_kwargs.pop("ssl", None):
         redis_kwargs["connection_class"] = async_redis.SSLConnection
+    else:
+        redis_kwargs = {k: v for k, v in redis_kwargs.items() if not k.startswith("ssl_")}
     return async_redis.BlockingConnectionPool(timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs)
 
 
