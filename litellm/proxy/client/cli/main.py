@@ -1,5 +1,4 @@
 # stdlib imports
-import os
 from typing import Optional
 
 # third party imports
@@ -47,24 +46,9 @@ def print_version(base_url: str, api_key: Optional[str]):
 @click.option(
     "--version",
     "-v",
+    "show_version",
     is_flag=True,
-    is_eager=True,
-    expose_value=False,
     help="Show the LiteLLM Proxy CLI and server version and exit.",
-    callback=lambda ctx, param, value: (
-        (
-            print_version(
-                ctx.params.get("base_url")
-                or os.environ.get("LITELLM_PROXY_URL")
-                or get_config_value("base_url")
-                or "http://localhost:4000",
-                ctx.params.get("api_key") or os.environ.get("LITELLM_PROXY_API_KEY"),
-            )
-            or ctx.exit()
-        )
-        if value and not ctx.resilient_parsing
-        else None
-    ),
 )
 @click.option(
     "--base-url",
@@ -81,7 +65,7 @@ def print_version(base_url: str, api_key: Optional[str]):
     help="API key for authentication",
 )
 @click.pass_context
-def cli(ctx: click.Context, base_url: str | None, api_key: Optional[str]) -> None:
+def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: Optional[str]) -> None:
     """LiteLLM Proxy CLI - Manage your LiteLLM proxy server"""
     ctx.ensure_object(dict)
 
@@ -106,6 +90,10 @@ def cli(ctx: click.Context, base_url: str | None, api_key: Optional[str]) -> Non
     # whatever server the stored token was actually issued for. A base_url
     # saved via `lite config set` counts as the user saying it.
     ctx.obj["base_url_explicit"] = base_url_provided or bool(stored_base_url)
+
+    if show_version:
+        print_version(base_url, api_key)
+        ctx.exit()
 
     # If no subcommand was invoked, start interactive mode
     if ctx.invoked_subcommand is None:

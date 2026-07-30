@@ -178,8 +178,7 @@ def test_empty_base_url_flag_is_not_treated_as_unset(cli_runner, isolated_home):
 
 
 def test_version_flag_reads_config_file_base_url(cli_runner, isolated_home):
-    """--version is an eager callback that exits before --base-url is parsed, so it
-    must resolve env/config itself instead of seeing only an explicit flag value."""
+    """--version resolves through the same precedence chain as every other command."""
     _write_config_file(isolated_home, {"base_url": "https://config-proxy.example.com"})
 
     with patch(
@@ -204,3 +203,38 @@ def test_version_flag_prefers_env_var_over_config_file(cli_runner, isolated_home
 
     assert result.exit_code == 0
     assert "LiteLLM Proxy Server URL: http://env-proxy.example.com:5000" in result.output
+
+
+def test_version_flag_prefers_explicit_base_url_over_config_file(cli_runner, isolated_home):
+    """An eager --version could not see the flag and silently queried the config
+    server instead of the one the user named."""
+    _write_config_file(isolated_home, {"base_url": "https://config-proxy.example.com"})
+
+    with patch(
+        "litellm.proxy.client.health.HealthManagementClient.get_server_version",
+        return_value="1.2.3",
+    ):
+        result = cli_runner.invoke(cli, ["--base-url", "https://flag-proxy.example.com", "--version"])
+
+    assert result.exit_code == 0
+    assert "LiteLLM Proxy Server URL: https://flag-proxy.example.com" in result.output
+    assert "config-proxy.example.com" not in result.output
+
+
+def test_version_flag_never_sends_api_key_to_unnamed_server(cli_runner, isolated_home, monkeypatch):
+    """The version request carries a bearer token; it must reach only the server the
+    user named, never whichever host happens to sit in the config file."""
+    _write_config_file(isolated_home, {"base_url": "https://config-proxy.example.com"})
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-intended-for-flag-proxy")
+
+    with patch("litellm.proxy.client.http_client.requests.request") as mock_request:
+        mock_request.return_value.json.return_value = {"litellm_version": "1.2.3"}
+        mock_request.return_value.raise_for_status.return_value = None
+        result = cli_runner.invoke(cli, ["--base-url", "https://flag-proxy.example.com", "--version"])
+
+    assert result.exit_code == 0
+    requested_urls = [call.kwargs["url"] for call in mock_request.call_args_list]
+    assert requested_urls
+    assert all(url.startswith("https://flag-proxy.example.com") for url in requested_urls)
+    sent_keys = [call.kwargs["headers"].get("Authorization") for call in mock_request.call_args_list]
+    assert sent_keys == ["Bearer sk-intended-for-flag-proxy"] * len(requested_urls)
