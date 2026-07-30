@@ -20,6 +20,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
+from litellm.litellm_core_utils.cache_control_utils import parse_cache_control_header
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.types.caching import *
 from litellm.types.utils import EmbeddingResponse, all_litellm_params
@@ -884,11 +885,22 @@ class Cache:
         If cache is default_on then this is True
         If cache is default_off then this is only true when user has opted in to use cache
         """
+        _cache = kwargs.get("cache", None)
+        if _cache is None and ("headers" in kwargs or "extra_headers" in kwargs):
+            headers = kwargs.get("headers") or kwargs.get("extra_headers") or {}
+            if isinstance(headers, dict):
+                header_val = headers.get("Cache-Control") or headers.get("cache-control")
+                if header_val and isinstance(header_val, str):
+                    _cache = parse_cache_control_header(header_val)
+
+        if isinstance(_cache, dict):
+            if _cache.get("no-cache", False) is True:
+                return False
+
         if self.mode == CacheMode.default_on:
             return True
 
         # when mode == default_off -> Cache is opt in only
-        _cache = kwargs.get("cache", None)
         verbose_logger.debug("should_use_cache: kwargs: %s; _cache: %s", kwargs, _cache)
         if _cache and isinstance(_cache, dict):
             if _cache.get("use-cache", False) is True:
