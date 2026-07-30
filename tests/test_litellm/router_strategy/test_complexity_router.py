@@ -2818,6 +2818,31 @@ class TestRoutingDecisionCauseLogging:
         assert "cause=semantic_keyword_match" not in router_log_capture.text
 
 
+class _ReadGatedCache:
+    """DualCache wrapper that holds every read open until `readers` of them are in flight.
+
+    Forces concurrent writers to resolve against the same pre-write state, which is the
+    interleaving a read-modify-write pin loses an escalation on.
+    """
+
+    def __init__(self, inner: DualCache, readers: int) -> None:
+        self._inner = inner
+        self._readers = readers
+        self._arrived = 0
+        self._all_arrived = asyncio.Event()
+
+    async def async_get_cache(self, *args, **kwargs):
+        value = await self._inner.async_get_cache(*args, **kwargs)
+        self._arrived += 1
+        if self._arrived >= self._readers:
+            self._all_arrived.set()
+        await self._all_arrived.wait()
+        return value
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
+
+
 class TestSessionAffinity:
     """Test the session_affinity sticky-routing behavior (on by default)."""
 
@@ -2907,6 +2932,312 @@ class TestSessionAffinity:
         assert second.model == "o1-preview"
 
     @pytest.mark.asyncio
+    async def test_pin_escalates_when_a_later_turn_scores_higher(self, mock_router_instance, session_affinity_config):
+        """Regression: a session whose first turn was trivial stayed on the cheap model for
+        the rest of the session, because a pinned turn returned the pin without scoring the
+        request. A later turn scoring above the pinned tier must raise the pin."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert first.model == "gpt-4o-mini"
+
+        second = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        assert second.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_escalated_pin_is_reused_by_later_turns(self, mock_router_instance, session_affinity_config):
+        """Escalating rewrites the pin, so the session keeps the strongest model it has
+        needed instead of dropping back to the cheap tier on the next trivial turn."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        escalated = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        assert escalated.model == "o1-preview"
+
+        third = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert third.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_pinned_turn_without_a_user_message_keeps_the_pin(
+        self, mock_router_instance, session_affinity_config
+    ):
+        """A turn carrying no user text has nothing to score, so the pin is served unchanged
+        rather than being re-derived from an empty prompt."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "assistant", "content": "continuing"}],
+        )
+        assert result.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_pin_that_no_longer_maps_to_a_tier_is_served_unchanged(
+        self, mock_router_instance, session_affinity_config
+    ):
+        """A pin written before the tier config changed no longer resolves to a tier, so it
+        cannot be compared against; serve it as-is instead of guessing an escalation."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        cache_key = router._get_session_affinity_cache_key("session-1", request_kwargs)
+        await mock_router_instance.cache.async_set_cache(
+            key=f"{cache_key}:{ComplexityTier.REASONING.value}", value="retired-model", ttl=60
+        )
+
+        result = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        assert result.model == "retired-model"
+        assert await router._get_session_pin(cache_key) == ("retired-model", ComplexityTier.REASONING)
+
+    @pytest.mark.asyncio
+    async def test_pin_records_the_routing_tier_not_the_models_highest_tier(self, mock_router_instance):
+        """Regression: a model may sit in several tier pools, and keying the pin by the
+        model's highest configured tier promoted the session above the tier that actually
+        routed it, holding later turns on the more expensive tier."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {
+                    "SIMPLE": "gpt-4o-mini",
+                    "MEDIUM": "gpt-4o-mini",
+                    "COMPLEX": "shared-model",
+                    "REASONING": "shared-model",
+                },
+                "session_affinity": True,
+            },
+        )
+        cache_key = router._get_session_affinity_cache_key("session-1", self._request_kwargs("session-1"))
+
+        await router._persist_session_pin(cache_key, "shared-model", ComplexityTier.COMPLEX)
+
+        assert await mock_router_instance.cache.async_get_cache(key=f"{cache_key}:COMPLEX") == "shared-model"
+        assert await mock_router_instance.cache.async_get_cache(key=f"{cache_key}:REASONING") is None
+        assert await router._get_session_pin(cache_key) == ("shared-model", ComplexityTier.COMPLEX)
+
+        _, routed_tier, cause = router._resolve_pinned_model(
+            "shared-model", ComplexityTier.COMPLEX, self.REASONING_MESSAGE[0]["content"], None
+        )
+        assert routed_tier == ComplexityTier.REASONING
+        assert cause == "session_affinity_complexity_escalation"
+
+    @pytest.mark.asyncio
+    async def test_pin_writes_do_not_race_on_a_shared_read(self, mock_router_instance, session_affinity_config):
+        """Regression: holding the pin in one key made the write a read-modify-write, so two
+        turns could both read before either wrote and the weaker write landed last, undoing
+        the escalation for the rest of the session."""
+        mock_router_instance.cache = _ReadGatedCache(DualCache(), readers=2)
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        cache_key = router._get_session_affinity_cache_key("session-1", self._request_kwargs("session-1"))
+
+        # The trivial turn resolves first but writes last, after the escalation has landed.
+        await asyncio.gather(
+            router._persist_session_pin(cache_key, "gpt-4o-mini", ComplexityTier.SIMPLE),
+            router._persist_session_pin(cache_key, "o1-preview", ComplexityTier.REASONING),
+        )
+
+        assert await router._get_session_pin(cache_key) == ("o1-preview", ComplexityTier.REASONING)
+
+    @pytest.mark.asyncio
+    async def test_concurrent_turns_cannot_lower_an_escalated_pin(
+        self, mock_router_instance, session_affinity_config
+    ):
+        """Regression: two turns resolving against the same pin used to race a shared key, so
+        the trivial one could write last and undo the escalation for the rest of the session."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+
+        escalated, _ = await asyncio.gather(
+            router.async_pre_routing_hook(
+                model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+            ),
+            router.async_pre_routing_hook(
+                model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+            ),
+        )
+        assert escalated.model == "o1-preview"
+
+        later = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert later.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_a_turn_that_resolved_pre_escalation_cannot_lower_the_pin(
+        self, mock_router_instance, session_affinity_config
+    ):
+        """Regression: concurrent turns in one session all resolve against the same cached
+        pin and then write back. A turn that resolved before another turn escalated must not
+        land last and revert the session to the weaker model."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        cache_key = router._get_session_affinity_cache_key("session-1", request_kwargs)
+        # A concurrent turn escalates the session while a trivial turn is still in flight.
+        escalated = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        assert escalated.model == "o1-preview"
+
+        # The in-flight turn now writes back the cheap model it resolved before the escalation.
+        await router._persist_session_pin(cache_key, "gpt-4o-mini", ComplexityTier.SIMPLE)
+        assert await router._get_session_pin(cache_key) == ("o1-preview", ComplexityTier.REASONING)
+
+        later = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert later.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_session_pin_is_absent_when_no_tiers_are_configured(self, mock_router_instance):
+        """With no tiers configured there are no pin keys to read, so the session has no pin
+        and the router falls through to classification rather than reading a stray key."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={"tiers": {}, "session_affinity": True},
+        )
+        assert router._session_pin_keys("session-1") == ()
+        assert await router._get_session_pin("session-1") is None
+
+    @pytest.mark.asyncio
+    async def test_session_pin_is_absent_when_the_cache_returns_a_short_batch(
+        self, mock_router_instance, session_affinity_config
+    ):
+        """A batch read that does not line up with the keys requested cannot be zipped back
+        to its tiers, so the pin is treated as absent instead of mapped to the wrong tier."""
+        cache = AsyncMock()
+        cache.async_batch_get_cache = AsyncMock(return_value=["gpt-4o-mini"])
+        mock_router_instance.cache = cache
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        assert await router._get_session_pin("session-1") is None
+
+    @pytest.mark.asyncio
+    async def test_a_stale_weaker_write_is_skipped_once_the_session_escalated(
+        self, mock_router_instance, session_affinity_config
+    ):
+        """Regression: tier keys expire independently, so a weaker turn that resolved before
+        an escalation but wrote after it would outlive the stronger key and hand the session
+        back to the cheap model once that key expired."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        cache_key = router._get_session_affinity_cache_key("session-1", request_kwargs)
+        await router._persist_session_pin(cache_key, "o1-preview", ComplexityTier.REASONING)
+
+        await router._persist_session_pin(cache_key, "gpt-4o-mini", ComplexityTier.SIMPLE)
+
+        assert await mock_router_instance.cache.async_get_cache(key=f"{cache_key}:SIMPLE") is None
+        assert await router._get_session_pin(cache_key) == ("o1-preview", ComplexityTier.REASONING)
+
+    @pytest.mark.asyncio
+    async def test_escalating_drops_the_subordinate_tier_key(self, mock_router_instance, session_affinity_config):
+        """A key beneath the escalated tier must not survive the escalation, otherwise it can
+        outlive the stronger key and become the highest pin the session resolves to."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        cache_key = router._get_session_affinity_cache_key("session-1", request_kwargs)
+        await router._persist_session_pin(cache_key, "gpt-4o-mini", ComplexityTier.SIMPLE)
+        assert await mock_router_instance.cache.async_get_cache(key=f"{cache_key}:SIMPLE") == "gpt-4o-mini"
+
+        await router._persist_session_pin(cache_key, "o1-preview", ComplexityTier.REASONING)
+
+        assert await mock_router_instance.cache.async_get_cache(key=f"{cache_key}:SIMPLE") is None
+        assert await router._get_session_pin(cache_key) == ("o1-preview", ComplexityTier.REASONING)
+
+    @pytest.mark.asyncio
+    async def test_pin_escalation_check_does_not_call_the_llm_classifier(
+        self, mock_router_instance, session_affinity_config
+    ):
+        """The escalation check runs the local heuristic scorer, so a pinned turn never pays
+        for an LLM classifier call or an embedding lookup."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        with patch.object(router, "aclassify", wraps=router.aclassify) as spy_aclassify:
+            escalated = await router.async_pre_routing_hook(
+                model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+            )
+            spy_aclassify.assert_not_called()
+        assert escalated.model == "o1-preview"
+
+    @pytest.mark.asyncio
     async def test_different_sessions_classify_independently(self, mock_router_instance, session_affinity_config):
         mock_router_instance.cache = DualCache()
         router = ComplexityRouter(
@@ -2926,7 +3257,7 @@ class TestSessionAffinity:
     @pytest.mark.asyncio
     async def test_respects_ttl_seconds(self, mock_router_instance, basic_config):
         cache = AsyncMock()
-        cache.async_get_cache = AsyncMock(return_value=None)
+        cache.async_batch_get_cache = AsyncMock(return_value=[None, None, None, None])
         mock_router_instance.cache = cache
         router = ComplexityRouter(
             model_name="test-router",
@@ -2944,13 +3275,14 @@ class TestSessionAffinity:
         call_kwargs = cache.async_set_cache.call_args.kwargs
         assert call_kwargs["ttl"] == 120
         assert call_kwargs["value"] == "gpt-4o-mini"
+        assert call_kwargs["key"].endswith(f":{ComplexityTier.SIMPLE.value}")
 
     @pytest.mark.asyncio
     async def test_ttl_refreshed_on_cache_hit(self, mock_router_instance, basic_config):
         """Regression: a pinned turn must refresh the TTL, not just the first write --
         otherwise a session outliving session_affinity_ttl_seconds silently loses its pin."""
         cache = AsyncMock()
-        cache.async_get_cache = AsyncMock(return_value="o1-preview")
+        cache.async_batch_get_cache = AsyncMock(return_value=[None, None, None, "o1-preview"])
         mock_router_instance.cache = cache
         router = ComplexityRouter(
             model_name="test-router",
@@ -2969,6 +3301,7 @@ class TestSessionAffinity:
         call_kwargs = cache.async_set_cache.call_args.kwargs
         assert call_kwargs["value"] == "o1-preview"
         assert call_kwargs["ttl"] == 90
+        assert call_kwargs["key"].endswith(f":{ComplexityTier.REASONING.value}")
 
     @pytest.mark.asyncio
     async def test_different_api_keys_do_not_share_pin(self, mock_router_instance, session_affinity_config):
@@ -3008,7 +3341,7 @@ class TestSessionAffinity:
             model="test-model", request_kwargs={}, messages=self.SIMPLE_MESSAGE
         )
         assert result.model == "gpt-4o-mini"
-        cache.async_get_cache.assert_not_called()
+        cache.async_batch_get_cache.assert_not_called()
         cache.async_set_cache.assert_not_called()
 
     @pytest.mark.asyncio
@@ -3552,7 +3885,9 @@ class TestEscalationKeywords:
             },
         )
         cache_key = router._get_session_affinity_cache_key("session-top", {})
-        await mock_router_instance.cache.async_set_cache(key=cache_key, value="o1-b")
+        await mock_router_instance.cache.async_set_cache(
+            key=f"{cache_key}:{ComplexityTier.REASONING.value}", value="o1-b"
+        )
         result = await router.async_pre_routing_hook(
             model="test-model",
             request_kwargs=self._request_kwargs("session-top"),
