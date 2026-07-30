@@ -295,7 +295,7 @@ class TestVolcengineResponsesAPITransformation:
         assert event.response.output == []
         assert event.response.created_at == 0
 
-    def test_transform_response_api_response_falls_back_to_model_construct(self):
+    def test_transform_response_api_response_keeps_declared_shape_on_bad_payload(self):
         config = VolcEngineResponsesAPIConfig()
         http_response = httpx.Response(
             status_code=200,
@@ -315,7 +315,7 @@ class TestVolcengineResponsesAPITransformation:
         )
 
         assert result.id == "resp_fallback"
-        assert result.output == "not-a-list"
+        assert result.output == []
         assert result._hidden_params["headers"].get("x-test") == "1"
 
     def test_transform_delete_response_api_request_builds_url(self):

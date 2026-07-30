@@ -12,6 +12,10 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _safe_convert_created_field,
 )
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.responses.response_construction import (
+    construct_responses_api_response,
+    construct_responses_api_stream_event,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
@@ -279,11 +283,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
-        try:
-            response = ResponsesAPIResponse(**raw_response_json)
-        except Exception:
-            verbose_logger.debug(f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct")
-            response = ResponsesAPIResponse.model_construct(**raw_response_json)
+        response = construct_responses_api_response(raw_response_json)
 
         # Store processed headers in additional_headers so they get returned to the client
         response._hidden_params["additional_headers"] = processed_headers
@@ -349,7 +349,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 event_pydantic_model.__name__,
                 parsed_chunk,
             )
-            return event_pydantic_model.model_construct(**parsed_chunk)
+            return construct_responses_api_stream_event(event_pydantic_model, parsed_chunk)
 
     @staticmethod
     def get_event_model_class(event_type: str) -> Any:
@@ -646,11 +646,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
 
-        try:
-            response = ResponsesAPIResponse(**raw_response_json)
-        except Exception:
-            verbose_logger.debug(f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct")
-            response = ResponsesAPIResponse.model_construct(**raw_response_json)
+        response = construct_responses_api_response(raw_response_json)
 
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
