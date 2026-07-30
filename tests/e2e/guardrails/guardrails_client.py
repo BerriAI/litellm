@@ -63,16 +63,6 @@ class OpenAIModerationParamsBody(GuardrailParamsBase):
     model: str | None = None
 
 
-class PresidioParamsBody(GuardrailParamsBase):
-    guardrail: Literal["presidio"] = "presidio"
-    presidio_analyzer_api_base: str | None = None
-    presidio_anonymizer_api_base: str | None = None
-    # apply_to_output masks PII the model itself emitted, which also makes the
-    # guardrail run post_call. logging_only masks what the proxy logs.
-    apply_to_output: bool | None = None
-    logging_only: bool | None = None
-
-
 class BlockCodeExecutionParamsBody(GuardrailParamsBase):
     guardrail: Literal["block_code_execution"] = "block_code_execution"
 
@@ -81,7 +71,6 @@ GuardrailParamsBody = (
     ContentFilterParamsBody
     | BedrockGuardrailParamsBody
     | OpenAIModerationParamsBody
-    | PresidioParamsBody
     | BlockCodeExecutionParamsBody
 )
 

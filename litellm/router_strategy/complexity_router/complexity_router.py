@@ -18,14 +18,21 @@ from __future__ import annotations
 import asyncio
 import random
 import re
-from typing import TYPE_CHECKING, Any, Literal, Union, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Union, cast
 
 from pydantic import BaseModel
 
 from litellm._logging import verbose_router_logger
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.utils import ModelResponse
+from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.types.utils import (
+    ModelResponse,
+    RoutingDecisionCause,
+    StandardLoggingRoutingDecision,
+    StandardLoggingRoutingDecisionTierBoundaries,
+)
 
 from .config import (
     DEFAULT_CODE_KEYWORDS,
@@ -112,6 +119,16 @@ def _classifier_call_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]
     }
 
 
+def _effective_turn_off_message_logging(request_kwargs: Mapping[str, Any] | None) -> bool | None:
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+
+    return initialize_standard_callback_dynamic_params(dict(request_kwargs) if request_kwargs else {}).get(
+        "turn_off_message_logging"
+    )
+
+
 class DimensionScore:
     """Represents a score for a single dimension with optional signal."""
 
@@ -121,6 +138,27 @@ class DimensionScore:
         self.name = name
         self.score = score
         self.signal = signal
+
+
+class KeywordOverride(NamedTuple):
+    """A keyword_tier_rules match: the winning tier and, on the lexical path, the keyword that fired."""
+
+    tier: ComplexityTier
+    matched_keyword: str | None
+
+
+class ClassificationOutcome(NamedTuple):
+    """What the classifier decided and which mechanism actually produced it.
+
+    `cause` reflects the path that ran, not the configured classifier_type: an LLM
+    classifier that fails falls back to the heuristic scorer and reports it.
+    `score` is None on the LLM path, which produces a tier label and no score.
+    """
+
+    tier: ComplexityTier
+    score: float | None
+    signals: tuple[str, ...]
+    cause: Literal["heuristic_scorer", "reasoning_override", "llm_classifier"]
 
 
 class ComplexityRouter(CustomLogger):
@@ -244,6 +282,7 @@ class ComplexityRouter(CustomLogger):
     def _score_keyword_match(
         self,
         text: str,
+        disclosable_text: str,
         keywords: list[str],
         name: str,
         signal_label: str,
@@ -251,6 +290,15 @@ class ComplexityRouter(CustomLogger):
         scores: tuple[float, float, float],  # (none, low, high)
     ) -> tuple[DimensionScore, int]:
         """Score based on keyword matches using word boundary matching.
+
+        Scoring reads `text`, which for most dimensions includes the system prompt.
+        The signal names only the terms that also appear in `disclosable_text`, the
+        caller's own message: signals are persisted to the request's spend log, which
+        the caller can read, so naming a term matched solely in the system prompt would
+        let a caller recover configured terms from a prompt it cannot see. Terms it did
+        not supply are reported as a count instead, which explains the score without
+        disclosing anything. `disclosable_text` is required rather than defaulted so a
+        future dimension has to state which text it is willing to quote.
 
         Returns:
             Tuple of (DimensionScore, match_count) so callers can reuse the count.
@@ -260,18 +308,13 @@ class ComplexityRouter(CustomLogger):
 
         matches = [kw for kw in keywords if self._keyword_matches(text, kw)]
         match_count = len(matches)
+        if match_count < low_threshold:
+            return DimensionScore(name, score_none, None), match_count
 
-        if match_count >= high_threshold:
-            return (
-                DimensionScore(name, score_high, f"{signal_label} ({', '.join(matches[:3])})"),
-                match_count,
-            )
-        if match_count >= low_threshold:
-            return (
-                DimensionScore(name, score_low, f"{signal_label} ({', '.join(matches[:3])})"),
-                match_count,
-            )
-        return DimensionScore(name, score_none, None), match_count
+        disclosable = [kw for kw in matches if self._keyword_matches(disclosable_text, kw)]
+        detail = ", ".join(disclosable[:3]) if disclosable else f"{match_count} matches"
+        score = score_high if match_count >= high_threshold else score_low
+        return DimensionScore(name, score, f"{signal_label} ({detail})"), match_count
 
     def _score_multi_step(self, text: str) -> DimensionScore:
         """Score based on multi-step patterns."""
@@ -288,8 +331,19 @@ class ComplexityRouter(CustomLogger):
         return DimensionScore("questionComplexity", 0, None)
 
     def classify(self, prompt: str, system_prompt: str | None = None) -> tuple[ComplexityTier, float, list[str]]:
+        """Classify a prompt by complexity, discarding which rule decided the tier.
+
+        Kept for callers that only need the tier and score; `_score_and_classify` is the
+        single computation behind both, so the two can never disagree.
         """
-        Classify a prompt by complexity.
+        tier, score, signals, _cause = self._score_and_classify(prompt, system_prompt)
+        return tier, score, list(signals)
+
+    def _score_and_classify(
+        self, prompt: str, system_prompt: str | None = None
+    ) -> tuple[ComplexityTier, float, tuple[str, ...], Literal["heuristic_scorer", "reasoning_override"]]:
+        """
+        Classify a prompt by complexity, reporting whether the score chose the tier.
 
         Args:
             prompt: The user's prompt/message.
@@ -315,6 +369,7 @@ class ComplexityRouter(CustomLogger):
         # Score all dimensions, capturing match counts where needed
         code_score, _ = self._score_keyword_match(
             full_text,
+            user_text,
             self.code_keywords,
             "codePresence",
             "code",
@@ -322,6 +377,7 @@ class ComplexityRouter(CustomLogger):
             (0, 0.5, 1.0),
         )
         reasoning_score, reasoning_match_count = self._score_keyword_match(
+            user_text,
             user_text,
             self.reasoning_keywords,
             "reasoningMarkers",
@@ -331,6 +387,7 @@ class ComplexityRouter(CustomLogger):
         )
         technical_score, _ = self._score_keyword_match(
             full_text,
+            user_text,
             self.technical_keywords,
             "technicalTerms",
             "technical",
@@ -339,6 +396,7 @@ class ComplexityRouter(CustomLogger):
         )
         simple_score, _ = self._score_keyword_match(
             full_text,
+            user_text,
             self.simple_keywords,
             "simpleIndicators",
             "simple",
@@ -366,48 +424,112 @@ class ComplexityRouter(CustomLogger):
         # Check for reasoning override (2+ reasoning markers)
         # Reuse match count from _score_keyword_match to avoid scanning twice
         if reasoning_match_count >= 2:
-            return ComplexityTier.REASONING, weighted_score, signals
+            return ComplexityTier.REASONING, weighted_score, tuple(signals), "reasoning_override"
 
         # Map score to tier
-        boundaries = self.config.tier_boundaries
-        simple_medium = boundaries.get("simple_medium", 0.15)
-        medium_complex = boundaries.get("medium_complex", 0.35)
-        complex_reasoning = boundaries.get("complex_reasoning", 0.60)
-
-        if weighted_score < simple_medium:
+        boundaries = self._effective_tier_boundaries()
+        if weighted_score < boundaries["simple_medium"]:
             tier = ComplexityTier.SIMPLE
-        elif weighted_score < medium_complex:
+        elif weighted_score < boundaries["medium_complex"]:
             tier = ComplexityTier.MEDIUM
-        elif weighted_score < complex_reasoning:
+        elif weighted_score < boundaries["complex_reasoning"]:
             tier = ComplexityTier.COMPLEX
         else:
             tier = ComplexityTier.REASONING
 
-        return tier, weighted_score, signals
+        return tier, weighted_score, tuple(signals), "heuristic_scorer"
+
+    def _effective_tier_boundaries(self) -> StandardLoggingRoutingDecisionTierBoundaries:
+        """The tier boundaries in effect, with the documented defaults filled in.
+
+        Shared by score-to-tier mapping and the per-request routing decision snapshot,
+        so a logged decision always reflects the boundaries that actually applied.
+        """
+        boundaries = self.config.tier_boundaries
+        return StandardLoggingRoutingDecisionTierBoundaries(
+            simple_medium=boundaries.get("simple_medium", 0.15),
+            medium_complex=boundaries.get("medium_complex", 0.35),
+            complex_reasoning=boundaries.get("complex_reasoning", 0.60),
+        )
+
+    def _build_routing_decision(
+        self,
+        *,
+        routed_model: str,
+        cause: RoutingDecisionCause,
+        tier: ComplexityTier | None = None,
+        score: float | None = None,
+        signals: tuple[str, ...] | None = None,
+        matched_keyword: str | None = None,
+        escalation_keyword: str | None = None,
+        escalated: bool = False,
+        classifier_model: str | None = None,
+    ) -> StandardLoggingRoutingDecision:
+        """Assemble the per-request provenance record for this router's decision.
+
+        Optional facts are omitted rather than set to None, so a spend log row only
+        carries the keys that applied to its path. `tier_boundaries` rides with
+        `score` because the score is only interpretable against the boundaries that
+        mapped it to a tier.
+        """
+        decision = StandardLoggingRoutingDecision(
+            router_model_name=self.model_name,
+            router_type="complexity",
+            routed_model=routed_model,
+            cause=cause,
+        )
+        if tier is not None:
+            decision["tier"] = tier.value
+        if score is not None:
+            decision["score"] = score
+            decision["tier_boundaries"] = self._effective_tier_boundaries()
+        if signals:
+            # Stored as a list because this record is serialized to JSON for the spend
+            # log and read back as an array by the dashboard; a sequence type that only
+            # happens to survive the serializer would make the wire shape depend on it.
+            decision["signals"] = list(signals)
+        if matched_keyword is not None:
+            decision["matched_keyword"] = matched_keyword
+        if escalation_keyword is not None:
+            # Two separate facts: the caller asked to escalate, and whether the tier
+            # actually moved. A request that escalates from an already-highest tier has
+            # nowhere to go, so it records the keyword with escalated=False rather than
+            # dropping the ask (which reads as an ordinary route) or claiming a bump
+            # that never happened. Every path reports both the same way.
+            decision["escalation_keyword"] = escalation_keyword
+            decision["escalated"] = escalated
+        if classifier_model is not None:
+            decision["classifier_model"] = classifier_model
+        return decision
 
     async def aclassify(
         self,
         prompt: str,
         system_prompt: str | None = None,
         request_kwargs: dict[str, Any] | None = None,
-    ) -> tuple[ComplexityTier, float, list[str]]:
+    ) -> ClassificationOutcome:
         """
         Classify a prompt by complexity, using the LLM classifier when configured.
 
         Falls back to the local heuristic scorer if classifier_type is "heuristic",
         or if the LLM call fails, times out, or returns an unparseable response.
+        The outcome's `cause` reports which path actually classified the request.
         """
         if self.config.classifier_type != "llm" or self.config.classifier_llm_config is None:
-            return self.classify(prompt, system_prompt)
+            tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
+            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
 
         try:
             tier = await self._classify_with_llm(prompt, system_prompt, request_kwargs)
-            return tier, 1.0, [f"llm-classifier:{tier.value}"]
+            return ClassificationOutcome(
+                tier=tier, score=None, signals=(f"llm-classifier:{tier.value}",), cause="llm_classifier"
+            )
         except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the heuristic scorer
             verbose_router_logger.warning(
                 f"ComplexityRouter: LLM classifier failed ({e}), falling back to heuristic scoring"
             )
-            return self.classify(prompt, system_prompt)
+            tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
+            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
 
     async def _classify_with_llm(
         self,
@@ -427,7 +549,17 @@ class ComplexityRouter(CustomLogger):
         # attributed to the calling key/team instead of being dropped. Excludes the
         # parent request's budget reservation, which the routed completion (not this
         # internal classifier call) is responsible for reconciling.
-        metadata = _classifier_call_metadata((request_kwargs or {}).get("litellm_metadata"))
+        request_metadata = (request_kwargs or {}).get("litellm_metadata") or (request_kwargs or {}).get("metadata")
+        metadata = _classifier_call_metadata(request_metadata)
+        turn_off_message_logging = _effective_turn_off_message_logging(request_kwargs)
+
+        proxy_server_request = {
+            "body": {
+                "model": llm_config.model,
+                "messages": [{"role": "user", "content": classification_prompt}],
+                "response_format": type_to_response_format_param(TierClassification),
+            }
+        }
 
         response: ModelResponse = await self.litellm_router_instance.acompletion(
             model=llm_config.model,
@@ -435,6 +567,8 @@ class ComplexityRouter(CustomLogger):
             response_format=TierClassification,
             timeout=llm_config.timeout_ms / 1000,
             metadata=metadata,
+            proxy_server_request=proxy_server_request,
+            turn_off_message_logging=turn_off_message_logging,
         )
         content = response.choices[0].message.content
         if not content:
@@ -675,16 +809,16 @@ class ComplexityRouter(CustomLogger):
                 }
         return best_model
 
-    def _escalation_triggered(self, user_message: str) -> bool:
-        """Whether the prompt asks to escalate to a stronger model.
+    def _matched_escalation_keyword(self, user_message: str) -> str | None:
+        """The escalation keyword the prompt contains, or None when escalation is off.
 
         Matching is a case-sensitive substring test so the default "LITELLM ESCALATE"
         only fires on the deliberate, shouted form and not on incidental lowercase
         mentions of the word (e.g. "how do I escalate this ticket").
         """
         if not self.escalation_keywords:
-            return False
-        return any(keyword in user_message for keyword in self.escalation_keywords)
+            return None
+        return next((keyword for keyword in self.escalation_keywords if keyword in user_message), None)
 
     def _tier_for_model(self, model: str) -> ComplexityTier | None:
         """Return the most-severe configured tier whose pool contains this model."""
@@ -722,7 +856,7 @@ class ComplexityRouter(CustomLogger):
             return pinned_model
         return self.get_model_for_tier(escalated_tier)
 
-    def _lexical_tier_override(self, user_message: str) -> ComplexityTier | None:
+    def _lexical_tier_override(self, user_message: str) -> KeywordOverride | None:
         """When keyword_tier_rules match literally, the most-severe matched tier wins.
 
         Escalating to the highest tier (rather than the first rule in the list) keeps
@@ -733,12 +867,15 @@ class ComplexityRouter(CustomLogger):
         if not rules:
             return None
         text = user_message.lower()
-        matched_tiers = [
-            rule.tier for rule in rules if any(self._keyword_matches(text, keyword) for keyword in rule.keywords)
+        matches = [
+            KeywordOverride(tier=rule.tier, matched_keyword=matched_keyword)
+            for rule in rules
+            if (matched_keyword := next((kw for kw in rule.keywords if self._keyword_matches(text, kw)), None))
+            is not None
         ]
-        if not matched_tiers:
+        if not matches:
             return None
-        return max(matched_tiers, key=TIER_SEVERITY_ORDER.index)
+        return max(matches, key=lambda match: TIER_SEVERITY_ORDER.index(match.tier))
 
     def _get_or_create_semantic_routelayer(self) -> SemanticRouter:
         """Build (once) a SemanticRouter with one route per tier, utterances = that tier's keywords."""
@@ -821,8 +958,16 @@ class ComplexityRouter(CustomLogger):
         # key/team budget. Key/team attribution fields are preserved for spend logging.
         metadata = _classifier_call_metadata(request_kwargs.get("metadata"))
         litellm_metadata = _classifier_call_metadata(request_kwargs.get("litellm_metadata"))
+        turn_off_message_logging = _effective_turn_off_message_logging(request_kwargs)
+        proxy_server_request = {"body": {"model": self.config.embedding_model, "input": [user_message]}}
         query_vector = (
-            await encoder.aencode_queries([user_message], metadata=metadata, litellm_metadata=litellm_metadata)
+            await encoder.aencode_queries(
+                [user_message],
+                metadata=metadata,
+                litellm_metadata=litellm_metadata,
+                proxy_server_request=proxy_server_request,
+                turn_off_message_logging=turn_off_message_logging,
+            )
         )[0]
         route_choice = await routelayer.acall(vector=query_vector)
 
@@ -835,7 +980,7 @@ class ComplexityRouter(CustomLogger):
         except ValueError:
             return None
 
-    async def _resolve_keyword_tier_override(self, user_message: str, request_kwargs: dict) -> ComplexityTier | None:
+    async def _resolve_keyword_tier_override(self, user_message: str, request_kwargs: dict) -> KeywordOverride | None:
         """Resolve a keyword_tier_rule override, semantically or lexically per config.
 
         Returns None (no override -> fall through to the scorer) not only when no rule
@@ -847,12 +992,17 @@ class ComplexityRouter(CustomLogger):
         if not self.config.semantic_keyword_matching:
             return self._lexical_tier_override(user_message)
         try:
-            return await self._semantic_tier_override(user_message, request_kwargs)
+            semantic_tier = await self._semantic_tier_override(user_message, request_kwargs)
         except Exception as e:  # noqa: BLE001 -- embedding call can fail many ways (timeout, provider/network/parse error); any failure must fall back to scoring, never fail the request
             verbose_router_logger.warning(
                 f"ComplexityRouter: semantic keyword matching failed ({e}), falling back to complexity scoring"
             )
             return None
+        if semantic_tier is None:
+            return None
+        # A semantic match is a similarity hit against the rule's utterances, not a
+        # literal keyword, so there is no single matched keyword to report.
+        return KeywordOverride(tier=semantic_tier, matched_keyword=None)
 
     def _resolve_messages(
         self,
@@ -971,6 +1121,7 @@ class ComplexityRouter(CustomLogger):
             pinned_model = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
             if isinstance(pinned_model, str):
                 routed_model: str | None = pinned_model
+                pin_escalation_keyword: str | None = None
                 if self.escalation_keywords:
                     resolved_messages = self._resolve_messages(messages, request_kwargs)
                     user_message = (
@@ -978,7 +1129,9 @@ class ComplexityRouter(CustomLogger):
                         if resolved_messages
                         else None
                     )
-                    if user_message is not None and self._escalation_triggered(user_message):
+                    if user_message is not None:
+                        pin_escalation_keyword = self._matched_escalation_keyword(user_message)
+                    if pin_escalation_keyword is not None:
                         routed_model = self._escalated_pin(pinned_model)
                 if routed_model is not None:
                     # Refresh the TTL on every hit so an active session doesn't lose its
@@ -996,7 +1149,8 @@ class ComplexityRouter(CustomLogger):
                         kwargs_metadata = request_kwargs.setdefault("metadata", {})
                         if isinstance(kwargs_metadata, dict):
                             kwargs_metadata[ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY] = routed_model
-                    cause = "session_affinity_escalation" if routed_model != pinned_model else "session_affinity_pin"
+                    escalated = routed_model != pinned_model
+                    cause: RoutingDecisionCause = "session_affinity_escalation" if escalated else "session_affinity_pin"
                     verbose_router_logger.info(
                         f"ComplexityRouter: routing decision cause={cause}, routed_model={routed_model}"
                     )
@@ -1004,6 +1158,12 @@ class ComplexityRouter(CustomLogger):
                     return PreRoutingHookResponse(
                         model=routed_model,
                         messages=messages if has_original_messages else None,
+                        routing_decision=self._build_routing_decision(
+                            routed_model=routed_model,
+                            cause=cause,
+                            escalation_keyword=pin_escalation_keyword,
+                            escalated=escalated,
+                        ),
                     )
 
         response = await self._classify_and_route(
@@ -1074,29 +1234,45 @@ class ComplexityRouter(CustomLogger):
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
+                routing_decision=self._build_routing_decision(routed_model=routed_model, cause="default_fallback"),
             )
 
-        escalate = self._escalation_triggered(user_message)
+        escalation_keyword = self._matched_escalation_keyword(user_message)
 
-        override_tier = await self._resolve_keyword_tier_override(user_message, request_kwargs)
-        if override_tier is not None:
-            routed_tier = self._escalate_tier(override_tier) if escalate else override_tier
+        override = await self._resolve_keyword_tier_override(user_message, request_kwargs)
+        if override is not None:
+            routed_tier = self._escalate_tier(override.tier) if escalation_keyword is not None else override.tier
+            keyword_escalated = routed_tier != override.tier
             routed_model = await self._pick_model_for_tier(routed_tier, messages, resolved_messages, request_kwargs)
-            base_cause = "semantic_keyword_match" if self.config.semantic_keyword_matching else "literal_keyword_match"
-            cause = f"{base_cause}+escalation" if escalate else base_cause
+            keyword_cause: RoutingDecisionCause = (
+                "semantic_keyword_match" if self.config.semantic_keyword_matching else "literal_keyword_match"
+            )
             verbose_router_logger.info(
-                f"ComplexityRouter: routing decision cause={cause}, "
+                f"ComplexityRouter: routing decision cause={keyword_cause}, escalated={keyword_escalated}, "
                 f"tier={routed_tier.value}, routed_model={routed_model}"
             )
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
+                routing_decision=self._build_routing_decision(
+                    routed_model=routed_model,
+                    cause=keyword_cause,
+                    tier=routed_tier,
+                    matched_keyword=override.matched_keyword,
+                    escalation_keyword=escalation_keyword,
+                    escalated=keyword_escalated,
+                ),
             )
 
-        tier, score, signals = await self.aclassify(user_message, system_prompt, request_kwargs)
-        if escalate:
+        outcome = await self.aclassify(user_message, system_prompt, request_kwargs)
+        tier, score, signals = outcome.tier, outcome.score, outcome.signals
+        classified_tier = tier
+        if escalation_keyword is not None:
             tier = self._escalate_tier(tier)
-            signals = [*signals, "escalation"]
+        escalated = tier != classified_tier
+        if escalated:
+            signals = (*signals, "escalation")
+        score_repr = f"{score:.3f}" if score is not None else "n/a"
         if self.config.adaptive:
             routed_model = self._soft_floor_pick(tier, user_message, request_kwargs)
             adaptive = self._ensure_adaptive_router()
@@ -1106,18 +1282,33 @@ class ComplexityRouter(CustomLogger):
                     chosen_key = getattr(self, "_adaptive_chosen_model_key", "adaptive_router_chosen_model")
                     kwargs_metadata[chosen_key] = routed_model
             verbose_router_logger.info(
-                f"ComplexityRouter[adaptive]: routing decision cause=complexity_scorer, "
-                f"tier={tier.value}, score={score:.3f}, "
+                f"ComplexityRouter[adaptive]: routing decision cause={outcome.cause}, "
+                f"tier={tier.value}, score={score_repr}, "
                 f"signals={signals}, routed_model={routed_model}"
             )
         else:
             routed_model = await self._pick_model_for_tier(tier, messages, resolved_messages, request_kwargs)
             verbose_router_logger.info(
-                f"ComplexityRouter: routing decision cause=complexity_scorer, tier={tier.value}, "
-                f"score={score:.3f}, signals={signals}, routed_model={routed_model}"
+                f"ComplexityRouter: routing decision cause={outcome.cause}, tier={tier.value}, "
+                f"score={score_repr}, signals={signals}, routed_model={routed_model}"
             )
 
+        classifier_model = (
+            self.config.classifier_llm_config.model
+            if outcome.cause == "llm_classifier" and self.config.classifier_llm_config is not None
+            else None
+        )
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages if has_original_messages else None,
+            routing_decision=self._build_routing_decision(
+                routed_model=routed_model,
+                cause=outcome.cause,
+                tier=tier,
+                score=score,
+                signals=signals,
+                escalation_keyword=escalation_keyword,
+                escalated=escalated,
+                classifier_model=classifier_model,
+            ),
         )

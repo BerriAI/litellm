@@ -1,11 +1,11 @@
-use litellm_core::CoreResult;
-use litellm_core::error::{CoreError, json_type_name};
-use litellm_core::messages::transformation::AnthropicMessagesProviderConfig;
-use litellm_core::providers::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG;
-use litellm_core::providers::azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG;
 use serde_json::{Map, Value};
 
 use crate::constants::MESSAGES_ERROR_BODY_MAX_CHARS;
+use crate::error::{CoreError, CoreResult, json_type_name};
+use crate::providers::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG;
+use crate::providers::azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG;
+
+use super::transformation::AnthropicMessagesProviderConfig;
 
 pub(super) fn truncate_error_body(body: &str) -> String {
     if body.chars().count() <= MESSAGES_ERROR_BODY_MAX_CHARS {

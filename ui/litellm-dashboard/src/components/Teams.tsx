@@ -12,6 +12,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Button as UIButton } from "@/components/ui/button";
 import { teamsTableKeys } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useTeamDetailRouting } from "@/app/(dashboard)/teams/detailNavigation";
 import { TeamsTable } from "./TeamsPage/TeamsTable";
 import AccessGroupSelector from "./common_components/AccessGroupSelector";
 import PassThroughRoutesSelector from "./common_components/PassThroughRoutesSelector";
@@ -135,7 +136,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [editModalVisible, setEditModalVisible] = useState(false);
 
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
-  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+  const { teamId: selectedTeamId, openTeam, close: closeTeamDetail } = useTeamDetailRouting();
   const [editTeam, setEditTeam] = useState<boolean>(false);
 
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
@@ -482,12 +483,12 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
             userID={userID}
             onSelectTeam={(team) => {
               setSelectedTeam(team);
-              setSelectedTeamId(team.team_id);
+              openTeam(team.team_id);
               setEditTeam(false);
             }}
             onEditTeam={(team) => {
               setSelectedTeam(team);
-              setSelectedTeamId(team.team_id);
+              openTeam(team.team_id);
               setEditTeam(true);
             }}
             onDeleteTeam={handleDelete}
@@ -547,11 +548,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           }}
           onClose={() => {
             setSelectedTeam(null);
-            setSelectedTeamId(null);
+            closeTeamDetail();
             setEditTeam(false);
           }}
           accessToken={accessToken}
-          is_team_admin={is_team_admin(selectedTeam)}
+          is_team_admin={is_team_admin(selectedTeam?.team_id === selectedTeamId ? selectedTeam : null)}
           is_proxy_admin={userRole == "Admin"}
           userModels={userModels}
           editTeam={editTeam}

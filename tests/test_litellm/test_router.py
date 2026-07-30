@@ -3755,6 +3755,182 @@ def test_get_deployment_credentials_with_provider_team_wildcard_priority():
     assert global_credentials["api_key"] == "global-key"
 
 
+def test_get_deployment_credentials_with_provider_skips_other_team_deployment():
+    """
+    Regression: a team-scoped deployment sharing a model_name with a global
+    deployment must never resolve for another team's (or an unscoped) caller,
+    even when it is indexed first; the shared global deployment wins instead.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "vertex_project": "team-b-project",
+                },
+                "model_info": {
+                    "id": "team-b-vertex",
+                    "team_id": "team-b",
+                    "team_public_model_name": "gemini-2.5-pro",
+                },
+            },
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "vertex_project": "shared-project",
+                },
+            },
+        ],
+    )
+
+    other_team_credentials = router.get_deployment_credentials_with_provider(
+        model_id="gemini-2.5-pro", team_id="team-a"
+    )
+    assert other_team_credentials is not None
+    assert other_team_credentials["vertex_project"] == "shared-project"
+
+    unscoped_credentials = router.get_deployment_credentials_with_provider(
+        model_id="gemini-2.5-pro"
+    )
+    assert unscoped_credentials is not None
+    assert unscoped_credentials["vertex_project"] == "shared-project"
+
+    owner_credentials = router.get_deployment_credentials_with_provider(
+        model_id="gemini-2.5-pro", team_id="team-b"
+    )
+    assert owner_credentials is not None
+    assert owner_credentials["vertex_project"] == "team-b-project"
+
+
+def test_get_deployment_credentials_with_provider_no_fallback_to_other_team_only_name():
+    """
+    When the only deployments under a model name belong to another team, other
+    callers must get None (env fallback) instead of that team's credentials.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "vertex_project": "team-b-project",
+                },
+                "model_info": {
+                    "id": "team-b-vertex",
+                    "team_id": "team-b",
+                    "team_public_model_name": "gemini-2.5-pro",
+                },
+            },
+        ],
+    )
+
+    assert (
+        router.get_deployment_credentials_with_provider(
+            model_id="gemini-2.5-pro", team_id="team-a"
+        )
+        is None
+    )
+    assert (
+        router.get_deployment_credentials_with_provider(model_id="gemini-2.5-pro")
+        is None
+    )
+
+
+def test_deployment_usable_by_team_helpers():
+    """
+    Direct coverage of the team-ownership filter: a team-scoped deployment is
+    usable only by its owning team, shared deployments by anyone, and the
+    model-group picker returns the first usable deployment or None.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "vertex_project": "team-b-project",
+                },
+                "model_info": {
+                    "id": "team-b-vertex",
+                    "team_id": "team-b",
+                    "team_public_model_name": "gemini-2.5-pro",
+                },
+            },
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "vertex_project": "shared-project",
+                },
+            },
+        ],
+    )
+
+    team_owned, shared = router.model_list
+    assert router._deployment_usable_by_team(team_owned, "team-b") is True
+    assert router._deployment_usable_by_team(team_owned, "team-a") is False
+    assert router._deployment_usable_by_team(team_owned, None) is False
+    assert router._deployment_usable_by_team(shared, "team-a") is True
+    assert router._deployment_usable_by_team(shared, None) is True
+
+    picked = router._get_model_group_deployment_usable_by_team(
+        model_group_name="gemini-2.5-pro", team_id="team-a"
+    )
+    assert picked is not None
+    assert picked.litellm_params.vertex_project == "shared-project"
+
+    owner_picked = router._get_model_group_deployment_usable_by_team(
+        model_group_name="gemini-2.5-pro", team_id="team-b"
+    )
+    assert owner_picked is not None
+    assert owner_picked.litellm_params.vertex_project == "team-b-project"
+
+    assert (
+        router._get_model_group_deployment_usable_by_team(
+            model_group_name="unknown-model", team_id="team-a"
+        )
+        is None
+    )
+
+
+def test_get_deployment_credentials_with_provider_skips_other_team_wildcard():
+    """
+    Global wildcard resolution must skip a team-scoped wildcard deployment for
+    callers outside that team, falling through to the shared wildcard entry.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "team-b-key"},
+                "model_info": {
+                    "id": "team-b-wildcard",
+                    "team_id": "team-b",
+                    "team_public_model_name": "openai/*",
+                },
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "global-key"},
+            },
+        ],
+    )
+
+    other_team_credentials = router.get_deployment_credentials_with_provider(
+        model_id="openai/gpt-5.2", team_id="team-a"
+    )
+    assert other_team_credentials is not None
+    assert other_team_credentials["api_key"] == "global-key"
+
+    owner_credentials = router.get_deployment_credentials_with_provider(
+        model_id="openai/gpt-5.2", team_id="team-b"
+    )
+    assert owner_credentials is not None
+    assert owner_credentials["api_key"] == "team-b-key"
+
+
 def test_team_wildcard_credentials_not_usable_after_delete_deployment():
     """
     Regression: team_pattern_routers retained deleted deployments, so a team
@@ -6379,3 +6555,22 @@ class TestPreRoutingStrategyRegistryLifecycle:
                 litellm_params=LiteLLM_Params(**params)
             )
             assert actual is expected, params["model"]
+
+
+def test_model_info_is_active_for_environment_matrix(monkeypatch):
+    """The model-write endpoints consult this predicate to tell a deliberately
+    environment-inactive model from one dropped by a failed reload; the Router's own
+    deployment gate delegates to it, so the two can never diverge."""
+    from litellm.router import model_info_is_active_for_environment
+
+    assert model_info_is_active_for_environment(model_info=None) is True
+    assert model_info_is_active_for_environment(model_info={"id": "m1"}) is True
+    assert model_info_is_active_for_environment(model_info={"supported_environments": None}) is True
+
+    monkeypatch.setenv("LITELLM_ENVIRONMENT", "development")
+    assert model_info_is_active_for_environment(model_info={"supported_environments": ["development"]}) is True
+    assert model_info_is_active_for_environment(model_info={"supported_environments": ["production"]}) is False
+
+    monkeypatch.delenv("LITELLM_ENVIRONMENT")
+    with pytest.raises(ValueError, match="LITELLM_ENVIRONMENT"):
+        model_info_is_active_for_environment(model_info={"supported_environments": ["production"]})

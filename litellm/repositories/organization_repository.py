@@ -26,10 +26,8 @@ class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):
 
     async def find_by_alias(self, organization_alias: str) -> Optional[LiteLLM_OrganizationTable]:
         """Find an organization by alias."""
-        records = await self.table.find_many(where={"organization_alias": organization_alias})
-        if records:
-            return self._to_model(records[0])
-        return None
+        organizations = await self.find_many(where={"organization_alias": organization_alias})
+        return organizations[0] if organizations else None
 
     async def create_organization(
         self,

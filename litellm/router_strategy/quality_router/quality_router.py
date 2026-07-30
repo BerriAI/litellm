@@ -23,6 +23,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_strategy.complexity_router.complexity_router import (
     ComplexityRouter,
 )
+from litellm.types.utils import StandardLoggingRoutingDecision
 
 from .config import QualityRouterConfig, RoutingPreferences
 
@@ -357,6 +358,12 @@ class QualityRouter(CustomLogger):
             return PreRoutingHookResponse(
                 model=self.config.default_model,
                 messages=messages,
+                routing_decision=StandardLoggingRoutingDecision(
+                    router_model_name=self.model_name,
+                    router_type="quality",
+                    routed_model=self.config.default_model,
+                    cause="default_fallback",
+                ),
             )
 
         # Try keyword override first — it short-circuits complexity classification.
@@ -380,9 +387,20 @@ class QualityRouter(CustomLogger):
                     "complexity_tier": None,
                 },
             )
+            routing_decision = StandardLoggingRoutingDecision(
+                router_model_name=self.model_name,
+                router_type="quality",
+                routed_model=routed_model,
+                cause="keyword",
+                matched_keyword=matched_keyword,
+            )
+            keyword_quality_tier = self._model_quality.get(routed_model)
+            if keyword_quality_tier is not None:
+                routing_decision["tier"] = str(keyword_quality_tier)
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages,
+                routing_decision=routing_decision,
             )
 
         # No keyword match → complexity classification flow.
@@ -419,4 +437,13 @@ class QualityRouter(CustomLogger):
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages,
+            routing_decision=StandardLoggingRoutingDecision(
+                router_model_name=self.model_name,
+                router_type="quality",
+                routed_model=routed_model,
+                cause="quality_tier",
+                tier=str(int(quality_tier)),
+                score=score,
+                signals=list(signals),
+            ),
         )

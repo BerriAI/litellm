@@ -7130,6 +7130,14 @@ def _mock_mcp_logging_obj() -> MagicMock:
     return logging_obj
 
 
+def _mock_mcp_proxy_logging() -> MagicMock:
+    """ProxyLogging stand-in whose post_mcp_call_hook passes the result through."""
+    proxy_logging_mock = MagicMock()
+    proxy_logging_mock.post_call_failure_hook = AsyncMock()
+    proxy_logging_mock.post_mcp_call_hook = AsyncMock(side_effect=lambda response, **_: response)
+    return proxy_logging_mock
+
+
 def test_extract_mcp_tool_result_error_message():
     from litellm.proxy._experimental.mcp_server.utils import (
         extract_mcp_tool_result_error_message,
@@ -7160,8 +7168,7 @@ async def test_fire_mcp_tool_call_logging_iserror_logs_failure():
     from litellm.proxy._experimental.mcp_server.exceptions import MCPToolResultError
 
     logging_obj = _mock_mcp_logging_obj()
-    proxy_logging_mock = MagicMock()
-    proxy_logging_mock.post_call_failure_hook = AsyncMock()
+    proxy_logging_mock = _mock_mcp_proxy_logging()
     user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock):
@@ -7199,8 +7206,7 @@ async def test_fire_mcp_tool_call_logging_success_path_unchanged():
     )
 
     logging_obj = _mock_mcp_logging_obj()
-    proxy_logging_mock = MagicMock()
-    proxy_logging_mock.post_call_failure_hook = AsyncMock()
+    proxy_logging_mock = _mock_mcp_proxy_logging()
     result = _call_tool_result(False, "all good")
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock):
@@ -7229,8 +7235,7 @@ async def test_fire_mcp_tool_call_logging_iserror_without_auth_skips_failure_hoo
     )
 
     logging_obj = _mock_mcp_logging_obj()
-    proxy_logging_mock = MagicMock()
-    proxy_logging_mock.post_call_failure_hook = AsyncMock()
+    proxy_logging_mock = _mock_mcp_proxy_logging()
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock):
         await _fire_mcp_tool_call_logging(
@@ -7256,8 +7261,7 @@ async def test_fire_mcp_tool_call_logging_strips_credentials_from_failure_hook()
     )
 
     logging_obj = _mock_mcp_logging_obj()
-    proxy_logging_mock = MagicMock()
-    proxy_logging_mock.post_call_failure_hook = AsyncMock()
+    proxy_logging_mock = _mock_mcp_proxy_logging()
     user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
     request_data = {
         "name": "explode",
@@ -7528,8 +7532,7 @@ async def test_call_mcp_tool_skips_failure_hook_for_upstream_auth_error():
         transport=MCPTransport.http,
         mcp_info={"server_name": "test_server"},
     )
-    proxy_logging_mock = MagicMock()
-    proxy_logging_mock.post_call_failure_hook = AsyncMock()
+    proxy_logging_mock = _mock_mcp_proxy_logging()
     user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
 
     with (
@@ -7841,3 +7844,83 @@ class TestPreemptive401ModeAware:
             await self._run(delegate, None, has_stored_token=False)
         assert exc.value.status_code == 401
         await self._run(delegate, self.LITELLM_KEY_HEADERS, has_stored_token=False)
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_guardrails_return_the_rewritten_result():
+    """The result a post_mcp_call guardrail rewrote must be what the caller sends back."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        _run_post_mcp_call_guardrails,
+    )
+
+    logging_obj = _mock_mcp_logging_obj()
+    raw_result = _call_tool_result(False, "jane@example.com")
+    masked_result = _call_tool_result(False, "<EMAIL_ADDRESS>")
+    proxy_logging_mock = _mock_mcp_proxy_logging()
+    proxy_logging_mock.post_mcp_call_hook = AsyncMock(return_value=masked_result)
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock):
+        returned = await _run_post_mcp_call_guardrails(
+            result=raw_result,
+            litellm_logging_obj=logging_obj,
+            user_api_key_auth=UserAPIKeyAuth(api_key="test-key", user_id="test-user"),
+            request_data={},
+        )
+
+    assert returned is masked_result
+    hook_kwargs = proxy_logging_mock.post_mcp_call_hook.await_args.kwargs
+    assert hook_kwargs["response"] is raw_result
+    assert hook_kwargs["request_data"] is logging_obj.model_call_details
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_guardrails_run_without_a_logging_object():
+    """Enforcement must not depend on logging being configured.
+
+    A tool call dispatched without a litellm_logging_obj (tool search, and any
+    caller that omits it) would otherwise skip the guardrail entirely and return
+    the unscanned tool output to the client.
+    """
+    from litellm.proxy._experimental.mcp_server.server import (
+        _run_post_mcp_call_guardrails,
+    )
+
+    raw_result = _call_tool_result(False, "jane@example.com")
+    masked_result = _call_tool_result(False, "<EMAIL_ADDRESS>")
+    proxy_logging_mock = _mock_mcp_proxy_logging()
+    proxy_logging_mock.post_mcp_call_hook = AsyncMock(return_value=masked_result)
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock):
+        returned = await _run_post_mcp_call_guardrails(
+            result=raw_result,
+            litellm_logging_obj=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="test-key", user_id="test-user"),
+            request_data={"name": "fetch_record"},
+        )
+
+    assert returned is masked_result
+    proxy_logging_mock.post_mcp_call_hook.assert_awaited_once()
+    assert proxy_logging_mock.post_mcp_call_hook.await_args.kwargs["request_data"] == {"name": "fetch_record"}
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_guardrails_propagate_a_block():
+    """A post_mcp_call guardrail rejection must propagate instead of returning the result."""
+    from litellm.exceptions import BlockedPiiEntityError
+    from litellm.proxy._experimental.mcp_server.server import (
+        _run_post_mcp_call_guardrails,
+    )
+
+    proxy_logging_mock = _mock_mcp_proxy_logging()
+    proxy_logging_mock.post_mcp_call_hook = AsyncMock(
+        side_effect=BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="presidio-mcp")
+    )
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock):
+        with pytest.raises(BlockedPiiEntityError):
+            await _run_post_mcp_call_guardrails(
+                result=_call_tool_result(False, "jane@example.com"),
+                litellm_logging_obj=_mock_mcp_logging_obj(),
+                user_api_key_auth=None,
+                request_data={},
+            )

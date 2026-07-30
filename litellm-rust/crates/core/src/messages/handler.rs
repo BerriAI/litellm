@@ -1,15 +1,13 @@
-use litellm_core::CoreResult;
-use litellm_core::error::CoreError;
-use serde_json::Value;
+use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
+use crate::error::{CoreError, CoreResult};
 
 use super::client::http_client;
 use super::common_utils::truncate_error_body;
-use super::types::ProviderMessagesRequest;
-use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
+use super::types::{AnthropicMessagesResponse, ProviderMessagesRequest};
 
 pub(super) async fn execute_messages_provider_call(
     request: ProviderMessagesRequest,
-) -> CoreResult<Value> {
+) -> CoreResult<AnthropicMessagesResponse> {
     let mut request_builder = http_client().post(&request.url).json(&request.body);
     for (key, value) in &request.upstream_headers {
         request_builder = request_builder.header(key, value);
@@ -39,12 +37,7 @@ pub(super) async fn execute_messages_provider_call(
     let response = serde_json::from_str(&text).map_err(|err| {
         CoreError::InvalidResponse(format!("invalid messages response JSON: {err}"))
     })?;
-    let transformed = request
-        .config
-        .transform_response(&request.model, response)?;
-    serde_json::to_value(transformed).map_err(|err| {
-        CoreError::InvalidResponse(format!("failed to serialize messages response: {err}"))
-    })
+    request.config.transform_response(&request.model, response)
 }
 
 pub(super) async fn execute_messages_provider_stream(

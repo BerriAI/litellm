@@ -55,6 +55,7 @@ import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "@/componen
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
+import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import UsageAIChatPanel from "./UsageAIChatPanel";
@@ -143,7 +144,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   // For admins: null means global view (all users), a string means filter by that user
   // For non-admins: always set to their own user ID
   const [selectedUserId, setSelectedUserId] = useState<string | null>(isAdmin ? null : userID || null);
-  const [modelViewType, setModelViewType] = useState<"groups" | "individual">("groups");
+  const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
@@ -438,7 +439,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     () => [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
     [userSpendData.results],
   );
-  const modelMetrics = useMemo(() => processActivityData(userSpendData, "models", teams), [userSpendData, teams]);
+  const modelMetrics = useMemo(
+    () => processActivityData(userSpendData, modelViewType === "groups" ? "model_groups" : "models", teams),
+    [userSpendData, modelViewType, teams],
+  );
   const keyMetrics = useMemo(() => processActivityData(userSpendData, "api_keys", teams), [userSpendData, teams]);
   const mcpServerMetrics = useMemo(
     () => processActivityData(userSpendData, "mcp_servers", teams),
@@ -753,28 +757,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               value={topModelsLimit}
                               onChange={(value) => setTopModelsLimit(value as number)}
                             />
-                            <div className="flex bg-gray-100 rounded-lg p-1">
-                              <button
-                                className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                                  modelViewType === "groups"
-                                    ? "bg-white shadow-xs text-gray-900"
-                                    : "text-gray-600 hover:text-gray-900"
-                                }`}
-                                onClick={() => setModelViewType("groups")}
-                              >
-                                Public Model Name
-                              </button>
-                              <button
-                                className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                                  modelViewType === "individual"
-                                    ? "bg-white shadow-xs text-gray-900"
-                                    : "text-gray-600 hover:text-gray-900"
-                                }`}
-                                onClick={() => setModelViewType("individual")}
-                              >
-                                Litellm Model Name
-                              </button>
-                            </div>
+                            <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
                           </div>
                           {loading ? (
                             <ChartLoader isDateChanging={isDateChanging} />
@@ -839,6 +822,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
                   {/* Activity Panel */}
                   <TabPanel>
+                    <div className="flex justify-end mt-2 mb-4">
+                      <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
+                    </div>
                     <ActivityMetrics modelMetrics={modelMetrics} />
                   </TabPanel>
                   <TabPanel>

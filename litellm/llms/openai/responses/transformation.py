@@ -280,7 +280,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
         try:
-            response = ResponsesAPIResponse(**raw_response_json)
+            response = ResponsesAPIResponse.model_validate(raw_response_json)
         except Exception:
             verbose_logger.debug(f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct")
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
@@ -506,7 +506,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
-        response = ResponsesAPIResponse(**raw_response_json)
+        response = ResponsesAPIResponse.model_validate(raw_response_json)
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
 
@@ -588,7 +588,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
 
-        response = ResponsesAPIResponse(**raw_response_json)
+        response = ResponsesAPIResponse.model_validate(raw_response_json)
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
 
@@ -647,7 +647,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         processed_headers = process_response_headers(raw_response_headers)
 
         try:
-            response = ResponsesAPIResponse(**raw_response_json)
+            response = ResponsesAPIResponse.model_validate(raw_response_json)
         except Exception:
             verbose_logger.debug(f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct")
             response = ResponsesAPIResponse.model_construct(**raw_response_json)

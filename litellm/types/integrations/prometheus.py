@@ -190,6 +190,7 @@ class UserAPIKeyLabelNames(Enum):
     ORG_ALIAS = "org_alias"
     MCP_TOOL_NAME = "mcp_tool_name"
     MCP_SERVER_NAME = "mcp_server_name"
+    SERVICE_TIER = "service_tier"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -286,6 +287,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.SERVICE_TIER.value,
     ]
 
     litellm_llm_api_time_to_first_token_metric = [
@@ -299,6 +301,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.SERVICE_TIER.value,
     ]
 
     litellm_request_total_latency_metric = [
@@ -312,6 +315,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.SERVICE_TIER.value,
     ]
 
     litellm_request_queue_time_seconds = [
@@ -453,6 +457,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.SERVICE_TIER.value,
     ]
 
     litellm_input_tokens_metric = [
@@ -878,6 +883,7 @@ class UserAPIKeyLabelValues:
     org_alias: Optional[str] = None
     mcp_tool_name: Optional[str] = None
     mcp_server_name: Optional[str] = None
+    service_tier: Optional[str] = None
 
     # Added for test compatibility.
     def __init__(self, **kwargs: Any) -> None:

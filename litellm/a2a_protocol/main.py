@@ -568,6 +568,7 @@ def _build_streaming_logging_obj(
     logging_obj.custom_llm_provider = "a2a_agent"
     logging_obj.model_call_details["model"] = model
     logging_obj.model_call_details["custom_llm_provider"] = "a2a_agent"
+    logging_obj.model_call_details["call_type"] = logging_obj.call_type
     if agent_id:
         logging_obj.model_call_details["agent_id"] = agent_id
 

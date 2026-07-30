@@ -23,6 +23,7 @@ from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_last_user_message,
 )
+from litellm.types.utils import StandardLoggingRoutingDecision
 from litellm.router_strategy.adaptive_router.bandit import (
     BanditCell,
     apply_delta,
@@ -193,7 +194,17 @@ class AdaptiveRouter:
         if isinstance(kwargs_metadata, dict):
             kwargs_metadata[ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY] = chosen_model
 
-        return PreRoutingHookResponse(model=chosen_model, messages=messages)
+        return PreRoutingHookResponse(
+            model=chosen_model,
+            messages=messages,
+            routing_decision=StandardLoggingRoutingDecision(
+                router_model_name=self.router_name,
+                router_type="adaptive",
+                routed_model=chosen_model,
+                cause="bandit",
+                request_type=request_type.value,
+            ),
+        )
 
     # ---- Pick model ------------------------------------------------------
 
