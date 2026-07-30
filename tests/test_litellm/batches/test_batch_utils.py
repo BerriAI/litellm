@@ -236,6 +236,8 @@ def test_extract_credentials_only_known_keys():
         "api_key": "sk-1",
         "api_base": "https://b",
         "vertex_project": "proj",
+        "gcs_bucket_name": "my-bucket",
+        "bucket_name": "my-alias-bucket",
         "model": "gpt-4o",  # not a credential key
         "unrelated": "x",
     }
@@ -243,6 +245,8 @@ def test_extract_credentials_only_known_keys():
         "api_key": "sk-1",
         "api_base": "https://b",
         "vertex_project": "proj",
+        "gcs_bucket_name": "my-bucket",
+        "bucket_name": "my-alias-bucket",
     }
 
 
@@ -262,6 +266,8 @@ def test_extract_credentials_all_supported_keys():
         "vertex_project",
         "vertex_location",
         "vertex_credentials",
+        "gcs_bucket_name",
+        "bucket_name",
         "timeout",
         "max_retries",
     }
@@ -665,6 +671,7 @@ async def test_output_file_content_vertex_fetches_via_afile_content(monkeypatch)
             "vertex_project": "proj-1",
             "vertex_location": "us-central1",
             "vertex_credentials": "/path/to/creds.json",
+            "gcs_bucket_name": "litellm-bucket",
             "model": "vertex_ai/gemini-3.6-flash",
         },
     )
@@ -675,6 +682,7 @@ async def test_output_file_content_vertex_fetches_via_afile_content(monkeypatch)
     assert captured["vertex_project"] == "proj-1"
     assert captured["vertex_location"] == "us-central1"
     assert captured["vertex_credentials"] == "/path/to/creds.json"
+    assert captured["gcs_bucket_name"] == "litellm-bucket"
     assert "model" not in captured
 
 

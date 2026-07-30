@@ -267,6 +267,8 @@ def _extract_file_access_credentials(litellm_params: Optional[dict]) -> dict:
             "vertex_project",
             "vertex_location",
             "vertex_credentials",
+            "gcs_bucket_name",
+            "bucket_name",
             "timeout",
             "max_retries",
         ]
