@@ -2959,6 +2959,122 @@ def test_pre_call_checks_counts_responses_instructions_tokens(monkeypatch):
         )
 
 
+def _vision_router() -> litellm.Router:
+    """Mixed-modality group: gpt-4o declares supports_vision true in the cost map,
+    gpt-audio declares it false."""
+    return litellm.Router(
+        model_list=[
+            {"model_name": "mixed", "litellm_params": {"model": "gpt-4o"}, "model_info": {"id": "vision"}},
+            {"model_name": "mixed", "litellm_params": {"model": "gpt-audio"}, "model_info": {"id": "text-only"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+
+
+IMAGE_MESSAGES = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "what is in this image?"},
+            {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+        ],
+    }
+]
+
+
+def test_pre_call_checks_filters_non_vision_deployments_for_image_request():
+    """
+    An image in the request must eliminate deployments that declare no vision support,
+    otherwise the provider rejects the whole call and (with session affinity) every
+    following turn of the session.
+    """
+    router = _vision_router()
+
+    result = router._pre_call_checks(
+        model="mixed",
+        healthy_deployments=router.get_model_list(model_name="mixed"),
+        messages=IMAGE_MESSAGES,
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in result] == ["vision"]
+
+
+def test_pre_call_checks_keeps_non_vision_deployments_for_text_request():
+    """Text-only requests must still be able to land on text-only deployments."""
+    router = _vision_router()
+
+    result = router._pre_call_checks(
+        model="mixed",
+        healthy_deployments=router.get_model_list(model_name="mixed"),
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert sorted(deployment["model_info"]["id"] for deployment in result) == ["text-only", "vision"]
+
+
+def test_pre_call_checks_raises_when_no_deployment_supports_images():
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "text-group", "litellm_params": {"model": "gpt-audio"}, "model_info": {"id": "d1"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="No deployments in model group support image input"):
+        router._pre_call_checks(
+            model="text-group",
+            healthy_deployments=router.get_model_list(model_name="text-group"),
+            messages=IMAGE_MESSAGES,
+        )
+
+
+def test_pre_call_checks_keeps_deployments_with_unknown_vision_support():
+    """
+    Vision support is unknown (None) for custom/self-hosted models, so those
+    deployments must not be filtered out; only an explicit `supports_vision: false`
+    eliminates a deployment.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "custom",
+                "litellm_params": {"model": "openai/my-private-vlm", "api_base": "http://localhost:8000"},
+                "model_info": {"id": "d1"},
+            },
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    result = router._pre_call_checks(
+        model="custom",
+        healthy_deployments=router.get_model_list(model_name="custom"),
+        messages=IMAGE_MESSAGES,
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in result] == ["d1"]
+
+
+def test_pre_call_checks_filters_non_vision_deployments_for_responses_image_input():
+    """The Responses API sends images as `input_image` items on `input`, not `messages`."""
+    router = _vision_router()
+
+    result = router._pre_call_checks(
+        model="mixed",
+        healthy_deployments=router.get_model_list(model_name="mixed"),
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "what is in this image?"},
+                    {"type": "input_image", "image_url": "https://example.com/cat.png"},
+                ],
+            }
+        ],
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in result] == ["vision"]
+
+
 def test_count_pre_call_check_tokens_across_api_surfaces():
     """
     _count_pre_call_check_tokens must count tokens from chat `messages`, a Responses

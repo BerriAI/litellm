@@ -32,6 +32,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Sequence,
     Set,
     Tuple,
     TypeVar,
@@ -76,6 +77,9 @@ from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    request_contains_image_content,
+)
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
@@ -10189,7 +10193,7 @@ class Router:
         # We only pop from the list, not modify deployment dicts - 100x+ faster on hot path (every request)
         _returned_deployments = list(healthy_deployments)
 
-        invalid_model_indices = set()  # Use set for O(1) membership checks
+        invalid_model_indices: Set[int] = set()  # Use set for O(1) membership checks
 
         # Token counting (tiktoken) is the dominant on-loop cost for large prompts.
         # Only count when a deployment actually declares max_input_tokens, and count
@@ -10199,11 +10203,16 @@ class Router:
         _context_window_error = False
         _potential_error_str = ""
         _rate_limit_error = False
+        _vision_error = False
         parent_otel_span = _get_parent_otel_span_from_kwargs(request_kwargs)
 
         raw_instructions = request_kwargs.get("instructions") if request_kwargs else None
         instructions = raw_instructions if isinstance(raw_instructions, str) else None
         has_countable_input = messages is not None or input is not None
+        requires_vision_support = request_contains_image_content(
+            messages=messages,
+            input=cast(Union[str, Sequence[object], None], input),  # cast-ok: responses input is a str or item list
+        )
 
         ## get model group RPM ##
         dt = get_utc_datetime()
@@ -10225,6 +10234,11 @@ class Router:
                     base_model = _litellm_params.get("base_model", None)
                 model_info = self.get_router_model_info(deployment=deployment, received_model_name=model)
                 _deployment_model = base_model or _litellm_params.get("model", None)
+
+                if requires_vision_support and model_info.get("supports_vision") is False:
+                    invalid_model_indices.add(idx)
+                    _vision_error = True
+                    continue
 
                 max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
                 if isinstance(max_input_tokens, int) and has_countable_input:
@@ -10330,6 +10344,16 @@ class Router:
                 raise litellm.ContextWindowExceededError(
                     message="litellm._pre_call_checks: Context Window exceeded for given call. No models have context window large enough for this call.\n{}".format(
                         _potential_error_str
+                    ),
+                    model=model,
+                    llm_provider="",
+                )
+
+            elif _vision_error is True:
+                raise litellm.BadRequestError(
+                    message=(
+                        "litellm._pre_call_checks: No deployments in model group support image input. "
+                        "The request contains image content."
                     ),
                     model=model,
                     llm_provider="",
