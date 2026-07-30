@@ -1,6 +1,6 @@
 import ipaddress
 from typing import List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -23,14 +23,19 @@ class NativeOIDCConfig(BaseModel):
     @field_validator("discovery_url")
     @classmethod
     def validate_discovery_url(cls, value: str) -> str:
-        parsed = urlparse(value)
+        try:
+            parsed = urlsplit(value)
+            _ = parsed.port
+        except ValueError as error:
+            raise ValueError("must contain a valid port") from error
         if (
             not value.strip()
             or _has_control_characters(value)
+            or any(character.isspace() for character in value)
             or parsed.scheme not in {"http", "https"}
             or not parsed.hostname
-            or parsed.username
-            or parsed.password
+            or parsed.username is not None
+            or parsed.password is not None
             or parsed.query
             or parsed.fragment
         ):

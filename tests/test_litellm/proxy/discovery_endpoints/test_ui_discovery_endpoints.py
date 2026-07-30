@@ -113,6 +113,38 @@ def test_ui_discovery_endpoints_exposes_valid_native_oidc_config():
         {
             "enable_jwt_auth": True,
             "litellm_jwtauth": {
+                "native_oidc_discovery_url": "https://@idp.example.com/.well-known/openid-configuration",
+                "native_oidc_client_id": "litellm-native",
+                "native_oidc_scopes": ["openid"],
+            },
+        },
+        {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "native_oidc_discovery_url": "https://idp.example.com:not-a-port/.well-known/openid-configuration",
+                "native_oidc_client_id": "litellm-native",
+                "native_oidc_scopes": ["openid"],
+            },
+        },
+        {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "native_oidc_discovery_url": "https://idp.example.com:65536/.well-known/openid-configuration",
+                "native_oidc_client_id": "litellm-native",
+                "native_oidc_scopes": ["openid"],
+            },
+        },
+        {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid configuration",
+                "native_oidc_client_id": "litellm-native",
+                "native_oidc_scopes": ["openid"],
+            },
+        },
+        {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
                 "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration?foo=bar",
                 "native_oidc_client_id": "litellm-native",
                 "native_oidc_scopes": ["openid"],
