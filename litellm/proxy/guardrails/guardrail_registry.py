@@ -438,7 +438,8 @@ class InMemoryGuardrailHandler:
         if provided_id:
             guardrail_id = provided_id
         elif source == "config":
-            guardrail_id = get_stable_config_guardrail_id(guardrail["guardrail_name"])
+            stable_id = get_stable_config_guardrail_id(guardrail["guardrail_name"])
+            guardrail_id = stable_id if stable_id not in self.IN_MEMORY_GUARDRAILS else str(uuid.uuid4())
         else:
             guardrail_id = str(uuid.uuid4())
         guardrail["guardrail_id"] = guardrail_id

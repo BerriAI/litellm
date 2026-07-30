@@ -405,6 +405,43 @@ def test_config_guardrail_id_is_stable_across_boots():
         registry_module.guardrail_initializer_registry.pop("stable_id_test", None)
 
 
+def test_same_name_config_guardrails_in_one_process_get_distinct_ids():
+    """
+    The deterministic id must not collapse two same-named guardrails registered
+    in one process into one entry (that would drop the second guardrail via the
+    early-return dedup). The first occurrence gets the stable id; a later clash
+    falls back to a unique id so both stay registered.
+    """
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    def _initializer(litellm_params, guardrail):
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=False,
+        )
+
+    registry_module.guardrail_initializer_registry["dup_name_test"] = _initializer
+    try:
+        handler = InMemoryGuardrailHandler()
+        params = {"guardrail": "dup_name_test", "mode": "pre_call"}
+
+        first = handler.initialize_guardrail(
+            guardrail={"guardrail_name": "dup", "litellm_params": dict(params)},
+            source="config",
+        )
+        second = handler.initialize_guardrail(
+            guardrail={"guardrail_name": "dup", "litellm_params": dict(params)},
+            source="config",
+        )
+
+        assert first["guardrail_id"] == registry_module.get_stable_config_guardrail_id("dup")
+        assert second["guardrail_id"] != first["guardrail_id"]
+        assert len(handler.IN_MEMORY_GUARDRAILS) == 2
+    finally:
+        registry_module.guardrail_initializer_registry.pop("dup_name_test", None)
+
+
 def test_explicit_config_guardrail_id_is_preserved():
     """An operator-provided guardrail_id must win over the derived-from-name id."""
     from litellm.proxy.guardrails import guardrail_registry as registry_module
