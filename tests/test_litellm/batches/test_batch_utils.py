@@ -14,10 +14,13 @@ maps (litellm.completion_cost, batch_cost_calculator), the tokenizer
 deterministic stand-ins so the arithmetic under test is the only variable.
 """
 
+import json
 import os
 import sys
 
+import httpx
 import pytest
+import respx
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
@@ -235,6 +238,8 @@ def test_extract_credentials_only_known_keys():
         "api_key": "sk-1",
         "api_base": "https://b",
         "vertex_project": "proj",
+        "gcs_bucket_name": "my-bucket",
+        "bucket_name": "my-alias-bucket",
         "model": "gpt-4o",  # not a credential key
         "unrelated": "x",
     }
@@ -242,6 +247,8 @@ def test_extract_credentials_only_known_keys():
         "api_key": "sk-1",
         "api_base": "https://b",
         "vertex_project": "proj",
+        "gcs_bucket_name": "my-bucket",
+        "bucket_name": "my-alias-bucket",
     }
 
 
@@ -261,6 +268,8 @@ def test_extract_credentials_all_supported_keys():
         "vertex_project",
         "vertex_location",
         "vertex_credentials",
+        "gcs_bucket_name",
+        "bucket_name",
         "timeout",
         "max_retries",
     }
@@ -615,10 +624,210 @@ def _batch(output_file_id):
     )
 
 
+def _vertex_openai_row(custom_id, model, prompt_tokens, completion_tokens):
+    return {
+        "id": f"batch_req_{custom_id}",
+        "custom_id": custom_id,
+        "response": {
+            "status_code": 200,
+            "request_id": custom_id,
+            "body": {
+                "id": f"chatcmpl-{custom_id}",
+                "object": "chat.completion",
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": _usage(prompt_tokens, completion_tokens),
+            },
+        },
+        "error": None,
+    }
+
+
+def _vertex_jsonl(rows):
+    return "\n".join(json.dumps(row) for row in rows).encode()
+
+
 @pytest.mark.asyncio
-async def test_output_file_content_vertex_raises():
-    with pytest.raises(ValueError, match="Vertex AI does not support"):
-        await bu._get_batch_output_file_content_as_dictionary(_batch("of"), custom_llm_provider="vertex_ai")
+async def test_output_file_content_vertex_fetches_via_afile_content(monkeypatch):
+    import litellm.files.main as files_main
+
+    rows = [_vertex_openai_row("request-1", "gemini-3.6-flash", 10, 5)]
+    captured: dict = {}
+
+    async def fake_afile_content(**kw):
+        captured.update(kw)
+        return type("R", (), {"content": _vertex_jsonl(rows)})()
+
+    monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
+
+    result = await bu._get_batch_output_file_content_as_dictionary(
+        _batch("gs://litellm-bucket/output/predictions.jsonl"),
+        custom_llm_provider="vertex_ai",
+        litellm_params={
+            "vertex_project": "proj-1",
+            "vertex_location": "us-central1",
+            "vertex_credentials": "/path/to/creds.json",
+            "gcs_bucket_name": "litellm-bucket",
+            "model": "vertex_ai/gemini-3.6-flash",
+        },
+    )
+
+    assert result == rows
+    assert captured["file_id"] == "gs://litellm-bucket/output/predictions.jsonl"
+    assert captured["custom_llm_provider"] == "vertex_ai"
+    assert captured["vertex_project"] == "proj-1"
+    assert captured["vertex_location"] == "us-central1"
+    assert captured["vertex_credentials"] == "/path/to/creds.json"
+    assert captured["gcs_bucket_name"] == "litellm-bucket"
+    assert "model" not in captured
+
+
+@pytest.mark.asyncio
+async def test_output_file_content_vertex_unified_file_id_extracts_gcs_uri(monkeypatch):
+    import base64
+
+    import litellm.files.main as files_main
+
+    captured: dict = {}
+
+    async def fake_afile_content(**kw):
+        captured.update(kw)
+        return type("R", (), {"content": b'{"a": 1}'})()
+
+    monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
+    unified_id = (
+        "litellm_proxy:application/jsonl;unified_id,uuid-1;target_model_names,vertex-model;"
+        "llm_output_file_id,gs://litellm-bucket/output/predictions.jsonl;llm_output_file_model_id,model-1"
+    )
+    encoded_id = base64.urlsafe_b64encode(unified_id.encode()).decode().rstrip("=")
+
+    await bu._get_batch_output_file_content_as_dictionary(_batch(encoded_id), custom_llm_provider="vertex_ai")
+
+    assert captured["file_id"] == "gs://litellm-bucket/output/predictions.jsonl"
+    assert captured["custom_llm_provider"] == "vertex_ai"
+
+
+def _vertex_predictions_row(custom_id, prompt_tokens, completion_tokens):
+    return {
+        "request": {
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "labels": {"litellm_custom_id": custom_id},
+        },
+        "status": "",
+        "response": {
+            "candidates": [
+                {
+                    "content": {"role": "model", "parts": [{"text": "ok"}]},
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": prompt_tokens,
+                "candidatesTokenCount": completion_tokens,
+                "totalTokenCount": prompt_tokens + completion_tokens,
+            },
+            "modelVersion": "gemini-3.6-flash",
+        },
+        "processed_time": "2026-07-30T00:00:00.000000+00:00",
+    }
+
+
+@pytest.fixture
+def respx_interceptable_httpx_client(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_output_file_content_vertex_managed_uri_accepted_by_real_validation(respx_interceptable_httpx_client):
+    managed_output_uri = (
+        "gs://litellm-bucket/litellm-vertex-files/publishers/google/models/"
+        "gemini-3.6-flash/abc-123/prediction-model/predictions.jsonl"
+    )
+    rows = [
+        _vertex_predictions_row("request-1", 10, 5),
+        _vertex_predictions_row("request-2", 20, 10),
+    ]
+    route = respx.get(url__regex=r"https://storage\.googleapis\.com/storage/v1/b/litellm-bucket/o/.*").mock(
+        return_value=httpx.Response(200, content=_vertex_jsonl(rows))
+    )
+
+    result = await bu._get_batch_output_file_content_as_dictionary(
+        _batch(managed_output_uri),
+        custom_llm_provider="vertex_ai",
+        litellm_params={
+            "api_key": "test-token",
+            "vertex_project": "proj-1",
+            "vertex_location": "us-central1",
+            "gcs_bucket_name": "litellm-bucket",
+        },
+    )
+
+    assert route.call_count == 1
+    request = route.calls.last.request
+    assert request.url.raw_path == (
+        b"/storage/v1/b/litellm-bucket/o/"
+        b"litellm-vertex-files%2Fpublishers%2Fgoogle%2Fmodels%2Fgemini-3.6-flash"
+        b"%2Fabc-123%2Fprediction-model%2Fpredictions.jsonl?alt=media"
+    )
+    assert [row["custom_id"] for row in result] == ["request-1", "request-2"]
+    assert all(row["response"]["status_code"] == 200 for row in result)
+    assert all(row["response"]["body"]["model"] == "gemini-3.6-flash" for row in result)
+    assert [row["response"]["body"]["usage"]["prompt_tokens"] for row in result] == [10, 20]
+    assert [row["response"]["body"]["usage"]["completion_tokens"] for row in result] == [5, 10]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_output_file_content_vertex_foreign_bucket_rejected_by_real_validation():
+    with pytest.raises(Exception, match="does not match the configured storage bucket"):
+        await bu._get_batch_output_file_content_as_dictionary(
+            _batch("gs://attacker-bucket/litellm-vertex-files/x/predictions.jsonl"),
+            custom_llm_provider="vertex_ai",
+            litellm_params={
+                "api_key": "test-token",
+                "vertex_project": "proj-1",
+                "vertex_location": "us-central1",
+                "gcs_bucket_name": "litellm-bucket",
+            },
+        )
+
+    assert respx.mock.calls.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_handle_completed_vertex_batch_computes_cost_usage_and_models(monkeypatch):
+    import litellm.files.main as files_main
+
+    rows = [
+        _vertex_openai_row("request-1", "gemini-3.6-flash", 10, 5),
+        _vertex_openai_row("request-2", "gemini-3.6-flash", 20, 10),
+    ]
+
+    async def fake_afile_content(**kw):
+        return type("R", (), {"content": _vertex_jsonl(rows)})()
+
+    monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
+
+    cost, usage, models = await bu._handle_completed_batch(
+        _batch("gs://litellm-bucket/output/predictions.jsonl"),
+        custom_llm_provider="vertex_ai",
+        litellm_params={"vertex_project": "proj-1", "vertex_location": "us-central1"},
+    )
+
+    assert cost > 0
+    assert cost == pytest.approx(30 * 7.5e-07 + 15 * 3.75e-06)
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (30, 15, 45)
+    assert models == ["gemini-3.6-flash", "gemini-3.6-flash"]
 
 
 @pytest.mark.asyncio
