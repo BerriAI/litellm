@@ -8,9 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../"))  # Adds the parent directory to the system path
 
 import litellm
 from litellm import completion
@@ -29,9 +27,7 @@ def test_minimax_anthropic_config():
     assert api_base == "https://api.minimax.io/anthropic/v1/messages"
 
     # Test get_api_base with custom value
-    custom_base = config.get_api_base(
-        api_base="https://api.minimaxi.com/anthropic/v1/messages"
-    )
+    custom_base = config.get_api_base(api_base="https://api.minimaxi.com/anthropic/v1/messages")
     assert custom_base == "https://api.minimaxi.com/anthropic/v1/messages"
 
 

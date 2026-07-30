@@ -168,24 +168,15 @@ class TestManagedIdProviderScope:
 
     def test_openai_scope(self):
         assert resolve_passthrough_managed_id_provider("openai") == "openai"
-        assert (
-            resolve_passthrough_managed_id_provider(litellm.LlmProviders.OPENAI)
-            == "openai"
-        )
+        assert resolve_passthrough_managed_id_provider(litellm.LlmProviders.OPENAI) == "openai"
 
     def test_azure_scope(self):
         assert resolve_passthrough_managed_id_provider("azure") == "azure"
-        assert (
-            resolve_passthrough_managed_id_provider(litellm.LlmProviders.AZURE)
-            == "azure"
-        )
+        assert resolve_passthrough_managed_id_provider(litellm.LlmProviders.AZURE) == "azure"
 
     def test_azure_ai_collapses_to_azure(self):
         assert resolve_passthrough_managed_id_provider("azure_ai") == "azure"
-        assert (
-            resolve_passthrough_managed_id_provider(litellm.LlmProviders.AZURE_AI)
-            == "azure"
-        )
+        assert resolve_passthrough_managed_id_provider(litellm.LlmProviders.AZURE_AI) == "azure"
 
     def test_azure_ai_id_resolves_on_azure_route(self):
         """End-to-end consequence of the collapse: an ID whose scope was
@@ -232,10 +223,7 @@ class TestCanonicalPath:
         assert _canonical_path("/azure/openai/files") == "/v1/files"
 
     def test_strips_azure_openai_batch_with_id(self):
-        assert (
-            _canonical_path("/azure/openai/batches/batch_abc123")
-            == "/v1/batches/batch_abc123"
-        )
+        assert _canonical_path("/azure/openai/batches/batch_abc123") == "/v1/batches/batch_abc123"
 
     def test_strips_azure_openai_responses(self):
         assert _canonical_path("/azure/openai/responses") == "/v1/responses"
@@ -244,17 +232,11 @@ class TestCanonicalPath:
         assert _canonical_path("/azure_ai/openai/files") == "/v1/files"
 
     def test_strips_azure_ai_openai_batch_cancel(self):
-        assert (
-            _canonical_path("/azure_ai/openai/batches/batch_abc/cancel")
-            == "/v1/batches/batch_abc/cancel"
-        )
+        assert _canonical_path("/azure_ai/openai/batches/batch_abc/cancel") == "/v1/batches/batch_abc/cancel"
 
     def test_azure_path_already_carrying_v1_is_not_doubled(self):
         assert _canonical_path("/azure/openai/v1/files") == "/v1/files"
-        assert (
-            _canonical_path("/azure/openai/v1/batches/batch_abc")
-            == "/v1/batches/batch_abc"
-        )
+        assert _canonical_path("/azure/openai/v1/batches/batch_abc") == "/v1/batches/batch_abc"
 
     def test_strips_azure_openai_file_with_id(self):
         assert _canonical_path("/azure/openai/files/file-abc") == "/v1/files/file-abc"
@@ -479,9 +461,7 @@ class TestRewriteResponseIds:
 
         pc = _prisma_client()
         # Dedup lookup finds existing row
-        pc.db.litellm_managedfiletable.find_many = AsyncMock(
-            return_value=[existing_row]
-        )
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(return_value=[existing_row])
         hook = _managed_files_hook()
         body = {
             "id": "batch_xyz",
@@ -511,9 +491,7 @@ class TestRewriteResponseIds:
         existing_row.unified_file_id = azure_managed_id
 
         pc = _prisma_client()
-        pc.db.litellm_managedfiletable.find_many = AsyncMock(
-            return_value=[existing_row]
-        )
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(return_value=[existing_row])
         hook = _managed_files_hook()
         body = {"id": "file-abc", "object": "file"}
         result = await rewrite_response_ids(
@@ -549,9 +527,7 @@ class TestRewriteResponseIds:
 
         pc = _prisma_client()
         # Cross-provider row listed first to expose any non-deterministic pick.
-        pc.db.litellm_managedfiletable.find_many = AsyncMock(
-            return_value=[openai_row, azure_row]
-        )
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(return_value=[openai_row, azure_row])
         hook = _managed_files_hook()
         body = {"id": raw_id, "object": "file"}
         result = await rewrite_response_ids(
@@ -581,9 +557,7 @@ class TestRewriteResponseIds:
         other_owner_row.created_by = "victim"
         other_owner_row.team_id = "victim-team"
         other_owner_row.unified_file_id = encode("openai", "victim", "file-victim")
-        pc.db.litellm_managedfiletable.find_many = _owner_scoped_file_find_many(
-            other_owner_row
-        )
+        pc.db.litellm_managedfiletable.find_many = _owner_scoped_file_find_many(other_owner_row)
         hook = _managed_files_hook()
 
         body = {"id": "file-victim", "object": "file"}
@@ -611,9 +585,7 @@ class TestRewriteResponseIds:
         other_owner_row.created_by = "victim"
         other_owner_row.team_id = "victim-team"
         other_owner_row.unified_file_id = encode("openai", "victim", "file-victim")
-        pc.db.litellm_managedfiletable.find_many = _owner_scoped_file_find_many(
-            other_owner_row
-        )
+        pc.db.litellm_managedfiletable.find_many = _owner_scoped_file_find_many(other_owner_row)
         hook = _managed_files_hook()
 
         body = {"id": "file-victim", "object": "file", "deleted": True}
@@ -642,9 +614,7 @@ class TestRewriteResponseIds:
         other_owner_row.created_by = "victim"
         other_owner_row.team_id = "victim-team"
         other_owner_row.unified_file_id = encode("openai", "victim", "file-shared")
-        pc.db.litellm_managedfiletable.find_many = _owner_scoped_file_find_many(
-            other_owner_row
-        )
+        pc.db.litellm_managedfiletable.find_many = _owner_scoped_file_find_many(other_owner_row)
         hook = _managed_files_hook()
 
         body = {"id": "file-shared", "object": "file"}
@@ -671,9 +641,7 @@ class TestRewriteResponseIds:
         existing_row.team_id = "shared-team"
 
         pc = _prisma_client()
-        pc.db.litellm_managedfiletable.find_many = AsyncMock(
-            return_value=[existing_row]
-        )
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(return_value=[existing_row])
         hook = _managed_files_hook()
 
         body = {"id": "file-team", "object": "file"}
@@ -719,9 +687,7 @@ class TestRewriteResponseIds:
         existing_row.team_id = "team-1"
 
         pc = _prisma_client()
-        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
-            return_value=existing_row
-        )
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=existing_row)
 
         completed_body = {
             "id": "batch_done",
@@ -782,9 +748,7 @@ class TestRewriteResponseIds:
 
         # Verify the upsert stored the namespaced model_object_id
         call_data = pc.db.litellm_managedobjecttable.upsert.call_args.kwargs["data"]
-        assert (
-            call_data["create"]["model_object_id"] == "passthrough:azure:batch_shared"
-        )
+        assert call_data["create"]["model_object_id"] == "passthrough:azure:batch_shared"
 
     @pytest.mark.asyncio
     async def test_batch_create_persist_failure_leaves_raw_id(self):
@@ -793,9 +757,7 @@ class TestRewriteResponseIds:
         would 404 on every subsequent resolve."""
         pc = _prisma_client()
         pc.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
-        pc.db.litellm_managedobjecttable.upsert = AsyncMock(
-            side_effect=Exception("db down")
-        )
+        pc.db.litellm_managedobjecttable.upsert = AsyncMock(side_effect=Exception("db down"))
         body = {"id": "batch_xyz", "object": "batch", "input_file_id": None}
         result = await rewrite_response_ids(
             provider="openai",
@@ -826,9 +788,7 @@ class TestRewriteResponseIds:
         winner_row.team_id = "team-1"
         winner_row.unified_object_id = winner_managed_id
         # First (dedup) lookup misses; post-collision re-read finds the winner.
-        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
-            side_effect=[None, winner_row]
-        )
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(side_effect=[None, winner_row])
         pc.db.litellm_managedobjecttable.upsert = AsyncMock(
             side_effect=Exception("UniqueConstraintViolation: model_object_id")
         )
@@ -863,9 +823,7 @@ class TestRewriteResponseIds:
         winner_row.created_by = "other-user"
         winner_row.team_id = "other-team"
         winner_row.unified_object_id = encode("openai", "other-uuid", "batch_race")
-        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
-            side_effect=[None, winner_row]
-        )
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(side_effect=[None, winner_row])
         pc.db.litellm_managedobjecttable.upsert = AsyncMock(
             side_effect=Exception("UniqueConstraintViolation: model_object_id")
         )
@@ -907,9 +865,7 @@ class TestRewriteResponseIds:
             managed_files_hook=None,
         )
         # The dedup lookup must use the namespaced key
-        lookup_where = pc.db.litellm_managedobjecttable.find_first.call_args.kwargs[
-            "where"
-        ]
+        lookup_where = pc.db.litellm_managedobjecttable.find_first.call_args.kwargs["where"]
         assert lookup_where["model_object_id"] == "passthrough:azure:batch_shared"
         # Result is a valid azure-scoped managed ID
         assert decode(result["id"]).provider == "azure"
@@ -926,12 +882,8 @@ class TestRewriteResponseIds:
         other_owner_row = MagicMock()
         other_owner_row.created_by = "other-user"
         other_owner_row.team_id = "other-team"
-        other_owner_row.unified_object_id = encode(
-            "azure", "other-user", "batch_shared"
-        )
-        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
-            return_value=other_owner_row
-        )
+        other_owner_row.unified_object_id = encode("azure", "other-user", "batch_shared")
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=other_owner_row)
         pc.db.litellm_managedobjecttable.upsert = AsyncMock(return_value=None)
 
         body = {"id": "batch_shared", "object": "batch", "input_file_id": None}
@@ -964,9 +916,7 @@ class TestRewriteResponseIds:
         other_owner_row.created_by = "other-user"
         other_owner_row.team_id = "other-team"
         other_owner_row.unified_object_id = encode("openai", "other-user", "batch_xyz")
-        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
-            return_value=other_owner_row
-        )
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=other_owner_row)
 
         body = {"id": "batch_xyz", "object": "batch", "input_file_id": None}
         with pytest.raises(HTTPException) as exc_info:
@@ -993,9 +943,7 @@ class TestRewriteResponseIds:
         other_owner_row.created_by = "other-user"
         other_owner_row.team_id = "other-team"
         other_owner_row.unified_object_id = encode("openai", "other-user", "resp_abc")
-        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
-            return_value=other_owner_row
-        )
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=other_owner_row)
 
         body = {"id": "resp_abc", "object": "response"}
         with pytest.raises(HTTPException) as exc_info:
@@ -1128,9 +1076,7 @@ class TestRewriteResponseIds:
             prisma_client=pc,
             managed_files_hook=hook,
         )
-        stored = pc.db.litellm_managedobjecttable.upsert.call_args.kwargs["data"][
-            "create"
-        ]["file_object"]
+        stored = pc.db.litellm_managedobjecttable.upsert.call_args.kwargs["data"]["create"]["file_object"]
         snapshot = _json.loads(stored)
         assert snapshot["input_file_id"] == result["input_file_id"]
         assert decode(snapshot["input_file_id"]).raw_provider_id == "file-in"  # type: ignore[union-attr]
@@ -1144,9 +1090,7 @@ class TestRewriteResponseIds:
 class TestRewritePathIds:
     @pytest.mark.asyncio
     async def test_raw_segment_passes_through(self):
-        result = await rewrite_path_ids(
-            "/v1/batches/batch_abc", "openai", _user(), None, None
-        )
+        result = await rewrite_path_ids("/v1/batches/batch_abc", "openai", _user(), None, None)
         assert result == "/v1/batches/batch_abc"
 
     @pytest.mark.asyncio
@@ -1158,9 +1102,7 @@ class TestRewritePathIds:
         obj_row.created_by = "user-1"
         obj_row.team_id = "team-1"
         pc.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=obj_row)
-        result = await rewrite_path_ids(
-            f"/v1/batches/{mid}", "openai", _user(), pc, hook
-        )
+        result = await rewrite_path_ids(f"/v1/batches/{mid}", "openai", _user(), pc, hook)
         assert result == "/v1/batches/batch_abc"
 
     @pytest.mark.asyncio
@@ -1284,9 +1226,7 @@ class TestRewriteBodyIds:
         from fastapi import HTTPException
 
         with pytest.raises(HTTPException) as exc_info:
-            await rewrite_body_ids(
-                body, "openai", _user("user-1", "team-1"), None, hook
-            )
+            await rewrite_body_ids(body, "openai", _user("user-1", "team-1"), None, hook)
         assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
@@ -1357,9 +1297,7 @@ class TestRawProviderIdInputGuard:
         from fastapi import HTTPException
 
         pc = _prisma_client()
-        pc.db.litellm_managedfiletable.find_many = AsyncMock(
-            return_value=[self._victim_file_row()]
-        )
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(return_value=[self._victim_file_row()])
         with pytest.raises(HTTPException) as exc_info:
             await rewrite_path_ids(
                 "/openai/v1/files/file-victim",
@@ -1377,9 +1315,7 @@ class TestRawProviderIdInputGuard:
         from fastapi import HTTPException
 
         pc = _prisma_client()
-        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
-            return_value=self._victim_object_row()
-        )
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=self._victim_object_row())
         with pytest.raises(HTTPException) as exc_info:
             await rewrite_path_ids(
                 "/openai/v1/batches/batch_victim/cancel",
@@ -1395,9 +1331,7 @@ class TestRawProviderIdInputGuard:
         from fastapi import HTTPException
 
         pc = _prisma_client()
-        pc.db.litellm_managedfiletable.find_many = AsyncMock(
-            return_value=[self._victim_file_row()]
-        )
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(return_value=[self._victim_file_row()])
         with pytest.raises(HTTPException) as exc_info:
             await rewrite_query_ids(
                 {"file_id": "file-victim"},
@@ -1413,9 +1347,7 @@ class TestRawProviderIdInputGuard:
         from fastapi import HTTPException
 
         pc = _prisma_client()
-        pc.db.litellm_managedfiletable.find_many = AsyncMock(
-            return_value=[self._victim_file_row()]
-        )
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(return_value=[self._victim_file_row()])
         with pytest.raises(HTTPException) as exc_info:
             await rewrite_body_ids(
                 {"input_file_id": "file-victim"},
@@ -1498,23 +1430,16 @@ class TestRawProviderIdGuardBudget:
         pc = _prisma_client()
         body = {"ids": [f"file-{i}" for i in range(_MAX_RAW_ID_GUARD_LOOKUPS + 25)]}
         with pytest.raises(HTTPException) as exc_info:
-            await rewrite_body_ids(
-                body, "openai", _user("attacker", "attacker-team"), pc, None
-            )
+            await rewrite_body_ids(body, "openai", _user("attacker", "attacker-team"), pc, None)
         assert exc_info.value.status_code == 400
-        assert (
-            pc.db.litellm_managedfiletable.find_many.call_count
-            == _MAX_RAW_ID_GUARD_LOOKUPS
-        )
+        assert pc.db.litellm_managedfiletable.find_many.call_count == _MAX_RAW_ID_GUARD_LOOKUPS
 
     @pytest.mark.asyncio
     async def test_repeated_raw_id_deduped(self):
         """The same raw ID repeated many times issues exactly one DB lookup."""
         pc = _prisma_client()
         body = {"ids": ["file-dup"] * (_MAX_RAW_ID_GUARD_LOOKUPS * 5)}
-        result = await rewrite_body_ids(
-            body, "openai", _user("attacker", "attacker-team"), pc, None
-        )
+        result = await rewrite_body_ids(body, "openai", _user("attacker", "attacker-team"), pc, None)
         assert result is body
         assert pc.db.litellm_managedfiletable.find_many.call_count == 1
 
@@ -1524,9 +1449,7 @@ class TestRawProviderIdGuardBudget:
         each distinct ID is guarded once."""
         pc = _prisma_client()
         body = {"ids": [f"file-{i}" for i in range(5)]}
-        result = await rewrite_body_ids(
-            body, "openai", _user("user-1", "team-1"), pc, None
-        )
+        result = await rewrite_body_ids(body, "openai", _user("user-1", "team-1"), pc, None)
         assert result is body
         assert pc.db.litellm_managedfiletable.find_many.call_count == 5
 
@@ -1539,14 +1462,9 @@ class TestRawProviderIdGuardBudget:
         pc = _prisma_client()
         params = {f"k{i}": f"file-{i}" for i in range(_MAX_RAW_ID_GUARD_LOOKUPS + 5)}
         with pytest.raises(HTTPException) as exc_info:
-            await rewrite_query_ids(
-                params, "openai", _user("attacker", "attacker-team"), pc, None
-            )
+            await rewrite_query_ids(params, "openai", _user("attacker", "attacker-team"), pc, None)
         assert exc_info.value.status_code == 400
-        assert (
-            pc.db.litellm_managedfiletable.find_many.call_count
-            == _MAX_RAW_ID_GUARD_LOOKUPS
-        )
+        assert pc.db.litellm_managedfiletable.find_many.call_count == _MAX_RAW_ID_GUARD_LOOKUPS
 
 
 # ---------------------------------------------------------------------------
@@ -1603,11 +1521,7 @@ def _prisma_with_list(file_rows=None, batch_rows=None) -> MagicMock:
         marker = (where or {}).get("flat_model_file_ids", {}) or {}
         marker = marker.get("has")
         if marker is not None:
-            rows = [
-                r
-                for r in rows
-                if marker in (getattr(r, "flat_model_file_ids", None) or [])
-            ]
+            rows = [r for r in rows if marker in (getattr(r, "flat_model_file_ids", None) or [])]
         return rows if take is None else rows[:take]
 
     def _batch_filter(*args, where=None, take=None, **kwargs):
@@ -1615,25 +1529,17 @@ def _prisma_with_list(file_rows=None, batch_rows=None) -> MagicMock:
         prefix = (where or {}).get("model_object_id", {}) or {}
         prefix = prefix.get("startswith")
         if prefix is not None:
-            rows = [
-                r
-                for r in rows
-                if str(getattr(r, "model_object_id", "") or "").startswith(prefix)
-            ]
+            rows = [r for r in rows if str(getattr(r, "model_object_id", "") or "").startswith(prefix)]
         return rows if take is None else rows[:take]
 
     if file_rows is not None:
         pc.db.litellm_managedfiletable.find_many = AsyncMock(side_effect=_file_filter)
     if batch_rows is not None:
-        pc.db.litellm_managedobjecttable.find_many = AsyncMock(
-            side_effect=_batch_filter
-        )
+        pc.db.litellm_managedobjecttable.find_many = AsyncMock(side_effect=_batch_filter)
     return pc
 
 
-def _fake_file_row(
-    unified_id: str, created_by: str = "user-1", team_id: str = "team-1"
-):
+def _fake_file_row(unified_id: str, created_by: str = "user-1", team_id: str = "team-1"):
     row = MagicMock()
     row.unified_file_id = unified_id
     row.created_by = created_by
@@ -1641,9 +1547,7 @@ def _fake_file_row(
     row.file_object = {"filename": "test.jsonl", "bytes": 42, "purpose": "batch"}
     payload = decode(unified_id)
     row.flat_model_file_ids = (
-        [payload.raw_provider_id, _passthrough_provider_marker(payload.provider)]
-        if payload is not None
-        else []
+        [payload.raw_provider_id, _passthrough_provider_marker(payload.provider)] if payload is not None else []
     )
 
     import datetime
@@ -1652,9 +1556,7 @@ def _fake_file_row(
     return row
 
 
-def _fake_batch_row(
-    unified_id: str, created_by: str = "user-1", team_id: str = "team-1"
-):
+def _fake_batch_row(unified_id: str, created_by: str = "user-1", team_id: str = "team-1"):
     row = MagicMock()
     row.unified_object_id = unified_id
     row.created_by = created_by
@@ -1662,11 +1564,7 @@ def _fake_batch_row(
     row.file_object = {"status": "completed", "input_file_id": "file-managed-1"}
     row.file_purpose = "batch"
     payload = decode(unified_id)
-    row.model_object_id = (
-        f"passthrough:{payload.provider}:{payload.raw_provider_id}"
-        if payload is not None
-        else None
-    )
+    row.model_object_id = f"passthrough:{payload.provider}:{payload.raw_provider_id}" if payload is not None else None
 
     import datetime
 
@@ -1681,39 +1579,24 @@ class TestListPassthroughIdsFromDb:
         assert is_passthrough_list_route("openai", "GET", "/openai/v1/files") is True
 
     def test_is_passthrough_list_route_batches(self):
-        assert (
-            is_passthrough_list_route("azure", "GET", "/azure/openai/batches") is True
-        )
+        assert is_passthrough_list_route("azure", "GET", "/azure/openai/batches") is True
 
     def test_is_passthrough_list_route_not_for_post(self):
         assert is_passthrough_list_route("openai", "POST", "/openai/v1/files") is False
 
     def test_is_passthrough_list_route_not_for_single_resource(self):
         # GET /v1/files/{file_id} is not a list route
-        assert (
-            is_passthrough_list_route("openai", "GET", "/openai/v1/files/file-abc")
-            is False
-        )
+        assert is_passthrough_list_route("openai", "GET", "/openai/v1/files/file-abc") is False
 
     def test_is_passthrough_list_route_azure_ai_prefix(self):
-        assert (
-            is_passthrough_list_route("azure", "GET", "/azure_ai/openai/files") is True
-        )
+        assert is_passthrough_list_route("azure", "GET", "/azure_ai/openai/files") is True
 
     def test_is_passthrough_list_route_azure_path_already_carrying_v1(self):
-        assert (
-            is_passthrough_list_route("azure", "GET", "/azure/openai/v1/files") is True
-        )
-        assert (
-            is_passthrough_list_route("azure", "GET", "/azure/openai/v1/batches")
-            is True
-        )
+        assert is_passthrough_list_route("azure", "GET", "/azure/openai/v1/files") is True
+        assert is_passthrough_list_route("azure", "GET", "/azure/openai/v1/batches") is True
 
     def test_is_passthrough_list_route_not_for_azure_single_resource(self):
-        assert (
-            is_passthrough_list_route("azure", "GET", "/azure/openai/files/file-abc")
-            is False
-        )
+        assert is_passthrough_list_route("azure", "GET", "/azure/openai/files/file-abc") is False
 
     @pytest.mark.asyncio
     async def test_list_files_returns_owned_rows(self):
@@ -1775,9 +1658,7 @@ class TestListPassthroughIdsFromDb:
         # Admin adds no owner scoping, but the provider scope is always pushed
         # to the DB; the only where clause is the provider marker filter.
         call_kwargs = pc.db.litellm_managedfiletable.find_many.call_args.kwargs
-        assert call_kwargs["where"] == {
-            "flat_model_file_ids": {"has": _passthrough_provider_marker("openai")}
-        }
+        assert call_kwargs["where"] == {"flat_model_file_ids": {"has": _passthrough_provider_marker("openai")}}
 
     @pytest.mark.asyncio
     async def test_list_files_user_scoped_where(self):
@@ -1802,9 +1683,7 @@ class TestListPassthroughIdsFromDb:
     @pytest.mark.asyncio
     async def test_list_has_more_flag(self):
         """has_more is True when DB returns limit+1 rows."""
-        rows = [
-            _fake_file_row(new_managed_id("openai", f"file-{i}")) for i in range(21)
-        ]  # limit=20, fetch 21
+        rows = [_fake_file_row(new_managed_id("openai", f"file-{i}")) for i in range(21)]  # limit=20, fetch 21
         pc = _prisma_with_list(file_rows=rows)
 
         result = await list_passthrough_ids_from_db(
@@ -1837,9 +1716,7 @@ class TestListPassthroughIdsFromDb:
         """DB failure must return an empty list, not None (which would fall through
         to the upstream provider and leak the provider-wide listing)."""
         pc = _prisma_with_list()
-        pc.db.litellm_managedfiletable.find_many = AsyncMock(
-            side_effect=Exception("db down")
-        )
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(side_effect=Exception("db down"))
 
         result = await list_passthrough_ids_from_db(
             provider="openai",
@@ -1856,9 +1733,7 @@ class TestListPassthroughIdsFromDb:
     @pytest.mark.asyncio
     async def test_list_returns_empty_for_caller_without_identity(self):
         """Caller with neither user_id nor team_id should get an empty list."""
-        pc = _prisma_with_list(
-            file_rows=[_fake_file_row(new_managed_id("openai", "file-1"))]
-        )
+        pc = _prisma_with_list(file_rows=[_fake_file_row(new_managed_id("openai", "file-1"))])
         anon = UserAPIKeyAuth()  # no user_id, no team_id, not admin
 
         result = await list_passthrough_ids_from_db(
@@ -1880,9 +1755,7 @@ class TestListPassthroughIdsFromDb:
         A large azure-only pool must return an empty openai page with
         has_more=False in exactly one DB round-trip.
         """
-        azure_rows = [
-            _fake_file_row(new_managed_id("azure", f"file-{i}")) for i in range(50)
-        ]
+        azure_rows = [_fake_file_row(new_managed_id("azure", f"file-{i}")) for i in range(50)]
         pc = _prisma_with_list(file_rows=azure_rows)
 
         result = await list_passthrough_ids_from_db(
@@ -1897,9 +1770,7 @@ class TestListPassthroughIdsFromDb:
         assert result["data"] == []
         assert result["has_more"] is False
         where = pc.db.litellm_managedfiletable.find_many.call_args.kwargs["where"]
-        assert where["flat_model_file_ids"] == {
-            "has": _passthrough_provider_marker("openai")
-        }
+        assert where["flat_model_file_ids"] == {"has": _passthrough_provider_marker("openai")}
         assert pc.db.litellm_managedfiletable.find_many.await_count == 1
 
     @pytest.mark.asyncio
@@ -1913,9 +1784,7 @@ class TestListPassthroughIdsFromDb:
         pc = _prisma_with_list(file_rows=[azure_row])
 
         cursor_row = MagicMock()
-        cursor_row.created_at = datetime.datetime(
-            2025, 6, 1, tzinfo=datetime.timezone.utc
-        )
+        cursor_row.created_at = datetime.datetime(2025, 6, 1, tzinfo=datetime.timezone.utc)
         pc.db.litellm_managedfiletable.find_first = AsyncMock(return_value=cursor_row)
 
         result = await list_passthrough_ids_from_db(
@@ -1942,9 +1811,7 @@ class TestListPassthroughIdsFromDb:
         pc = _prisma_with_list(file_rows=[azure_row])
 
         cursor_row = MagicMock()
-        cursor_row.created_at = datetime.datetime(
-            2025, 6, 1, tzinfo=datetime.timezone.utc
-        )
+        cursor_row.created_at = datetime.datetime(2025, 6, 1, tzinfo=datetime.timezone.utc)
         pc.db.litellm_managedfiletable.find_first = AsyncMock(return_value=cursor_row)
 
         cursor_id = new_managed_id("azure", "file-cursor")
@@ -2003,9 +1870,7 @@ class TestListPassthroughIdsFromDb:
                                 return False
                             if op == "gt" and not (actual is not None and actual > val):
                                 return False
-                            if op == "startswith" and not str(actual or "").startswith(
-                                val
-                            ):
+                            if op == "startswith" and not str(actual or "").startswith(val):
                                 return False
                     elif actual != cond:
                         return False
@@ -2015,9 +1880,7 @@ class TestListPassthroughIdsFromDb:
             matched = [r for r in rows if _matches(r, where or {})]
             for spec in reversed(order or []):
                 ((field, direction),) = spec.items()
-                matched.sort(
-                    key=lambda r: getattr(r, field), reverse=(direction == "desc")
-                )
+                matched.sort(key=lambda r: getattr(r, field), reverse=(direction == "desc"))
             return matched if take is None else matched[:take]
 
         def _find_first(*_a, where=None, **_k):

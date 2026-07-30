@@ -288,9 +288,7 @@ def test_deepinfra_rerank_error_handling(mock_post):
     )
 
     # Verify that the response contains error information
-    assert (
-        response._hidden_params["status"] == "unknown"
-    )  # Default status when error occurs
+    assert response._hidden_params["status"] == "unknown"  # Default status when error occurs
 
 
 def test_deepinfra_rerank_models():
@@ -309,9 +307,7 @@ def test_deepinfra_rerank_models():
         except Exception as e:
             # We expect this to potentially fail due to missing api_base/key
             # but the model format should be recognized
-            assert "api_base" in str(e) or "API key" in str(
-                e
-            ), f"Unexpected error for model {model}: {e}"
+            assert "api_base" in str(e) or "API key" in str(e), f"Unexpected error for model {model}: {e}"
 
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")

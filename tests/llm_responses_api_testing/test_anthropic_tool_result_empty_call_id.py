@@ -2,7 +2,7 @@
 Test to reproduce and verify fix for Anthropic tool_result issue with empty call_id.
 
 This test reproduces the exact error:
-"messages.0.content.0: unexpected `tool_use_id` found in `tool_result` blocks: tool_use_id. 
+"messages.0.content.0: unexpected `tool_use_id` found in `tool_result` blocks: tool_use_id.
 Each `tool_result` block must have a corresponding `tool_use` block in the previous message."
 
 The issue occurs when:
@@ -42,9 +42,7 @@ def test_empty_tool_call_id_is_skipped():
         tool_call_output_empty
     )
 
-    assert (
-        result == []
-    ), "Tool messages with empty call_id should be skipped, not created"
+    assert result == [], "Tool messages with empty call_id should be skipped, not created"
     print("[OK] Empty call_id messages are correctly skipped")
 
 
@@ -70,9 +68,7 @@ def test_empty_tool_call_id_in_messages_list_is_removed():
 
     # The tool message with empty tool_call_id should be removed
     tool_messages = [msg for msg in fixed_messages if msg.get("role") == "tool"]
-    assert (
-        len(tool_messages) == 0
-    ), "Tool messages with empty tool_call_id should be removed from the list"
+    assert len(tool_messages) == 0, "Tool messages with empty tool_call_id should be removed from the list"
     print("[OK] Empty tool_call_id messages are correctly removed from messages list")
 
 
@@ -109,9 +105,7 @@ def test_tool_call_id_recovered_from_previous_assistant():
     )
 
     # The tool message should have its tool_call_id recovered
-    tool_message = next(
-        (msg for msg in fixed_messages if msg.get("role") == "tool"), None
-    )
+    tool_message = next((msg for msg in fixed_messages if msg.get("role") == "tool"), None)
     assert tool_message is not None, "Tool message should still be present"
     assert tool_message.get("tool_call_id") == tool_call_id, (
         f"Tool call_id should be recovered from assistant message. "
@@ -160,26 +154,20 @@ def test_tool_calls_added_when_missing():
     )
 
     # The assistant message should now have tool_calls
-    assistant_message = next(
-        (msg for msg in fixed_messages if msg.get("role") == "assistant"), None
-    )
+    assistant_message = next((msg for msg in fixed_messages if msg.get("role") == "assistant"), None)
     assert assistant_message is not None, "Assistant message should be present"
 
     tool_calls = assistant_message.get("tool_calls", [])
-    assert (
-        len(tool_calls) > 0
-    ), "Assistant message should have tool_calls added when tool_result is present"
+    assert len(tool_calls) > 0, "Assistant message should have tool_calls added when tool_result is present"
 
     # Verify the tool_call has the correct ID
     first_tool_call = tool_calls[0]
     tool_call_id_from_message = (
-        first_tool_call.get("id")
-        if isinstance(first_tool_call, dict)
-        else getattr(first_tool_call, "id", None)
+        first_tool_call.get("id") if isinstance(first_tool_call, dict) else getattr(first_tool_call, "id", None)
     )
-    assert (
-        tool_call_id_from_message == tool_call_id
-    ), f"Tool call ID should match. Expected: {tool_call_id}, Got: {tool_call_id_from_message}"
+    assert tool_call_id_from_message == tool_call_id, (
+        f"Tool call ID should match. Expected: {tool_call_id}, Got: {tool_call_id_from_message}"
+    )
     print(f"[OK] Tool calls added to assistant message: {len(tool_calls)} tool_call(s)")
 
 
@@ -241,34 +229,25 @@ def test_anthropic_transformation_with_fixed_messages():
     anthropic_messages = anthropic_data.get("messages", [])
 
     # Find the assistant message
-    anthropic_assistant_msg = next(
-        (msg for msg in anthropic_messages if msg.get("role") == "assistant"), None
-    )
+    anthropic_assistant_msg = next((msg for msg in anthropic_messages if msg.get("role") == "assistant"), None)
 
     assert anthropic_assistant_msg is not None, "Assistant message should be present"
 
     # Verify it has tool_use blocks
     assistant_content = anthropic_assistant_msg.get("content", [])
     tool_use_blocks = [
-        block
-        for block in assistant_content
-        if isinstance(block, dict) and block.get("type") == "tool_use"
+        block for block in assistant_content if isinstance(block, dict) and block.get("type") == "tool_use"
     ]
 
     assert len(tool_use_blocks) > 0, (
-        f"After fix, assistant message should have tool_use blocks. "
-        f"Found content: {assistant_content}"
+        f"After fix, assistant message should have tool_use blocks. Found content: {assistant_content}"
     )
 
     # Verify the tool_use block has the correct ID
     tool_use_id = tool_use_blocks[0].get("id")
-    assert (
-        tool_use_id == tool_call_id
-    ), f"Tool use ID should match. Expected: {tool_call_id}, Got: {tool_use_id}"
+    assert tool_use_id == tool_call_id, f"Tool use ID should match. Expected: {tool_call_id}, Got: {tool_use_id}"
 
-    print(
-        f"[OK] Anthropic transformation successful with {len(tool_use_blocks)} tool_use block(s)"
-    )
+    print(f"[OK] Anthropic transformation successful with {len(tool_use_blocks)} tool_use block(s)")
 
 
 if __name__ == "__main__":

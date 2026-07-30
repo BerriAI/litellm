@@ -66,9 +66,7 @@ class TestContainerRegionalApiBase:
         call_args = mock_post.call_args
         called_url = call_args[1]["url"]
 
-        assert (
-            "us.api.openai.com" in called_url
-        ), f"Expected US regional URL, got: {called_url}"
+        assert "us.api.openai.com" in called_url, f"Expected US regional URL, got: {called_url}"
         assert called_url == "https://us.api.openai.com/v1/containers"
 
     @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
@@ -100,9 +98,7 @@ class TestContainerRegionalApiBase:
         call_args = mock_post.call_args
         called_url = call_args[1]["url"]
 
-        assert (
-            "us.api.openai.com" in called_url
-        ), f"Expected US regional URL, got: {called_url}"
+        assert "us.api.openai.com" in called_url, f"Expected US regional URL, got: {called_url}"
 
     @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
     def test_create_container_defaults_to_standard_openai(self, mock_post):
@@ -162,7 +158,5 @@ class TestContainerRegionalApiBase:
         call_args = mock_post.call_args
         called_url = call_args[1]["url"]
 
-        assert (
-            "us.api.openai.com" in called_url
-        ), f"Expected US regional URL, got: {called_url}"
+        assert "us.api.openai.com" in called_url, f"Expected US regional URL, got: {called_url}"
         assert "cntr_123456/files" in called_url

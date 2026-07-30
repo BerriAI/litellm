@@ -54,9 +54,7 @@ def test_onyx_guard_with_custom_timeout_from_kwargs():
     os.environ["ONYX_API_BASE"] = "https://test.onyx.security"
     os.environ["ONYX_API_KEY"] = "test-api-key"
 
-    with patch(
-        "litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client"
-    ) as mock_get_client:
+    with patch("litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client") as mock_get_client:
         mock_get_client.return_value = MagicMock()
 
         # Simulate how guardrail is instantiated from config with timeout
@@ -92,9 +90,7 @@ def test_onyx_guard_with_timeout_none_uses_env_var():
     os.environ["ONYX_API_KEY"] = "test-api-key"
     os.environ["ONYX_TIMEOUT"] = "60"
 
-    with patch(
-        "litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client"
-    ) as mock_get_client:
+    with patch("litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client") as mock_get_client:
         mock_get_client.return_value = MagicMock()
 
         # Pass timeout=None to simulate config model behavior
@@ -130,9 +126,7 @@ def test_onyx_guard_with_timeout_none_defaults_to_10():
     if "ONYX_TIMEOUT" in os.environ:
         del os.environ["ONYX_TIMEOUT"]
 
-    with patch(
-        "litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client"
-    ) as mock_get_client:
+    with patch("litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client") as mock_get_client:
         mock_get_client.return_value = MagicMock()
 
         # Pass timeout=None with no env var - should default to 10.0
@@ -179,9 +173,7 @@ class TestOnyxGuardrail:
         # Set required API key
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
-        guardrail = OnyxGuardrail(
-            guardrail_name="test-guard", event_hook="pre_call", default_on=True
-        )
+        guardrail = OnyxGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
 
         # Should use default server URL
         assert guardrail.api_base == "https://ai-guard.onyx.security"
@@ -194,9 +186,7 @@ class TestOnyxGuardrail:
         os.environ["ONYX_API_BASE"] = "https://custom.onyx.security"
         os.environ["ONYX_API_KEY"] = "custom-api-key"
 
-        guardrail = OnyxGuardrail(
-            guardrail_name="test-guard", event_hook="post_call", default_on=True
-        )
+        guardrail = OnyxGuardrail(guardrail_name="test-guard", event_hook="post_call", default_on=True)
 
         assert guardrail.api_base == "https://custom.onyx.security"
         assert guardrail.api_key == "custom-api-key"
@@ -208,22 +198,16 @@ class TestOnyxGuardrail:
         if "ONYX_API_KEY" in os.environ:
             del os.environ["ONYX_API_KEY"]
 
-        with pytest.raises(
-            ValueError, match="ONYX_API_KEY environment variable is not set"
-        ):
+        with pytest.raises(ValueError, match="ONYX_API_KEY environment variable is not set"):
             OnyxGuardrail(guardrail_name="test-guard", event_hook="pre_call")
 
     def test_initialization_with_default_timeout(self):
         """Test that default timeout is 10.0 seconds."""
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
-        with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client") as mock_get_client:
             mock_get_client.return_value = MagicMock()
-            guardrail = OnyxGuardrail(
-                guardrail_name="test-guard", event_hook="pre_call", default_on=True
-            )
+            guardrail = OnyxGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
 
             # Verify the client was initialized with correct timeout
             mock_get_client.assert_called_once()
@@ -236,9 +220,7 @@ class TestOnyxGuardrail:
         """Test initialization with custom timeout parameter."""
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
-        with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client") as mock_get_client:
             mock_get_client.return_value = MagicMock()
             guardrail = OnyxGuardrail(
                 guardrail_name="test-guard",
@@ -263,9 +245,7 @@ class TestOnyxGuardrail:
         os.environ["ONYX_API_KEY"] = "test-api-key"
         os.environ["ONYX_TIMEOUT"] = "25"
 
-        with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client") as mock_get_client:
             mock_get_client.return_value = MagicMock()
             # Must pass timeout=None explicitly to trigger env var lookup
             guardrail = OnyxGuardrail(
@@ -287,9 +267,7 @@ class TestOnyxGuardrail:
         os.environ["ONYX_API_KEY"] = "test-api-key"
         os.environ["ONYX_TIMEOUT"] = "25"
 
-        with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client") as mock_get_client:
             mock_get_client.return_value = MagicMock()
             guardrail = OnyxGuardrail(
                 guardrail_name="test-guard",
@@ -312,9 +290,7 @@ class TestOnyxGuardrail:
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
         # Setup guardrail
-        guardrail = OnyxGuardrail(
-            guardrail_name="test-guard", event_hook="pre_call", default_on=True
-        )
+        guardrail = OnyxGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
 
         # Test data
         inputs = GenericGuardrailAPIInputs()
@@ -345,9 +321,7 @@ class TestOnyxGuardrail:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            guardrail.async_handler, "post", return_value=mock_response
-        ) as mock_post:
+        with patch.object(guardrail.async_handler, "post", return_value=mock_response) as mock_post:
             result = await guardrail.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -361,13 +335,8 @@ class TestOnyxGuardrail:
         # Verify the API was called with correct parameters
         mock_post.assert_called_once()
         call_args = mock_post.call_args
-        assert (
-            call_args.args[0]
-            == f"{guardrail.api_base}/guard/evaluate/v1/{guardrail.api_key}/litellm"
-        )
-        assert (
-            call_args.kwargs["json"]["payload"] == request_data["proxy_server_request"]
-        )
+        assert call_args.args[0] == f"{guardrail.api_base}/guard/evaluate/v1/{guardrail.api_key}/litellm"
+        assert call_args.kwargs["json"]["payload"] == request_data["proxy_server_request"]
         assert call_args.kwargs["json"]["input_type"] == "request"
         assert call_args.kwargs["json"]["conversation_id"] == "test-call-id"
 
@@ -378,9 +347,7 @@ class TestOnyxGuardrail:
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
         # Setup guardrail
-        guardrail = OnyxGuardrail(
-            guardrail_name="test-guard", event_hook="pre_call", default_on=True
-        )
+        guardrail = OnyxGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
 
         # Test data with potential violations
         inputs = GenericGuardrailAPIInputs()
@@ -429,9 +396,7 @@ class TestOnyxGuardrail:
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
         # Setup guardrail
-        guardrail = OnyxGuardrail(
-            guardrail_name="test-guard", event_hook="post_call", default_on=True
-        )
+        guardrail = OnyxGuardrail(guardrail_name="test-guard", event_hook="post_call", default_on=True)
 
         # Test data
         inputs = GenericGuardrailAPIInputs()
@@ -477,9 +442,7 @@ class TestOnyxGuardrail:
             start_time=None,
         )
 
-        with patch.object(
-            guardrail.async_handler, "post", return_value=mock_api_response
-        ) as mock_post:
+        with patch.object(guardrail.async_handler, "post", return_value=mock_api_response) as mock_post:
             result = await guardrail.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -503,9 +466,7 @@ class TestOnyxGuardrail:
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
         # Setup guardrail
-        guardrail = OnyxGuardrail(
-            guardrail_name="test-guard", event_hook="post_call", default_on=True
-        )
+        guardrail = OnyxGuardrail(guardrail_name="test-guard", event_hook="post_call", default_on=True)
 
         # Test data
         inputs = GenericGuardrailAPIInputs()
@@ -541,9 +502,7 @@ class TestOnyxGuardrail:
         }
         mock_api_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            guardrail.async_handler, "post", return_value=mock_api_response
-        ):
+        with patch.object(guardrail.async_handler, "post", return_value=mock_api_response):
             with pytest.raises(HTTPException) as exc_info:
                 await guardrail.apply_guardrail(
                     inputs=inputs,
@@ -563,9 +522,7 @@ class TestOnyxGuardrail:
         # Set required API key
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
-        guardrail = OnyxGuardrail(
-            guardrail_name="test-guard", event_hook="pre_call", default_on=True
-        )
+        guardrail = OnyxGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
 
         inputs = GenericGuardrailAPIInputs()
 
@@ -577,9 +534,7 @@ class TestOnyxGuardrail:
         }
 
         # Test API connection error
-        with patch.object(
-            guardrail.async_handler, "post", side_effect=Exception("Connection timeout")
-        ):
+        with patch.object(guardrail.async_handler, "post", side_effect=Exception("Connection timeout")):
             # Should return original inputs on error (graceful degradation)
             result = await guardrail.apply_guardrail(
                 inputs=inputs,
@@ -710,9 +665,7 @@ class TestOnyxGuardrail:
         # Set required API key
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
-        guardrail = OnyxGuardrail(
-            guardrail_name="test-guard", event_hook="pre_call", default_on=True
-        )
+        guardrail = OnyxGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
 
         inputs = GenericGuardrailAPIInputs()
 
@@ -729,9 +682,7 @@ class TestOnyxGuardrail:
 
         # Mock uuid.uuid4 to verify it's called when logging_obj is None
         with (
-            patch.object(
-                guardrail.async_handler, "post", return_value=mock_response
-            ) as mock_post,
+            patch.object(guardrail.async_handler, "post", return_value=mock_response) as mock_post,
             patch("uuid.uuid4", return_value="test-uuid"),
         ):
             result = await guardrail.apply_guardrail(
@@ -752,9 +703,7 @@ class TestOnyxGuardrail:
         # Set required API key
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
-        guardrail = OnyxGuardrail(
-            guardrail_name="test-guard", event_hook="pre_call", default_on=True
-        )
+        guardrail = OnyxGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
 
         payload = {"messages": [{"role": "user", "content": "test"}]}
 
@@ -763,13 +712,9 @@ class TestOnyxGuardrail:
         mock_response.json.return_value = {"allowed": True, "message": "Safe"}
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            guardrail.async_handler, "post", return_value=mock_response
-        ) as mock_post:
+        with patch.object(guardrail.async_handler, "post", return_value=mock_response) as mock_post:
             conversation_id = "test-conversation-id"
-            result = await guardrail._validate_with_guard_server(
-                payload, "request", conversation_id
-            )
+            result = await guardrail._validate_with_guard_server(payload, "request", conversation_id)
 
             assert result["allowed"] is True
             assert result["message"] == "Safe"
@@ -793,9 +738,7 @@ class TestOnyxGuardrail:
         # Set required API key
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
-        guardrail = OnyxGuardrail(
-            guardrail_name="test-guard", event_hook="pre_call", default_on=True
-        )
+        guardrail = OnyxGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
 
         payload = {"messages": [{"role": "user", "content": "harmful content"}]}
 
@@ -810,9 +753,7 @@ class TestOnyxGuardrail:
 
         with patch.object(guardrail.async_handler, "post", return_value=mock_response):
             with pytest.raises(HTTPException) as exc_info:
-                await guardrail._validate_with_guard_server(
-                    payload, "request", "test-conversation-id"
-                )
+                await guardrail._validate_with_guard_server(payload, "request", "test-conversation-id")
 
             assert exc_info.value.status_code == 400
             assert "rule1, rule2" in str(exc_info.value.detail)
@@ -830,9 +771,7 @@ class TestOnyxGuardrail:
         # Set required API key
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
-        guardrail = OnyxGuardrail(
-            guardrail_name="test-guard", event_hook="post_call", default_on=True
-        )
+        guardrail = OnyxGuardrail(guardrail_name="test-guard", event_hook="post_call", default_on=True)
 
         inputs = GenericGuardrailAPIInputs()
 
@@ -863,9 +802,7 @@ class TestOnyxGuardrail:
         }
         mock_api_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            guardrail.async_handler, "post", return_value=mock_api_response
-        ) as mock_post:
+        with patch.object(guardrail.async_handler, "post", return_value=mock_api_response) as mock_post:
             result = await guardrail.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -885,9 +822,7 @@ class TestOnyxGuardrail:
         # Set required API key
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
-        guardrail = OnyxGuardrail(
-            guardrail_name="test-guard", event_hook="post_call", default_on=True
-        )
+        guardrail = OnyxGuardrail(guardrail_name="test-guard", event_hook="post_call", default_on=True)
 
         inputs = GenericGuardrailAPIInputs()
 
@@ -902,9 +837,7 @@ class TestOnyxGuardrail:
         }
         mock_api_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            guardrail.async_handler, "post", return_value=mock_api_response
-        ) as mock_post:
+        with patch.object(guardrail.async_handler, "post", return_value=mock_api_response) as mock_post:
             result = await guardrail.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -978,9 +911,7 @@ class TestOnyxIntegration:
         # Set required API key
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
-        guardrail = OnyxGuardrail(
-            guardrail_name="test-guard", event_hook="pre_call", default_on=True
-        )
+        guardrail = OnyxGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
 
         inputs = GenericGuardrailAPIInputs()
 
@@ -990,9 +921,7 @@ class TestOnyxIntegration:
         mock_response.json.return_value = {"allowed": True, "message": "Safe"}
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            guardrail.async_handler, "post", return_value=mock_response
-        ) as mock_post:
+        with patch.object(guardrail.async_handler, "post", return_value=mock_response) as mock_post:
             result = await guardrail.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,

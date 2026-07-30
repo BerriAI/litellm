@@ -69,7 +69,6 @@ def has_litellm_module_deletion(tree):
                 and node.iter.func.value.attr == "modules"
                 and node.iter.func.attr == "keys"
             ):
-
                 self.has_sys_modules_loop = True
                 if isinstance(node.target, ast.Name):
                     self.current_for_target = node.target.id
@@ -92,7 +91,6 @@ def has_litellm_module_deletion(tree):
                 and node.iter.args[0].func.value.attr == "modules"
                 and node.iter.args[0].func.attr == "keys"
             ):
-
                 self.has_sys_modules_loop = True
                 if isinstance(node.target, ast.Name):
                     self.current_for_target = node.target.id
@@ -115,7 +113,6 @@ def has_litellm_module_deletion(tree):
                 and isinstance(node.test.args[0], ast.Constant)
                 and node.test.args[0].value == "litellm"
             ):
-
                 self.has_litellm_check = True
 
                 # Check the body of the if statement
@@ -136,7 +133,6 @@ def has_litellm_module_deletion(tree):
                     and isinstance(target.slice, ast.Name)
                     and target.slice.id == self.current_for_target
                 ):
-
                     self.has_del_sys_modules = True
 
             self.generic_visit(node)
@@ -144,11 +140,7 @@ def has_litellm_module_deletion(tree):
     visitor = LiteLLMDeletionVisitor()
     visitor.visit(tree)
 
-    return (
-        visitor.has_sys_modules_loop
-        and visitor.has_litellm_check
-        and visitor.has_del_sys_modules
-    )
+    return visitor.has_sys_modules_loop and visitor.has_litellm_check and visitor.has_del_sys_modules
 
 
 def main():

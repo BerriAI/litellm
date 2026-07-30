@@ -138,14 +138,7 @@ class OtherCell(_Base):
 
 
 Cell = Annotated[
-    LlmCell
-    | MgmtCell
-    | McpCell
-    | ReliabilityCell
-    | QuotaCell
-    | LoggingCell
-    | GuardrailCell
-    | OtherCell,
+    LlmCell | MgmtCell | McpCell | ReliabilityCell | QuotaCell | LoggingCell | GuardrailCell | OtherCell,
     Field(discriminator="module"),
 ]
 

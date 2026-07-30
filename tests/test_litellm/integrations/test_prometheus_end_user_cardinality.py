@@ -25,9 +25,7 @@ def cleanup_prometheus_registry():
     old_metrics_config = litellm.prometheus_metrics_config
     old_max_series = litellm.prometheus_end_user_metrics_max_series_per_metric
     old_ttl_seconds = litellm.prometheus_end_user_metrics_ttl_seconds
-    old_cleanup_interval_seconds = (
-        litellm.prometheus_end_user_metrics_cleanup_interval_seconds
-    )
+    old_cleanup_interval_seconds = litellm.prometheus_end_user_metrics_cleanup_interval_seconds
 
     yield
 
@@ -35,9 +33,7 @@ def cleanup_prometheus_registry():
     litellm.prometheus_metrics_config = old_metrics_config
     litellm.prometheus_end_user_metrics_max_series_per_metric = old_max_series
     litellm.prometheus_end_user_metrics_ttl_seconds = old_ttl_seconds
-    litellm.prometheus_end_user_metrics_cleanup_interval_seconds = (
-        old_cleanup_interval_seconds
-    )
+    litellm.prometheus_end_user_metrics_cleanup_interval_seconds = old_cleanup_interval_seconds
 
     collectors = list(REGISTRY._collector_to_names.keys())
     for collector in collectors:

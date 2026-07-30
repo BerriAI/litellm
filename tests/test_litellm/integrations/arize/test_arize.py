@@ -67,9 +67,7 @@ async def test_arize_dynamic_params():
     print(f"Tracer calls: {len(tracer_calls)}")
 
     # We should have captured calls for both requests
-    assert (
-        len(tracer_calls) >= 2
-    ), f"Expected at least 2 tracer calls, got {len(tracer_calls)}"
+    assert len(tracer_calls) >= 2, f"Expected at least 2 tracer calls, got {len(tracer_calls)}"
 
     # Check that we have the expected dynamic params in the kwargs
     team1_found = False
@@ -90,9 +88,7 @@ async def test_arize_dynamic_params():
     assert team1_found, "team1 dynamic params not found"
     assert team2_found, "team2 dynamic params not found"
 
-    print(
-        "✅ All assertions passed - OpenTelemetry logger correctly received dynamic params"
-    )
+    print("✅ All assertions passed - OpenTelemetry logger correctly received dynamic params")
 
 
 @pytest.mark.asyncio
@@ -117,11 +113,8 @@ async def test_arize_dynamic_headers_in_grpc_requests():
         "opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter",
         mock_otlp_http_exporter,
     ):
-
         # Create ArizeLogger with HTTP configuration
-        config = OpenTelemetryConfig(
-            exporter="otlp_http", endpoint="https://otlp.arize.com/v1"
-        )
+        config = OpenTelemetryConfig(exporter="otlp_http", endpoint="https://otlp.arize.com/v1")
         arize_logger = ArizeLogger(config=config)
         litellm.callbacks = [arize_logger]
 
@@ -150,25 +143,17 @@ async def test_arize_dynamic_headers_in_grpc_requests():
         print(f"Captured exporter headers: {exporter_headers}")
 
         # Should have multiple exporter calls (default + dynamic)
-        assert (
-            len(exporter_headers) >= 2
-        ), f"Expected at least 2 exporter calls, got {len(exporter_headers)}"
+        assert len(exporter_headers) >= 2, f"Expected at least 2 exporter calls, got {len(exporter_headers)}"
 
         # Find team1 and team2 headers
         team1_found = False
         team2_found = False
 
         for headers in exporter_headers:
-            if (
-                headers.get("api_key") == "team1_api_key"
-                and headers.get("arize-space-id") == "team1_space_id"
-            ):
+            if headers.get("api_key") == "team1_api_key" and headers.get("arize-space-id") == "team1_space_id":
                 team1_found = True
                 print(f"✅ Found team1 headers: {headers}")
-            elif (
-                headers.get("api_key") == "team2_api_key"
-                and headers.get("arize-space-id") == "team2_space_id"
-            ):
+            elif headers.get("api_key") == "team2_api_key" and headers.get("arize-space-id") == "team2_space_id":
                 team2_found = True
                 print(f"✅ Found team2 headers: {headers}")
 
@@ -176,6 +161,4 @@ async def test_arize_dynamic_headers_in_grpc_requests():
         assert team1_found, "team1 dynamic headers not found in exporter calls"
         assert team2_found, "team2 dynamic headers not found in exporter calls"
 
-        print(
-            "✅ Test passed - Dynamic Arize params correctly passed to gRPC/HTTP exporter"
-        )
+        print("✅ Test passed - Dynamic Arize params correctly passed to gRPC/HTTP exporter")

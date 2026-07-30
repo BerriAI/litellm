@@ -33,7 +33,9 @@ async def test_presidio_with_entities_config():
     )
 
     # Test text with different PII types
-    test_text = "My credit card number is 4111-1111-1111-1111, my email is test@example.com, and my phone is 555-123-4567"
+    test_text = (
+        "My credit card number is 4111-1111-1111-1111, my email is test@example.com, and my phone is 555-123-4567"
+    )
 
     # Test the analyze request configuration
     analyze_request = presidio_guardrail._get_presidio_analyze_request_payload(
@@ -70,9 +72,7 @@ async def test_presidio_apply_guardrail():
         presidio_anonymizer_api_base=os.environ.get("PRESIDIO_ANONYMIZER_API_BASE"),
     )
 
-    test_text = (
-        "My credit card number is 4111-1111-1111-1111 and my email is test@example.com"
-    )
+    test_text = "My credit card number is 4111-1111-1111-1111 and my email is test@example.com"
     response = await presidio_guardrail.apply_guardrail(
         inputs={"texts": [test_text]},
         request_data={},
@@ -105,9 +105,7 @@ async def test_presidio_with_blocked_entities():
     )
 
     # Test text with blocked PII type
-    test_text = (
-        "My credit card number is 4111-1111-1111-1111 and my email is test@example.com"
-    )
+    test_text = "My credit card number is 4111-1111-1111-1111 and my email is test@example.com"
 
     # Verify the analyze request configuration
     analyze_request = presidio_guardrail._get_presidio_analyze_request_payload(
@@ -120,9 +118,7 @@ async def test_presidio_with_blocked_entities():
 
     # Test that BlockedPiiEntityError is raised when check_pii is called
     with pytest.raises(BlockedPiiEntityError) as excinfo:
-        await presidio_guardrail.check_pii(
-            text=test_text, output_parse_pii=True, presidio_config=None, request_data={}
-        )
+        await presidio_guardrail.check_pii(text=test_text, output_parse_pii=True, presidio_config=None, request_data={})
 
     # Verify the error contains the correct entity type
     assert excinfo.value.entity_type == PiiEntityType.CREDIT_CARD
@@ -251,9 +247,7 @@ def test_validate_environment_missing_http(base_url):
         if not (base_url.startswith("https://") or base_url.startswith("http://")):
             expected_url = "http://" + base_url
 
-        assert (
-            pii_masking.presidio_anonymizer_api_base == f"{expected_url}/anonymize/"
-        ), "Got={}, Expected={}".format(
+        assert pii_masking.presidio_anonymizer_api_base == f"{expected_url}/anonymize/", "Got={}, Expected={}".format(
             pii_masking.presidio_anonymizer_api_base, f"{expected_url}/anonymize/"
         )
         assert pii_masking.presidio_analyzer_api_base == f"{expected_url}/analyze/"
@@ -293,20 +287,13 @@ async def test_output_parsing():
     new_response = await pii_masking.async_post_call_success_hook(
         user_api_key_dict=UserAPIKeyAuth(),
         data={
-            "messages": [
-                {"role": "system", "content": "You are an helpfull assistant"}
-            ],
-            "metadata": {
-                "pii_tokens": {"<PERSON>": "Jane Doe", "<PHONE_NUMBER>": "034453334"}
-            },
+            "messages": [{"role": "system", "content": "You are an helpfull assistant"}],
+            "metadata": {"pii_tokens": {"<PERSON>": "Jane Doe", "<PHONE_NUMBER>": "034453334"}},
         },
         response=response,
     )
 
-    assert (
-        new_response.choices[0].message.content
-        == "Hello Jane Doe! How can I assist you today?"
-    )
+    assert new_response.choices[0].message.content == "Hello Jane Doe! How can I assist you today?"
 
 
 # asyncio.run(test_output_parsing())
@@ -354,9 +341,7 @@ async def test_presidio_pii_masking_input_a():
     """
     Tests to see if correct parts of sentence anonymized
     """
-    pii_masking = _OPTIONAL_PresidioPIIMasking(
-        mock_testing=True, mock_redacted_text=input_a_anonymizer_results
-    )
+    pii_masking = _OPTIONAL_PresidioPIIMasking(mock_testing=True, mock_redacted_text=input_a_anonymizer_results)
 
     _api_key = "sk-12345"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
@@ -386,9 +371,7 @@ async def test_presidio_pii_masking_input_b():
     """
     Tests to see if correct parts of sentence anonymized
     """
-    pii_masking = _OPTIONAL_PresidioPIIMasking(
-        mock_testing=True, mock_redacted_text=input_b_anonymizer_results
-    )
+    pii_masking = _OPTIONAL_PresidioPIIMasking(mock_testing=True, mock_redacted_text=input_b_anonymizer_results)
 
     _api_key = "sk-12345"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
@@ -495,9 +478,7 @@ async def test_presidio_pii_masking_logging_output_only_logged_response_guardrai
     assert hasattr(pii_masking_obj, "logging_only")
     assert pii_masking_obj.event_hook == GuardrailEventHooks.logging_only
 
-    assert pii_masking_obj.should_run_guardrail(
-        data={}, event_type=GuardrailEventHooks.logging_only
-    )
+    assert pii_masking_obj.should_run_guardrail(data={}, event_type=GuardrailEventHooks.logging_only)
 
 
 @pytest.mark.asyncio
@@ -539,16 +520,12 @@ async def test_presidio_language_configuration():
     assert analyze_request_es["text"] == test_text_es
 
     # Test default language (English) when not specified
-    presidio_guardrail_default = _OPTIONAL_PresidioPIIMasking(
-        pii_entities_config={}, mock_testing=True
-    )
+    presidio_guardrail_default = _OPTIONAL_PresidioPIIMasking(pii_entities_config={}, mock_testing=True)
 
     test_text_en = "My phone number is +1 555-123-4567"
 
-    analyze_request_default = (
-        presidio_guardrail_default._get_presidio_analyze_request_payload(
-            text=test_text_en, presidio_config=None, request_data={}
-        )
+    analyze_request_default = presidio_guardrail_default._get_presidio_analyze_request_payload(
+        text=test_text_en, presidio_config=None, request_data={}
     )
 
     # Verify the language defaults to English
@@ -562,9 +539,7 @@ async def test_presidio_language_configuration_with_per_request_override():
     litellm._turn_on_debug()
 
     # Set up guardrail with German as default language
-    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
-        pii_entities_config={}, presidio_language="de", mock_testing=True
-    )
+    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(pii_entities_config={}, presidio_language="de", mock_testing=True)
 
     test_text = "Test text with PII"
 

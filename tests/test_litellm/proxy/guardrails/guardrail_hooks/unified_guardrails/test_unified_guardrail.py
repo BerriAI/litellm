@@ -93,9 +93,7 @@ class TestUnifiedLLMGuardrails:
             assert msgs[0]["content"] == "sys"
 
         def test_effective_skip_respects_per_guardrail_over_global(self, monkeypatch):
-            monkeypatch.setattr(
-                litellm, "skip_system_message_in_guardrail", True, raising=False
-            )
+            monkeypatch.setattr(litellm, "skip_system_message_in_guardrail", True, raising=False)
 
             class G:
                 skip_system_message_in_guardrail = False
@@ -108,21 +106,15 @@ class TestUnifiedLLMGuardrails:
             assert effective_skip_system_message_for_guardrail(G2()) is True
 
         @pytest.mark.asyncio
-        async def test_openai_handler_skips_system_in_guardrail_inputs(
-            self, monkeypatch
-        ):
-            monkeypatch.setattr(
-                litellm, "skip_system_message_in_guardrail", True, raising=False
-            )
+        async def test_openai_handler_skips_system_in_guardrail_inputs(self, monkeypatch):
+            monkeypatch.setattr(litellm, "skip_system_message_in_guardrail", True, raising=False)
 
             captured = {}
 
             class MockGuardrail:
                 skip_system_message_in_guardrail = None
 
-                async def apply_guardrail(
-                    self, inputs, request_data, input_type, logging_obj=None
-                ):
+                async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
                     captured["inputs"] = inputs
                     return inputs
 
@@ -147,21 +139,15 @@ class TestUnifiedLLMGuardrails:
             assert data["messages"][0]["content"] == "secret system"
 
         @pytest.mark.asyncio
-        async def test_openai_handler_per_guardrail_skip_false_overrides_global(
-            self, monkeypatch
-        ):
-            monkeypatch.setattr(
-                litellm, "skip_system_message_in_guardrail", True, raising=False
-            )
+        async def test_openai_handler_per_guardrail_skip_false_overrides_global(self, monkeypatch):
+            monkeypatch.setattr(litellm, "skip_system_message_in_guardrail", True, raising=False)
 
             captured = {}
 
             class MockGuardrail:
                 skip_system_message_in_guardrail = False
 
-                async def apply_guardrail(
-                    self, inputs, request_data, input_type, logging_obj=None
-                ):
+                async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
                     captured["inputs"] = inputs
                     return inputs
 
@@ -179,10 +165,7 @@ class TestUnifiedLLMGuardrails:
             )
 
             assert "sys" in captured["inputs"]["texts"]
-            roles = {
-                m.get("role")
-                for m in (captured["inputs"].get("structured_messages") or [])
-            }
+            roles = {m.get("role") for m in (captured["inputs"].get("structured_messages") or [])}
             assert "system" in roles
 
     class TestSkipToolMessageForChatCompletions:
@@ -207,12 +190,8 @@ class TestUnifiedLLMGuardrails:
             assert all(m["role"] != "tool" for m in out)
             assert msgs[2]["content"] == "tool result"
 
-        def test_effective_skip_tool_respects_per_guardrail_over_global(
-            self, monkeypatch
-        ):
-            monkeypatch.setattr(
-                litellm, "skip_tool_message_in_guardrail", True, raising=False
-            )
+        def test_effective_skip_tool_respects_per_guardrail_over_global(self, monkeypatch):
+            monkeypatch.setattr(litellm, "skip_tool_message_in_guardrail", True, raising=False)
 
             class G:
                 skip_tool_message_in_guardrail = False
@@ -226,18 +205,14 @@ class TestUnifiedLLMGuardrails:
 
         @pytest.mark.asyncio
         async def test_openai_handler_skips_tool_in_guardrail_inputs(self, monkeypatch):
-            monkeypatch.setattr(
-                litellm, "skip_tool_message_in_guardrail", True, raising=False
-            )
+            monkeypatch.setattr(litellm, "skip_tool_message_in_guardrail", True, raising=False)
 
             captured = {}
 
             class MockGuardrail:
                 skip_tool_message_in_guardrail = None
 
-                async def apply_guardrail(
-                    self, inputs, request_data, input_type, logging_obj=None
-                ):
+                async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
                     captured["inputs"] = inputs
                     return inputs
 
@@ -277,21 +252,15 @@ class TestUnifiedLLMGuardrails:
             assert data["messages"][2]["content"] == "secret tool result"
 
         @pytest.mark.asyncio
-        async def test_openai_handler_per_guardrail_skip_tool_false_overrides_global(
-            self, monkeypatch
-        ):
-            monkeypatch.setattr(
-                litellm, "skip_tool_message_in_guardrail", True, raising=False
-            )
+        async def test_openai_handler_per_guardrail_skip_tool_false_overrides_global(self, monkeypatch):
+            monkeypatch.setattr(litellm, "skip_tool_message_in_guardrail", True, raising=False)
 
             captured = {}
 
             class MockGuardrail:
                 skip_tool_message_in_guardrail = False
 
-                async def apply_guardrail(
-                    self, inputs, request_data, input_type, logging_obj=None
-                ):
+                async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
                     captured["inputs"] = inputs
                     return inputs
 
@@ -309,10 +278,7 @@ class TestUnifiedLLMGuardrails:
             )
 
             assert "tr" in captured["inputs"]["texts"]
-            roles = {
-                m.get("role")
-                for m in (captured["inputs"].get("structured_messages") or [])
-            }
+            roles = {m.get("role") for m in (captured["inputs"].get("structured_messages") or [])}
             assert "tool" in roles
 
     class TestAsyncPreCallHook:
@@ -402,7 +368,9 @@ class TestUnifiedLLMGuardrails:
                 async def process_input_messages(self, data, guardrail_to_apply, litellm_logging_obj=None):  # type: ignore[override]
                     return data
 
-                async def process_output_response(self, response, guardrail_to_apply, litellm_logging_obj=None, user_api_key_dict=None):  # type: ignore[override]
+                async def process_output_response(
+                    self, response, guardrail_to_apply, litellm_logging_obj=None, user_api_key_dict=None
+                ):  # type: ignore[override]
                     return response
 
                 async def process_output_streaming_response(
@@ -474,9 +442,7 @@ class TestUnifiedLLMGuardrails:
                 response=mock_stream(),
                 request_data=request_data,
             ):
-                content = (
-                    item.choices[0].delta.content if item.choices[0].delta else None
-                )
+                content = item.choices[0].delta.content if item.choices[0].delta else None
                 yielded_contents.append(content)
 
             # Every chunk should have non-empty content
@@ -519,15 +485,10 @@ class TestUnifiedLLMGuardrails:
             assert guardrail.event_history == [GuardrailEventHooks.pre_call]
             assert len(guardrail.apply_calls) == 1
             assert guardrail.apply_calls[0]["input_type"] == "request"
-            assert (
-                "https://arxiv.org/pdf/2201.04234"
-                in guardrail.apply_calls[0]["inputs"]["texts"]
-            )
+            assert "https://arxiv.org/pdf/2201.04234" in guardrail.apply_calls[0]["inputs"]["texts"]
 
             # Data should be returned with document intact
-            assert (
-                result["document"]["document_url"] == "https://arxiv.org/pdf/2201.04234"
-            )
+            assert result["document"]["document_url"] == "https://arxiv.org/pdf/2201.04234"
 
         @pytest.mark.asyncio
         async def test_moderation_hook_invokes_ocr_handler(self):
@@ -555,10 +516,7 @@ class TestUnifiedLLMGuardrails:
 
             assert guardrail.event_history == [GuardrailEventHooks.during_call]
             assert len(guardrail.apply_calls) == 1
-            assert (
-                "https://example.com/scan.png"
-                in guardrail.apply_calls[0]["inputs"]["texts"]
-            )
+            assert "https://example.com/scan.png" in guardrail.apply_calls[0]["inputs"]["texts"]
 
         @pytest.mark.asyncio
         async def test_post_call_success_hook_guardrails_ocr_output(self):
@@ -574,9 +532,7 @@ class TestUnifiedLLMGuardrails:
                 def should_run_guardrail(self, data, event_type):  # type: ignore[override]
                     return True
 
-                async def apply_guardrail(
-                    self, inputs, request_data, input_type, **kwargs
-                ):
+                async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
                     texts = inputs.get("texts", [])
                     return {"texts": [t.replace("SECRET", "[REDACTED]") for t in texts]}
 
@@ -1260,9 +1216,7 @@ class TestStreamingTransform:
         # And the redacted text ("SECRET") reached the wire on some non-tool
         # chunk (i.e. the text terminator).
         transformed = "".join(
-            item.choices[0].delta.content or ""
-            for item in out
-            if item.choices and not item.choices[0].delta.tool_calls
+            item.choices[0].delta.content or "" for item in out if item.choices and not item.choices[0].delta.tool_calls
         )
         assert "SECRET" in transformed
         assert "secret" not in transformed
@@ -1407,7 +1361,9 @@ class TestStreamingTransform:
             _stream_chunk("went home."),
             ModelResponseStream(
                 choices=[
-                    StreamingChoices(index=0, delta=Delta(content=None, role="assistant", tool_calls=None), finish_reason=None),
+                    StreamingChoices(
+                        index=0, delta=Delta(content=None, role="assistant", tool_calls=None), finish_reason=None
+                    ),
                     StreamingChoices(
                         index=1,
                         delta=Delta(

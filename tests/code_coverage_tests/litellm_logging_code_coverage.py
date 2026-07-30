@@ -19,10 +19,7 @@ def get_function_names_from_file(file_path: str) -> List[str]:
                 if isinstance(class_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     # Check if the function has @staticmethod decorator
                     for decorator in class_node.decorator_list:
-                        if (
-                            isinstance(decorator, ast.Name)
-                            and decorator.id == "staticmethod"
-                        ):
+                        if isinstance(decorator, ast.Name) and decorator.id == "staticmethod":
                             function_names.append(class_node.name)
 
     return function_names
@@ -76,9 +73,7 @@ def main():
 
     called_functions_in_tests = get_all_functions_called_in_tests(tests_dir)
     untested_functions = [
-        fn
-        for fn in logging_functions
-        if fn not in called_functions_in_tests and fn not in ignored_function_names
+        fn for fn in logging_functions if fn not in called_functions_in_tests and fn not in ignored_function_names
     ]
 
     if untested_functions:

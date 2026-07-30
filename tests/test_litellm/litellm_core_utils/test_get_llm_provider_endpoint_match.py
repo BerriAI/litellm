@@ -117,11 +117,7 @@ class TestGetLlmProviderRejectsAttackerSmuggledApiBase:
 
         # Regardless of return / raise, the secret must never have been
         # read against this attacker-controlled api_base.
-        groq_lookups = [
-            call
-            for call in mocked_secret.call_args_list
-            if call.args and call.args[0] == "GROQ_API_KEY"
-        ]
+        groq_lookups = [call for call in mocked_secret.call_args_list if call.args and call.args[0] == "GROQ_API_KEY"]
         assert groq_lookups == []
 
     def test_legitimate_groq_api_base_still_resolves(self):

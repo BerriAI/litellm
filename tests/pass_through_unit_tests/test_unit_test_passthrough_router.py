@@ -46,19 +46,13 @@ class TestPassthroughEndpointRouter(unittest.TestCase):
 
         # AssemblyAI: using an API base that contains 'eu' should trigger regional logic.
         api_base_eu = "https://api.eu.assemblyai.com"
-        self.router.set_pass_through_credentials(
-            "assemblyai", api_base_eu, "assemblyai_key"
-        )
+        self.router.set_pass_through_credentials("assemblyai", api_base_eu, "assemblyai_key")
         # When calling get_credentials, pass the region "eu" (extracted from the API base)
-        self.assertEqual(
-            self.router.get_credentials("assemblyai", "eu"), "assemblyai_key"
-        )
+        self.assertEqual(self.router.get_credentials("assemblyai", "eu"), "assemblyai_key")
 
         # Anthropic: no region set
         self.router.set_pass_through_credentials("anthropic", None, "anthropic_key")
-        self.assertEqual(
-            self.router.get_credentials("anthropic", None), "anthropic_key"
-        )
+        self.assertEqual(self.router.get_credentials("anthropic", None), "anthropic_key")
 
         # Cohere: no region set
         self.router.set_pass_through_credentials("cohere", None, "cohere_key")
@@ -110,27 +104,19 @@ class TestPassthroughEndpointRouter(unittest.TestCase):
             - Should return the provider in uppercase followed by _API_KEY.
         """
         self.assertEqual(
-            PassthroughEndpointRouter._get_default_env_variable_name_passthrough_endpoint(
-                "openai"
-            ),
+            PassthroughEndpointRouter._get_default_env_variable_name_passthrough_endpoint("openai"),
             "OPENAI_API_KEY",
         )
         self.assertEqual(
-            PassthroughEndpointRouter._get_default_env_variable_name_passthrough_endpoint(
-                "assemblyai"
-            ),
+            PassthroughEndpointRouter._get_default_env_variable_name_passthrough_endpoint("assemblyai"),
             "ASSEMBLYAI_API_KEY",
         )
         self.assertEqual(
-            PassthroughEndpointRouter._get_default_env_variable_name_passthrough_endpoint(
-                "anthropic"
-            ),
+            PassthroughEndpointRouter._get_default_env_variable_name_passthrough_endpoint("anthropic"),
             "ANTHROPIC_API_KEY",
         )
         self.assertEqual(
-            PassthroughEndpointRouter._get_default_env_variable_name_passthrough_endpoint(
-                "cohere"
-            ),
+            PassthroughEndpointRouter._get_default_env_variable_name_passthrough_endpoint("cohere"),
             "COHERE_API_KEY",
         )
 
@@ -193,9 +179,7 @@ class TestPassthroughEndpointRouter(unittest.TestCase):
             vertex_credentials='{"credentials": "test-creds"}',
         )
 
-        creds = router.get_vertex_credentials(
-            project_id="test-project", location="us-central2"
-        )
+        creds = router.get_vertex_credentials(project_id="test-project", location="us-central2")
 
         assert creds is None
 
@@ -248,9 +232,7 @@ class TestPassthroughEndpointRouter(unittest.TestCase):
 
             assert self.router.default_vertex_config.vertex_project == "my-project-123"
             assert self.router.default_vertex_config.vertex_location == "us-central1"
-            assert (
-                self.router.default_vertex_config.vertex_credentials == "path/to/creds"
-            )
+            assert self.router.default_vertex_config.vertex_credentials == "path/to/creds"
 
             # Test with environment variable reference
             test_config = {
@@ -260,9 +242,7 @@ class TestPassthroughEndpointRouter(unittest.TestCase):
             }
             self.router.set_default_vertex_config(test_config)
 
-            assert (
-                self.router.default_vertex_config.vertex_credentials == "secret-creds"
-            )
+            assert self.router.default_vertex_config.vertex_credentials == "secret-creds"
 
         finally:
             # Clean up environment variables
@@ -309,9 +289,7 @@ class TestPassthroughEndpointRouter(unittest.TestCase):
             vertex_credentials='{"credentials": "test-creds"}',
         )
 
-        creds = router.get_vertex_credentials(
-            project_id="test-project", location="us-central1"
-        )
+        creds = router.get_vertex_credentials(project_id="test-project", location="us-central1")
         assert creds.vertex_project == "test-project"
         assert creds.vertex_location == "us-central1"
         assert creds.vertex_credentials == '{"credentials": "test-creds"}'

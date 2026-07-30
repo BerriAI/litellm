@@ -11,9 +11,7 @@ import traceback
 import openai
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -65,9 +63,7 @@ class CustomModelResponseIterator:
             tool_use=None,
             is_finished=True,
             finish_reason="stop",
-            usage=ChatCompletionUsageBlock(
-                prompt_tokens=10, completion_tokens=20, total_tokens=30
-            ),
+            usage=ChatCompletionUsageBlock(prompt_tokens=10, completion_tokens=20, total_tokens=30),
             index=0,
         )
 
@@ -193,9 +189,7 @@ class MyCustomLLM(CustomLLM):
         completion_stream = ModelResponseIterator(
             model_response=generic_streaming_chunk  # type: ignore
         )
-        custom_iterator = CustomModelResponseIterator(
-            streaming_response=completion_stream
-        )
+        custom_iterator = CustomModelResponseIterator(streaming_response=completion_stream)
         return custom_iterator
 
     async def astreaming(  # type: ignore
@@ -360,9 +354,7 @@ def test_get_llm_provider():
     from litellm.utils import custom_llm_setup
 
     my_custom_llm = MyCustomLLM()
-    litellm.custom_provider_map = [
-        {"provider": "custom_llm", "custom_handler": my_custom_llm}
-    ]
+    litellm.custom_provider_map = [{"provider": "custom_llm", "custom_handler": my_custom_llm}]
 
     custom_llm_setup()
 
@@ -373,9 +365,7 @@ def test_get_llm_provider():
 
 def test_simple_completion():
     my_custom_llm = MyCustomLLM()
-    litellm.custom_provider_map = [
-        {"provider": "custom_llm", "custom_handler": my_custom_llm}
-    ]
+    litellm.custom_provider_map = [{"provider": "custom_llm", "custom_handler": my_custom_llm}]
     resp = completion(
         model="custom_llm/my-fake-model",
         messages=[{"role": "user", "content": "Hello world!"}],
@@ -387,9 +377,7 @@ def test_simple_completion():
 @pytest.mark.asyncio
 async def test_simple_acompletion():
     my_custom_llm = MyCustomLLM()
-    litellm.custom_provider_map = [
-        {"provider": "custom_llm", "custom_handler": my_custom_llm}
-    ]
+    litellm.custom_provider_map = [{"provider": "custom_llm", "custom_handler": my_custom_llm}]
     resp = await acompletion(
         model="custom_llm/my-fake-model",
         messages=[{"role": "user", "content": "Hello world!"}],
@@ -400,9 +388,7 @@ async def test_simple_acompletion():
 
 def test_simple_completion_streaming():
     my_custom_llm = MyCustomLLM()
-    litellm.custom_provider_map = [
-        {"provider": "custom_llm", "custom_handler": my_custom_llm}
-    ]
+    litellm.custom_provider_map = [{"provider": "custom_llm", "custom_handler": my_custom_llm}]
     resp = completion(
         model="custom_llm/my-fake-model",
         messages=[{"role": "user", "content": "Hello world!"}],
@@ -420,9 +406,7 @@ def test_simple_completion_streaming():
 @pytest.mark.asyncio
 async def test_simple_completion_async_streaming():
     my_custom_llm = MyCustomLLM()
-    litellm.custom_provider_map = [
-        {"provider": "custom_llm", "custom_handler": my_custom_llm}
-    ]
+    litellm.custom_provider_map = [{"provider": "custom_llm", "custom_handler": my_custom_llm}]
     resp = await litellm.acompletion(
         model="custom_llm/my-fake-model",
         messages=[{"role": "user", "content": "Hello world!"}],
@@ -439,9 +423,7 @@ async def test_simple_completion_async_streaming():
 
 def test_simple_image_generation():
     my_custom_llm = MyCustomLLM()
-    litellm.custom_provider_map = [
-        {"provider": "custom_llm", "custom_handler": my_custom_llm}
-    ]
+    litellm.custom_provider_map = [{"provider": "custom_llm", "custom_handler": my_custom_llm}]
     resp = image_generation(
         model="custom_llm/my-fake-model",
         prompt="Hello world",
@@ -453,9 +435,7 @@ def test_simple_image_generation():
 @pytest.mark.asyncio
 async def test_simple_image_generation_async():
     my_custom_llm = MyCustomLLM()
-    litellm.custom_provider_map = [
-        {"provider": "custom_llm", "custom_handler": my_custom_llm}
-    ]
+    litellm.custom_provider_map = [{"provider": "custom_llm", "custom_handler": my_custom_llm}]
     resp = await litellm.aimage_generation(
         model="custom_llm/my-fake-model",
         prompt="Hello world",
@@ -467,13 +447,9 @@ async def test_simple_image_generation_async():
 @pytest.mark.asyncio
 async def test_image_generation_async_additional_params():
     my_custom_llm = MyCustomLLM()
-    litellm.custom_provider_map = [
-        {"provider": "custom_llm", "custom_handler": my_custom_llm}
-    ]
+    litellm.custom_provider_map = [{"provider": "custom_llm", "custom_handler": my_custom_llm}]
 
-    with patch.object(
-        my_custom_llm, "aimage_generation", new=AsyncMock()
-    ) as mock_client:
+    with patch.object(my_custom_llm, "aimage_generation", new=AsyncMock()) as mock_client:
         try:
             resp = await litellm.aimage_generation(
                 model="custom_llm/my-fake-model",
@@ -491,17 +467,13 @@ async def test_image_generation_async_additional_params():
 
         mock_client.call_args.kwargs["api_key"] == "my-api-key"
         mock_client.call_args.kwargs["api_base"] == "my-api-base"
-        mock_client.call_args.kwargs["optional_params"] == {
-            "my_custom_param": "my-custom-param"
-        }
+        mock_client.call_args.kwargs["optional_params"] == {"my_custom_param": "my-custom-param"}
 
 
 def test_simple_image_edit():
     """Test sync image_edit with custom handler"""
     my_custom_llm = MyCustomLLM()
-    litellm.custom_provider_map = [
-        {"provider": "custom_llm", "custom_handler": my_custom_llm}
-    ]
+    litellm.custom_provider_map = [{"provider": "custom_llm", "custom_handler": my_custom_llm}]
     resp = litellm.image_edit(
         model="custom_llm/my-fake-model",
         image=b"fake_image_bytes",
@@ -516,9 +488,7 @@ def test_simple_image_edit():
 async def test_simple_image_edit_async():
     """Test async image_edit with custom handler"""
     my_custom_llm = MyCustomLLM()
-    litellm.custom_provider_map = [
-        {"provider": "custom_llm", "custom_handler": my_custom_llm}
-    ]
+    litellm.custom_provider_map = [{"provider": "custom_llm", "custom_handler": my_custom_llm}]
     resp = await litellm.aimage_edit(
         model="custom_llm/my-fake-model",
         image=b"fake_image_bytes",
@@ -533,9 +503,7 @@ async def test_simple_image_edit_async():
 async def test_image_edit_async_additional_params():
     """Test that additional params are passed to custom handler"""
     my_custom_llm = MyCustomLLM()
-    litellm.custom_provider_map = [
-        {"provider": "custom_llm", "custom_handler": my_custom_llm}
-    ]
+    litellm.custom_provider_map = [{"provider": "custom_llm", "custom_handler": my_custom_llm}]
 
     with patch.object(
         my_custom_llm,
@@ -566,7 +534,6 @@ async def test_image_edit_async_additional_params():
 def test_get_supported_openai_params():
 
     class MyCustomLLM(CustomLLM):
-
         # This is what `get_supported_openai_params` should be returning:
         def get_supported_openai_params(self, model: str) -> list[str]:
             return [
@@ -620,9 +587,7 @@ def test_get_supported_openai_params():
 
 def test_simple_embedding():
     my_custom_llm = MyCustomLLM()
-    litellm.custom_provider_map = [
-        {"provider": "custom_llm", "custom_handler": my_custom_llm}
-    ]
+    litellm.custom_provider_map = [{"provider": "custom_llm", "custom_handler": my_custom_llm}]
     resp = litellm.embedding(
         model="custom_llm/my-fake-model",
         input=["good morning from litellm", "good night from litellm"],
@@ -638,9 +603,7 @@ def test_simple_embedding():
 @pytest.mark.asyncio
 async def test_simple_aembedding():
     my_custom_llm = MyCustomLLM()
-    litellm.custom_provider_map = [
-        {"provider": "custom_llm", "custom_handler": my_custom_llm}
-    ]
+    litellm.custom_provider_map = [{"provider": "custom_llm", "custom_handler": my_custom_llm}]
     resp = await litellm.aembedding(
         model="custom_llm/my-fake-model",
         input=["good morning from litellm", "good night from litellm"],
@@ -687,14 +650,10 @@ class ModelResponseStreamLLM(MyCustomLLM):
         )
 
 
-@pytest.mark.parametrize(
-    "finish_reason", ["stop", "tool_calls", "length", "content_filter"]
-)
+@pytest.mark.parametrize("finish_reason", ["stop", "tool_calls", "length", "content_filter"])
 def test_custom_llm_streaming_model_response_stream(finish_reason):
     my_custom_llm = ModelResponseStreamLLM(finish_reason=finish_reason)
-    litellm.custom_provider_map = [
-        {"provider": "custom_llm", "custom_handler": my_custom_llm}
-    ]
+    litellm.custom_provider_map = [{"provider": "custom_llm", "custom_handler": my_custom_llm}]
     resp = completion(
         model="custom_llm/my-fake-model",
         messages=[{"role": "user", "content": "Hello world!"}],
@@ -710,14 +669,10 @@ def test_custom_llm_streaming_model_response_stream(finish_reason):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "finish_reason", ["stop", "tool_calls", "length", "content_filter"]
-)
+@pytest.mark.parametrize("finish_reason", ["stop", "tool_calls", "length", "content_filter"])
 async def test_custom_llm_astreaming_model_response_stream(finish_reason):
     my_custom_llm = ModelResponseStreamLLM(finish_reason=finish_reason)
-    litellm.custom_provider_map = [
-        {"provider": "custom_llm", "custom_handler": my_custom_llm}
-    ]
+    litellm.custom_provider_map = [{"provider": "custom_llm", "custom_handler": my_custom_llm}]
     resp = await litellm.acompletion(
         model="custom_llm/my-fake-model",
         messages=[{"role": "user", "content": "Hello world!"}],

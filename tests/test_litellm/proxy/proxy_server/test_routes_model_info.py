@@ -147,9 +147,7 @@ def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch
     router.get_model_list = MagicMock(return_value=[deployment])
     monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
 
-    expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info(
-        [deployment]
-    )
+    expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info([deployment])
     allowed_model_names = proxy_server._get_v1_model_info_allowed_model_names(
         user_api_key_dict=UserAPIKeyAuth(
             api_key="sk-test",
@@ -385,14 +383,10 @@ def test_v2_model_info_exclude_auto_routers_shrinks_total_count(client, auth_as,
     assert len(payload["data"]) == payload["total_count"]
 
 
-def test_v2_model_info_exclude_auto_routers_paginates_over_the_filtered_set(
-    client, auth_as, mixed_auto_router_router
-):
+def test_v2_model_info_exclude_auto_routers_paginates_over_the_filtered_set(client, auth_as, mixed_auto_router_router):
     """Page size applies to the filtered list, so no page silently comes back short."""
     with auth_as():
-        response = client.get(
-            "/v2/model/info", params={"exclude_auto_routers": "true", "page": 1, "size": 1}
-        )
+        response = client.get("/v2/model/info", params={"exclude_auto_routers": "true", "page": 1, "size": 1})
     payload = response.json()
     assert payload["total_count"] == 2
     assert payload["total_pages"] == 2

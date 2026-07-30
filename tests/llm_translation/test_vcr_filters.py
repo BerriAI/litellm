@@ -158,10 +158,7 @@ def _multipart_request(boundary: str):
 def test_normalize_multipart_rewrites_header_and_body():
     req = _multipart_request("abc123random")
     _normalize_multipart_boundary(req)
-    assert (
-        req.headers["content-type"]
-        == f"multipart/form-data; boundary={VCR_FIXED_MULTIPART_BOUNDARY}"
-    )
+    assert req.headers["content-type"] == f"multipart/form-data; boundary={VCR_FIXED_MULTIPART_BOUNDARY}"
     assert b"abc123random" not in req.body
     assert VCR_FIXED_MULTIPART_BOUNDARY.encode("utf-8") in req.body
 

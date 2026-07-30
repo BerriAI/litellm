@@ -62,9 +62,7 @@ class CacheCallTracker:
             "total_cache_reads": len(self.cache_reads),
             "total_cache_writes": len(self.cache_writes),
             "total_db_queries": len(self.db_queries),
-            "total_network_requests": len(self.cache_reads)
-            + len(self.cache_writes)
-            + len(self.db_queries),
+            "total_network_requests": len(self.cache_reads) + len(self.cache_writes) + len(self.db_queries),
             "cache_read_keys": [r["key"] for r in self.cache_reads],
             "cache_write_keys": [w["key"] for w in self.cache_writes],
             "db_query_details": self.db_queries,
@@ -78,9 +76,7 @@ def _wrap_cache_with_tracker(cache: DualCache, tracker: CacheCallTracker) -> Dua
 
     async def tracked_async_get(key, *args, **kwargs):
         result = await original_async_get(key, *args, **kwargs)
-        tracker.cache_reads.append(
-            {"key": key, "hit": result is not None, "method": "async_get_cache"}
-        )
+        tracker.cache_reads.append({"key": key, "hit": result is not None, "method": "async_get_cache"})
         return result
 
     async def tracked_async_set(key, value, *args, **kwargs):
@@ -402,14 +398,10 @@ async def test_team_membership_cache_key_duplication():
     }
 
     # Document that these are different keys
-    assert (
-        key_format_1 != key_format_2
-    ), "Cache keys should be different (this is the bug)"
+    assert key_format_1 != key_format_2, "Cache keys should be different (this is the bug)"
 
     # Document that these are different keys
-    assert (
-        key_format_1 != key_format_2
-    ), "Cache keys should be different (this is the bug)"
+    assert key_format_1 != key_format_2, "Cache keys should be different (this is the bug)"
 
 
 # ============================================================================
@@ -432,9 +424,7 @@ async def test_full_hot_path_network_count():
     hashed_token = hash_token(api_key)
 
     # Create all objects
-    valid_token = _create_valid_token(
-        api_key, team_id, user_id, has_team_member_spend=True
-    )
+    valid_token = _create_valid_token(api_key, team_id, user_id, has_team_member_spend=True)
     team_obj = _create_team_object(team_id)
     user_obj = _create_user_object(user_id)
     membership_data = LiteLLM_TeamMembership(
@@ -450,12 +440,8 @@ async def test_full_hot_path_network_count():
     await cache.async_set_cache(key=hashed_token, value=valid_token)
     await cache.async_set_cache(key=f"team_id:{team_id}", value=team_obj)
     await cache.async_set_cache(key=user_id, value=user_obj)
-    await cache.async_set_cache(
-        key=f"team_membership:{user_id}:{team_id}", value=membership_data.model_dump()
-    )
-    await cache.async_set_cache(
-        key=f"{team_id}_{user_id}", value=membership_data.model_dump()
-    )
+    await cache.async_set_cache(key=f"team_membership:{user_id}:{team_id}", value=membership_data.model_dump())
+    await cache.async_set_cache(key=f"{team_id}_{user_id}", value=membership_data.model_dump())
 
     # Create tracker AFTER populating cache
     tracker = CacheCallTracker()
@@ -503,19 +489,15 @@ async def test_full_hot_path_network_count():
 
     # Assertions for expected baseline
     # On warm cache: 4 reads (key, team, user, team_membership)
-    assert (
-        summary["total_cache_reads"] == 4
-    ), f"Expected 4 cache reads on warm path, got {summary['total_cache_reads']}"
+    assert summary["total_cache_reads"] == 4, f"Expected 4 cache reads on warm path, got {summary['total_cache_reads']}"
 
     # No DB queries on warm cache
-    assert (
-        summary["total_db_queries"] == 0
-    ), f"Expected 0 DB queries on warm path, got {summary['total_db_queries']}"
+    assert summary["total_db_queries"] == 0, f"Expected 0 DB queries on warm path, got {summary['total_db_queries']}"
 
     # Total network requests should be exactly 4 on warm cache
-    assert (
-        summary["total_network_requests"] == 4
-    ), f"Expected 4 total network requests on warm path, got {summary['total_network_requests']}"
+    assert summary["total_network_requests"] == 4, (
+        f"Expected 4 total network requests on warm path, got {summary['total_network_requests']}"
+    )
 
 
 # ============================================================================

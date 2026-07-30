@@ -13,9 +13,7 @@ def test_output_format_supported_and_transforms_correctly():
     config = AnthropicMessagesConfig()
 
     # 1. Verify it's in supported parameters
-    supported_params = config.get_supported_anthropic_messages_params(
-        "claude-sonnet-4-5"
-    )
+    supported_params = config.get_supported_anthropic_messages_params("claude-sonnet-4-5")
     assert "output_format" in supported_params
 
     # 2. Verify transformation preserves output_format and adds beta header

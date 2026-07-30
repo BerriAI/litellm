@@ -103,9 +103,7 @@ class TestLinkupSearchTransformation:
                 "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
                 return_value=mock_response,
             ):
-                response = litellm.search(
-                    query="Microsoft revenue", search_provider="linkup"
-                )
+                response = litellm.search(query="Microsoft revenue", search_provider="linkup")
 
                 # Verify response transformation
                 assert response.object == "search"
@@ -113,8 +111,5 @@ class TestLinkupSearchTransformation:
 
                 first_result = response.results[0]
                 assert first_result.title == "Microsoft 2024 Annual Report"
-                assert (
-                    first_result.url
-                    == "https://www.microsoft.com/investor/reports/ar24/index.html"
-                )
+                assert first_result.url == "https://www.microsoft.com/investor/reports/ar24/index.html"
                 assert "Microsoft Cloud revenue" in first_result.snippet

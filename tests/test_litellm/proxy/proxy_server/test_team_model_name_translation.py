@@ -59,9 +59,7 @@ def test_translate_leaves_non_internal_shape_untouched():
     """Team row whose model_name is not the internal routing key is not rewritten."""
     model = _team_row()
     model["model_name"] = "already-public-name"
-    assert (
-        _translate_model_name_for_response(model)["model_name"] == "already-public-name"
-    )
+    assert _translate_model_name_for_response(model)["model_name"] == "already-public-name"
 
 
 def test_translate_handles_missing_or_non_dict_model_info():
@@ -69,19 +67,9 @@ def test_translate_handles_missing_or_non_dict_model_info():
     # missing model_info
     assert _translate_model_name_for_response({"model_name": "x"})["model_name"] == "x"
     # model_info is None -> coerced to {} -> no team fields
-    assert (
-        _translate_model_name_for_response({"model_name": "x", "model_info": None})[
-            "model_name"
-        ]
-        == "x"
-    )
+    assert _translate_model_name_for_response({"model_name": "x", "model_info": None})["model_name"] == "x"
     # model_info is a truthy non-dict (e.g. a stray string) -> early return
-    assert (
-        _translate_model_name_for_response(
-            {"model_name": "x", "model_info": "garbage"}
-        )["model_name"]
-        == "x"
-    )
+    assert _translate_model_name_for_response({"model_name": "x", "model_info": "garbage"})["model_name"] == "x"
     # model itself is not a dict
     assert _translate_model_name_for_response("not-a-dict") == "not-a-dict"  # type: ignore[arg-type]
 
@@ -120,9 +108,7 @@ async def test_model_info_v2_translates_team_model_name(monkeypatch):
         "_apply_search_filter_to_models",
         AsyncMock(side_effect=lambda all_models, **kw: (all_models, len(all_models))),
     )
-    monkeypatch.setattr(
-        ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
-    )
+    monkeypatch.setattr(ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
     import litellm.proxy.agent_endpoints.model_list_helpers as mlh
 
     monkeypatch.setattr(
@@ -172,13 +158,9 @@ async def test_model_info_v1_list_path_translates_team_model_name(monkeypatch):
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "llm_model_list", router.model_list)
     monkeypatch.setattr(ps, "llm_router", router)
-    monkeypatch.setattr(
-        ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
-    )
+    monkeypatch.setattr(ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
 
-    admin = UserAPIKeyAuth(
-        user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[]
-    )
+    admin = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[])
     resp = await ps.model_info_v1(user_api_key_dict=admin, litellm_model_id=None)
 
     names = [m["model_name"] for m in resp["data"]]
@@ -202,9 +184,7 @@ async def test_model_info_v1_unrestricted_key_returns_all_deployments(monkeypatc
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "llm_model_list", router.model_list)
     monkeypatch.setattr(ps, "llm_router", router)
-    monkeypatch.setattr(
-        ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
-    )
+    monkeypatch.setattr(ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
 
     caller = UserAPIKeyAuth(
         user_id="user-1",
@@ -234,9 +214,7 @@ async def test_model_info_v1_restricted_key_filters_deployments(monkeypatch):
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "llm_model_list", router.model_list)
     monkeypatch.setattr(ps, "llm_router", router)
-    monkeypatch.setattr(
-        ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
-    )
+    monkeypatch.setattr(ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
 
     caller = UserAPIKeyAuth(
         user_id="user-1",
@@ -289,18 +267,14 @@ async def test_model_info_v1_unrestricted_key_hides_other_team_byok(monkeypatch)
         "teams": ["team-abc-123"],
         "models": [],
     }
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=caller_user_row
-    )
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=caller_user_row)
 
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "llm_model_list", router.model_list)
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "prisma_client", prisma_client)
     monkeypatch.setattr(ps, "get_all_team_models", AsyncMock(return_value={}))
-    monkeypatch.setattr(
-        ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
-    )
+    monkeypatch.setattr(ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
 
     caller = UserAPIKeyAuth(
         user_id="user-1",
@@ -342,9 +316,7 @@ async def test_model_info_v1_service_key_hides_all_team_byok(monkeypatch):
     monkeypatch.setattr(ps, "llm_model_list", router.model_list)
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "prisma_client", prisma_client)
-    monkeypatch.setattr(
-        ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
-    )
+    monkeypatch.setattr(ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
 
     caller = UserAPIKeyAuth(
         user_id=None,
@@ -368,9 +340,7 @@ async def test_model_info_v1_service_key_hides_all_team_byok(monkeypatch):
     ],
     ids=["user-not-in-team", "user-row-missing", "user-lookup-error"],
 )
-async def test_model_info_v1_team_key_sees_own_byok_regardless_of_user_lookup(
-    monkeypatch, find_unique
-):
+async def test_model_info_v1_team_key_sees_own_byok_regardless_of_user_lookup(monkeypatch, find_unique):
     """A team-scoped key sees its own team's BYOK rows even when the bound user
     is not a member of that team, has no DB row, or the lookup errors; the
     key's team_id is authoritative (issue #30983). Other teams' rows stay
@@ -396,9 +366,7 @@ async def test_model_info_v1_team_key_sees_own_byok_regardless_of_user_lookup(
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "prisma_client", prisma_client)
     monkeypatch.setattr(ps, "_populate_team_access_on_models", _populate)
-    monkeypatch.setattr(
-        ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
-    )
+    monkeypatch.setattr(ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
 
     caller = UserAPIKeyAuth(
         user_id="user-1",
@@ -427,9 +395,7 @@ async def test_model_info_v1_user_team_membership_grants_byok(monkeypatch):
     router.get_model_access_groups.return_value = {}
 
     prisma_client = MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=MagicMock(teams=["team-other"])
-    )
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=MagicMock(teams=["team-other"]))
 
     async def _populate(**kwargs):
         return kwargs["all_models"]
@@ -439,9 +405,7 @@ async def test_model_info_v1_user_team_membership_grants_byok(monkeypatch):
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "prisma_client", prisma_client)
     monkeypatch.setattr(ps, "_populate_team_access_on_models", _populate)
-    monkeypatch.setattr(
-        ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
-    )
+    monkeypatch.setattr(ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
 
     caller = UserAPIKeyAuth(
         user_id="user-2",
@@ -491,13 +455,9 @@ async def test_model_info_v1_populates_access_via_team_ids(monkeypatch):
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "prisma_client", prisma_client)
     monkeypatch.setattr(ps, "_populate_team_access_on_models", _fake_populate)
-    monkeypatch.setattr(
-        ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
-    )
+    monkeypatch.setattr(ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
 
-    admin = UserAPIKeyAuth(
-        user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[]
-    )
+    admin = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[])
     resp = await ps.model_info_v1(user_api_key_dict=admin, litellm_model_id=None)
 
     by_id = {m["model_info"]["id"]: m for m in resp["data"]}
@@ -523,9 +483,7 @@ async def test_populate_team_access_sets_direct_access_false_by_default(monkeypa
         AsyncMock(return_value={"byok-id-1": ["team-abc-123"]}),
     )
 
-    admin = UserAPIKeyAuth(
-        user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[]
-    )
+    admin = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[])
     result = await ps._populate_team_access_on_models(
         user_api_key_dict=admin,
         prisma_client=MagicMock(),
@@ -552,14 +510,10 @@ async def test_model_info_v1_team_id_without_db_fails_fast(monkeypatch):
     monkeypatch.setattr(ps, "prisma_client", None)
     monkeypatch.setattr(ps, "_enrich_model_info_with_litellm_data", enrich_spy)
 
-    admin = UserAPIKeyAuth(
-        user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[]
-    )
+    admin = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[])
 
     with pytest.raises(ps.HTTPException) as exc_info:
-        await ps.model_info_v1(
-            user_api_key_dict=admin, litellm_model_id=None, teamId="team-abc-123"
-        )
+        await ps.model_info_v1(user_api_key_dict=admin, litellm_model_id=None, teamId="team-abc-123")
 
     assert exc_info.value.status_code == 500
     assert "DB not connected" in exc_info.value.detail["error"]
@@ -581,14 +535,10 @@ async def test_model_info_v1_include_team_models_without_db_fails_fast(monkeypat
     monkeypatch.setattr(ps, "prisma_client", None)
     monkeypatch.setattr(ps, "_enrich_model_info_with_litellm_data", enrich_spy)
 
-    admin = UserAPIKeyAuth(
-        user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[]
-    )
+    admin = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[])
 
     with pytest.raises(ps.HTTPException) as exc_info:
-        await ps.model_info_v1(
-            user_api_key_dict=admin, litellm_model_id=None, include_team_models=True
-        )
+        await ps.model_info_v1(user_api_key_dict=admin, litellm_model_id=None, include_team_models=True)
 
     assert exc_info.value.status_code == 500
     assert "DB not connected" in exc_info.value.detail["error"]
@@ -609,9 +559,7 @@ async def test_model_info_v1_litellm_model_id_team_id_without_db_fails_fast(
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "prisma_client", None)
 
-    admin = UserAPIKeyAuth(
-        user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[]
-    )
+    admin = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[])
 
     with pytest.raises(ps.HTTPException) as exc_info:
         await ps.model_info_v1(
@@ -651,9 +599,7 @@ async def test_model_info_v1_litellm_model_id_include_team_models_filters_inacce
     monkeypatch.setattr(ps, "_get_proxy_model_info", lambda model: team_row)
     monkeypatch.setattr(ps, "_populate_team_access_on_models", _fake_populate)
 
-    caller = UserAPIKeyAuth(
-        user_id="u", user_role=LitellmUserRoles.INTERNAL_USER, team_models=[]
-    )
+    caller = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.INTERNAL_USER, team_models=[])
     resp = await ps.model_info_v1(
         user_api_key_dict=caller,
         litellm_model_id="byok-id-1",
@@ -687,9 +633,7 @@ async def test_model_info_v1_litellm_model_id_team_id_applies_team_filter(monkey
     monkeypatch.setattr(ps, "_populate_team_access_on_models", _fake_populate)
     monkeypatch.setattr(ps, "_filter_models_by_team_id", team_filter)
 
-    admin = UserAPIKeyAuth(
-        user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[]
-    )
+    admin = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[])
     resp = await ps.model_info_v1(
         user_api_key_dict=admin,
         litellm_model_id="byok-id-1",
@@ -735,9 +679,7 @@ async def test_v1_models_translates_team_model_for_access_group_key(monkeypatch)
     monkeypatch.setattr(ps, "general_settings", {})
 
     # virtual key granted access via the access group (no team membership)
-    key = UserAPIKeyAuth(
-        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
-    )
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", models=["grp-a"], team_models=[])
     resp = await ps.model_list(user_api_key_dict=key)
 
     ids = [d["id"] for d in resp["data"]]
@@ -775,9 +717,7 @@ async def test_v1_models_keeps_internal_names_when_public_name_flag_disabled(
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": False})
 
-    key = UserAPIKeyAuth(
-        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
-    )
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", models=["grp-a"], team_models=[])
     resp = await ps.model_list(user_api_key_dict=key)
 
     ids = [d["id"] for d in resp["data"]]
@@ -811,9 +751,7 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "general_settings", {})
 
-    key = UserAPIKeyAuth(
-        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
-    )
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", models=["grp-a"], team_models=[])
     resp = await ps.model_list(user_api_key_dict=key, include_metadata=True)
 
     assert resp["data"] == [
@@ -859,9 +797,7 @@ async def test_v1_models_metadata_fallbacks_use_internal_routing_key(monkeypatch
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "general_settings", {})
 
-    key = UserAPIKeyAuth(
-        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
-    )
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", models=["grp-a"], team_models=[])
     resp = await ps.model_list(user_api_key_dict=key, include_metadata=True)
 
     assert resp["data"] == [
@@ -918,9 +854,7 @@ async def test_v1_models_metadata_does_not_leak_other_team_fallbacks(monkeypatch
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "general_settings", {})
 
-    key = UserAPIKeyAuth(
-        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
-    )
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", models=["grp-a"], team_models=[])
     resp = await ps.model_list(user_api_key_dict=key, include_metadata=True)
 
     assert resp["data"] == [
@@ -1023,9 +957,7 @@ def test_listing_entries_lookup_id_never_crosses_team_boundary():
     ]
 
     # caller can only access teamX's internal key
-    entries = TeamModelNameTranslator.listing_entries(
-        ["model_name_teamX_uuidA"], router, {}
-    )
+    entries = TeamModelNameTranslator.listing_entries(["model_name_teamX_uuidA"], router, {})
 
     assert entries == [("shared-name", "model_name_teamX_uuidA")]
 
@@ -1048,9 +980,7 @@ def test_listing_entries_global_wins_when_team_alias_collides_with_global():
         {"model_name": "gpt-4o", "model_info": {"db_model": False}},
     ]
 
-    entries = TeamModelNameTranslator.listing_entries(
-        ["gpt-4o", "model_name_teamX_uuidA"], router, {}
-    )
+    entries = TeamModelNameTranslator.listing_entries(["gpt-4o", "model_name_teamX_uuidA"], router, {})
 
     assert entries == [("gpt-4o", "gpt-4o")]
 
@@ -1079,9 +1009,7 @@ def test_listing_and_resolve_agree_on_sibling_internal_key():
     ]
     available = ["model_name_teamX_uuidA", "model_name_teamX_uuidB"]
 
-    [(_, listing_lookup)] = TeamModelNameTranslator.listing_entries(
-        available, router, {}
-    )
+    [(_, listing_lookup)] = TeamModelNameTranslator.listing_entries(available, router, {})
     resolve_lookup = TeamModelNameTranslator.resolve_public_name(
         model_id="tushar-gpt-4.1",
         available_models=available,
@@ -1107,9 +1035,7 @@ def test_listing_entries_skips_empty_team_public_model_name():
         },
     ]
 
-    entries = TeamModelNameTranslator.listing_entries(
-        ["model_name_teamX_uuidA"], router, {}
-    )
+    entries = TeamModelNameTranslator.listing_entries(["model_name_teamX_uuidA"], router, {})
 
     assert entries == [("model_name_teamX_uuidA", "model_name_teamX_uuidA")]
 
@@ -1125,13 +1051,9 @@ def test_listing_entries_passthrough_when_disabled():
 def test_translate_team_model_names_for_listing_leaves_unmapped_names():
     """Names with no team mapping (globals, access-group keys) pass through."""
     router = MagicMock()
-    router.get_model_list.return_value = [
-        {"model_name": "gpt-4o", "model_info": {"db_model": False}}
-    ]
+    router.get_model_list.return_value = [{"model_name": "gpt-4o", "model_info": {"db_model": False}}]
 
-    assert TeamModelNameTranslator.translate_listing(
-        ["gpt-4o", "beta-group"], router, {}
-    ) == ["gpt-4o", "beta-group"]
+    assert TeamModelNameTranslator.translate_listing(["gpt-4o", "beta-group"], router, {}) == ["gpt-4o", "beta-group"]
 
 
 def test_translate_team_model_names_for_listing_none_router():
@@ -1261,18 +1183,14 @@ async def test_retrieve_model_by_public_name_returns_200(monkeypatch):
         "get_available_models_for_user",
         AsyncMock(return_value=["model_name_team-abc-123_4a6b8"]),
     )
-    monkeypatch.setattr(
-        litellm, "get_llm_provider", lambda model: (model, "openai", None, None)
-    )
+    monkeypatch.setattr(litellm, "get_llm_provider", lambda model: (model, "openai", None, None))
 
     key = UserAPIKeyAuth(user_id="u", api_key="sk-test", team_models=[])
     resp = await ps.model_info(model_id="team-claude-sonnet", user_api_key_dict=key)
 
     assert resp["id"] == "team-claude-sonnet"
     # lookup happened by the internal routing key, not the public name
-    router.get_deployment_by_model_group_name.assert_called_once_with(
-        "model_name_team-abc-123_4a6b8"
-    )
+    router.get_deployment_by_model_group_name.assert_called_once_with("model_name_team-abc-123_4a6b8")
 
 
 @pytest.mark.asyncio
@@ -1296,14 +1214,10 @@ async def test_retrieve_model_by_internal_name_returns_public_id(monkeypatch):
         "get_available_models_for_user",
         AsyncMock(return_value=["model_name_team-abc-123_4a6b8"]),
     )
-    monkeypatch.setattr(
-        litellm, "get_llm_provider", lambda model: (model, "openai", None, None)
-    )
+    monkeypatch.setattr(litellm, "get_llm_provider", lambda model: (model, "openai", None, None))
 
     key = UserAPIKeyAuth(user_id="u", api_key="sk-test", team_models=[])
-    resp = await ps.model_info(
-        model_id="model_name_team-abc-123_4a6b8", user_api_key_dict=key
-    )
+    resp = await ps.model_info(model_id="model_name_team-abc-123_4a6b8", user_api_key_dict=key)
 
     assert resp["id"] == "team-claude-sonnet"
 
@@ -1329,14 +1243,10 @@ async def test_retrieve_model_by_internal_name_keeps_internal_id_when_flag_disab
         "get_available_models_for_user",
         AsyncMock(return_value=["model_name_team-abc-123_4a6b8"]),
     )
-    monkeypatch.setattr(
-        litellm, "get_llm_provider", lambda model: (model, "openai", None, None)
-    )
+    monkeypatch.setattr(litellm, "get_llm_provider", lambda model: (model, "openai", None, None))
 
     key = UserAPIKeyAuth(user_id="u", api_key="sk-test", team_models=[])
-    resp = await ps.model_info(
-        model_id="model_name_team-abc-123_4a6b8", user_api_key_dict=key
-    )
+    resp = await ps.model_info(model_id="model_name_team-abc-123_4a6b8", user_api_key_dict=key)
 
     assert resp["id"] == "model_name_team-abc-123_4a6b8"
 
@@ -1360,9 +1270,7 @@ async def test_retrieve_model_by_inaccessible_public_name_404s(monkeypatch):
         "get_available_models_for_user",
         AsyncMock(return_value=[]),  # caller has no access
     )
-    monkeypatch.setattr(
-        litellm, "get_llm_provider", lambda model: (model, "openai", None, None)
-    )
+    monkeypatch.setattr(litellm, "get_llm_provider", lambda model: (model, "openai", None, None))
 
     key = UserAPIKeyAuth(user_id="u", api_key="sk-test", team_models=[])
     with pytest.raises(ps.HTTPException) as exc_info:
@@ -1436,9 +1344,7 @@ async def test_populate_team_access_grants_all_proxy_models_user_direct_access(
 
     monkeypatch.setattr(ps, "get_all_team_models", AsyncMock(return_value={}))
 
-    caller = UserAPIKeyAuth(
-        user_id="u", user_role=LitellmUserRoles.INTERNAL_USER, team_models=[]
-    )
+    caller = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.INTERNAL_USER, team_models=[])
 
     populated = await ps._populate_team_access_on_models(
         user_api_key_dict=caller,

@@ -40,9 +40,7 @@ class TestRedactStringFunction:
         text = "This is a normal error message with no secrets"
         assert _redact_string(text) == text
 
-    @pytest.mark.skipif(
-        not _ENABLE_SECRET_REDACTION, reason="redaction disabled via env var"
-    )
+    @pytest.mark.skipif(not _ENABLE_SECRET_REDACTION, reason="redaction disabled via env var")
     def test_redaction_enabled_by_default(self):
         text = "Bearer sk-1234567890abcdefghij"
         result = _redact_string(text)
@@ -97,9 +95,7 @@ class TestOpenAIRealtimeRedaction:
         from litellm.llms.openai.realtime.handler import OpenAIRealtime
 
         handler = OpenAIRealtime()
-        secret_error = RuntimeError(
-            "Connection failed for api_key=sk-1234567890abcdefghij"
-        )
+        secret_error = RuntimeError("Connection failed for api_key=sk-1234567890abcdefghij")
 
         kwargs = self._call_kwargs()
         mock_ws = kwargs["websocket"]
@@ -151,9 +147,7 @@ class TestBedrockRealtimeRedaction:
     """Test that _redact_string produces safe close reasons for Bedrock-style errors."""
 
     def test_internal_error_message_redacted(self):
-        secret_error = RuntimeError(
-            "Failed with aws_secret_access_key=AKIAIOSFODNN7EXAMPLE123456"
-        )
+        secret_error = RuntimeError("Failed with aws_secret_access_key=AKIAIOSFODNN7EXAMPLE123456")
         reason = _redact_string(f"Internal error: {str(secret_error)}")
         assert "AKIAIOSFODNN7EXAMPLE123456" not in reason
 
@@ -167,9 +161,7 @@ class TestLLMHTTPHandlerRealtimeRedaction:
 
     def test_internal_server_error_pattern(self):
         error_msg = "Connection failed for api_key=sk-secret-key-12345678"
-        assert "sk-secret-key-12345678" not in _redact_string(
-            f"Internal server error: {error_msg}"
-        )
+        assert "sk-secret-key-12345678" not in _redact_string(f"Internal server error: {error_msg}")
 
 
 class TestProxyStreamingDataGeneratorRedaction:
@@ -177,9 +169,7 @@ class TestProxyStreamingDataGeneratorRedaction:
 
     def test_redact_traceback_format_exc(self):
         try:
-            raise RuntimeError(
-                "Failed connecting to api_key=sk-1234567890abcdefghij at https://api.example.com"
-            )
+            raise RuntimeError("Failed connecting to api_key=sk-1234567890abcdefghij at https://api.example.com")
         except RuntimeError:
             raw_tb = traceback.format_exc()
 
@@ -239,9 +229,7 @@ class TestGeminiIngestionHeaders:
         mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.headers = {
-            "x-goog-upload-url": "https://upload.example.com/upload123"
-        }
+        mock_response.headers = {"x-goog-upload-url": "https://upload.example.com/upload123"}
         mock_client.post.return_value = mock_response
 
         with patch(

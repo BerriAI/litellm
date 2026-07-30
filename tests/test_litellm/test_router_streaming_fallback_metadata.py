@@ -39,9 +39,7 @@ def test_apply_fallback_hidden_params_copies_from_fallback_response():
 
     Router._apply_fallback_hidden_params_to_item(
         fallback_item=chunk,
-        prepared_fallback_hidden_params=Router._prepare_fallback_hidden_params(
-            fallback_response
-        ),
+        prepared_fallback_hidden_params=Router._prepare_fallback_hidden_params(fallback_response),
     )
 
     assert chunk._hidden_params["api_base"] == "https://fallback.example"
@@ -119,9 +117,7 @@ def test_prepare_fallback_hidden_params_no_additional_headers():
 
 
 def test_apply_fallback_hidden_params_to_item_none_item():
-    Router._apply_fallback_hidden_params_to_item(
-        None, ({"api_base": "http://fallback.example"}, {"x-custom": "value"})
-    )
+    Router._apply_fallback_hidden_params_to_item(None, ({"api_base": "http://fallback.example"}, {"x-custom": "value"}))
 
 
 def test_apply_fallback_hidden_params_to_item_no_existing_additional_headers():
@@ -139,9 +135,7 @@ def test_apply_fallback_hidden_params_to_item_no_existing_additional_headers():
 
     assert chunk._hidden_params["api_base"] == "http://fallback.example"
     assert chunk._hidden_params["model_id"] == "test-id"
-    assert chunk._hidden_params["additional_headers"] == {
-        "x-litellm-attempted-fallbacks": 1
-    }
+    assert chunk._hidden_params["additional_headers"] == {"x-litellm-attempted-fallbacks": 1}
 
 
 @pytest.mark.asyncio

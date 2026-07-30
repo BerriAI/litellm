@@ -84,9 +84,7 @@ class TestGetAzureAdTokenProvider:
 
         # Assertions
         assert callable(result)
-        mock_managed_identity_credential.assert_called_once_with(
-            client_id="test-client-id"
-        )
+        mock_managed_identity_credential.assert_called_once_with(client_id="test-client-id")
         mock_get_bearer_token_provider.assert_called_once_with(
             mock_credential_instance, "https://cognitiveservices.azure.com/.default"
         )

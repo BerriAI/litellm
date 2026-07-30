@@ -81,9 +81,7 @@ def _streaming_chunks() -> list[str]:
     }
     return [
         json.dumps({**base, "choices": [{"index": 0, "delta": {"content": "I am"}}]}),
-        json.dumps(
-            {**base, "choices": [{"index": 0, "delta": {"content": " a language"}}]}
-        ),
+        json.dumps({**base, "choices": [{"index": 0, "delta": {"content": " a language"}}]}),
         json.dumps(
             {
                 **base,
@@ -115,9 +113,7 @@ def test_completion_cloudflare(sync_mode):
             )
             mock_post.assert_called_once()
     else:
-        with patch.object(
-            AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp
-        ) as mock_post:
+        with patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp) as mock_post:
             response = asyncio.run(
                 acompletion(
                     model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
@@ -217,9 +213,7 @@ def test_completion_cloudflare_stream(sync_mode):
         mock_resp.headers = {"content-type": "text/event-stream"}
 
         async def _run():
-            with patch.object(
-                AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp
-            ) as mock_post:
+            with patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp) as mock_post:
                 resp = await acompletion(
                     model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
                     messages=messages,
@@ -237,9 +231,5 @@ def test_completion_cloudflare_stream(sync_mode):
         chunks_received = asyncio.run(_run())
 
     assert len(chunks_received) > 0
-    content = "".join(
-        c.choices[0].delta.content
-        for c in chunks_received
-        if c.choices[0].delta.content
-    )
+    content = "".join(c.choices[0].delta.content for c in chunks_received if c.choices[0].delta.content)
     assert "language" in content.lower()

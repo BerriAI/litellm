@@ -102,9 +102,7 @@ def test_update_values_with_no_args_is_noop(proxy_logging):
 
 
 def test_update_values_invalid_type_for_alerting_raises(proxy_logging):
-    proxy_logging.slack_alerting_instance = MagicMock(
-        update_values=MagicMock(side_effect=TypeError("bad type"))
-    )
+    proxy_logging.slack_alerting_instance = MagicMock(update_values=MagicMock(side_effect=TypeError("bad type")))
     with pytest.raises(TypeError):
         proxy_logging.update_values(alerting={"not": "a list"})  # type: ignore[arg-type]
 
@@ -267,9 +265,7 @@ def test_init_litellm_callbacks_replaces_string_with_instance(proxy_logging, mon
     snapshot = {
         "replaced_first_item": litellm.callbacks[0] is sentinel_instance,
         "callbacks_grew_with_service": len(litellm.callbacks) >= 2,
-        "service_logging_appended": any(
-            "ServiceLogging" in type(c).__name__ for c in litellm.callbacks
-        ),
+        "service_logging_appended": any("ServiceLogging" in type(c).__name__ for c in litellm.callbacks),
     }
     assert snapshot == {
         "replaced_first_item": True,

@@ -48,9 +48,7 @@ def check_function_lengths(router_file):
         print("The following functions exceed the allowed line count:")
         for name, count in long_functions:
             print(f"- {name}: {count} lines")
-        raise Exception(
-            f"{len(long_functions)} functions in {router_file} exceed {MAX_FUNCTION_LINES} lines"
-        )
+        raise Exception(f"{len(long_functions)} functions in {router_file} exceed {MAX_FUNCTION_LINES} lines")
     else:
         print("All functions in the router file are within the allowed line limit.")
 

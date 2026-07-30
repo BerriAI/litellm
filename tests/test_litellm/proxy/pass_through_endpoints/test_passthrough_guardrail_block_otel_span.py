@@ -40,10 +40,7 @@ from litellm.proxy.utils import ProxyLogging  # noqa: E402
 from litellm.types.guardrails import GuardrailEventHooks  # noqa: E402
 
 _PT_MOD = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
-_COLLECT = (
-    "litellm.proxy.pass_through_endpoints.passthrough_guardrails."
-    "PassthroughGuardrailHandler.collect_guardrails"
-)
+_COLLECT = "litellm.proxy.pass_through_endpoints.passthrough_guardrails.PassthroughGuardrailHandler.collect_guardrails"
 _GUARDRAIL_SPAN = "execute_guardrail block-demo"
 _TRIGGER = "BLOCKME"
 
@@ -62,9 +59,7 @@ class _BlockOnTextGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_post_call_success_hook(self, data, user_api_key_dict, response):
         if _TRIGGER in json.dumps(response):
-            raise HTTPException(
-                status_code=400, detail={"error": "blocked by block-demo guardrail"}
-            )
+            raise HTTPException(status_code=400, detail={"error": "blocked by block-demo guardrail"})
         return response
 
 
@@ -110,20 +105,14 @@ def _otel_logger_with_exporter():
 
 
 def _guardrail_span_names(exporter):
-    return [
-        s.name
-        for s in exporter.get_finished_spans()
-        if s.name.startswith("execute_guardrail")
-    ]
+    return [s.name for s in exporter.get_finished_spans() if s.name.startswith("execute_guardrail")]
 
 
 async def _drive(response_text: str):
     """Run the real pass_through_request with the block-demo guardrail + otel V2
     logger registered, returning (status_code, guardrail_span_names)."""
     otel, exporter = _otel_logger_with_exporter()
-    guardrail = _BlockOnTextGuardrail(
-        guardrail_name="block-demo", event_hook=[GuardrailEventHooks.post_call]
-    )
+    guardrail = _BlockOnTextGuardrail(guardrail_name="block-demo", event_hook=[GuardrailEventHooks.post_call])
     proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache(DualCache()))
 
     saved_callbacks = list(litellm.callbacks)
@@ -166,9 +155,7 @@ async def _drive(response_text: str):
                 # the upstream Response.
                 status_code = result.status_code
             except Exception as e:
-                status_code = getattr(e, "code", None) or getattr(
-                    e, "status_code", None
-                )
+                status_code = getattr(e, "code", None) or getattr(e, "status_code", None)
         return int(status_code), _guardrail_span_names(exporter)
     finally:
         litellm.callbacks = saved_callbacks
@@ -179,8 +166,7 @@ async def test_guardrail_block_emits_otel_guardrail_span():
     status_code, span_names = await _drive(f"{_TRIGGER} please")
     assert status_code == 400
     assert span_names == [_GUARDRAIL_SPAN], (
-        "guardrail span must be emitted when a passthrough guardrail blocks, "
-        f"got spans: {span_names}"
+        f"guardrail span must be emitted when a passthrough guardrail blocks, got spans: {span_names}"
     )
 
 

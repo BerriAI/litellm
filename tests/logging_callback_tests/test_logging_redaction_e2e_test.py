@@ -222,9 +222,9 @@ async def test_redaction_responses_api():
         if "content" in output_item and isinstance(output_item["content"], list):
             for content_item in output_item["content"]:
                 if "text" in content_item:
-                    assert (
-                        content_item["text"] == "redacted-by-litellm"
-                    ), f"Expected redacted text but got: {content_item['text']}"
+                    assert content_item["text"] == "redacted-by-litellm", (
+                        f"Expected redacted text but got: {content_item['text']}"
+                    )
     assert "This is a test response" not in json.dumps(standard_logging_payload)
     print(
         "logged standard logging payload for ResponsesAPIResponse",
@@ -239,9 +239,7 @@ async def test_redaction_responses_api_stream():
     test_custom_logger = TestCustomLogger(turn_off_message_logging=True)
     litellm.callbacks = [test_custom_logger]
 
-    mocked_response_payload = mock_responses_api_response(
-        "This is a test response"
-    ).model_dump()
+    mocked_response_payload = mock_responses_api_response("This is a test response").model_dump()
 
     async def mock_post(self, url, headers, timeout, stream=False, **kwargs):
         stream_content = (
@@ -276,9 +274,7 @@ async def test_redaction_responses_api_stream():
         chunks.append(chunk)
 
     # Wait for async success callback to fire (streaming logs run via asyncio.create_task)
-    await asyncio.sleep(
-        0.5
-    )  # Let event loop schedule the create_task'd success handler
+    await asyncio.sleep(0.5)  # Let event loop schedule the create_task'd success handler
     for _ in range(100):  # Up to 10 seconds total
         if test_custom_logger.logged_standard_logging_payload is not None:
             break
@@ -294,10 +290,7 @@ async def test_redaction_responses_api_stream():
     # Verify that response content is redacted (ModelResponse format)
     if "choices" in standard_logging_payload["response"]:
         # ModelResponse format
-        assert (
-            standard_logging_payload["response"]["choices"][0]["message"]["content"]
-            == "redacted-by-litellm"
-        )
+        assert standard_logging_payload["response"]["choices"][0]["message"]["content"] == "redacted-by-litellm"
     elif "output" in standard_logging_payload["response"]:
         # ResponsesAPIResponse format
         output_items = standard_logging_payload["response"]["output"]
@@ -305,9 +298,9 @@ async def test_redaction_responses_api_stream():
             if "content" in output_item and isinstance(output_item["content"], list):
                 for content_item in output_item["content"]:
                     if "text" in content_item:
-                        assert (
-                            content_item["text"] == "redacted-by-litellm"
-                        ), f"Expected redacted text but got: {content_item['text']}"
+                        assert content_item["text"] == "redacted-by-litellm", (
+                            f"Expected redacted text but got: {content_item['text']}"
+                        )
     print(
         "logged standard logging payload for ResponsesAPIResponse stream",
         json.dumps(standard_logging_payload, indent=2),
@@ -374,10 +367,7 @@ async def test_redaction_responses_api_with_reasoning_summary():
     original_isinstance = isinstance
 
     def patched_isinstance(obj, cls):
-        if (
-            cls == litellm.ResponsesAPIResponse
-            and obj.__class__.__name__ == "ResponsesAPIResponse"
-        ):
+        if cls == litellm.ResponsesAPIResponse and obj.__class__.__name__ == "ResponsesAPIResponse":
             return True
         return original_isinstance(obj, cls)
 
@@ -397,25 +387,19 @@ async def test_redaction_responses_api_with_reasoning_summary():
 
         # Verify reasoning summary text is redacted
         reasoning_item = redacted_result.output[0]
-        assert (
-            reasoning_item.summary[0].text == "redacted-by-litellm"
-        ), "Reasoning summary text should be redacted"
+        assert reasoning_item.summary[0].text == "redacted-by-litellm", "Reasoning summary text should be redacted"
 
         # Verify message content is also redacted
         message_item = redacted_result.output[1]
-        assert (
-            message_item.content[0].text == "redacted-by-litellm"
-        ), "Message content text should be redacted"
+        assert message_item.content[0].text == "redacted-by-litellm", "Message content text should be redacted"
 
         # Verify top-level reasoning field is removed
-        assert (
-            redacted_result.reasoning is None
-        ), "Top-level reasoning field should be None"
+        assert redacted_result.reasoning is None, "Top-level reasoning field should be None"
 
         # Verify input messages are redacted
-        assert (
-            model_call_details["messages"][0]["content"] == "redacted-by-litellm"
-        ), "Input messages should be redacted"
+        assert model_call_details["messages"][0]["content"] == "redacted-by-litellm", (
+            "Input messages should be redacted"
+        )
 
         print("✓ Reasoning summary redaction test passed")
     finally:

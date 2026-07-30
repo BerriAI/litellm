@@ -13,9 +13,7 @@ import pytest
 import litellm.types
 import litellm.types.router
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -40,9 +38,7 @@ load_dotenv()
 
 
 def test_router_deployment_typing():
-    deployment_typed_dict = DeploymentTypedDict(
-        model_name="hi", litellm_params={"model": "hello-world"}
-    )
+    deployment_typed_dict = DeploymentTypedDict(model_name="hi", litellm_params={"model": "hello-world"})
     for value in deployment_typed_dict.items():
         assert not isinstance(value, BaseModel)
 
@@ -127,9 +123,7 @@ async def test_router_provider_wildcard_routing():
     print("response 3 = ", response3)
 
     response4 = await router.acompletion(
-        model=os.environ.get(
-            "CI_CD_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"
-        ),
+        model=os.environ.get("CI_CD_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
         messages=[{"role": "user", "content": "hello"}],
     )
 
@@ -197,9 +191,7 @@ def test_router_specific_model_via_id():
     router.completion(model="1234", messages=[{"role": "user", "content": "Hey!"}])
 
 
-@pytest.mark.skip(
-    reason="Router no longer creates clients, this is delegated to the provider integration."
-)
+@pytest.mark.skip(reason="Router no longer creates clients, this is delegated to the provider integration.")
 def test_router_azure_ai_client_init():
 
     _deployment = {
@@ -225,9 +217,7 @@ def test_router_azure_ai_client_init():
     assert not isinstance(_client, AsyncAzureOpenAI)
 
 
-@pytest.mark.skip(
-    reason="Router no longer creates clients, this is delegated to the provider integration."
-)
+@pytest.mark.skip(reason="Router no longer creates clients, this is delegated to the provider integration.")
 def test_router_azure_ad_token_provider():
     _deployment = {
         "model_name": "gpt-4o_2024-05-13",
@@ -407,9 +397,7 @@ def test_exception_raising():
         os.environ["AZURE_AI_API_KEY"] = old_api_key
         pytest.fail(f"Should have raised an Auth Error")
     except openai.AuthenticationError:
-        print(
-            "Test Passed: Caught an OPENAI AUTH Error, Good job. This is what we needed!"
-        )
+        print("Test Passed: Caught an OPENAI AUTH Error, Good job. This is what we needed!")
         os.environ["AZURE_AI_API_KEY"] = old_api_key
         router.reset()
     except Exception as e:
@@ -587,7 +575,12 @@ async def test_async_router_context_window_fallback(sync_mode):
             },
         ]
 
-        router = Router(model_list=model_list, set_verbose=True, context_window_fallbacks=[{"gpt-4": ["gpt-4-turbo"]}], num_retries=0)  # type: ignore
+        router = Router(
+            model_list=model_list,
+            set_verbose=True,
+            context_window_fallbacks=[{"gpt-4": ["gpt-4-turbo"]}],
+            num_retries=0,
+        )  # type: ignore
         if sync_mode is False:
             response = await router.acompletion(
                 model="gpt-4",
@@ -789,7 +782,13 @@ def test_router_context_window_check_pre_call_check_out_group():
             },
         ]
 
-        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0, context_window_fallbacks=[{"gpt-3.5-turbo-small": ["gpt-3.5-turbo-large"]}])  # type: ignore
+        router = Router(
+            model_list=model_list,
+            set_verbose=True,
+            enable_pre_call_checks=True,
+            num_retries=0,
+            context_window_fallbacks=[{"gpt-3.5-turbo-small": ["gpt-3.5-turbo-large"]}],
+        )  # type: ignore
 
         response = router.completion(
             model="gpt-3.5-turbo-small",
@@ -884,13 +883,9 @@ def test_router_region_pre_call_check(allowed_model_region):
     if allowed_model_region is None:
         assert len(_healthy_deployments) == 2
     else:
-        assert len(_healthy_deployments) == 1, "{} models selected as healthy".format(
-            len(_healthy_deployments)
-        )
-        assert (
-            _healthy_deployments[0]["model_info"]["id"] == "1"
-        ), "Incorrect model id picked. Got id={}, expected id=1".format(
-            _healthy_deployments[0]["model_info"]["id"]
+        assert len(_healthy_deployments) == 1, "{} models selected as healthy".format(len(_healthy_deployments))
+        assert _healthy_deployments[0]["model_info"]["id"] == "1", (
+            "Incorrect model id picked. Got id={}, expected id=1".format(_healthy_deployments[0]["model_info"]["id"])
         )
 
 
@@ -930,9 +925,7 @@ def test_function_calling():
     ]
 
     router = Router(model_list=model_list)
-    response = router.completion(
-        model="gpt-3.5-turbo", messages=messages, functions=functions
-    )
+    response = router.completion(model="gpt-3.5-turbo", messages=messages, functions=functions)
     router.reset()
     print(response)
 
@@ -976,9 +969,7 @@ def test_function_calling_on_router():
             redis_port=os.getenv("REDIS_PORT"),
         )
         messages = [{"role": "user", "content": "what's the weather in boston"}]
-        response = router.completion(
-            model="gpt-3.5-turbo", messages=messages, functions=function1
-        )
+        response = router.completion(model="gpt-3.5-turbo", messages=messages, functions=function1)
         print(f"final returned response: {response}")
         router.reset()
         assert isinstance(response["choices"][0]["message"]["function_call"], dict)
@@ -1003,9 +994,7 @@ async def test_aimg_gen_on_router():
             }
         ]
         router = Router(model_list=model_list, num_retries=3)
-        response = await router.aimage_generation(
-            model="gpt-image-1", prompt="A cute baby sea otter"
-        )
+        response = await router.aimage_generation(model="gpt-image-1", prompt="A cute baby sea otter")
         print(response)
         assert len(response.data) > 0
         router.reset()
@@ -1038,9 +1027,7 @@ def test_img_gen_on_router():
             }
         ]
         router = Router(model_list=model_list)
-        response = router.image_generation(
-            model="gpt-image-1", prompt="A cute baby sea otter"
-        )
+        response = router.image_generation(model="gpt-image-1", prompt="A cute baby sea otter")
         print(response)
         assert len(response.data) > 0
         router.reset()
@@ -1140,9 +1127,7 @@ def test_azure_embedding_on_router():
         router = Router(model_list=model_list)
 
         async def embedding_call():
-            response = await router.aembedding(
-                model="text-embedding-ada-002", input=["good morning from litellm"]
-            )
+            response = await router.aembedding(model="text-embedding-ada-002", input=["good morning from litellm"])
             print(response)
 
         asyncio.run(embedding_call())
@@ -1317,13 +1302,9 @@ def test_consistent_model_id():
         "stream_timeout": 0.001,
     }
 
-    id1 = Router()._generate_model_id(
-        model_group=model_group, litellm_params=litellm_params
-    )
+    id1 = Router()._generate_model_id(model_group=model_group, litellm_params=litellm_params)
 
-    id2 = Router()._generate_model_id(
-        model_group=model_group, litellm_params=litellm_params
-    )
+    id2 = Router()._generate_model_id(model_group=model_group, litellm_params=litellm_params)
 
     assert id1 == id2
 
@@ -1350,36 +1331,35 @@ def test_reading_keys_os_environ():
 
         router = Router(model_list=model_list)
         for model in router.model_list:
-            assert (
-                model["litellm_params"]["api_key"] == os.environ["AZURE_AI_API_KEY"]
-            ), f"{model['litellm_params']['api_key']} vs {os.environ['AZURE_AI_API_KEY']}"
-            assert (
-                model["litellm_params"]["api_base"] == os.environ["AZURE_AI_API_BASE"]
-            ), f"{model['litellm_params']['api_base']} vs {os.environ['AZURE_AI_API_BASE']}"
-            assert (
-                model["litellm_params"]["api_version"]
-                == os.environ["AZURE_API_VERSION"]
-            ), f"{model['litellm_params']['api_version']} vs {os.environ['AZURE_API_VERSION']}"
-            assert float(model["litellm_params"]["timeout"]) == float(
-                os.environ["AZURE_TIMEOUT"]
-            ), f"{model['litellm_params']['timeout']} vs {os.environ['AZURE_TIMEOUT']}"
-            assert float(model["litellm_params"]["stream_timeout"]) == float(
-                os.environ["AZURE_STREAM_TIMEOUT"]
-            ), f"{model['litellm_params']['stream_timeout']} vs {os.environ['AZURE_STREAM_TIMEOUT']}"
-            assert int(model["litellm_params"]["max_retries"]) == int(
-                os.environ["AZURE_MAX_RETRIES"]
-            ), f"{model['litellm_params']['max_retries']} vs {os.environ['AZURE_MAX_RETRIES']}"
+            assert model["litellm_params"]["api_key"] == os.environ["AZURE_AI_API_KEY"], (
+                f"{model['litellm_params']['api_key']} vs {os.environ['AZURE_AI_API_KEY']}"
+            )
+            assert model["litellm_params"]["api_base"] == os.environ["AZURE_AI_API_BASE"], (
+                f"{model['litellm_params']['api_base']} vs {os.environ['AZURE_AI_API_BASE']}"
+            )
+            assert model["litellm_params"]["api_version"] == os.environ["AZURE_API_VERSION"], (
+                f"{model['litellm_params']['api_version']} vs {os.environ['AZURE_API_VERSION']}"
+            )
+            assert float(model["litellm_params"]["timeout"]) == float(os.environ["AZURE_TIMEOUT"]), (
+                f"{model['litellm_params']['timeout']} vs {os.environ['AZURE_TIMEOUT']}"
+            )
+            assert float(model["litellm_params"]["stream_timeout"]) == float(os.environ["AZURE_STREAM_TIMEOUT"]), (
+                f"{model['litellm_params']['stream_timeout']} vs {os.environ['AZURE_STREAM_TIMEOUT']}"
+            )
+            assert int(model["litellm_params"]["max_retries"]) == int(os.environ["AZURE_MAX_RETRIES"]), (
+                f"{model['litellm_params']['max_retries']} vs {os.environ['AZURE_MAX_RETRIES']}"
+            )
             print("passed testing of reading keys from os.environ")
             model_id = model["model_info"]["id"]
             async_client: openai.AsyncAzureOpenAI = router.cache.get_cache(f"{model_id}_async_client")  # type: ignore
             assert async_client.api_key == os.environ["AZURE_AI_API_KEY"]
             assert async_client.base_url == os.environ["AZURE_AI_API_BASE"]
-            assert async_client.max_retries == int(
-                os.environ["AZURE_MAX_RETRIES"]
-            ), f"{async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
-            assert async_client.timeout == int(
-                os.environ["AZURE_TIMEOUT"]
-            ), f"{async_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+            assert async_client.max_retries == int(os.environ["AZURE_MAX_RETRIES"]), (
+                f"{async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
+            )
+            assert async_client.timeout == int(os.environ["AZURE_TIMEOUT"]), (
+                f"{async_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+            )
             print("async client set correctly!")
 
             print("\n Testing async streaming client")
@@ -1387,36 +1367,36 @@ def test_reading_keys_os_environ():
             stream_async_client: openai.AsyncAzureOpenAI = router.cache.get_cache(f"{model_id}_stream_async_client")  # type: ignore
             assert stream_async_client.api_key == os.environ["AZURE_AI_API_KEY"]
             assert stream_async_client.base_url == os.environ["AZURE_AI_API_BASE"]
-            assert stream_async_client.max_retries == int(
-                os.environ["AZURE_MAX_RETRIES"]
-            ), f"{stream_async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
-            assert stream_async_client.timeout == int(
-                os.environ["AZURE_STREAM_TIMEOUT"]
-            ), f"{stream_async_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+            assert stream_async_client.max_retries == int(os.environ["AZURE_MAX_RETRIES"]), (
+                f"{stream_async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
+            )
+            assert stream_async_client.timeout == int(os.environ["AZURE_STREAM_TIMEOUT"]), (
+                f"{stream_async_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+            )
             print("async stream client set correctly!")
 
             print("\n Testing sync client")
             client: openai.AzureOpenAI = router.cache.get_cache(f"{model_id}_client")  # type: ignore
             assert client.api_key == os.environ["AZURE_AI_API_KEY"]
             assert client.base_url == os.environ["AZURE_AI_API_BASE"]
-            assert client.max_retries == int(
-                os.environ["AZURE_MAX_RETRIES"]
-            ), f"{client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
-            assert client.timeout == int(
-                os.environ["AZURE_TIMEOUT"]
-            ), f"{client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+            assert client.max_retries == int(os.environ["AZURE_MAX_RETRIES"]), (
+                f"{client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
+            )
+            assert client.timeout == int(os.environ["AZURE_TIMEOUT"]), (
+                f"{client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+            )
             print("sync client set correctly!")
 
             print("\n Testing sync stream client")
             stream_client: openai.AzureOpenAI = router.cache.get_cache(f"{model_id}_stream_client")  # type: ignore
             assert stream_client.api_key == os.environ["AZURE_AI_API_KEY"]
             assert stream_client.base_url == os.environ["AZURE_AI_API_BASE"]
-            assert stream_client.max_retries == int(
-                os.environ["AZURE_MAX_RETRIES"]
-            ), f"{stream_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
-            assert stream_client.timeout == int(
-                os.environ["AZURE_STREAM_TIMEOUT"]
-            ), f"{stream_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+            assert stream_client.max_retries == int(os.environ["AZURE_MAX_RETRIES"]), (
+                f"{stream_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
+            )
+            assert stream_client.timeout == int(os.environ["AZURE_STREAM_TIMEOUT"]), (
+                f"{stream_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+            )
             print("sync stream client set correctly!")
 
         router.reset()
@@ -1458,62 +1438,62 @@ def test_reading_openai_keys_os_environ():
 
         router = Router(model_list=model_list)
         for model in router.model_list:
-            assert (
-                model["litellm_params"]["api_key"] == os.environ["OPENAI_API_KEY"]
-            ), f"{model['litellm_params']['api_key']} vs {os.environ['AZURE_AI_API_KEY']}"
-            assert float(model["litellm_params"]["timeout"]) == float(
-                os.environ["AZURE_TIMEOUT"]
-            ), f"{model['litellm_params']['timeout']} vs {os.environ['AZURE_TIMEOUT']}"
-            assert float(model["litellm_params"]["stream_timeout"]) == float(
-                os.environ["AZURE_STREAM_TIMEOUT"]
-            ), f"{model['litellm_params']['stream_timeout']} vs {os.environ['AZURE_STREAM_TIMEOUT']}"
-            assert int(model["litellm_params"]["max_retries"]) == int(
-                os.environ["AZURE_MAX_RETRIES"]
-            ), f"{model['litellm_params']['max_retries']} vs {os.environ['AZURE_MAX_RETRIES']}"
+            assert model["litellm_params"]["api_key"] == os.environ["OPENAI_API_KEY"], (
+                f"{model['litellm_params']['api_key']} vs {os.environ['AZURE_AI_API_KEY']}"
+            )
+            assert float(model["litellm_params"]["timeout"]) == float(os.environ["AZURE_TIMEOUT"]), (
+                f"{model['litellm_params']['timeout']} vs {os.environ['AZURE_TIMEOUT']}"
+            )
+            assert float(model["litellm_params"]["stream_timeout"]) == float(os.environ["AZURE_STREAM_TIMEOUT"]), (
+                f"{model['litellm_params']['stream_timeout']} vs {os.environ['AZURE_STREAM_TIMEOUT']}"
+            )
+            assert int(model["litellm_params"]["max_retries"]) == int(os.environ["AZURE_MAX_RETRIES"]), (
+                f"{model['litellm_params']['max_retries']} vs {os.environ['AZURE_MAX_RETRIES']}"
+            )
             print("passed testing of reading keys from os.environ")
             model_id = model["model_info"]["id"]
             async_client: openai.AsyncOpenAI = router.cache.get_cache(key=f"{model_id}_async_client")  # type: ignore
             assert async_client.api_key == os.environ["OPENAI_API_KEY"]
-            assert async_client.max_retries == int(
-                os.environ["AZURE_MAX_RETRIES"]
-            ), f"{async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
-            assert async_client.timeout == int(
-                os.environ["AZURE_TIMEOUT"]
-            ), f"{async_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+            assert async_client.max_retries == int(os.environ["AZURE_MAX_RETRIES"]), (
+                f"{async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
+            )
+            assert async_client.timeout == int(os.environ["AZURE_TIMEOUT"]), (
+                f"{async_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+            )
             print("async client set correctly!")
 
             print("\n Testing async streaming client")
 
             stream_async_client: openai.AsyncOpenAI = router.cache.get_cache(key=f"{model_id}_stream_async_client")  # type: ignore
             assert stream_async_client.api_key == os.environ["OPENAI_API_KEY"]
-            assert stream_async_client.max_retries == int(
-                os.environ["AZURE_MAX_RETRIES"]
-            ), f"{stream_async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
-            assert stream_async_client.timeout == int(
-                os.environ["AZURE_STREAM_TIMEOUT"]
-            ), f"{stream_async_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+            assert stream_async_client.max_retries == int(os.environ["AZURE_MAX_RETRIES"]), (
+                f"{stream_async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
+            )
+            assert stream_async_client.timeout == int(os.environ["AZURE_STREAM_TIMEOUT"]), (
+                f"{stream_async_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+            )
             print("async stream client set correctly!")
 
             print("\n Testing sync client")
             client: openai.AzureOpenAI = router.cache.get_cache(key=f"{model_id}_client")  # type: ignore
             assert client.api_key == os.environ["OPENAI_API_KEY"]
-            assert client.max_retries == int(
-                os.environ["AZURE_MAX_RETRIES"]
-            ), f"{client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
-            assert client.timeout == int(
-                os.environ["AZURE_TIMEOUT"]
-            ), f"{client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+            assert client.max_retries == int(os.environ["AZURE_MAX_RETRIES"]), (
+                f"{client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
+            )
+            assert client.timeout == int(os.environ["AZURE_TIMEOUT"]), (
+                f"{client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+            )
             print("sync client set correctly!")
 
             print("\n Testing sync stream client")
             stream_client: openai.AzureOpenAI = router.cache.get_cache(key=f"{model_id}_stream_client")  # type: ignore
             assert stream_client.api_key == os.environ["OPENAI_API_KEY"]
-            assert stream_client.max_retries == int(
-                os.environ["AZURE_MAX_RETRIES"]
-            ), f"{stream_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
-            assert stream_client.timeout == int(
-                os.environ["AZURE_STREAM_TIMEOUT"]
-            ), f"{stream_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+            assert stream_client.max_retries == int(os.environ["AZURE_MAX_RETRIES"]), (
+                f"{stream_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
+            )
+            assert stream_client.timeout == int(os.environ["AZURE_STREAM_TIMEOUT"]), (
+                f"{stream_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+            )
             print("sync stream client set correctly!")
 
         router.reset()
@@ -1531,9 +1511,7 @@ def test_router_anthropic_key_dynamic():
         {
             "model_name": "anthropic-claude",
             "litellm_params": {
-                "model": os.environ.get(
-                    "CI_CD_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"
-                ),
+                "model": os.environ.get("CI_CD_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
                 "api_key": anthropic_api_key,
             },
         }
@@ -1565,9 +1543,7 @@ def test_router_timeout():
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
     start_time = time.time()
     try:
-        res = router.completion(
-            model="gpt-3.5-turbo", messages=messages, timeout=0.0001
-        )
+        res = router.completion(model="gpt-3.5-turbo", messages=messages, timeout=0.0001)
         print(res)
         pytest.fail("this should have timed out")
     except litellm.exceptions.Timeout as e:
@@ -1591,9 +1567,7 @@ async def test_router_amoderation():
 
     router = Router(model_list=model_list)
     ## Test 1: user facing function
-    result = await router.amoderation(
-        model="omni-moderation-latest", input="this is valid good text"
-    )
+    result = await router.amoderation(model="omni-moderation-latest", input="this is valid good text")
 
 
 def test_router_add_deployment():
@@ -1730,34 +1704,24 @@ async def test_router_model_usage(mock_response):
 
     for _ in range(2):
         try:
-            _ = await llm_router.acompletion(
-                model=model, messages=[{"role": "user", "content": "Hey!"}]
-            )
+            _ = await llm_router.acompletion(model=model, messages=[{"role": "user", "content": "Hey!"}])
             await asyncio.sleep(3)
 
-            initial_usage_tuple = await llm_router.get_model_group_usage(
-                model_group=model
-            )
+            initial_usage_tuple = await llm_router.get_model_group_usage(model_group=model)
             initial_usage = initial_usage_tuple[0]
 
             # completion call - 10 tokens
-            _ = await llm_router.acompletion(
-                model=model, messages=[{"role": "user", "content": "Hey!"}]
-            )
+            _ = await llm_router.acompletion(model=model, messages=[{"role": "user", "content": "Hey!"}])
 
             await asyncio.sleep(3)
-            updated_usage_tuple = await llm_router.get_model_group_usage(
-                model_group=model
-            )
+            updated_usage_tuple = await llm_router.get_model_group_usage(model_group=model)
             updated_usage = updated_usage_tuple[0]
 
             assert updated_usage == initial_usage + 10  # type: ignore
             break
         except Exception as e:
             if allowed_fails > 0:
-                print(
-                    f"Decrementing allowed_fails: {allowed_fails}.\nReceived error - {str(e)}"
-                )
+                print(f"Decrementing allowed_fails: {allowed_fails}.\nReceived error - {str(e)}")
                 allowed_fails -= 1
             else:
                 print(f"allowed_fails: {allowed_fails}")
@@ -1800,9 +1764,7 @@ async def test_is_proxy_set():
     )
 
     _deployment = llm_router.get_deployment(model_id="1")
-    model_client: AsyncAzureOpenAI = llm_router._get_client(
-        deployment=_deployment, kwargs={}, client_type="async"
-    )  # type: ignore
+    model_client: AsyncAzureOpenAI = llm_router._get_client(deployment=_deployment, kwargs={}, client_type="async")  # type: ignore
 
     assert check_proxy(client=model_client._client)
 
@@ -1841,15 +1803,11 @@ def test_router_get_model_info(model, base_model, llm_provider):
     assert deployment is not None
 
     if llm_provider == "openai" or (base_model is not None and llm_provider == "azure"):
-        router.get_router_model_info(
-            deployment=deployment.to_json(), received_model_name=model
-        )
+        router.get_router_model_info(deployment=deployment.to_json(), received_model_name=model)
     else:
         # Azure models without base_model now fallback to using the original model name
         # instead of raising an exception. This should succeed but log a warning.
-        model_info = router.get_router_model_info(
-            deployment=deployment.to_json(), received_model_name=model
-        )
+        model_info = router.get_router_model_info(deployment=deployment.to_json(), received_model_name=model)
         # Verify that model_info is returned (even if it may have default values)
         assert model_info is not None
 
@@ -1905,9 +1863,7 @@ def test_router_context_window_pre_call_check(model, base_model, llm_provider):
             else:
                 pytest.fail("Expected to raise an error. Got={}".format(updated_list))
         except Exception as e:
-            if (
-                llm_provider == "azure" and base_model is not None
-            ) or llm_provider == "openai":
+            if (llm_provider == "azure" and base_model is not None) or llm_provider == "openai":
                 pass
     except Exception as e:
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
@@ -2042,9 +1998,7 @@ def test_router_dynamic_cooldown_correct_retry_after_time():
     ):
         new_retry_after_mock_client = MagicMock(return_value=-1)
 
-        litellm.utils._get_retry_after_from_exception_header = (
-            new_retry_after_mock_client
-        )
+        litellm.utils._get_retry_after_from_exception_header = new_retry_after_mock_client
 
         try:
             router.embedding(
@@ -2130,9 +2084,7 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
         )
 
     if sync_mode:
-        cooldown_deployments = _get_cooldown_deployments(
-            litellm_router_instance=router, parent_otel_span=None
-        )
+        cooldown_deployments = _get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
     else:
         cooldown_deployments = await _async_get_cooldown_deployments(
             litellm_router_instance=router, parent_otel_span=None
@@ -2261,9 +2213,9 @@ async def test_router_batch_endpoints(provider):
 
     await asyncio.sleep(10)
     batch_input_file_id = file_obj.id
-    assert (
-        batch_input_file_id is not None
-    ), "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
+    assert batch_input_file_id is not None, (
+        "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
+    )
 
     create_batch_response = await router.acreate_batch(
         model="my-custom-name",
@@ -2285,16 +2237,16 @@ async def test_router_batch_endpoints(provider):
 
     print("response from router.create_batch=", create_batch_response)
 
-    assert (
-        create_batch_response.id is not None
-    ), f"Failed to create batch, expected a non null batch_id but got {create_batch_response.id}"
+    assert create_batch_response.id is not None, (
+        f"Failed to create batch, expected a non null batch_id but got {create_batch_response.id}"
+    )
     assert (
         create_batch_response.endpoint == "/v1/chat/completions"
         or create_batch_response.endpoint == "/chat/completions"
     ), f"Failed to create batch, expected endpoint to be /v1/chat/completions but got {create_batch_response.endpoint}"
-    assert (
-        create_batch_response.input_file_id == batch_input_file_id
-    ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
+    assert create_batch_response.input_file_id == batch_input_file_id, (
+        f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
+    )
 
     await asyncio.sleep(1)
 
@@ -2308,9 +2260,7 @@ async def test_router_batch_endpoints(provider):
     assert retrieved_batch.id == create_batch_response.id
 
     # list all batches
-    list_batches = await router.alist_batches(
-        model="my-custom-name", custom_llm_provider=provider, limit=2
-    )
+    list_batches = await router.alist_batches(model="my-custom-name", custom_llm_provider=provider, limit=2)
     print("list_batches=", list_batches)
 
 
@@ -2325,9 +2275,7 @@ def test_model_group_alias(hidden):
     ]
     router = Router(
         model_list=_model_list,
-        model_group_alias={
-            "gpt-4.5-turbo": {"model": "gpt-3.5-turbo", "hidden": hidden}
-        },
+        model_group_alias={"gpt-4.5-turbo": {"model": "gpt-3.5-turbo", "hidden": hidden}},
     )
 
     models = router.get_model_list()
@@ -2371,9 +2319,7 @@ def test_get_team_specific_model():
     assert router._get_team_specific_model(deployment, "team1") is None
 
     # Test 4: No model_info
-    deployment = DeploymentTypedDict(
-        model_name="model-z", litellm_params={}, model_info=ModelInfo()
-    )
+    deployment = DeploymentTypedDict(model_name="model-z", litellm_params={}, model_info=ModelInfo())
     assert router._get_team_specific_model(deployment, "team1") is None
 
 
@@ -2457,9 +2403,7 @@ def test_router_completion_with_model_id():
         ]
     )
 
-    with patch.object(
-        router, "routing_strategy_pre_call_checks"
-    ) as mock_pre_call_checks:
+    with patch.object(router, "routing_strategy_pre_call_checks") as mock_pre_call_checks:
         router.completion(model="123", messages=[{"role": "user", "content": "hi"}])
         mock_pre_call_checks.assert_not_called()
 
@@ -2509,14 +2453,10 @@ def test_router_get_model_list_from_model_alias():
                 "litellm_params": {"model": "gpt-3.5-turbo"},
             }
         ],
-        model_group_alias={
-            "my-special-fake-model-alias-name": "fake-openai-endpoint-3"
-        },
+        model_group_alias={"my-special-fake-model-alias-name": "fake-openai-endpoint-3"},
     )
 
-    model_alias_list = router.get_model_list_from_model_alias(
-        model_name="gpt-3.5-turbo"
-    )
+    model_alias_list = router.get_model_list_from_model_alias(model_name="gpt-3.5-turbo")
     assert len(model_alias_list) == 0
 
 

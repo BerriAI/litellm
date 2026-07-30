@@ -38,14 +38,10 @@ class TestRestEndpointAuthHeaderExtraction:
             }
         )
 
-        mcp_server_auth_headers = (
-            MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
-        )
+        mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
 
         assert "github" in mcp_server_auth_headers
-        assert (
-            mcp_server_auth_headers["github"]["Authorization"] == "Bearer github-token"
-        )
+        assert mcp_server_auth_headers["github"]["Authorization"] == "Bearer github-token"
         assert "zapier" in mcp_server_auth_headers
         assert mcp_server_auth_headers["zapier"]["x-api-key"] == "zapier-key-123"
 
@@ -59,15 +55,11 @@ class TestRestEndpointAuthHeaderExtraction:
         )
 
         mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers)
-        mcp_server_auth_headers = (
-            MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
-        )
+        mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
 
         assert mcp_auth_header == "Bearer legacy-token"
         assert "zapier" in mcp_server_auth_headers
-        assert (
-            mcp_server_auth_headers["zapier"]["Authorization"] == "Bearer zapier-token"
-        )
+        assert mcp_server_auth_headers["zapier"]["Authorization"] == "Bearer zapier-token"
 
 
 class TestCaseInsensitiveServerMatching:
@@ -85,9 +77,7 @@ class TestCaseInsensitiveServerMatching:
             auth_type=MCPAuth.authorization,
         )
 
-        mcp_server_auth_headers = {
-            "litellmagcgateway": {"Authorization": "Bearer token"}
-        }
+        mcp_server_auth_headers = {"litellmagcgateway": {"Authorization": "Bearer token"}}
 
         # Test the case-insensitive matching logic from _call_regular_mcp_tool
         normalized_headers = {k.lower(): v for k, v in mcp_server_auth_headers.items()}

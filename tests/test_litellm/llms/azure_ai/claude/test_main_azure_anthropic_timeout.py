@@ -6,9 +6,7 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 from litellm import completion
 from litellm.types.utils import ModelResponse
@@ -22,9 +20,7 @@ def test_main_azure_ai_claude_completion_passes_timeout_to_azure_anthropic_handl
         return ModelResponse()
 
     with patch("litellm.main.azure_anthropic_chat_completions") as mock_azure_anthropic:
-        mock_azure_anthropic.completion = MagicMock(
-            side_effect=fake_azure_anthropic_completion
-        )
+        mock_azure_anthropic.completion = MagicMock(side_effect=fake_azure_anthropic_completion)
 
         completion(
             model="azure_ai/claude-sonnet-4-5",

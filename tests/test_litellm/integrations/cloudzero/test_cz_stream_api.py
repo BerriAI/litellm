@@ -18,9 +18,7 @@ class TestCloudZeroStreamer:
 
     def test_init_with_defaults(self):
         """Test CloudZeroStreamer initialization with default parameters."""
-        streamer = CloudZeroStreamer(
-            api_key="test-key", connection_id="test-connection"
-        )
+        streamer = CloudZeroStreamer(api_key="test-key", connection_id="test-connection")
 
         assert streamer.api_key == "test-key"
         assert streamer.connection_id == "test-connection"
@@ -44,7 +42,6 @@ class TestCloudZeroStreamer:
             patch.object(streamer, "_group_by_date") as mock_group,
             patch.object(streamer, "_send_daily_batch") as mock_send,
         ):
-
             mock_group.return_value = {
                 "2025-01-19": pl.DataFrame({"test": ["data1"]}),
                 "2025-01-20": pl.DataFrame({"test": ["data2"]}),
@@ -59,13 +56,9 @@ class TestCloudZeroStreamer:
         """Test _group_by_date method with valid data."""
         streamer = CloudZeroStreamer("test-key", "test-connection")
         with patch.object(streamer, "_parse_and_convert_timestamp") as mock_parse:
-            mock_parse.return_value = datetime(
-                2025, 1, 19, 10, 30, 0, tzinfo=timezone.utc
-            )
+            mock_parse.return_value = datetime(2025, 1, 19, 10, 30, 0, tzinfo=timezone.utc)
 
-            data = pl.DataFrame(
-                {"time/usage_start": ["2025-01-19T10:30:00Z"], "cost": [10.0]}
-            )
+            data = pl.DataFrame({"time/usage_start": ["2025-01-19T10:30:00Z"], "cost": [10.0]})
 
             result = streamer._group_by_date(data)
 
@@ -96,9 +89,7 @@ class TestCloudZeroStreamer:
 
     def test_parse_and_convert_timestamp_no_timezone(self):
         """Test _parse_and_convert_timestamp method without timezone info."""
-        streamer = CloudZeroStreamer(
-            "test-key", "test-connection", user_timezone="America/New_York"
-        )
+        streamer = CloudZeroStreamer("test-key", "test-connection", user_timezone="America/New_York")
 
         result = streamer._parse_and_convert_timestamp("2025-01-19T10:30:00")
 
@@ -118,9 +109,7 @@ class TestCloudZeroStreamer:
             mock_convert.return_value = {"test": "record"}
 
             batch_data = pl.DataFrame({"cost": [10.0]})
-            result = streamer._prepare_batch_payload(
-                "2025-01-19", batch_data, "replace_hourly"
-            )
+            result = streamer._prepare_batch_payload("2025-01-19", batch_data, "replace_hourly")
 
             assert result["month"] == "2025-01"
             assert result["operation"] == "replace_hourly"

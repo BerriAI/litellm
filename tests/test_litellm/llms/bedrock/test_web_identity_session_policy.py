@@ -92,10 +92,7 @@ def _statement_by_sid(policy: dict, sid: str) -> dict:
     for stmt in policy["Statement"]:
         if stmt.get("Sid") == sid:
             return stmt
-    raise AssertionError(
-        f"Sid={sid!r} not found in session policy; "
-        f"saw {[s.get('Sid') for s in policy['Statement']]}"
-    )
+    raise AssertionError(f"Sid={sid!r} not found in session policy; saw {[s.get('Sid') for s in policy['Statement']]}")
 
 
 class TestWebIdentitySessionPolicyShape:
@@ -134,8 +131,7 @@ class TestClaudePlatformActionsCovered:
             elif isinstance(stmt_actions, list):
                 all_actions.update(stmt_actions)
         assert action in all_actions, (
-            f"{action} missing from session policy — "
-            f"bedrock/claude_platform/* requests will 403 on OIDC auth"
+            f"{action} missing from session policy — bedrock/claude_platform/* requests will 403 on OIDC auth"
         )
 
     def test_claude_platform_statement_allows(self):
@@ -192,8 +188,7 @@ class TestBedrockMantleActionsCovered:
         if isinstance(actions, str):
             actions = [actions]
         assert "bedrock-mantle:*" not in actions, (
-            "session policy must not grant bedrock-mantle:* — "
-            "the ceiling should match the documented action set"
+            "session policy must not grant bedrock-mantle:* — the ceiling should match the documented action set"
         )
 
     def test_bedrock_mantle_statement_carries_secure_transport_condition(self):
@@ -201,8 +196,7 @@ class TestBedrockMantleActionsCovered:
         stmt = _statement_by_sid(policy, "BedrockMantleLiteLLM")
         cond = stmt.get("Condition") or {}
         assert cond.get("Bool", {}).get("aws:SecureTransport") == "true", (
-            "BedrockMantleLiteLLM must require aws:SecureTransport=true "
-            "to keep parity with the bedrock statement"
+            "BedrockMantleLiteLLM must require aws:SecureTransport=true to keep parity with the bedrock statement"
         )
 
 
@@ -237,12 +231,8 @@ class TestInvalidIdentityTokenSurfacesAudience:
         class _InvalidIdentityTokenException(Exception):
             pass
 
-        mock_sts.exceptions.InvalidIdentityTokenException = (
-            _InvalidIdentityTokenException
-        )
-        mock_sts.assume_role_with_web_identity.side_effect = (
-            _InvalidIdentityTokenException(self._STS_MESSAGE)
-        )
+        mock_sts.exceptions.InvalidIdentityTokenException = _InvalidIdentityTokenException
+        mock_sts.assume_role_with_web_identity.side_effect = _InvalidIdentityTokenException(self._STS_MESSAGE)
 
         with (
             patch("boto3.client", return_value=mock_sts),
@@ -292,6 +282,5 @@ class TestPolicyTransportConditions:
         stmt = _statement_by_sid(policy, "ClaudePlatformLiteLLM")
         cond = stmt.get("Condition") or {}
         assert cond.get("Bool", {}).get("aws:SecureTransport") == "true", (
-            "ClaudePlatformLiteLLM must require aws:SecureTransport=true "
-            "to keep parity with the bedrock statement"
+            "ClaudePlatformLiteLLM must require aws:SecureTransport=true to keep parity with the bedrock statement"
         )

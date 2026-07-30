@@ -77,9 +77,9 @@ async def test_team_list_v2_bare(
         return
 
     visible = _seeded(await _v2_team_ids(proxy_client, caller.cleartext), world)
-    assert visible == set(
-        expected_visible
-    ), f"{actor.value}: expected {sorted(expected_visible)}, got {sorted(visible)}"
+    assert visible == set(expected_visible), (
+        f"{actor.value}: expected {sorted(expected_visible)}, got {sorted(visible)}"
+    )
 
 
 # A regular user scoping the query to its own user_id is allowed, and sees
@@ -94,31 +94,23 @@ _OWN = {
 }
 
 
-@pytest.mark.parametrize(
-    "actor,expected_visible", list(_OWN.items()), ids=[a.value for a in _OWN]
-)
-async def test_team_list_v2_own_user_id_query(
-    actor: Actor, expected_visible: FrozenSet[str], proxy_client, world
-):
+@pytest.mark.parametrize("actor,expected_visible", list(_OWN.items()), ids=[a.value for a in _OWN])
+async def test_team_list_v2_own_user_id_query(actor: Actor, expected_visible: FrozenSet[str], proxy_client, world):
     caller = world.keys[actor]
     visible = _seeded(
-        await _v2_team_ids(
-            proxy_client, caller.cleartext, f"&user_id={caller.user_id}"
-        ),
+        await _v2_team_ids(proxy_client, caller.cleartext, f"&user_id={caller.user_id}"),
         world,
     )
-    assert visible == set(
-        expected_visible
-    ), f"{actor.value}: expected {sorted(expected_visible)}, got {sorted(visible)}"
+    assert visible == set(expected_visible), (
+        f"{actor.value}: expected {sorted(expected_visible)}, got {sorted(visible)}"
+    )
 
 
 async def test_team_list_v2_user_id_filter_other_user_is_401(proxy_client, world):
     """A regular user filtering by another user's user_id is rejected 401."""
     resp = await proxy_client.get(
         f"/v2/team/list?user_id={world.keys[Actor.OWNER].user_id}",
-        headers={
-            "Authorization": f"Bearer {world.keys[Actor.INTERNAL_USER].cleartext}"
-        },
+        headers={"Authorization": f"Bearer {world.keys[Actor.INTERNAL_USER].cleartext}"},
     )
     assert resp.status_code == 401, resp.text
 

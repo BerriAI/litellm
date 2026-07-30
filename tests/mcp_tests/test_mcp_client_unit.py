@@ -60,9 +60,7 @@ class TestMCPClientUnitTests:
         }
 
         # Basic auth
-        client = MCPClient(
-            "http://example.com", auth_type=MCPAuth.basic, auth_value="user:pass"
-        )
+        client = MCPClient("http://example.com", auth_type=MCPAuth.basic, auth_value="user:pass")
         expected_encoded = base64.b64encode("user:pass".encode("utf-8")).decode()
         headers = client._get_auth_headers()
         assert headers == {
@@ -70,9 +68,7 @@ class TestMCPClientUnitTests:
         }
 
         # API key
-        client = MCPClient(
-            "http://example.com", auth_type=MCPAuth.api_key, auth_value="api_key_123"
-        )
+        client = MCPClient("http://example.com", auth_type=MCPAuth.api_key, auth_value="api_key_123")
         headers = client._get_auth_headers()
         assert headers == {
             "X-API-Key": "api_key_123",

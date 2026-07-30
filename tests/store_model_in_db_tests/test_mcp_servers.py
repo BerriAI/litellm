@@ -80,9 +80,7 @@ def generate_mcpserver_create_request(
     )
 
 
-def assert_mcp_server_record_same(
-    mcp_server: NewMCPServerRequest, resp: LiteLLM_MCPServerTable
-):
+def assert_mcp_server_record_same(mcp_server: NewMCPServerRequest, resp: LiteLLM_MCPServerTable):
     """
     Assert that the mcp server record is created correctly.
     """
@@ -163,11 +161,7 @@ async def test_create_mcp_server_direct():
         mcp_server_request = generate_mcpserver_create_request(server_id=server_id)
 
         # The function will normalize the alias by replacing spaces with underscores
-        expected_alias = (
-            mcp_server_request.alias.replace(" ", "_")
-            if mcp_server_request.alias
-            else None
-        )
+        expected_alias = mcp_server_request.alias.replace(" ", "_") if mcp_server_request.alias else None
 
         expected_response = LiteLLM_MCPServerTable(
             server_id=server_id,
@@ -197,9 +191,7 @@ async def test_create_mcp_server_direct():
         )
 
         # Call the function directly
-        result = await add_mcp_server(
-            payload=mcp_server_request, user_api_key_dict=user_auth
-        )
+        result = await add_mcp_server(payload=mcp_server_request, user_api_key_dict=user_auth)
 
         # Verify the result
         assert result.server_id == server_id
@@ -270,9 +262,7 @@ async def test_create_duplicate_mcp_server():
 
         # Expect HTTPException to be raised
         with pytest.raises(HTTPException) as exc_info:
-            await add_mcp_server(
-                payload=mcp_server_request, user_api_key_dict=user_auth
-            )
+            await add_mcp_server(payload=mcp_server_request, user_api_key_dict=user_auth)
 
         # Verify the exception details
         assert exc_info.value.status_code == 400
@@ -318,9 +308,7 @@ async def test_create_mcp_server_auth_failure():
 
         # Expect HTTPException to be raised
         with pytest.raises(HTTPException) as exc_info:
-            await add_mcp_server(
-                payload=mcp_server_request, user_api_key_dict=user_auth
-            )
+            await add_mcp_server(payload=mcp_server_request, user_api_key_dict=user_auth)
 
         # Verify the exception details
         assert exc_info.value.status_code == 403
@@ -341,12 +329,8 @@ async def test_create_mcp_server_invalid_alias():
         mock.patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
         ) as mock_get_prisma,
-        mock.patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server"
-        ) as mock_get_server,
-        mock.patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server"
-        ) as mock_create,
+        mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server") as mock_get_server,
+        mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server") as mock_create,
     ):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             add_mcp_server,
@@ -359,9 +343,7 @@ async def test_create_mcp_server_invalid_alias():
         # Set up test data with invalid alias
         server_id = str(uuid.uuid4())
         mcp_server_request = generate_mcpserver_create_request(server_id=server_id)
-        mcp_server_request.alias = (
-            "invalid-alias"  # This should trigger the validation error
-        )
+        mcp_server_request.alias = "invalid-alias"  # This should trigger the validation error
 
         # Mock that server does not exist
         mock_get_server.return_value = None
@@ -376,14 +358,11 @@ async def test_create_mcp_server_invalid_alias():
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            await add_mcp_server(
-                payload=mcp_server_request, user_api_key_dict=user_auth
-            )
+            await add_mcp_server(payload=mcp_server_request, user_api_key_dict=user_auth)
 
         assert exc_info.value.status_code == 400
-        assert (
-            "Server name cannot contain '-'. Use an alternative character instead Found: invalid-alias"
-            in str(exc_info.value.detail)
+        assert "Server name cannot contain '-'. Use an alternative character instead Found: invalid-alias" in str(
+            exc_info.value.detail
         )
 
 

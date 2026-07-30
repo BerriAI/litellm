@@ -35,9 +35,7 @@ def test_generate_snapshot_uses_shared_operation_id_reservations(monkeypatch):
             register_fn=lambda app, module: None,
         ),
     ]
-    monkeypatch.setitem(
-        sys.modules, "litellm.proxy._lazy_features", fake_lazy_features_module
-    )
+    monkeypatch.setitem(sys.modules, "litellm.proxy._lazy_features", fake_lazy_features_module)
 
     def fake_get_openapi(title, version, routes):
         path = routes[0].path
@@ -58,30 +56,16 @@ def test_generate_snapshot_uses_shared_operation_id_reservations(monkeypatch):
 
     fake_proxy_server_module = ModuleType("litellm.proxy.proxy_server")
     fake_proxy_server_module.app = fake_app
-    fake_proxy_server_module.ensure_unique_openapi_operation_ids = (
-        fake_ensure_unique_openapi_operation_ids
-    )
-    monkeypatch.setitem(
-        sys.modules, "litellm.proxy.proxy_server", fake_proxy_server_module
-    )
+    fake_proxy_server_module.ensure_unique_openapi_operation_ids = fake_ensure_unique_openapi_operation_ids
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy_server_module)
     monkeypatch.setattr("fastapi.openapi.utils.get_openapi", fake_get_openapi)
 
     fragments = _lazy_openapi_snapshot.generate_snapshot()
 
-    assert (
-        fragments["feature-a"]["paths"]["/feature-a/items"]["get"]["operationId"]
-        == "shared_operation_id_get"
-    )
-    assert (
-        fragments["feature-b"]["paths"]["/feature-b/items"]["get"]["operationId"]
-        == "shared_operation_id_get_2"
-    )
-    assert fragments["feature-a"]["paths"]["/feature-a/items"]["get"]["tags"] == [
-        "feature-a"
-    ]
-    assert fragments["feature-b"]["paths"]["/feature-b/items"]["get"]["tags"] == [
-        "feature-b"
-    ]
+    assert fragments["feature-a"]["paths"]["/feature-a/items"]["get"]["operationId"] == "shared_operation_id_get"
+    assert fragments["feature-b"]["paths"]["/feature-b/items"]["get"]["operationId"] == "shared_operation_id_get_2"
+    assert fragments["feature-a"]["paths"]["/feature-a/items"]["get"]["tags"] == ["feature-a"]
+    assert fragments["feature-b"]["paths"]["/feature-b/items"]["get"]["tags"] == ["feature-b"]
 
 
 def test_normalize_operation_ids_uses_each_http_method():

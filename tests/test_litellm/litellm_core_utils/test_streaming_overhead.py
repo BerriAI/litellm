@@ -216,8 +216,7 @@ def test_sync_path_no_model_dump_on_text_chunks():
     text_chunks = [r for r in results if r.choices and r.choices[0].delta.content]
     assert len(text_chunks) >= 2, "Expected at least 2 text chunks"
     assert model_dump_call_count <= 1, (
-        f"model_dump() called {model_dump_call_count} times — "
-        "usage check is firing on every chunk"
+        f"model_dump() called {model_dump_call_count} times — usage check is firing on every chunk"
     )
 
 
@@ -231,17 +230,13 @@ def test_sync_path_usage_stripped_from_body_preserved_in_hidden_params():
     usage_dict = {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
     chunks = [
         _make_generic_chunk("Hello"),
-        _make_generic_chunk(
-            "", is_finished=True, finish_reason="stop", usage=usage_dict
-        ),
+        _make_generic_chunk("", is_finished=True, finish_reason="stop", usage=usage_dict),
     ]
     wrapper = _make_wrapper(chunks)
     results = _drain_sync(wrapper)
 
     # The usage chunk must be returned (not silently dropped)
-    finish_chunks = [
-        r for r in results if r.choices and r.choices[0].finish_reason == "stop"
-    ]
+    finish_chunks = [r for r in results if r.choices and r.choices[0].finish_reason == "stop"]
     assert finish_chunks, "Finish-reason chunk was not returned"
 
     # The final chunk must carry usage in _hidden_params
@@ -261,9 +256,7 @@ def test_async_path_usage_stripped_from_body_preserved_in_hidden_params():
     usage_dict = {"prompt_tokens": 5, "completion_tokens": 15, "total_tokens": 20}
     chunks = [
         _make_generic_chunk("Hi"),
-        _make_generic_chunk(
-            "", is_finished=True, finish_reason="stop", usage=usage_dict
-        ),
+        _make_generic_chunk("", is_finished=True, finish_reason="stop", usage=usage_dict),
     ]
 
     async def _run():
@@ -295,11 +288,7 @@ def test_bedrock_converse_text_chunks_pass_through():
     wrapper = _make_wrapper(chunks, provider="bedrock")
     results = _drain_sync(wrapper)
 
-    texts = [
-        r.choices[0].delta.content
-        for r in results
-        if r.choices and r.choices[0].delta.content
-    ]
+    texts = [r.choices[0].delta.content for r in results if r.choices and r.choices[0].delta.content]
     assert "Hello" in texts or any("Hello" in (t or "") for t in texts)
 
 
@@ -333,11 +322,7 @@ def test_anthropic_generic_chunks_text_pass_through():
     wrapper = _make_wrapper(chunks, provider="anthropic")
     results = _drain_sync(wrapper)
 
-    texts = [
-        r.choices[0].delta.content
-        for r in results
-        if r.choices and r.choices[0].delta.content
-    ]
+    texts = [r.choices[0].delta.content for r in results if r.choices and r.choices[0].delta.content]
     assert len(texts) >= 2
 
 
@@ -350,11 +335,7 @@ def test_anthropic_finish_reason_propagated():
     wrapper = _make_wrapper(chunks, provider="anthropic")
     results = _drain_sync(wrapper)
 
-    finish_reasons = [
-        r.choices[0].finish_reason
-        for r in results
-        if r.choices and r.choices[0].finish_reason
-    ]
+    finish_reasons = [r.choices[0].finish_reason for r in results if r.choices and r.choices[0].finish_reason]
     assert "stop" in finish_reasons
 
 
@@ -374,20 +355,16 @@ def test_post_streaming_hooks_cached_after_first_call():
     async def _run():
         # Simulate hook resolution with an empty callback list
         with patch.object(litellm, "callbacks", []):
-            await wrapper._call_post_streaming_deployment_hook(
-                MagicMock(spec=ModelResponseStream)
-            )
+            await wrapper._call_post_streaming_deployment_hook(MagicMock(spec=ModelResponseStream))
         first_list = wrapper._post_streaming_hooks
         assert isinstance(first_list, list)
 
         # Second call must reuse the same list object
         with patch.object(litellm, "callbacks", []):
-            await wrapper._call_post_streaming_deployment_hook(
-                MagicMock(spec=ModelResponseStream)
-            )
-        assert (
-            wrapper._post_streaming_hooks is first_list
-        ), "_post_streaming_hooks was rebuilt on second call — caching broken"
+            await wrapper._call_post_streaming_deployment_hook(MagicMock(spec=ModelResponseStream))
+        assert wrapper._post_streaming_hooks is first_list, (
+            "_post_streaming_hooks was rebuilt on second call — caching broken"
+        )
 
     asyncio.run(_run())
 
@@ -412,9 +389,7 @@ def test_post_streaming_hooks_filters_correctly():
 
     async def _run():
         with patch.object(litellm, "callbacks", [MyLogger(), plain_callable]):
-            await wrapper._call_post_streaming_deployment_hook(
-                MagicMock(spec=ModelResponseStream)
-            )
+            await wrapper._call_post_streaming_deployment_hook(MagicMock(spec=ModelResponseStream))
 
         # plain_callable must be excluded; MyLogger (CustomLogger subclass) included
         assert len(wrapper._post_streaming_hooks) == 1
@@ -481,8 +456,7 @@ def test_sync_streaming_overhead_not_regressed():
 
     assert len(results) > 0, "No chunks returned"
     assert elapsed < 2.0, (
-        f"Sync streaming of {n_chunks} chunks took {elapsed:.3f}s — "
-        "per-chunk overhead regression detected"
+        f"Sync streaming of {n_chunks} chunks took {elapsed:.3f}s — per-chunk overhead regression detected"
     )
 
 
@@ -503,6 +477,5 @@ def test_async_streaming_overhead_not_regressed():
     results, elapsed = asyncio.run(_run())
     assert len(results) > 0
     assert elapsed < 2.0, (
-        f"Async streaming of {n_chunks} chunks took {elapsed:.3f}s — "
-        "per-chunk overhead regression detected"
+        f"Async streaming of {n_chunks} chunks took {elapsed:.3f}s — per-chunk overhead regression detected"
     )

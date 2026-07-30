@@ -97,9 +97,7 @@ def test_build_object_key_hourly():
     )
 
     dest = FocusGCSDestination(prefix="focus_exports", config={"bucket_name": "b"})
-    key = dest._build_object_key(
-        time_window=_make_window("hourly"), filename="usage.parquet"
-    )
+    key = dest._build_object_key(time_window=_make_window("hourly"), filename="usage.parquet")
 
     assert key == "focus_exports/date=2026-01-01/hour=10/usage.parquet"
 

@@ -6,9 +6,7 @@ import pytest
 import json
 from unittest.mock import Mock, patch, AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.types.utils import ImageObject
@@ -72,9 +70,7 @@ async def test_xinference_image_generation():
         # Validate that the OpenAI client was called with correct parameters
         mock_client.images.generate.assert_called_once()
         assert captured_kwargs is not None
-        assert (
-            captured_kwargs["model"] == "stabilityai/stable-diffusion-3.5-large"
-        )  # xinference/ prefix removed
+        assert captured_kwargs["model"] == "stabilityai/stable-diffusion-3.5-large"  # xinference/ prefix removed
         assert captured_kwargs["prompt"] == "A beautiful sunset over a calm ocean"
 
 
@@ -148,9 +144,7 @@ async def test_xinference_image_generation_with_response_format():
         # Validate that the OpenAI client was called with correct parameters
         mock_client.images.generate.assert_called_once()
         assert captured_kwargs is not None
-        assert (
-            captured_kwargs["model"] == "stabilityai/stable-diffusion-3.5-large"
-        )  # xinference/ prefix removed
+        assert captured_kwargs["model"] == "stabilityai/stable-diffusion-3.5-large"  # xinference/ prefix removed
         assert captured_kwargs["prompt"] == "A beautiful sunset over a calm ocean"
         assert captured_kwargs["response_format"] == "b64_json"
         assert captured_kwargs["n"] == 1

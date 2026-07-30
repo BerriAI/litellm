@@ -81,11 +81,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
                 ResponseOutputMessage(
                     type="message",
                     role="assistant",
-                    content=[
-                        ResponseOutputText(
-                            type="output_text", text="Hello from Cursor!"
-                        )
-                    ],
+                    content=[ResponseOutputText(type="output_text", text="Hello from Cursor!")],
                 )
             ],
         )
@@ -120,9 +116,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
     @pytest.mark.asyncio
     @patch("litellm.proxy.proxy_server.llm_router")
     @patch("litellm.proxy.proxy_server.user_api_key_auth")
-    async def test_responses_api_key_spend_header_includes_response_cost(
-        self, mock_auth, mock_router
-    ):
+    async def test_responses_api_key_spend_header_includes_response_cost(self, mock_auth, mock_router):
         """
         Test that x-litellm-key-spend header includes the current request's response_cost
         for /v1/responses endpoint.
@@ -158,9 +152,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
                 ResponseOutputMessage(
                     type="message",
                     role="assistant",
-                    content=[
-                        ResponseOutputText(type="output_text", text="Test response")
-                    ],
+                    content=[ResponseOutputText(type="output_text", text="Test response")],
                 )
             ],
         )
@@ -355,6 +347,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {"type": "response.create", "model": "gpt-4o", "input": "hello"}
         assert _extract_model_from_first_ws_event(event) == "gpt-4o"
 
@@ -362,6 +355,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {"type": "response.create", "response": {"model": "gpt-4o", "input": "hello"}}
         assert _extract_model_from_first_ws_event(event) == "gpt-4o"
 
@@ -369,6 +363,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {
             "type": "response.create",
             "model": "flat-model",
@@ -380,6 +375,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {"type": "response.create", "input": "hello"}
         assert _extract_model_from_first_ws_event(event) is None
 
@@ -399,9 +395,7 @@ class TestResponsesWSFirstFrameValidation:
         )
 
         ws = MagicMock()
-        ws.receive_text = AsyncMock(
-            return_value=json.dumps({"type": "session.update", "model": "gpt-4o"})
-        )
+        ws.receive_text = AsyncMock(return_value=json.dumps({"type": "session.update", "model": "gpt-4o"}))
         ws.send_text = AsyncMock()
         ws.close = AsyncMock()
 
@@ -411,10 +405,7 @@ class TestResponsesWSFirstFrameValidation:
         ws.send_text.assert_awaited_once()
         ws.close.assert_awaited_once_with(code=1008, reason="Invalid first message")
         error_payload = json.loads(ws.send_text.await_args.args[0])
-        assert (
-            error_payload["error"]["message"]
-            == "First message must be a response.create JSON object."
-        )
+        assert error_payload["error"]["message"] == "First message must be a response.create JSON object."
 
     @pytest.mark.asyncio
     async def test_rejects_non_object_json_first_frame(self):
@@ -483,16 +474,12 @@ class TestResponsesWSFirstFrameModelAuth:
         ws.url = "ws://testserver/v1/responses"
         ws.accept = AsyncMock()
         ws.receive_text = AsyncMock(
-            return_value=json.dumps(
-                {"type": "response.create", "model": "gpt-4o-mini", "input": []}
-            )
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
         )
         ws.close = AsyncMock()
 
         processor = MagicMock()
-        processor.common_processing_pre_call_logic = AsyncMock(
-            return_value=({"model": "gpt-4o-mini"}, MagicMock())
-        )
+        processor.common_processing_pre_call_logic = AsyncMock(return_value=({"model": "gpt-4o-mini"}, MagicMock()))
 
         async def fake_llm_call():
             return None
@@ -528,9 +515,7 @@ class TestResponsesWSFirstFrameModelAuth:
             _enforce_responses_ws_first_frame_model_auth,
         )
 
-        request = Request(
-            {"type": "http", "method": "POST", "path": "/v1/responses", "headers": []}
-        )
+        request = Request({"type": "http", "method": "POST", "path": "/v1/responses", "headers": []})
         user_api_key_dict = MagicMock()
         llm_router = MagicMock()
 
@@ -592,9 +577,7 @@ class TestReadWSModelFromFirstFrameErrors:
 
         assert result is None
         ws.send_text.assert_not_awaited()
-        ws.close.assert_awaited_once_with(
-            code=1008, reason="Timed out waiting for first message"
-        )
+        ws.close.assert_awaited_once_with(code=1008, reason="Timed out waiting for first message")
 
     @pytest.mark.asyncio
     async def test_invalid_json_sends_error_and_closes(self):
@@ -612,9 +595,7 @@ class TestReadWSModelFromFirstFrameErrors:
         assert result is None
         payload = json.loads(ws.send_text.await_args.args[0])
         assert payload["error"]["message"] == "First message is not valid JSON."
-        ws.close.assert_awaited_once_with(
-            code=1008, reason="Invalid JSON in first message"
-        )
+        ws.close.assert_awaited_once_with(code=1008, reason="Invalid JSON in first message")
 
     @pytest.mark.asyncio
     async def test_missing_model_sends_error_and_closes(self):
@@ -623,9 +604,7 @@ class TestReadWSModelFromFirstFrameErrors:
         )
 
         ws = MagicMock()
-        ws.receive_text = AsyncMock(
-            return_value=json.dumps({"type": "response.create", "input": []})
-        )
+        ws.receive_text = AsyncMock(return_value=json.dumps({"type": "response.create", "input": []}))
         ws.send_text = AsyncMock()
         ws.close = AsyncMock()
 
@@ -678,10 +657,7 @@ class TestManagedResponsesSameProvider:
         assert self._handler("gpt-4o")._same_provider("gpt-4o-mini") is True
 
     def test_different_provider_is_not_same(self):
-        assert (
-            self._handler("gpt-4o")._same_provider("vertex_ai/gemini-2.0-flash")
-            is False
-        )
+        assert self._handler("gpt-4o")._same_provider("vertex_ai/gemini-2.0-flash") is False
 
     def test_inject_credentials_keeps_provider_for_same_provider_model(self):
         handler = self._handler("gpt-4o", custom_llm_provider="openai")
@@ -696,18 +672,14 @@ class TestManagedResponsesSameProvider:
         assert "custom_llm_provider" not in call_kwargs
 
     def test_unresolvable_connection_model_falls_back_to_custom_provider(self):
-        handler = self._handler(
-            "my-custom-deployment", custom_llm_provider="openai"
-        )
+        handler = self._handler("my-custom-deployment", custom_llm_provider="openai")
         assert handler._same_provider("gpt-4o-mini") is True
         call_kwargs: dict = {}
         handler._inject_credentials(call_kwargs, model="gpt-4o-mini")
         assert call_kwargs["custom_llm_provider"] == "openai"
 
     def test_unresolvable_connection_model_still_drops_cross_provider(self):
-        handler = self._handler(
-            "my-custom-deployment", custom_llm_provider="openai"
-        )
+        handler = self._handler("my-custom-deployment", custom_llm_provider="openai")
         call_kwargs: dict = {}
         handler._inject_credentials(call_kwargs, model="vertex_ai/gemini-2.0-flash")
         assert "custom_llm_provider" not in call_kwargs

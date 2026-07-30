@@ -1783,10 +1783,7 @@ def _asserts_null_reset_is_due(where):
         if isinstance(b, dict)
     )
     has_expired_branch = any(
-        isinstance(b, dict)
-        and "budget_reset_at" in b
-        and b["budget_reset_at"] is not None
-        for b in branches
+        isinstance(b, dict) and "budget_reset_at" in b and b["budget_reset_at"] is not None for b in branches
     )
     assert has_null_branch, f"missing NULL-reset_at branch in {where!r}"
     assert has_expired_branch, f"missing expired-reset_at branch in {where!r}"
@@ -1812,8 +1809,6 @@ def test_get_data_reset_query_selects_null_budget_reset_at(table_name):
     setattr(getattr(client.db, table_attr), "find_many", find_many)
 
     now = datetime.now(timezone.utc)
-    asyncio.run(
-        client.get_data(table_name=table_name, query_type="find_all", reset_at=now)
-    )
+    asyncio.run(client.get_data(table_name=table_name, query_type="find_all", reset_at=now))
 
     _asserts_null_reset_is_due(_extract_reset_where(find_many))

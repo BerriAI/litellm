@@ -20,12 +20,10 @@ def test_litellm_proxy_responses_api_config():
     )
     print(f"config: {config}")
     assert config is not None, "Config should not be None for litellm_proxy provider"
-    assert isinstance(
-        config, LiteLLMProxyResponsesAPIConfig
-    ), f"Expected LiteLLMProxyResponsesAPIConfig, got {type(config)}"
-    assert (
-        config.custom_llm_provider == LlmProviders.LITELLM_PROXY
-    ), "custom_llm_provider should be LITELLM_PROXY"
+    assert isinstance(config, LiteLLMProxyResponsesAPIConfig), (
+        f"Expected LiteLLMProxyResponsesAPIConfig, got {type(config)}"
+    )
+    assert config.custom_llm_provider == LlmProviders.LITELLM_PROXY, "custom_llm_provider should be LITELLM_PROXY"
 
 
 def test_litellm_proxy_responses_api_config_get_complete_url():

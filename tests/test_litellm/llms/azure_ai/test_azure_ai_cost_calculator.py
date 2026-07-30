@@ -13,9 +13,7 @@ from litellm.utils import get_model_info
 
 # Get the flat cost from model_prices_and_context_window.json
 _model_info = get_model_info(model="model_router", custom_llm_provider="azure_ai")
-AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS = (
-    _model_info.get("input_cost_per_token", 0) * 1_000_000
-)
+AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS = _model_info.get("input_cost_per_token", 0) * 1_000_000
 
 
 class TestAzureModelRouterDetection:
@@ -95,11 +93,7 @@ class TestAzureModelRouterFlatCost:
         prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
 
         # Calculate expected flat cost
-        expected_flat_cost = (
-            usage.prompt_tokens
-            * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
-            / 1_000_000
-        )
+        expected_flat_cost = usage.prompt_tokens * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
 
         # Flat cost should be $0.00014 (1000 tokens × $0.14 / 1M tokens)
         assert expected_flat_cost == pytest.approx(0.00014, rel=1e-9)
@@ -107,9 +101,7 @@ class TestAzureModelRouterFlatCost:
         # Prompt cost should include the flat cost
         # (plus any base cost from the actual model used, which might be 0 if not in model_cost)
         assert prompt_cost >= expected_flat_cost
-        print(
-            f"Model Router flat cost for {usage.prompt_tokens} tokens: ${expected_flat_cost:.6f}"
-        )
+        print(f"Model Router flat cost for {usage.prompt_tokens} tokens: ${expected_flat_cost:.6f}")
         print(f"Total prompt cost: ${prompt_cost:.6f}")
 
     def test_model_router_flat_cost_large_request(self):
@@ -124,21 +116,13 @@ class TestAzureModelRouterFlatCost:
         prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
 
         # Calculate expected flat cost
-        expected_flat_cost = (
-            usage.prompt_tokens
-            * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
-            / 1_000_000
-        )
+        expected_flat_cost = usage.prompt_tokens * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
 
         # Flat cost should be $0.014 (100k tokens × $0.14 / 1M tokens)
         assert expected_flat_cost == pytest.approx(0.014, rel=1e-9)
         # Use approx for floating-point comparison
-        assert prompt_cost >= expected_flat_cost or prompt_cost == pytest.approx(
-            expected_flat_cost, rel=1e-9
-        )
-        print(
-            f"Model Router flat cost for {usage.prompt_tokens} tokens: ${expected_flat_cost:.6f}"
-        )
+        assert prompt_cost >= expected_flat_cost or prompt_cost == pytest.approx(expected_flat_cost, rel=1e-9)
+        print(f"Model Router flat cost for {usage.prompt_tokens} tokens: ${expected_flat_cost:.6f}")
         print(f"Total prompt cost: ${prompt_cost:.6f}")
 
     def test_model_router_flat_cost_1m_tokens(self):
@@ -193,17 +177,11 @@ class TestAzureModelRouterFlatCost:
         prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
 
         # Flat cost is based on ALL prompt tokens (including cached)
-        expected_flat_cost = (
-            usage.prompt_tokens
-            * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
-            / 1_000_000
-        )
+        expected_flat_cost = usage.prompt_tokens * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
 
         assert expected_flat_cost == pytest.approx(0.00028, rel=1e-9)
         assert prompt_cost >= expected_flat_cost
-        print(
-            f"Model Router flat cost with caching for {usage.prompt_tokens} tokens: ${expected_flat_cost:.6f}"
-        )
+        print(f"Model Router flat cost with caching for {usage.prompt_tokens} tokens: ${expected_flat_cost:.6f}")
         print(f"Total prompt cost: ${prompt_cost:.6f}")
 
     def test_router_flat_cost_when_response_has_actual_model(self):
@@ -232,11 +210,7 @@ class TestAzureModelRouterFlatCost:
         )
 
         # Expected: model cost (from gpt-5-nano) + router flat cost
-        expected_flat_cost = (
-            usage.prompt_tokens
-            * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
-            / 1_000_000
-        )
+        expected_flat_cost = usage.prompt_tokens * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
         assert expected_flat_cost == pytest.approx(0.0014, rel=1e-9)
 
         # Total cost should be model cost + flat cost
@@ -260,14 +234,10 @@ class TestAzureModelRouterCostBreakdown:
         prompt_tokens = 10000
 
         # Calculate flat cost using helper function
-        flat_cost = calculate_azure_model_router_flat_cost(
-            model=model, prompt_tokens=prompt_tokens
-        )
+        flat_cost = calculate_azure_model_router_flat_cost(model=model, prompt_tokens=prompt_tokens)
 
         # Expected flat cost
-        expected_flat_cost = (
-            prompt_tokens * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
-        )
+        expected_flat_cost = prompt_tokens * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
 
         assert flat_cost > 0
         assert flat_cost == pytest.approx(expected_flat_cost, rel=1e-9)
@@ -313,14 +283,10 @@ class TestAzureModelRouterCostBreakdown:
         )
 
         # Expected flat cost
-        expected_flat_cost = (
-            5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
-        )
+        expected_flat_cost = 5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
 
         # Cost should include the flat cost (use approx for floating-point comparison)
-        assert cost >= expected_flat_cost or cost == pytest.approx(
-            expected_flat_cost, rel=1e-9
-        )
+        assert cost >= expected_flat_cost or cost == pytest.approx(expected_flat_cost, rel=1e-9)
         print(f"Total cost with flat fee: ${cost:.6f}")
         print(f"Expected minimum flat cost: ${expected_flat_cost:.6f}")
 
@@ -388,9 +354,7 @@ class TestAzureModelRouterCostBreakdown:
         assert "Azure Model Router Flat Cost" in additional_costs
 
         # Verify the flat cost value
-        expected_flat_cost = (
-            5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
-        )
+        expected_flat_cost = 5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
         actual_flat_cost = additional_costs["Azure Model Router Flat Cost"]
         assert actual_flat_cost == pytest.approx(expected_flat_cost, rel=1e-9)
 
@@ -438,19 +402,14 @@ class TestAzureModelRouterCostBreakdown:
             custom_llm_provider="azure_ai",
             litellm_logging_obj=logging_obj,
         )
-        expected_flat_cost = (
-            5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
-        )
+        expected_flat_cost = 5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
         assert cost >= expected_flat_cost
         assert logging_obj.cost_breakdown is not None
         assert "additional_costs" in logging_obj.cost_breakdown
-        assert (
-            "Azure Model Router Flat Cost"
-            in logging_obj.cost_breakdown["additional_costs"]
+        assert "Azure Model Router Flat Cost" in logging_obj.cost_breakdown["additional_costs"]
+        assert logging_obj.cost_breakdown["additional_costs"]["Azure Model Router Flat Cost"] == pytest.approx(
+            expected_flat_cost, rel=1e-9
         )
-        assert logging_obj.cost_breakdown["additional_costs"][
-            "Azure Model Router Flat Cost"
-        ] == pytest.approx(expected_flat_cost, rel=1e-9)
 
 
 class TestAzureAIServiceTierCostCalculation:
@@ -459,26 +418,27 @@ class TestAzureAIServiceTierCostCalculation:
     @pytest.fixture(autouse=True)
     def register_test_model(self):
         import litellm
-        litellm.register_model(model_cost={
-            "test-azure-ai-model": {
-                "input_cost_per_token": 0.001,
-                "output_cost_per_token": 0.002,
-                "input_cost_per_token_priority": 0.01,
-                "output_cost_per_token_priority": 0.02,
-                "input_cost_per_token_flex": 0.0005,
-                "output_cost_per_token_flex": 0.001,
-                "litellm_provider": "azure_ai",
-                "max_tokens": 8192,
+
+        litellm.register_model(
+            model_cost={
+                "test-azure-ai-model": {
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                    "input_cost_per_token_priority": 0.01,
+                    "output_cost_per_token_priority": 0.02,
+                    "input_cost_per_token_flex": 0.0005,
+                    "output_cost_per_token_flex": 0.001,
+                    "litellm_provider": "azure_ai",
+                    "max_tokens": 8192,
+                }
             }
-        })
+        )
 
     def test_service_tier_priority_higher_cost(self):
         """Priority tier should cost more than standard for azure_ai."""
         usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
 
-        standard_prompt, standard_completion = cost_per_token(
-            model="test-azure-ai-model", usage=usage
-        )
+        standard_prompt, standard_completion = cost_per_token(model="test-azure-ai-model", usage=usage)
         priority_prompt, priority_completion = cost_per_token(
             model="test-azure-ai-model", usage=usage, service_tier="priority"
         )
@@ -490,12 +450,8 @@ class TestAzureAIServiceTierCostCalculation:
         """Flex tier should cost less than standard for azure_ai."""
         usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
 
-        standard_prompt, standard_completion = cost_per_token(
-            model="test-azure-ai-model", usage=usage
-        )
-        flex_prompt, flex_completion = cost_per_token(
-            model="test-azure-ai-model", usage=usage, service_tier="flex"
-        )
+        standard_prompt, standard_completion = cost_per_token(model="test-azure-ai-model", usage=usage)
+        flex_prompt, flex_completion = cost_per_token(model="test-azure-ai-model", usage=usage, service_tier="flex")
 
         assert flex_prompt < standard_prompt
         assert flex_completion < standard_completion

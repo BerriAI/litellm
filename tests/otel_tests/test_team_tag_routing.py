@@ -10,9 +10,7 @@ from litellm._uuid import uuid
 LITELLM_MASTER_KEY = "sk-1234"
 
 
-async def chat_completion(
-    session, key, model: Union[str, List] = "fake-openai-endpoint"
-):
+async def chat_completion(session, key, model: Union[str, List] = "fake-openai-endpoint"):
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -108,16 +106,12 @@ async def test_team_tag_routing():
         print("key_with_team_a=", key_with_team_a)
         _key_with_team_a = key_with_team_a["key"]
         for _ in range(5):
-            response_a, headers = await chat_completion(
-                session=session, key=_key_with_team_a
-            )
+            response_a, headers = await chat_completion(session=session, key=_key_with_team_a)
 
             headers = dict(headers)
             print(response_a)
             print(headers)
-            assert (
-                headers["x-litellm-model-id"] == "team-a-model"
-            ), "Model ID should be teamA"
+            assert headers["x-litellm-model-id"] == "team-a-model", "Model ID should be teamA"
 
         key_with_team_b = await create_key_with_team(session, key, team_b_id)
         _key_with_team_b = key_with_team_b["key"]
@@ -126,9 +120,7 @@ async def test_team_tag_routing():
             headers = dict(headers)
             print(response_b)
             print(headers)
-            assert (
-                headers["x-litellm-model-id"] == "team-b-model"
-            ), "Model ID should be teamB"
+            assert headers["x-litellm-model-id"] == "team-b-model", "Model ID should be teamB"
 
 
 @pytest.mark.asyncio()

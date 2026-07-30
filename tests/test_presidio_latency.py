@@ -28,9 +28,7 @@ async def test_sanity_presidio_session_reuse_main_thread():
         session_creations += 1
         original_init(self, *args, **kwargs)
 
-    with patch.object(
-        aiohttp.ClientSession, "__init__", side_effect=mocked_init, autospec=True
-    ):
+    with patch.object(aiohttp.ClientSession, "__init__", side_effect=mocked_init, autospec=True):
         for _ in range(10):
             async with presidio._get_session_iterator() as session:
                 pass
@@ -68,9 +66,7 @@ async def test_bug_presidio_session_explosion_background_thread_causes_latency()
         session_creations += 1
         original_init(self, *args, **kwargs)
 
-    with patch.object(
-        aiohttp.ClientSession, "__init__", side_effect=mocked_init, autospec=True
-    ):
+    with patch.object(aiohttp.ClientSession, "__init__", side_effect=mocked_init, autospec=True):
         for _ in range(10):
             async with presidio._get_session_iterator() as session:
                 pass

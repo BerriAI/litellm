@@ -265,10 +265,7 @@ environment_variables: {}
                 )
 
         # Assert no network errors were found
-        assert len(network_errors) == 0, (
-            f"Container made network requests during startup that failed: "
-            f"{network_errors}"
-        )
+        assert len(network_errors) == 0, f"Container made network requests during startup that failed: {network_errors}"
 
     def test_no_external_urls_in_startup_code(self):
         """
@@ -372,12 +369,7 @@ def test_container_build_no_network_fetch():
     for i, line in enumerate(lines, 1):
         line_upper = line.strip().upper()
         if line_upper.startswith(("CMD", "ENTRYPOINT")):
-            if any(
-                cmd in line.lower()
-                for cmd in ["curl", "wget", "fetch", "http://", "https://"]
-            ):
+            if any(cmd in line.lower() for cmd in ["curl", "wget", "fetch", "http://", "https://"]):
                 problematic.append(f"Line {i}: {line.strip()}")
 
-    assert (
-        len(problematic) == 0
-    ), f"Dockerfile CMD/ENTRYPOINT contains network calls: {problematic}"
+    assert len(problematic) == 0, f"Dockerfile CMD/ENTRYPOINT contains network calls: {problematic}"

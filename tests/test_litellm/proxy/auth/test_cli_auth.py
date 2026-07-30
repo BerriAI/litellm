@@ -79,28 +79,20 @@ def test_start_cli_sso_flow_rejects_invalid_response(request_mock):
 async def test_poll_for_ready_404(sleep_mock, request_mock):
     """Test polling treats HTTP 404 as a permanent error and raises instead of retrying"""
     with pytest.raises(ValueError, match="rejected the login session with HTTP 404"):
-        _poll_for_ready_data(
-            "https://litellm.com", poll_interval=1, total_timeout=1, request_timeout=42
-        )
+        _poll_for_ready_data("https://litellm.com", poll_interval=1, total_timeout=1, request_timeout=42)
     request_mock.assert_called_once_with("https://litellm.com", timeout=42)
 
 
 @pytest.mark.asyncio
 @patch(
     "litellm.proxy.client.cli.commands.auth.requests.get",
-    side_effect=[
-        Mock(
-            status_code=200, json=Mock(return_value={"status": "ready", "json": "data"})
-        )
-    ],
+    side_effect=[Mock(status_code=200, json=Mock(return_value={"status": "ready", "json": "data"}))],
 )
 @patch("litellm.proxy.client.cli.commands.auth.click.echo")
 @patch("litellm.proxy.client.cli.commands.auth.time.sleep")
 async def test_poll_for_ready_200_ready(sleep_mock, click_mock, request_mock):
     """Test poll_for_ready function"""
-    actual = _poll_for_ready_data(
-        "https://litellm.com", poll_interval=1, total_timeout=1, request_timeout=42
-    )
+    actual = _poll_for_ready_data("https://litellm.com", poll_interval=1, total_timeout=1, request_timeout=42)
     assert actual == {"status": "ready", "json": "data"}
     click_mock.assert_not_called()
     request_mock.assert_called_once_with("https://litellm.com", timeout=42)
@@ -115,18 +107,14 @@ async def test_poll_for_ready_200_ready(sleep_mock, click_mock, request_mock):
             status_code=200,
             json=Mock(return_value={"status": "pending", "json": "data"}),
         ),
-        Mock(
-            status_code=200, json=Mock(return_value={"status": "ready", "json": "data"})
-        ),
+        Mock(status_code=200, json=Mock(return_value={"status": "ready", "json": "data"})),
     ],
 )
 @patch("litellm.proxy.client.cli.commands.auth.click.echo")
 @patch("litellm.proxy.client.cli.commands.auth.time.sleep")
 async def test_poll_for_ready_single_pending(sleep_mock, click_mock, request_mock):
     """Test poll_for_ready function"""
-    actual = _poll_for_ready_data(
-        "https://litellm.com", poll_interval=1, total_timeout=2, request_timeout=42
-    )
+    actual = _poll_for_ready_data("https://litellm.com", poll_interval=1, total_timeout=2, request_timeout=42)
     assert actual == {"status": "ready", "json": "data"}
     click_mock.assert_not_called()
     request_mock.assert_has_calls(
@@ -187,9 +175,7 @@ async def test_poll_for_ready_pending(sleep_mock, click_mock, request_mock):
 @patch("litellm.proxy.client.cli.commands.auth.time.sleep")
 async def test_poll_for_ready_connection_failure(sleep_mock, click_mock, request_mock):
     """Test poll_for_ready function"""
-    actual = _poll_for_ready_data(
-        "https://litellm.com", poll_interval=1, total_timeout=2, request_timeout=42
-    )
+    actual = _poll_for_ready_data("https://litellm.com", poll_interval=1, total_timeout=2, request_timeout=42)
     assert actual is None
     click_mock.assert_called_once_with("Connection error (will retry): ERROR")
     request_mock.assert_has_calls(
@@ -252,9 +238,7 @@ async def test_poll_for_authentication_no_teams(click_mock, poll_mock, handle_mo
     },
 )
 @patch("litellm.proxy.client.cli.commands.auth.click.echo")
-async def test_poll_for_authentication_team_selection_success(
-    click_mock, poll_mock, handle_mock
-):
+async def test_poll_for_authentication_team_selection_success(click_mock, poll_mock, handle_mock):
     """Test poll_for_authentication function"""
     actual = _poll_for_authentication("https://litellm.com", "key-123", "poll-secret")
     assert actual == {
@@ -294,9 +278,7 @@ async def test_poll_for_authentication_team_selection_success(
     },
 )
 @patch("litellm.proxy.client.cli.commands.auth.click.echo")
-async def test_poll_for_authentication_team_selection_cancelled(
-    click_mock, poll_mock, handle_mock
-):
+async def test_poll_for_authentication_team_selection_cancelled(click_mock, poll_mock, handle_mock):
     """Test poll_for_authentication function"""
     actual = _poll_for_authentication("https://litellm.com", "key-123", "poll-secret")
     assert actual is None
@@ -327,9 +309,7 @@ async def test_poll_for_authentication_team_selection_cancelled(
     },
 )
 @patch("litellm.proxy.client.cli.commands.auth.click.echo")
-async def test_poll_for_authentication_auto_assigned_team(
-    click_mock, poll_mock, handle_mock
-):
+async def test_poll_for_authentication_auto_assigned_team(click_mock, poll_mock, handle_mock):
     """Test poll_for_authentication function"""
     actual = _poll_for_authentication("https://litellm.com", "key-123", "poll-secret")
     assert actual == {

@@ -41,9 +41,7 @@ async def test_openai_fine_tuning():
         assert ft_job.id is not None
 
         # list all fine tuning jobs
-        list_ft_jobs = await client.fine_tuning.jobs.list(
-            extra_headers={"custom-llm-provider": "openai"}
-        )
+        list_ft_jobs = await client.fine_tuning.jobs.list(extra_headers={"custom-llm-provider": "openai"})
 
         print("list of ft jobs={}".format(list_ft_jobs))
 

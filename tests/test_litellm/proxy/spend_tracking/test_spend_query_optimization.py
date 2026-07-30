@@ -211,9 +211,7 @@ def _make_ui_spend_logs_mock(count_total, page_rows):
     """
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(
-        side_effect=[[{"total_count": count_total}], page_rows]
-    )
+    mock_prisma.db.query_raw = AsyncMock(side_effect=[[{"total_count": count_total}], page_rows])
     mock_prisma.db.litellm_spendlogs = MagicMock()
     mock_prisma.db.litellm_spendlogs.count = AsyncMock(return_value=0)
     return mock_prisma
@@ -265,17 +263,13 @@ async def test_spend_logs_ui_uses_bounded_count_not_full_scan(monkeypatch):
     count_sql = count_call[0][0]
     assert "COUNT(*) OVER ()" not in count_sql
     assert "LIMIT" in count_sql and "FROM (" in count_sql, (
-        "the total must come from a bounded subquery count, not a full-window "
-        f"scan. SQL was:\n{count_sql}"
+        f"the total must come from a bounded subquery count, not a full-window scan. SQL was:\n{count_sql}"
     )
-    assert count_call[0][-1] == SPEND_LOGS_PAGINATION_COUNT_CAP + 1, (
-        "the bounded count must probe at most cap+1 rows"
-    )
+    assert count_call[0][-1] == SPEND_LOGS_PAGINATION_COUNT_CAP + 1, "the bounded count must probe at most cap+1 rows"
 
     page_sql = mock_prisma.db.query_raw.call_args_list[1][0][0]
     assert "COUNT(*) OVER ()" not in page_sql, (
-        "the page query must not carry a window count that forces a full-window "
-        f"scan. SQL was:\n{page_sql}"
+        f"the page query must not carry a window count that forces a full-window scan. SQL was:\n{page_sql}"
     )
 
     assert response["total"] == 137
@@ -300,9 +294,7 @@ async def test_spend_logs_ui_caps_total_for_large_result_sets(monkeypatch):
     )
 
     page_rows = [{"request_id": "req-1", "metadata": "{}", "session_id": None}]
-    mock_prisma = _make_ui_spend_logs_mock(
-        count_total=SPEND_LOGS_PAGINATION_COUNT_CAP + 1, page_rows=page_rows
-    )
+    mock_prisma = _make_ui_spend_logs_mock(count_total=SPEND_LOGS_PAGINATION_COUNT_CAP + 1, page_rows=page_rows)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")

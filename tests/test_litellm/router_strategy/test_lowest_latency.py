@@ -11,9 +11,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -63,9 +61,9 @@ def test_sync_embedding_latency_is_json_serializable():
 
     latencies = _recorded_latencies(cache)
     assert latencies, "expected a latency entry to be recorded"
-    assert all(
-        not isinstance(value, timedelta) for value in latencies
-    ), f"raw timedelta leaked into latency list: {latencies}"
+    assert all(not isinstance(value, timedelta) for value in latencies), (
+        f"raw timedelta leaked into latency list: {latencies}"
+    )
     assert latencies[-1] == pytest.approx(2.0)
     # the exact failure mode from production: redis cache sync json.dumps
     json.dumps({"latency": latencies})
@@ -89,9 +87,9 @@ async def test_async_embedding_latency_is_json_serializable():
 
     latencies = _recorded_latencies(cache)
     assert latencies, "expected a latency entry to be recorded"
-    assert all(
-        not isinstance(value, timedelta) for value in latencies
-    ), f"raw timedelta leaked into latency list: {latencies}"
+    assert all(not isinstance(value, timedelta) for value in latencies), (
+        f"raw timedelta leaked into latency list: {latencies}"
+    )
     assert latencies[-1] == pytest.approx(3.0)
     json.dumps({"latency": latencies})
 

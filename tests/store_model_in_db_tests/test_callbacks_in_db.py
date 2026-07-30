@@ -1,9 +1,9 @@
 """
 PROD TEST - DO NOT Delete this Test
 
-e2e test for langfuse callback in DB 
+e2e test for langfuse callback in DB
 - Add langfuse callback to DB - with /config/update
-- wait 20 seconds for the callback to be loaded into the instance 
+- wait 20 seconds for the callback to be loaded into the instance
 - Make a /chat/completions request to the proxy
 - Check if the request is logged in Langfuse
 """
@@ -68,9 +68,7 @@ async def check_langfuse_request(response_id: str):
         async with session.get(url) as response:
             response_json = await response.json()
             assert response.status == 200, f"Expected status 200, got {response.status}"
-            assert (
-                response_json["exists"] == True
-            ), f"Request {response_id} not found in Langfuse traces"
+            assert response_json["exists"] == True, f"Request {response_id} not found in Langfuse traces"
             assert response_json["request_id"] == response_id, f"Request ID mismatch"
 
 
@@ -88,9 +86,7 @@ async def make_chat_completions_request() -> ChatCompletion:
         except APIConnectionError as e:
             last_error = e
             await asyncio.sleep(2)
-    raise AssertionError(
-        f"Proxy at {PROXY_BASE_URL} unreachable after retries: {last_error!r}"
-    )
+    raise AssertionError(f"Proxy at {PROXY_BASE_URL} unreachable after retries: {last_error!r}")
 
 
 @pytest.mark.asyncio

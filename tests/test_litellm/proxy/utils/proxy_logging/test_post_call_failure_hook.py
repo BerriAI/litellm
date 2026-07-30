@@ -33,9 +33,7 @@ def test_is_proxy_only_llm_api_truth_table(proxy_logging):
     snapshot. Covers no-route, non-LLM route, HTTPException on LLM route,
     and auth-error short-circuit."""
     snapshot = {
-        "no_route": proxy_logging._is_proxy_only_llm_api_error(
-            original_exception=Exception(), route=None
-        ),
+        "no_route": proxy_logging._is_proxy_only_llm_api_error(original_exception=Exception(), route=None),
         "non_llm_route": proxy_logging._is_proxy_only_llm_api_error(
             original_exception=HTTPException(status_code=429, detail="rate"),
             route="/random/path",
@@ -158,9 +156,7 @@ async def test_post_call_failure_hook_non_http_exception_in_callback_swallowed(
 
 
 @pytest.mark.asyncio
-async def test_handle_logging_proxy_only_path_uses_existing_logging_obj(
-    proxy_logging, make_user_api_key_auth
-):
+async def test_handle_logging_proxy_only_path_uses_existing_logging_obj(proxy_logging, make_user_api_key_auth):
     logging_obj = MagicMock()
     logging_obj.call_type = "acompletion"
     logging_obj.model_call_details = {}
@@ -183,10 +179,7 @@ async def test_handle_logging_proxy_only_path_uses_existing_logging_obj(
     snapshot = {
         "input_logged": "messages" in logging_obj.model_call_details,
         "call_type_normalized": logging_obj.call_type,
-        "marker_present": logging_obj.model_call_details.get(
-            LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
-        )
-        is True,
+        "marker_present": logging_obj.model_call_details.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL) is True,
         "async_failure_called": logging_obj.async_failure_handler.called,
     }
     assert snapshot == {
@@ -198,9 +191,7 @@ async def test_handle_logging_proxy_only_path_uses_existing_logging_obj(
 
 
 @pytest.mark.asyncio
-async def test_handle_logging_proxy_only_path_skips_for_pass_through(
-    proxy_logging, make_user_api_key_auth
-):
+async def test_handle_logging_proxy_only_path_skips_for_pass_through(proxy_logging, make_user_api_key_auth):
     from litellm.types.utils import CallTypes
 
     logging_obj = MagicMock()
@@ -248,9 +239,7 @@ async def test_handle_logging_proxy_only_path_no_logging_obj_creates_one(
 
 
 @pytest.mark.asyncio
-async def test_handle_logging_proxy_only_path_propagates_async_failure_raises(
-    proxy_logging, make_user_api_key_auth
-):
+async def test_handle_logging_proxy_only_path_propagates_async_failure_raises(proxy_logging, make_user_api_key_auth):
     logging_obj = MagicMock()
     logging_obj.call_type = "acompletion"
     logging_obj.model_call_details = {}

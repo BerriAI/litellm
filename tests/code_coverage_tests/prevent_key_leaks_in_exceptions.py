@@ -145,9 +145,7 @@ def main():
         print("Found '{args}' usage in the following locations:")
         for violation in violations:
             print(f"- {violation['file']}:{violation['line']} - {violation['text']}")
-        raise Exception(
-            f"Found {len(violations)} instances of '{{args}}' usage in the codebase"
-        )
+        raise Exception(f"Found {len(violations)} instances of '{{args}}' usage in the codebase")
     else:
         print("No '{args}' usage found in the codebase.")
 

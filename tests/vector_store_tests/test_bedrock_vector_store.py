@@ -40,9 +40,7 @@ class TestBedrockVectorStore(BaseVectorStoreTest):
         assert file_id == "https://www.litellm.ai"
 
         # Test without source URI but with chunk ID
-        metadata_without_uri = {
-            "x-amz-bedrock-kb-chunk-id": "1%3A0%3AjNYPg5YByRuP5PdK96co"
-        }
+        metadata_without_uri = {"x-amz-bedrock-kb-chunk-id": "1%3A0%3AjNYPg5YByRuP5PdK96co"}
         file_id = config._get_file_id_from_metadata(metadata_without_uri)
         assert file_id == "bedrock-kb-1%3A0%3AjNYPg5YByRuP5PdK96co"
 
@@ -55,9 +53,7 @@ class TestBedrockVectorStore(BaseVectorStoreTest):
         config = BedrockVectorStoreConfig()
 
         # Test with source URI containing path
-        metadata_with_path = {
-            "x-amz-bedrock-kb-source-uri": "https://docs.litellm.ai/tutorial/setup.html"
-        }
+        metadata_with_path = {"x-amz-bedrock-kb-source-uri": "https://docs.litellm.ai/tutorial/setup.html"}
         filename = config._get_filename_from_metadata(metadata_with_path)
         assert filename == "setup.html"
 
@@ -178,9 +174,7 @@ async def test_bedrock_search_with_credentials_managed_registry():
             wraps=registry.get_credentials_for_vector_store,
         ) as mock_get_creds:
             # Mock the actual search call to avoid making real API calls
-            with patch(
-                "litellm.vector_stores.main.base_llm_http_handler.vector_store_search_handler"
-            ) as mock_handler:
+            with patch("litellm.vector_stores.main.base_llm_http_handler.vector_store_search_handler") as mock_handler:
                 mock_handler.return_value = {
                     "data": [
                         {
@@ -210,22 +204,16 @@ async def test_bedrock_search_with_credentials_managed_registry():
 
                 # The key test: verify that credentials from the registry were used
                 # Since we have a registry with credentials, they should be present in the params
-                assert hasattr(
-                    litellm_params, "aws_access_key_id"
-                ), "aws_access_key_id should be in litellm_params"
-                assert hasattr(
-                    litellm_params, "aws_secret_access_key"
-                ), "aws_secret_access_key should be in litellm_params"
-                assert hasattr(
-                    litellm_params, "aws_region_name"
-                ), "aws_region_name should be in litellm_params"
+                assert hasattr(litellm_params, "aws_access_key_id"), "aws_access_key_id should be in litellm_params"
+                assert hasattr(litellm_params, "aws_secret_access_key"), (
+                    "aws_secret_access_key should be in litellm_params"
+                )
+                assert hasattr(litellm_params, "aws_region_name"), "aws_region_name should be in litellm_params"
 
                 # Verify we got the expected response
                 assert search_response["data"][0]["id"] == "test_result"
 
-                print(
-                    f"✅ Test passed: Credential accessor was called with vector store ID: T37J8R4WTM"
-                )
+                print(f"✅ Test passed: Credential accessor was called with vector store ID: T37J8R4WTM")
                 print(f"✅ Retrieved credentials: {retrieved_credentials}")
                 print(f"✅ Credentials were injected into search call")
                 print(f"✅ Search completed successfully using registry credentials")

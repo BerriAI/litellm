@@ -33,9 +33,7 @@ class Pattern(ABC):
         pass
 
     @abstractmethod
-    def visit_assign(
-        self, node: ast.Assign, context: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+    def visit_assign(self, node: ast.Assign, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Detect memory-sensitive operations in assignment. Returns list of {line, var_name, call} dicts."""
         pass
 
@@ -56,9 +54,7 @@ class QueueGetPattern(Pattern):
     def get_pattern_name(self) -> str:
         return "queue_reference_not_cleared"
 
-    def visit_assign(
-        self, node: ast.Assign, context: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+    def visit_assign(self, node: ast.Assign, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Detect queue.get() or queue.get_nowait() calls where object name contains 'queue'"""
         operations = []
 
@@ -66,11 +62,7 @@ class QueueGetPattern(Pattern):
             func = node.value.func
             if isinstance(func, ast.Attribute) and func.attr in ("get", "get_nowait"):
                 obj_name = context["get_attr_string"](func.value)
-                if (
-                    "queue" in obj_name.lower()
-                    and node.targets
-                    and isinstance(node.targets[0], ast.Name)
-                ):
+                if "queue" in obj_name.lower() and node.targets and isinstance(node.targets[0], ast.Name):
                     operations.append(
                         {
                             "line": node.lineno,
@@ -121,9 +113,7 @@ class UnboundedDataStructurePattern(Pattern):
     def get_pattern_name(self) -> str:
         return "unbounded_data_structure"
 
-    def visit_assign(
-        self, node: ast.Assign, context: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+    def visit_assign(self, node: ast.Assign, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Detect list/dict/set creations that are at class level"""
         operations = []
 
@@ -152,9 +142,7 @@ class UnboundedDataStructurePattern(Pattern):
                 attr_name = func.attr
 
                 # Check for collections module data structures
-                if "collections" in obj_name.lower() or "collections" in str(
-                    func.value
-                ):
+                if "collections" in obj_name.lower() or "collections" in str(func.value):
                     if attr_name in (
                         "deque",
                         "defaultdict",
@@ -169,11 +157,7 @@ class UnboundedDataStructurePattern(Pattern):
                     elif attr_name in ("list", "dict", "set"):
                         # collections.defaultdict(list) pattern
                         is_data_structure = True
-                        structure_type = (
-                            "defaultdict"
-                            if "defaultdict" in obj_name.lower()
-                            else attr_name
-                        )
+                        structure_type = "defaultdict" if "defaultdict" in obj_name.lower() else attr_name
                 # Check for queue.Queue, asyncio.Queue (if unbounded)
                 elif "queue" in obj_name.lower() or "asyncio" in obj_name.lower():
                     if attr_name == "Queue":
@@ -317,8 +301,7 @@ class UnboundedDataStructurePattern(Pattern):
                                 arg_name = get_attr_string(node.args[0])
                                 for var_name, op in tracked_vars.items():
                                     if op["structure_type"] == "list" and (
-                                        arg_name == var_name
-                                        or arg_name.endswith(f".{var_name}")
+                                        arg_name == var_name or arg_name.endswith(f".{var_name}")
                                     ):
                                         if var_name not in var_add_operations:
                                             var_add_operations[var_name] = []
@@ -330,9 +313,7 @@ class UnboundedDataStructurePattern(Pattern):
                         if isinstance(target, ast.Subscript):
                             target_name = get_attr_string(target.value)
                             for var_name in tracked_vars:
-                                if target_name == var_name or target_name.endswith(
-                                    f".{var_name}"
-                                ):
+                                if target_name == var_name or target_name.endswith(f".{var_name}"):
                                     if var_name not in var_add_operations:
                                         var_add_operations[var_name] = []
                                     var_add_operations[var_name].append(node.lineno)
@@ -341,9 +322,7 @@ class UnboundedDataStructurePattern(Pattern):
                 if isinstance(node, ast.AugAssign):
                     target_name = get_attr_string(node.target)
                     for var_name in tracked_vars:
-                        if target_name == var_name or target_name.endswith(
-                            f".{var_name}"
-                        ):
+                        if target_name == var_name or target_name.endswith(f".{var_name}"):
                             if var_name not in var_add_operations:
                                 var_add_operations[var_name] = []
                             var_add_operations[var_name].append(node.lineno)
@@ -354,61 +333,31 @@ class UnboundedDataStructurePattern(Pattern):
                     if test:
                         for comp_node in ast.walk(test):
                             if isinstance(comp_node, ast.Compare):
-                                left_str = (
-                                    get_attr_string(comp_node.left)
-                                    if hasattr(comp_node, "left")
-                                    else ""
-                                )
+                                left_str = get_attr_string(comp_node.left) if hasattr(comp_node, "left") else ""
                                 # Check for len() calls
                                 if isinstance(comp_node.left, ast.Call):
                                     call_func = comp_node.left.func
-                                    if (
-                                        isinstance(call_func, ast.Name)
-                                        and call_func.id == "len"
-                                    ):
+                                    if isinstance(call_func, ast.Name) and call_func.id == "len":
                                         if len(comp_node.left.args) > 0:
-                                            arg_name = get_attr_string(
-                                                comp_node.left.args[0]
-                                            )
+                                            arg_name = get_attr_string(comp_node.left.args[0])
                                             for var_name in tracked_vars:
-                                                if (
-                                                    arg_name == var_name
-                                                    or arg_name.endswith(f".{var_name}")
-                                                ):
+                                                if arg_name == var_name or arg_name.endswith(f".{var_name}"):
                                                     # Check if comparing to a limit
-                                                    for (
-                                                        comparator
-                                                    ) in comp_node.comparators:
-                                                        if isinstance(
-                                                            comparator, ast.Constant
-                                                        ):
-                                                            var_size_checks[
-                                                                var_name
-                                                            ] = True
-                                                        elif isinstance(
-                                                            comparator, ast.Name
-                                                        ):
+                                                    for comparator in comp_node.comparators:
+                                                        if isinstance(comparator, ast.Constant):
+                                                            var_size_checks[var_name] = True
+                                                        elif isinstance(comparator, ast.Name):
                                                             # Could be a constant like MAX_SIZE
                                                             if (
-                                                                "max"
-                                                                in comparator.id.lower()
-                                                                or "limit"
-                                                                in comparator.id.lower()
+                                                                "max" in comparator.id.lower()
+                                                                or "limit" in comparator.id.lower()
                                                             ):
-                                                                var_size_checks[
-                                                                    var_name
-                                                                ] = True
+                                                                var_size_checks[var_name] = True
                                                         # Handle deprecated ast.Num for Python < 3.8
                                                         try:
-                                                            Num = getattr(
-                                                                ast, "Num", None
-                                                            )
-                                                            if Num and isinstance(
-                                                                comparator, Num
-                                                            ):
-                                                                var_size_checks[
-                                                                    var_name
-                                                                ] = True
+                                                            Num = getattr(ast, "Num", None)
+                                                            if Num and isinstance(comparator, Num):
+                                                                var_size_checks[var_name] = True
                                                         except (
                                                             AttributeError,
                                                             TypeError,
@@ -464,13 +413,9 @@ class MemoryViolationDetector(ast.NodeVisitor):
         self.file_path = file_path
         self.violations: List[Dict[str, Any]] = []
         self.current_function: Optional[str] = None
-        self.current_scope: str = (
-            "module"  # Track current scope: module, class, function
-        )
+        self.current_scope: str = "module"  # Track current scope: module, class, function
         self.patterns = self.DEFAULT_PATTERNS if patterns is None else patterns
-        self.ast_tree: Optional[ast.Module] = (
-            None  # Store full AST for module-level checks
-        )
+        self.ast_tree: Optional[ast.Module] = None  # Store full AST for module-level checks
 
         self.pattern_operations: Dict[str, List[Dict[str, Any]]] = {
             pattern.get_pattern_name(): [] for pattern in self.patterns
@@ -572,9 +517,7 @@ class MemoryViolationDetector(ast.NodeVisitor):
                     None,
                 ):
                     # Check if this regular function modifies class-level structures
-                    violations = pattern.check_cleanup(
-                        class_ops, node.body, self._context
-                    )
+                    violations = pattern.check_cleanup(class_ops, node.body, self._context)
                     self.violations.extend(violations)
 
     def _check_module_level_cleanup(self):
@@ -606,21 +549,12 @@ class MemoryViolationDetector(ast.NodeVisitor):
             for node in ast.walk(stmt):
                 if isinstance(node, ast.Assign):
                     for target in node.targets:
-                        if (
-                            isinstance(target, ast.Name)
-                            and target.id == var_name
-                            and node.lineno > assignment_line
-                        ):
-                            if (
-                                isinstance(node.value, ast.Constant)
-                                and node.value.value is None
-                            ):
+                        if isinstance(target, ast.Name) and target.id == var_name and node.lineno > assignment_line:
+                            if isinstance(node.value, ast.Constant) and node.value.value is None:
                                 return True
                             try:
                                 NameConstant = getattr(ast, "NameConstant", None)
-                                if NameConstant and isinstance(
-                                    node.value, NameConstant
-                                ):
+                                if NameConstant and isinstance(node.value, NameConstant):
                                     if getattr(node.value, "value", None) is None:
                                         return True
                             except (AttributeError, TypeError):
@@ -694,9 +628,7 @@ def check_directory_for_memory_violations(
             continue
         for file in files:
             if file.endswith(".py"):
-                violations = check_file_for_memory_violations(
-                    os.path.join(root, file), patterns
-                )
+                violations = check_file_for_memory_violations(os.path.join(root, file), patterns)
                 all_violations.extend(violations)
     return all_violations
 
@@ -709,9 +641,7 @@ def main():
     print("MEMORY VIOLATION DETECTION TEST")
     print("=" * 80)
     print(f"Scanning: {codebase_path}")
-    print(
-        f"Active patterns: {', '.join(p.get_pattern_name() for p in MemoryViolationDetector.DEFAULT_PATTERNS)}"
-    )
+    print(f"Active patterns: {', '.join(p.get_pattern_name() for p in MemoryViolationDetector.DEFAULT_PATTERNS)}")
     print()
 
     violations = check_directory_for_memory_violations(codebase_path)
@@ -732,9 +662,7 @@ def main():
             print(f"\n{vtype.upper().replace('_', ' ')}: {len(vlist)} violation(s)")
             print("-" * 80)
             for v in vlist[:10]:
-                print(
-                    f"  [VIOLATION] {v['file_path'] if 'file_path' in v else 'unknown'}:{v['line']}"
-                )
+                print(f"  [VIOLATION] {v['file_path'] if 'file_path' in v else 'unknown'}:{v['line']}")
                 print(f"     Function: {v['function']}")
                 print(f"     Variable: {v['var_name']}")
                 print(f"     {v['message']}")
@@ -746,16 +674,10 @@ def main():
         print(f"TOTAL VIOLATIONS: {total}")
         print()
         print("RECOMMENDATIONS:")
-        print(
-            "   1. Set queue variables to None after use: obj = queue.get(); ...; obj = None"
-        )
+        print("   1. Set queue variables to None after use: obj = queue.get(); ...; obj = None")
         print("   2. Use bounded queues to prevent unbounded accumulation")
-        print(
-            "   3. Process items faster than they're added, or drain queues periodically"
-        )
-        print(
-            "   4. For class-level data structures (lists, dicts, sets) that are modified at runtime:"
-        )
+        print("   3. Process items faster than they're added, or drain queues periodically")
+        print("   4. For class-level data structures (lists, dicts, sets) that are modified at runtime:")
         print("      - Add size limit checks: if len(data) >= MAX_SIZE: ...")
         print("      - Implement periodic cleanup or use bounded collections")
         print("      - Consider using collections.deque with maxlen for lists")

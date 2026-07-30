@@ -28,10 +28,7 @@ class TestIBMWatsonXRerankTransform:
         api_base = "https://us-south.ml.cloud.ibm.com"
         model = "watsonx/cross-encoder/ms-marco-minilm-l-12-v2"
         url = self.config.get_complete_url(api_base, model)
-        assert (
-            url
-            == "https://us-south.ml.cloud.ibm.com/ml/v1/text/rerank?version=2024-03-13"
-        )
+        assert url == "https://us-south.ml.cloud.ibm.com/ml/v1/text/rerank?version=2024-03-13"
 
     def test_map_cohere_rerank_params_basic(self):
         """Test basic parameter mapping for IBM watsonx.ai rerank."""
@@ -89,9 +86,7 @@ class TestIBMWatsonXRerankTransform:
                 {
                     "index": 0,
                     "score": 6.53515625,
-                    "input": {
-                        "text": "Python is great for beginners due to simple syntax."
-                    },
+                    "input": {"text": "Python is great for beginners due to simple syntax."},
                 },
                 {
                     "index": 1,
@@ -126,16 +121,10 @@ class TestIBMWatsonXRerankTransform:
         assert len(result.results) == 2
         assert result.results[0]["index"] == 0
         assert result.results[0]["relevance_score"] == 6.53515625
-        assert (
-            result.results[0]["document"]["text"]
-            == "Python is great for beginners due to simple syntax."
-        )
+        assert result.results[0]["document"]["text"] == "Python is great for beginners due to simple syntax."
         assert result.results[1]["index"] == 1
         assert result.results[1]["relevance_score"] == -7.1875
-        assert (
-            result.results[1]["document"]["text"]
-            == "JavaScript runs in browsers and is versatile."
-        )
+        assert result.results[1]["document"]["text"] == "JavaScript runs in browsers and is versatile."
 
         # # Verify metadata
         assert result.meta["tokens"]["input_tokens"] == 62

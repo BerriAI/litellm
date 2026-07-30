@@ -101,15 +101,11 @@ async def test_get_cloudzero_settings_success(client, monkeypatch):
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     # Mock the decrypt function to return a decrypted key
-    with patch(
-        "litellm.proxy.spend_tracking.cloudzero_endpoints.decrypt_value_helper"
-    ) as mock_decrypt:
+    with patch("litellm.proxy.spend_tracking.cloudzero_endpoints.decrypt_value_helper") as mock_decrypt:
         mock_decrypt.return_value = "decrypted_api_key"
 
         # Mock the masker
-        with patch(
-            "litellm.proxy.spend_tracking.cloudzero_endpoints._sensitive_masker"
-        ) as mock_masker:
+        with patch("litellm.proxy.spend_tracking.cloudzero_endpoints._sensitive_masker") as mock_masker:
             mock_masker.mask_dict.return_value = {"api_key": "test****key"}
 
             app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(

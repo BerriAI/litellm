@@ -10,9 +10,7 @@ def calculate_img_tokens(
     if mode == "low":
         return base_tokens
     elif mode == "high" or mode == "auto":
-        resized_width, resized_height = resize_image_high_res(
-            width=width, height=height
-        )
+        resized_width, resized_height = resize_image_high_res(width=width, height=height)
         tiles_needed_high_res = calculate_tiles_needed(resized_width, resized_height)
         tile_tokens = (base_tokens * 2) * tiles_needed_high_res
         total_tokens = base_tokens + tile_tokens
@@ -51,9 +49,7 @@ def resize_image_high_res(width, height):
 
 
 # Test the function with the given example
-def calculate_tiles_needed(
-    resized_width, resized_height, tile_width=512, tile_height=512
-):
+def calculate_tiles_needed(resized_width, resized_height, tile_width=512, tile_height=512):
     tiles_across = (resized_width + tile_width - 1) // tile_width
     tiles_down = (resized_height + tile_height - 1) // tile_height
     total_tiles = tiles_across * tiles_down
@@ -63,12 +59,8 @@ def calculate_tiles_needed(
 # Test high res mode with 1875 x 768 image
 resized_width_high_res = 1875
 resized_height_high_res = 768
-tiles_needed_high_res = calculate_tiles_needed(
-    resized_width_high_res, resized_height_high_res
-)
-print(
-    f"Tiles needed for high res image ({resized_width_high_res}x{resized_height_high_res}): {tiles_needed_high_res}"
-)
+tiles_needed_high_res = calculate_tiles_needed(resized_width_high_res, resized_height_high_res)
+print(f"Tiles needed for high res image ({resized_width_high_res}x{resized_height_high_res}): {tiles_needed_high_res}")
 
 # If you had the original size and needed to resize and then calculate tiles:
 original_size = (10000, 4096)

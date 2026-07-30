@@ -74,9 +74,7 @@ async def test_team_member_add_authz_matrix(
 ):
     await _seed_target(prisma, world, shape, scratch.prefix)
     caller = world.keys[actor]
-    new_member_id = await create_scratch_user(
-        prisma, scratch.prefix, suffix="newmember"
-    )
+    new_member_id = await create_scratch_user(prisma, scratch.prefix, suffix="newmember")
 
     resp = await proxy_client.post(
         "/team/member_add",
@@ -86,13 +84,9 @@ async def test_team_member_add_authz_matrix(
             "member": {"user_id": new_member_id, "role": "user"},
         },
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value} {shape}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value} {shape}: {resp.status_code} {resp.text}"
 
-    row = await prisma.db.litellm_teamtable.find_unique(
-        where={"team_id": scratch.prefix}
-    )
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None
     if expected_status == 200:
         assert new_member_id in _member_ids(row)
@@ -131,12 +125,9 @@ async def test_team_member_add_unprovisioned_user_id_is_proxy_admin_only(
     # Deliberately NOT seeded — create_scratch_user is what the matrix above
     # calls, and its absence here is the whole scenario.
     unprovisioned_id = scratch.tag("unprovisioned")
-    assert (
-        await prisma.db.litellm_usertable.find_unique(
-            where={"user_id": unprovisioned_id}
-        )
-        is None
-    ), "setup: user must not exist yet"
+    assert await prisma.db.litellm_usertable.find_unique(where={"user_id": unprovisioned_id}) is None, (
+        "setup: user must not exist yet"
+    )
 
     resp = await proxy_client.post(
         "/team/member_add",
@@ -146,17 +137,11 @@ async def test_team_member_add_unprovisioned_user_id_is_proxy_admin_only(
             "member": {"user_id": unprovisioned_id, "role": "user"},
         },
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value}: {resp.status_code} {resp.text}"
 
-    row = await prisma.db.litellm_teamtable.find_unique(
-        where={"team_id": scratch.prefix}
-    )
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None
-    created = await prisma.db.litellm_usertable.find_unique(
-        where={"user_id": unprovisioned_id}
-    )
+    created = await prisma.db.litellm_usertable.find_unique(where={"user_id": unprovisioned_id})
     if expected_status == 200:
         assert unprovisioned_id in _member_ids(row)
         assert created is not None, "proxy admin add did not provision the user"
@@ -193,13 +178,9 @@ async def test_team_member_add_email_invite_open_to_team_admin(
     )
     assert resp.status_code == 200, resp.text
 
-    invited = await prisma.db.litellm_usertable.find_first(
-        where={"user_email": email}
-    )
+    invited = await prisma.db.litellm_usertable.find_first(where={"user_email": email})
     assert invited is not None, "invite did not create the user"
-    row = await prisma.db.litellm_teamtable.find_unique(
-        where={"team_id": scratch.prefix}
-    )
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None
     assert invited.user_id in _member_ids(row)
 
@@ -232,9 +213,7 @@ async def test_team_member_add_available_team_self_join(
     # Org-less team with no admins: the INTERNAL_USER caller is neither team
     # nor org admin, so it lands on the available-team branch.
     await create_scratch_team(prisma, scratch.prefix)
-    monkeypatch.setattr(
-        litellm, "default_internal_user_params", {"available_teams": [scratch.prefix]}
-    )
+    monkeypatch.setattr(litellm, "default_internal_user_params", {"available_teams": [scratch.prefix]})
 
     caller = world.keys[Actor.INTERNAL_USER]
     member_id = caller.user_id if who == "self" else world.keys[Actor.OWNER].user_id
@@ -247,13 +226,9 @@ async def test_team_member_add_available_team_self_join(
             "member": {"user_id": member_id, "role": role},
         },
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{who}/{role}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{who}/{role}: {resp.status_code} {resp.text}"
 
-    row = await prisma.db.litellm_teamtable.find_unique(
-        where={"team_id": scratch.prefix}
-    )
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None
     if expected_status == 200:
         assert member_id in _member_ids(row)

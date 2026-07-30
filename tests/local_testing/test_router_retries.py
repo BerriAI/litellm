@@ -9,9 +9,7 @@ import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import httpx
 import openai
@@ -28,18 +26,14 @@ class MyCustomHandler(CustomLogger):
 
     def log_pre_api_call(self, model, messages, kwargs):
         print(f"Pre-API Call")
-        print(
-            f"previous_models: {kwargs['litellm_params']['metadata'].get('previous_models', None)}"
-        )
+        print(f"previous_models: {kwargs['litellm_params']['metadata'].get('previous_models', None)}")
         self.previous_models = len(
             kwargs["litellm_params"]["metadata"].get("previous_models", [])
         )  # {"previous_models": [{"model": litellm_model_name, "exception_type": AuthenticationError, "exception_string": <complete_traceback>}]}
         print(f"self.previous_models: {self.previous_models}")
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
-        print(
-            f"Post-API Call - response object: {response_obj}; model: {kwargs['model']}"
-        )
+        print(f"Post-API Call - response object: {response_obj}; model: {kwargs['model']}")
 
     def log_stream_event(self, kwargs, response_obj, start_time, end_time):
         print(f"On Stream")
@@ -73,9 +67,7 @@ async def test_router_retries_errors(sync_mode, error_type):
     - Auth Error -> 0 retries
     - API Error -> 2 retries
     """
-    _api_key = (
-        "bad-key" if error_type == "Authorization Error" else os.getenv("AZURE_API_KEY")
-    )
+    _api_key = "bad-key" if error_type == "Authorization Error" else os.getenv("AZURE_API_KEY")
     print(f"_api_key: {_api_key}")
     model_list = [
         {
@@ -112,11 +104,7 @@ async def test_router_retries_errors(sync_mode, error_type):
     kwargs = {
         "model": "azure/gpt-3.5-turbo",
         "messages": messages,
-        "mock_response": (
-            None
-            if error_type == "Authorization Error"
-            else Exception("Invalid Request")
-        ),
+        "mock_response": (None if error_type == "Authorization Error" else Exception("Invalid Request")),
     }
     for _ in range(4):
         response = await router.acompletion(
@@ -133,9 +121,7 @@ async def test_router_retries_errors(sync_mode, error_type):
     except Exception as e:
         pass
 
-    await asyncio.sleep(
-        0.05
-    )  # allow a delay as success_callbacks are on a separate thread
+    await asyncio.sleep(0.05)  # allow a delay as success_callbacks are on a separate thread
     print(f"customHandler.previous_models: {customHandler.previous_models}")
 
     if error_type == "Authorization Error":
@@ -152,9 +138,7 @@ async def test_router_retries_errors(sync_mode, error_type):
 async def test_router_retry_policy(error_type):
     from litellm.router import AllowedFailsPolicy, RetryPolicy
 
-    retry_policy = RetryPolicy(
-        ContentPolicyViolationErrorRetries=3, AuthenticationErrorRetries=0
-    )
+    retry_policy = RetryPolicy(ContentPolicyViolationErrorRetries=3, AuthenticationErrorRetries=0)
 
     allowed_fails_policy = AllowedFailsPolicy(
         ContentPolicyViolationErrorAllowedFails=1000,
@@ -216,9 +200,7 @@ async def test_router_retry_policy(error_type):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="This is a local only test, use this to confirm if retry policy works"
-)
+@pytest.mark.skip(reason="This is a local only test, use this to confirm if retry policy works")
 async def test_router_retry_policy_on_429_errprs():
     from litellm.router import RetryPolicy
 
@@ -404,9 +386,7 @@ def test_retry_rate_limit_error_with_healthy_deployments():
 
     # Act & Assert
     try:
-        response = router.should_retry_this_error(
-            error=rate_limit_error, healthy_deployments=healthy_deployments
-        )
+        response = router.should_retry_this_error(error=rate_limit_error, healthy_deployments=healthy_deployments)
         print("response from should_retry_this_error: ", response)
     except Exception as e:
         pytest.fail(
@@ -437,9 +417,7 @@ def test_do_retry_rate_limit_error_with_no_fallbacks_and_no_healthy_deployments(
 
     # Act & Assert
     try:
-        response = router.should_retry_this_error(
-            error=rate_limit_error, healthy_deployments=healthy_deployments
-        )
+        response = router.should_retry_this_error(error=rate_limit_error, healthy_deployments=healthy_deployments)
         pytest.fail("Should have raised an error")
     except Exception as e:
         print("got an exception", e)
@@ -481,9 +459,7 @@ def test_raise_context_window_exceeded_error():
             healthy_deployments=None,
             context_window_fallbacks=context_window_fallbacks,
         )
-        pytest.fail(
-            "Expected to raise context window exceeded error -> trigger fallback"
-        )
+        pytest.fail("Expected to raise context window exceeded error -> trigger fallback")
     except Exception as e:
         pass
 
@@ -523,9 +499,7 @@ def test_raise_context_window_exceeded_error_no_retry():
             healthy_deployments=None,
             context_window_fallbacks=context_window_fallbacks,
         )
-        assert (
-            response == True
-        ), "Should not have raised exception since we do not have context window fallbacks"
+        assert response == True, "Should not have raised exception since we do not have context window fallbacks"
     except litellm.ContextWindowExceededError:
         pass
 
@@ -540,9 +514,7 @@ def test_raise_context_window_exceeded_error_no_retry():
 
 
 @pytest.mark.parametrize("num_deployments, expected_timeout", [(1, 60), (2, 0.0)])
-def test_timeout_for_rate_limit_error_with_healthy_deployments(
-    num_deployments, expected_timeout
-):
+def test_timeout_for_rate_limit_error_with_healthy_deployments(num_deployments, expected_timeout):
     """
     Test 1. Timeout is 0.0 when RateLimit Error and healthy deployments are > 0
     """
@@ -666,9 +638,7 @@ def test_no_retry_for_not_found_error_404():
         llm_provider="azure",
     )
     try:
-        response = router.should_retry_this_error(
-            error=error, healthy_deployments=healthy_deployments
-        )
+        response = router.should_retry_this_error(error=error, healthy_deployments=healthy_deployments)
         pytest.fail(
             "Should have raised an exception 404 NotFoundError should never be retried, it's typically model_not_found error"
         )
@@ -704,12 +674,8 @@ def test_no_retry_for_bad_request_error_400():
         llm_provider="azure",
     )
     try:
-        response = router.should_retry_this_error(
-            error=error, healthy_deployments=healthy_deployments
-        )
-        pytest.fail(
-            "Should have raised BadRequestError - 400 errors should never be retried"
-        )
+        response = router.should_retry_this_error(error=error, healthy_deployments=healthy_deployments)
+        pytest.fail("Should have raised BadRequestError - 400 errors should never be retried")
     except litellm.BadRequestError as e:
         print("Correctly raised BadRequestError without retry:", e)
 
@@ -745,12 +711,8 @@ def test_no_retry_for_unprocessable_entity_error_422():
         ),
     )
     try:
-        response = router.should_retry_this_error(
-            error=error, healthy_deployments=healthy_deployments
-        )
-        pytest.fail(
-            "Should have raised UnprocessableEntityError - 422 errors should never be retried"
-        )
+        response = router.should_retry_this_error(error=error, healthy_deployments=healthy_deployments)
+        pytest.fail("Should have raised UnprocessableEntityError - 422 errors should never be retried")
     except litellm.UnprocessableEntityError as e:
         print("Correctly raised UnprocessableEntityError without retry:", e)
 
@@ -804,9 +766,7 @@ def test_no_retry_when_no_healthy_deployments():
         timeout_error,
     ]:
         try:
-            response = router.should_retry_this_error(
-                error=error, healthy_deployments=healthy_deployments
-            )
+            response = router.should_retry_this_error(error=error, healthy_deployments=healthy_deployments)
             pytest.fail(
                 "Should have raised an exception,  there's no point retrying an error when there are 0 healthy deployments"
             )
@@ -832,9 +792,7 @@ async def test_router_retries_model_specific_and_global():
         ]
     )
 
-    with patch.object(
-        router, "_time_to_sleep_before_retry"
-    ) as mock_async_function_with_retries:
+    with patch.object(router, "_time_to_sleep_before_retry") as mock_async_function_with_retries:
         try:
             await router.acompletion(
                 model="gpt-3.5-turbo",
@@ -924,9 +882,7 @@ async def test_router_retry_num_retries_tracking():
                 [{"model_info": {"id": "test-id"}}],
             ),
         ):
-            with patch.object(
-                router, "_time_to_sleep_before_retry", return_value=0.01
-            ):  # Fast retries for testing
+            with patch.object(router, "_time_to_sleep_before_retry", return_value=0.01):  # Fast retries for testing
                 try:
                     await router.acompletion(
                         model="gpt-3.5-turbo",
@@ -935,27 +891,17 @@ async def test_router_retry_num_retries_tracking():
                     pytest.fail("Expected exception to be raised")
                 except litellm.RateLimitError as e:
                     # Verify num_retries is correctly set to 3 (not 2, which would be current_attempt)
-                    assert hasattr(
-                        e, "num_retries"
-                    ), "Exception should have num_retries attribute"
-                    assert hasattr(
-                        e, "max_retries"
-                    ), "Exception should have max_retries attribute"
-                    assert (
-                        e.num_retries == 3
-                    ), f"Expected num_retries to be 3, got {e.num_retries}"
-                    assert (
-                        e.max_retries == 3
-                    ), f"Expected max_retries to be 3, got {e.max_retries}"
+                    assert hasattr(e, "num_retries"), "Exception should have num_retries attribute"
+                    assert hasattr(e, "max_retries"), "Exception should have max_retries attribute"
+                    assert e.num_retries == 3, f"Expected num_retries to be 3, got {e.num_retries}"
+                    assert e.max_retries == 3, f"Expected max_retries to be 3, got {e.max_retries}"
 
                     # Verify the error message includes correct retry information
                     error_str = str(e)
-                    assert (
-                        "LiteLLM Retried: 3 times" in error_str
-                    ), f"Error message should indicate 3 retries: {error_str}"
-                    assert (
-                        "LiteLLM Max Retries: 3" in error_str
-                    ), f"Error message should show max retries: {error_str}"
+                    assert "LiteLLM Retried: 3 times" in error_str, (
+                        f"Error message should indicate 3 retries: {error_str}"
+                    )
+                    assert "LiteLLM Max Retries: 3" in error_str, f"Error message should show max retries: {error_str}"
 
 
 @pytest.mark.asyncio
@@ -1004,9 +950,5 @@ async def test_router_retry_num_retries_single_retry():
                     pytest.fail("Expected exception to be raised")
                 except litellm.Timeout as e:
                     # With num_retries=1, we should attempt 1 retry
-                    assert (
-                        e.num_retries == 1
-                    ), f"Expected num_retries to be 1, got {e.num_retries}"
-                    assert (
-                        e.max_retries == 1
-                    ), f"Expected max_retries to be 1, got {e.max_retries}"
+                    assert e.num_retries == 1, f"Expected num_retries to be 1, got {e.num_retries}"
+                    assert e.max_retries == 1, f"Expected max_retries to be 1, got {e.max_retries}"

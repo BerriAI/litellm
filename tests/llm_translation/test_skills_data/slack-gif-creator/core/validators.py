@@ -8,9 +8,7 @@ These validators help ensure your GIFs meet Slack's size and dimension constrain
 from pathlib import Path
 
 
-def validate_gif(
-    gif_path: str | Path, is_emoji: bool = True, verbose: bool = True
-) -> tuple[bool, dict]:
+def validate_gif(gif_path: str | Path, is_emoji: bool = True, verbose: bool = True) -> tuple[bool, dict]:
     """
     Validate GIF for Slack (dimensions, size, frame count).
 
@@ -66,11 +64,7 @@ def validate_gif(
         acceptable = width == height and 64 <= width <= 128
         dim_pass = acceptable
     else:
-        aspect_ratio = (
-            max(width, height) / min(width, height)
-            if min(width, height) > 0
-            else float("inf")
-        )
+        aspect_ratio = max(width, height) / min(width, height) if min(width, height) > 0 else float("inf")
         dim_pass = aspect_ratio <= 2.0 and 320 <= min(width, height) <= 640
 
     results = {
@@ -92,25 +86,13 @@ def validate_gif(
         print(f"\nValidating {gif_path.name}:")
         print(
             f"  Dimensions: {width}x{height}"
-            + (
-                f" ({'optimal' if optimal else 'acceptable'})"
-                if is_emoji and acceptable
-                else ""
-            )
+            + (f" ({'optimal' if optimal else 'acceptable'})" if is_emoji and acceptable else "")
         )
-        print(
-            f"  Size: {size_kb:.1f} KB"
-            + (f" ({size_mb:.2f} MB)" if size_mb >= 1.0 else "")
-        )
-        print(
-            f"  Frames: {frame_count}"
-            + (f" @ {fps:.1f} fps ({total_duration:.1f}s)" if fps else "")
-        )
+        print(f"  Size: {size_kb:.1f} KB" + (f" ({size_mb:.2f} MB)" if size_mb >= 1.0 else ""))
+        print(f"  Frames: {frame_count}" + (f" @ {fps:.1f} fps ({total_duration:.1f}s)" if fps else ""))
 
         if not dim_pass:
-            print(
-                f"  Note: {'Emoji should be 128x128' if is_emoji else 'Unusual dimensions for Slack'}"
-            )
+            print(f"  Note: {'Emoji should be 128x128' if is_emoji else 'Unusual dimensions for Slack'}")
 
         if size_mb > 5.0:
             print(f"  Note: Large file size - consider fewer frames/colors")
@@ -118,9 +100,7 @@ def validate_gif(
     return dim_pass, results
 
 
-def is_slack_ready(
-    gif_path: str | Path, is_emoji: bool = True, verbose: bool = True
-) -> bool:
+def is_slack_ready(gif_path: str | Path, is_emoji: bool = True, verbose: bool = True) -> bool:
     """
     Quick check if GIF is ready for Slack.
 

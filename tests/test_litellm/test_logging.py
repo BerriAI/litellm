@@ -6,9 +6,7 @@ from typing import List
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system-path
 import logging
 import sys
 
@@ -195,9 +193,7 @@ def test_json_formatter_includes_component_field():
         )
         output = formatter.format(record)
         obj = json.loads(output)
-        assert (
-            obj["component"] == logger_name
-        ), f"Expected component={logger_name!r}, got {obj.get('component')!r}"
+        assert obj["component"] == logger_name, f"Expected component={logger_name!r}, got {obj.get('component')!r}"
 
 
 def test_json_formatter_includes_logger_field():
@@ -217,9 +213,7 @@ def test_json_formatter_includes_logger_field():
     )
     output = formatter.format(record)
     obj = json.loads(output)
-    assert (
-        obj["logger"] == "proxy_server.py:123"
-    ), f"Expected logger='proxy_server.py:123', got {obj['logger']!r}"
+    assert obj["logger"] == "proxy_server.py:123", f"Expected logger='proxy_server.py:123', got {obj['logger']!r}"
 
 
 def test_json_formatter_extra_component_not_overwritten():
@@ -238,9 +232,7 @@ def test_json_formatter_extra_component_not_overwritten():
     )
     record.component = "auth-service"
     obj = json.loads(formatter.format(record))
-    assert (
-        obj["component"] == "auth-service"
-    ), f"User-supplied component was overwritten, got {obj['component']!r}"
+    assert obj["component"] == "auth-service", f"User-supplied component was overwritten, got {obj['component']!r}"
 
 
 def test_initialize_loggers_with_handler_sets_propagate_false():
@@ -252,9 +244,9 @@ def test_initialize_loggers_with_handler_sets_propagate_false():
 
     # Check that propagate is set to False for all loggers
     for logger in ALL_LOGGERS:
-        assert (
-            logger.propagate is False
-        ), f"Logger {logger.name} has propagate set to {logger.propagate}, expected False"
+        assert logger.propagate is False, (
+            f"Logger {logger.name} has propagate set to {logger.propagate}, expected False"
+        )
 
 
 @pytest.mark.asyncio
@@ -292,9 +284,9 @@ async def test_cache_hit_includes_custom_llm_provider():
         await asyncio.sleep(0.5)
 
         # Verify we have logged events
-        assert (
-            len(test_custom_logger.logged_standard_logging_payloads) >= 2
-        ), f"Expected at least 2 logged events, got {len(test_custom_logger.logged_standard_logging_payloads)}"
+        assert len(test_custom_logger.logged_standard_logging_payloads) >= 2, (
+            f"Expected at least 2 logged events, got {len(test_custom_logger.logged_standard_logging_payloads)}"
+        )
 
         # Find the cache hit event (should be the second call)
         cache_hit_payload = None
@@ -304,20 +296,18 @@ async def test_cache_hit_includes_custom_llm_provider():
                 break
 
         # Verify cache hit event was found
-        assert (
-            cache_hit_payload is not None
-        ), "No cache hit event found in logged payloads"
+        assert cache_hit_payload is not None, "No cache hit event found in logged payloads"
 
         # Verify custom_llm_provider is included in the cache hit payload
-        assert (
-            "custom_llm_provider" in cache_hit_payload
-        ), "custom_llm_provider missing from cache hit standard logging payload"
+        assert "custom_llm_provider" in cache_hit_payload, (
+            "custom_llm_provider missing from cache hit standard logging payload"
+        )
 
         # Verify custom_llm_provider has a valid value (should be "openai" for gpt-3.5-turbo)
         custom_llm_provider = cache_hit_payload["custom_llm_provider"]
-        assert (
-            custom_llm_provider is not None and custom_llm_provider != ""
-        ), f"custom_llm_provider should not be None or empty, got: {custom_llm_provider}"
+        assert custom_llm_provider is not None and custom_llm_provider != "", (
+            f"custom_llm_provider should not be None or empty, got: {custom_llm_provider}"
+        )
 
         print(
             f"Cache hit standard logging payload with custom_llm_provider: {custom_llm_provider}",

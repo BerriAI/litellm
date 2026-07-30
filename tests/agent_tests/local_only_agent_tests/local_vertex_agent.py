@@ -36,9 +36,7 @@ async def main():
 
     # Step 1: Authenticate with Google Cloud
     print("Step 1: Authenticating with Google Cloud...")
-    credentials, project = default(
-        scopes=["https://www.googleapis.com/auth/cloud-platform"]
-    )
+    credentials, project = default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
     credentials.refresh(Request())
     print(f"Authenticated! Project: {project}")
     print(f"Token (first 20 chars): {credentials.token[:20]}...")
@@ -94,9 +92,7 @@ async def main():
             print(f"Session created:\n{json.dumps(session_data, indent=2)}")
 
             # Extract session_id from response
-            session_id = session_data.get("output", {}).get("id") or session_data.get(
-                "output", {}
-            ).get("session_id")
+            session_id = session_data.get("output", {}).get("id") or session_data.get("output", {}).get("session_id")
             print(f"\nSession ID: {session_id}")
 
             # Now send the actual query via streamQuery
@@ -113,9 +109,7 @@ async def main():
             print(f"Request:\n{json.dumps(query_request, indent=2)}")
 
             # Use streaming endpoint but collect full response
-            async with client.stream(
-                "POST", stream_url, json=query_request
-            ) as stream_response:
+            async with client.stream("POST", stream_url, json=query_request) as stream_response:
                 print(f"Query status: {stream_response.status_code}")
 
                 if stream_response.status_code == 200:

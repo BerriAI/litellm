@@ -14,9 +14,7 @@ from litellm.proxy.guardrails.guardrail_hooks.lasso.lasso import (
     LassoGuardrailAPIError,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
@@ -54,9 +52,7 @@ def test_lasso_guard_config_no_api_key():
     if "LASSO_API_KEY" in os.environ:
         del os.environ["LASSO_API_KEY"]
 
-    with pytest.raises(
-        LassoGuardrailMissingSecrets, match="Couldn't get Lasso api key"
-    ):
+    with pytest.raises(LassoGuardrailMissingSecrets, match="Couldn't get Lasso api key"):
         init_guardrails_v2(
             all_guardrails=[
                 {
@@ -90,9 +86,7 @@ async def test_callback():
             }
         ],
     )
-    lasso_guardrails = litellm.logging_callback_manager.get_custom_loggers_for_type(
-        LassoGuardrail
-    )
+    lasso_guardrails = litellm.logging_callback_manager.get_custom_loggers_for_type(LassoGuardrail)
     print("found lasso guardrails", lasso_guardrails)
     lasso_guardrail = lasso_guardrails[0]
 
@@ -127,16 +121,12 @@ async def test_callback():
             "findings": {"jailbreak": [{"action": "BLOCK", "severity": "HIGH"}]},
         },
         status_code=200,
-        request=Request(
-            method="POST", url="https://server.lasso.security/gateway/v2/classify"
-        ),
+        request=Request(method="POST", url="https://server.lasso.security/gateway/v2/classify"),
     )
     mock_response.raise_for_status = lambda: None
 
     with pytest.raises(HTTPException) as excinfo:
-        with patch.object(
-            lasso_guardrail.async_handler, "post", return_value=mock_response
-        ):
+        with patch.object(lasso_guardrail.async_handler, "post", return_value=mock_response):
             await lasso_guardrail.async_pre_call_hook(
                 data=data,
                 cache=DualCache(),
@@ -173,15 +163,11 @@ async def test_callback():
             "findings": {},
         },
         status_code=200,
-        request=Request(
-            method="POST", url="https://server.lasso.security/gateway/v2/classify"
-        ),
+        request=Request(method="POST", url="https://server.lasso.security/gateway/v2/classify"),
     )
     mock_response_no_violation.raise_for_status = lambda: None
 
-    with patch.object(
-        lasso_guardrail.async_handler, "post", return_value=mock_response_no_violation
-    ):
+    with patch.object(lasso_guardrail.async_handler, "post", return_value=mock_response_no_violation):
         result = await lasso_guardrail.async_pre_call_hook(
             data=data,
             cache=DualCache(),
@@ -202,9 +188,7 @@ async def test_empty_messages():
     """Test handling of empty messages"""
     os.environ["LASSO_API_KEY"] = "test-key"
 
-    lasso_guardrail = LassoGuardrail(
-        guardrail_name="test-guard", event_hook="pre_call", default_on=True
-    )
+    lasso_guardrail = LassoGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
 
     data = {"messages": []}
 
@@ -226,9 +210,7 @@ async def test_api_error_handling():
     """Test handling of API errors"""
     os.environ["LASSO_API_KEY"] = "test-key"
 
-    lasso_guardrail = LassoGuardrail(
-        guardrail_name="test-guard", event_hook="pre_call", default_on=True
-    )
+    lasso_guardrail = LassoGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
 
     data = {
         "messages": [
@@ -237,9 +219,7 @@ async def test_api_error_handling():
     }
 
     # Test handling of connection error
-    with patch.object(
-        lasso_guardrail.async_handler, "post", side_effect=Exception("Connection error")
-    ):
+    with patch.object(lasso_guardrail.async_handler, "post", side_effect=Exception("Connection error")):
         # Expect the guardrail to raise a LassoGuardrailAPIError
         with pytest.raises(LassoGuardrailAPIError) as excinfo:
             await lasso_guardrail.async_pre_call_hook(
@@ -254,9 +234,7 @@ async def test_api_error_handling():
     assert "Connection error" in str(excinfo.value)
 
     # Test with a different error message
-    with patch.object(
-        lasso_guardrail.async_handler, "post", side_effect=Exception("API timeout")
-    ):
+    with patch.object(lasso_guardrail.async_handler, "post", side_effect=Exception("API timeout")):
         # Expect the guardrail to raise a LassoGuardrailAPIError
         with pytest.raises(LassoGuardrailAPIError) as excinfo:
             await lasso_guardrail.async_pre_call_hook(

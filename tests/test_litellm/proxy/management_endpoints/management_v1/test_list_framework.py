@@ -139,7 +139,10 @@ def _conjuncts(plan: QueryPlan) -> tuple[object, ...]:
 def test_appends_the_tiebreaker_to_the_default_sort():
     """Without a unique final key, ordering by an all-null column lets Postgres hand the
     same row back on two different pages."""
-    assert _plan({}).order == (SortKey(field="created_at", descending=True), SortKey(field="budget_id", descending=False))
+    assert _plan({}).order == (
+        SortKey(field="created_at", descending=True),
+        SortKey(field="budget_id", descending=False),
+    )
 
 
 def test_appends_the_tiebreaker_to_an_explicit_multi_key_sort():
@@ -239,13 +242,7 @@ def test_a_search_renders_as_a_parenthesised_or():
         )
     )
 
-    assert sql == (
-        '"created_by" = $1 AND ('
-        "\"budget_id\" ILIKE $2 ESCAPE '\\'"
-        " OR "
-        "\"created_by\" ILIKE $3 ESCAPE '\\'"
-        ")"
-    )
+    assert sql == ('"created_by" = $1 AND ("budget_id" ILIKE $2 ESCAPE \'\\\' OR "created_by" ILIKE $3 ESCAPE \'\\\')')
     assert params == ("alice", "%prod%", "%prod%")
 
 
@@ -273,11 +270,7 @@ def test_a_planned_filter_renders_end_to_end():
     sql, params = where_sql(_plan({"filter[max_budget][is_null]": "true", "q": "prod"}).where)
 
     assert sql == (
-        '"max_budget" IS NULL AND ('
-        "\"budget_id\" ILIKE $1 ESCAPE '\\'"
-        " OR "
-        "\"created_by\" ILIKE $2 ESCAPE '\\'"
-        ")"
+        '"max_budget" IS NULL AND ("budget_id" ILIKE $1 ESCAPE \'\\\' OR "created_by" ILIKE $2 ESCAPE \'\\\')'
     )
     assert params == ("%prod%", "%prod%")
 
@@ -603,15 +596,11 @@ def test_in_splits_on_commas_and_coerces_every_member():
 def test_is_null_true_matches_rows_with_no_budget():
     """Budgets renders a null max_budget as "Unlimited"; without is_null there is no way
     to ask for those rows."""
-    assert _conjuncts(_plan({"filter[max_budget][is_null]": "true"})) == (
-        IsNull(field="max_budget", negated=False),
-    )
+    assert _conjuncts(_plan({"filter[max_budget][is_null]": "true"})) == (IsNull(field="max_budget", negated=False),)
 
 
 def test_is_null_false_matches_rows_that_have_one():
-    assert _conjuncts(_plan({"filter[max_budget][is_null]": "false"})) == (
-        IsNull(field="max_budget", negated=True),
-    )
+    assert _conjuncts(_plan({"filter[max_budget][is_null]": "false"})) == (IsNull(field="max_budget", negated=True),)
 
 
 def test_is_null_rejects_a_non_boolean():
@@ -664,9 +653,7 @@ async def test_returns_the_page_mode_envelope():
         total_count=42,
     )
 
-    response = await handle_list(
-        spec=_spec(), executor=executor, request=_request("page=2&page_size=5"), caller=CALLER
-    )
+    response = await handle_list(spec=_spec(), executor=executor, request=_request("page=2&page_size=5"), caller=CALLER)
     body = response.model_dump(by_alias=True)
 
     assert body["meta"] == {"total_count": 42, "page": 2, "page_size": 5, "total_pages": 9}
@@ -690,9 +677,7 @@ async def test_serializes_rows_flat_without_a_json_api_resource_wrapper():
 async def test_links_let_a_client_page_without_building_urls():
     executor = RecordingExecutor(rows=(), total_count=42)
 
-    response = await handle_list(
-        spec=_spec(), executor=executor, request=_request("page=2&page_size=5"), caller=CALLER
-    )
+    response = await handle_list(spec=_spec(), executor=executor, request=_request("page=2&page_size=5"), caller=CALLER)
     links = response.model_dump(by_alias=True)["links"]
 
     assert links["self"] == f"{BUDGETS_PATH}?page_size=5&page=2"
@@ -706,9 +691,7 @@ async def test_links_let_a_client_page_without_building_urls():
 async def test_the_last_page_has_no_next_link():
     executor = RecordingExecutor(rows=(), total_count=10)
 
-    response = await handle_list(
-        spec=_spec(), executor=executor, request=_request("page=2&page_size=5"), caller=CALLER
-    )
+    response = await handle_list(spec=_spec(), executor=executor, request=_request("page=2&page_size=5"), caller=CALLER)
     links = response.model_dump(by_alias=True)["links"]
 
     assert links["next"] is None

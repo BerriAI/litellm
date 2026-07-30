@@ -76,10 +76,7 @@ def _has_web_search_tool_use(events: Sequence[Mapping[str, Any]]) -> bool:
         for block in content:
             if not isinstance(block, dict):
                 continue
-            if (
-                block.get("type") == "tool_use"
-                and block.get("name") == WEB_SEARCH_TOOL_NAME
-            ):
+            if block.get("type") == "tool_use" and block.get("name") == WEB_SEARCH_TOOL_NAME:
                 return True
     return False
 

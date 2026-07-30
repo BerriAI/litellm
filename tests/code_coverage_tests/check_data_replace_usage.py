@@ -24,7 +24,6 @@ class DataReplaceVisitor(ast.NodeVisitor):
                 and isinstance(node.args[0].value, str)
                 and "data:" in node.args[0].value
             ):
-
                 self.issues.append(
                     {
                         "file": self.current_file,
@@ -86,9 +85,7 @@ def scan_directory(base_dir):
             file_path = os.path.join(root, file)
 
             # Skip directories we don't want to check
-            if any(
-                d in file_path for d in [".git", "__pycache__", ".venv", "node_modules"]
-            ):
+            if any(d in file_path for d in [".git", "__pycache__", ".venv", "node_modules"]):
                 continue
 
             # For Python files, use AST for more accurate parsing

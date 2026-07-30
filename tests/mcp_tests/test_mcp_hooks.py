@@ -125,9 +125,7 @@ class TestMCPArgumentValidationHook(CustomLogger):
         # Example: Validate GitHub issue creation
         if tool_name == "github/create_issue":
             if not arguments.get("title"):
-                return MCPPreCallResponseObject(
-                    should_proceed=False, error_message="GitHub issue title is required"
-                )
+                return MCPPreCallResponseObject(should_proceed=False, error_message="GitHub issue title is required")
 
             # Sanitize the title
             title = arguments["title"]
@@ -138,13 +136,9 @@ class TestMCPArgumentValidationHook(CustomLogger):
         # Example: Validate email sending
         elif tool_name == "zapier/send_email":
             if not arguments.get("to"):
-                return MCPPreCallResponseObject(
-                    should_proceed=False, error_message="Email recipient is required"
-                )
+                return MCPPreCallResponseObject(should_proceed=False, error_message="Email recipient is required")
 
-        return MCPPreCallResponseObject(
-            should_proceed=True, modified_arguments=arguments
-        )
+        return MCPPreCallResponseObject(should_proceed=True, modified_arguments=arguments)
 
 
 # Test fixtures
@@ -247,9 +241,7 @@ class TestMCPHooks:
     async def test_cost_tracking_hook(self, cost_tracking_hook):
         """Test cost tracking functionality"""
         kwargs = {"name": "github/create_issue"}
-        response_obj = MCPPostCallResponseObject(
-            mcp_tool_call_response=[], hidden_params=HiddenParams()
-        )
+        response_obj = MCPPostCallResponseObject(mcp_tool_call_response=[], hidden_params=HiddenParams())
 
         result = await cost_tracking_hook.async_post_mcp_tool_call_hook(
             kwargs=kwargs,
@@ -266,9 +258,7 @@ class TestMCPHooks:
     async def test_cost_tracking_hook_default_cost(self, cost_tracking_hook):
         """Test default cost assignment"""
         kwargs = {"name": "unknown_tool"}
-        response_obj = MCPPostCallResponseObject(
-            mcp_tool_call_response=[], hidden_params=HiddenParams()
-        )
+        response_obj = MCPPostCallResponseObject(mcp_tool_call_response=[], hidden_params=HiddenParams())
 
         result = await cost_tracking_hook.async_post_mcp_tool_call_hook(
             kwargs=kwargs,
@@ -299,14 +289,10 @@ class TestMCPHooks:
         assert monitoring_hook.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_argument_validation_hook_valid_github_issue(
-        self, argument_validation_hook
-    ):
+    async def test_argument_validation_hook_valid_github_issue(self, argument_validation_hook):
         """Test argument validation for valid GitHub issue"""
         kwargs = {"name": "github/create_issue"}
-        request_obj = MCPPreCallRequestObject(
-            tool_name="github/create_issue", arguments={"title": "Valid issue title"}
-        )
+        request_obj = MCPPreCallRequestObject(tool_name="github/create_issue", arguments={"title": "Valid issue title"})
 
         result = await argument_validation_hook.async_pre_mcp_tool_call_hook(
             kwargs=kwargs,
@@ -321,13 +307,12 @@ class TestMCPHooks:
         assert argument_validation_hook.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_argument_validation_hook_missing_title(
-        self, argument_validation_hook
-    ):
+    async def test_argument_validation_hook_missing_title(self, argument_validation_hook):
         """Test argument validation for missing GitHub issue title"""
         kwargs = {"name": "github/create_issue"}
         request_obj = MCPPreCallRequestObject(
-            tool_name="github/create_issue", arguments={}  # Missing title
+            tool_name="github/create_issue",
+            arguments={},  # Missing title
         )
 
         result = await argument_validation_hook.async_pre_mcp_tool_call_hook(
@@ -342,15 +327,11 @@ class TestMCPHooks:
         assert "title is required" in result.error_message
 
     @pytest.mark.asyncio
-    async def test_argument_validation_hook_long_title_sanitization(
-        self, argument_validation_hook
-    ):
+    async def test_argument_validation_hook_long_title_sanitization(self, argument_validation_hook):
         """Test argument validation with title sanitization"""
         kwargs = {"name": "github/create_issue"}
         long_title = "A" * 150  # Very long title
-        request_obj = MCPPreCallRequestObject(
-            tool_name="github/create_issue", arguments={"title": long_title}
-        )
+        request_obj = MCPPreCallRequestObject(tool_name="github/create_issue", arguments={"title": long_title})
 
         result = await argument_validation_hook.async_pre_mcp_tool_call_hook(
             kwargs=kwargs,
@@ -365,9 +346,7 @@ class TestMCPHooks:
         assert result.modified_arguments["title"].endswith("...")
 
     @pytest.mark.asyncio
-    async def test_argument_validation_hook_email_validation(
-        self, argument_validation_hook
-    ):
+    async def test_argument_validation_hook_email_validation(self, argument_validation_hook):
         """Test argument validation for email sending"""
         kwargs = {"name": "zapier/send_email"}
         request_obj = MCPPreCallRequestObject(
@@ -390,9 +369,7 @@ class TestMCPHooks:
         }
 
     @pytest.mark.asyncio
-    async def test_argument_validation_hook_missing_email_recipient(
-        self, argument_validation_hook
-    ):
+    async def test_argument_validation_hook_missing_email_recipient(self, argument_validation_hook):
         """Test argument validation for missing email recipient"""
         kwargs = {"name": "zapier/send_email"}
         request_obj = MCPPreCallRequestObject(
@@ -455,9 +432,7 @@ class TestMCPHookIntegration:
         assert validation_result.should_proceed is True
 
         # Simulate post-hook execution
-        response_obj = MCPPostCallResponseObject(
-            mcp_tool_call_response=[], hidden_params=HiddenParams()
-        )
+        response_obj = MCPPostCallResponseObject(mcp_tool_call_response=[], hidden_params=HiddenParams())
 
         cost_result = await cost_hook.async_post_mcp_tool_call_hook(
             kwargs=kwargs,

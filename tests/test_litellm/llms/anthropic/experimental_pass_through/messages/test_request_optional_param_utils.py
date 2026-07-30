@@ -21,11 +21,7 @@ def test_optional_param_filtering_unchanged():
         "not_a_real_param": "drop me",  # invalid key dropped
         "stream": True,
     }
-    result = (
-        AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
-            params
-        )
-    )
+    result = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(params)
     assert result == {"temperature": 0.5, "tools": [{"name": "x"}], "stream": True}
     assert "top_p" not in result
     assert "not_a_real_param" not in result
@@ -35,9 +31,7 @@ def test_valid_keys_are_memoized():
     _anthropic_messages_optional_param_keys.cache_clear()
     first = _anthropic_messages_optional_param_keys()
     for _ in range(50):
-        AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
-            {"temperature": 0.1}
-        )
+        AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param({"temperature": 0.1})
     info = _anthropic_messages_optional_param_keys.cache_info()
     # Resolved exactly once despite many calls.
     assert info.misses == 1
@@ -49,23 +43,16 @@ def test_valid_keys_are_memoized():
 
 
 def test_empty_params():
-    assert (
-        AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
-            {}
-        )
-        == {}
-    )
+    assert AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param({}) == {}
 
 
 def test_drop_params_strips_speed_for_unsupported_model():
     original = litellm.drop_params
     litellm.drop_params = True
     try:
-        result = (
-            AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
-                params={"speed": "fast", "temperature": 0.5},
-                model="claude-sonnet-4-6",
-            )
+        result = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+            params={"speed": "fast", "temperature": 0.5},
+            model="claude-sonnet-4-6",
         )
     finally:
         litellm.drop_params = original
@@ -78,11 +65,9 @@ def test_drop_params_keeps_speed_for_supporting_model():
     original = litellm.drop_params
     litellm.drop_params = True
     try:
-        result = (
-            AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
-                params={"speed": "fast"},
-                model="claude-opus-4-6",
-            )
+        result = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+            params={"speed": "fast"},
+            model="claude-opus-4-6",
         )
     finally:
         litellm.drop_params = original

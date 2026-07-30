@@ -90,20 +90,12 @@ class SpendClient:
         tags: list[str] | None = None,
         user: str | None = None,
     ) -> Result[ChatResponse]:
-        return self.proxy.chat(
-            key, _chat_body(model, content, max_tokens=max_tokens, tags=tags, user=user)
-        )
+        return self.proxy.chat(key, _chat_body(model, content, max_tokens=max_tokens, tags=tags, user=user))
 
-    def chat_stream(
-        self, key: str, model: str, content: str, *, max_tokens: int | None = None
-    ) -> StreamingResponse:
-        return self.proxy.chat_stream(
-            key, _chat_body(model, content, max_tokens=max_tokens, stream=True)
-        )
+    def chat_stream(self, key: str, model: str, content: str, *, max_tokens: int | None = None) -> StreamingResponse:
+        return self.proxy.chat_stream(key, _chat_body(model, content, max_tokens=max_tokens, stream=True))
 
-    def messages_stream(
-        self, key: str, model: str, content: str, *, max_tokens: int
-    ) -> StreamingResponse:
+    def messages_stream(self, key: str, model: str, content: str, *, max_tokens: int) -> StreamingResponse:
         return self.proxy.messages_stream(
             key,
             AnthropicMessagesBody(
@@ -124,18 +116,14 @@ class SpendClient:
         min_rows: int = 1,
         predicate: Callable[[list[SpendLogRow]], bool] | None = None,
     ) -> list[SpendLogRow]:
-        return self.proxy.poll_logs_for_key(
-            key, min_rows=min_rows, predicate=predicate
-        )
+        return self.proxy.poll_logs_for_key(key, min_rows=min_rows, predicate=predicate)
 
     def calculate_spend(self, model: str, content: str) -> float:
         return unwrap(
             self.proxy.transport.post(
                 "/spend/calculate",
                 headers=self.proxy.transport.master,
-                json=SpendCalculateBody(
-                    model=model, messages=[ChatMessage(role="user", content=content)]
-                ),
+                json=SpendCalculateBody(model=model, messages=[ChatMessage(role="user", content=content)]),
                 response_type=SpendCalculateResponse,
             )
         ).cost
@@ -158,9 +146,7 @@ class SpendClient:
         deadline = time.monotonic() + self.proxy.poll_timeout
         entry: TagSpend | None = None
         while time.monotonic() < deadline:
-            matches = [
-                t for t in self.spend_by_tags() if t.individual_request_tag == tag
-            ]
+            matches = [t for t in self.spend_by_tags() if t.individual_request_tag == tag]
             if matches:
                 entry = matches[0]
                 if (entry.total_spend or 0.0) >= minimum:
@@ -178,9 +164,7 @@ class SpendClient:
             time.sleep(self.proxy.poll_interval)
         return spend
 
-    def spend_logs_page(
-        self, *, api_key: str | None, page: int, page_size: int
-    ) -> SpendLogsPage:
+    def spend_logs_page(self, *, api_key: str | None, page: int, page_size: int) -> SpendLogsPage:
         """One page of /spend/logs/v2 over a window wide enough to contain every
         row this test run wrote (the endpoint requires explicit dates)."""
         now = datetime.now(timezone.utc)

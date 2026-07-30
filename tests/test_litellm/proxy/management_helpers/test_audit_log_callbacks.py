@@ -130,9 +130,7 @@ class TestDispatchAuditLogToCallbacks:
     async def test_nonblocking_on_callback_failure(self):
         """Callback errors should not propagate."""
         mock_logger = MagicMock(spec=CustomLogger)
-        mock_logger.async_log_audit_log_event = AsyncMock(
-            side_effect=RuntimeError("boom")
-        )
+        mock_logger.async_log_audit_log_event = AsyncMock(side_effect=RuntimeError("boom"))
         litellm.audit_log_callbacks = [mock_logger]
 
         audit_log = _make_audit_log()
@@ -236,9 +234,7 @@ class TestCreateAuditLogForUpdateWithCallbacks:
             patch("litellm.store_audit_logs", True),
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
         ):
-            mock_prisma.db.litellm_auditlog.create = AsyncMock(
-                side_effect=RuntimeError("DB connection lost")
-            )
+            mock_prisma.db.litellm_auditlog.create = AsyncMock(side_effect=RuntimeError("DB connection lost"))
 
             audit_log = _make_audit_log()
             await create_audit_log_for_update(audit_log)
@@ -254,9 +250,7 @@ class TestAuditLogTaskDoneCallback:
         mock_task = MagicMock(spec=asyncio.Task)
         mock_task.exception.return_value = RuntimeError("callback failed")
 
-        with patch(
-            "litellm.proxy.management_helpers.audit_logs.verbose_proxy_logger"
-        ) as mock_logger:
+        with patch("litellm.proxy.management_helpers.audit_logs.verbose_proxy_logger") as mock_logger:
             _audit_log_task_done_callback(mock_task)
             mock_logger.error.assert_called_once()
             assert "callback failed" in str(mock_logger.error.call_args)
@@ -266,9 +260,7 @@ class TestAuditLogTaskDoneCallback:
         mock_task = MagicMock(spec=asyncio.Task)
         mock_task.exception.return_value = None
 
-        with patch(
-            "litellm.proxy.management_helpers.audit_logs.verbose_proxy_logger"
-        ) as mock_logger:
+        with patch("litellm.proxy.management_helpers.audit_logs.verbose_proxy_logger") as mock_logger:
             _audit_log_task_done_callback(mock_task)
             mock_logger.error.assert_not_called()
 
@@ -277,9 +269,7 @@ class TestAuditLogTaskDoneCallback:
         mock_task = MagicMock(spec=asyncio.Task)
         mock_task.exception.side_effect = asyncio.CancelledError()
 
-        with patch(
-            "litellm.proxy.management_helpers.audit_logs.verbose_proxy_logger"
-        ) as mock_logger:
+        with patch("litellm.proxy.management_helpers.audit_logs.verbose_proxy_logger") as mock_logger:
             _audit_log_task_done_callback(mock_task)
             mock_logger.error.assert_not_called()
 

@@ -12,9 +12,7 @@ import litellm.proxy.proxy_server as ps
 from litellm.proxy.proxy_server import app
 from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, CommonProxyErrors
 
-sys.path.insert(
-    0, os.path.abspath("../../../")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../"))  # Adds the parent directory to the system path
 
 
 @pytest.fixture
@@ -160,9 +158,7 @@ async def test_update_budget_allows_null_max_budget(client_and_mocks):
     assert resp.status_code == 200, resp.text
 
     # Verify that max_budget=None was included in the update data
-    assert (
-        "max_budget" in captured_data
-    ), "max_budget should be included when explicitly set to null"
+    assert "max_budget" in captured_data, "max_budget should be included when explicitly set to null"
     assert captured_data["max_budget"] is None, "max_budget should be None"
 
     mock_table.update.assert_awaited_once()
@@ -297,9 +293,7 @@ async def test_update_budget_recomputes_reset_at_when_duration_changes(
     )
     assert resp.status_code == 200, resp.text
 
-    assert (
-        "budget_reset_at" in captured
-    ), "duration change must recompute budget_reset_at"
+    assert "budget_reset_at" in captured, "duration change must recompute budget_reset_at"
     reset_at = captured["budget_reset_at"]
     assert isinstance(reset_at, datetime)
     assert reset_at > before, "recomputed reset must be in the future"

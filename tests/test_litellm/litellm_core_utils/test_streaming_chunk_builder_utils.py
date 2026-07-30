@@ -4,9 +4,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
 from litellm.types.utils import GenericStreamingChunk
@@ -191,11 +189,7 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
                 }
             ]
         ),
-        make_chunk(
-            thinking_blocks=[
-                {"type": "thinking", "thinking": None, "signature": "sig_block1"}
-            ]
-        ),
+        make_chunk(thinking_blocks=[{"type": "thinking", "thinking": None, "signature": "sig_block1"}]),
         make_chunk(
             thinking_blocks=[
                 {
@@ -213,16 +207,10 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
                 }
             ]
         ),
-        make_chunk(
-            thinking_blocks=[
-                {"type": "thinking", "thinking": None, "signature": "sig_block2"}
-            ]
-        ),
+        make_chunk(thinking_blocks=[{"type": "thinking", "thinking": None, "signature": "sig_block2"}]),
     ]
 
-    thinking_chunks = [
-        chunk for chunk in chunks if chunk["choices"][0]["delta"].get("thinking_blocks")
-    ]
+    thinking_chunks = [chunk for chunk in chunks if chunk["choices"][0]["delta"].get("thinking_blocks")]
     processor = ChunkProcessor(chunks=chunks)
     result = processor.get_combined_thinking_content(thinking_chunks)
 
@@ -267,9 +255,7 @@ def test_cache_read_input_tokens_retained():
             prompt_tokens=11779,
             total_tokens=11784,
             completion_tokens_details=None,
-            prompt_tokens_details=PromptTokensDetails(
-                audio_tokens=None, cached_tokens=11775
-            ),
+            prompt_tokens_details=PromptTokensDetails(audio_tokens=None, cached_tokens=11775),
             cache_creation_input_tokens=4,
             cache_read_input_tokens=11775,
         ),
@@ -303,9 +289,7 @@ def test_cache_read_input_tokens_retained():
             prompt_tokens=0,
             total_tokens=214,
             completion_tokens_details=None,
-            prompt_tokens_details=PromptTokensDetails(
-                audio_tokens=None, cached_tokens=0
-            ),
+            prompt_tokens_details=PromptTokensDetails(audio_tokens=None, cached_tokens=0),
             cache_creation_input_tokens=0,
             cache_read_input_tokens=0,
         ),
@@ -366,10 +350,7 @@ def test_streaming_preserves_anthropic_1hr_cache_creation_breakdown():
     )
     # Sanity: the delta event genuinely lacks the breakdown - this is the input
     # condition that used to defeat cost calc.
-    assert (
-        getattr(message_delta_usage.prompt_tokens_details, "cache_creation_token_details", None)
-        is None
-    )
+    assert getattr(message_delta_usage.prompt_tokens_details, "cache_creation_token_details", None) is None
 
     def _usage_chunk(usage, finish_reason):
         return ModelResponseStream(
@@ -496,9 +477,7 @@ def test_cache_read_input_tokens_retained_genericstreamingchunk():
             prompt_tokens=1234,
             total_tokens=1239,
             completion_tokens_details=None,
-            prompt_tokens_details=PromptTokensDetails(
-                audio_tokens=None, cached_tokens=543
-            ).model_dump(),
+            prompt_tokens_details=PromptTokensDetails(audio_tokens=None, cached_tokens=543).model_dump(),
         ),
         index=2,
     )
@@ -514,6 +493,7 @@ def test_cache_read_input_tokens_retained_genericstreamingchunk():
     )
 
     assert usage.prompt_tokens_details.cached_tokens == 543
+
 
 def test_stream_chunk_builder_litellm_usage_chunks():
     """
@@ -588,9 +568,7 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     chunks = [chunk1, chunk2]
     processor = ChunkProcessor(chunks=chunks)
 
-    usage = processor.calculate_usage(
-        chunks=chunks, model="gemini/gemini-2.5-flash-lite", completion_output=""
-    )
+    usage = processor.calculate_usage(chunks=chunks, model="gemini/gemini-2.5-flash-lite", completion_output="")
 
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
@@ -612,9 +590,7 @@ def test_get_model_from_chunks_azure_model_router():
         {"model": "gpt-4.1-nano-2025-04-14", "id": "chatcmpl-123", "choices": []},
     ]
 
-    result = ChunkProcessor._get_model_from_chunks(
-        chunks=chunks, first_chunk_model="azure-model-router"
-    )
+    result = ChunkProcessor._get_model_from_chunks(chunks=chunks, first_chunk_model="azure-model-router")
 
     # Should return the actual model, not the request model
     assert result == "gpt-4.1-nano-2025-04-14"
@@ -625,9 +601,7 @@ def test_get_model_from_chunks_azure_model_router():
         {"model": "gpt-4", "id": "chatcmpl-456", "choices": []},
     ]
 
-    result_same = ChunkProcessor._get_model_from_chunks(
-        chunks=chunks_same_model, first_chunk_model="gpt-4"
-    )
+    result_same = ChunkProcessor._get_model_from_chunks(chunks=chunks_same_model, first_chunk_model="gpt-4")
 
     # Should return the first chunk's model when all are the same
     assert result_same == "gpt-4"
@@ -703,9 +677,7 @@ def test_stream_chunk_builder_anthropic_web_search():
     chunks = [chunk1, chunk2]
     processor = ChunkProcessor(chunks=chunks)
 
-    usage = processor.calculate_usage(
-        chunks=chunks, model="claude-sonnet-4-5-20250929", completion_output=""
-    )
+    usage = processor.calculate_usage(chunks=chunks, model="claude-sonnet-4-5-20250929", completion_output="")
 
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
@@ -797,15 +769,11 @@ def test_stream_chunk_builder_dict_snapshot_preserves_hidden_provider_fields():
         ],
     )
     chunk_dict = chunk.model_dump()
-    chunk_dict["_hidden_params"] = {
-        "provider_specific_fields": {"traffic_type": "default"}
-    }
+    chunk_dict["_hidden_params"] = {"provider_specific_fields": {"traffic_type": "default"}}
 
     response = stream_chunk_builder(chunks=[chunk_dict])
     assert response is not None
-    assert (
-        response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
-    )
+    assert response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
 
 
 def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_chunks():
@@ -850,10 +818,7 @@ def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_chunks():
     assert getattr(response, "vertex_ai_grounding_metadata") == grounding_metadata
     assert getattr(response, "vertex_ai_url_context_metadata") == url_context_metadata
     assert response._hidden_params["vertex_ai_grounding_metadata"] == grounding_metadata
-    assert (
-        response._hidden_params["vertex_ai_url_context_metadata"]
-        == url_context_metadata
-    )
+    assert response._hidden_params["vertex_ai_url_context_metadata"] == url_context_metadata
 
     dumped = response.model_dump()
     assert dumped["vertex_ai_grounding_metadata"] == grounding_metadata
@@ -900,9 +865,7 @@ def test_stream_chunk_builder_uses_assembled_model_for_provider_metadata():
 
 def test_stream_chunk_builder_propagates_vertex_ai_safety_results():
     """Assembled response must expose safety data under the non-streaming field name."""
-    safety_ratings = [
-        [{"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"}]
-    ]
+    safety_ratings = [[{"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"}]]
 
     chunk = ModelResponseStream(
         id="chatcmpl-vertex-safety",
@@ -944,18 +907,12 @@ def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_dict_chunks():
             )
         ],
     ).model_dump()
-    chunk_dict["_hidden_params"] = {
-        "vertex_ai_grounding_metadata": [{"webSearchQueries": ["test query"]}]
-    }
+    chunk_dict["_hidden_params"] = {"vertex_ai_grounding_metadata": [{"webSearchQueries": ["test query"]}]}
 
     response = stream_chunk_builder(chunks=[chunk_dict])
     assert response is not None
-    assert getattr(response, "vertex_ai_grounding_metadata") == [
-        {"webSearchQueries": ["test query"]}
-    ]
-    assert response.model_dump()["vertex_ai_grounding_metadata"] == [
-        {"webSearchQueries": ["test query"]}
-    ]
+    assert getattr(response, "vertex_ai_grounding_metadata") == [{"webSearchQueries": ["test query"]}]
+    assert response.model_dump()["vertex_ai_grounding_metadata"] == [{"webSearchQueries": ["test query"]}]
 
 
 def test_cost_field_in_usage_chunks():
@@ -964,29 +921,21 @@ def test_cost_field_in_usage_chunks():
         id="chatcmpl-1",
         created=1745513206,
         model="openrouter/claude",
-        choices=[
-            StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))
-        ],
+        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))],
         usage=chunk1_usage,
     )
 
-    chunk2_usage = Usage(
-        completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025
-    )
+    chunk2_usage = Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025)
     chunk2 = ModelResponseStream(
         id="chatcmpl-1",
         created=1745513207,
         model="openrouter/claude",
-        choices=[
-            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
-        ],
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))],
         usage=chunk2_usage,
     )
 
     processor = ChunkProcessor(chunks=[chunk1, chunk2])
-    usage = processor.calculate_usage(
-        chunks=[chunk1, chunk2], model="openrouter/claude", completion_output="Hi"
-    )
+    usage = processor.calculate_usage(chunks=[chunk1, chunk2], model="openrouter/claude", completion_output="Hi")
 
     assert hasattr(usage, "cost")
     assert usage.cost == 0.00025

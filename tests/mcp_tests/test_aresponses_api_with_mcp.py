@@ -41,9 +41,7 @@ async def test_mcp_helper_methods():
     """Test the core MCP helper methods in LiteLLM_Proxy_MCP_Handler"""
 
     # Test _should_use_litellm_mcp_gateway
-    mcp_tools: List[Any] = [
-        {"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}
-    ]
+    mcp_tools: List[Any] = [{"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}]
 
     other_tools: List[Any] = [
         {
@@ -61,9 +59,7 @@ async def test_mcp_helper_methods():
     assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(mcp_tools) == True
 
     # Should return False for other tools
-    assert (
-        LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(other_tools) == False
-    )
+    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(other_tools) == False
 
     # Should return False for None
     assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(None) == False
@@ -82,9 +78,7 @@ async def test_mcp_helper_methods():
     mcp_tools_always = [{"require_approval": "always"}]
 
     assert LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_never) == True
-    assert (
-        LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_always) == False
-    )
+    assert LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_always) == False
 
     # A single approval-required reference must disable auto-execution for the
     # whole request; otherwise a "never" reference alongside an "always" one
@@ -163,9 +157,7 @@ async def test_mcp_output_elements_addition():
         }
     ]
 
-    mock_tool_results = [
-        {"tool_call_id": "call_123", "result": "Tool executed successfully"}
-    ]
+    mock_tool_results = [{"tool_call_id": "call_123", "result": "Tool executed successfully"}]
 
     # Test adding output elements
     updated_response = LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
@@ -230,41 +222,25 @@ async def test_aresponses_api_with_mcp_mock_integration():
     )
 
     # Test 1: Verify MCP tools are detected correctly
-    should_use_mcp = LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
-        cast(Any, mcp_tools)
-    )
-    assert (
-        should_use_mcp == True
-    ), "Should detect MCP tools with litellm_proxy server_url"
+    should_use_mcp = LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(cast(Any, mcp_tools))
+    assert should_use_mcp == True, "Should detect MCP tools with litellm_proxy server_url"
 
     # Test 2: Verify auto-execution detection works
-    should_auto_execute = LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
-        cast(Any, mcp_tools)
-    )
-    assert (
-        should_auto_execute == True
-    ), "Should auto-execute tools with require_approval='never'"
+    should_auto_execute = LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(cast(Any, mcp_tools))
+    assert should_auto_execute == True, "Should auto-execute tools with require_approval='never'"
 
     # Test 3: Verify tool parsing works correctly
-    mcp_parsed, other_parsed = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(
-        cast(Any, mcp_tools)
-    )
+    mcp_parsed, other_parsed = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(cast(Any, mcp_tools))
     assert len(mcp_parsed) == 1, "Should parse one MCP tool"
     assert len(other_parsed) == 0, "Should have no other tools"
     assert mcp_parsed[0]["type"] == "mcp", "Parsed tool should be MCP type"
     assert mcp_parsed[0]["server_url"] == "litellm_proxy", "Should preserve server_url"
-    assert (
-        mcp_parsed[0].get("require_approval") == "never"
-    ), "Should preserve require_approval"
+    assert mcp_parsed[0].get("require_approval") == "never", "Should preserve require_approval"
 
     # Test 4: Test with mixed tools
-    mixed_tools = mcp_tools + [
-        {"type": "function", "name": "test_function", "parameters": {"type": "object"}}
-    ]
+    mixed_tools = mcp_tools + [{"type": "function", "name": "test_function", "parameters": {"type": "object"}}]
 
-    mcp_parsed, other_parsed = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(
-        cast(Any, mixed_tools)
-    )
+    mcp_parsed, other_parsed = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(cast(Any, mixed_tools))
     assert len(mcp_parsed) == 1, "Should parse one MCP tool from mixed list"
     assert len(other_parsed) == 1, "Should have one other tool from mixed list"
 
@@ -353,10 +329,7 @@ async def test_aresponses_api_with_mcp_passes_mcp_server_auth_headers_to_process
     mcp_server_auth_headers = captured_process_kwargs["mcp_server_auth_headers"]
     assert mcp_server_auth_headers is not None
     assert "linear_config" in mcp_server_auth_headers
-    assert (
-        mcp_server_auth_headers["linear_config"]["Authorization"]
-        == "Bearer linear-token"
-    )
+    assert mcp_server_auth_headers["linear_config"]["Authorization"] == "Bearer linear-token"
 
 
 @pytest.mark.asyncio
@@ -436,15 +409,11 @@ async def test_mcp_allowed_tools_filtering():
     # Filter tools using the helper function
     filtered_tools = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
         mcp_tools=mock_mcp_tools_from_server,
-        mcp_tools_with_litellm_proxy=cast(
-            List[ToolParam], mcp_tool_config_with_allowed_tools
-        ),
+        mcp_tools_with_litellm_proxy=cast(List[ToolParam], mcp_tool_config_with_allowed_tools),
     )
 
     # Should only return the 2 allowed tools
-    assert (
-        len(filtered_tools) == 2
-    ), f"Expected 2 filtered tools, got {len(filtered_tools)}"
+    assert len(filtered_tools) == 2, f"Expected 2 filtered tools, got {len(filtered_tools)}"
 
     # Check that only allowed tools are included
     filtered_tool_names = [tool.name for tool in filtered_tools]
@@ -453,16 +422,14 @@ async def test_mcp_allowed_tools_filtering():
         "fetch_tiktoken_documentation",
     ]
 
-    assert set(filtered_tool_names) == set(
-        expected_allowed_tools
-    ), f"Expected tools {expected_allowed_tools}, got {filtered_tool_names}"
+    assert set(filtered_tool_names) == set(expected_allowed_tools), (
+        f"Expected tools {expected_allowed_tools}, got {filtered_tool_names}"
+    )
 
     # Verify excluded tools are not present
     excluded_tools = ["list_tiktoken_functions", "get_tiktoken_examples"]
     for excluded_tool in excluded_tools:
-        assert (
-            excluded_tool not in filtered_tool_names
-        ), f"Tool {excluded_tool} should have been filtered out"
+        assert excluded_tool not in filtered_tool_names, f"Tool {excluded_tool} should have been filtered out"
 
     print("✓ Test Case 1: allowed_tools filtering works correctly")
 
@@ -478,15 +445,13 @@ async def test_mcp_allowed_tools_filtering():
 
     filtered_tools_all = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
         mcp_tools=mock_mcp_tools_from_server,
-        mcp_tools_with_litellm_proxy=cast(
-            List[ToolParam], mcp_tool_config_without_allowed_tools
-        ),
+        mcp_tools_with_litellm_proxy=cast(List[ToolParam], mcp_tool_config_without_allowed_tools),
     )
 
     # Should return all 4 tools when no allowed_tools specified
-    assert (
-        len(filtered_tools_all) == 4
-    ), f"Expected 4 tools when no allowed_tools specified, got {len(filtered_tools_all)}"
+    assert len(filtered_tools_all) == 4, (
+        f"Expected 4 tools when no allowed_tools specified, got {len(filtered_tools_all)}"
+    )
 
     print("✓ Test Case 2: no allowed_tools returns all tools")
 
@@ -548,13 +513,9 @@ async def test_mcp_allowed_tools_filtering():
     ]
 
     # First filter by allowed tools
-    filtered_tools_with_duplicates = (
-        LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
-            mcp_tools=mock_mcp_tools_with_duplicates,
-            mcp_tools_with_litellm_proxy=cast(
-                List[ToolParam], mcp_tool_config_with_duplicates
-            ),
-        )
+    filtered_tools_with_duplicates = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=mock_mcp_tools_with_duplicates,
+        mcp_tools_with_litellm_proxy=cast(List[ToolParam], mcp_tool_config_with_duplicates),
     )
 
     # Then deduplicate the filtered tools
@@ -563,14 +524,14 @@ async def test_mcp_allowed_tools_filtering():
     )
 
     # Should only return 1 tool (the duplicate should be removed)
-    assert (
-        len(filtered_tools_deduplicated) == 1
-    ), f"Expected 1 tool after deduplication, got {len(filtered_tools_deduplicated)}"
+    assert len(filtered_tools_deduplicated) == 1, (
+        f"Expected 1 tool after deduplication, got {len(filtered_tools_deduplicated)}"
+    )
 
     # Check that the correct tool is present
-    assert (
-        filtered_tools_deduplicated[0].name == "GitMCP-fetch_litellm_documentation"
-    ), f"Expected GitMCP-fetch_litellm_documentation, got {filtered_tools_deduplicated[0].name}"
+    assert filtered_tools_deduplicated[0].name == "GitMCP-fetch_litellm_documentation", (
+        f"Expected GitMCP-fetch_litellm_documentation, got {filtered_tools_deduplicated[0].name}"
+    )
 
     print("✓ Test Case 3: duplicate tools are properly deduplicated")
 
@@ -580,18 +541,18 @@ async def test_mcp_allowed_tools_filtering():
     )
 
     # Should return 2 unique tools (GitMCP-fetch_litellm_documentation and GitMCP-search_litellm_documentation)
-    assert (
-        len(standalone_deduplicated) == 2
-    ), f"Expected 2 unique tools after standalone deduplication, got {len(standalone_deduplicated)}"
+    assert len(standalone_deduplicated) == 2, (
+        f"Expected 2 unique tools after standalone deduplication, got {len(standalone_deduplicated)}"
+    )
 
     unique_tool_names = [tool.name for tool in standalone_deduplicated]
     expected_unique_names = [
         "GitMCP-fetch_litellm_documentation",
         "GitMCP-search_litellm_documentation",
     ]
-    assert set(unique_tool_names) == set(
-        expected_unique_names
-    ), f"Expected {expected_unique_names}, got {unique_tool_names}"
+    assert set(unique_tool_names) == set(expected_unique_names), (
+        f"Expected {expected_unique_names}, got {unique_tool_names}"
+    )
 
     print("✓ Test Case 3b: standalone deduplication method works correctly")
 
@@ -613,17 +574,15 @@ async def test_mcp_allowed_tools_filtering():
         },
     ]
 
-    filtered_tools_multiple = (
-        LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
-            mcp_tools=mock_mcp_tools_from_server,
-            mcp_tools_with_litellm_proxy=cast(List[ToolParam], multiple_mcp_configs),
-        )
+    filtered_tools_multiple = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=mock_mcp_tools_from_server,
+        mcp_tools_with_litellm_proxy=cast(List[ToolParam], multiple_mcp_configs),
     )
 
     # Should return union of all allowed tools (3 unique tools)
-    assert (
-        len(filtered_tools_multiple) == 3
-    ), f"Expected 3 tools from multiple configs, got {len(filtered_tools_multiple)}"
+    assert len(filtered_tools_multiple) == 3, (
+        f"Expected 3 tools from multiple configs, got {len(filtered_tools_multiple)}"
+    )
 
     filtered_multiple_names = [tool.name for tool in filtered_tools_multiple]
     expected_multiple_tools = [
@@ -632,13 +591,11 @@ async def test_mcp_allowed_tools_filtering():
         "get_tiktoken_examples",
     ]
 
-    assert set(filtered_multiple_names) == set(
-        expected_multiple_tools
-    ), f"Expected tools {expected_multiple_tools}, got {filtered_multiple_names}"
-
-    print(
-        "✓ Test Case 3: multiple MCP configs with different allowed_tools works correctly"
+    assert set(filtered_multiple_names) == set(expected_multiple_tools), (
+        f"Expected tools {expected_multiple_tools}, got {filtered_multiple_names}"
     )
+
+    print("✓ Test Case 3: multiple MCP configs with different allowed_tools works correctly")
 
     # Test Case 4: Empty allowed_tools list (should return no tools)
     mcp_config_empty_allowed = [
@@ -657,9 +614,9 @@ async def test_mcp_allowed_tools_filtering():
     )
 
     # Should return all tools when allowed_tools is empty list (no filtering)
-    assert (
-        len(filtered_tools_empty) == 4
-    ), f"Expected 4 tools when allowed_tools is empty list, got {len(filtered_tools_empty)}"
+    assert len(filtered_tools_empty) == 4, (
+        f"Expected 4 tools when allowed_tools is empty list, got {len(filtered_tools_empty)}"
+    )
 
     print("✓ Test Case 4: empty allowed_tools list returns all tools")
 
@@ -690,9 +647,7 @@ async def test_streaming_mcp_events_validation():
                 "description": "Search BerriAI/litellm repository for information",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "Search query"}
-                    },
+                    "properties": {"query": {"type": "string", "description": "Search query"}},
                     "required": ["query"],
                 },
             },
@@ -784,9 +739,7 @@ async def test_streaming_mcp_events_validation():
         # Setup MCP mocks
         mock_get_tools.return_value = (mock_mcp_tools, ["test_server"])
 
-        async def mock_execute_tool_calls_side_effect(
-            tool_server_map, tool_calls, user_api_key_auth, **kwargs
-        ):
+        async def mock_execute_tool_calls_side_effect(tool_server_map, tool_calls, user_api_key_auth, **kwargs):
             """Mock tool execution with realistic results"""
             results = []
             for tool_call in tool_calls:
@@ -831,9 +784,7 @@ async def test_streaming_mcp_events_validation():
             stream=True,
         )
 
-        assert hasattr(
-            response, "__aiter__"
-        ), "Response should be async iterable for streaming"
+        assert hasattr(response, "__aiter__"), "Response should be async iterable for streaming"
 
         # Collect all streaming events
         events = []
@@ -859,9 +810,7 @@ async def test_streaming_mcp_events_validation():
         assert len(events) > 0, "Should have received at least some streaming events"
 
         # Validate MCP discovery events were emitted
-        assert (
-            len(mcp_discovery_events) > 0
-        ), "Should have received MCP discovery events"
+        assert len(mcp_discovery_events) > 0, "Should have received MCP discovery events"
 
         # Check that discovery events come before regular content events
         first_discovery_idx = next(
@@ -875,9 +824,7 @@ async def test_streaming_mcp_events_validation():
         )
         # The output_item.added event triggers the transition to MCP discovery,
         # so discovery events should appear after it in the stream
-        assert (
-            first_discovery_idx > 0
-        ), "MCP discovery events should follow the initial output_item.added event"
+        assert first_discovery_idx > 0, "MCP discovery events should follow the initial output_item.added event"
 
         # Verify MCP mocks were called
         assert mock_get_tools.called, "MCP tools should have been fetched"
@@ -891,9 +838,7 @@ async def test_streaming_mcp_events_validation():
         pytest.param("claude-haiku-4-5", id="anthropic"),
     ],
 )
-async def test_streaming_responses_api_with_mcp_tools(
-    model: str, caplog: pytest.LogCaptureFixture
-):
+async def test_streaming_responses_api_with_mcp_tools(model: str, caplog: pytest.LogCaptureFixture):
     """
     Test the streaming responses API with MCP tools when using server_url="litellm_proxy"
 
@@ -907,13 +852,9 @@ async def test_streaming_responses_api_with_mcp_tools(
     Return the user the result of request 2
     """
     # Skip test if API keys are not set for the respective models
-    if ("claude" in model.lower() or "anthropic" in model.lower()) and not os.getenv(
-        "ANTHROPIC_API_KEY"
-    ):
+    if ("claude" in model.lower() or "anthropic" in model.lower()) and not os.getenv("ANTHROPIC_API_KEY"):
         pytest.skip("ANTHROPIC_API_KEY not set, skipping anthropic model test")
-    if ("gpt" in model.lower() or "openai" in model.lower()) and not os.getenv(
-        "OPENAI_API_KEY"
-    ):
+    if ("gpt" in model.lower() or "openai" in model.lower()) and not os.getenv("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY not set, skipping openai model test")
 
     from unittest.mock import AsyncMock, patch
@@ -930,9 +871,7 @@ async def test_streaming_responses_api_with_mcp_tools(
                 "description": "Search BerriAI/litellm repository for information",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "Search query"}
-                    },
+                    "properties": {"query": {"type": "string", "description": "Search query"}},
                     "required": ["query"],
                 },
             },
@@ -957,9 +896,7 @@ async def test_streaming_responses_api_with_mcp_tools(
             mock_get_tools.return_value = (mock_mcp_tools, ["litellm_proxy"])
 
             # Create a dynamic mock that will match the actual tool call ID from the LLM response
-            def mock_execute_tool_calls_side_effect(
-                tool_calls, user_api_key_auth, **kwargs
-            ):
+            def mock_execute_tool_calls_side_effect(tool_calls, user_api_key_auth, **kwargs):
                 """Mock function that returns results matching the actual tool call IDs from the LLM"""
                 results = []
                 for tool_call in tool_calls:
@@ -1007,9 +944,7 @@ async def test_streaming_responses_api_with_mcp_tools(
             )
 
             print(f"📋 Response type: {type(response)}")
-            assert hasattr(
-                response, "__aiter__"
-            ), "Response should be an async streaming response"
+            assert hasattr(response, "__aiter__"), "Response should be an async streaming response"
 
             # Collect streaming chunks
             chunks = []
@@ -1020,9 +955,9 @@ async def test_streaming_responses_api_with_mcp_tools(
             print(f"📊 Total chunks received: {len(chunks)}")
 
             # Verify MCP mocks were called (may be called multiple times in streaming)
-            assert (
-                mock_get_tools.call_count >= 1
-            ), f"Expected MCP tools to be fetched at least once, got {mock_get_tools.call_count}"
+            assert mock_get_tools.call_count >= 1, (
+                f"Expected MCP tools to be fetched at least once, got {mock_get_tools.call_count}"
+            )
             print(f"MCP tools fetched: {len(mock_mcp_tools)}")
 
             # Verify we got a response
@@ -1034,12 +969,9 @@ async def test_streaming_responses_api_with_mcp_tools(
     lite_errors = [
         record
         for record in caplog.records
-        if record.levelno >= logging.ERROR
-        and ("LiteLLM" in record.name or "LiteLLM" in record.getMessage())
+        if record.levelno >= logging.ERROR and ("LiteLLM" in record.name or "LiteLLM" in record.getMessage())
     ]
-    assert not lite_errors, "Unexpected LiteLLM errors: " + ", ".join(
-        record.getMessage() for record in lite_errors
-    )
+    assert not lite_errors, "Unexpected LiteLLM errors: " + ", ".join(record.getMessage() for record in lite_errors)
 
 
 @pytest.mark.asyncio
@@ -1071,13 +1003,9 @@ async def test_mcp_parameter_preparation_helpers():
         call_params=base_call_params, should_auto_execute=True
     )
 
-    assert (
-        initial_params_auto["stream"] == False
-    ), "Stream should be disabled for auto-execute"
+    assert initial_params_auto["stream"] == False, "Stream should be disabled for auto-execute"
     assert initial_params_auto["temperature"] == 0.7, "Other params should be preserved"
-    assert (
-        initial_params_auto["tool_choice"] == "required"
-    ), "tool_choice should be preserved for initial call"
+    assert initial_params_auto["tool_choice"] == "required", "tool_choice should be preserved for initial call"
     assert base_call_params["stream"] == True, "Original params should not be mutated"
 
     print("✅ _prepare_initial_call_params (auto-execute) works correctly")
@@ -1087,12 +1015,8 @@ async def test_mcp_parameter_preparation_helpers():
         call_params=base_call_params, should_auto_execute=False
     )
 
-    assert (
-        initial_params_no_auto["stream"] == True
-    ), "Stream should be preserved when not auto-executing"
-    assert (
-        initial_params_no_auto["temperature"] == 0.7
-    ), "Other params should be preserved"
+    assert initial_params_no_auto["stream"] == True, "Stream should be preserved when not auto-executing"
+    assert initial_params_no_auto["temperature"] == 0.7, "Other params should be preserved"
 
     print("✅ _prepare_initial_call_params (no auto-execute) works correctly")
 
@@ -1101,16 +1025,10 @@ async def test_mcp_parameter_preparation_helpers():
         call_params=base_call_params, original_stream_setting=True
     )
 
-    assert (
-        follow_up_params["stream"] == True
-    ), "Stream should be restored to original setting"
-    assert (
-        "tool_choice" not in follow_up_params
-    ), "tool_choice should be removed for follow-up call"
+    assert follow_up_params["stream"] == True, "Stream should be restored to original setting"
+    assert "tool_choice" not in follow_up_params, "tool_choice should be removed for follow-up call"
     assert follow_up_params["temperature"] == 0.7, "Other params should be preserved"
-    assert (
-        base_call_params["tool_choice"] == "required"
-    ), "Original params should not be mutated"
+    assert base_call_params["tool_choice"] == "required", "Original params should not be mutated"
 
     print("✅ _prepare_follow_up_call_params works correctly")
 
@@ -1135,18 +1053,14 @@ async def test_mcp_parameter_preparation_helpers():
     assert request_params["input"] == input_data, "Input should be included"
     assert request_params["model"] == model, "Model should be included"
     assert request_params["tools"] == tools, "Tools should be included"
-    assert (
-        request_params["previous_response_id"] == previous_response_id
-    ), "Previous response ID should be included"
+    assert request_params["previous_response_id"] == previous_response_id, "Previous response ID should be included"
 
     # Verify call_params are merged
     assert request_params["stream"] == True, "call_params should be merged"
     assert request_params["temperature"] == 0.8, "call_params should be merged"
 
     # Verify extra kwargs are merged
-    assert (
-        request_params["custom_param"] == "test_value"
-    ), "Extra kwargs should be merged"
+    assert request_params["custom_param"] == "test_value", "Extra kwargs should be merged"
 
     print("✅ _build_request_params works correctly")
 
@@ -1159,9 +1073,7 @@ async def test_mcp_parameter_preparation_helpers():
         previous_response_id=None,
     )
 
-    assert (
-        "previous_response_id" not in request_params_no_prev
-    ), "None previous_response_id should not be included"
+    assert "previous_response_id" not in request_params_no_prev, "None previous_response_id should not be included"
 
     print("✅ _build_request_params handles None previous_response_id correctly")
 
@@ -1220,23 +1132,19 @@ async def test_mcp_tool_execution_events_creation():
     for event in execution_events:
         assert hasattr(event, "type"), "Event should have type attribute"
         event_type = str(event.type)
-        assert (
-            "mcp_call" in event_type.lower() or "output_item" in event_type.lower()
-        ), f"Event should be MCP-related: {event_type}"
+        assert "mcp_call" in event_type.lower() or "output_item" in event_type.lower(), (
+            f"Event should be MCP-related: {event_type}"
+        )
 
         # Check for sequence numbers
         if hasattr(event, "sequence_number"):
-            assert isinstance(
-                event.sequence_number, int
-            ), "Sequence number should be integer"
+            assert isinstance(event.sequence_number, int), "Sequence number should be integer"
             assert event.sequence_number > 0, "Sequence number should be positive"
 
     print("Tool execution events have proper structure")
 
     # Test with empty inputs
-    empty_events = LiteLLM_Proxy_MCP_Handler._create_tool_execution_events(
-        tool_calls=[], tool_results=[]
-    )
+    empty_events = LiteLLM_Proxy_MCP_Handler._create_tool_execution_events(tool_calls=[], tool_results=[])
 
     assert len(empty_events) == 0, "Should create no events for empty inputs"
     print("Handles empty inputs correctly")
@@ -1273,9 +1181,7 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
                 "description": "Search documentation for information",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "Search query"}
-                    },
+                    "properties": {"query": {"type": "string", "description": "Search query"}},
                     "required": ["query"],
                 },
             },
@@ -1288,9 +1194,7 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
                 "description": "Get content of a specific file",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "Path to file"}
-                    },
+                    "properties": {"file_path": {"type": "string", "description": "Path to file"}},
                     "required": ["file_path"],
                 },
             },
@@ -1308,9 +1212,7 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
         # Return a minimal mock async streaming response
         class MockStreamingResponse:
             async def __aiter__(self):
-                yield type(
-                    "MockChunk", (), {"type": "response.completed", "output": []}
-                )()
+                yield type("MockChunk", (), {"type": "response.completed", "output": []})()
 
         return MockStreamingResponse()
 
@@ -1323,7 +1225,6 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
         ) as mock_get_tools,
         patch("litellm.aresponses", side_effect=capture_llm_tools) as mock_aresponses,
     ):
-
         # Setup MCP mock to return our test tools
         mock_get_tools.return_value = mock_mcp_tools
 
@@ -1367,14 +1268,12 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
         # If MCP tools were processed, validate they were fetched exactly once
         # (This protects against duplicate fetching)
         if mock_get_tools.call_count > 0:
-            assert (
-                mock_get_tools.call_count == 1
-            ), f"MCP tools should be fetched exactly once, got {mock_get_tools.call_count} calls"
+            assert mock_get_tools.call_count == 1, (
+                f"MCP tools should be fetched exactly once, got {mock_get_tools.call_count} calls"
+            )
             print(f"MCP tools fetched exactly once: {mock_get_tools.call_count}")
         else:
-            print(
-                "MCP tools not fetched (likely due to test mocking - this is OK for validation)"
-            )
+            print("MCP tools not fetched (likely due to test mocking - this is OK for validation)")
 
         # Analyze tools sent to LLM for duplicates
         for call_idx, tools_in_call in enumerate(llm_call_tools):
@@ -1385,9 +1284,7 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
                 tool_names = []
                 for tool in tools_in_call:
                     if isinstance(tool, dict):
-                        tool_name = tool.get("function", {}).get("name") or tool.get(
-                            "name"
-                        )
+                        tool_name = tool.get("function", {}).get("name") or tool.get("name")
                     else:
                         tool_name = getattr(tool, "name", str(tool))
 
@@ -1400,50 +1297,34 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
                 unique_tool_names = set(tool_names)
                 duplicates = [name for name in tool_names if tool_names.count(name) > 1]
 
-                assert (
-                    len(duplicates) == 0
-                ), f"Found duplicate tools in LLM call {call_idx + 1}: {duplicates}"
-                assert len(tool_names) == len(
-                    unique_tool_names
-                ), f"Tool names should be unique in call {call_idx + 1}"
+                assert len(duplicates) == 0, f"Found duplicate tools in LLM call {call_idx + 1}: {duplicates}"
+                assert len(tool_names) == len(unique_tool_names), f"Tool names should be unique in call {call_idx + 1}"
 
                 print(f"   No duplicate tools found in call {call_idx + 1}")
 
                 # Validate that MCP tools were properly transformed to OpenAI format
-                openai_format_tools = [
-                    tool
-                    for tool in tools_in_call
-                    if isinstance(tool, dict) and "function" in tool
-                ]
+                openai_format_tools = [tool for tool in tools_in_call if isinstance(tool, dict) and "function" in tool]
                 if openai_format_tools:
                     print(f"   Found {len(openai_format_tools)} OpenAI-format tools")
 
                     # Verify tools have proper OpenAI structure
                     for tool in openai_format_tools:
                         assert "type" in tool, "Tool should have 'type' field"
-                        assert (
-                            tool["type"] == "function"
-                        ), "Tool type should be 'function'"
+                        assert tool["type"] == "function", "Tool type should be 'function'"
                         assert "function" in tool, "Tool should have 'function' field"
                         assert "name" in tool["function"], "Function should have 'name'"
-                        assert (
-                            "description" in tool["function"]
-                        ), "Function should have 'description'"
-                        assert (
-                            "parameters" in tool["function"]
-                        ), "Function should have 'parameters'"
+                        assert "description" in tool["function"], "Function should have 'description'"
+                        assert "parameters" in tool["function"], "Function should have 'parameters'"
 
                     print(f"   All tools have proper OpenAI format")
 
         # The key validation: ensure no duplicate fetching occurred
         # This is the main protection against the bug we fixed
         if mock_get_tools.call_count > 1:
-            print(
-                f"ERROR: Duplicate MCP fetching detected! Called {mock_get_tools.call_count} times"
+            print(f"ERROR: Duplicate MCP fetching detected! Called {mock_get_tools.call_count} times")
+            assert False, (
+                f"MCP tools should be fetched exactly once, but were fetched {mock_get_tools.call_count} times"
             )
-            assert (
-                False
-            ), f"MCP tools should be fetched exactly once, but were fetched {mock_get_tools.call_count} times"
 
         # Additional validation: ensure no duplicate tools in any LLM call
         total_duplicates_found = 0
@@ -1452,23 +1333,17 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
                 tool_names = []
                 for tool in tools_in_call:
                     if isinstance(tool, dict):
-                        tool_name = tool.get("function", {}).get("name") or tool.get(
-                            "name"
-                        )
+                        tool_name = tool.get("function", {}).get("name") or tool.get("name")
                         if tool_name:
                             tool_names.append(tool_name)
 
                 duplicates = [name for name in tool_names if tool_names.count(name) > 1]
                 if duplicates:
                     total_duplicates_found += len(set(duplicates))
-                    print(
-                        f"ERROR: Duplicate tools in call {call_idx + 1}: {set(duplicates)}"
-                    )
+                    print(f"ERROR: Duplicate tools in call {call_idx + 1}: {set(duplicates)}")
 
         if total_duplicates_found > 0:
-            assert (
-                False
-            ), f"Found {total_duplicates_found} duplicate tools across all LLM calls"
+            assert False, f"Found {total_duplicates_found} duplicate tools across all LLM calls"
 
         print("No duplicate MCP tools E2E test passed!")
         print(f"Summary:")
@@ -1489,17 +1364,13 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["gpt-4o-mini"])
-async def test_streaming_mcp_event_order_and_response_id_consistency(
-    model: str, caplog: pytest.LogCaptureFixture
-):
+async def test_streaming_mcp_event_order_and_response_id_consistency(model: str, caplog: pytest.LogCaptureFixture):
     """
     Test that:
     1. Streaming events are emitted in correct order (response.created, response.in_progress, response.output_item.added before MCP events)
     2. All response lifecycle events share the same response ID within a cycle
     """
-    if ("gpt" in model.lower() or "openai" in model.lower()) and not os.getenv(
-        "OPENAI_API_KEY"
-    ):
+    if ("gpt" in model.lower() or "openai" in model.lower()) and not os.getenv("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY not set, skipping openai model test")
 
     from unittest.mock import AsyncMock, patch
@@ -1513,9 +1384,7 @@ async def test_streaming_mcp_event_order_and_response_id_consistency(
                 "description": "Get weather for a city",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {
-                        "city": {"type": "string", "description": "City name"}
-                    },
+                    "properties": {"city": {"type": "string", "description": "City name"}},
                     "required": ["city"],
                 },
             },
@@ -1587,65 +1456,39 @@ async def test_streaming_mcp_event_order_and_response_id_consistency(
             assert len(events) > 0, "Should receive streaming events"
 
             created_idx = next(
-                (
-                    i
-                    for i, e in enumerate(events)
-                    if getattr(e, "type", None) == "response.created"
-                ),
+                (i for i, e in enumerate(events) if getattr(e, "type", None) == "response.created"),
                 None,
             )
             in_progress_idx = next(
-                (
-                    i
-                    for i, e in enumerate(events)
-                    if getattr(e, "type", None) == "response.in_progress"
-                ),
+                (i for i, e in enumerate(events) if getattr(e, "type", None) == "response.in_progress"),
                 None,
             )
             output_item_added_idx = next(
-                (
-                    i
-                    for i, e in enumerate(events)
-                    if getattr(e, "type", None) == "response.output_item.added"
-                ),
+                (i for i, e in enumerate(events) if getattr(e, "type", None) == "response.output_item.added"),
                 None,
             )
             mcp_in_progress_idx = next(
-                (
-                    i
-                    for i, e in enumerate(events)
-                    if "mcp_list_tools.in_progress" in str(getattr(e, "type", ""))
-                ),
+                (i for i, e in enumerate(events) if "mcp_list_tools.in_progress" in str(getattr(e, "type", ""))),
                 None,
             )
             completed_idx = next(
-                (
-                    i
-                    for i, e in enumerate(events)
-                    if getattr(e, "type", None) == "response.completed"
-                ),
+                (i for i, e in enumerate(events) if getattr(e, "type", None) == "response.completed"),
                 None,
             )
 
             assert created_idx is not None, "response.created event should be present"
-            assert (
-                in_progress_idx is not None
-            ), "response.in_progress event should be present"
-            assert (
-                output_item_added_idx is not None
-            ), "response.output_item.added event should be present"
+            assert in_progress_idx is not None, "response.in_progress event should be present"
+            assert output_item_added_idx is not None, "response.output_item.added event should be present"
 
-            assert (
-                created_idx < in_progress_idx
-            ), "response.created should come before response.in_progress"
-            assert (
-                in_progress_idx < output_item_added_idx
-            ), "response.in_progress should come before response.output_item.added"
+            assert created_idx < in_progress_idx, "response.created should come before response.in_progress"
+            assert in_progress_idx < output_item_added_idx, (
+                "response.in_progress should come before response.output_item.added"
+            )
 
             if mcp_in_progress_idx is not None:
-                assert (
-                    output_item_added_idx < mcp_in_progress_idx
-                ), "response.output_item.added should come before response.mcp_list_tools.in_progress"
+                assert output_item_added_idx < mcp_in_progress_idx, (
+                    "response.output_item.added should come before response.mcp_list_tools.in_progress"
+                )
 
             response_ids = []
             for i, event in enumerate(events):
@@ -1653,11 +1496,7 @@ async def test_streaming_mcp_event_order_and_response_id_consistency(
                 if hasattr(event, "response"):
                     response_obj = getattr(event, "response", None)
                     if response_obj and hasattr(response_obj, "id"):
-                        event_type_value = (
-                            event_type.value
-                            if hasattr(event_type, "value")
-                            else str(event_type)
-                        )
+                        event_type_value = event_type.value if hasattr(event_type, "value") else str(event_type)
                         if any(
                             x in event_type_value
                             for x in [
@@ -1668,9 +1507,9 @@ async def test_streaming_mcp_event_order_and_response_id_consistency(
                         ):
                             response_ids.append((i, event_type_value, response_obj.id))
 
-            assert (
-                len(response_ids) >= 2
-            ), f"Should have at least 2 response lifecycle events. Found {len(response_ids)}"
+            assert len(response_ids) >= 2, (
+                f"Should have at least 2 response lifecycle events. Found {len(response_ids)}"
+            )
 
             cycles = []
             current_cycle = []
@@ -1690,20 +1529,15 @@ async def test_streaming_mcp_event_order_and_response_id_consistency(
 
             for cycle_num, cycle in enumerate(cycles):
                 cycle_ids = set(resp_id for _, _, resp_id in cycle)
-                assert (
-                    len(cycle_ids) == 1
-                ), f"Cycle {cycle_num + 1} should have consistent response ID. Found {len(cycle_ids)} unique IDs"
+                assert len(cycle_ids) == 1, (
+                    f"Cycle {cycle_num + 1} should have consistent response ID. Found {len(cycle_ids)} unique IDs"
+                )
 
-            assert (
-                completed_idx is not None
-            ), "response.completed event should be present"
+            assert completed_idx is not None, "response.completed event should be present"
 
     lite_errors = [
         record
         for record in caplog.records
-        if record.levelno >= logging.ERROR
-        and ("LiteLLM" in record.name or "LiteLLM" in record.getMessage())
+        if record.levelno >= logging.ERROR and ("LiteLLM" in record.name or "LiteLLM" in record.getMessage())
     ]
-    assert not lite_errors, "Unexpected LiteLLM errors: " + ", ".join(
-        record.getMessage() for record in lite_errors
-    )
+    assert not lite_errors, "Unexpected LiteLLM errors: " + ", ".join(record.getMessage() for record in lite_errors)

@@ -77,9 +77,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
         ),
     ],
 )
-def test_remove_sensitive_info_from_deployment(
-    model_config: dict, expected_config: dict
-):
+def test_remove_sensitive_info_from_deployment(model_config: dict, expected_config: dict):
     sanitized_config = remove_sensitive_info_from_deployment(model_config)
     assert sanitized_config == expected_config
 
@@ -110,10 +108,7 @@ def test_remove_sensitive_info_from_deployment_with_excluded_keys():
     sanitized_config = remove_sensitive_info_from_deployment(
         copy.deepcopy(base_config), excluded_keys={"litellm_credentials_name"}
     )
-    assert (
-        sanitized_config["litellm_params"]["litellm_credentials_name"]
-        == "my-credential-name"
-    )
+    assert sanitized_config["litellm_params"]["litellm_credentials_name"] == "my-credential-name"
 
     # access_token should still be masked (not in excluded_keys)
     assert sanitized_config["litellm_params"]["access_token"] != "token-12345"

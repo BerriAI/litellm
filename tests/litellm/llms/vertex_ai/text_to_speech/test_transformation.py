@@ -6,9 +6,7 @@ from unittest.mock import MagicMock, Mock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.vertex_ai.text_to_speech.transformation import (
@@ -46,9 +44,7 @@ class TestVertexAITextToSpeechConfig:
 
     @patch.object(VertexAITextToSpeechConfig, "_ensure_access_token")
     @patch.object(VertexAITextToSpeechConfig, "_get_token_and_url")
-    def test_transform_text_to_speech_request_body(
-        self, mock_get_token, mock_ensure_token
-    ):
+    def test_transform_text_to_speech_request_body(self, mock_get_token, mock_ensure_token):
         """Test that transform_text_to_speech_request generates correct request body"""
         # Mock authentication
         mock_ensure_token.return_value = ("mock-token", "test-project")
@@ -109,9 +105,7 @@ class TestVertexAITextToSpeechConfig:
         config = VertexAITextToSpeechConfig()
 
         # Test with a Chirp3 HD voice
-        voice_str, voice_dict = config._map_voice_to_vertex_format(
-            "en-US-Chirp3-HD-Charon"
-        )
+        voice_str, voice_dict = config._map_voice_to_vertex_format("en-US-Chirp3-HD-Charon")
 
         assert voice_str == "en-US-Chirp3-HD-Charon"
         assert voice_dict is not None
@@ -145,9 +139,7 @@ def test_litellm_speech_vertex_ai_chirp(mock_get_token, mock_ensure_token, mock_
 
     # Mock HTTP response
     mock_response = Mock(spec=httpx.Response)
-    mock_response.content = (
-        b'{"audioContent": "SGVsbG8gV29ybGQ="}'  # base64 encoded "Hello World"
-    )
+    mock_response.content = b'{"audioContent": "SGVsbG8gV29ybGQ="}'  # base64 encoded "Hello World"
     mock_response.status_code = 200
     mock_response.headers = {"content-type": "application/json"}
     mock_response.json.return_value = {"audioContent": "SGVsbG8gV29ybGQ="}
@@ -166,9 +158,7 @@ def test_litellm_speech_vertex_ai_chirp(mock_get_token, mock_ensure_token, mock_
     call_kwargs = mock_post.call_args.kwargs
 
     # Verify the URL is the Google Cloud TTS API
-    assert (
-        call_kwargs["url"] == "https://texttospeech.googleapis.com/v1/text:synthesize"
-    )
+    assert call_kwargs["url"] == "https://texttospeech.googleapis.com/v1/text:synthesize"
 
     # Verify request body structure
     assert "data" in call_kwargs

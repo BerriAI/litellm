@@ -4,9 +4,7 @@ import sys
 from unittest.mock import Mock, patch
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
@@ -45,10 +43,7 @@ class TestBedrockImageGeneration:
             for call in mock_bedrock_image_gen.call_args_list:
                 if "headers" in call.kwargs:
                     headers = call.kwargs["headers"]
-                    if (
-                        "Authorization" in headers
-                        and headers["Authorization"] == f"Bearer {test_api_key}"
-                    ):
+                    if "Authorization" in headers and headers["Authorization"] == f"Bearer {test_api_key}":
                         break
 
     def test_image_generation_with_env_variable_bearer_token(self, monkeypatch):
@@ -65,14 +60,11 @@ class TestBedrockImageGeneration:
                 "litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration.image_generation"
             ) as mock_bedrock_image_gen,
         ):
-
             mock_image_response_obj = litellm.ImageResponse()
             mock_image_response_obj.data = [{"url": "https://example.com/image.jpg"}]
             mock_bedrock_image_gen.return_value = mock_image_response_obj
 
-            response = litellm.image_generation(
-                model=model, prompt=prompt, aws_region_name="us-west-2"
-            )
+            response = litellm.image_generation(model=model, prompt=prompt, aws_region_name="us-west-2")
 
             assert response is not None
             assert len(response.data) > 0
@@ -81,10 +73,7 @@ class TestBedrockImageGeneration:
             for call in mock_bedrock_image_gen.call_args_list:
                 if "headers" in call.kwargs:
                     headers = call.kwargs["headers"]
-                    if (
-                        "Authorization" in headers
-                        and headers["Authorization"] == f"Bearer {test_api_key}"
-                    ):
+                    if "Authorization" in headers and headers["Authorization"] == f"Bearer {test_api_key}":
                         break
 
     @pytest.mark.asyncio
@@ -117,10 +106,7 @@ class TestBedrockImageGeneration:
             for call in mock_async_bedrock_image_gen.call_args_list:
                 if "headers" in call.kwargs:
                     headers = call.kwargs["headers"]
-                    if (
-                        "Authorization" in headers
-                        and headers["Authorization"] == f"Bearer {test_api_key}"
-                    ):
+                    if "Authorization" in headers and headers["Authorization"] == f"Bearer {test_api_key}":
                         break
 
     def test_image_generation_with_sigv4(self):
@@ -136,9 +122,7 @@ class TestBedrockImageGeneration:
             mock_image_response_obj.data = [{"url": "https://example.com/image.jpg"}]
             mock_bedrock_image_gen.return_value = mock_image_response_obj
 
-            response = litellm.image_generation(
-                model=model, prompt=prompt, aws_region_name="us-west-2"
-            )
+            response = litellm.image_generation(model=model, prompt=prompt, aws_region_name="us-west-2")
 
             assert response is not None
             assert len(response.data) > 0

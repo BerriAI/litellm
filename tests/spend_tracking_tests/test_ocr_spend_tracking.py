@@ -50,9 +50,7 @@ class TestExtractUsageForOCRCall:
     def test_extract_usage_from_pydantic_model(self):
         """Test extracting usage from Pydantic model response"""
         usage_info = MockUsageInfo(pages_processed=10, doc_size_bytes=1024)
-        response_obj = MockOCRResponse(
-            id="ocr-123", object="ocr", model="test-ocr-model", usage_info=usage_info
-        )
+        response_obj = MockOCRResponse(id="ocr-123", object="ocr", model="test-ocr-model", usage_info=usage_info)
         response_obj_dict = response_obj.model_dump()
 
         usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)

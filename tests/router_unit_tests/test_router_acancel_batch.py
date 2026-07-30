@@ -80,9 +80,7 @@ async def test_router_acancel_batch_resolves_credential_name():
     mock_response.status = "cancelled"
 
     try:
-        with patch.object(
-            litellm, "acancel_batch", new_callable=AsyncMock
-        ) as mock_cancel:
+        with patch.object(litellm, "acancel_batch", new_callable=AsyncMock) as mock_cancel:
             mock_cancel.return_value = mock_response
 
             await router.acancel_batch(
@@ -115,9 +113,7 @@ async def test_router_acancel_batch_removes_unresolved_credential_name():
     mock_response.status = "cancelled"
 
     with (
-        patch.object(
-            router, "get_deployment_credentials_with_provider", return_value=None
-        ),
+        patch.object(router, "get_deployment_credentials_with_provider", return_value=None),
         patch.object(litellm, "acancel_batch", new_callable=AsyncMock) as mock_cancel,
     ):
         mock_cancel.return_value = mock_response

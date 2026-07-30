@@ -8,9 +8,7 @@ from fastapi import Request
 import pytest
 import asyncio
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
@@ -90,9 +88,9 @@ async def test_assistants_passthrough_logging():
     await asyncio.sleep(1)
 
     assert test_custom_logger.logged_kwargs is not None
-    passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (
-        test_custom_logger.logged_kwargs["passthrough_logging_payload"]
-    )
+    passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = test_custom_logger.logged_kwargs[
+        "passthrough_logging_payload"
+    ]
     assert passthrough_logging_payload is not None
     assert passthrough_logging_payload["url"] == TARGET_URL
     assert passthrough_logging_payload["request_body"] == REQUEST_BODY
@@ -155,9 +153,7 @@ async def test_threads_passthrough_logging():
     await asyncio.sleep(1)
 
     assert test_custom_logger.logged_kwargs is not None
-    passthrough_logging_payload = test_custom_logger.logged_kwargs[
-        "passthrough_logging_payload"
-    ]
+    passthrough_logging_payload = test_custom_logger.logged_kwargs["passthrough_logging_payload"]
     assert passthrough_logging_payload is not None
 
     # Fix for TypedDict access errors
@@ -168,7 +164,5 @@ async def test_threads_passthrough_logging():
     response_body = result.body
     client_facing_response_body = json.loads(response_body)
 
-    assert (
-        passthrough_logging_payload.get("response_body") == client_facing_response_body
-    )
+    assert passthrough_logging_payload.get("response_body") == client_facing_response_body
     assert passthrough_logging_payload.get("request_method") == TARGET_METHOD

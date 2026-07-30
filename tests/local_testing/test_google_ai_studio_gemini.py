@@ -1,8 +1,6 @@
 import os, sys, traceback
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from dotenv import load_dotenv
 
@@ -17,9 +15,7 @@ def generate_text():
                     {"type": "text", "text": "What is this image?"},
                     {
                         "type": "image_url",
-                        "image_url": {
-                            "url": "https://avatars.githubusercontent.com/u/17561003?v=4"
-                        },
+                        "image_url": {"url": "https://avatars.githubusercontent.com/u/17561003?v=4"},
                     },
                 ],
             }

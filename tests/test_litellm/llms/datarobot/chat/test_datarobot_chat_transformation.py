@@ -85,10 +85,7 @@ class TestDataRobotConfig:
 
     def test_resolve_api_base_with_environment_variable(self, handler):
         os.environ["DATAROBOT_ENDPOINT"] = "https://env.datarobot.com"
-        assert (
-            handler._resolve_api_base(None)
-            == "https://env.datarobot.com/api/v2/genai/llmgw/chat/completions/"
-        )
+        assert handler._resolve_api_base(None) == "https://env.datarobot.com/api/v2/genai/llmgw/chat/completions/"
         del os.environ["DATAROBOT_ENDPOINT"]
 
     @pytest.mark.parametrize(

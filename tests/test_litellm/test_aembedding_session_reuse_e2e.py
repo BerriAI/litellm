@@ -58,7 +58,5 @@ def test_openai_embedding_passes_shared_session():
     assert "shared_session=shared_session" in async_transport_source
 
     # Step 6: _create_aiohttp_transport uses it
-    aiohttp_transport_source = inspect.getsource(
-        AsyncHTTPHandler._create_aiohttp_transport
-    )
+    aiohttp_transport_source = inspect.getsource(AsyncHTTPHandler._create_aiohttp_transport)
     assert "shared_session" in aiohttp_transport_source

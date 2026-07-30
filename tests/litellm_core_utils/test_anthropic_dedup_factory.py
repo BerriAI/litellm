@@ -53,9 +53,7 @@ def test_anthropic_deduplication_logic():
 
     # Run transformation
     # We pass dummy model/provider args as they are required but valid for this test
-    result = anthropic_messages_pt(
-        messages=messages, model="claude-3-opus-20240229", llm_provider="anthropic"
-    )
+    result = anthropic_messages_pt(messages=messages, model="claude-3-opus-20240229", llm_provider="anthropic")
 
     # Inspect results
     # We expect 1 user message and 1 merged assistant message
@@ -66,11 +64,7 @@ def test_anthropic_deduplication_logic():
     assistant_content = result[1]["content"]
 
     # Filter for tool_use blocks
-    tool_uses = [
-        b
-        for b in assistant_content
-        if isinstance(b, dict) and b.get("type") == "tool_use"
-    ]
+    tool_uses = [b for b in assistant_content if isinstance(b, dict) and b.get("type") == "tool_use"]
 
     # We expect exactly 2 tool uses (one for unique_1, one for unique_2)
     # The duplicate unique_1 should be gone.

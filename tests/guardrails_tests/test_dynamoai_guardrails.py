@@ -49,9 +49,7 @@ async def test_dynamoai_blocks_content_with_block_action():
         ],
     }
     mock_response.raise_for_status = MagicMock()
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         request_data = {
             "model": "gpt-5.5",
             "messages": [{"role": "user", "content": "This is harmful content"}],
@@ -98,9 +96,7 @@ async def test_dynamoai_allows_content_with_none_action():
         "appliedPolicies": [],
     }
     mock_response.raise_for_status = MagicMock()
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         request_data = {
             "model": "gpt-5.5",
             "messages": [{"role": "user", "content": "Hello, how are you?"}],

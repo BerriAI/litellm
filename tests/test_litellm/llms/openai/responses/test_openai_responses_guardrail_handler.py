@@ -12,9 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../../.."))  # Adds the parent directory to the system path
 
 from fastapi import HTTPException
 from openai.types.responses import ResponseFunctionToolCall
@@ -151,15 +149,9 @@ class TestOpenAIResponsesHandlerInputProcessing:
 
         result = await handler.process_input_messages(data, guardrail)
 
-        assert (
-            result["input"][0]["content"][0]["text"]
-            == "Describe this image [GUARDRAILED]"
-        )
+        assert result["input"][0]["content"][0]["text"] == "Describe this image [GUARDRAILED]"
         # Image URL should remain unchanged
-        assert (
-            result["input"][0]["content"][1]["image_url"]["url"]
-            == "https://example.com/image.jpg"
-        )
+        assert result["input"][0]["content"][1]["image_url"]["url"] == "https://example.com/image.jpg"
 
     @pytest.mark.asyncio
     async def test_process_input_with_empty_content(self):
@@ -577,10 +569,7 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert tool_call["id"] == "call_4SjsMeA6DUHwGKaE87ZojgOF"
         assert tool_call["type"] == "function"
         assert tool_call["function"]["name"] == "get_current_weather"
-        assert (
-            tool_call["function"]["arguments"]
-            == '{"location":"Boston, MA","unit":"celsius"}'
-        )
+        assert tool_call["function"]["arguments"] == '{"location":"Boston, MA","unit":"celsius"}'
         assert tool_call["index"] == 0
 
     def test_extract_tool_call_from_dict_format(self):
@@ -621,10 +610,7 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert tool_call["id"] == "call_4SjsMeA6DUHwGKaE87ZojgOF"
         assert tool_call["type"] == "function"
         assert tool_call["function"]["name"] == "get_current_weather"
-        assert (
-            tool_call["function"]["arguments"]
-            == '{"location":"Boston, MA","unit":"celsius"}'
-        )
+        assert tool_call["function"]["arguments"] == '{"location":"Boston, MA","unit":"celsius"}'
 
     @pytest.mark.asyncio
     async def test_process_output_response_with_tool_calls(self):
@@ -1025,9 +1011,7 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
                 logging_obj: Optional[Any] = None,
             ) -> GenericGuardrailAPIInputs:
                 texts = inputs.get("texts", [])
-                inputs["texts"] = [
-                    t.replace("<TOKEN_1>", "john@example.com") for t in texts
-                ]
+                inputs["texts"] = [t.replace("<TOKEN_1>", "john@example.com") for t in texts]
                 return inputs
 
         handler = OpenAIResponsesHandler()
@@ -1063,15 +1047,11 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
             litellm_logging_obj=None,
         )
 
-        completed_chunk = next(
-            c
-            for c in result
-            if isinstance(c, dict) and c.get("type") == "response.completed"
-        )
+        completed_chunk = next(c for c in result if isinstance(c, dict) and c.get("type") == "response.completed")
         output_text = completed_chunk["response"]["output"][0]["content"][0]["text"]
-        assert (
-            output_text == "send to john@example.com"
-        ), f"Expected PII token to be unmasked in response.completed output, got: {output_text!r}"
+        assert output_text == "send to john@example.com", (
+            f"Expected PII token to be unmasked in response.completed output, got: {output_text!r}"
+        )
 
     @pytest.mark.asyncio
     async def test_process_output_streaming_response_pass_through_unchanged(self):
@@ -1150,9 +1130,7 @@ class TestGetStructuredMessages:
         }
         result = handler.get_structured_messages(data)
         assert result is not None
-        has_system = any(
-            isinstance(msg, dict) and msg.get("role") == "system" for msg in result
-        )
+        has_system = any(isinstance(msg, dict) and msg.get("role") == "system" for msg in result)
         assert has_system, f"Expected system message from instructions, got: {result}"
 
     def test_should_return_none_when_no_input(self):

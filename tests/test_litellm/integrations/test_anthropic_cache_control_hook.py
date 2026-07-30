@@ -1629,7 +1629,9 @@ class TestEnableAnthropicPromptCaching:
         """OpenAI-shaped tools nest cache_control under ``function``; the Anthropic
         chat transform honors that location, so the stand-down must see it too."""
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
-        tools = [{"type": "function", "function": {"name": "t", "parameters": {}, "cache_control": {"type": "ephemeral"}}}]
+        tools = [
+            {"type": "function", "function": {"name": "t", "parameters": {}, "cache_control": {"type": "ephemeral"}}}
+        ]
         assert self._points(tools=tools) == []
 
     def test_seed_stands_down_when_only_tools_carry_cache_control(self, monkeypatch):
@@ -1879,9 +1881,7 @@ class TestAnthropicPromptCachingEnvVars:
             print(json.dumps([litellm.enable_anthropic_prompt_caching, litellm.anthropic_prompt_caching_ttl]))
             """
         )
-        result = subprocess.run(
-            [sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=300
-        )
+        result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=300)
         assert result.returncode == 0, result.stderr
         enabled, ttl = json.loads(result.stdout.strip().splitlines()[-1])
         return enabled, ttl

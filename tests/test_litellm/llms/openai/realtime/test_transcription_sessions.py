@@ -24,9 +24,7 @@ from litellm.types.realtime import RealtimeTranscriptionSessionRequest
 def test_openai_transcription_session_url():
     cfg = OpenAIRealtimeHTTPConfig()
     assert (
-        cfg.get_transcription_session_url(
-            api_base="https://api.openai.com", model="gpt-realtime-whisper"
-        )
+        cfg.get_transcription_session_url(api_base="https://api.openai.com", model="gpt-realtime-whisper")
         == "https://api.openai.com/v1/realtime/transcription_sessions"
     )
 
@@ -35,9 +33,7 @@ def test_openai_transcription_session_url_strips_trailing_v1():
     """A /v1 suffix must not be duplicated in the path."""
     cfg = OpenAIRealtimeHTTPConfig()
     assert (
-        cfg.get_transcription_session_url(
-            api_base="https://api.openai.com/v1", model="gpt-realtime-whisper"
-        )
+        cfg.get_transcription_session_url(api_base="https://api.openai.com/v1", model="gpt-realtime-whisper")
         == "https://api.openai.com/v1/realtime/transcription_sessions"
     )
 
@@ -49,10 +45,7 @@ def test_azure_transcription_session_url_uses_deployment_and_api_version():
         model="whisper-deploy",
         api_version="2025-04-01-preview",
     )
-    assert (
-        url
-        == "https://my.openai.azure.com/openai/realtime/transcription_sessions?api-version=2025-04-01-preview"
-    )
+    assert url == "https://my.openai.azure.com/openai/realtime/transcription_sessions?api-version=2025-04-01-preview"
 
 
 def test_request_resolves_model_returns_none_when_both_absent():
@@ -172,18 +165,14 @@ async def test_sdk_fn_routes_openai_transcription_session(monkeypatch):
     assert kwargs["url"].endswith("/v1/realtime/transcription_sessions")
     # The litellm-only routing hint must not be forwarded upstream.
     assert "model" not in kwargs["json"]
-    assert kwargs["json"]["input_audio_transcription"] == {
-        "model": "gpt-realtime-whisper"
-    }
+    assert kwargs["json"]["input_audio_transcription"] == {"model": "gpt-realtime-whisper"}
 
 
 def test_append_query_params_skips_existing_keys():
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 
     url = "wss://example.com/v1/realtime?model=gpt-4o"
-    result = BaseLLMHTTPHandler._append_query_params(
-        url, {"model": "ignored", "intent": "transcription"}
-    )
+    result = BaseLLMHTTPHandler._append_query_params(url, {"model": "ignored", "intent": "transcription"})
     assert "model=ignored" not in result
     assert "intent=transcription" in result
 

@@ -52,13 +52,10 @@ async def test_key_info_v2_visibility(actor, expected_visible, proxy_client, wor
     assert resp.status_code == 200, f"{actor.value}: {resp.status_code} {resp.text}"
 
     visible = {
-        user_id_to_actor[entry["user_id"]]
-        for entry in resp.json()["info"]
-        if entry.get("user_id") in user_id_to_actor
+        user_id_to_actor[entry["user_id"]] for entry in resp.json()["info"] if entry.get("user_id") in user_id_to_actor
     }
     assert visible == set(expected_visible), (
-        f"{actor.value}: expected {sorted(a.value for a in expected_visible)}, "
-        f"got {sorted(a.value for a in visible)}"
+        f"{actor.value}: expected {sorted(a.value for a in expected_visible)}, got {sorted(a.value for a in visible)}"
     )
 
 

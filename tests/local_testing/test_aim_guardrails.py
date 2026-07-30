@@ -17,9 +17,7 @@ from litellm.proxy.guardrails.guardrail_hooks.aim.aim import (
 from litellm.proxy.proxy_server import StreamingCallbackError, UserAPIKeyAuth
 from litellm.types.utils import ModelResponseStream, ModelResponse
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
@@ -89,9 +87,7 @@ async def test_block_callback(mode: str):
         ],
         config_file_path="",
     )
-    aim_guardrails = [
-        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
-    ]
+    aim_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)]
     assert len(aim_guardrails) == 1
     aim_guardrail = aim_guardrails[0]
 
@@ -160,9 +156,7 @@ async def test_output_block_raises_proxy_exception():
         ],
         config_file_path="",
     )
-    aim_guardrails = [
-        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
-    ]
+    aim_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)]
     assert len(aim_guardrails) == 1
     aim_guardrail = aim_guardrails[0]
 
@@ -225,9 +219,7 @@ async def test_anonymize_multimodal_rejection_raises_proxy_exception():
         ],
         config_file_path="",
     )
-    aim_guardrails = [
-        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
-    ]
+    aim_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)]
     assert len(aim_guardrails) == 1
     aim_guardrail = aim_guardrails[0]
 
@@ -250,9 +242,7 @@ async def test_anonymize_multimodal_rejection_raises_proxy_exception():
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         return_value=response_with_detections,
     ):
-        with pytest.raises(
-            ProxyException, match="anonymize action requested for multimodal"
-        ) as exc_info:
+        with pytest.raises(ProxyException, match="anonymize action requested for multimodal") as exc_info:
             await aim_guardrail.async_pre_call_hook(
                 data=data,
                 cache=DualCache(),
@@ -283,9 +273,7 @@ async def test_anonymize_callback__it_returns_redacted_content(mode: str):
         ],
         config_file_path="",
     )
-    aim_guardrails = [
-        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
-    ]
+    aim_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)]
     assert len(aim_guardrails) == 1
     aim_guardrail = aim_guardrails[0]
 
@@ -330,9 +318,7 @@ async def test_post_call__with_anonymized_entities__it_doesnt_deanonymize_output
         ],
         config_file_path="",
     )
-    aim_guardrails = [
-        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
-    ]
+    aim_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)]
     assert len(aim_guardrails) == 1
     aim_guardrail = aim_guardrails[0]
 
@@ -343,19 +329,13 @@ async def test_post_call__with_anonymized_entities__it_doesnt_deanonymize_output
         "litellm_call_id": "test-call-id",
     }
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
 
         def mock_post_detect_side_effect(url, *args, **kwargs):
             request_body = kwargs.get("json", {})
             request_headers = kwargs.get("headers", {})
-            assert (
-                request_headers["x-aim-call-id"] == "test-call-id"
-            ), "Wrong header: x-aim-call-id"
-            assert (
-                request_headers["x-aim-gateway-key-alias"] == "test-key"
-            ), "Wrong header: x-aim-gateway-key-alias"
+            assert request_headers["x-aim-call-id"] == "test-call-id", "Wrong header: x-aim-call-id"
+            assert request_headers["x-aim-gateway-key-alias"] == "test-key", "Wrong header: x-aim-gateway-key-alias"
             if request_body["messages"][-1]["role"] == "user":
                 return response_with_detections
             elif request_body["messages"][-1]["role"] == "assistant":
@@ -392,9 +372,7 @@ async def test_post_call__with_anonymized_entities__it_doesnt_deanonymize_output
             response=llm_response(),
             user_api_key_dict=UserAPIKeyAuth(key_alias="test-key"),
         )
-        assert (
-            result["choices"][0]["message"]["content"] == "Hello [NAME_1]! How are you?"
-        )
+        assert result["choices"][0]["message"]["content"] == "Hello [NAME_1]! How are you?"
 
 
 @pytest.mark.asyncio
@@ -413,9 +391,7 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
         ],
         config_file_path="",
     )
-    aim_guardrails = [
-        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
-    ]
+    aim_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)]
     assert len(aim_guardrails) == 1
     aim_guardrail = aim_guardrails[0]
 
@@ -431,9 +407,7 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
 
     websocket_mock = AsyncMock()
 
-    messages_from_aim = [
-        b'{"verified_chunk": {"choices": [{"delta": {"content": "A"}}]}}'
-    ] * length
+    messages_from_aim = [b'{"verified_chunk": {"choices": [{"delta": {"content": "A"}}]}}'] * length
     messages_from_aim.append(b'{"done": true}')
     websocket_mock.recv = ReceiveMock(messages_from_aim, delay=0.2)
 
@@ -441,9 +415,7 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
     async def connect_mock(*args, **kwargs):
         yield websocket_mock
 
-    monkeypatch.setattr(
-        "litellm.proxy.guardrails.guardrail_hooks.aim.aim.connect", connect_mock
-    )
+    monkeypatch.setattr("litellm.proxy.guardrails.guardrail_hooks.aim.aim.connect", connect_mock)
 
     results = []
     async for result in aim_guardrail.async_post_call_streaming_iterator_hook(
@@ -475,9 +447,7 @@ async def test_post_call_stream__blocked_chunks(monkeypatch):
         ],
         config_file_path="",
     )
-    aim_guardrails = [
-        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
-    ]
+    aim_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)]
     assert len(aim_guardrails) == 1
     aim_guardrail = aim_guardrails[0]
 
@@ -502,9 +472,7 @@ async def test_post_call_stream__blocked_chunks(monkeypatch):
     async def connect_mock(*args, **kwargs):
         yield websocket_mock
 
-    monkeypatch.setattr(
-        "litellm.proxy.guardrails.guardrail_hooks.aim.aim.connect", connect_mock
-    )
+    monkeypatch.setattr("litellm.proxy.guardrails.guardrail_hooks.aim.aim.connect", connect_mock)
 
     results = []
     # For async generators, we need to manually iterate and catch the exception
@@ -569,9 +537,7 @@ response_with_detections = Response(
                     "additional_content_index": None,
                 }
             ],
-            "session_entities": [
-                {"type": "NAME", "content": "Brian", "name": "NAME_1"}
-            ],
+            "session_entities": [{"type": "NAME", "content": "Brian", "name": "NAME_1"}],
         },
         "required_action": {
             "action_type": "anonymize_action",

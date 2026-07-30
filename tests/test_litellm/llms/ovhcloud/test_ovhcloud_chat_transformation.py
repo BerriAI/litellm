@@ -10,9 +10,7 @@ import pytest
 from litellm.llms.ovhcloud.utils import OVHCloudException
 from litellm.utils import get_optional_params
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.ovhcloud.chat.transformation import (
     OVHCloudChatCompletionStreamingHandler,
@@ -25,18 +23,14 @@ model = "ovhcloud/Mistral-7B-Instruct-v0.3"
 
 class TestOvhCloudChatCompletionStreamingHandler:
     def test_chunk_parser_successful(self):
-        handler = OVHCloudChatCompletionStreamingHandler(
-            streaming_response=None, sync_stream=True
-        )
+        handler = OVHCloudChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
         chunk = {
             "id": "test_id",
             "created": 1234567890,
             "model": "gpt-oss-20b",
             "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
-            "choices": [
-                {"delta": {"content": "test content", "reasoning": "test reasoning"}}
-            ],
+            "choices": [{"delta": {"content": "test content", "reasoning": "test reasoning"}}],
         }
 
         result = handler.chunk_parser(chunk)
@@ -52,9 +46,7 @@ class TestOvhCloudChatCompletionStreamingHandler:
         assert result.choices[0]["delta"]["reasoning_content"] == "test reasoning"
 
     def test_chunk_parser_error_response(self):
-        handler = OVHCloudChatCompletionStreamingHandler(
-            streaming_response=None, sync_stream=True
-        )
+        handler = OVHCloudChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
         error_chunk = {
             "error": {
@@ -70,9 +62,7 @@ class TestOvhCloudChatCompletionStreamingHandler:
         assert exc_info.value.status_code == 400
 
     def test_chunk_parser_key_error(self):
-        handler = OVHCloudChatCompletionStreamingHandler(
-            streaming_response=None, sync_stream=True
-        )
+        handler = OVHCloudChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
         invalid_chunk = {"incomplete": "data"}
 
@@ -95,9 +85,7 @@ class TestOVHCloudConfig:
         )
 
         assert transformed_request["model"] == model
-        assert transformed_request["messages"] == [
-            {"role": "user", "content": "Hello, world!"}
-        ]
+        assert transformed_request["messages"] == [{"role": "user", "content": "Hello, world!"}]
 
     def test_transform_request_with_extra_body(self):
         """Test request transformation with extra_body parameters"""
@@ -110,9 +98,7 @@ class TestOVHCloudConfig:
         )
 
         assert transformed_request["custom_param"] == "custom_value"
-        assert transformed_request["messages"] == [
-            {"role": "user", "content": "Hello, world!"}
-        ]
+        assert transformed_request["messages"] == [{"role": "user", "content": "Hello, world!"}]
 
     def test_map_openai_params(self):
         """Test OpenAI parameter mapping"""
@@ -216,9 +202,7 @@ def test_OVHCloud_streaming_integration():
         pytest.skip("OVHCLOUD_API_KEY not set, skipping test")
 
     try:
-        print(
-            f"🔍 Testing streaming with API key: {api_key[:6]}...{api_key[-4:]} (length: {len(api_key)})"
-        )
+        print(f"🔍 Testing streaming with API key: {api_key[:6]}...{api_key[-4:]} (length: {len(api_key)})")
         print(f"🔍 API base URL: {os.getenv('OVHCLOUD_API_BASE')}")
 
         response = completion(
@@ -270,9 +254,7 @@ def test_ovhcloud_with_custom_base_url():
     if not api_key:
         pytest.skip("OVHCLOUD_API_KEY not set, skipping test")
 
-    custom_base_url = os.getenv(
-        "OVHCLOUD_API_BASE", "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
-    )
+    custom_base_url = os.getenv("OVHCLOUD_API_BASE", "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1")
 
     try:
         response = completion(
@@ -301,7 +283,7 @@ class TestOVHCloudReasoningFieldMigration:
         """New `reasoning` field should be mapped to `reasoning_content`."""
         handler = OVHCloudChatCompletionStreamingHandler(
             streaming_response=iter([]),
-                        sync_stream=True,
+            sync_stream=True,
         )
         chunk = {
             "id": "test-id",
@@ -324,7 +306,7 @@ class TestOVHCloudReasoningFieldMigration:
         """Legacy `reasoning_content` field should pass through untouched."""
         handler = OVHCloudChatCompletionStreamingHandler(
             streaming_response=iter([]),
-                        sync_stream=True,
+            sync_stream=True,
         )
         chunk = {
             "id": "test-id",
@@ -347,7 +329,7 @@ class TestOVHCloudReasoningFieldMigration:
         """When both fields present, existing `reasoning_content` is not overwritten."""
         handler = OVHCloudChatCompletionStreamingHandler(
             streaming_response=iter([]),
-                        sync_stream=True,
+            sync_stream=True,
         )
         chunk = {
             "id": "test-id",
@@ -365,5 +347,3 @@ class TestOVHCloudReasoningFieldMigration:
         }
         result = handler.chunk_parser(chunk)
         assert result.choices[0]["delta"]["reasoning_content"] == "legacy field"
-
-

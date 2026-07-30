@@ -77,18 +77,14 @@ def test_nfkc_homoglyph_rejected_at_compile():
     [
         # Literal dunder attribute access.
         "def apply_guardrail(i, r, t):\n    return str.__class__\n",
-        "def apply_guardrail(i, r, t):\n"
-        "    return ().__class__.__bases__[0].__subclasses__()\n",
+        "def apply_guardrail(i, r, t):\n    return ().__class__.__bases__[0].__subclasses__()\n",
         # gi_code — on the transformer's restricted-names list.
-        "def apply_guardrail(i, r, t):\n"
-        "    def g():\n        yield 1\n"
-        "    return g().gi_code\n",
+        "def apply_guardrail(i, r, t):\n    def g():\n        yield 1\n    return g().gi_code\n",
         # Import forms.
         "import os\ndef apply_guardrail(i, r, t):\n    return allow()\n",
-        "from subprocess import call\n"
-        "def apply_guardrail(i, r, t):\n    return allow()\n",
+        "from subprocess import call\ndef apply_guardrail(i, r, t):\n    return allow()\n",
         # __import__ is rejected as an underscore-prefixed name.
-        "def apply_guardrail(i, r, t):\n" '    return __import__("os")\n',
+        'def apply_guardrail(i, r, t):\n    return __import__("os")\n',
     ],
 )
 def test_compile_time_rejections(snippet: str):
@@ -100,8 +96,7 @@ def test_compile_time_rejections(snippet: str):
     "snippet",
     [
         # getattr is not in the sandbox builtins — NameError at call time.
-        "def apply_guardrail(i, r, t):\n"
-        '    return getattr(str, "_"+"_class_"+"_")\n',
+        'def apply_guardrail(i, r, t):\n    return getattr(str, "_"+"_class_"+"_")\n',
         # setattr is guarded_setattr + full_write_guard — setting any attribute
         # on a user-defined object raises TypeError, whether the name is a
         # dunder or not.
@@ -139,10 +134,7 @@ def test_documented_ssn_example_compiles_and_runs():
 
 @pytest.mark.asyncio
 async def test_async_guardrail_compiles_and_runs():
-    code = (
-        "async def apply_guardrail(inputs, request_data, input_type):\n"
-        "    return allow()\n"
-    )
+    code = "async def apply_guardrail(inputs, request_data, input_type):\n    return allow()\n"
     guardrail = _compile(code)
     from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -156,10 +148,7 @@ async def test_async_guardrail_compiles_and_runs():
 
 @pytest.mark.asyncio
 async def test_custom_code_pre_call_block_uses_passthrough():
-    code = (
-        "def apply_guardrail(inputs, request_data, input_type):\n"
-        '    return block("blocked by test")\n'
-    )
+    code = 'def apply_guardrail(inputs, request_data, input_type):\n    return block("blocked by test")\n'
     guardrail = _compile(code)
 
     with pytest.raises(ModifyResponseException) as exc_info:
@@ -176,10 +165,7 @@ async def test_custom_code_pre_call_block_uses_passthrough():
 
 @pytest.mark.asyncio
 async def test_custom_code_post_call_block_raises_http_400():
-    code = (
-        "def apply_guardrail(inputs, request_data, input_type):\n"
-        '    return block("blocked by test")\n'
-    )
+    code = 'def apply_guardrail(inputs, request_data, input_type):\n    return block("blocked by test")\n'
     guardrail = _compile(code)
 
     with pytest.raises(HTTPException) as exc_info:
@@ -198,10 +184,7 @@ async def test_custom_code_post_call_block_raises_http_400():
 
 
 def test_typical_sync_guardrail_still_works():
-    code = (
-        "def apply_guardrail(inputs, request_data, input_type):\n"
-        "    return allow()\n"
-    )
+    code = "def apply_guardrail(inputs, request_data, input_type):\n    return allow()\n"
     guardrail = _compile(code)
     assert guardrail._compiled_function is not None
 

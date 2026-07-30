@@ -132,9 +132,7 @@ def _build_call(
 
 def _logger(reader, *, enable_metrics: bool):
     return OpenTelemetryV2(
-        config=OpenTelemetryV2Config(
-            exporter="in_memory", enable_metrics=enable_metrics
-        ),
+        config=OpenTelemetryV2Config(exporter="in_memory", enable_metrics=enable_metrics),
         meter_provider=MeterProvider(metric_readers=[reader]),
     )
 
@@ -158,9 +156,7 @@ def _drive_success(reader, callback_settings_attributes=None, **call_overrides):
     logger = _logger(reader, enable_metrics=True)
     previous = litellm.callback_settings
     if callback_settings_attributes is not None:
-        litellm.callback_settings = {
-            "otel": {"attributes": callback_settings_attributes}
-        }
+        litellm.callback_settings = {"otel": {"attributes": callback_settings_attributes}}
     try:
         kwargs, response_obj, start, end = _build_call(**call_overrides)
         asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
@@ -284,9 +280,7 @@ def test_a_metric_ineligible_filter_name_is_reported_not_silently_dropped(caplog
     with caplog.at_level("WARNING"):
         _drive_success(
             InMemoryMetricReader(),
-            callback_settings_attributes={
-                "include_list": [MODEL_KEY, "metadata.requester_ip_address"]
-            },
+            callback_settings_attributes={"include_list": [MODEL_KEY, "metadata.requester_ip_address"]},
         )
 
     reported = [
@@ -386,6 +380,8 @@ def test_success_attributes_are_capped_at_the_ceiling():
         for dp in metrics[name]:
             leaked = set(dp.attributes) - set(BOUNDED_KEYS) - {TOKEN_TYPE}
             assert not leaked, f"{name} leaked {leaked}"
+
+
 def test_provider_is_labelled_with_semconv_provider_name():
     """Every recorded point carries gen_ai.provider.name holding the semconv
     provider value (bedrock -> aws.bedrock), the key the GenAI convention and the
@@ -506,9 +502,7 @@ def test_metrics_reach_operator_configured_global_provider(monkeypatch):
 def test_resolve_meter_provider_prefers_injected():
     """An injected provider is used verbatim, never replaced by the global."""
     injected = MeterProvider(metric_readers=[InMemoryMetricReader()])
-    resolved = resolve_meter_provider(
-        OpenTelemetryV2Config(exporter="in_memory"), injected
-    )
+    resolved = resolve_meter_provider(OpenTelemetryV2Config(exporter="in_memory"), injected)
     assert resolved is injected
     injected.shutdown()
 

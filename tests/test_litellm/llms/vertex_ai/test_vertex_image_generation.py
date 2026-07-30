@@ -4,9 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.vertex_ai.image_generation.image_generation_handler import (
@@ -147,14 +145,10 @@ class TestVertexImageGeneration:
             # We need to test this through the transform_optional_params method
             # since the snake_to_camel function is defined inside it
             if "_" in snake_case:
-                result = self.vertex_image_gen.transform_optional_params(
-                    {snake_case: "test"}
-                )
+                result = self.vertex_image_gen.transform_optional_params({snake_case: "test"})
                 assert expected_camel_case in result
                 assert result[expected_camel_case] == "test"
             elif snake_case:  # Handle empty string case
-                result = self.vertex_image_gen.transform_optional_params(
-                    {snake_case: "test"}
-                )
+                result = self.vertex_image_gen.transform_optional_params({snake_case: "test"})
                 assert snake_case in result
                 assert result[snake_case] == "test"

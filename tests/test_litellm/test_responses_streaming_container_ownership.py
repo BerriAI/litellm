@@ -152,9 +152,7 @@ class TestStreamWrapperCapturesTerminalEvent:
 
         wrapper = wrapper_cls(gen())
         asyncio.run(_drain(wrapper))
-        assert (
-            wrapper.completed_response is None
-        ), "non-terminal chunks must not set completed_response"
+        assert wrapper.completed_response is None, "non-terminal chunks must not set completed_response"
 
     def test_first_terminal_event_wins(self):
         """Real streams only emit one terminal event, but defend against
@@ -194,9 +192,7 @@ class TestProxyOwnershipHookReadsCompletedResponse:
         wrapper = wrapper_cls(gen())
         asyncio.run(_drain(wrapper))
 
-        extracted = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
-            wrapper
-        )
+        extracted = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(wrapper)
         assert extracted is not None
         assert extracted.id == "resp_test"
         assert extracted.container["id"] == "cntr_test"
@@ -248,9 +244,7 @@ class TestSilentSkipNowLogged:
             asyncio.run(driver())
 
         assert any(
-            "Container ownership recording skipped on streaming /v1/responses"
-            in r.message
-            for r in caplog.records
+            "Container ownership recording skipped on streaming /v1/responses" in r.message for r in caplog.records
         ), "silent-skip warning never fired despite completed_response=None"
 
 

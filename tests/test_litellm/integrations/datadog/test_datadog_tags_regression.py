@@ -67,9 +67,7 @@ class TestDatadogTagsRegression:
         logger = DatadogCostManagementLogger()
 
         # Case 1: Legacy metadata (user alias only)
-        payload_legacy = StandardLoggingPayload(
-            metadata=StandardLoggingMetadata(user_api_key_alias="legacy-user")
-        )
+        payload_legacy = StandardLoggingPayload(metadata=StandardLoggingMetadata(user_api_key_alias="legacy-user"))
 
         tags_legacy = logger._extract_tags(payload_legacy)
 
@@ -79,9 +77,7 @@ class TestDatadogTagsRegression:
 
         # Case 2: New metadata (team alias)
         payload_new = StandardLoggingPayload(
-            metadata=StandardLoggingMetadata(
-                user_api_key_alias="new-user", user_api_key_team_alias="new-team-alias"
-            )
+            metadata=StandardLoggingMetadata(user_api_key_alias="new-user", user_api_key_team_alias="new-team-alias")
         )
 
         tags_new = logger._extract_tags(payload_new)

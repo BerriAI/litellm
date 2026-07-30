@@ -103,9 +103,7 @@ async def test_azure_responses_api_status_error():
                 "role": "assistant",
                 "type": "message",
                 "status": "completed",
-                "content": [
-                    {"type": "output_text", "text": "Here's an interesting fact."}
-                ],
+                "content": [{"type": "output_text", "text": "Here's an interesting fact."}],
             }
         ],
     }
@@ -146,9 +144,7 @@ async def test_azure_responses_api_status_error():
         )
 
     # Verify that 'status' field is not present in any of the input messages
-    print(
-        "Final request body:", json.dumps(captured_request_body, indent=4, default=str)
-    )
+    print("Final request body:", json.dumps(captured_request_body, indent=4, default=str))
     assert "input" in captured_request_body, "Request body should contain 'input' field"
 
     expected_input = [
@@ -246,30 +242,23 @@ async def test_azure_responses_api_headers_with_llm_provider_prefix():
 
     # Check that the response has the expected headers structure
     assert hasattr(response, "_hidden_params"), "Response should have _hidden_params"
-    assert (
-        "additional_headers" in response._hidden_params
-    ), "Response _hidden_params should contain 'additional_headers' with the LLM provider headers"
+    assert "additional_headers" in response._hidden_params, (
+        "Response _hidden_params should contain 'additional_headers' with the LLM provider headers"
+    )
 
     headers = response._hidden_params["additional_headers"]
 
     # Verify that Azure-specific headers are present with llm_provider- prefix
     assert "llm_provider-x-request-id" in headers, (
-        f"Response should contain 'llm_provider-x-request-id' header. "
-        f"Headers: {list(headers.keys())}"
+        f"Response should contain 'llm_provider-x-request-id' header. Headers: {list(headers.keys())}"
     )
     assert "llm_provider-apim-request-id" in headers, (
-        f"Response should contain 'llm_provider-apim-request-id' header. "
-        f"Headers: {list(headers.keys())}"
+        f"Response should contain 'llm_provider-apim-request-id' header. Headers: {list(headers.keys())}"
     )
 
     # Verify the header values match
-    assert (
-        headers["llm_provider-x-request-id"] == "12086715-aca3-4006-a29f-2f1e1d552043"
-    )
-    assert (
-        headers["llm_provider-apim-request-id"]
-        == "25664b0d-cf4b-4e10-8d27-c7272e7efd49"
-    )
+    assert headers["llm_provider-x-request-id"] == "12086715-aca3-4006-a29f-2f1e1d552043"
+    assert headers["llm_provider-apim-request-id"] == "25664b0d-cf4b-4e10-8d27-c7272e7efd49"
     assert headers["llm_provider-x-ms-region"] == "Sweden Central"
 
     # Also verify openai-compatible headers are included

@@ -24,9 +24,7 @@ def test_prompt_spec_includes_environment_and_created_by():
     """PromptSpec should carry environment and created_by fields."""
     spec = PromptSpec(
         prompt_id="test",
-        litellm_params=PromptLiteLLMParams(
-            prompt_id="test", prompt_integration="dotprompt"
-        ),
+        litellm_params=PromptLiteLLMParams(prompt_id="test", prompt_integration="dotprompt"),
         prompt_info=PromptInfo(prompt_type="db", environment="staging"),
         environment="staging",
         created_by="user-123",
@@ -39,9 +37,7 @@ def test_prompt_spec_default_environment():
     """PromptSpec environment should default to 'development'."""
     spec = PromptSpec(
         prompt_id="test",
-        litellm_params=PromptLiteLLMParams(
-            prompt_id="test", prompt_integration="dotprompt"
-        ),
+        litellm_params=PromptLiteLLMParams(prompt_id="test", prompt_integration="dotprompt"),
         prompt_info=PromptInfo(prompt_type="db"),
     )
     assert spec.environment == "development"
@@ -106,23 +102,17 @@ async def test_create_prompt_stores_environment_and_created_by():
         "created_at": None,
         "updated_at": None,
     }
-    mock_prisma_client.db.litellm_prompttable.create = AsyncMock(
-        return_value=mock_db_entry
-    )
+    mock_prisma_client.db.litellm_prompttable.create = AsyncMock(return_value=mock_db_entry)
     mock_prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[])
 
     request = Prompt(
         prompt_id="my_prompt",
-        litellm_params=PromptLiteLLMParams(
-            prompt_id="my_prompt", prompt_integration="dotprompt"
-        ),
+        litellm_params=PromptLiteLLMParams(prompt_id="my_prompt", prompt_integration="dotprompt"),
         prompt_info=PromptInfo(prompt_type="db", environment="staging"),
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
-        with patch(
-            "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
-        ) as mock_registry:
+        with patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry:
             mock_registry.initialize_prompt.return_value = PromptSpec(
                 prompt_id="my_prompt.v1",
                 litellm_params=request.litellm_params,
@@ -154,9 +144,7 @@ async def test_update_prompt_stores_environment_and_created_by():
     mock_prisma_client = MagicMock()
     mock_existing = MagicMock()
     mock_existing.version = 1
-    mock_prisma_client.db.litellm_prompttable.find_many = AsyncMock(
-        return_value=[mock_existing]
-    )
+    mock_prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[mock_existing])
 
     mock_db_entry = MagicMock()
     mock_db_entry.model_dump.return_value = {
@@ -175,22 +163,16 @@ async def test_update_prompt_stores_environment_and_created_by():
         "created_at": None,
         "updated_at": None,
     }
-    mock_prisma_client.db.litellm_prompttable.create = AsyncMock(
-        return_value=mock_db_entry
-    )
+    mock_prisma_client.db.litellm_prompttable.create = AsyncMock(return_value=mock_db_entry)
 
     request = Prompt(
         prompt_id="my_prompt",
-        litellm_params=PromptLiteLLMParams(
-            prompt_id="my_prompt", prompt_integration="dotprompt"
-        ),
+        litellm_params=PromptLiteLLMParams(prompt_id="my_prompt", prompt_integration="dotprompt"),
         prompt_info=PromptInfo(prompt_type="db", environment="production"),
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
-        with patch(
-            "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
-        ) as mock_registry:
+        with patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry:
             mock_registry.get_prompt_by_id.return_value = PromptSpec(
                 prompt_id="my_prompt.v1",
                 litellm_params=request.litellm_params,
@@ -203,9 +185,7 @@ async def test_update_prompt_stores_environment_and_created_by():
                 environment="production",
                 created_by="user-update",
             )
-            await update_prompt(
-                prompt_id="my_prompt", request=request, user_api_key_dict=mock_user_auth
-            )
+            await update_prompt(prompt_id="my_prompt", request=request, user_api_key_dict=mock_user_auth)
 
             create_call = mock_prisma_client.db.litellm_prompttable.create.call_args
             data = create_call.kwargs["data"]
@@ -228,14 +208,10 @@ async def test_delete_prompt_scoped_to_environment():
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_prompttable.delete_many = AsyncMock(return_value=None)
 
-    with patch(
-        "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
-    ) as mock_registry:
+    with patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry:
         prompt_spec = PromptSpec(
             prompt_id="test_prompt.v1",
-            litellm_params=PromptLiteLLMParams(
-                prompt_id="test_prompt", prompt_integration="dotprompt"
-            ),
+            litellm_params=PromptLiteLLMParams(prompt_id="test_prompt", prompt_integration="dotprompt"),
             prompt_info=PromptInfo(prompt_type="db"),
             environment="staging",
         )

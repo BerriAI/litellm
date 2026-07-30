@@ -399,9 +399,7 @@ class TestResolveModelForCostLookup:
             "litellm.proxy.proxy_server.llm_router",
             None,
         ):
-            resolved_model, provider = _resolve_model_for_cost_lookup(
-                "azure/openai/gpt-5.3-codex"
-            )
+            resolved_model, provider = _resolve_model_for_cost_lookup("azure/openai/gpt-5.3-codex")
 
         assert resolved_model == "azure/openai/gpt-5.3-codex"
         assert provider is None

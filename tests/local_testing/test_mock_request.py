@@ -7,9 +7,7 @@ import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 import time
 
@@ -56,9 +54,7 @@ async def test_async_mock_streaming_request():
         print(chunk)
         complete_response += chunk["choices"][0]["delta"]["content"] or ""
 
-    assert (
-        complete_response == "LiteLLM is awesome"
-    ), f"Unexpected response got {complete_response}"
+    assert complete_response == "LiteLLM is awesome", f"Unexpected response got {complete_response}"
 
 
 def test_mock_request_n_greater_than_1():

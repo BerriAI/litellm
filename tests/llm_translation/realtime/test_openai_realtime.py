@@ -5,9 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.types.realtime import RealtimeQueryParams
@@ -119,41 +117,28 @@ async def test_openai_realtime_direct_call_no_intent():
     # Build detailed error message for debugging
     error_details = []
     error_details.append(f"messages_sent count: {len(websocket_client.messages_sent)}")
-    error_details.append(
-        f"messages_received count: {len(websocket_client.messages_received)}"
-    )
+    error_details.append(f"messages_received count: {len(websocket_client.messages_received)}")
     error_details.append(f"close_code: {websocket_client.close_code}")
     error_details.append(f"close_reason: {websocket_client.close_reason}")
     if caught_exception:
-        error_details.append(
-            f"exception: {type(caught_exception).__name__}: {caught_exception}"
-        )
+        error_details.append(f"exception: {type(caught_exception).__name__}: {caught_exception}")
 
     # Skip test on transient connection failures (e.g., WebSocket connection rejected)
     # These are not regressions, just external API availability issues
-    if (
-        not websocket_client.connection_successful
-        and websocket_client.close_code is not None
-    ):
+    if not websocket_client.connection_successful and websocket_client.close_code is not None:
         pytest.skip(
             f"Skipping due to transient connection failure: close_code={websocket_client.close_code}, close_reason={websocket_client.close_reason}"
         )
 
-    assert (
-        websocket_client.connection_successful
-    ), f"Failed to establish connection. Debug info: {'; '.join(error_details)}"
-    assert (
-        websocket_client.received_session_created
-    ), "Did not receive session.created response"
+    assert websocket_client.connection_successful, (
+        f"Failed to establish connection. Debug info: {'; '.join(error_details)}"
+    )
+    assert websocket_client.received_session_created, "Did not receive session.created response"
     assert len(websocket_client.messages_received) > 0, "No messages received"
 
     session_message = websocket_client.messages_received[0]
-    assert (
-        session_message["type"] == "session.created"
-    ), f"Expected session.created, got {session_message.get('type')}"
-    assert (
-        "session" in session_message
-    ), "session.created response missing session object"
+    assert session_message["type"] == "session.created", f"Expected session.created, got {session_message.get('type')}"
+    assert "session" in session_message, "session.created response missing session object"
     assert "id" in session_message["session"], "Session object missing id field"
     assert "model" in session_message["session"], "Session object missing model field"
 
@@ -280,43 +265,32 @@ async def test_openai_realtime_direct_call_with_intent():
     # Build detailed error message for debugging
     error_details = []
     error_details.append(f"messages_sent count: {len(websocket_client.messages_sent)}")
-    error_details.append(
-        f"messages_received count: {len(websocket_client.messages_received)}"
-    )
+    error_details.append(f"messages_received count: {len(websocket_client.messages_received)}")
     error_details.append(f"close_code: {websocket_client.close_code}")
     error_details.append(f"close_reason: {websocket_client.close_reason}")
     if caught_exception:
-        error_details.append(
-            f"exception: {type(caught_exception).__name__}: {caught_exception}"
-        )
+        error_details.append(f"exception: {type(caught_exception).__name__}: {caught_exception}")
 
     # Skip test on transient connection failures (e.g., WebSocket connection rejected)
     # These are not regressions, just external API availability issues
-    if (
-        not websocket_client.connection_successful
-        and websocket_client.close_code is not None
-    ):
+    if not websocket_client.connection_successful and websocket_client.close_code is not None:
         pytest.skip(
             f"Skipping due to transient connection failure: close_code={websocket_client.close_code}, close_reason={websocket_client.close_reason}"
         )
 
-    assert (
-        websocket_client.connection_successful
-    ), f"Failed to establish connection or verify intent parameter pass-through. Debug info: {'; '.join(error_details)}"
+    assert websocket_client.connection_successful, (
+        f"Failed to establish connection or verify intent parameter pass-through. Debug info: {'; '.join(error_details)}"
+    )
 
     if websocket_client.received_session_created:
         assert len(websocket_client.messages_received) > 0, "No messages received"
         session_message = websocket_client.messages_received[0]
-        assert (
-            session_message["type"] == "session.created"
-        ), f"Expected session.created, got {session_message.get('type')}"
-        assert (
-            "session" in session_message
-        ), "session.created response missing session object"
+        assert session_message["type"] == "session.created", (
+            f"Expected session.created, got {session_message.get('type')}"
+        )
+        assert "session" in session_message, "session.created response missing session object"
         assert "id" in session_message["session"], "Session object missing id field"
-        assert (
-            "model" in session_message["session"]
-        ), "Session object missing model field"
+        assert "model" in session_message["session"], "Session object missing model field"
     elif websocket_client.intent_error_received:
         # invalid_intent error confirms intent parameter was passed through
         pass

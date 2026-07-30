@@ -46,9 +46,7 @@ def _build_bitbucket_manager(monkeypatch) -> BitBucketTemplateManager:
     # Stub the BitBucket client so we don't need network or real config.
     from litellm.integrations.bitbucket import bitbucket_prompt_manager
 
-    monkeypatch.setattr(
-        bitbucket_prompt_manager, "BitBucketClient", lambda *a, **kw: MagicMock()
-    )
+    monkeypatch.setattr(bitbucket_prompt_manager, "BitBucketClient", lambda *a, **kw: MagicMock())
     return BitBucketTemplateManager(
         bitbucket_config={"workspace": "w", "repository": "r", "access_token": "t"},
         prompt_id=None,
@@ -58,9 +56,7 @@ def _build_bitbucket_manager(monkeypatch) -> BitBucketTemplateManager:
 def _build_arize_manager(monkeypatch) -> ArizePhoenixTemplateManager:
     from litellm.integrations.arize import arize_phoenix_prompt_manager
 
-    monkeypatch.setattr(
-        arize_phoenix_prompt_manager, "ArizePhoenixClient", lambda *a, **kw: MagicMock()
-    )
+    monkeypatch.setattr(arize_phoenix_prompt_manager, "ArizePhoenixClient", lambda *a, **kw: MagicMock())
     return ArizePhoenixTemplateManager(
         api_key="k",
         api_base="https://example.test",

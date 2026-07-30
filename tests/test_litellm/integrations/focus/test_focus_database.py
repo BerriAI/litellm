@@ -81,9 +81,6 @@ async def test_should_join_organization_table(monkeypatch: pytest.MonkeyPatch):
     await db.get_usage_data()
 
     query_text, *_ = query_mock.await_args.args
-    assert (
-        "COALESCE(vt.organization_id, tt.organization_id) as organization_id"
-        in query_text
-    )
+    assert "COALESCE(vt.organization_id, tt.organization_id) as organization_id" in query_text
     assert "ot.organization_alias as organization_alias" in query_text
     assert 'LEFT JOIN "LiteLLM_OrganizationTable" ot' in query_text

@@ -5,9 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.dd_tracing import (
     _should_use_dd_profiler,
@@ -76,9 +74,7 @@ def test_should_use_dd_tracer():
     """
     Test that the should_use_dd_tracer function works as expected
     """
-    with patch(
-        "litellm.litellm_core_utils.dd_tracing.get_secret_bool"
-    ) as mock_get_secret:
+    with patch("litellm.litellm_core_utils.dd_tracing.get_secret_bool") as mock_get_secret:
         # Test when USE_DDTRACE is True
 
         mock_get_secret.return_value = True
@@ -98,9 +94,7 @@ def test_should_use_dd_profiler():
     """
     Test that the should_use_dd_profiler function works as expected
     """
-    with patch(
-        "litellm.litellm_core_utils.dd_tracing.get_secret_bool"
-    ) as mock_get_secret:
+    with patch("litellm.litellm_core_utils.dd_tracing.get_secret_bool") as mock_get_secret:
         # Test when USE_DDPROFILER is True
 
         mock_get_secret.return_value = True

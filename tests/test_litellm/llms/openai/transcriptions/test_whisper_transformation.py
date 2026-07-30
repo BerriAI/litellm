@@ -63,9 +63,7 @@ class TestWhisperTransformResponse:
         """JSON body (verbose_json or json format) is parsed into TranscriptionResponse."""
         config = OpenAIWhisperAudioTranscriptionConfig()
         result = config.transform_audio_transcription_response(
-            self._make_response(
-                text="Hello world", content_type="application/json", is_json=True
-            )
+            self._make_response(text="Hello world", content_type="application/json", is_json=True)
         )
         assert result.text == "Hello world"
 

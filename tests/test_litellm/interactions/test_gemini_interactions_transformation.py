@@ -91,9 +91,7 @@ class TestValidateEnvironment:
         original = litellm.use_legacy_interactions_schema
         try:
             litellm.use_legacy_interactions_schema = False
-            headers = config.validate_environment(
-                headers={}, model="gemini-2.5-flash", litellm_params=None
-            )
+            headers = config.validate_environment(headers={}, model="gemini-2.5-flash", litellm_params=None)
             assert headers["Api-Revision"] == "2026-05-20"
         finally:
             litellm.use_legacy_interactions_schema = original
@@ -103,9 +101,7 @@ class TestValidateEnvironment:
         original = litellm.use_legacy_interactions_schema
         try:
             litellm.use_legacy_interactions_schema = True
-            headers = config.validate_environment(
-                headers={}, model="gemini-2.5-flash", litellm_params=None
-            )
+            headers = config.validate_environment(headers={}, model="gemini-2.5-flash", litellm_params=None)
             assert headers["Api-Revision"] == "2026-05-07"
         finally:
             litellm.use_legacy_interactions_schema = original
@@ -169,9 +165,7 @@ class TestTransformRequest:
         assert request_body["agent"] == "my-custom-slides-agent"
         assert request_body["environment"] == "remote"
         assert request_body["stream"] is False
-        assert request_body["input"] == [
-            {"type": "text", "text": "Create a 5-slide presentation about AI trends."}
-        ]
+        assert request_body["input"] == [{"type": "text", "text": "Create a 5-slide presentation about AI trends."}]
 
     def test_passes_environment_object_to_request_body(self, config):
         environment_config = {
@@ -232,9 +226,7 @@ class TestTransformRequest:
 
 
 class TestStreamingIterator:
-    def _make_iterator(
-        self, use_legacy: bool = False
-    ) -> LiteLLMResponsesInteractionsStreamingIterator:
+    def _make_iterator(self, use_legacy: bool = False) -> LiteLLMResponsesInteractionsStreamingIterator:
         original = litellm.use_legacy_interactions_schema
         litellm.use_legacy_interactions_schema = use_legacy
         try:
@@ -247,9 +239,7 @@ class TestStreamingIterator:
         finally:
             litellm.use_legacy_interactions_schema = original
 
-    def _make_text_delta(
-        self, text: str, item_id: str = "item_1"
-    ) -> OutputTextDeltaEvent:
+    def _make_text_delta(self, text: str, item_id: str = "item_1") -> OutputTextDeltaEvent:
         event = MagicMock(spec=OutputTextDeltaEvent)
         event.delta = text
         event.item_id = item_id
@@ -266,9 +256,7 @@ class TestStreamingIterator:
         it.sent_interaction_start = True
         it.sent_content_start = True
 
-        chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_text_delta("Hello")
-        )
+        chunk = it._transform_responses_chunk_to_interactions_chunk(self._make_text_delta("Hello"))
 
         assert chunk is not None
         assert chunk.event_type == "step.delta"
@@ -280,9 +268,7 @@ class TestStreamingIterator:
         it.sent_interaction_start = True
         it.sent_content_start = True
 
-        chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_text_delta("Hello")
-        )
+        chunk = it._transform_responses_chunk_to_interactions_chunk(self._make_text_delta("Hello"))
 
         assert chunk is not None
         assert chunk.event_type == "content.delta"
@@ -291,9 +277,7 @@ class TestStreamingIterator:
     def test_response_created_emits_interaction_created(self):
         it = self._make_iterator(use_legacy=False)
 
-        chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_response_created()
-        )
+        chunk = it._transform_responses_chunk_to_interactions_chunk(self._make_response_created())
 
         assert chunk is not None
         assert chunk.event_type == "interaction.created"
@@ -303,9 +287,7 @@ class TestStreamingIterator:
     def test_response_created_emits_interaction_start_legacy(self):
         it = self._make_iterator(use_legacy=True)
 
-        chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_response_created()
-        )
+        chunk = it._transform_responses_chunk_to_interactions_chunk(self._make_response_created())
 
         assert chunk is not None
         assert chunk.event_type == "interaction.start"
@@ -363,9 +345,7 @@ class TestStreamingIterator:
         """The legacy single-chunk shim must surface the synthetic events AND the delta."""
         it = self._make_iterator(use_legacy=False)
 
-        first = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_text_delta("Hello")
-        )
+        first = it._transform_responses_chunk_to_interactions_chunk(self._make_text_delta("Hello"))
         assert first is not None
         assert first.event_type == "interaction.created"
 
@@ -517,9 +497,7 @@ class TestInteractionOperationUrls:
             ),
         ],
     )
-    def test_url_excludes_key(
-        self, config, method_name, interaction_id, expected_suffix
-    ):
+    def test_url_excludes_key(self, config, method_name, interaction_id, expected_suffix):
         with patch(_PATCH_GET_API_KEY, return_value="secret-key"):
             url, params = getattr(config, method_name)(
                 interaction_id=interaction_id,
@@ -639,9 +617,7 @@ class TestTransformRequestSchemaCoalescing:
         assert body["response_format"] == rf_list
         assert "response_mime_type" not in body
 
-    def test_image_config_appended_to_response_format_list_without_mutating_input(
-        self, config
-    ):
+    def test_image_config_appended_to_response_format_list_without_mutating_input(self, config):
         """When response_format is already a list, image_config must not mutate optional_params."""
         original = litellm.use_legacy_interactions_schema
         try:

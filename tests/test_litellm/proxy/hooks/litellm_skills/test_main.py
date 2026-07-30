@@ -21,9 +21,7 @@ def _request_data():
 def _tool_use_response(tool_name):
     return {
         "stop_reason": "tool_use",
-        "content": [
-            {"type": "tool_use", "id": "toolu_1", "name": tool_name, "input": {}}
-        ],
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": tool_name, "input": {}}],
     }
 
 
@@ -33,9 +31,7 @@ async def test_post_call_success_hook_executes_litellm_skill_tool():
     hook = SkillsInjectionHook()
     response = _tool_use_response(SKILL_TOOL_NAME)
 
-    with patch.object(
-        hook, "_execute_code_loop_messages_api", new=AsyncMock(return_value=response)
-    ) as mock_loop:
+    with patch.object(hook, "_execute_code_loop_messages_api", new=AsyncMock(return_value=response)) as mock_loop:
         result = await hook.async_post_call_success_deployment_hook(
             request_data=_request_data(), response=response, call_type=None
         )
@@ -51,9 +47,7 @@ async def test_execute_code_loop_dispatches_litellm_skill_tool():
     final_response = {"stop_reason": "end_turn", "content": []}
 
     with (
-        patch.object(
-            hook, "_execute_skill_tool", new=AsyncMock(return_value="skill ran")
-        ) as mock_exec,
+        patch.object(hook, "_execute_skill_tool", new=AsyncMock(return_value="skill ran")) as mock_exec,
         patch("litellm.anthropic.acreate", new=AsyncMock(return_value=final_response)),
     ):
         result = await hook._execute_code_loop_messages_api(

@@ -252,9 +252,7 @@ async def test_apply_guardrail_enforces_fenced_verdict(mock_completion):
 @patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
 async def test_apply_guardrail_non_object_verdict_fails_open_with_status(mock_completion):
     """A non-object verdict fails open and logs guardrail_failed_to_respond."""
-    mock_completion.return_value = MagicMock(
-        choices=[MagicMock(message=MagicMock(content='[{"overall_score": 50}]'))]
-    )
+    mock_completion.return_value = MagicMock(choices=[MagicMock(message=MagicMock(content='[{"overall_score": 50}]'))])
     guardrail = _make_guardrail(overall_threshold=80.0, on_failure="block", router_provider=lambda: None)
     inputs = {"texts": ["response"]}
     request_data: dict = {"messages": [], "metadata": {}}
@@ -314,7 +312,12 @@ def _real_router(model_list, **router_kwargs):
     "model_list, router_kwargs, judge_model",
     [
         (
-            [{"model_name": "my-judge-alias", "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"}}],
+            [
+                {
+                    "model_name": "my-judge-alias",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"},
+                }
+            ],
             {},
             "my-judge-alias",
         ),
@@ -324,12 +327,22 @@ def _real_router(model_list, **router_kwargs):
             "anthropic/claude-sonnet-4-6",
         ),
         (
-            [{"model_name": "backing-group", "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"}}],
+            [
+                {
+                    "model_name": "backing-group",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"},
+                }
+            ],
             {"model_group_alias": {"my-judge-alias": "backing-group"}},
             "my-judge-alias",
         ),
         (
-            [{"model_name": "backing-group", "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"}}],
+            [
+                {
+                    "model_name": "backing-group",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"},
+                }
+            ],
             {"model_group_alias": {"my-judge-alias": {"model": "backing-group", "hidden": True}}},
             "my-judge-alias",
         ),
@@ -412,7 +425,12 @@ async def test_judge_resolves_router_lazily_per_call(mock_sdk_completion):
     mock_sdk_completion.assert_awaited_once()
 
     holder["router"] = _real_router(
-        [{"model_name": "my-judge-alias", "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"}}]
+        [
+            {
+                "model_name": "my-judge-alias",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"},
+            }
+        ]
     )
     await guardrail.apply_guardrail({"texts": ["r"]}, {"messages": [], "metadata": {}}, "response")
     holder["router"].acompletion.assert_awaited_once()

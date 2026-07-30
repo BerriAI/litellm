@@ -6,9 +6,7 @@ import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import asyncio
 import logging
@@ -65,9 +63,7 @@ def test_async_fallbacks(caplog):
 
     async def _make_request():
         try:
-            await router.acompletion(
-                model="gpt-3.5-turbo", messages=messages, max_tokens=1
-            )
+            await router.acompletion(model="gpt-3.5-turbo", messages=messages, max_tokens=1)
             router.reset()
         except litellm.Timeout:
             pass

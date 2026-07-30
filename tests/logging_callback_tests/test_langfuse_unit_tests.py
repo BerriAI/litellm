@@ -1,9 +1,7 @@
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 
 import pytest
 from litellm.integrations.langfuse.langfuse import (
@@ -39,9 +37,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
         startTime=1234567890.0,
         endTime=1234567891.0,
         completionStartTime=1234567890.5,
-        model_map_information=StandardLoggingModelInformation(
-            model_map_key="gpt-5-mini", model_map_value=None
-        ),
+        model_map_information=StandardLoggingModelInformation(model_map_key="gpt-5-mini", model_map_value=None),
         model="gpt-5-mini",
         model_id="model-123",
         model_group="openai-gpt",
@@ -140,9 +136,7 @@ def test_get_langfuse_logger_for_request_with_dynamic_params(
 
 
 @pytest.mark.parametrize("globalLangfuseLogger", [None, global_langfuse_logger])
-def test_get_langfuse_logger_for_request_with_no_dynamic_params(
-    dynamic_logging_cache, globalLangfuseLogger
-):
+def test_get_langfuse_logger_for_request_with_no_dynamic_params(dynamic_logging_cache, globalLangfuseLogger):
     """
     If StandardCallbackDynamicParams are not provided, the globalLangfuseLogger should be returned
     """
@@ -168,32 +162,15 @@ def test_dynamic_langfuse_credentials_are_passed():
         langfuse_secret="test_secret",
         langfuse_host="https://test.langfuse.com",
     )
-    assert (
-        LangFuseHandler._dynamic_langfuse_credentials_are_passed(
-            params_with_credentials
-        )
-        is True
-    )
+    assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(params_with_credentials) is True
 
     # Test when no credentials are passed
     params_without_credentials = StandardCallbackDynamicParams()
-    assert (
-        LangFuseHandler._dynamic_langfuse_credentials_are_passed(
-            params_without_credentials
-        )
-        is False
-    )
+    assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(params_without_credentials) is False
 
     # Test when only some credentials are passed
-    params_partial_credentials = StandardCallbackDynamicParams(
-        langfuse_public_key="test_key"
-    )
-    assert (
-        LangFuseHandler._dynamic_langfuse_credentials_are_passed(
-            params_partial_credentials
-        )
-        is True
-    )
+    params_partial_credentials = StandardCallbackDynamicParams(langfuse_public_key="test_key")
+    assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(params_partial_credentials) is True
 
 
 def test_get_dynamic_langfuse_logging_config():
@@ -218,9 +195,7 @@ def test_get_dynamic_langfuse_logging_config():
 
 def test_return_global_langfuse_logger():
     mock_cache = Mock()
-    global_logger = LangFuseLogger(
-        langfuse_public_key="global_key", langfuse_secret="global_secret"
-    )
+    global_logger = LangFuseLogger(langfuse_public_key="global_key", langfuse_secret="global_secret")
 
     # Test with existing global logger
     result = LangFuseHandler._return_global_langfuse_logger(global_logger, mock_cache)
@@ -247,9 +222,7 @@ def test_get_langfuse_logger_for_request_with_cached_logger():
     Test that get_langfuse_logger_for_request returns the cached logger if it exists when dynamic params are passed
     """
     mock_cache = Mock()
-    cached_logger = LangFuseLogger(
-        langfuse_public_key="cached_key", langfuse_secret="cached_secret"
-    )
+    cached_logger = LangFuseLogger(langfuse_public_key="cached_key", langfuse_secret="cached_secret")
     mock_cache.get_cache.return_value = cached_logger
 
     dynamic_params = StandardCallbackDynamicParams(
@@ -300,16 +273,12 @@ def test_get_langfuse_flush_interval():
     default_interval = 60
 
     # Test when env var is not set
-    result = LangFuseLogger._get_langfuse_flush_interval(
-        flush_interval=default_interval
-    )
+    result = LangFuseLogger._get_langfuse_flush_interval(flush_interval=default_interval)
     assert result == default_interval
 
     # Test when env var is set
     with patch.dict(os.environ, {"LANGFUSE_FLUSH_INTERVAL": "120"}):
-        result = LangFuseLogger._get_langfuse_flush_interval(
-            flush_interval=default_interval
-        )
+        result = LangFuseLogger._get_langfuse_flush_interval(flush_interval=default_interval)
         assert result == 120
 
 
@@ -320,9 +289,7 @@ def test_langfuse_e2e_sync(monkeypatch):
     import httpx
     import time
 
-    litellm.disable_aiohttp_transport = (
-        True  # since this uses respx, we need to set use_aiohttp_transport to False
-    )
+    litellm.disable_aiohttp_transport = True  # since this uses respx, we need to set use_aiohttp_transport to False
 
     litellm._turn_on_debug()
     monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
@@ -330,9 +297,9 @@ def test_langfuse_e2e_sync(monkeypatch):
     with respx.mock:
         # Mock Langfuse
         # Mock any Langfuse endpoint
-        langfuse_mock = respx.post(
-            "https://*.cloud.langfuse.com/api/public/ingestion"
-        ).mock(return_value=httpx.Response(200))
+        langfuse_mock = respx.post("https://*.cloud.langfuse.com/api/public/ingestion").mock(
+            return_value=httpx.Response(200)
+        )
         completion(
             model="openai/my-fake-endpoint",
             messages=[{"role": "user", "content": "hello from litellm"}],
@@ -350,9 +317,7 @@ def test_get_chat_content_for_langfuse():
     Test that _get_chat_content_for_langfuse correctly extracts content from chat completion responses
     """
     # Test with valid response
-    mock_response = ModelResponse(
-        choices=[Choices(message=Message(role="assistant", content="Hello world"))]
-    )
+    mock_response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="Hello world"))])
 
     result = LangFuseLogger._get_chat_content_for_langfuse(mock_response)
     assert result["content"] == "Hello world"
@@ -419,9 +384,7 @@ def test_apply_masking_function_with_dict():
         return data
 
     # Test with dict containing messages
-    input_dict = {
-        "messages": [{"role": "user", "content": "My email is test@example.com"}]
-    }
+    input_dict = {"messages": [{"role": "user", "content": "My email is test@example.com"}]}
     result = LangFuseLogger._apply_masking_function(input_dict, mask_emails)
     assert result["messages"][0]["content"] == "My email is [EMAIL]"
     assert "test@example.com" not in str(result)
@@ -534,9 +497,7 @@ def test_langfuse_model_parameters_no_secret_leakage():
         "headers": {"X-Api-Key": "secret-header-value"},
     }
 
-    sanitized = ModelParamHelper.get_standard_logging_model_parameters(
-        optional_params_with_secrets
-    )
+    sanitized = ModelParamHelper.get_standard_logging_model_parameters(optional_params_with_secrets)
 
     # Safe params should be present
     assert sanitized["temperature"] == 0.7
@@ -570,9 +531,7 @@ def test_langfuse_v2_uses_standard_logging_model_parameters():
     }
 
     # When standard_logging_object is available, its model_parameters should be used
-    sanitized = standard_logging_object.get(
-        "model_parameters", optional_params_with_secrets
-    )
+    sanitized = standard_logging_object.get("model_parameters", optional_params_with_secrets)
     assert "api_key" not in sanitized
     assert "secret_fields" not in sanitized
     assert sanitized["temperature"] == 0.5
@@ -580,9 +539,7 @@ def test_langfuse_v2_uses_standard_logging_model_parameters():
     # When standard_logging_object is None, ModelParamHelper should filter
     from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 
-    fallback_sanitized = ModelParamHelper.get_standard_logging_model_parameters(
-        optional_params_with_secrets
-    )
+    fallback_sanitized = ModelParamHelper.get_standard_logging_model_parameters(optional_params_with_secrets)
     assert "api_key" not in fallback_sanitized
     assert "secret_fields" not in fallback_sanitized
     assert fallback_sanitized["temperature"] == 0.5

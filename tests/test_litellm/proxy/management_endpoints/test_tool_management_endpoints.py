@@ -74,7 +74,10 @@ def _rollup_row(date: str, tool_name: str, spend: float, request_count: int, tot
 
 
 def _group_row(tool_name: str, spend: float, request_count: int, total_tokens: int) -> dict:
-    return {"tool_name": tool_name, "_sum": {"spend": spend, "total_tokens": total_tokens, "request_count": request_count}}
+    return {
+        "tool_name": tool_name,
+        "_sum": {"spend": spend, "total_tokens": total_tokens, "request_count": request_count},
+    }
 
 
 class FakeTeamTable:
@@ -220,9 +223,10 @@ class TestToolManagementEndpoints:
         mock_block.return_value = True
         team_table = FakeTeamTable([_team_row("existing-op-id")])
 
-        with patch("litellm.proxy.proxy_server.prisma_client", _team_policy_prisma(team_table)), patch(
-            "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry"
-        ) as mock_registry:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", _team_policy_prisma(team_table)),
+            patch("litellm.proxy.db.tool_registry_writer.get_tool_policy_registry") as mock_registry,
+        ):
             mock_registry.return_value.is_initialized.return_value = False
             resp = self.client.post(
                 "/v1/tool/policy",
@@ -255,9 +259,10 @@ class TestToolManagementEndpoints:
             updated_count=0,
         )
 
-        with patch("litellm.proxy.proxy_server.prisma_client", _team_policy_prisma(team_table)), patch(
-            "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry"
-        ) as mock_registry:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", _team_policy_prisma(team_table)),
+            patch("litellm.proxy.db.tool_registry_writer.get_tool_policy_registry") as mock_registry,
+        ):
             mock_registry.return_value.is_initialized.return_value = False
             resp = self.client.post(
                 "/v1/tool/policy",

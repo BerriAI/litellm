@@ -62,29 +62,20 @@ class SpanAttributesUsageChecker(ast.NodeVisitor):
                         and isinstance(keyword.value.value, ast.Name)
                         and keyword.value.value.id == "SpanAttributes"
                     ):
-
                         # Get the source code for this attribute
                         try:
                             attr_source = ast.unparse(keyword.value)
                             if not attr_source.endswith(".value"):
                                 if self.debug:
-                                    print(
-                                        f"AST found violation: {node.lineno}: {attr_source}"
-                                    )
-                                self.violations.append(
-                                    (node.lineno, f"{attr_source} used without .value")
-                                )
+                                    print(f"AST found violation: {node.lineno}: {attr_source}")
+                                self.violations.append((node.lineno, f"{attr_source} used without .value"))
                         except AttributeError:
                             # For Python < 3.9, ast.unparse doesn't exist
                             # Fallback to our best guess
-                            if keyword.value.attr != "value" and not hasattr(
-                                keyword.value, "value"
-                            ):
+                            if keyword.value.attr != "value" and not hasattr(keyword.value, "value"):
                                 violation_msg = f"SpanAttributes.{keyword.value.attr} used without .value"
                                 if self.debug:
-                                    print(
-                                        f"AST found violation: {node.lineno}: {violation_msg}"
-                                    )
+                                    print(f"AST found violation: {node.lineno}: {violation_msg}")
                                 self.violations.append((node.lineno, violation_msg))
         # Continue the visit
         self.generic_visit(node)
@@ -134,9 +125,7 @@ def check_file(file_path: str, debug: bool = False) -> List[Tuple[int, str]]:
                 if not any(i == line_num for line_num, _ in violations):
                     if debug:
                         print(f"Regex found violation: {i}: {match.group(0)}")
-                    violations.append(
-                        (i, f"SpanAttributes used without .value: {match.group(0)}")
-                    )
+                    violations.append((i, f"SpanAttributes used without .value: {match.group(0)}"))
 
         return violations
 
@@ -151,9 +140,7 @@ def main():
 
     Exits with code 1 if violations are found, 0 otherwise.
     """
-    parser = argparse.ArgumentParser(
-        description="Check for SpanAttributes used without .value"
-    )
+    parser = argparse.ArgumentParser(description="Check for SpanAttributes used without .value")
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
     args = parser.parse_args()
 
@@ -162,9 +149,7 @@ def main():
 
     if not os.path.exists(target_file):
         # Try alternate path for local development
-        target_file = os.path.join(
-            "..", "..", "litellm", "integrations", "opentelemetry.py"
-        )
+        target_file = os.path.join("..", "..", "litellm", "integrations", "opentelemetry.py")
 
     if not os.path.exists(target_file):
         print(f"Error: Could not find file at {target_file}")
@@ -173,18 +158,14 @@ def main():
     violations = check_file(target_file, debug=args.debug)
 
     if violations:
-        print(
-            f"Found {len(violations)} SpanAttributes without .value in {target_file}:"
-        )
+        print(f"Found {len(violations)} SpanAttributes without .value in {target_file}:")
 
         # Sort violations by line number for better readability
         violations.sort(key=lambda x: x[0])
 
         for line, message in violations:
             print(f"  Line {line}: {message}")
-        print(
-            "\nDirect enum reference can cause errors. Always use .value with SpanAttributes enums."
-        )
+        print("\nDirect enum reference can cause errors. Always use .value with SpanAttributes enums.")
         exit(1)
     else:
         print(f"All SpanAttributes are used correctly with .value in {target_file}")

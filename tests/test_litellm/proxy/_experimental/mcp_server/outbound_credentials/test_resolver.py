@@ -472,21 +472,15 @@ async def test_id_jag_runs_both_legs_and_returns_the_leg2_bearer():
         ]
     )
     provider = UpstreamCredentialProvider(token_endpoint=endpoint)
-    result = await provider.resolve_credentials(
-        _with_inbound("user-id-token"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(_with_inbound("user-id-token"), _spec(_id_jag_config()))
 
     assert isinstance(result, Ok)
     assert _emitted(result.ok)["Authorization"] == "Bearer final-access"
 
     leg1_endpoint, _, leg1_params = endpoint.calls[0]
     assert leg1_endpoint == "https://idp.example.com/token"
-    assert (
-        leg1_params["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
-    )
-    assert (
-        leg1_params["requested_token_type"] == "urn:ietf:params:oauth:token-type:id-jag"
-    )
+    assert leg1_params["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
+    assert leg1_params["requested_token_type"] == "urn:ietf:params:oauth:token-type:id-jag"
     assert leg1_params["subject_token"] == "user-id-token"
 
     leg2_endpoint, _, leg2_params = endpoint.calls[1]
@@ -501,9 +495,7 @@ async def test_id_jag_without_inbound_token_or_stored_assertion_is_precondition_
     endpoint = _FakeTokenEndpoint([])
     store = _FakeAssertionStore()
     provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=store)
-    result = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "precondition_required"
@@ -519,9 +511,7 @@ async def test_id_jag_exchanges_the_stored_sso_assertion_when_the_caller_present
     store = _FakeAssertionStore({"alice": _assertion("alice-id-token")})
     provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=store)
 
-    result = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Ok)
     assert _emitted(result.ok)["Authorization"] == "Bearer final-access"
@@ -551,9 +541,7 @@ async def test_id_jag_refuses_an_expired_stored_assertion_without_calling_the_id
     store = _FakeAssertionStore({"alice": _assertion("stale-id-token", expires_in=-timedelta(seconds=1))})
     provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=store)
 
-    result = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "precondition_required"
@@ -566,9 +554,7 @@ async def test_id_jag_accepts_a_stored_assertion_that_declares_no_expiry():
     store = _FakeAssertionStore({"alice": _assertion("undated-id-token", expires_in=None)})
     provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=store)
 
-    result = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Ok)
     _, _, leg1_params = endpoint.calls[0]
@@ -601,14 +587,10 @@ async def test_id_jag_keeps_store_sourced_bearers_partitioned_per_user():
             Ok(ExchangedToken(access_token="bob-bearer", expires_in=3600)),
         ]
     )
-    store = _FakeAssertionStore(
-        {"alice": _assertion("alice-id-token"), "bob": _assertion("bob-id-token")}
-    )
+    store = _FakeAssertionStore({"alice": _assertion("alice-id-token"), "bob": _assertion("bob-id-token")})
     provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=store)
 
-    alice = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    alice = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
     bob = await provider.resolve_credentials(Subject(tenant_id="", subject_id="bob"), _spec(_id_jag_config()))
 
     assert isinstance(alice, Ok) and isinstance(bob, Ok)
@@ -637,9 +619,7 @@ async def test_id_jag_maps_an_assertion_store_outage_to_upstream_unavailable():
     endpoint = _FakeTokenEndpoint([])
     provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=_OutageAssertionStore())
 
-    result = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
@@ -655,9 +635,7 @@ async def test_id_jag_store_outage_does_not_leak_driver_detail_to_the_caller(cap
     )
 
     with caplog.at_level(logging.WARNING):
-        result = await provider.resolve_credentials(
-            Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-        )
+        result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert _DRIVER_DETAIL not in result.error.summary
@@ -674,9 +652,7 @@ async def test_id_jag_invalidation_survives_an_assertion_store_outage():
         token_endpoint=_FakeTokenEndpoint([]), sso_assertion_store=_OutageAssertionStore()
     )
 
-    await provider.invalidate_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    await provider.invalidate_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
 
 class _FlakyAssertionStore:
@@ -867,14 +843,10 @@ async def test_id_jag_reads_a_naive_stored_expiry_as_utc():
     comparison would be a TypeError on the egress path, turning a 412 into a 500."""
     endpoint = _FakeTokenEndpoint([])
     naive_past = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
-    store = _FakeAssertionStore(
-        {"alice": SSOIdentityAssertion(id_token=SecretStr("stale"), expires_at=naive_past)}
-    )
+    store = _FakeAssertionStore({"alice": SSOIdentityAssertion(id_token=SecretStr("stale"), expires_at=naive_past)})
     provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=store)
 
-    result = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "precondition_required"
@@ -903,13 +875,9 @@ async def test_invalidate_evicts_a_store_sourced_id_jag_bearer():
 
 @pytest.mark.asyncio
 async def test_id_jag_propagates_a_leg1_error_without_calling_leg2():
-    endpoint = _FakeTokenEndpoint(
-        [Error(CredError.of_upstream_unavailable("leg1 down"))]
-    )
+    endpoint = _FakeTokenEndpoint([Error(CredError.of_upstream_unavailable("leg1 down"))])
     provider = UpstreamCredentialProvider(token_endpoint=endpoint)
-    result = await provider.resolve_credentials(
-        _with_inbound("user-id-token"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(_with_inbound("user-id-token"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
@@ -926,9 +894,7 @@ async def test_id_jag_propagates_a_leg2_error():
         ]
     )
     provider = UpstreamCredentialProvider(token_endpoint=endpoint)
-    result = await provider.resolve_credentials(
-        _with_inbound("user-id-token"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(_with_inbound("user-id-token"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"

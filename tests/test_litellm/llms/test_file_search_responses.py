@@ -243,9 +243,7 @@ class TestFileSearchGuardInResponsesMain:
                 "litellm.responses.main.ResponsesAPIRequestUtils.get_requested_response_api_optional_param",
                 return_value={},
             ),
-            patch(
-                "litellm.responses.main.run_async_function", return_value=expected
-            ) as run_async_mock,
+            patch("litellm.responses.main.run_async_function", return_value=expected) as run_async_mock,
         ):
             result = responses(
                 input="hello",
@@ -294,9 +292,7 @@ class TestFileSearchGuardInResponsesMain:
                 "litellm.responses.main.ResponsesAPIRequestUtils.get_requested_response_api_optional_param",
                 return_value={},
             ),
-            patch(
-                "litellm.responses.main.run_async_function", return_value=expected
-            ) as run_async_mock,
+            patch("litellm.responses.main.run_async_function", return_value=expected) as run_async_mock,
         ):
             result = responses(
                 input="hello",
@@ -382,9 +378,7 @@ class TestManagedFilesVectorStoreAccess:
 
         mock_row = self._make_vs_row(vector_store_id="uuid-001", team_id="team-other")
 
-        async def mock_get_rows(
-            uuids, prisma_client, user_api_key_cache, proxy_logging_obj=None
-        ):
+        async def mock_get_rows(uuids, prisma_client, user_api_key_cache, proxy_logging_obj=None):
             return [mock_row]
 
         with (
@@ -398,9 +392,7 @@ class TestManagedFilesVectorStoreAccess:
             ),
         ):
             with pytest.raises(HTTPException) as exc_info:
-                await hook.check_vector_store_ids_access(
-                    [unified_id], self._make_user(team_id="team-caller")
-                )
+                await hook.check_vector_store_ids_access([unified_id], self._make_user(team_id="team-caller"))
             assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
@@ -411,9 +403,7 @@ class TestManagedFilesVectorStoreAccess:
 
         mock_row = self._make_vs_row(vector_store_id="uuid-002", team_id=None)
 
-        async def mock_get_rows(
-            uuids, prisma_client, user_api_key_cache, proxy_logging_obj=None
-        ):
+        async def mock_get_rows(uuids, prisma_client, user_api_key_cache, proxy_logging_obj=None):
             return [mock_row]
 
         with (
@@ -426,25 +416,15 @@ class TestManagedFilesVectorStoreAccess:
                 side_effect=mock_get_rows,
             ),
         ):
-            await hook.check_vector_store_ids_access(
-                [unified_id], self._make_user(team_id="team-caller")
-            )
+            await hook.check_vector_store_ids_access([unified_id], self._make_user(team_id="team-caller"))
 
     @pytest.mark.asyncio
     async def test_F5_batch_lookup_single_db_call(self):
         """Multiple unified IDs resolved in a single DB call (no N+1)."""
         hook = self._make_hook()
-        ids = [
-            _make_unified_vs_id(
-                unified_uuid=f"uuid-{i}", provider_resource_id=f"vs_{i}"
-            )
-            for i in range(3)
-        ]
+        ids = [_make_unified_vs_id(unified_uuid=f"uuid-{i}", provider_resource_id=f"vs_{i}") for i in range(3)]
 
-        rows = [
-            self._make_vs_row(vector_store_id=f"uuid-{i}", team_id="team-abc")
-            for i in range(3)
-        ]
+        rows = [self._make_vs_row(vector_store_id=f"uuid-{i}", team_id="team-abc") for i in range(3)]
 
         get_rows_mock = AsyncMock(return_value=rows)
 
@@ -484,9 +464,7 @@ class TestManagedFilesVectorStoreAccess:
         await hook.async_pre_call_hook(
             user_api_key_dict=self._make_user(),
             cache=MagicMock(),
-            data={
-                "tools": [{"type": "file_search", "vector_store_ids": ["vs_native"]}]
-            },
+            data={"tools": [{"type": "file_search", "vector_store_ids": ["vs_native"]}]},
             call_type=CallTypes.acompletion.value,
         )
         hook.async_pre_call_hook.assert_called_once()
@@ -728,9 +706,7 @@ class TestEmulatedFileSearchHandler:
         r2.content = [{"type": "text", "text": "second hit"}]
 
         search_results = _build_search_results_for_include([r1, r2])
-        assert (
-            len(search_results) == 2
-        ), "Both chunks should be returned, not deduplicated"
+        assert len(search_results) == 2, "Both chunks should be returned, not deduplicated"
         assert search_results[0]["text"] == "first hit"
         assert search_results[1]["text"] == "second hit"
 
@@ -744,9 +720,7 @@ class TestEmulatedFileSearchHandler:
         )
 
         first_resp = self._make_mock_responses_api_response(include_function_call=True)
-        final_resp = self._make_mock_responses_api_response(
-            text="Deep research enables multi-step queries."
-        )
+        final_resp = self._make_mock_responses_api_response(text="Deep research enables multi-step queries.")
 
         search_result = MagicMock()
         search_result.file_id = "file-xyz"
@@ -808,9 +782,7 @@ class TestEmulatedFileSearchHandler:
         first_resp_plural.model = "claude-3-5-sonnet"
         first_resp_plural.usage = None
 
-        final_resp = self._make_mock_responses_api_response(
-            text="Deep research uses multiple queries."
-        )
+        final_resp = self._make_mock_responses_api_response(text="Deep research uses multiple queries.")
 
         search_result = MagicMock()
         search_result.file_id = "file-multi"
@@ -851,9 +823,7 @@ class TestEmulatedFileSearchHandler:
             aresponses_with_emulated_file_search,
         )
 
-        direct_resp = self._make_mock_responses_api_response(
-            text="I already know the answer."
-        )
+        direct_resp = self._make_mock_responses_api_response(text="I already know the answer.")
 
         with patch(
             "litellm.responses.file_search.emulated_handler._call_aresponses",
@@ -932,6 +902,5 @@ class TestEmulatedFileSearchHandler:
         assert len(captured_ctx) == 2, "Expected exactly 2 sub-calls"
         for i, ctx_val in enumerate(captured_ctx):
             assert ctx_val is True, (
-                f"Sub-call {i} must run with is_internal_call=True to suppress "
-                "billing callbacks in wrapper_async"
+                f"Sub-call {i} must run with is_internal_call=True to suppress billing callbacks in wrapper_async"
             )

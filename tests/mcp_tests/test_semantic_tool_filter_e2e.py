@@ -27,9 +27,7 @@ except ImportError:
     not SEMANTIC_ROUTER_AVAILABLE,
     reason="semantic-router not installed. Install the `litellm[semantic-router]` extra.",
 )
-@pytest.mark.skipif(
-    not os.environ.get("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set in environment"
-)
+@pytest.mark.skipif(not os.environ.get("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set in environment")
 async def test_e2e_semantic_filter():
     """E2E: Load router/filter and verify hook filters tools."""
     from litellm import Router
@@ -82,25 +80,19 @@ async def test_e2e_semantic_filter():
             description="Send Slack message",
             inputSchema={"type": "object"},
         ),
-        MCPTool(
-            name="doc_read", description="Read document", inputSchema={"type": "object"}
-        ),
+        MCPTool(name="doc_read", description="Read document", inputSchema={"type": "object"}),
         MCPTool(
             name="db_query",
             description="Query database",
             inputSchema={"type": "object"},
         ),
-        MCPTool(
-            name="api_call", description="Make API call", inputSchema={"type": "object"}
-        ),
+        MCPTool(name="api_call", description="Make API call", inputSchema={"type": "object"}),
         MCPTool(
             name="task_create",
             description="Create task",
             inputSchema={"type": "object"},
         ),
-        MCPTool(
-            name="note_add", description="Add note", inputSchema={"type": "object"}
-        ),
+        MCPTool(name="note_add", description="Add note", inputSchema={"type": "object"}),
     ]
 
     # Build router with test tools
@@ -110,9 +102,7 @@ async def test_e2e_semantic_filter():
 
     data = {
         "model": "gpt-4",
-        "messages": [
-            {"role": "user", "content": "Send an email and create a calendar event"}
-        ],
+        "messages": [{"role": "user", "content": "Send an email and create a calendar event"}],
         "tools": tools,
         "metadata": {},  # Initialize metadata dict for hook to store filter stats
     }
@@ -126,11 +116,9 @@ async def test_e2e_semantic_filter():
     )
 
     # Single assertion: hook filtered tools
-    assert result and len(result["tools"]) < len(
-        tools
-    ), f"Expected filtered tools, got {len(result['tools'])} tools (original: {len(tools)})"
-
-    print(
-        f"✅ E2E test passed: Filtering reduced tools from {len(tools)} to {len(result['tools'])}"
+    assert result and len(result["tools"]) < len(tools), (
+        f"Expected filtered tools, got {len(result['tools'])} tools (original: {len(tools)})"
     )
+
+    print(f"✅ E2E test passed: Filtering reduced tools from {len(tools)} to {len(result['tools'])}")
     print(f"   Filtered tools: {[t.name for t in result['tools']]}")

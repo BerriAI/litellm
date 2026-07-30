@@ -7,9 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
@@ -117,9 +115,7 @@ async def test_list_search_tools_config_only(monkeypatch):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             # Mock proxy_config
             mock_proxy_config = MagicMock()
-            mock_proxy_config.get_config = AsyncMock(
-                return_value={"search_tools": config_tools}
-            )
+            mock_proxy_config.get_config = AsyncMock(return_value={"search_tools": config_tools})
             mock_proxy_config.parse_search_tools = MagicMock(return_value=config_tools)
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
@@ -193,9 +189,7 @@ async def test_list_search_tools_filters_duplicate_config_tools(monkeypatch):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             # Mock proxy_config
             mock_proxy_config = MagicMock()
-            mock_proxy_config.get_config = AsyncMock(
-                return_value={"search_tools": config_tools}
-            )
+            mock_proxy_config.get_config = AsyncMock(return_value={"search_tools": config_tools})
             mock_proxy_config.parse_search_tools = MagicMock(return_value=config_tools)
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
@@ -216,11 +210,7 @@ async def test_list_search_tools_filters_duplicate_config_tools(monkeypatch):
 
                     # Verify DB tool is present
                     db_tool = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "existing-tool"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "existing-tool"),
                         None,
                     )
                     assert db_tool is not None
@@ -233,11 +223,7 @@ async def test_list_search_tools_filters_duplicate_config_tools(monkeypatch):
 
                     # Verify unique config tool is present
                     config_tool = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "unique-config-tool"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "unique-config-tool"),
                         None,
                     )
                     assert config_tool is not None
@@ -248,8 +234,7 @@ async def test_list_search_tools_filters_duplicate_config_tools(monkeypatch):
                         (
                             t
                             for t in data["search_tools"]
-                            if t["search_tool_name"] == "existing-tool"
-                            and t["is_from_config"] is True
+                            if t["search_tool_name"] == "existing-tool" and t["is_from_config"] is True
                         ),
                         None,
                     )
@@ -324,11 +309,7 @@ async def test_list_search_tools_datetime_conversion(monkeypatch):
 
                     # Test datetime conversion for tool 1
                     tool1 = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "datetime-test-tool"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "datetime-test-tool"),
                         None,
                     )
                     assert tool1 is not None
@@ -342,11 +323,7 @@ async def test_list_search_tools_datetime_conversion(monkeypatch):
 
                     # Test None handling for tool 2
                     tool2 = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "null-datetime-tool"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "null-datetime-tool"),
                         None,
                     )
                     assert tool2 is not None
@@ -358,11 +335,7 @@ async def test_list_search_tools_datetime_conversion(monkeypatch):
 
                     # Test string passthrough for tool 3
                     tool3 = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "string-datetime-tool"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "string-datetime-tool"),
                         None,
                     )
                     assert tool3 is not None
@@ -402,9 +375,7 @@ async def test_list_search_tools_config_error_handling(monkeypatch):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             # Mock proxy_config to raise an error
             mock_proxy_config = MagicMock()
-            mock_proxy_config.get_config = AsyncMock(
-                side_effect=Exception("Config error")
-            )
+            mock_proxy_config.get_config = AsyncMock(side_effect=Exception("Config error"))
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
                 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -423,13 +394,8 @@ async def test_list_search_tools_config_error_handling(monkeypatch):
                     assert len(data["search_tools"]) == 1
                     assert data["search_tools"][0]["search_tool_name"] == "db-tool-1"
                     # Verify masking of sensitive values
-                    assert (
-                        data["search_tools"][0]["litellm_params"]["api_key"]
-                        != "sk-test"
-                    )
-                    assert (
-                        "****" in data["search_tools"][0]["litellm_params"]["api_key"]
-                    )
+                    assert data["search_tools"][0]["litellm_params"]["api_key"] != "sk-test"
+                    assert "****" in data["search_tools"][0]["litellm_params"]["api_key"]
                 finally:
                     app.dependency_overrides.pop(user_api_key_auth, None)
 
@@ -544,31 +510,18 @@ async def test_list_search_tools_db_masking_sensitive_values(monkeypatch):
 
                     # Test tool 1: api_key should be masked
                     tool1 = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "perplexity-tool"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "perplexity-tool"),
                         None,
                     )
                     assert tool1 is not None
-                    assert (
-                        tool1["litellm_params"]["api_key"] != "pplx-sk-1234567890abcdef"
-                    )
+                    assert tool1["litellm_params"]["api_key"] != "pplx-sk-1234567890abcdef"
                     assert "****" in tool1["litellm_params"]["api_key"]
                     assert tool1["litellm_params"]["search_provider"] == "perplexity"
-                    assert (
-                        tool1["litellm_params"]["api_base"]
-                        == "https://api.perplexity.ai"
-                    )
+                    assert tool1["litellm_params"]["api_base"] == "https://api.perplexity.ai"
 
                     # Test tool 2: api_key should be masked
                     tool2 = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "tavily-tool"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "tavily-tool"),
                         None,
                     )
                     assert tool2 is not None
@@ -578,29 +531,18 @@ async def test_list_search_tools_db_masking_sensitive_values(monkeypatch):
 
                     # Test tool 3: access_token and secret_key should be masked
                     tool3 = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "tool-with-token"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "tool-with-token"),
                         None,
                     )
                     assert tool3 is not None
-                    assert (
-                        tool3["litellm_params"]["access_token"]
-                        != "token-abcdefghijklmnop"
-                    )
+                    assert tool3["litellm_params"]["access_token"] != "token-abcdefghijklmnop"
                     assert "****" in tool3["litellm_params"]["access_token"]
                     assert tool3["litellm_params"]["secret_key"] != "secret-xyz123"
                     assert "****" in tool3["litellm_params"]["secret_key"]
 
                     # Test tool 4: non-sensitive fields should remain unmasked
                     tool4 = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "tool-with-non-sensitive"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "tool-with-non-sensitive"),
                         None,
                     )
                     assert tool4 is not None
@@ -629,25 +571,18 @@ async def test_get_all_search_tools_from_db_retries_on_transport_error():
         return []
 
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_searchtoolstable.find_many = AsyncMock(
-        side_effect=_flaky_find_many
-    )
+    mock_prisma_client.db.litellm_searchtoolstable.find_many = AsyncMock(side_effect=_flaky_find_many)
     mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
     mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
     mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
 
-    result = await SearchToolRegistry.get_all_search_tools_from_db(
-        prisma_client=mock_prisma_client
-    )
+    result = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=mock_prisma_client)
 
     assert result == []
     assert len(invocations) == 2
     mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
     reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
-    assert (
-        reconnect_kwargs["reason"]
-        == "get_all_search_tools_from_db_lookup_failure"
-    )
+    assert reconnect_kwargs["reason"] == "get_all_search_tools_from_db_lookup_failure"
 
 
 @contextlib.contextmanager
@@ -750,9 +685,7 @@ async def test_list_search_tools_scoped_to_key_object_permission():
 @pytest.mark.asyncio
 async def test_list_search_tools_unrestricted_internal_user_sees_all():
     """An internal user with no search_tools allowlist is unrestricted and sees every tool."""
-    unrestricted_user = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal_user"
-    )
+    unrestricted_user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal_user")
 
     with (
         _mock_search_tool_backend(_scoping_db_tools()),
@@ -792,9 +725,7 @@ async def test_list_search_tools_scoped_to_team_object_permission():
         response = TestClient(app).get("/search_tools/list")
 
     assert response.status_code == 200
-    assert [t["search_tool_name"] for t in response.json()["search_tools"]] == [
-        "db-tool-2"
-    ]
+    assert [t["search_tool_name"] for t in response.json()["search_tools"]] == ["db-tool-2"]
 
 
 @pytest.mark.asyncio

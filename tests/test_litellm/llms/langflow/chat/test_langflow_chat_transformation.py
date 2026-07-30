@@ -225,9 +225,7 @@ def test_langflow_extra_body_cannot_inject_tweaks_into_run_payload():
         posted_bodies.append(json.loads(body) if isinstance(body, str) else body)
         resp = MagicMock(spec=httpx.Response)
         resp.status_code = 200
-        resp.json.return_value = {
-            "outputs": [{"outputs": [{"results": {"message": {"text": "hi"}}}]}]
-        }
+        resp.json.return_value = {"outputs": [{"outputs": [{"results": {"message": {"text": "hi"}}}]}]}
         resp.headers = {}
         resp.text = "{}"
         return resp
@@ -275,9 +273,7 @@ def test_langflow_config_extract_response_from_outputs_dict():
                     "outputs": [
                         {
                             "results": {},
-                            "outputs": {
-                                "message": {"message": {"text": "via outputs dict"}}
-                            },
+                            "outputs": {"message": {"message": {"text": "via outputs dict"}}},
                         }
                     ]
                 }
@@ -292,14 +288,9 @@ def test_langflow_extract_response_returns_none_when_no_message():
     assert config._extract_content_from_response({"outputs": []}) is None
     assert config._extract_content_from_response({"detail": "flow failed"}) is None
     assert config._extract_content_from_response({"outputs": ["not-a-dict"]}) is None
+    assert config._extract_content_from_response({"outputs": [{"outputs": ["bad"]}]}) is None
     assert (
-        config._extract_content_from_response({"outputs": [{"outputs": ["bad"]}]})
-        is None
-    )
-    assert (
-        config._extract_content_from_response(
-            {"outputs": [{"outputs": [{"results": {"message": {"text": ""}}}]}]}
-        )
+        config._extract_content_from_response({"outputs": [{"outputs": [{"results": {"message": {"text": ""}}}]}]})
         is None
     )
 
@@ -310,9 +301,7 @@ def test_langflow_transform_response_builds_model_response_with_usage():
         status_code=200,
         json={
             "session_id": "sess-abc",
-            "outputs": [
-                {"outputs": [{"results": {"message": {"text": "Hello from LangFlow"}}}]}
-            ],
+            "outputs": [{"outputs": [{"results": {"message": {"text": "Hello from LangFlow"}}}]}],
         },
     )
 
@@ -332,9 +321,7 @@ def test_langflow_transform_response_builds_model_response_with_usage():
     assert result.choices[0].finish_reason == "stop"
     assert result.model == "langflow/my-flow-id"
     assert result.usage.completion_tokens > 0
-    assert result.usage.total_tokens == (
-        result.usage.prompt_tokens + result.usage.completion_tokens
-    )
+    assert result.usage.total_tokens == (result.usage.prompt_tokens + result.usage.completion_tokens)
 
 
 def test_langflow_transform_response_raises_on_unparseable_body():
@@ -357,9 +344,7 @@ def test_langflow_transform_response_raises_on_unparseable_body():
 
 def test_langflow_transform_response_raises_on_non_json_body():
     config = LangFlowConfig()
-    raw_response = httpx.Response(
-        status_code=200, content=b"not json", headers={"content-type": "text/plain"}
-    )
+    raw_response = httpx.Response(status_code=200, content=b"not json", headers={"content-type": "text/plain"})
 
     with pytest.raises(LangFlowError):
         config.transform_response(

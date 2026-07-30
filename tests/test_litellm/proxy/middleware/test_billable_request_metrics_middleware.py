@@ -34,9 +34,7 @@ class FakeRecorder:
         self.calls: List[dict] = []
 
     def record(self, *, category: BillableCategory, route: str, status_code: int, model_id: Optional[str]) -> None:
-        self.calls.append(
-            {"category": category, "route": route, "status_code": status_code, "model_id": model_id}
-        )
+        self.calls.append({"category": category, "route": route, "status_code": status_code, "model_id": model_id})
 
 
 def _make_app(recorder: Optional[FakeRecorder], status_code: int = 200, model_id: Optional[str] = None) -> Starlette:

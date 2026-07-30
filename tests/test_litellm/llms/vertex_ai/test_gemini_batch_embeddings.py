@@ -57,9 +57,7 @@ def test_gemini_batch_embeddings_with_custom_api_base_and_auth_header():
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "embeddings": [{"values": [0.1, 0.2, 0.3, 0.4, 0.5]}]
-        }
+        mock_response.json.return_value = {"embeddings": [{"values": [0.1, 0.2, 0.3, 0.4, 0.5]}]}
         mock_post.return_value = mock_response
 
         response = litellm.embedding(
@@ -244,10 +242,7 @@ def test_transform_multimodal_with_file_reference():
     assert parts[0]["text"] == "Some text"
     assert "file_data" in parts[1]
     assert parts[1]["file_data"]["mime_type"] == "image/jpeg"
-    assert (
-        parts[1]["file_data"]["file_uri"]
-        == "https://generativelanguage.googleapis.com/v1beta/files/abc123"
-    )
+    assert parts[1]["file_data"]["file_uri"] == "https://generativelanguage.googleapis.com/v1beta/files/abc123"
 
 
 def test_embed_content_response_processing():
@@ -373,9 +368,7 @@ def test_gemini_multimodal_embedding_with_audio():
 
 def test_gemini_multimodal_embedding_with_video():
     """Test multimodal embedding with video input."""
-    input_data = [
-        "data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAA"
-    ]
+    input_data = ["data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAA"]
 
     result = transform_openai_input_gemini_embed_content(
         input=input_data,
@@ -550,9 +543,7 @@ def test_vertex_ai_text_only_embedding_uses_embed_content():
         )
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "embedding": {"values": [0.1, 0.2, 0.3, 0.4, 0.5]}
-        }
+        mock_response.json.return_value = {"embedding": {"values": [0.1, 0.2, 0.3, 0.4, 0.5]}}
         mock_post.return_value = mock_response
 
         response = litellm.embedding(
@@ -565,9 +556,7 @@ def test_vertex_ai_text_only_embedding_uses_embed_content():
 
         mock_post.assert_called_once()
         call_args = mock_post.call_args
-        post_url = call_args.kwargs.get(
-            "url", call_args.args[0] if call_args.args else ""
-        )
+        post_url = call_args.kwargs.get("url", call_args.args[0] if call_args.args else "")
         assert "embedContent" in str(post_url)
         data = json.loads(call_args.kwargs["data"])
         assert "content" in data
@@ -584,9 +573,7 @@ def test_vertex_ai_text_only_embedding_uses_embed_content():
 
 def test_filter_embed_params_drops_unsupported():
     """Unsupported params like max_tokens should be filtered out."""
-    result = _filter_embed_params(
-        {"dimensions": 768, "max_tokens": 256, "temperature": 0.5}
-    )
+    result = _filter_embed_params({"dimensions": 768, "max_tokens": 256, "temperature": 0.5})
     assert result == {"outputDimensionality": 768}
 
 
@@ -649,9 +636,5 @@ def test_batch_embeddings_response_has_correct_indices_and_order():
 
     assert len(result.data) == 3
     for i, embedding in enumerate(result.data):
-        assert (
-            embedding.index == i
-        ), f"embedding {i} has index={embedding.index}, expected {i}"
-        assert (
-            embedding.embedding == expected_values[i]
-        ), f"embedding {i} has wrong values: {embedding.embedding}"
+        assert embedding.index == i, f"embedding {i} has index={embedding.index}, expected {i}"
+        assert embedding.embedding == expected_values[i], f"embedding {i} has wrong values: {embedding.embedding}"

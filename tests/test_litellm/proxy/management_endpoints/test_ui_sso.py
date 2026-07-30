@@ -10,9 +10,7 @@ from fastapi import HTTPException, Request
 
 from litellm._uuid import uuid
 
-sys.path.insert(
-    0, os.path.abspath("../../../")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../"))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse
@@ -104,9 +102,7 @@ def test_microsoft_sso_handler_with_empty_response():
     # Test with None response
 
     # Act
-    result = MicrosoftSSOHandler.openid_from_response(
-        response=None, team_ids=[], user_role=None
-    )
+    result = MicrosoftSSOHandler.openid_from_response(response=None, team_ids=[], user_role=None)
 
     # Assert
     assert isinstance(result, CustomOpenID)
@@ -142,12 +138,8 @@ def test_microsoft_sso_handler_openid_from_response_with_custom_attributes():
             "custom_display_name",
         ),
         patch("litellm.constants.MICROSOFT_USER_ID_ATTRIBUTE", "custom_id_field"),
-        patch(
-            "litellm.constants.MICROSOFT_USER_FIRST_NAME_ATTRIBUTE", "custom_first_name"
-        ),
-        patch(
-            "litellm.constants.MICROSOFT_USER_LAST_NAME_ATTRIBUTE", "custom_last_name"
-        ),
+        patch("litellm.constants.MICROSOFT_USER_FIRST_NAME_ATTRIBUTE", "custom_first_name"),
+        patch("litellm.constants.MICROSOFT_USER_LAST_NAME_ATTRIBUTE", "custom_last_name"),
         patch(
             "litellm.proxy.management_endpoints.ui_sso.MICROSOFT_USER_EMAIL_ATTRIBUTE",
             "custom_email_field",
@@ -275,9 +267,7 @@ def test_get_google_callback_response():
 
     with patch.dict(os.environ, {"GOOGLE_CLIENT_SECRET": "mock_secret"}):
         mock_verify = AsyncMock(return_value=mock_response)
-        with patch(
-            "fastapi_sso.sso.google.GoogleSSO.verify_and_process", new=mock_verify
-        ):
+        with patch("fastapi_sso.sso.google.GoogleSSO.verify_and_process", new=mock_verify):
             # Act
             result = asyncio.run(
                 GoogleSSOHandler.get_google_callback_response(
@@ -320,16 +310,12 @@ async def test_get_user_groups_from_graph_api():
         mock.json.return_value = mock_response
         return mock
 
-    with patch(
-        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-    ) as mock_client:
+    with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_client:
         mock_client.return_value = MagicMock()
         mock_client.return_value.get = mock_get
 
         # Act
-        result = await MicrosoftSSOHandler.get_user_groups_from_graph_api(
-            access_token="mock_token"
-        )
+        result = await MicrosoftSSOHandler.get_user_groups_from_graph_api(access_token="mock_token")
 
         # Assert
         assert isinstance(result, list)
@@ -351,16 +337,12 @@ async def test_get_user_groups_empty_response():
         mock.json.return_value = mock_response
         return mock
 
-    with patch(
-        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-    ) as mock_client:
+    with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_client:
         mock_client.return_value = MagicMock()
         mock_client.return_value.get = mock_get
 
         # Act
-        result = await MicrosoftSSOHandler.get_user_groups_from_graph_api(
-            access_token="mock_token"
-        )
+        result = await MicrosoftSSOHandler.get_user_groups_from_graph_api(access_token="mock_token")
 
         # Assert
         assert isinstance(result, list)
@@ -373,16 +355,12 @@ async def test_get_user_groups_error_handling():
     async def mock_get(*args, **kwargs):
         raise Exception("API Error")
 
-    with patch(
-        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-    ) as mock_client:
+    with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_client:
         mock_client.return_value = MagicMock()
         mock_client.return_value.get = mock_get
 
         # Act
-        result = await MicrosoftSSOHandler.get_user_groups_from_graph_api(
-            access_token="mock_token"
-        )
+        result = await MicrosoftSSOHandler.get_user_groups_from_graph_api(access_token="mock_token")
 
         # Assert
         assert isinstance(result, list)
@@ -401,9 +379,7 @@ async def test_get_user_groups_uses_default_graph_endpoint(monkeypatch):
         mock.json.return_value = {"value": []}
         return mock
 
-    with patch(
-        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-    ) as mock_client:
+    with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_client:
         mock_client.return_value = MagicMock()
         mock_client.return_value.get = mock_get
 
@@ -424,9 +400,7 @@ async def test_get_user_groups_uses_configured_graph_endpoint(monkeypatch):
         mock.json.return_value = {"value": []}
         return mock
 
-    with patch(
-        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-    ) as mock_client:
+    with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_client:
         mock_client.return_value = MagicMock()
         mock_client.return_value.get = mock_get
 
@@ -456,9 +430,7 @@ async def test_get_group_ids_from_service_principal_uses_configured_graph_endpoi
         access_token="mock_token",
     )
 
-    assert requested_urls == [
-        "https://graph.microsoft.us/v1.0/servicePrincipals/sp-123/appRoleAssignedTo"
-    ]
+    assert requested_urls == ["https://graph.microsoft.us/v1.0/servicePrincipals/sp-123/appRoleAssignedTo"]
 
 
 @pytest.mark.asyncio
@@ -556,9 +528,7 @@ def test_get_group_ids_from_graph_api_response():
     "team_params",
     [
         # Test case 1: Using DefaultTeamSSOParams
-        DefaultTeamSSOParams(
-            max_budget=10, budget_duration="1d", models=["special-gpt-5"]
-        ),
+        DefaultTeamSSOParams(max_budget=10, budget_duration="1d", models=["special-gpt-5"]),
         # Test case 2: Using Dict
         {"max_budget": 10, "budget_duration": "1d", "models": ["special-gpt-5"]},
     ],
@@ -596,9 +566,7 @@ async def test_default_team_params(team_params):
         # Assert
         # Verify team was created with correct parameters
         mock_prisma.db.litellm_teamtable.create.assert_called_once()
-        create_call_args = mock_prisma.db.litellm_teamtable.create.call_args.kwargs[
-            "data"
-        ]
+        create_call_args = mock_prisma.db.litellm_teamtable.create.call_args.kwargs["data"]
         assert create_call_args["team_id"] == team_id
         assert create_call_args["team_alias"] == "Test Team"
         assert create_call_args["max_budget"] == 10
@@ -640,9 +608,7 @@ async def test_create_team_without_default_params():
 
         # Assert
         mock_prisma.db.litellm_teamtable.create.assert_called_once()
-        create_call_args = mock_prisma.db.litellm_teamtable.create.call_args.kwargs[
-            "data"
-        ]
+        create_call_args = mock_prisma.db.litellm_teamtable.create.call_args.kwargs["data"]
         assert create_call_args["team_id"] == team_id
         assert create_call_args["team_alias"] == "Test Team"
         # Should not have any of the optional fields
@@ -1100,9 +1066,7 @@ async def test_get_user_info_from_db_user_exists():
         "user_email": user_email,
         "user_defined_values": user_defined_values,
     }
-    with patch(
-        "litellm.proxy.management_endpoints.ui_sso.get_user_object"
-    ) as mock_get_user_object:
+    with patch("litellm.proxy.management_endpoints.ui_sso.get_user_object") as mock_get_user_object:
         await get_user_info_from_db(**args)
         mock_get_user_object.assert_called_once()
         assert mock_get_user_object.call_args.kwargs["user_id"] == "krrishd"
@@ -1142,9 +1106,7 @@ async def test_get_user_info_from_db_user_exists_alternate_user_id():
         "user_defined_values": user_defined_values,
         "alternate_user_id": "krrishd-email1234",
     }
-    with patch(
-        "litellm.proxy.management_endpoints.ui_sso.get_user_object"
-    ) as mock_get_user_object:
+    with patch("litellm.proxy.management_endpoints.ui_sso.get_user_object") as mock_get_user_object:
         await get_user_info_from_db(**args)
         mock_get_user_object.assert_called_once()
         assert mock_get_user_object.call_args.kwargs["user_id"] == "krrishd-email1234"
@@ -1446,17 +1408,13 @@ async def test_get_generic_sso_response_with_additional_headers():
     # Mock the SSO provider and its methods
     mock_sso_instance = MagicMock()
     mock_sso_instance.verify_and_process = AsyncMock(return_value=mock_sso_response)
-    mock_sso_instance.access_token = (
-        None  # Avoid triggering JWT decode in process_sso_jwt_access_token
-    )
+    mock_sso_instance.access_token = None  # Avoid triggering JWT decode in process_sso_jwt_access_token
 
     mock_sso_class = MagicMock(return_value=mock_sso_instance)
 
     with patch.dict(os.environ, test_env_vars):
         with patch("fastapi_sso.sso.base.DiscoveryDocument"):
-            with patch(
-                "fastapi_sso.sso.generic.create_provider", return_value=mock_sso_class
-            ):
+            with patch("fastapi_sso.sso.generic.create_provider", return_value=mock_sso_class):
                 # Act
                 result, received_response, _, _ = await get_generic_sso_response(
                     request=mock_request,
@@ -1510,17 +1468,13 @@ async def test_get_generic_sso_response_with_empty_headers():
     # Mock the SSO provider and its methods
     mock_sso_instance = MagicMock()
     mock_sso_instance.verify_and_process = AsyncMock(return_value=mock_sso_response)
-    mock_sso_instance.access_token = (
-        None  # Avoid triggering JWT decode in process_sso_jwt_access_token
-    )
+    mock_sso_instance.access_token = None  # Avoid triggering JWT decode in process_sso_jwt_access_token
 
     mock_sso_class = MagicMock(return_value=mock_sso_instance)
 
     with patch.dict(os.environ, test_env_vars):
         with patch("fastapi_sso.sso.base.DiscoveryDocument"):
-            with patch(
-                "fastapi_sso.sso.generic.create_provider", return_value=mock_sso_class
-            ):
+            with patch("fastapi_sso.sso.generic.create_provider", return_value=mock_sso_class):
                 # Act
                 result, received_response, _, _ = await get_generic_sso_response(
                     request=mock_request,
@@ -1613,9 +1567,7 @@ class TestAuthCallbackRouting:
 
         for state in non_cli_states:
             # This mimics the routing logic in auth_callback
-            should_route_to_cli = state and state.startswith(
-                f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"
-            )
+            should_route_to_cli = state and state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:")
             assert not should_route_to_cli, f"State '{state}' should not route to CLI"
 
 
@@ -1650,9 +1602,7 @@ class TestGoogleLoginCLIIntegration:
 
         for source, key in test_cases:
             cli_state = SSOAuthenticationHandler._get_cli_state(source=source, key=key)
-            assert (
-                cli_state is None
-            ), f"CLI state should not be generated for source='{source}', key='{key}'"
+            assert cli_state is None, f"CLI state should not be generated for source='{source}', key='{key}'"
 
 
 class TestSSOHandlerIntegration:
@@ -1663,24 +1613,13 @@ class TestSSOHandlerIntegration:
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         # Test that SSO handler is used when client IDs are provided
-        assert (
-            SSOAuthenticationHandler.should_use_sso_handler(google_client_id="test")
-            is True
-        )
-        assert (
-            SSOAuthenticationHandler.should_use_sso_handler(microsoft_client_id="test")
-            is True
-        )
-        assert (
-            SSOAuthenticationHandler.should_use_sso_handler(generic_client_id="test")
-            is True
-        )
+        assert SSOAuthenticationHandler.should_use_sso_handler(google_client_id="test") is True
+        assert SSOAuthenticationHandler.should_use_sso_handler(microsoft_client_id="test") is True
+        assert SSOAuthenticationHandler.should_use_sso_handler(generic_client_id="test") is True
 
         # Test that SSO handler is not used when no client IDs are provided
         assert SSOAuthenticationHandler.should_use_sso_handler() is False
-        assert (
-            SSOAuthenticationHandler.should_use_sso_handler(None, None, None) is False
-        )
+        assert SSOAuthenticationHandler.should_use_sso_handler(None, None, None) is False
 
     @patch.dict(os.environ, {}, clear=False)
     def test_get_redirect_url_for_sso(self):
@@ -1751,9 +1690,7 @@ class TestSSOStateHandling:
         """Test generating CLI state with valid parameters"""
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        state = SSOAuthenticationHandler._get_cli_state(
-            source="litellm-cli", key="cli-test1234567890"
-        )
+        state = SSOAuthenticationHandler._get_cli_state(source="litellm-cli", key="cli-test1234567890")
 
         assert state is not None
         assert state.startswith("litellm-session-token:")
@@ -1763,9 +1700,7 @@ class TestSSOStateHandling:
         """Test generating CLI state with invalid source"""
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        state = SSOAuthenticationHandler._get_cli_state(
-            source="invalid_source", key="cli-test1234567890"
-        )
+        state = SSOAuthenticationHandler._get_cli_state(source="invalid_source", key="cli-test1234567890")
 
         assert state is None
 
@@ -1781,9 +1716,7 @@ class TestSSOStateHandling:
         """Test generating CLI state without source"""
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        state = SSOAuthenticationHandler._get_cli_state(
-            source=None, key="cli-test1234567890"
-        )
+        state = SSOAuthenticationHandler._get_cli_state(source=None, key="cli-test1234567890")
 
         assert state is None
 
@@ -1952,9 +1885,7 @@ class TestCustomUISSO:
                     # Test that the ValueError is raised with the correct message
                     import pytest
 
-                    with pytest.raises(
-                        ValueError, match="Enterprise features are not available"
-                    ):
+                    with pytest.raises(ValueError, match="Enterprise features are not available"):
                         asyncio.run(mock_google_login())
 
     @pytest.mark.asyncio
@@ -1988,9 +1919,7 @@ class TestCustomUISSO:
             picture=None,
             provider="custom",
         )
-        mock_custom_handler.handle_custom_ui_sso_sign_in = AsyncMock(
-            return_value=expected_openid
-        )
+        mock_custom_handler.handle_custom_ui_sso_sign_in = AsyncMock(return_value=expected_openid)
 
         # Mock the redirect response method
         mock_redirect_response = MagicMock()
@@ -2011,15 +1940,11 @@ class TestCustomUISSO:
                         return_value=mock_redirect_response,
                     ) as mock_get_redirect:
                         # Act
-                        result = await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(
-                            request=mock_request
-                        )
+                        result = await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(request=mock_request)
 
                         # Assert
                         # Verify the custom handler was called with the request
-                        mock_custom_handler.handle_custom_ui_sso_sign_in.assert_called_once_with(
-                            request=mock_request
-                        )
+                        mock_custom_handler.handle_custom_ui_sso_sign_in.assert_called_once_with(request=mock_request)
 
                         # Verify the redirect response was generated with correct OpenID
                         mock_get_redirect.assert_called_once_with(
@@ -2063,9 +1988,7 @@ class TestCustomUISSO:
                     {"trusted_proxy_ranges": ["10.0.0.0/24"]},
                 ):
                     with pytest.raises(ValueError, match="not trusted"):
-                        await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(
-                            request=mock_request
-                        )
+                        await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(request=mock_request)
 
         mock_custom_handler.handle_custom_ui_sso_sign_in.assert_not_called()
 
@@ -2097,9 +2020,7 @@ class TestCustomUISSO:
                 request_headers_dict = dict(request.headers)
                 return OpenID(
                     id=request_headers_dict.get("x-litellm-user-id", "default_user"),
-                    email=request_headers_dict.get(
-                        "x-litellm-user-email", "default@test.com"
-                    ),
+                    email=request_headers_dict.get("x-litellm-user-email", "default@test.com"),
                     first_name="Custom",
                     last_name="Handler",
                     display_name="Custom Handler Test",
@@ -2139,9 +2060,7 @@ class TestCustomUISSO:
                         return_value=mock_redirect_response,
                     ) as mock_get_redirect:
                         # Act
-                        result = await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(
-                            request=mock_request
-                        )
+                        result = await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(request=mock_request)
 
                         # Assert that our custom handler was executed
                         assert test_handler_instance.method_called is True
@@ -2291,9 +2210,7 @@ class TestCLIKeyRegenerationFlow:
         redis_cache.set_cache.side_effect = lambda key, value, ttl: redis_store.__setitem__(
             key, str(value).encode("utf-8")
         )
-        redis_cache.get_cache.side_effect = lambda key: RedisCache._get_cache_logic(
-            MagicMock(), redis_store.get(key)
-        )
+        redis_cache.get_cache.side_effect = lambda key: RedisCache._get_cache_logic(MagicMock(), redis_store.get(key))
         cache = MagicMock()
         cache.redis_cache = redis_cache
 
@@ -2333,12 +2250,8 @@ class TestCLIKeyRegenerationFlow:
         assert mock_cache.increment_cache.call_args.kwargs["ttl"] == 60
         mock_cache.set_cache.assert_called_once()
         flow_data = mock_cache.set_cache.call_args.kwargs["value"]
-        assert flow_data["poll_secret_hash"] == _hash_cli_sso_secret(
-            result["poll_secret"]
-        )
-        assert flow_data["user_code_hash"] == _hash_cli_sso_secret(
-            _normalize_cli_sso_user_code(result["user_code"])
-        )
+        assert flow_data["poll_secret_hash"] == _hash_cli_sso_secret(result["poll_secret"])
+        assert flow_data["user_code_hash"] == _hash_cli_sso_secret(_normalize_cli_sso_user_code(result["user_code"]))
         assert flow_data["poll_secret_hash"] != result["poll_secret"]
         assert flow_data["user_code_hash"] != result["user_code"]
 
@@ -2496,9 +2409,7 @@ class TestCLIKeyRegenerationFlow:
         )
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        manual_state = SSOAuthenticationHandler._get_cli_state(
-            source=LITELLM_CLI_SOURCE_IDENTIFIER, key="cli-abc123"
-        )
+        manual_state = SSOAuthenticationHandler._get_cli_state(source=LITELLM_CLI_SOURCE_IDENTIFIER, key="cli-abc123")
         prefill_state = SSOAuthenticationHandler._get_cli_state(
             source=LITELLM_CLI_SOURCE_IDENTIFIER,
             key="cli-abc123",
@@ -2506,14 +2417,9 @@ class TestCLIKeyRegenerationFlow:
         )
 
         assert manual_state == f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-abc123"
+        assert prefill_state == f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-abc123:WXYZ-2345"
         assert (
-            prefill_state == f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-abc123:WXYZ-2345"
-        )
-        assert (
-            SSOAuthenticationHandler._get_cli_state(
-                source="not-cli", key="cli-abc123", user_code="WXYZ-2345"
-            )
-            is None
+            SSOAuthenticationHandler._get_cli_state(source="not-cli", key="cli-abc123", user_code="WXYZ-2345") is None
         )
 
     def test_get_cli_state_drops_malformed_user_code(self):
@@ -2597,9 +2503,7 @@ class TestCLIKeyRegenerationFlow:
             browser_complete_token="browser-token",
         )
 
-        input_line = next(
-            line for line in html.splitlines() if 'name="user_code"' in line
-        )
+        input_line = next(line for line in html.splitlines() if 'name="user_code"' in line)
         assert "value=" not in input_line
         assert "shown in your terminal" in html
 
@@ -2661,15 +2565,11 @@ class TestCLIKeyRegenerationFlow:
         )
 
         mock_request = MagicMock(spec=Request)
-        mock_request.body = AsyncMock(
-            return_value=b"user_code=ABCD-EFGH&browser_complete_token=browser-token"
-        )
+        mock_request.body = AsyncMock(return_value=b"user_code=ABCD-EFGH&browser_complete_token=browser-token")
         mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
-            "user_code_hash": _hash_cli_sso_secret(
-                _normalize_cli_sso_user_code("ABCD-EFGH")
-            ),
+            "user_code_hash": _hash_cli_sso_secret(_normalize_cli_sso_user_code("ABCD-EFGH")),
             "browser_complete_token_hash": _hash_cli_sso_secret("browser-token"),
             "sso_complete": True,
             "user_code_verified": False,
@@ -2684,9 +2584,7 @@ class TestCLIKeyRegenerationFlow:
                 return_value="<html>Success</html>",
             ),
         ):
-            result = await cli_sso_complete(
-                request=mock_request, login_id="cli-session-4567890"
-            )
+            result = await cli_sso_complete(request=mock_request, login_id="cli-session-4567890")
 
         assert result.status_code == 200
         flow_data = mock_cache.set_cache.call_args.kwargs["value"]
@@ -2706,9 +2604,7 @@ class TestCLIKeyRegenerationFlow:
         mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
-            "user_code_hash": _hash_cli_sso_secret(
-                _normalize_cli_sso_user_code("ABCD-EFGH")
-            ),
+            "user_code_hash": _hash_cli_sso_secret(_normalize_cli_sso_user_code("ABCD-EFGH")),
             "browser_complete_token_hash": _hash_cli_sso_secret("browser-token"),
             "sso_complete": True,
             "user_code_verified": False,
@@ -2720,9 +2616,7 @@ class TestCLIKeyRegenerationFlow:
             patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
         ):
             with pytest.raises(HTTPException) as exc_info:
-                await cli_sso_complete(
-                    request=mock_request, login_id="cli-session-4567890"
-                )
+                await cli_sso_complete(request=mock_request, login_id="cli-session-4567890")
 
         assert exc_info.value.status_code == 400
         mock_cache.set_cache.assert_not_called()
@@ -2737,15 +2631,11 @@ class TestCLIKeyRegenerationFlow:
         )
 
         mock_request = MagicMock(spec=Request)
-        mock_request.body = AsyncMock(
-            return_value=b"user_code=ABCD-EFGH&browser_complete_token=browser-token"
-        )
+        mock_request.body = AsyncMock(return_value=b"user_code=ABCD-EFGH&browser_complete_token=browser-token")
         mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
-            "user_code_hash": _hash_cli_sso_secret(
-                _normalize_cli_sso_user_code("ABCD-EFGH")
-            ),
+            "user_code_hash": _hash_cli_sso_secret(_normalize_cli_sso_user_code("ABCD-EFGH")),
             "sso_complete": False,
             "user_code_verified": False,
             "session_data": None,
@@ -2756,9 +2646,7 @@ class TestCLIKeyRegenerationFlow:
             patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
         ):
             with pytest.raises(HTTPException) as exc_info:
-                await cli_sso_complete(
-                    request=mock_request, login_id="cli-session-4567890"
-                )
+                await cli_sso_complete(request=mock_request, login_id="cli-session-4567890")
 
         assert exc_info.value.status_code == 400
         assert exc_info.value.detail == "CLI login is not ready"
@@ -2850,10 +2738,7 @@ class TestCLIKeyRegenerationFlow:
             assert result.status_code == 200
             # Verify response contains success message (response is HTML)
             assert result.body is not None
-            assert (
-                'action="https://test.example.com/sso/cli/complete/cli-session-4567890"'
-                in result.body.decode()
-            )
+            assert 'action="https://test.example.com/sso/cli/complete/cli-session-4567890"' in result.body.decode()
 
     @pytest.mark.asyncio
     async def test_cli_poll_key_returns_teams_for_selection(self):
@@ -2981,9 +2866,7 @@ class TestCLIKeyRegenerationFlow:
         mock_result = {"user_id": "test-user", "email": "test@example.com"}
 
         with (
-            patch(
-                "litellm.proxy.management_endpoints.ui_sso.cli_sso_callback"
-            ) as mock_cli_callback,
+            patch("litellm.proxy.management_endpoints.ui_sso.cli_sso_callback") as mock_cli_callback,
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.master_key", "test-master-key"),
             patch("litellm.proxy.proxy_server.general_settings", {}),
@@ -3017,15 +2900,11 @@ class TestCLIKeyRegenerationFlow:
 
         mock_request = MagicMock(spec=Request)
         mock_request.query_params = {"code": "some-auth-code"}
-        cli_state = (
-            f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-new-session-key-456:WXYZ-2345"
-        )
+        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-new-session-key-456:WXYZ-2345"
         mock_result = {"user_id": "test-user", "email": "test@example.com"}
 
         with (
-            patch(
-                "litellm.proxy.management_endpoints.ui_sso.cli_sso_callback"
-            ) as mock_cli_callback,
+            patch("litellm.proxy.management_endpoints.ui_sso.cli_sso_callback") as mock_cli_callback,
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.master_key", "test-master-key"),
             patch("litellm.proxy.proxy_server.general_settings", {}),
@@ -3058,9 +2937,7 @@ class TestCLIKeyRegenerationFlow:
         mock_request = MagicMock()
         mock_request.base_url = "https://test.litellm.ai/"
 
-        with patch(
-            "litellm.proxy.utils.get_custom_url", return_value="https://test.litellm.ai"
-        ):
+        with patch("litellm.proxy.utils.get_custom_url", return_value="https://test.litellm.ai"):
             # Test with existing_key - should NOT be in URL
             redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
                 request=mock_request,
@@ -3080,9 +2957,7 @@ class TestCLIKeyRegenerationFlow:
         mock_request = MagicMock()
         mock_request.base_url = "https://test.litellm.ai/"
 
-        with patch(
-            "litellm.proxy.utils.get_custom_url", return_value="https://test.litellm.ai"
-        ):
+        with patch("litellm.proxy.utils.get_custom_url", return_value="https://test.litellm.ai"):
             # Test without existing_key
             redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
                 request=mock_request, sso_callback_route="sso/callback"
@@ -3223,9 +3098,7 @@ class TestCLIKeyRegenerationFlow:
             ),
             patch(
                 "litellm.proxy.auth.auth_checks.get_team_object",
-                new=AsyncMock(
-                    side_effect=AssertionError("team lookup must be skipped")
-                ),
+                new=AsyncMock(side_effect=AssertionError("team lookup must be skipped")),
             ),
         ):
             result = await cli_poll_key(
@@ -3307,9 +3180,7 @@ class TestGetAppRolesFromIdToken:
 
             # Assert
             assert result == ["Admin", "User", "Developer"]
-            mock_jwt_decode.assert_called_once_with(
-                mock_token, options={"verify_signature": False}
-            )
+            mock_jwt_decode.assert_called_once_with(mock_token, options={"verify_signature": False})
 
     def test_app_roles_picked_when_both_exist(self):
         """Test that 'app_roles' takes precedence when both 'app_roles' and 'roles' exist"""
@@ -3431,9 +3302,7 @@ class TestProcessSSOJWTAccessToken:
             "groups": ["team1", "team2", "team3"],
         }
 
-    def test_process_sso_jwt_access_token_with_existing_team_ids(
-        self, mock_jwt_handler, sample_jwt_token
-    ):
+    def test_process_sso_jwt_access_token_with_existing_team_ids(self, mock_jwt_handler, sample_jwt_token):
         """Test that existing team IDs are not overwritten"""
         from litellm.proxy.management_endpoints.ui_sso import (
             process_sso_jwt_access_token,
@@ -3489,20 +3358,14 @@ class TestProcessSSOJWTAccessToken:
             )
 
             # Assert
-            mock_jwt_decode.assert_called_once_with(
-                sample_jwt_token, options={"verify_signature": False}
-            )
-            mock_jwt_handler.get_team_ids_from_jwt.assert_called_once_with(
-                sample_jwt_payload
-            )
+            mock_jwt_decode.assert_called_once_with(sample_jwt_token, options={"verify_signature": False})
+            mock_jwt_handler.get_team_ids_from_jwt.assert_called_once_with(sample_jwt_payload)
 
             # Verify team_ids was added to the dict as a key
             assert "team_ids" in result
             assert result["team_ids"] == ["team1", "team2", "team3"]
 
-    def test_process_sso_jwt_access_token_with_dict_existing_team_ids(
-        self, mock_jwt_handler, sample_jwt_token
-    ):
+    def test_process_sso_jwt_access_token_with_dict_existing_team_ids(self, mock_jwt_handler, sample_jwt_token):
         """Test that existing team IDs in dictionary are not overwritten"""
         from litellm.proxy.management_endpoints.ui_sso import (
             process_sso_jwt_access_token,
@@ -3545,9 +3408,7 @@ class TestProcessSSOJWTAccessToken:
 
         # Test with None access token
         with patch("jwt.decode") as mock_jwt_decode:
-            process_sso_jwt_access_token(
-                access_token_str=None, sso_jwt_handler=mock_jwt_handler, result=result
-            )
+            process_sso_jwt_access_token(access_token_str=None, sso_jwt_handler=mock_jwt_handler, result=result)
 
             # Assert nothing was processed
             mock_jwt_decode.assert_not_called()
@@ -3556,18 +3417,14 @@ class TestProcessSSOJWTAccessToken:
 
         # Test with empty string access token
         with patch("jwt.decode") as mock_jwt_decode:
-            process_sso_jwt_access_token(
-                access_token_str="", sso_jwt_handler=mock_jwt_handler, result=result
-            )
+            process_sso_jwt_access_token(access_token_str="", sso_jwt_handler=mock_jwt_handler, result=result)
 
             # Assert nothing was processed
             mock_jwt_decode.assert_not_called()
             mock_jwt_handler.get_team_ids_from_jwt.assert_not_called()
             assert result.team_ids == []
 
-    def test_process_sso_jwt_access_token_no_result(
-        self, mock_jwt_handler, sample_jwt_token
-    ):
+    def test_process_sso_jwt_access_token_no_result(self, mock_jwt_handler, sample_jwt_token):
         """Test that nothing happens when result is None"""
         from litellm.proxy.management_endpoints.ui_sso import (
             process_sso_jwt_access_token,
@@ -3585,9 +3442,7 @@ class TestProcessSSOJWTAccessToken:
             mock_jwt_decode.assert_not_called()
             mock_jwt_handler.get_team_ids_from_jwt.assert_not_called()
 
-    def test_process_sso_jwt_access_token_non_decode_exception_propagates(
-        self, mock_jwt_handler, sample_jwt_token
-    ):
+    def test_process_sso_jwt_access_token_non_decode_exception_propagates(self, mock_jwt_handler, sample_jwt_token):
         """Test that non-DecodeError JWT exceptions still propagate up."""
         import jwt as pyjwt
 
@@ -3597,9 +3452,7 @@ class TestProcessSSOJWTAccessToken:
 
         result = CustomOpenID(id="test_user", email="test@example.com", team_ids=[])
 
-        with patch(
-            "jwt.decode", side_effect=pyjwt.exceptions.InvalidKeyError("Invalid key")
-        ) as mock_jwt_decode:
+        with patch("jwt.decode", side_effect=pyjwt.exceptions.InvalidKeyError("Invalid key")) as mock_jwt_decode:
             with pytest.raises(pyjwt.exceptions.InvalidKeyError, match="Invalid key"):
                 process_sso_jwt_access_token(
                     access_token_str=sample_jwt_token,
@@ -3633,9 +3486,7 @@ class TestProcessSSOJWTAccessToken:
 
             # Assert
             mock_jwt_decode.assert_called_once()
-            mock_jwt_handler.get_team_ids_from_jwt.assert_called_once_with(
-                sample_jwt_payload
-            )
+            mock_jwt_handler.get_team_ids_from_jwt.assert_called_once_with(sample_jwt_payload)
 
             # Even empty team IDs should be set
             assert result.team_ids == []
@@ -3672,9 +3523,7 @@ class TestProcessSSOJWTAccessToken:
         assert result.team_ids == ["existing_team"]
         assert result.user_role is None
 
-    def test_process_sso_jwt_access_token_real_jwt_with_role_and_teams(
-        self, mock_jwt_handler
-    ):
+    def test_process_sso_jwt_access_token_real_jwt_with_role_and_teams(self, mock_jwt_handler):
         """Test that a real JWT containing role and team fields is correctly processed."""
         import jwt as pyjwt
 
@@ -3847,15 +3696,9 @@ class TestGenericResponseConvertorNestedAttributes:
             # Current behavior: returns None for nested paths
             # Expected behavior with current implementation (no nested path support):
             assert result.id == "nested-user-456"
-            assert (
-                result.email == "john.doe@example.com"
-            )  # Can't access "attributes.email" with .get()
-            assert (
-                result.first_name == "John"
-            )  # Can't access "attributes.given_name" with .get()
-            assert (
-                result.last_name == "Doe"
-            )  # Can't access "attributes.family_name" with .get()
+            assert result.email == "john.doe@example.com"  # Can't access "attributes.email" with .get()
+            assert result.first_name == "John"  # Can't access "attributes.given_name" with .get()
+            assert result.last_name == "Doe"  # Can't access "attributes.family_name" with .get()
             assert result.display_name == "user-sub-123"  # Top-level attribute works
 
 
@@ -4031,14 +3874,8 @@ class TestGetGenericSSORedirectParams:
             assert redirect_params["code_challenge_method"] == "S256"
 
             # Verify code_challenge is correctly derived from code_verifier
-            expected_challenge_bytes = hashlib.sha256(
-                code_verifier.encode("utf-8")
-            ).digest()
-            expected_challenge = (
-                base64.urlsafe_b64encode(expected_challenge_bytes)
-                .decode("utf-8")
-                .rstrip("=")
-            )
+            expected_challenge_bytes = hashlib.sha256(code_verifier.encode("utf-8")).digest()
+            expected_challenge = base64.urlsafe_b64encode(expected_challenge_bytes).decode("utf-8").rstrip("=")
             assert redirect_params["code_challenge"] == expected_challenge
 
     def test_state_with_pkce_disabled(self):
@@ -4171,14 +4008,8 @@ class TestPKCEFunctionality:
         assert isinstance(code_verifier, str)
 
         # Verify code_challenge is correctly generated from code_verifier
-        expected_challenge_bytes = hashlib.sha256(
-            code_verifier.encode("utf-8")
-        ).digest()
-        expected_challenge = (
-            base64.urlsafe_b64encode(expected_challenge_bytes)
-            .decode("utf-8")
-            .rstrip("=")
-        )
+        expected_challenge_bytes = hashlib.sha256(code_verifier.encode("utf-8")).digest()
+        expected_challenge = base64.urlsafe_b64encode(expected_challenge_bytes).decode("utf-8").rstrip("=")
         assert code_challenge == expected_challenge
 
         # Verify both are base64url encoded (no padding)
@@ -4200,9 +4031,7 @@ class TestPKCEFunctionality:
         # Mock cache with async methods — use dict format (primary path)
         mock_cache = MagicMock(redis_cache=None)
         test_code_verifier = "test_code_verifier_abc123xyz"
-        mock_cache.async_get_cache = AsyncMock(
-            return_value={"code_verifier": test_code_verifier}
-        )
+        mock_cache.async_get_cache = AsyncMock(return_value={"code_verifier": test_code_verifier})
         mock_cache.async_delete_cache = AsyncMock()
 
         with (
@@ -4211,10 +4040,8 @@ class TestPKCEFunctionality:
             patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}),
         ):
             # Act
-            token_params = (
-                await SSOAuthenticationHandler.prepare_token_exchange_parameters(
-                    request=mock_request, generic_include_client_id=False
-                )
+            token_params = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                request=mock_request, generic_include_client_id=False
             )
 
             # Assert
@@ -4225,9 +4052,7 @@ class TestPKCEFunctionality:
 
             # Verify cache was read but NOT deleted yet (deletion is deferred to after
             # successful token exchange to preserve the verifier for retries)
-            mock_cache.async_get_cache.assert_called_once_with(
-                key=f"pkce_verifier:{test_state}"
-            )
+            mock_cache.async_get_cache.assert_called_once_with(key=f"pkce_verifier:{test_state}")
             mock_cache.async_delete_cache.assert_not_called()
 
     @pytest.mark.asyncio
@@ -4240,9 +4065,7 @@ class TestPKCEFunctionality:
         # Mock SSO provider
         mock_sso = MagicMock()
         mock_redirect_response = MagicMock()
-        original_location = (
-            "https://auth.example.com/authorize?state=test456&client_id=abc"
-        )
+        original_location = "https://auth.example.com/authorize?state=test456&client_id=abc"
         mock_redirect_response.headers = {"location": original_location}
         mock_sso.get_login_redirect = AsyncMock(return_value=mock_redirect_response)
         mock_sso.__enter__ = MagicMock(return_value=mock_sso)
@@ -4328,9 +4151,7 @@ class TestPKCEFunctionality:
 
         with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
             with patch("litellm.proxy.proxy_server.redis_usage_cache", mock_redis):
-                with patch(
-                    "litellm.proxy.proxy_server.user_api_key_cache", mock_in_memory
-                ):
+                with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_in_memory):
                     # Pod A: start login, store code_verifier in "Redis"
                     await SSOAuthenticationHandler.get_generic_sso_redirect_response(
                         generic_sso=mock_sso,
@@ -4344,9 +4165,7 @@ class TestPKCEFunctionality:
                     stored_value = mock_redis._store[stored_key]
                     # Stored as JSON-serialized dict for Redis compatibility
                     stored_dict = json.loads(stored_value)
-                    assert (
-                        isinstance(stored_dict, dict) and "code_verifier" in stored_dict
-                    )
+                    assert isinstance(stored_dict, dict) and "code_verifier" in stored_dict
                     assert len(stored_dict["code_verifier"]) == 43
 
                     # Pod B: callback with same state, retrieve from "Redis"
@@ -4401,9 +4220,7 @@ class TestPKCEFunctionality:
 
         with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
             with patch("litellm.proxy.proxy_server.redis_usage_cache", None):
-                with patch(
-                    "litellm.proxy.proxy_server.user_api_key_cache", mock_in_memory
-                ):
+                with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_in_memory):
                     # Pod A: start login, store code_verifier in in-memory cache
                     await SSOAuthenticationHandler.get_generic_sso_redirect_response(
                         generic_sso=mock_sso,
@@ -4412,14 +4229,9 @@ class TestPKCEFunctionality:
                     )
                     mock_in_memory.async_set_cache.assert_called_once()
                     stored_key = mock_in_memory.async_set_cache.call_args.kwargs["key"]
-                    stored_value = mock_in_memory.async_set_cache.call_args.kwargs[
-                        "value"
-                    ]
+                    stored_value = mock_in_memory.async_set_cache.call_args.kwargs["value"]
                     assert stored_key == "pkce_verifier:fallback_state_xyz"
-                    assert (
-                        isinstance(stored_value, dict)
-                        and len(stored_value["code_verifier"]) == 43
-                    )
+                    assert isinstance(stored_value, dict) and len(stored_value["code_verifier"]) == 43
 
                     # Same pod: callback retrieves from in-memory cache
                     mock_request = MagicMock(spec=Request)
@@ -4428,14 +4240,10 @@ class TestPKCEFunctionality:
                         request=mock_request, generic_include_client_id=False
                     )
                     assert "code_verifier" in token_params
-                    assert (
-                        token_params["code_verifier"] == stored_value["code_verifier"]
-                    )
+                    assert token_params["code_verifier"] == stored_value["code_verifier"]
                     # Cache key returned for deferred deletion after successful exchange
                     assert token_params["_pkce_cache_key"] == stored_key
-                    mock_in_memory.async_get_cache.assert_called_once_with(
-                        key=stored_key
-                    )
+                    mock_in_memory.async_get_cache.assert_called_once_with(key=stored_key)
                     # Deletion is deferred — not called by prepare_token_exchange_parameters
                     mock_in_memory.async_delete_cache.assert_not_called()
 
@@ -4457,10 +4265,8 @@ class TestPKCEFunctionality:
         ):
             mock_request = MagicMock(spec=Request)
             mock_request.query_params = {}
-            token_params = (
-                await SSOAuthenticationHandler.prepare_token_exchange_parameters(
-                    request=mock_request, generic_include_client_id=False
-                )
+            token_params = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                request=mock_request, generic_include_client_id=False
             )
             assert "code_verifier" not in token_params
             mock_redis.async_get_cache.assert_not_called()
@@ -4496,12 +4302,10 @@ class TestPKCEFunctionality:
             # Verify redirect_uri is forwarded (required by strict OAuth providers)
             assert post_data.get("redirect_uri") == "https://proxy.example.com/callback"
             # Verify credentials are NOT double-sent in the POST body when using Basic Auth
-            assert (
-                "client_secret" not in post_data
-            ), "client_secret must not appear in POST body when using Basic Auth"
-            assert (
-                "client_id" not in post_data
-            ), "client_id must not appear in POST body when using Basic Auth (include_client_id=False)"
+            assert "client_secret" not in post_data, "client_secret must not appear in POST body when using Basic Auth"
+            assert "client_id" not in post_data, (
+                "client_id must not appear in POST body when using Basic Auth (include_client_id=False)"
+            )
             return mock_response
 
         # get_async_httpx_client returns a client directly (no context manager).
@@ -4511,9 +4315,7 @@ class TestPKCEFunctionality:
         mock_userinfo_client = MagicMock()
         mock_userinfo_client.get = AsyncMock(return_value=mock_userinfo_response)
 
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_get_client:
             mock_get_client.side_effect = [mock_token_client, mock_userinfo_client]
 
             result = await SSOAuthenticationHandler._pkce_token_exchange(
@@ -4532,9 +4334,7 @@ class TestPKCEFunctionality:
         assert result["email"] == "user@example.com"
         # id_token was explicit null in token_response — the merge loop must remove it
         # rather than leaving "id_token": None in the result.
-        assert (
-            "id_token" not in result
-        ), "null id_token from token endpoint must be absent in merged result"
+        assert "id_token" not in result, "null id_token from token endpoint must be absent in merged result"
         # Verify userinfo GET used the correct Bearer token header
         get_call = mock_userinfo_client.get.call_args
         assert get_call is not None
@@ -4554,18 +4354,12 @@ class TestPKCEFunctionality:
         async def fake_post(*args, **kwargs):
             headers = kwargs.get("headers", {})
             auth_header = headers.get("Authorization", "")
-            assert not auth_header.startswith(
-                "Basic "
-            ), "Should NOT use Basic Auth when include_client_id=True"
+            assert not auth_header.startswith("Basic "), "Should NOT use Basic Auth when include_client_id=True"
             data = kwargs.get("data", {})
             assert "client_id" in data
             assert "client_secret" in data
-            assert (
-                data.get("code_verifier") == "verifier_xyz"
-            ), "code_verifier must be in POST body"
-            assert (
-                data.get("redirect_uri") == "https://proxy.example.com/callback"
-            ), "redirect_uri must be forwarded"
+            assert data.get("code_verifier") == "verifier_xyz", "code_verifier must be in POST body"
+            assert data.get("redirect_uri") == "https://proxy.example.com/callback", "redirect_uri must be forwarded"
             mock = MagicMock()
             mock.status_code = 200
             mock.json.return_value = token_resp
@@ -4581,9 +4375,7 @@ class TestPKCEFunctionality:
         mock_userinfo_client = MagicMock()
         mock_userinfo_client.get = AsyncMock(return_value=mock_userinfo)
 
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_get_client:
             mock_get_client.side_effect = [mock_token_client, mock_userinfo_client]
 
             result = await SSOAuthenticationHandler._pkce_token_exchange(
@@ -4615,9 +4407,7 @@ class TestPKCEFunctionality:
             "error_description": "Code already used",
         }
 
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_get_client:
             mock_client = MagicMock()
             mock_resp = MagicMock()
             mock_resp.status_code = 200
@@ -4649,16 +4439,10 @@ class TestPKCEFunctionality:
 
         payload = {"sub": "user_from_jwt", "email": "jwt@example.com"}
         # Build a minimal JWT (header.payload.signature — signature not verified)
-        encoded_payload = (
-            base64.urlsafe_b64encode(_json.dumps(payload).encode())
-            .rstrip(b"=")
-            .decode()
-        )
+        encoded_payload = base64.urlsafe_b64encode(_json.dumps(payload).encode()).rstrip(b"=").decode()
         fake_id_token = f"eyJhbGciOiJSUzI1NiJ9.{encoded_payload}.fakesig"
 
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_get_client:
             mock_client = MagicMock()
             mock_fail = MagicMock()
             mock_fail.status_code = 503
@@ -4684,11 +4468,7 @@ class TestPKCEFunctionality:
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         payload = {"sub": "id_token_user", "email": "id@example.com"}
-        encoded_payload = (
-            base64.urlsafe_b64encode(_json.dumps(payload).encode())
-            .rstrip(b"=")
-            .decode()
-        )
+        encoded_payload = base64.urlsafe_b64encode(_json.dumps(payload).encode()).rstrip(b"=").decode()
         fake_id_token = f"eyJhbGciOiJSUzI1NiJ9.{encoded_payload}.fakesig"
 
         # No httpx call should happen when userinfo_endpoint is None
@@ -4708,9 +4488,7 @@ class TestPKCEFunctionality:
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_get_client:
             mock_client = MagicMock()
             mock_fail = MagicMock()
             mock_fail.status_code = 503
@@ -4739,9 +4517,7 @@ class TestPKCEFunctionality:
         mock_resp.status_code = 200
         mock_resp.json.return_value = None  # HTTP 200 with null JSON body
 
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.get = AsyncMock(return_value=mock_resp)
             mock_get_client.return_value = mock_client
@@ -4792,10 +4568,7 @@ class TestPKCEFunctionality:
                     request=mock_request, generic_include_client_id=False
                 )
 
-        assert (
-            "verifier not found" in exc_info.value.message.lower()
-            or "cache" in exc_info.value.message.lower()
-        )
+        assert "verifier not found" in exc_info.value.message.lower() or "cache" in exc_info.value.message.lower()
         assert str(exc_info.value.code) == "401"
 
     @pytest.mark.asyncio
@@ -4814,14 +4587,10 @@ class TestPKCEFunctionality:
         async def fake_post(*args, **kwargs):
             headers = kwargs.get("headers", {})
             auth_header = headers.get("Authorization", "")
-            assert not auth_header.startswith(
-                "Basic "
-            ), "Public client must not use Basic Auth"
+            assert not auth_header.startswith("Basic "), "Public client must not use Basic Auth"
             data = kwargs.get("data", {})
             assert data.get("client_id") == "public_client_id"
-            assert (
-                "client_secret" not in data
-            ), "No secret should be sent for public client"
+            assert "client_secret" not in data, "No secret should be sent for public client"
             assert data.get("code_verifier") == "public_verifier"
             mock = MagicMock()
             mock.status_code = 200
@@ -4838,9 +4607,7 @@ class TestPKCEFunctionality:
         mock_userinfo_client = MagicMock()
         mock_userinfo_client.get = AsyncMock(return_value=mock_userinfo)
 
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_get_client:
             mock_get_client.side_effect = [mock_token_client, mock_userinfo_client]
 
             result = await SSOAuthenticationHandler._pkce_token_exchange(
@@ -4868,22 +4635,16 @@ class TestPKCEFunctionality:
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         failing_cache = MagicMock()
-        failing_cache.async_delete_cache = AsyncMock(
-            side_effect=Exception("Redis down")
-        )
+        failing_cache.async_delete_cache = AsyncMock(side_effect=Exception("Redis down"))
 
         # Should NOT raise even though the underlying cache delete fails
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
             patch("litellm.proxy.proxy_server.user_api_key_cache", failing_cache),
         ):
-            await SSOAuthenticationHandler._delete_pkce_verifier(
-                "pkce_verifier:test_state"
-            )
+            await SSOAuthenticationHandler._delete_pkce_verifier("pkce_verifier:test_state")
 
-        failing_cache.async_delete_cache.assert_called_once_with(
-            key="pkce_verifier:test_state"
-        )
+        failing_cache.async_delete_cache.assert_called_once_with(key="pkce_verifier:test_state")
 
     @pytest.mark.asyncio
     async def test_pkce_cache_miss_unexpected_format_raises_proxy_exception(self):
@@ -4971,8 +4732,7 @@ class TestPKCEFunctionality:
         mock_cache.async_get_cache.assert_called_once()
         # Verify the warning was actually logged
         assert any(
-            "verifier not found" in r.message.lower()
-            or "code_verifier" in r.message.lower()
+            "verifier not found" in r.message.lower() or "code_verifier" in r.message.lower()
             for r in caplog.records
             if r.levelno >= logging.WARNING
         ), f"Expected a cache-miss warning. Records: {[r.message for r in caplog.records]}"
@@ -4990,9 +4750,7 @@ class TestPKCEFunctionality:
         mock_response.status_code = 401
         mock_response.text = "Unauthorized"
 
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_get_client.return_value = mock_client
@@ -5014,9 +4772,7 @@ class TestPKCEFunctionality:
         assert str(exc_info.value.code) == "401"
 
     @pytest.mark.asyncio
-    async def test_pkce_cache_miss_unexpected_format_non_strict_logs_warning(
-        self, caplog
-    ):
+    async def test_pkce_cache_miss_unexpected_format_non_strict_logs_warning(self, caplog):
         """When cached data has an unexpected format (e.g. integer from corrupt Redis)
         in non-strict mode, prepare_token_exchange_parameters logs a warning and
         returns params without code_verifier rather than raising."""
@@ -5060,9 +4816,7 @@ class TestPKCEFunctionality:
         mock_cache.async_get_cache.assert_called_once()
         # Verify a warning was logged about the unexpected format or cache miss
         assert any(
-            "verifier" in r.message.lower()
-            or "format" in r.message.lower()
-            or "cache" in r.message.lower()
+            "verifier" in r.message.lower() or "format" in r.message.lower() or "cache" in r.message.lower()
             for r in caplog.records
             if r.levelno >= logging.WARNING
         ), f"Expected a format/cache warning. Records: {[r.message for r in caplog.records]}"
@@ -5106,9 +4860,7 @@ class TestPKCEFunctionality:
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_get_client:
             mock_client = MagicMock()
             mock_resp = MagicMock()
             mock_resp.status_code = 200
@@ -5142,9 +4894,7 @@ class TestPKCEFunctionality:
 
         body_without_token = {"token_type": "Bearer", "scope": "openid"}
 
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_get_client:
             mock_client = MagicMock()
             mock_resp = MagicMock()
             mock_resp.status_code = 200
@@ -5165,10 +4915,7 @@ class TestPKCEFunctionality:
                     additional_headers={},
                 )
 
-        assert (
-            "no access_token" in exc_info.value.message
-            or "access_token" in exc_info.value.message
-        )
+        assert "no access_token" in exc_info.value.message or "access_token" in exc_info.value.message
         assert str(exc_info.value.code) == "401"
 
 
@@ -5196,18 +4943,16 @@ class TestAddMissingTeamMember:
 
         sso_teams = ["team-from-entra-1", "team-from-entra-2"]
 
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task"
-        ) as mock_add_task:
+        with patch("litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task") as mock_add_task:
             mock_add_task.return_value = AsyncMock()
 
             await add_missing_team_member(user_info=new_user, sso_teams=sso_teams)
 
             # Bug: This assertion currently FAILS - no teams are added
             # because function returns early when teams is None
-            assert (
-                mock_add_task.call_count == 2
-            ), f"Expected 2 calls to add user to teams, but got {mock_add_task.call_count}"
+            assert mock_add_task.call_count == 2, (
+                f"Expected 2 calls to add user to teams, but got {mock_add_task.call_count}"
+            )
             called_team_ids = [call.args[0] for call in mock_add_task.call_args_list]
             assert set(called_team_ids) == {
                 "team-from-entra-1",
@@ -5233,9 +4978,7 @@ class TestAddMissingTeamMember:
 
         sso_teams = ["team-from-entra-1", "team-from-entra-2"]
 
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task"
-        ) as mock_add_task:
+        with patch("litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task") as mock_add_task:
             mock_add_task.return_value = AsyncMock()
 
             await add_missing_team_member(user_info=existing_user, sso_teams=sso_teams)
@@ -5269,9 +5012,7 @@ class TestAddMissingTeamMember:
             teams=None,  # Bug: NewUserResponse defaults to None
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.add_missing_team_member"
-        ) as mock_add_member:
+        with patch("litellm.proxy.management_endpoints.ui_sso.add_missing_team_member") as mock_add_member:
             await SSOAuthenticationHandler.add_user_to_teams_from_sso_response(
                 result=sso_result,
                 user_info=new_user_info,
@@ -5313,9 +5054,7 @@ class TestAddMissingTeamMember:
 
         # Bug: With current code, team_member_calls will be empty
         # After fix: Should have 2 entries
-        assert (
-            len(team_member_calls) == 2
-        ), f"Expected 2 teams to be added, but got {len(team_member_calls)}"
+        assert len(team_member_calls) == 2, f"Expected 2 teams to be added, but got {len(team_member_calls)}"
         assert {c["team_id"] for c in team_member_calls} == {
             "entra-team-alpha",
             "entra-team-beta",
@@ -5371,9 +5110,9 @@ class TestAddMissingTeamMember:
         ):
             await add_missing_team_member(user_info=user_info, sso_teams=sso_teams)
 
-        assert set(added_teams) == set(
-            expected_teams_added
-        ), f"Expected teams {expected_teams_added}, but got {added_teams}"
+        assert set(added_teams) == set(expected_teams_added), (
+            f"Expected teams {expected_teams_added}, but got {added_teams}"
+        )
 
 
 @pytest.mark.asyncio
@@ -5439,17 +5178,15 @@ async def test_role_mappings_override_default_internal_user_params():
             new_user_request = call_args.kwargs["data"]
 
             # The role from SSO should be preserved, not overridden by default_internal_user_params
-            assert (
-                new_user_request.user_role == "proxy_admin"
-            ), "SSO-extracted role should override default_internal_user_params role"
+            assert new_user_request.user_role == "proxy_admin", (
+                "SSO-extracted role should override default_internal_user_params role"
+            )
 
             # Other default params should still be applied
-            assert (
-                new_user_request.max_budget == 100
-            ), "max_budget from default_internal_user_params should be applied"
-            assert (
-                new_user_request.budget_duration == "30d"
-            ), "budget_duration from default_internal_user_params should be applied"
+            assert new_user_request.max_budget == 100, "max_budget from default_internal_user_params should be applied"
+            assert new_user_request.budget_duration == "30d", (
+                "budget_duration from default_internal_user_params should be applied"
+            )
 
     finally:
         # Restore original default_internal_user_params (always assign, never delattr —
@@ -5520,19 +5257,17 @@ async def test_sso_role_preserved_without_role_mappings():
             new_user_request = call_args.kwargs["data"]
 
             # SSO role should be preserved even without role_mappings configured
-            assert (
-                new_user_request.user_role == "proxy_admin"
-            ), "SSO role from app_roles should not be overwritten by default_internal_user_params"
+            assert new_user_request.user_role == "proxy_admin", (
+                "SSO role from app_roles should not be overwritten by default_internal_user_params"
+            )
 
             # Other defaults should still apply
-            assert (
-                new_user_request.max_budget == 50
-            ), "max_budget from default_internal_user_params should be applied"
+            assert new_user_request.max_budget == 50, "max_budget from default_internal_user_params should be applied"
 
             # Verify user_defined_values was also updated (it's mutated in-place)
-            assert (
-                user_defined_values["user_role"] == "proxy_admin"
-            ), "user_defined_values should retain the SSO role after insert_sso_user"
+            assert user_defined_values["user_role"] == "proxy_admin", (
+                "user_defined_values should retain the SSO role after insert_sso_user"
+            )
 
     finally:
         # Restore original default_internal_user_params (always assign, never delattr —
@@ -5641,10 +5376,7 @@ class TestSSOReadinessEndpoint:
                 assert data["sso_configured"] is True
                 assert data["provider"] == "google"
                 assert "GOOGLE_CLIENT_SECRET" in data["missing_environment_variables"]
-                assert (
-                    "Google SSO is configured but missing required environment variables"
-                    in data["message"]
-                )
+                assert "Google SSO is configured but missing required environment variables" in data["message"]
         finally:
             app.dependency_overrides.clear()
 
@@ -5705,9 +5437,7 @@ class TestSSOReadinessEndpoint:
                     assert data["sso_configured"] is True
                     assert data["provider"] == expected_provider
                     assert data["status"] == "unhealthy"
-                    assert set(data["missing_environment_variables"]) == set(
-                        expected_missing_vars
-                    )
+                    assert set(data["missing_environment_variables"]) == set(expected_missing_vars)
         finally:
             app.dependency_overrides.clear()
 
@@ -5775,9 +5505,7 @@ class TestSSOReadinessEndpoint:
                     assert data["sso_configured"] is True
                     assert data["provider"] == expected_provider
                     assert data["status"] == "unhealthy"
-                    assert set(data["missing_environment_variables"]) == set(
-                        expected_missing_vars
-                    )
+                    assert set(data["missing_environment_variables"]) == set(expected_missing_vars)
         finally:
             app.dependency_overrides.clear()
 
@@ -5809,13 +5537,9 @@ class TestCustomMicrosoftSSO:
         discovery = await sso.get_discovery_document()
 
         assert (
-            discovery["authorization_endpoint"]
-            == "https://login.microsoftonline.com/test-tenant/oauth2/v2.0/authorize"
+            discovery["authorization_endpoint"] == "https://login.microsoftonline.com/test-tenant/oauth2/v2.0/authorize"
         )
-        assert (
-            discovery["token_endpoint"]
-            == "https://login.microsoftonline.com/test-tenant/oauth2/v2.0/token"
-        )
+        assert discovery["token_endpoint"] == "https://login.microsoftonline.com/test-tenant/oauth2/v2.0/token"
         assert discovery["userinfo_endpoint"] == "https://graph.microsoft.com/v1.0/me"
 
     @pytest.mark.asyncio
@@ -5879,13 +5603,8 @@ class TestCustomMicrosoftSSO:
             # Custom auth endpoint
             assert discovery["authorization_endpoint"] == custom_auth_endpoint
             # Default token and userinfo endpoints
-            assert (
-                discovery["token_endpoint"]
-                == "https://login.microsoftonline.com/test-tenant/oauth2/v2.0/token"
-            )
-            assert (
-                discovery["userinfo_endpoint"] == "https://graph.microsoft.com/v1.0/me"
-            )
+            assert discovery["token_endpoint"] == "https://login.microsoftonline.com/test-tenant/oauth2/v2.0/token"
+            assert discovery["userinfo_endpoint"] == "https://graph.microsoft.com/v1.0/me"
 
     def test_custom_microsoft_sso_uses_common_tenant_when_none(self):
         """
@@ -5923,9 +5642,7 @@ async def test_setup_team_mappings():
     mock_prisma = MagicMock()
     mock_sso_config = MagicMock()
     mock_sso_config.sso_settings = {"team_mappings": {"team_ids_jwt_field": "groups"}}
-    mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
-        return_value=mock_sso_config
-    )
+    mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=mock_sso_config)
 
     with patch(
         "litellm.proxy.utils.get_prisma_client_or_throw",
@@ -5938,9 +5655,7 @@ async def test_setup_team_mappings():
         assert result is not None
         assert isinstance(result, TeamMappings)
         assert result.team_ids_jwt_field == "groups"
-        mock_prisma.db.litellm_ssoconfig.find_unique.assert_called_once_with(
-            where={"id": "sso_config"}
-        )
+        mock_prisma.db.litellm_ssoconfig.find_unique.assert_called_once_with(where={"id": "sso_config"})
 
 
 # ============================================================================
@@ -6099,9 +5814,7 @@ def test_process_sso_jwt_access_token_extracts_role_from_nested_field():
         user_role=None,
     )
 
-    with patch.dict(
-        os.environ, {"GENERIC_USER_ROLE_ATTRIBUTE": "resource_access.my-client.roles"}
-    ):
+    with patch.dict(os.environ, {"GENERIC_USER_ROLE_ATTRIBUTE": "resource_access.my-client.roles"}):
         process_sso_jwt_access_token(
             access_token_str=access_token_str,
             sso_jwt_handler=None,
@@ -6162,9 +5875,7 @@ def test_generic_response_convertor_with_extra_attributes(monkeypatch):
     from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
 
     monkeypatch.setenv("GENERIC_CLIENT_ID", "test_client")
-    monkeypatch.setenv(
-        "GENERIC_USER_EXTRA_ATTRIBUTES", "custom_field1,custom_field2,custom_field3"
-    )
+    monkeypatch.setenv("GENERIC_USER_EXTRA_ATTRIBUTES", "custom_field1,custom_field2,custom_field3")
 
     mock_response = {
         "sub": "user-id-123",
@@ -6230,9 +5941,7 @@ def test_generic_response_convertor_extra_attributes_with_nested_paths(monkeypat
     from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
 
     monkeypatch.setenv("GENERIC_CLIENT_ID", "test_client")
-    monkeypatch.setenv(
-        "GENERIC_USER_EXTRA_ATTRIBUTES", "org_info.department,org_info.manager"
-    )
+    monkeypatch.setenv("GENERIC_USER_EXTRA_ATTRIBUTES", "org_info.department,org_info.manager")
 
     mock_response = {
         "sub": "user-id-123",
@@ -6393,10 +6102,7 @@ class TestCliSsoAttributionMetadata:
 
         get_user_info_mock.assert_awaited_once()
         assert get_user_info_mock.call_args.kwargs["user_defined_values"] is not None
-        assert (
-            get_user_info_mock.call_args.kwargs["user_defined_values"]["user_id"]
-            == "cli-test-user"
-        )
+        assert get_user_info_mock.call_args.kwargs["user_defined_values"]["user_id"] == "cli-test-user"
 
     @pytest.mark.asyncio
     async def test_cli_sso_callback_rejects_restricted_sso_group(self):
@@ -6519,13 +6225,9 @@ class TestCliSsoAttributionMetadata:
             )
 
         flow_data = mock_cache.set_cache.call_args.kwargs["value"]
-        assert flow_data["session_data"]["attribution_metadata"] == {
-            "acme_employment_type": "contractor"
-        }
+        assert flow_data["session_data"]["attribution_metadata"] == {"acme_employment_type": "contractor"}
         mock_prisma.db.litellm_usertable.update_many.assert_awaited_once()
-        update_data = mock_prisma.db.litellm_usertable.update_many.call_args.kwargs[
-            "data"
-        ]
+        update_data = mock_prisma.db.litellm_usertable.update_many.call_args.kwargs["data"]
         assert update_data["metadata"]["acme_employment_type"] == "contractor"
         assert update_data["metadata"]["auth_provider"] == "generic"
 
@@ -6577,9 +6279,7 @@ class TestValidateReturnTo:
     def test_returns_false_when_no_control_plane_url_configured(self, monkeypatch):
         """return_to should be silently ignored if control_plane_url is not in general_settings."""
         monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
-        result = SSOAuthenticationHandler._validate_return_to(
-            "https://cp.example.com/ui"
-        )
+        result = SSOAuthenticationHandler._validate_return_to("https://cp.example.com/ui")
         assert result is False
 
     def test_allows_matching_origin(self, monkeypatch):
@@ -6589,9 +6289,7 @@ class TestValidateReturnTo:
             {"control_plane_url": "https://cp.example.com"},
         )
         # Should not raise
-        SSOAuthenticationHandler._validate_return_to(
-            "https://cp.example.com/ui?page=models"
-        )
+        SSOAuthenticationHandler._validate_return_to("https://cp.example.com/ui?page=models")
 
     def test_allows_matching_origin_with_trailing_slash(self, monkeypatch):
         """Trailing slash on control_plane_url should not affect origin comparison."""
@@ -6608,9 +6306,7 @@ class TestValidateReturnTo:
             {"control_plane_url": "https://cp.example.com"},
         )
         with pytest.raises(HTTPException) as exc_info:
-            SSOAuthenticationHandler._validate_return_to(
-                "https://cp.example.com.evil.com/steal"
-            )
+            SSOAuthenticationHandler._validate_return_to("https://cp.example.com.evil.com/steal")
         assert exc_info.value.status_code == 400
 
     def test_rejects_different_origin(self, monkeypatch):
@@ -6649,9 +6345,7 @@ class TestValidateReturnTo:
             {"control_plane_url": "https://cp.example.com"},
         )
         with pytest.raises(HTTPException) as exc_info:
-            SSOAuthenticationHandler._validate_return_to(
-                "https://cp.example.com:8443/ui"
-            )
+            SSOAuthenticationHandler._validate_return_to("https://cp.example.com:8443/ui")
         assert exc_info.value.status_code == 400
 
     def test_allows_explicit_default_port(self, monkeypatch):
@@ -6777,9 +6471,7 @@ class TestSyncUserRoleFromJwtRoleMap:
             user_id=user_id,
             user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
         )
-        await cache.async_set_cache(
-            key=user_id, value=existing_user.model_dump(), ttl=60
-        )
+        await cache.async_set_cache(key=user_id, value=existing_user.model_dump(), ttl=60)
 
         sso_values = self._make_sso_values(
             user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
@@ -6860,9 +6552,7 @@ class TestPKCEStateCookieBinding:
             SSOAuthenticationHandler,
         )
 
-        mock_redirect = RedirectResponse(
-            url="https://idp.example.com/authorize?state=test-state-xyz"
-        )
+        mock_redirect = RedirectResponse(url="https://idp.example.com/authorize?state=test-state-xyz")
         mock_generic_sso = MagicMock()
         mock_generic_sso.__enter__ = MagicMock(return_value=mock_generic_sso)
         mock_generic_sso.__exit__ = MagicMock(return_value=None)
@@ -6883,12 +6573,8 @@ class TestPKCEStateCookieBinding:
 
         assert response is not None
         cookie_headers = response.headers.getlist("set-cookie")
-        cookie_str = next(
-            (c for c in cookie_headers if "litellm_oauth_state=" in c), None
-        )
-        assert (
-            cookie_str is not None
-        ), f"litellm_oauth_state cookie not set; got: {cookie_headers}"
+        cookie_str = next((c for c in cookie_headers if "litellm_oauth_state=" in c), None)
+        assert cookie_str is not None, f"litellm_oauth_state cookie not set; got: {cookie_headers}"
         assert "test-state-xyz" in cookie_str
         assert "HttpOnly" in cookie_str
         assert "SameSite=lax" in cookie_str
@@ -6910,9 +6596,7 @@ class TestPKCEStateCookieBinding:
             SSOAuthenticationHandler,
         )
 
-        mock_redirect = RedirectResponse(
-            url="https://idp.example.com/authorize?state=test-state-xyz"
-        )
+        mock_redirect = RedirectResponse(url="https://idp.example.com/authorize?state=test-state-xyz")
         mock_generic_sso = MagicMock()
         mock_generic_sso.__enter__ = MagicMock(return_value=mock_generic_sso)
         mock_generic_sso.__exit__ = MagicMock(return_value=None)
@@ -6933,9 +6617,9 @@ class TestPKCEStateCookieBinding:
 
         assert response is not None
         cookie_headers = response.headers.getlist("set-cookie")
-        assert not any(
-            "litellm_oauth_state=" in c for c in cookie_headers
-        ), f"litellm_oauth_state cookie set on non-PKCE flow; got: {cookie_headers}"
+        assert not any("litellm_oauth_state=" in c for c in cookie_headers), (
+            f"litellm_oauth_state cookie set on non-PKCE flow; got: {cookie_headers}"
+        )
 
     @pytest.mark.asyncio
     async def test_redirect_response_drops_secure_flag_for_http_dev(self):
@@ -6948,9 +6632,7 @@ class TestPKCEStateCookieBinding:
             SSOAuthenticationHandler,
         )
 
-        mock_redirect = RedirectResponse(
-            url="http://idp.local/authorize?state=local-dev-state"
-        )
+        mock_redirect = RedirectResponse(url="http://idp.local/authorize?state=local-dev-state")
         mock_generic_sso = MagicMock()
         mock_generic_sso.__enter__ = MagicMock(return_value=mock_generic_sso)
         mock_generic_sso.__exit__ = MagicMock(return_value=None)
@@ -6974,9 +6656,7 @@ class TestPKCEStateCookieBinding:
             )
 
         cookie_headers = response.headers.getlist("set-cookie")
-        cookie_str = next(
-            (c for c in cookie_headers if "litellm_oauth_state=" in c), None
-        )
+        cookie_str = next((c for c in cookie_headers if "litellm_oauth_state=" in c), None)
         assert cookie_str is not None
         assert "Secure" not in cookie_str
 
@@ -7438,16 +7118,19 @@ async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
 
     request_double = SimpleNamespace(cookies={}, headers={}, stream=_stream)
 
-    with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}), patch(
-        "litellm.proxy.proxy_server.premium_user", False
-    ), patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
-        "litellm.proxy.proxy_server.master_key", "sk-1234"
-    ), patch(
-        "litellm.proxy.management_endpoints.sso.saml_sso.SAMLAuthHandler.handle_acs",
-        new=_fake_handle_acs,
-    ), patch(
-        "litellm.repositories.user_repository.UserRepository.count_billable_users",
-        new=AsyncMock(side_effect=_fake_count_billable_users),
+    with (
+        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch(
+            "litellm.proxy.management_endpoints.sso.saml_sso.SAMLAuthHandler.handle_acs",
+            new=_fake_handle_acs,
+        ),
+        patch(
+            "litellm.repositories.user_repository.UserRepository.count_billable_users",
+            new=AsyncMock(side_effect=_fake_count_billable_users),
+        ),
     ):
         with pytest.raises(ProxyException) as exc:
             await saml_callback(request_double)
@@ -7663,9 +7346,7 @@ async def test_verify_and_process_arm_captures_sso_assertion():
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     mock_sso_instance = MagicMock()
-    mock_sso_instance.verify_and_process = AsyncMock(
-        return_value={"sub": "u1", "email": "u@example.com"}
-    )
+    mock_sso_instance.verify_and_process = AsyncMock(return_value={"sub": "u1", "email": "u@example.com"})
     mock_sso_instance.access_token = None
     mock_sso_instance.id_token = id_token
     mock_sso_instance.refresh_token = "rt_from_idp"
@@ -7681,9 +7362,7 @@ async def test_verify_and_process_arm_captures_sso_assertion():
         },
     ):
         with patch("fastapi_sso.sso.base.DiscoveryDocument"):
-            with patch(
-                "fastapi_sso.sso.generic.create_provider", return_value=mock_sso_class
-            ):
+            with patch("fastapi_sso.sso.generic.create_provider", return_value=mock_sso_class):
                 _, _, _, sso_assertion = await get_generic_sso_response(
                     request=mock_request,
                     jwt_handler=mock_jwt_handler,
@@ -7725,9 +7404,7 @@ async def test_redirect_from_openid_persists_assertion_under_canonical_user_id()
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch(
             "litellm.proxy.proxy_server.generate_key_helper_fn",
-            AsyncMock(
-                return_value={"token": "sk-ui-key", "user_id": "canonical-user-id"}
-            ),
+            AsyncMock(return_value={"token": "sk-ui-key", "user_id": "canonical-user-id"}),
         ),
         patch(
             "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
@@ -7762,9 +7439,7 @@ async def test_redirect_from_openid_persists_assertion_under_canonical_user_id()
             sso_assertion=assertion,
         )
 
-    retain_mock.assert_awaited_once_with(
-        user_id="canonical-user-id", assertion=assertion
-    )
+    retain_mock.assert_awaited_once_with(user_id="canonical-user-id", assertion=assertion)
     assert response is not None
 
 

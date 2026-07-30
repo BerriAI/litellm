@@ -92,9 +92,7 @@ async def test_streaming_trace_id_prefers_logging_trace_id():
         captured["extra_headers"] = extra_headers
         raise RuntimeError("stop")
 
-    with patch.object(
-        a2a_main, "create_a2a_client", new=AsyncMock(side_effect=_capture)
-    ):
+    with patch.object(a2a_main, "create_a2a_client", new=AsyncMock(side_effect=_capture)):
         with pytest.raises(RuntimeError, match="stop"):
             async for _ in a2a_main.asend_message_streaming(
                 request=request,

@@ -34,9 +34,7 @@ _SCRIPTS_DIR = Path(__file__).resolve().parents[2] / ".github" / "scripts"
 def triage_module():
     """Load triage_with_llm under its canonical name so the sibling modules
     can `from triage_with_llm import ...`."""
-    spec = importlib.util.spec_from_file_location(
-        "triage_with_llm", _SCRIPTS_DIR / "triage_with_llm.py"
-    )
+    spec = importlib.util.spec_from_file_location("triage_with_llm", _SCRIPTS_DIR / "triage_with_llm.py")
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     sys.modules["triage_with_llm"] = module
@@ -46,9 +44,7 @@ def triage_module():
 
 @pytest.fixture(scope="module")
 def actions_module(triage_module):
-    spec = importlib.util.spec_from_file_location(
-        "_agent_shin_actions", _SCRIPTS_DIR / "_agent_shin_actions.py"
-    )
+    spec = importlib.util.spec_from_file_location("_agent_shin_actions", _SCRIPTS_DIR / "_agent_shin_actions.py")
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     sys.modules["_agent_shin_actions"] = module
@@ -76,9 +72,7 @@ class TestActionsDryRun:
     """Each maybe_* helper must NOT hit GitHub in dry-run, and MUST hit it
     in real mode. The whole rollout's safety story rests on this."""
 
-    def test_maybe_post_comment_dry_run_logs_only(
-        self, actions_module, triage_module, monkeypatch, capsys
-    ):
+    def test_maybe_post_comment_dry_run_logs_only(self, actions_module, triage_module, monkeypatch, capsys):
         called = []
         monkeypatch.setattr(
             triage_module,
@@ -89,9 +83,7 @@ class TestActionsDryRun:
         assert called == []
         assert "[DRY RUN] comment o/r#7" in capsys.readouterr().out
 
-    def test_maybe_post_comment_real_run_calls_through(
-        self, actions_module, triage_module, monkeypatch
-    ):
+    def test_maybe_post_comment_real_run_calls_through(self, actions_module, triage_module, monkeypatch):
         called = []
         monkeypatch.setattr(
             triage_module,
@@ -108,12 +100,7 @@ class TestActionsDryRun:
 
 class TestWouldBeClosed:
     def test_pr_passing_returns_false(self, heads_up_module):
-        assert (
-            heads_up_module._would_be_closed(
-                "pr", {"passing": True, "action": "noop-passing"}
-            )
-            is False
-        )
+        assert heads_up_module._would_be_closed("pr", {"passing": True, "action": "noop-passing"}) is False
 
     def test_pr_failing_returns_true(self, heads_up_module):
         assert (
@@ -130,33 +117,21 @@ class TestWouldBeClosed:
 
     def test_pr_skipped_returns_false(self, heads_up_module):
         # passing is None for skip paths (internal-author, llm-error, etc.)
-        assert (
-            heads_up_module._would_be_closed("pr", {"action": "skip-internal-author"})
-            is False
-        )
+        assert heads_up_module._would_be_closed("pr", {"action": "skip-internal-author"}) is False
 
     def test_issue_pass_returns_false(self, heads_up_module):
         assert (
-            heads_up_module._would_be_closed(
-                "issue", {"action": "pass-llm", "verdict": {"verdict": "pass"}}
-            )
-            is False
+            heads_up_module._would_be_closed("issue", {"action": "pass-llm", "verdict": {"verdict": "pass"}}) is False
         )
 
     def test_issue_fail_returns_true(self, heads_up_module):
         assert (
-            heads_up_module._would_be_closed(
-                "issue", {"action": "would-close", "verdict": {"verdict": "fail"}}
-            )
-            is True
+            heads_up_module._would_be_closed("issue", {"action": "would-close", "verdict": {"verdict": "fail"}}) is True
         )
 
     def test_issue_missing_verdict_returns_false(self, heads_up_module):
         # Skip paths don't surface a verdict; treat as "won't close".
-        assert (
-            heads_up_module._would_be_closed("issue", {"action": "skip-not-open"})
-            is False
-        )
+        assert heads_up_module._would_be_closed("issue", {"action": "skip-not-open"}) is False
 
 
 # ---------------------------------------------------------------------------
@@ -235,23 +210,17 @@ class TestProcessOne:
             lambda repo, n, body, *, dry_run: posts.append((repo, n, body, dry_run)),
         )
         monkeypatch.setattr(heads_up_module, "_has_heads_up_marker", lambda item: False)
-        monkeypatch.setattr(
-            heads_up_module, "_comments_have_marker", lambda repo, n: False
-        )
+        monkeypatch.setattr(heads_up_module, "_comments_have_marker", lambda repo, n: False)
 
         def _install(item):
-            for mod, name, fn in _stub_fetchers(
-                heads_up_module, triage_module, item=item
-            ):
+            for mod, name, fn in _stub_fetchers(heads_up_module, triage_module, item=item):
                 monkeypatch.setattr(mod, name, fn)
 
         return _install, posts
 
     def test_skip_closed_pr(self, heads_up_module, patch_env):
         install, posts = patch_env
-        install(
-            {"state": "closed", "user": {"login": "ext"}, "author_association": "NONE"}
-        )
+        install({"state": "closed", "user": {"login": "ext"}, "author_association": "NONE"})
         r = heads_up_module._process_one(
             repo="o/r",
             kind="pr",
@@ -320,9 +289,7 @@ class TestProcessOne:
         assert r["action"] == "skip-passing"
         assert posts == []
 
-    def test_failing_pr_posts_heads_up_dry_run(
-        self, heads_up_module, patch_env, monkeypatch, capsys
-    ):
+    def test_failing_pr_posts_heads_up_dry_run(self, heads_up_module, patch_env, monkeypatch, capsys):
         install, posts = patch_env
         install(
             {
@@ -361,9 +328,7 @@ class TestProcessOne:
         assert "QA proof" in posts[0][2]
         assert heads_up_module.HEADS_UP_MARKER in posts[0][2]
 
-    def test_failing_issue_posts_heads_up_real_run(
-        self, heads_up_module, patch_env, monkeypatch
-    ):
+    def test_failing_issue_posts_heads_up_real_run(self, heads_up_module, patch_env, monkeypatch):
         install, posts = patch_env
         install(
             {
@@ -413,9 +378,7 @@ class TestProcessOne:
             }
         )
         # Override the marker check for this scenario only.
-        monkeypatch.setattr(
-            heads_up_module, "_comments_have_marker", lambda repo, n: True
-        )
+        monkeypatch.setattr(heads_up_module, "_comments_have_marker", lambda repo, n: True)
         r = heads_up_module._process_one(
             repo="o/r",
             kind="pr",
@@ -427,9 +390,7 @@ class TestProcessOne:
         assert r["action"] == "skip-already-notified"
         assert posts == []
 
-    def test_ignore_existing_marker_forces_post(
-        self, heads_up_module, patch_env, monkeypatch
-    ):
+    def test_ignore_existing_marker_forces_post(self, heads_up_module, patch_env, monkeypatch):
         install, posts = patch_env
         install(
             {
@@ -441,9 +402,7 @@ class TestProcessOne:
                 "created_at": "2026-05-25T00:00:00Z",
             }
         )
-        monkeypatch.setattr(
-            heads_up_module, "_comments_have_marker", lambda repo, n: True
-        )
+        monkeypatch.setattr(heads_up_module, "_comments_have_marker", lambda repo, n: True)
         monkeypatch.setattr(
             heads_up_module,
             "_evaluate_pr",
@@ -483,9 +442,7 @@ class TestRun:
             lambda repo, n, body, *, dry_run: posts.append((n, dry_run, body)),
         )
         monkeypatch.setattr(heads_up_module, "_has_heads_up_marker", lambda item: False)
-        monkeypatch.setattr(
-            heads_up_module, "_comments_have_marker", lambda repo, n: False
-        )
+        monkeypatch.setattr(heads_up_module, "_comments_have_marker", lambda repo, n: False)
 
         def fake_list(repo, kind):
             return [1, 2] if kind == "pr" else [101, 102]
@@ -533,9 +490,7 @@ class TestRun:
         monkeypatch.setattr(heads_up_module, "_evaluate_issue", issue_eval)
         return posts
 
-    def test_dry_run_posts_nothing_but_logs_both_would_posts(
-        self, heads_up_module, configured, capsys
-    ):
+    def test_dry_run_posts_nothing_but_logs_both_would_posts(self, heads_up_module, configured, capsys):
         results = heads_up_module.run(
             repo="o/r",
             close=False,
@@ -590,9 +545,7 @@ class TestListOpenNumbersNoCap:
     here never gets a heads-up before the bot starts auto-closing.
     """
 
-    def test_delegates_to_list_open_items_with_no_cap(
-        self, heads_up_module, monkeypatch
-    ):
+    def test_delegates_to_list_open_items_with_no_cap(self, heads_up_module, monkeypatch):
         import agent_shin_shared
 
         captured: dict = {}
@@ -606,7 +559,5 @@ class TestListOpenNumbersNoCap:
         assert numbers == [5, 9]
         args = captured["args"]
         assert args[0] == "issue"
-        assert args[args.index("--limit") + 1] == str(
-            agent_shin_shared.GH_LIST_ALL_LIMIT
-        )
+        assert args[args.index("--limit") + 1] == str(agent_shin_shared.GH_LIST_ALL_LIMIT)
         assert "1000" not in args

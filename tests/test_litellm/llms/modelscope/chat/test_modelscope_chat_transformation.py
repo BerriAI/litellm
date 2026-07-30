@@ -9,9 +9,7 @@ import json
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from unittest.mock import patch
 
@@ -84,9 +82,7 @@ class TestModelScopeConfig:
 
         response = completion(
             model=f"modelscope/{DEFAULT_MODEL}",
-            messages=[
-                {"role": "user", "content": "write code for saying hey from LiteLLM"}
-            ],
+            messages=[{"role": "user", "content": "write code for saying hey from LiteLLM"}],
             api_key=api_key,
             api_base=api_base,
         )

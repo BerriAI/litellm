@@ -44,23 +44,17 @@ def _approx_equal(actual: float, expected: float) -> bool:
 
 
 class TestAnthropicMessages:
-    def _register(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> tuple[str, str]:
+    def _register(self, endpoints_client: EndpointsClient, resources: ResourceManager) -> tuple[str, str]:
         model = f"e2e-messages-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
-            LiteLLMParamsBody(
-                model=ANTHROPIC_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY"
-            ),
+            LiteLLMParamsBody(model=ANTHROPIC_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY"),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         return model, resources.key()
 
     @pytest.mark.covers("llm.messages.anthropic.basic.nonstream.works")
-    def test_messages_returns_completion(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> None:
+    def test_messages_returns_completion(self, endpoints_client: EndpointsClient, resources: ResourceManager) -> None:
         model, key = self._register(endpoints_client, resources)
 
         result = endpoints_client.messages(key, model, "reply with one word")
@@ -76,9 +70,7 @@ class TestAnthropicMessages:
         model = f"e2e-messages-cost-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
-            LiteLLMParamsBody(
-                model=ANTHROPIC_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY"
-            ),
+            LiteLLMParamsBody(model=ANTHROPIC_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY"),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()
@@ -94,8 +86,7 @@ class TestAnthropicMessages:
         # it must be present and positive on /v1/messages, not only /chat/completions.
         header_cost = result.response_cost
         assert header_cost is not None and header_cost > 0, (
-            "x-litellm-response-cost header missing or non-positive on /v1/messages; "
-            f"headers={result.headers}"
+            f"x-litellm-response-cost header missing or non-positive on /v1/messages; headers={result.headers}"
         )
 
         # Correlate the spend row by the unique scoped key, not the Anthropic response
@@ -108,9 +99,7 @@ class TestAnthropicMessages:
 
         rows = endpoints_client.proxy.poll_logs_for_key(key, predicate=_priced)
         priced = [r for r in rows if r.spend is not None and r.spend > 0]
-        assert priced, (
-            f"no priced /spend/logs row landed for key {key} within the poll window; got {rows}"
-        )
+        assert priced, f"no priced /spend/logs row landed for key {key} within the poll window; got {rows}"
         row = priced[0]
         assert (row.prompt_tokens or 0) > 0 and (row.completion_tokens or 0) > 0, (
             f"messages spend row missing token counts, so the cost is not real usage: {row}"
@@ -121,9 +110,7 @@ class TestAnthropicMessages:
         )
 
     @pytest.mark.covers("llm.messages.anthropic.basic.stream.works")
-    def test_messages_streams_completion(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> None:
+    def test_messages_streams_completion(self, endpoints_client: EndpointsClient, resources: ResourceManager) -> None:
         model, key = self._register(endpoints_client, resources)
 
         result = endpoints_client.proxy.messages_stream(
@@ -139,17 +126,11 @@ class TestAnthropicMessages:
         assert result.is_streaming, f"response was not streamed: {result.headers}"
         assert not result.stream_error, f"stream errored: {result.stream_error}"
         assert result.stream_events, "stream produced no SSE events"
-        assert any("content_block_delta" in event for event in result.stream_events), (
-            "stream carried no content deltas"
-        )
-        assert any("message_stop" in event for event in result.stream_events), (
-            "stream never reached message_stop"
-        )
+        assert any("content_block_delta" in event for event in result.stream_events), "stream carried no content deltas"
+        assert any("message_stop" in event for event in result.stream_events), "stream never reached message_stop"
 
     @pytest.mark.covers("llm.messages.anthropic.tool_use.nonstream.works")
-    def test_messages_tool_use(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> None:
+    def test_messages_tool_use(self, endpoints_client: EndpointsClient, resources: ResourceManager) -> None:
         model, key = self._register(endpoints_client, resources)
 
         response = unwrap(
@@ -159,13 +140,9 @@ class TestAnthropicMessages:
                     model=model,
                     max_tokens=256,
                     tools=[WEATHER_TOOL],
-                    messages=[
-                        ChatMessage(role="user", content="What is the weather in Paris? Use the tool.")
-                    ],
+                    messages=[ChatMessage(role="user", content="What is the weather in Paris? Use the tool.")],
                 ),
             )
         )
         assert response.content, f"no content blocks in response: {response}"
-        assert any(block.type == "tool_use" for block in response.content), (
-            f"model did not call the tool: {response}"
-        )
+        assert any(block.type == "tool_use" for block in response.content), f"model did not call the tool: {response}"

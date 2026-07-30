@@ -131,9 +131,7 @@ async def test_patch_user_manages_group_memberships():
     patch_ops = SCIMPatchOp(
         Operations=[
             SCIMPatchOperation(op="add", path="groups", value=[{"value": "new-team"}]),
-            SCIMPatchOperation(
-                op="remove", path="groups", value=[{"value": "old-team"}]
-            ),
+            SCIMPatchOperation(op="remove", path="groups", value=[{"value": "old-team"}]),
         ]
     )
 
@@ -355,23 +353,15 @@ def test_apply_patch_ops_replace_entitlements_writes_canonical_key():
         ]
     )
 
-    update_data, _ = _apply_patch_ops(
-        existing_user=_user_with_metadata({}), patch_ops=patch_ops
-    )
+    update_data, _ = _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
 
     metadata = update_data["metadata"]
-    assert metadata["scim_entitlements"] == [
-        {"value": "jira-software", "display": "Jira Software"}
-    ]
+    assert metadata["scim_entitlements"] == [{"value": "jira-software", "display": "Jira Software"}]
     assert "entitlements" not in metadata
 
 
 def test_apply_patch_ops_add_roles_appends_to_existing():
-    patch_ops = SCIMPatchOp(
-        Operations=[
-            SCIMPatchOperation(op="add", path="roles", value=[{"value": "admin"}])
-        ]
-    )
+    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="add", path="roles", value=[{"value": "admin"}])])
 
     update_data, _ = _apply_patch_ops(
         existing_user=_user_with_metadata({"scim_roles": [{"value": "viewer"}]}),
@@ -385,14 +375,10 @@ def test_apply_patch_ops_add_roles_appends_to_existing():
 
 
 def test_apply_patch_ops_remove_entitlements_clears_canonical_key():
-    patch_ops = SCIMPatchOp(
-        Operations=[SCIMPatchOperation(op="remove", path="entitlements")]
-    )
+    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="remove", path="entitlements")])
 
     update_data, _ = _apply_patch_ops(
-        existing_user=_user_with_metadata(
-            {"scim_entitlements": [{"value": "jira-software"}]}
-        ),
+        existing_user=_user_with_metadata({"scim_entitlements": [{"value": "jira-software"}]}),
         patch_ops=patch_ops,
     )
 
@@ -409,22 +395,14 @@ def test_apply_patch_ops_pathless_value_dict_handles_roles():
         ]
     )
 
-    update_data, _ = _apply_patch_ops(
-        existing_user=_user_with_metadata({}), patch_ops=patch_ops
-    )
+    update_data, _ = _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
 
-    assert update_data["metadata"]["scim_roles"] == [
-        {"value": "engineering-admin", "primary": True}
-    ]
+    assert update_data["metadata"]["scim_roles"] == [{"value": "engineering-admin", "primary": True}]
 
 
 def test_apply_patch_ops_invalid_entitlements_value_raises_400():
     patch_ops = SCIMPatchOp(
-        Operations=[
-            SCIMPatchOperation(
-                op="replace", path="entitlements", value=[{"display": "no value"}]
-            )
-        ]
+        Operations=[SCIMPatchOperation(op="replace", path="entitlements", value=[{"display": "no value"}])]
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -434,9 +412,7 @@ def test_apply_patch_ops_invalid_entitlements_value_raises_400():
 
 
 def test_apply_patch_ops_add_without_value_raises_400_naming_value_member():
-    patch_ops = SCIMPatchOp(
-        Operations=[SCIMPatchOperation(op="add", path="entitlements")]
-    )
+    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="add", path="entitlements")])
 
     with pytest.raises(HTTPException) as exc_info:
         _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
@@ -448,19 +424,11 @@ def test_apply_patch_ops_add_without_value_raises_400_naming_value_member():
 def test_apply_patch_ops_filtered_path_raises_400_instead_of_junk_metadata():
     """A filtered path must fail loudly rather than fall through to the generic
     handler, which would write a junk metadata key while reporting success"""
-    patch_ops = SCIMPatchOp(
-        Operations=[
-            SCIMPatchOperation(
-                op="remove", path='roles[value eq "engineering-admin"]'
-            )
-        ]
-    )
+    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="remove", path='roles[value eq "engineering-admin"]')])
 
     with pytest.raises(HTTPException) as exc_info:
         _apply_patch_ops(
-            existing_user=_user_with_metadata(
-                {"scim_roles": [{"value": "engineering-admin"}]}
-            ),
+            existing_user=_user_with_metadata({"scim_roles": [{"value": "engineering-admin"}]}),
             patch_ops=patch_ops,
         )
 
@@ -476,9 +444,7 @@ def test_apply_patch_ops_remove_group_filtered_path_without_value():
         teams=["team-1", "team-2"],
         metadata={},
     )
-    patch_ops = SCIMPatchOp(
-        Operations=[SCIMPatchOperation(op="remove", path='groups[value eq "team-1"]')]
-    )
+    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="remove", path='groups[value eq "team-1"]')])
 
     _, final_team_set = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
 
@@ -493,9 +459,7 @@ def test_apply_patch_ops_add_group_filtered_path_without_value():
         teams=["team-1"],
         metadata={},
     )
-    patch_ops = SCIMPatchOp(
-        Operations=[SCIMPatchOperation(op="add", path="groups[value eq 'team-3']")]
-    )
+    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="add", path="groups[value eq 'team-3']")])
 
     _, final_team_set = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
 
@@ -511,11 +475,7 @@ def test_apply_patch_ops_replace_groups_empty_value_does_not_use_path_filter():
         teams=["team-1", "team-2"],
         metadata={},
     )
-    patch_ops = SCIMPatchOp(
-        Operations=[
-            SCIMPatchOperation(op="replace", path='groups[value eq "team-1"]', value=[])
-        ]
-    )
+    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="replace", path='groups[value eq "team-1"]', value=[])])
 
     _, final_team_set = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
 

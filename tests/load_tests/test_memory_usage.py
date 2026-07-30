@@ -10,9 +10,7 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 
 import litellm.types
@@ -85,18 +83,14 @@ async def make_text_completion_request():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="This test is too slow to run on every commit. We can use this after nightly release"
-)
+@pytest.mark.skip(reason="This test is too slow to run on every commit. We can use this after nightly release")
 async def test_acompletion_memory():
     """Test memory usage for litellm.acompletion"""
     await run_memory_test(make_completion_request, "acompletion")
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="This test is too slow to run on every commit. We can use this after nightly release"
-)
+@pytest.mark.skip(reason="This test is too slow to run on every commit. We can use this after nightly release")
 async def test_atext_completion_memory():
     """Test memory usage for litellm.atext_completion"""
     await run_memory_test(make_text_completion_request, "atext_completion")
@@ -134,14 +128,10 @@ async def make_router_atext_completion_request():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="This test is too slow to run on every commit. We can use this after nightly release"
-)
+@pytest.mark.skip(reason="This test is too slow to run on every commit. We can use this after nightly release")
 async def test_router_atext_completion_memory():
     """Test memory usage for litellm.atext_completion"""
-    await run_memory_test(
-        make_router_atext_completion_request, "router_atext_completion"
-    )
+    await run_memory_test(make_router_atext_completion_request, "router_atext_completion")
 
 
 async def make_router_acompletion_request():
@@ -167,9 +157,7 @@ def analyze_pydantic_snapshot():
         type_counts[type_name] = type_counts.get(type_name, 0) + 1
 
     print("\nPydantic Object Count:")
-    for type_name, count in sorted(
-        type_counts.items(), key=lambda x: x[1], reverse=True
-    ):
+    for type_name, count in sorted(type_counts.items(), key=lambda x: x[1], reverse=True):
         print(f"{type_name}: {count}")
         # Print an example object if helpful
         if count > 1000:  # Only look at types with many instances
@@ -213,14 +201,10 @@ def print_top_blueprints(top_n=10):
 
     print(f"Top {top_n} Pydantic blueprint objects by memory usage (shallow size):")
     for typename, count, total_size in stats[:top_n]:
-        print(
-            f"{typename}: count = {count}, total shallow size = {total_size / 1024:.2f} KiB"
-        )
+        print(f"{typename}: count = {count}, total shallow size = {total_size / 1024:.2f} KiB")
 
         # Get one instance of the blueprint object for this type (if available)
-        blueprint_objs = [
-            obj for obj in gc.get_objects() if type(obj).__name__ == typename
-        ]
+        blueprint_objs = [obj for obj in gc.get_objects() if type(obj).__name__ == typename]
         if blueprint_objs:
             obj = blueprint_objs[0]
             # Ensure that tracemalloc is enabled and tracking this allocation.

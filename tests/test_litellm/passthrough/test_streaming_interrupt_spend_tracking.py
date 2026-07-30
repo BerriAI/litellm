@@ -60,9 +60,7 @@ async def test_async_streaming_flushes_on_normal_completion():
     await asyncio.sleep(0)
 
     mock_logging_obj.async_flush_passthrough_collected_chunks.assert_called_once()
-    call_kwargs = (
-        mock_logging_obj.async_flush_passthrough_collected_chunks.call_args.kwargs
-    )
+    call_kwargs = mock_logging_obj.async_flush_passthrough_collected_chunks.call_args.kwargs
     assert call_kwargs["raw_bytes"] == chunks
     assert call_kwargs["provider_config"] is provider_config
 
@@ -98,9 +96,7 @@ async def test_async_streaming_flushes_on_client_disconnect():
     await asyncio.sleep(0)
 
     mock_logging_obj.async_flush_passthrough_collected_chunks.assert_called_once()
-    call_kwargs = (
-        mock_logging_obj.async_flush_passthrough_collected_chunks.call_args.kwargs
-    )
+    call_kwargs = mock_logging_obj.async_flush_passthrough_collected_chunks.call_args.kwargs
     assert call_kwargs["raw_bytes"] == [chunks[0]]
 
 
@@ -115,9 +111,7 @@ async def test_async_streaming_does_not_flush_on_4xx():
         raise httpx.HTTPStatusError(
             "429",
             request=httpx.Request("POST", "https://example.com"),
-            response=httpx.Response(
-                429, request=httpx.Request("POST", "https://example.com")
-            ),
+            response=httpx.Response(429, request=httpx.Request("POST", "https://example.com")),
         )
 
     err_response.raise_for_status = _raise
@@ -177,9 +171,7 @@ async def test_async_streaming_flushes_on_upstream_exception_with_partial_data()
     await asyncio.sleep(0)
 
     mock_logging_obj.async_flush_passthrough_collected_chunks.assert_called_once()
-    call_kwargs = (
-        mock_logging_obj.async_flush_passthrough_collected_chunks.call_args.kwargs
-    )
+    call_kwargs = mock_logging_obj.async_flush_passthrough_collected_chunks.call_args.kwargs
     assert call_kwargs["raw_bytes"] == partial_chunks
 
 

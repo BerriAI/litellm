@@ -56,9 +56,7 @@ class WeatherArguments(BaseModel):
 
 class TestResponses:
     @pytest.mark.covers("llm.responses.openai.basic.nonstream.works")
-    def test_responses_returns_completion(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> None:
+    def test_responses_returns_completion(self, endpoints_client: EndpointsClient, resources: ResourceManager) -> None:
         model = f"e2e-responses-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
@@ -87,22 +85,17 @@ class TestResponses:
         result = endpoints_client.responses(key, model, "reply with one word", stream=True)
         require_successful_call(result)
         delta_events = tuple(
-            parsed
-            for event in result.stream_events
-            if (parsed := _parse_stream_event(event)) is not None
+            parsed for event in result.stream_events if (parsed := _parse_stream_event(event)) is not None
         )
 
         assert any(event.delta for event in delta_events), "responses stream returned no text deltas"
         assert result.stream_events, "responses stream returned no events"
-        assert (
-            ResponsesStreamEventType.model_validate_json(result.stream_events[-1]).type
-            == "response.completed"
-        ), "responses stream did not terminate with response.completed"
+        assert ResponsesStreamEventType.model_validate_json(result.stream_events[-1]).type == "response.completed", (
+            "responses stream did not terminate with response.completed"
+        )
 
     @pytest.mark.covers("llm.responses.openai.basic.nonstream.cost_logged")
-    def test_responses_logs_cost(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> None:
+    def test_responses_logs_cost(self, endpoints_client: EndpointsClient, resources: ResourceManager) -> None:
         model = f"e2e-responses-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
@@ -186,10 +179,9 @@ class TestResponses:
         parsed = ResponsesResult.model_validate_json(result.body)
         text = parsed.text.strip().lower()
         assert text, f"/responses vision returned no output text: {result.body[:300]}"
-        assert any(
-            keyword in text
-            for keyword in ("cat", "feline")
-        ), f"vision response did not describe the image: {parsed.text[:300]}"
+        assert any(keyword in text for keyword in ("cat", "feline")), (
+            f"vision response did not describe the image: {parsed.text[:300]}"
+        )
 
     @pytest.mark.covers("llm.responses.anthropic.basic.nonstream.works")
     def test_responses_anthropic_returns_completion(
@@ -198,9 +190,7 @@ class TestResponses:
         model = f"e2e-responses-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
-            LiteLLMParamsBody(
-                model="anthropic/claude-haiku-4-5", api_key="os.environ/ANTHROPIC_API_KEY"
-            ),
+            LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key="os.environ/ANTHROPIC_API_KEY"),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()
@@ -217,9 +207,7 @@ class TestResponses:
         model = f"e2e-responses-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
-            LiteLLMParamsBody(
-                model="anthropic/claude-haiku-4-5", api_key="os.environ/ANTHROPIC_API_KEY"
-            ),
+            LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key="os.environ/ANTHROPIC_API_KEY"),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()

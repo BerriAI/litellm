@@ -1597,9 +1597,7 @@ async def test_sap_chat(
     ):
         model = "sap/text-embedding-3-small"
         input = "Hi"
-        respx_mock.post(f"{fake_deployment_url}/v2/embeddings").respond(
-            json=sap_api_response
-        )
+        respx_mock.post(f"{fake_deployment_url}/v2/embeddings").respond(json=sap_api_response)
 
         if sync_mode:
             response = litellm.embedding(model=model, input=input)
@@ -1660,8 +1658,7 @@ async def test_sap_embedding_required_headers(
         request = route.calls[0].request
         for header_name, expected_value in required_headers.items():
             assert header_name in request.headers, (
-                f"Required header '{header_name}' missing from request. "
-                f"Found headers: {list(request.headers.keys())}"
+                f"Required header '{header_name}' missing from request. Found headers: {list(request.headers.keys())}"
             )
             assert request.headers[header_name] == expected_value, (
                 f"Header '{header_name}' has incorrect value. "

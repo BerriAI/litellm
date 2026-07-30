@@ -114,8 +114,7 @@ class TestSnowflakeToolTransformation:
             )
 
             assert transformed_request["tool_choice"] == value, (
-                f"tool_choice='{value}' should pass through unchanged, "
-                f"got {transformed_request['tool_choice']}"
+                f"tool_choice='{value}' should pass through unchanged, got {transformed_request['tool_choice']}"
             )
 
     def test_transform_response_with_tool_calls(self):
@@ -159,9 +158,7 @@ class TestSnowflakeToolTransformation:
             headers={"Content-Type": "application/json"},
         )
 
-        model_response = ModelResponse(
-            choices=[litellm.Choices(index=0, message=litellm.Message())]
-        )
+        model_response = ModelResponse(choices=[litellm.Choices(index=0, message=litellm.Message())])
 
         logging_obj = MagicMock()
 
@@ -232,9 +229,7 @@ class TestSnowflakeToolTransformation:
             headers={"Content-Type": "application/json"},
         )
 
-        model_response = ModelResponse(
-            choices=[litellm.Choices(index=0, message=litellm.Message())]
-        )
+        model_response = ModelResponse(choices=[litellm.Choices(index=0, message=litellm.Message())])
 
         logging_obj = MagicMock()
 
@@ -280,9 +275,7 @@ class TestSnowflakeToolTransformation:
             headers={"Content-Type": "application/json"},
         )
 
-        model_response = ModelResponse(
-            choices=[litellm.Choices(index=0, message=litellm.Message())]
-        )
+        model_response = ModelResponse(choices=[litellm.Choices(index=0, message=litellm.Message())])
 
         logging_obj = MagicMock()
 
@@ -300,10 +293,7 @@ class TestSnowflakeToolTransformation:
 
         # Verify standard response works
         assert isinstance(result, ModelResponse)
-        assert (
-            result.choices[0].message.content
-            == "Hello! I'm doing well, thank you for asking."
-        )
+        assert result.choices[0].message.content == "Hello! I'm doing well, thank you for asking."
 
     def test_get_supported_openai_params_includes_tools(self):
         """
@@ -380,10 +370,7 @@ class TestSnowFlakeCompletion:
         # PAT key was used
         post_kwargs = mock_post.call_args_list[-1][1]
         assert "xxxxx" in post_kwargs["headers"]["Authorization"]
-        assert (
-            post_kwargs["headers"]["X-Snowflake-Authorization-Token-Type"]
-            == "PROGRAMMATIC_ACCESS_TOKEN"
-        )
+        assert post_kwargs["headers"]["X-Snowflake-Authorization-Token-Type"] == "PROGRAMMATIC_ACCESS_TOKEN"
 
         # account id was used
         assert "AAAA-BBBB" in post_kwargs["url"]
@@ -495,9 +482,7 @@ class TestSnowflakeChatCompletion:
                 )
                 mock_post.assert_called_once()
         else:
-            with patch.object(
-                AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp
-            ) as mock_post:
+            with patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp) as mock_post:
                 response = asyncio.run(
                     acompletion(
                         model="snowflake/mistral-7b",
@@ -580,8 +565,4 @@ class TestSnowflakeChatCompletion:
             chunks_received = asyncio.run(_run())
 
         assert len(chunks_received) > 0
-        content = "".join(
-            c.choices[0].delta.content
-            for c in chunks_received
-            if c.choices[0].delta.content
-        )
+        content = "".join(c.choices[0].delta.content for c in chunks_received if c.choices[0].delta.content)

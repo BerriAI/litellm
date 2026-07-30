@@ -113,10 +113,7 @@ def test_transform_request_builds_recognition_config(cfg):
     assert payload["recognition_config"]["audio_channel_count"] == 1
     assert payload["recognition_config"]["encoding"] == "LINEAR_PCM"
     assert payload["recognition_config"]["enable_word_time_offsets"] is True
-    assert (
-        payload["recognition_config"]["model"]
-        == "parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer"
-    )
+    assert payload["recognition_config"]["model"] == "parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer"
     assert "audio_file" not in payload
     assert "auth" not in payload
 
@@ -172,9 +169,7 @@ def test_explicit_endpointing_config_pass_through(cfg):
     result = cfg.transform_audio_transcription_request(
         model="m",
         audio_file=b"x",
-        optional_params={
-            "endpointing_config": {"stop_history": 1200, "start_threshold": 0.3}
-        },
+        optional_params={"endpointing_config": {"stop_history": 1200, "start_threshold": 0.3}},
         litellm_params={"api_base": "localhost:50051"},
     )
     ep = result.data["recognition_config"]["endpointing_config"]

@@ -8,9 +8,7 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import json
 
 import pytest
@@ -104,9 +102,7 @@ def test_completion_cohere_command_r_plus_function_call():
         # Add any assertions, here to check response args
         print(response)
         assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
-        assert isinstance(
-            response.choices[0].message.tool_calls[0].function.arguments, str
-        )
+        assert isinstance(response.choices[0].message.tool_calls[0].function.arguments, str)
     except litellm.Timeout:
         pass
     except Exception as e:
@@ -275,9 +271,7 @@ async def test_cohere_request_body_with_allowed_params():
 
 def test_cohere_embedding_outout_dimensions():
     litellm._turn_on_debug()
-    response = embedding(
-        model="cohere/embed-v4.0", input="Hello, world!", dimensions=512
-    )
+    response = embedding(model="cohere/embed-v4.0", input="Hello, world!", dimensions=512)
     print(f"response: {response}\n")
     assert len(response.data[0]["embedding"]) == 512
 
@@ -369,9 +363,7 @@ async def test_cohere_embed_v4_image_embedding(sync_mode):
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.parametrize(
-    "input_type", ["search_document", "search_query", "classification", "clustering"]
-)
+@pytest.mark.parametrize("input_type", ["search_document", "search_query", "classification", "clustering"])
 @pytest.mark.asyncio
 async def test_cohere_embed_v4_input_types(input_type):
     """Test Cohere Embed v4 with different input types."""
@@ -626,9 +618,7 @@ def test_cohere_v2_tool_calling():
             tool_call = message.tool_calls[0]
             assert tool_call.function.name == "get_weather"
             assert tool_call.function.arguments is not None
-            print(
-                f"Tool call: {tool_call.function.name} - {tool_call.function.arguments}"
-            )
+            print(f"Tool call: {tool_call.function.name} - {tool_call.function.arguments}")
         else:
             # If no tool calls, check that we got a regular response
             assert message.content is not None
@@ -647,9 +637,7 @@ async def test_cohere_v2_annotations(stream):
     """Test Cohere v2 annotations functionality (replaces citations)."""
     try:
         litellm.set_verbose = True
-        messages = [
-            {"role": "user", "content": "What are the benefits of renewable energy?"}
-        ]
+        messages = [{"role": "user", "content": "What are the benefits of renewable energy?"}]
 
         documents = [
             {
@@ -688,9 +676,7 @@ async def test_cohere_v2_annotations(stream):
                     and chunk.choices[0].message.annotations
                 ):
                     annotations_found = True
-                    print(
-                        f"Streaming annotations: {chunk.choices[0].message.annotations}"
-                    )
+                    print(f"Streaming annotations: {chunk.choices[0].message.annotations}")
                     break
             # Note: Annotations might not appear in every chunk during streaming
         else:
@@ -706,9 +692,9 @@ async def test_cohere_v2_annotations(stream):
 
                 # Validate annotation structure
                 for annotation in message.annotations:
-                    assert (
-                        annotation.get("type") == "url_citation"
-                    ), f"Expected type 'url_citation', got {annotation.get('type')}"
+                    assert annotation.get("type") == "url_citation", (
+                        f"Expected type 'url_citation', got {annotation.get('type')}"
+                    )
                     assert "url_citation" in annotation, "Missing url_citation field"
                     url_citation = annotation["url_citation"]
                     assert "start_index" in url_citation, "Missing start_index"
@@ -722,9 +708,7 @@ async def test_cohere_v2_annotations(stream):
                 print("No annotations in this response")
 
             # Ensure citations field is NOT present (removed backward compatibility)
-            assert not hasattr(
-                response, "citations"
-            ), "Citations field should be removed - no backward compatibility"
+            assert not hasattr(response, "citations"), "Citations field should be removed - no backward compatibility"
 
     except litellm.ServiceUnavailableError:
         pass
@@ -865,9 +849,7 @@ async def test_cohere_v2_conversation_history():
             {"role": "user", "content": "What about 3+3?"},
         ]
 
-        response = await litellm.acompletion(
-            model="cohere_chat/v2/command-a-03-2025", messages=messages, max_tokens=50
-        )
+        response = await litellm.acompletion(model="cohere_chat/v2/command-a-03-2025", messages=messages, max_tokens=50)
 
         # Validate response with conversation history
         assert response.choices is not None

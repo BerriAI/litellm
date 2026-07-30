@@ -24,6 +24,7 @@ def _env_ref(*names: str) -> str:
             return f"os.environ/{name}"
     return f"os.environ/{names[0]}"
 
+
 Scenario = Literal["encoded", "unified", "model_param", "provider_fallback"]
 
 IdShape = Literal["managed", "model_encoded", "raw"]
@@ -106,9 +107,7 @@ class Capability:
 
 
 PROVIDERS: tuple[Provider, ...] = (
-    Provider(
-        "openai", batch_model_name("openai-batch"), "gpt-4o-mini", can_cancel=True, can_list=True
-    ),
+    Provider("openai", batch_model_name("openai-batch"), "gpt-4o-mini", can_cancel=True, can_list=True),
     Provider(
         "azure",
         batch_model_name("azure-batch"),
@@ -132,14 +131,12 @@ PROVIDERS: tuple[Provider, ...] = (
     ),
 )
 
+
 def _model_for(provider_name: str) -> str:
     for provider in PROVIDERS:
         if provider.name == provider_name:
             return provider.model
-    raise ValueError(
-        f"no batch provider named {provider_name!r} in PROVIDERS; "
-        f"known={[p.name for p in PROVIDERS]}"
-    )
+    raise ValueError(f"no batch provider named {provider_name!r} in PROVIDERS; known={[p.name for p in PROVIDERS]}")
 
 
 OPENAI_BATCH_MODEL = _model_for("openai")
@@ -165,11 +162,7 @@ def raw_id_matches_provider(provider: str, batch_id: str) -> bool:
     if provider in ("openai", "azure"):
         return batch_id.startswith("batch")
     if provider == "vertex_ai":
-        return (
-            batch_id.startswith("projects/")
-            or "batchPredictionJobs" in batch_id
-            or batch_id.isdigit()
-        )
+        return batch_id.startswith("projects/") or "batchPredictionJobs" in batch_id or batch_id.isdigit()
     if provider == "bedrock":
         return batch_id.startswith("arn:aws:bedrock:")
     return True

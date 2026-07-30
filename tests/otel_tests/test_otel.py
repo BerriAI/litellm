@@ -118,9 +118,7 @@ async def test_chat_completion_check_otel_spans():
             "batch_write_to_db",
         }
         parent_trace_spans = next(
-            spans
-            for spans in spans_grouped_by_parent.values()
-            if chat_completion_markers.issubset(spans)
+            spans for spans in spans_grouped_by_parent.values() if chat_completion_markers.issubset(spans)
         )
 
         print("Parent trace spans: ", parent_trace_spans)

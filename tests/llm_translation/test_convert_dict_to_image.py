@@ -3,9 +3,7 @@ import os
 import sys
 from datetime import datetime
 
-sys.path.insert(
-    0, os.path.abspath("../../")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../"))  # Adds the parent directory to the system path
 
 import litellm
 import pytest
@@ -38,9 +36,7 @@ def test_convert_to_image_response_with_hidden_params():
     }
     hidden_params = {"api_key": "test_key"}
 
-    result = LiteLLMResponseObjectHandler.convert_to_image_response(
-        response_dict, hidden_params=hidden_params
-    )
+    result = LiteLLMResponseObjectHandler.convert_to_image_response(response_dict, hidden_params=hidden_params)
 
     assert result._hidden_params == {"api_key": "test_key"}
 
@@ -183,9 +179,7 @@ def test_convert_to_image_response_with_partial_none_usage_fields():
     assert result.usage is not None
     assert result.usage.input_tokens == 10  # Valid value should be preserved
     assert result.usage.output_tokens == 0  # None value should become 0
-    assert (
-        result.usage.total_tokens == 10
-    )  # Calculated as input_tokens + output_tokens (10 + 0)
+    assert result.usage.total_tokens == 10  # Calculated as input_tokens + output_tokens (10 + 0)
     assert result.usage.input_tokens_details is not None
     assert result.usage.input_tokens_details.image_tokens == 0
     assert result.usage.input_tokens_details.text_tokens == 0

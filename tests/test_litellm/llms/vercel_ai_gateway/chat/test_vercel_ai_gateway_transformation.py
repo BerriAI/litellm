@@ -4,9 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.vercel_ai_gateway.chat.transformation import (
     VercelAIGatewayConfig,
@@ -19,11 +17,7 @@ def test_vercel_ai_gateway_extra_body_transformation():
     transformed_request = VercelAIGatewayConfig().transform_request(
         model="vercel_ai_gateway/openai/gpt-4o",
         messages=[{"role": "user", "content": "Hello, world!"}],
-        optional_params={
-            "extra_body": {
-                "providerOptions": {"gateway": {"order": ["azure", "openai"]}}
-            }
-        },
+        optional_params={"extra_body": {"providerOptions": {"gateway": {"order": ["azure", "openai"]}}}},
         litellm_params={},
         headers={},
     )
@@ -32,24 +26,18 @@ def test_vercel_ai_gateway_extra_body_transformation():
         "azure",
         "openai",
     ]
-    assert transformed_request["messages"] == [
-        {"role": "user", "content": "Hello, world!"}
-    ]
+    assert transformed_request["messages"] == [{"role": "user", "content": "Hello, world!"}]
 
 
 def test_vercel_ai_gateway_provider_options_mapping():
     """Test that providerOptions from non_default_params is moved to extra_body"""
     config = VercelAIGatewayConfig()
 
-    non_default_params = {
-        "providerOptions": {"gateway": {"order": ["azure", "openai"]}}
-    }
+    non_default_params = {"providerOptions": {"gateway": {"order": ["azure", "openai"]}}}
     optional_params = {}
     model = "vercel_ai_gateway/openai/gpt-4o"
 
-    result = config.map_openai_params(
-        non_default_params, optional_params, model, drop_params=False
-    )
+    result = config.map_openai_params(non_default_params, optional_params, model, drop_params=False)
 
     assert result["extra_body"]["providerOptions"]["gateway"]["order"] == [
         "azure",
@@ -61,9 +49,7 @@ def test_vercel_ai_gateway_provider_options_mapping():
 def test_vercel_ai_gateway_get_supported_openai_params():
     """Test that extra_body is included in supported params"""
     config = VercelAIGatewayConfig()
-    supported_params = config.get_supported_openai_params(
-        "vercel_ai_gateway/openai/gpt-4o"
-    )
+    supported_params = config.get_supported_openai_params("vercel_ai_gateway/openai/gpt-4o")
 
     assert "extra_body" in supported_params
     assert "temperature" in supported_params

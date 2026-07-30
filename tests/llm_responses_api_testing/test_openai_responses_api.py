@@ -53,9 +53,7 @@ class TestCustomLogger(CustomLogger):
         pass
 
 
-def validate_standard_logging_payload(
-    slp: StandardLoggingPayload, response: ResponsesAPIResponse, request_model: str
-):
+def validate_standard_logging_payload(slp: StandardLoggingPayload, response: ResponsesAPIResponse, request_model: str):
     """
     Validate that a StandardLoggingPayload object matches the expected response
 
@@ -75,16 +73,11 @@ def validate_standard_logging_payload(
     print("FIELDS IN SLP=", json.dumps(slp, indent=4, default=str))
     print("SLP PROMPT TOKENS=", slp["prompt_tokens"])
     print("RESPONSE PROMPT TOKENS=", response["usage"]["input_tokens"])
-    assert (
-        slp["prompt_tokens"] == response["usage"]["input_tokens"]
-    ), "Prompt tokens mismatch"
-    assert (
-        slp["completion_tokens"] == response["usage"]["output_tokens"]
-    ), "Completion tokens mismatch"
-    assert (
-        slp["total_tokens"]
-        == response["usage"]["input_tokens"] + response["usage"]["output_tokens"]
-    ), "Total tokens mismatch"
+    assert slp["prompt_tokens"] == response["usage"]["input_tokens"], "Prompt tokens mismatch"
+    assert slp["completion_tokens"] == response["usage"]["output_tokens"], "Completion tokens mismatch"
+    assert slp["total_tokens"] == response["usage"]["input_tokens"] + response["usage"]["output_tokens"], (
+        "Total tokens mismatch"
+    )
 
     # Validate spend and response metadata
     assert slp["response_cost"] > 0, "Response cost should be greater than 0"
@@ -138,35 +131,24 @@ def validate_responses_match(slp_response, litellm_response):
     # Validate core fields
     assert slp_response["id"] == litellm_response["id"], "ID mismatch"
     assert slp_response["model"] == litellm_response["model"], "Model mismatch"
-    assert (
-        slp_response["created_at"] == litellm_response["created_at"]
-    ), "Created at mismatch"
+    assert slp_response["created_at"] == litellm_response["created_at"], "Created at mismatch"
 
     # Validate usage
-    assert (
-        slp_response["usage"]["prompt_tokens"]
-        == litellm_response["usage"]["input_tokens"]
-    ), "Input tokens mismatch"
-    assert (
-        slp_response["usage"]["completion_tokens"]
-        == litellm_response["usage"]["output_tokens"]
-    ), "Output tokens mismatch"
-    assert (
-        slp_response["usage"]["total_tokens"]
-        == litellm_response["usage"]["total_tokens"]
-    ), "Total tokens mismatch"
+    assert slp_response["usage"]["prompt_tokens"] == litellm_response["usage"]["input_tokens"], "Input tokens mismatch"
+    assert slp_response["usage"]["completion_tokens"] == litellm_response["usage"]["output_tokens"], (
+        "Output tokens mismatch"
+    )
+    assert slp_response["usage"]["total_tokens"] == litellm_response["usage"]["total_tokens"], "Total tokens mismatch"
 
     # Validate output/messages
-    assert len(slp_response["output"]) == len(
-        litellm_response["output"]
-    ), "Output length mismatch"
+    assert len(slp_response["output"]) == len(litellm_response["output"]), "Output length mismatch"
     for slp_msg, litellm_msg in zip(slp_response["output"], litellm_response["output"]):
         assert slp_msg["role"] == litellm_msg.role, "Message role mismatch"
         # Access the content's text field for the litellm response
         litellm_content = litellm_msg.content[0].text if litellm_msg.content else ""
-        assert (
-            slp_msg["content"][0]["text"] == litellm_content
-        ), f"Message content mismatch. Expected {litellm_content}, Got {slp_msg['content']}"
+        assert slp_msg["content"][0]["text"] == litellm_content, (
+            f"Message content mismatch. Expected {litellm_content}, Got {slp_msg['content']}"
+        )
         assert slp_msg["status"] == litellm_msg.status, "Message status mismatch"
 
 
@@ -196,9 +178,7 @@ async def test_basic_openai_responses_api_non_streaming_with_logging():
     assert response is not None
     assert test_custom_logger.standard_logging_object is not None
 
-    validate_standard_logging_payload(
-        test_custom_logger.standard_logging_object, response, request_model
-    )
+    validate_standard_logging_payload(test_custom_logger.standard_logging_object, response, request_model)
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -231,20 +211,14 @@ async def test_openai_responses_api_returns_headers(sync_mode):
     assert isinstance(response, ResponsesAPIResponse)
 
     # Verify _hidden_params exists
-    assert hasattr(
-        response, "_hidden_params"
-    ), "Response should have _hidden_params attribute"
+    assert hasattr(response, "_hidden_params"), "Response should have _hidden_params attribute"
     assert response._hidden_params is not None, "_hidden_params should not be None"
 
     # Verify additional_headers exists in _hidden_params
-    assert (
-        "additional_headers" in response._hidden_params
-    ), "_hidden_params should contain 'additional_headers' key"
+    assert "additional_headers" in response._hidden_params, "_hidden_params should contain 'additional_headers' key"
 
     additional_headers = response._hidden_params["additional_headers"]
-    assert isinstance(
-        additional_headers, dict
-    ), "additional_headers should be a dictionary"
+    assert isinstance(additional_headers, dict), "additional_headers should be a dictionary"
     assert len(additional_headers) > 0, "additional_headers should not be empty"
 
     # Check for expected OpenAI rate limit headers
@@ -263,18 +237,14 @@ async def test_openai_responses_api_returns_headers(sync_mode):
         elif f"llm_provider-{header_name}" in additional_headers:
             found_headers.append(f"llm_provider-{header_name}")
 
-    assert (
-        len(found_headers) > 0
-    ), f"Should find at least one OpenAI rate limit header. Headers found: {list(additional_headers.keys())}"
+    assert len(found_headers) > 0, (
+        f"Should find at least one OpenAI rate limit header. Headers found: {list(additional_headers.keys())}"
+    )
 
     # Verify headers key also exists (raw headers)
-    assert (
-        "headers" in response._hidden_params
-    ), "_hidden_params should contain 'headers' key with raw response headers"
+    assert "headers" in response._hidden_params, "_hidden_params should contain 'headers' key with raw response headers"
 
-    print(
-        f"✓ Successfully validated OpenAI headers in {'sync' if sync_mode else 'async'} mode"
-    )
+    print(f"✓ Successfully validated OpenAI headers in {'sync' if sync_mode else 'async'} mode")
     print(f"  Found {len(additional_headers)} headers total")
     print(f"  Rate limit headers found: {found_headers}")
 
@@ -295,149 +265,69 @@ def validate_stream_event(event):
 
     # Type-specific validation
     if event.type == "response.created" or event.type == "response.in_progress":
-        assert hasattr(
-            event, "response"
-        ), f"{event.type} event should have a 'response' attribute"
+        assert hasattr(event, "response"), f"{event.type} event should have a 'response' attribute"
         validate_responses_api_response(event.response, final_chunk=False)
 
     elif event.type == "response.completed":
-        assert hasattr(
-            event, "response"
-        ), "response.completed event should have a 'response' attribute"
+        assert hasattr(event, "response"), "response.completed event should have a 'response' attribute"
         validate_responses_api_response(event.response, final_chunk=True)
         # Usage is guaranteed only on the completed event
-        assert (
-            "usage" in event.response
-        ), "response.completed event should have usage information"
+        assert "usage" in event.response, "response.completed event should have usage information"
         print("Usage in event.response=", event.response["usage"])
         assert isinstance(event.response["usage"], ResponseAPIUsage)
     elif event.type == "response.failed" or event.type == "response.incomplete":
-        assert hasattr(
-            event, "response"
-        ), f"{event.type} event should have a 'response' attribute"
+        assert hasattr(event, "response"), f"{event.type} event should have a 'response' attribute"
 
-    elif (
-        event.type == "response.output_item.added"
-        or event.type == "response.output_item.done"
-    ):
-        assert hasattr(
-            event, "output_index"
-        ), f"{event.type} event should have an 'output_index' attribute"
-        assert hasattr(
-            event, "item"
-        ), f"{event.type} event should have an 'item' attribute"
+    elif event.type == "response.output_item.added" or event.type == "response.output_item.done":
+        assert hasattr(event, "output_index"), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(event, "item"), f"{event.type} event should have an 'item' attribute"
 
-    elif (
-        event.type == "response.content_part.added"
-        or event.type == "response.content_part.done"
-    ):
-        assert hasattr(
-            event, "item_id"
-        ), f"{event.type} event should have an 'item_id' attribute"
-        assert hasattr(
-            event, "output_index"
-        ), f"{event.type} event should have an 'output_index' attribute"
-        assert hasattr(
-            event, "content_index"
-        ), f"{event.type} event should have a 'content_index' attribute"
-        assert hasattr(
-            event, "part"
-        ), f"{event.type} event should have a 'part' attribute"
+    elif event.type == "response.content_part.added" or event.type == "response.content_part.done":
+        assert hasattr(event, "item_id"), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(event, "output_index"), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(event, "content_index"), f"{event.type} event should have a 'content_index' attribute"
+        assert hasattr(event, "part"), f"{event.type} event should have a 'part' attribute"
 
     elif event.type == "response.output_text.delta":
-        assert hasattr(
-            event, "item_id"
-        ), f"{event.type} event should have an 'item_id' attribute"
-        assert hasattr(
-            event, "output_index"
-        ), f"{event.type} event should have an 'output_index' attribute"
-        assert hasattr(
-            event, "content_index"
-        ), f"{event.type} event should have a 'content_index' attribute"
-        assert hasattr(
-            event, "delta"
-        ), f"{event.type} event should have a 'delta' attribute"
+        assert hasattr(event, "item_id"), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(event, "output_index"), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(event, "content_index"), f"{event.type} event should have a 'content_index' attribute"
+        assert hasattr(event, "delta"), f"{event.type} event should have a 'delta' attribute"
 
     elif event.type == "response.output_text.annotation.added":
-        assert hasattr(
-            event, "item_id"
-        ), f"{event.type} event should have an 'item_id' attribute"
-        assert hasattr(
-            event, "output_index"
-        ), f"{event.type} event should have an 'output_index' attribute"
-        assert hasattr(
-            event, "content_index"
-        ), f"{event.type} event should have a 'content_index' attribute"
-        assert hasattr(
-            event, "annotation_index"
-        ), f"{event.type} event should have an 'annotation_index' attribute"
-        assert hasattr(
-            event, "annotation"
-        ), f"{event.type} event should have an 'annotation' attribute"
+        assert hasattr(event, "item_id"), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(event, "output_index"), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(event, "content_index"), f"{event.type} event should have a 'content_index' attribute"
+        assert hasattr(event, "annotation_index"), f"{event.type} event should have an 'annotation_index' attribute"
+        assert hasattr(event, "annotation"), f"{event.type} event should have an 'annotation' attribute"
 
     elif event.type == "response.output_text.done":
-        assert hasattr(
-            event, "item_id"
-        ), f"{event.type} event should have an 'item_id' attribute"
-        assert hasattr(
-            event, "output_index"
-        ), f"{event.type} event should have an 'output_index' attribute"
-        assert hasattr(
-            event, "content_index"
-        ), f"{event.type} event should have a 'content_index' attribute"
-        assert hasattr(
-            event, "text"
-        ), f"{event.type} event should have a 'text' attribute"
+        assert hasattr(event, "item_id"), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(event, "output_index"), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(event, "content_index"), f"{event.type} event should have a 'content_index' attribute"
+        assert hasattr(event, "text"), f"{event.type} event should have a 'text' attribute"
 
     elif event.type == "response.refusal.delta":
-        assert hasattr(
-            event, "item_id"
-        ), f"{event.type} event should have an 'item_id' attribute"
-        assert hasattr(
-            event, "output_index"
-        ), f"{event.type} event should have an 'output_index' attribute"
-        assert hasattr(
-            event, "content_index"
-        ), f"{event.type} event should have a 'content_index' attribute"
-        assert hasattr(
-            event, "delta"
-        ), f"{event.type} event should have a 'delta' attribute"
+        assert hasattr(event, "item_id"), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(event, "output_index"), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(event, "content_index"), f"{event.type} event should have a 'content_index' attribute"
+        assert hasattr(event, "delta"), f"{event.type} event should have a 'delta' attribute"
 
     elif event.type == "response.refusal.done":
-        assert hasattr(
-            event, "item_id"
-        ), f"{event.type} event should have an 'item_id' attribute"
-        assert hasattr(
-            event, "output_index"
-        ), f"{event.type} event should have an 'output_index' attribute"
-        assert hasattr(
-            event, "content_index"
-        ), f"{event.type} event should have a 'content_index' attribute"
-        assert hasattr(
-            event, "refusal"
-        ), f"{event.type} event should have a 'refusal' attribute"
+        assert hasattr(event, "item_id"), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(event, "output_index"), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(event, "content_index"), f"{event.type} event should have a 'content_index' attribute"
+        assert hasattr(event, "refusal"), f"{event.type} event should have a 'refusal' attribute"
 
     elif event.type == "response.function_call_arguments.delta":
-        assert hasattr(
-            event, "item_id"
-        ), f"{event.type} event should have an 'item_id' attribute"
-        assert hasattr(
-            event, "output_index"
-        ), f"{event.type} event should have an 'output_index' attribute"
-        assert hasattr(
-            event, "delta"
-        ), f"{event.type} event should have a 'delta' attribute"
+        assert hasattr(event, "item_id"), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(event, "output_index"), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(event, "delta"), f"{event.type} event should have a 'delta' attribute"
 
     elif event.type == "response.function_call_arguments.done":
-        assert hasattr(
-            event, "item_id"
-        ), f"{event.type} event should have an 'item_id' attribute"
-        assert hasattr(
-            event, "output_index"
-        ), f"{event.type} event should have an 'output_index' attribute"
-        assert hasattr(
-            event, "arguments"
-        ), f"{event.type} event should have an 'arguments' attribute"
+        assert hasattr(event, "item_id"), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(event, "output_index"), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(event, "arguments"), f"{event.type} event should have an 'arguments' attribute"
 
     elif event.type in [
         "response.file_search_call.in_progress",
@@ -447,17 +337,11 @@ def validate_stream_event(event):
         "response.web_search_call.searching",
         "response.web_search_call.completed",
     ]:
-        assert hasattr(
-            event, "output_index"
-        ), f"{event.type} event should have an 'output_index' attribute"
-        assert hasattr(
-            event, "item_id"
-        ), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(event, "output_index"), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(event, "item_id"), f"{event.type} event should have an 'item_id' attribute"
 
     elif event.type == "error":
-        assert hasattr(
-            event, "message"
-        ), "Error event should have a 'message' attribute"
+        assert hasattr(event, "message"), "Error event should have a 'message' attribute"
     return True  # Return True if validation passes
 
 
@@ -612,9 +496,7 @@ async def test_openai_responses_litellm_router_no_metadata():
                 "id": "msg_123",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "Hello world!", "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": "Hello world!", "annotations": []}],
             }
         ],
         "parallel_tool_calls": True,
@@ -682,9 +564,7 @@ async def test_openai_responses_litellm_router_no_metadata():
         print("Request body:", json.dumps(request_body, indent=4))
 
         # Assert metadata is not in the request
-        assert (
-            "metadata" not in request_body
-        ), "metadata should not be in the request body"
+        assert "metadata" not in request_body, "metadata should not be in the request body"
         mock_post.assert_called_once()
 
 
@@ -711,9 +591,7 @@ async def test_openai_responses_litellm_router_with_metadata():
                 "id": "msg_123",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "Hello world!", "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": "Hello world!", "annotations": []}],
             }
         ],
         "parallel_tool_calls": True,
@@ -781,9 +659,7 @@ async def test_openai_responses_litellm_router_with_metadata():
         print("Request body:", json.dumps(request_body, indent=4))
 
         # Assert metadata matches exactly what was passed
-        assert (
-            request_body["metadata"] == test_metadata
-        ), "metadata in request body should match what was passed"
+        assert request_body["metadata"] == test_metadata, "metadata in request body should match what was passed"
         mock_post.assert_called_once()
 
 
@@ -880,9 +756,7 @@ def test_bad_request_bad_param_error():
 async def test_async_bad_request_bad_param_error():
     """Raise a BadRequestError when an invalid parameter value is provided"""
     try:
-        await litellm.aresponses(
-            model="gpt-5.5", input="This should fail", temperature=2000
-        )
+        await litellm.aresponses(model="gpt-5.5", input="This should fail", temperature=2000)
         pytest.fail("Expected BadRequestError but no exception was raised")
     except litellm.BadRequestError as e:
         print(f"Exception raised: {e}")
@@ -1218,9 +1092,7 @@ def test_mcp_tools_with_responses_api():
             "type": "mcp",
             "server_label": "zapier",
             "server_url": "https://mcp.zapier.com/api/mcp/mcp",
-            "headers": {
-                "Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"
-            },
+            "headers": {"Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"},
         }
     ]
     MODEL = "openai/gpt-4.1"
@@ -1255,19 +1127,13 @@ def test_mcp_tools_with_responses_api():
             )
             print(response_with_mcp_call)
     except litellm.APIError as e:
-        if (
-            "424" in str(e)
-            or "Failed Dependency" in str(e)
-            or "external_connector_error" in str(e)
-        ):
+        if "424" in str(e) or "Failed Dependency" in str(e) or "external_connector_error" in str(e):
             pytest.skip(f"Skipping test due to external MCP server error: {e}")
         else:
             raise e
     except litellm.InternalServerError as e:
         if "500" in str(e) or "server_error" in str(e):
-            pytest.skip(
-                f"Skipping test due to OpenAI server error (likely MCP server unavailable): {e}"
-            )
+            pytest.skip(f"Skipping test due to OpenAI server error (likely MCP server unavailable): {e}")
         else:
             raise e
 
@@ -1295,9 +1161,7 @@ async def test_openai_responses_api_field_types():
     response_without_store = await litellm.aresponses(model="gpt-5.5", input="hi")
 
     # Verify created_at is still an integer
-    assert isinstance(
-        response_without_store.created_at, int
-    ), "created_at should be an integer"
+    assert isinstance(response_without_store.created_at, int), "created_at should be an integer"
 
     # Verify store field is present but None when not specified
     assert hasattr(response_without_store, "store"), "store field should be present"
@@ -1331,9 +1195,7 @@ async def test_store_field_transformation():
                 "id": "msg_1",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "Hello", "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": "Hello", "annotations": []}],
             }
         ],
         "parallel_tool_calls": True,
@@ -1371,51 +1233,37 @@ async def test_store_field_transformation():
     )
 
     # Test case 4: API omits store field
-    mock_response_no_store = httpx.Response(
-        status_code=200, content=json.dumps(base_response).encode()
-    )
+    mock_response_no_store = httpx.Response(status_code=200, content=json.dumps(base_response).encode())
 
     # Test when store=True in request
     logging_obj.optional_params = {"store": True}
     response = config.transform_response_api_response(
         model="gpt-5.5", raw_response=mock_response_store_true, logging_obj=logging_obj
     )
-    assert (
-        response.store is True
-    ), "store should be True when specified in request and API returns True"
+    assert response.store is True, "store should be True when specified in request and API returns True"
 
     # Test when store=False in request
     logging_obj.optional_params = {"store": False}
     response = config.transform_response_api_response(
         model="gpt-5.5", raw_response=mock_response_store_false, logging_obj=logging_obj
     )
-    assert (
-        response.store is False
-    ), "store should be False when specified in request and API returns False"
+    assert response.store is False, "store should be False when specified in request and API returns False"
 
     # Test when store not in request but API returns null
     response = config.transform_response_api_response(
         model="gpt-5.5", raw_response=mock_response_store_null, logging_obj=logging_obj
     )
-    assert (
-        response.store is None
-    ), "store should be None when not specified in request and API returns null"
+    assert response.store is None, "store should be None when not specified in request and API returns null"
 
     # Test when store not in request and API omits store field
     response = config.transform_response_api_response(
         model="gpt-5.5", raw_response=mock_response_no_store, logging_obj=logging_obj
     )
-    assert (
-        response.store is None
-    ), "store should be None when not specified in request and API omits store"
+    assert response.store is None, "store should be None when not specified in request and API omits store"
 
     # Verify created_at is always converted to integer
-    assert isinstance(
-        response.created_at, int
-    ), "created_at should always be converted to integer"
-    assert (
-        response.created_at == 1751443898
-    ), "created_at should maintain the same value after conversion"
+    assert isinstance(response.created_at, int), "created_at should always be converted to integer"
+    assert response.created_at == 1751443898, "created_at should maintain the same value after conversion"
 
 
 @pytest.mark.asyncio
@@ -1496,12 +1344,8 @@ async def test_aresponses_service_tier_and_safety_identifier():
         print("request_body=", json.dumps(request_body, indent=4, default=str))
 
         # Validate that both parameters are present in the request body
-        assert (
-            request_body["service_tier"] == "flex"
-        ), "service_tier should be 'flex' in request body"
-        assert (
-            request_body["safety_identifier"] == "123"
-        ), "safety_identifier should be '123' in request body"
+        assert request_body["service_tier"] == "flex", "service_tier should be 'flex' in request body"
+        assert request_body["safety_identifier"] == "123", "safety_identifier should be '123' in request body"
         assert request_body["model"] == "gpt-5.5"
         assert request_body["input"] == "Test with service tier and safety identifier"
 
@@ -1592,12 +1436,8 @@ async def test_openai_gpt5_reasoning_effort_parameter():
         print("request_body=", json.dumps(request_body, indent=4, default=str))
         print("reasoning=", request_body["reasoning"])
         # Validate that reasoning_effort is present in the request body
-        assert (
-            "reasoning" in request_body
-        ), "reasoning should be present in request body"
-        assert (
-            request_body["reasoning"]["effort"] == "minimal"
-        ), "reasoning_effort should be 'minimal' in request body"
+        assert "reasoning" in request_body, "reasoning should be present in request body"
+        assert request_body["reasoning"]["effort"] == "minimal", "reasoning_effort should be 'minimal' in request body"
         assert request_body["model"] == "gpt-5-mini"
         assert request_body["input"] == "What is the capital of France?"
 
@@ -1639,9 +1479,7 @@ async def test_openai_responses_api_token_limit_error():
     # Generate text with >400k tokens to trigger token limit error
     oversized_text = "This is a test sentence. " * 50000  # ~400k tokens
 
-    response = await litellm.aresponses(
-        model="gpt-5-mini", input=oversized_text, stream=True
-    )
+    response = await litellm.aresponses(model="gpt-5-mini", input=oversized_text, stream=True)
 
     with pytest.raises(litellm.APIError) as exc_info:
         async for event in response:
@@ -1663,21 +1501,15 @@ async def test_openai_streaming_logging():
         def __init__(self):
             self.standard_logging_object: Optional[StandardLoggingPayload] = None
 
-        async def async_log_success_event(
-            self, kwargs, response_obj, start_time, end_time
-        ):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
             print(f"response_obj: {response_obj.usage}")
-            assert isinstance(
-                response_obj.usage, (Usage, dict)
-            ), f"Expected response_obj.usage to be of type Usage or dict, but got {type(response_obj.usage)}"
+            assert isinstance(response_obj.usage, (Usage, dict)), (
+                f"Expected response_obj.usage to be of type Usage or dict, but got {type(response_obj.usage)}"
+            )
             # Verify it has the chat completion format fields
             if isinstance(response_obj.usage, dict):
-                assert (
-                    "prompt_tokens" in response_obj.usage
-                ), "Usage dict should have prompt_tokens"
-                assert (
-                    "completion_tokens" in response_obj.usage
-                ), "Usage dict should have completion_tokens"
+                assert "prompt_tokens" in response_obj.usage, "Usage dict should have prompt_tokens"
+                assert "completion_tokens" in response_obj.usage, "Usage dict should have completion_tokens"
             print("\n\nVALIDATED USAGE\n\n")
             self.validate_usage = True
 
@@ -1726,9 +1558,7 @@ def extra_body_mock_response_data():
                 "id": "msg_123",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "Hello!", "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": "Hello!", "annotations": []}],
             }
         ],
         "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},

@@ -56,22 +56,16 @@ async def test_team_block_unblock_authz_matrix(
 
     # /unblock starts from a blocked row so a 200 is observable as True->False.
     if route == "unblock":
-        await prisma.db.litellm_teamtable.update(
-            where={"team_id": scratch.prefix}, data={"blocked": True}
-        )
+        await prisma.db.litellm_teamtable.update(where={"team_id": scratch.prefix}, data={"blocked": True})
 
     resp = await proxy_client.post(
         f"/team/{route}",
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"team_id": scratch.prefix, "organization_id": org_id},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{route} {actor.value} {shape}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{route} {actor.value} {shape}: {resp.status_code} {resp.text}"
 
-    row = await prisma.db.litellm_teamtable.find_unique(
-        where={"team_id": scratch.prefix}
-    )
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None
     if expected_status == 200:
         assert bool(row.blocked) is (route == "block")
@@ -84,22 +78,14 @@ async def test_team_block_unblock_round_trip(proxy_client, prisma, scratch, worl
     await create_scratch_team(prisma, scratch.prefix, organization_id=world.org_a_id)
     headers = {"Authorization": f"Bearer {world.keys[Actor.PROXY_ADMIN].cleartext}"}
 
-    blocked = await proxy_client.post(
-        "/team/block", headers=headers, json={"team_id": scratch.prefix}
-    )
+    blocked = await proxy_client.post("/team/block", headers=headers, json={"team_id": scratch.prefix})
     assert blocked.status_code == 200, blocked.text
-    row = await prisma.db.litellm_teamtable.find_unique(
-        where={"team_id": scratch.prefix}
-    )
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None and row.blocked is True
 
-    unblocked = await proxy_client.post(
-        "/team/unblock", headers=headers, json={"team_id": scratch.prefix}
-    )
+    unblocked = await proxy_client.post("/team/unblock", headers=headers, json={"team_id": scratch.prefix})
     assert unblocked.status_code == 200, unblocked.text
-    row = await prisma.db.litellm_teamtable.find_unique(
-        where={"team_id": scratch.prefix}
-    )
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None and row.blocked is False
 
 

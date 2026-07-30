@@ -4,9 +4,7 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 
 
 import litellm
@@ -19,9 +17,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 from test_rerank import assert_response_shape
 import litellm
 
@@ -84,9 +80,7 @@ async def test_infinity_rerank():
         assert response.id is not None
         assert response.results is not None
         assert response.meta["tokens"]["input_tokens"] == 100
-        assert (
-            response.meta["tokens"]["output_tokens"] == 50
-        )  # total_tokens - prompt_tokens
+        assert response.meta["tokens"]["output_tokens"] == 50  # total_tokens - prompt_tokens
 
         assert_response_shape(response, custom_llm_provider="infinity")
 
@@ -181,9 +175,7 @@ async def test_infinity_rerank_with_env(monkeypatch):
         assert response.id is not None
         assert response.results is not None
         assert response.meta["tokens"]["input_tokens"] == 100
-        assert (
-            response.meta["tokens"]["output_tokens"] == 50
-        )  # total_tokens - prompt_tokens
+        assert response.meta["tokens"]["output_tokens"] == 50  # total_tokens - prompt_tokens
 
         assert_response_shape(response, custom_llm_provider="infinity")
 

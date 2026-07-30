@@ -75,9 +75,7 @@ _test_app.include_router(router)
 def client():
     """Test client with a fixed authenticated user (bypasses the session
     cookie check by overriding the dep)."""
-    _test_app.dependency_overrides[_byok_session_auth] = lambda: UserAPIKeyAuth(
-        api_key="hashed", user_id="user-123"
-    )
+    _test_app.dependency_overrides[_byok_session_auth] = lambda: UserAPIKeyAuth(api_key="hashed", user_id="user-123")
     try:
         yield TestClient(_test_app, raise_server_exceptions=False)
     finally:
@@ -789,9 +787,7 @@ def test_authorize_post_rejects_replayed_byok_session_token(unauthenticated_clie
             "real-master-key",
             algorithm="HS256",
         )
-        resp = _authorize_post_with_cookie(
-            unauthenticated_client, byok_session, api_key="k"
-        )
+        resp = _authorize_post_with_cookie(unauthenticated_client, byok_session, api_key="k")
     assert resp.status_code == 401
 
 
@@ -862,9 +858,7 @@ def test_authorize_post_rejects_cookie_missing_login_method(unauthenticated_clie
             "real-master-key",
             algorithm="HS256",
         )
-        resp = _authorize_post_with_cookie(
-            unauthenticated_client, malformed, api_key="k"
-        )
+        resp = _authorize_post_with_cookie(unauthenticated_client, malformed, api_key="k")
     assert resp.status_code == 401
 
 
@@ -1253,9 +1247,7 @@ def test_validate_trusted_redirect_uri_rejects_unlisted_native_callback(
     )
     req = _make_trusted_request("http://localhost:4000/")
     with pytest.raises(HTTPException) as exc:
-        validate_trusted_redirect_uri(
-            req, "cursor://anysphere.cursor-mcp/oauth/callback"
-        )
+        validate_trusted_redirect_uri(req, "cursor://anysphere.cursor-mcp/oauth/callback")
     assert exc.value.status_code == 400
 
 
@@ -1285,9 +1277,7 @@ def test_validate_trusted_redirect_uri_rejects_native_callback_with_fragment():
 
     req = _make_trusted_request("http://localhost:4000/")
     with pytest.raises(HTTPException) as exc:
-        validate_trusted_redirect_uri(
-            req, "cursor://anysphere.cursor-mcp/oauth/callback#frag"
-        )
+        validate_trusted_redirect_uri(req, "cursor://anysphere.cursor-mcp/oauth/callback#frag")
     assert exc.value.status_code == 400
 
 
@@ -1338,13 +1328,9 @@ def test_validate_trusted_redirect_uri_native_wildcard_respects_path_boundary(
         "cursor://anysphere.cursor-mcp/oauth/callback*",
     )
     req = _make_trusted_request("http://localhost:4000/")
-    validate_trusted_redirect_uri(
-        req, "cursor://anysphere.cursor-mcp/oauth/callback/extra"
-    )
+    validate_trusted_redirect_uri(req, "cursor://anysphere.cursor-mcp/oauth/callback/extra")
     with pytest.raises(HTTPException):
-        validate_trusted_redirect_uri(
-            req, "cursor://anysphere.cursor-mcp/oauth/callback-2"
-        )
+        validate_trusted_redirect_uri(req, "cursor://anysphere.cursor-mcp/oauth/callback-2")
 
 
 def test_validate_trusted_redirect_uri_native_wildcard_directory_prefix(
@@ -1412,18 +1398,14 @@ def test_validate_trusted_redirect_uri_rejects_userinfo(monkeypatch):
     monkeypatch.setenv("MCP_TRUSTED_REDIRECT_ORIGINS", "app.example.com")
     req = _make_trusted_request("https://llm.other-proxy.com/")
     with pytest.raises(HTTPException) as exc:
-        validate_trusted_redirect_uri(
-            req, "https://app.example.com@attacker.example/cb"
-        )
+        validate_trusted_redirect_uri(req, "https://app.example.com@attacker.example/cb")
     assert exc.value.status_code == 400
 
     # (3) Same-origin path — userinfo that mimics the proxy's host.
     monkeypatch.delenv("MCP_TRUSTED_REDIRECT_ORIGINS", raising=False)
     req = _make_trusted_request("https://llm.example.com/")
     with pytest.raises(HTTPException) as exc:
-        validate_trusted_redirect_uri(
-            req, "https://llm.example.com@attacker.example/cb"
-        )
+        validate_trusted_redirect_uri(req, "https://llm.example.com@attacker.example/cb")
     assert exc.value.status_code == 400
 
     # (4) Loopback path — userinfo that mimics 127.0.0.1.
@@ -1711,8 +1693,6 @@ def test_parse_trusted_redirect_origins_drops_bare_path_entries(monkeypatch):
         _parse_trusted_redirect_origins,
     )
 
-    monkeypatch.setenv(
-        "MCP_TRUSTED_REDIRECT_ORIGINS", "https:///, /foo, app.example.com"
-    )
+    monkeypatch.setenv("MCP_TRUSTED_REDIRECT_ORIGINS", "https:///, /foo, app.example.com")
     # The two malformed entries drop out; only the real host survives.
     assert _parse_trusted_redirect_origins() == ["app.example.com"]

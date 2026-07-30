@@ -41,15 +41,11 @@ class TestAlertingHangingRequestCheck:
         """
         checker = AlertingHangingRequestCheck(slack_alerting_object=mock_slack_alerting)
 
-        expected_ttl = int(
-            mock_slack_alerting.alerting_threshold * 1.5 + 60
-        )  # HANGING_ALERT_BUFFER_TIME_SECONDS
+        expected_ttl = int(mock_slack_alerting.alerting_threshold * 1.5 + 60)  # HANGING_ALERT_BUFFER_TIME_SECONDS
         assert checker.hanging_request_cache.default_ttl == expected_ttl
 
     @pytest.mark.asyncio
-    async def test_add_request_to_hanging_request_check_success(
-        self, hanging_request_checker
-    ):
+    async def test_add_request_to_hanging_request_check_success(self, hanging_request_checker):
         """
         Test successfully adding a request to the hanging request cache.
         Should extract metadata and store HangingRequestData in cache.
@@ -65,16 +61,10 @@ class TestAlertingHangingRequestCheck:
         }
 
         with patch("litellm.get_api_base", return_value="https://api.openai.com/v1"):
-            await hanging_request_checker.add_request_to_hanging_request_check(
-                request_data
-            )
+            await hanging_request_checker.add_request_to_hanging_request_check(request_data)
 
         # Verify the request was added to cache
-        cached_data = (
-            await hanging_request_checker.hanging_request_cache.async_get_cache(
-                key="test_request_123"
-            )
-        )
+        cached_data = await hanging_request_checker.hanging_request_cache.async_get_cache(key="test_request_123")
 
         assert cached_data is not None
         assert isinstance(cached_data, HangingRequestData)
@@ -83,22 +73,16 @@ class TestAlertingHangingRequestCheck:
         assert cached_data.api_base == "https://api.openai.com/v1"
 
     @pytest.mark.asyncio
-    async def test_add_request_to_hanging_request_check_none_request_data(
-        self, hanging_request_checker
-    ):
+    async def test_add_request_to_hanging_request_check_none_request_data(self, hanging_request_checker):
         """
         Test that passing None request_data returns early without error.
         Should handle gracefully when no request data is provided.
         """
-        result = await hanging_request_checker.add_request_to_hanging_request_check(
-            None
-        )
+        result = await hanging_request_checker.add_request_to_hanging_request_check(None)
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_add_request_to_hanging_request_check_minimal_data(
-        self, hanging_request_checker
-    ):
+    async def test_add_request_to_hanging_request_check_minimal_data(self, hanging_request_checker):
         """
         Test adding request with minimal required data.
         Should handle cases where optional fields are missing.
@@ -110,11 +94,7 @@ class TestAlertingHangingRequestCheck:
 
         await hanging_request_checker.add_request_to_hanging_request_check(request_data)
 
-        cached_data = (
-            await hanging_request_checker.hanging_request_cache.async_get_cache(
-                key="minimal_request_456"
-            )
-        )
+        cached_data = await hanging_request_checker.hanging_request_cache.async_get_cache(key="minimal_request_456")
 
         assert cached_data is not None
         assert cached_data.request_id == "minimal_request_456"
@@ -154,9 +134,7 @@ class TestAlertingHangingRequestCheck:
         assert call_args[1]["level"] == "Medium"
 
     @pytest.mark.asyncio
-    async def test_send_alerts_for_hanging_requests_no_proxy_logging(
-        self, hanging_request_checker
-    ):
+    async def test_send_alerts_for_hanging_requests_no_proxy_logging(self, hanging_request_checker):
         """
         Test send_alerts_for_hanging_requests when proxy_logging_obj.internal_usage_cache is None.
         Should return early without processing when internal usage cache is unavailable.
@@ -168,9 +146,7 @@ class TestAlertingHangingRequestCheck:
             assert result is None
 
     @pytest.mark.asyncio
-    async def test_send_alerts_for_hanging_requests_with_completed_request(
-        self, hanging_request_checker
-    ):
+    async def test_send_alerts_for_hanging_requests_with_completed_request(self, hanging_request_checker):
         """
         Test send_alerts_for_hanging_requests when request has completed (not hanging).
         Should remove completed requests from cache and not send alerts.
@@ -192,8 +168,8 @@ class TestAlertingHangingRequestCheck:
             mock_proxy.internal_usage_cache = mock_internal_cache
 
             # Mock the cache method to return our test request
-            hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = (
-                AsyncMock(return_value=["completed_request_789"])
+            hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = AsyncMock(
+                return_value=["completed_request_789"]
             )
 
             await hanging_request_checker.send_alerts_for_hanging_requests()
@@ -202,9 +178,7 @@ class TestAlertingHangingRequestCheck:
         hanging_request_checker.slack_alerting_object.send_alert.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_send_alerts_for_hanging_requests_with_actual_hanging_request(
-        self, hanging_request_checker
-    ):
+    async def test_send_alerts_for_hanging_requests_with_actual_hanging_request(self, hanging_request_checker):
         """
         Test send_alerts_for_hanging_requests when request is actually hanging.
         Should send alert for requests that haven't completed within threshold.
@@ -229,8 +203,8 @@ class TestAlertingHangingRequestCheck:
             mock_proxy.internal_usage_cache = mock_internal_cache
 
             # Mock the cache method to return our test request
-            hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = (
-                AsyncMock(return_value=["hanging_request_999"])
+            hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = AsyncMock(
+                return_value=["hanging_request_999"]
             )
 
             await hanging_request_checker.send_alerts_for_hanging_requests()
@@ -239,9 +213,7 @@ class TestAlertingHangingRequestCheck:
         hanging_request_checker.slack_alerting_object.send_alert.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_send_alerts_for_hanging_requests_alerts_once_per_hang(
-        self, hanging_request_checker
-    ):
+    async def test_send_alerts_for_hanging_requests_alerts_once_per_hang(self, hanging_request_checker):
         """
         A single hanging request must alert exactly once even though the
         checker tick revisits it on every run within the cache TTL.
@@ -261,24 +233,20 @@ class TestAlertingHangingRequestCheck:
             mock_internal_cache.async_get_cache.return_value = None
             mock_proxy.internal_usage_cache = mock_internal_cache
 
-            hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = (
-                AsyncMock(return_value=["hanging_once_555"])
+            hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = AsyncMock(
+                return_value=["hanging_once_555"]
             )
 
             for _ in range(3):
                 await hanging_request_checker.send_alerts_for_hanging_requests()
 
         assert hanging_request_checker.slack_alerting_object.send_alert.call_count == 1
-        cached = await hanging_request_checker.hanging_request_cache.async_get_cache(
-            key="hanging_once_555"
-        )
+        cached = await hanging_request_checker.hanging_request_cache.async_get_cache(key="hanging_once_555")
         assert cached is not None
         assert cached.alerted is True
 
     @pytest.mark.asyncio
-    async def test_send_alerts_for_hanging_requests_skips_request_younger_than_threshold(
-        self, hanging_request_checker
-    ):
+    async def test_send_alerts_for_hanging_requests_skips_request_younger_than_threshold(self, hanging_request_checker):
         """
         Test that an in-flight request younger than the alerting threshold
         does not trigger an alert and stays in the cache for later checks.
@@ -298,8 +266,8 @@ class TestAlertingHangingRequestCheck:
             mock_internal_cache.async_get_cache.return_value = None
             mock_proxy.internal_usage_cache = mock_internal_cache
 
-            hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = (
-                AsyncMock(return_value=["young_request_123"])
+            hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = AsyncMock(
+                return_value=["young_request_123"]
             )
 
             await hanging_request_checker.send_alerts_for_hanging_requests()
@@ -307,17 +275,10 @@ class TestAlertingHangingRequestCheck:
         # No alert for a request below the threshold, and it must remain
         # cached so a later check can alert if it never completes
         hanging_request_checker.slack_alerting_object.send_alert.assert_not_called()
-        assert (
-            await hanging_request_checker.hanging_request_cache.async_get_cache(
-                key="young_request_123"
-            )
-            is not None
-        )
+        assert await hanging_request_checker.hanging_request_cache.async_get_cache(key="young_request_123") is not None
 
     @pytest.mark.asyncio
-    async def test_send_alerts_for_hanging_requests_with_missing_hanging_data(
-        self, hanging_request_checker
-    ):
+    async def test_send_alerts_for_hanging_requests_with_missing_hanging_data(self, hanging_request_checker):
         """
         Test send_alerts_for_hanging_requests when hanging request data is missing from cache.
         Should continue processing other requests when individual request data is missing.
@@ -327,12 +288,10 @@ class TestAlertingHangingRequestCheck:
             mock_proxy.internal_usage_cache = mock_internal_cache
 
             # Mock cache to return request ID but no data (simulating expired or missing data)
-            hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = (
-                AsyncMock(return_value=["missing_request_111"])
+            hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = AsyncMock(
+                return_value=["missing_request_111"]
             )
-            hanging_request_checker.hanging_request_cache.async_get_cache = AsyncMock(
-                return_value=None
-            )
+            hanging_request_checker.hanging_request_cache.async_get_cache = AsyncMock(return_value=None)
 
             await hanging_request_checker.send_alerts_for_hanging_requests()
 

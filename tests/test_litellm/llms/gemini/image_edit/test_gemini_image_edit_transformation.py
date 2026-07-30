@@ -140,9 +140,7 @@ class TestGeminiImageEditTransformation:
             headers={},
         )
 
-        assert request_body["generationConfig"]["imageConfig"] == {
-            "aspectRatio": "16:9"
-        }
+        assert request_body["generationConfig"]["imageConfig"] == {"aspectRatio": "16:9"}
 
     def test_transform_image_edit_request_multiple_images(self) -> None:
         image_one = BytesIO(b"image_one")
@@ -174,9 +172,7 @@ class TestGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-one").decode(
-                                        "utf-8"
-                                    ),
+                                    "data": base64.b64encode(b"image-one").decode("utf-8"),
                                 }
                             }
                         ]
@@ -188,9 +184,7 @@ class TestGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-two").decode(
-                                        "utf-8"
-                                    ),
+                                    "data": base64.b64encode(b"image-two").decode("utf-8"),
                                 }
                             }
                         ]
@@ -221,12 +215,8 @@ class TestGeminiImageEditTransformation:
 
         assert image_response.data is not None
         assert len(image_response.data) == 2
-        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode(
-            "utf-8"
-        )
-        assert image_response.data[1].b64_json == base64.b64encode(b"image-two").decode(
-            "utf-8"
-        )
+        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode("utf-8")
+        assert image_response.data[1].b64_json == base64.b64encode(b"image-two").decode("utf-8")
 
         usage = image_response.model_dump()["usage"]
         assert usage["input_tokens"] == 35
@@ -236,9 +226,7 @@ class TestGeminiImageEditTransformation:
         assert usage["prompt_tokens_details"]["image_tokens"] == 5
         assert usage["completion_tokens_details"]["image_tokens"] == 1716
 
-        logging_usage = StandardLoggingPayloadSetup.get_usage_as_dict(
-            response_obj=image_response.model_dump()
-        )
+        logging_usage = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj=image_response.model_dump())
         assert logging_usage["completion_tokens_details"]["image_tokens"] == 1716
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:

@@ -1,9 +1,7 @@
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 
@@ -51,6 +49,4 @@ def test_map_openai_params_with_preview_api_version():
     model = "azure/gpt-4-1"
     drop_params = False
     api_version = "preview"
-    assert config.map_openai_params(
-        non_default_params, optional_params, model, drop_params, api_version
-    )
+    assert config.map_openai_params(non_default_params, optional_params, model, drop_params, api_version)

@@ -87,9 +87,7 @@ class TestEnkryptAIGuardrailConfiguration:
         assert guardrail.api_key == "test-key"
         assert guardrail.api_base == "https://api.test.enkryptai.com"
         assert guardrail.policy_name == "test-policy"
-        assert guardrail.optional_params.get("detectors") == {
-            "toxicity": {"enabled": True}
-        }
+        assert guardrail.optional_params.get("detectors") == {"toxicity": {"enabled": True}}
 
     def test_init_with_env_vars(self):
         """Test initialization with environment variables"""
@@ -128,9 +126,7 @@ class TestEnkryptAIGuardrailHooks:
     """Test the guardrail hook methods"""
 
     @pytest.mark.asyncio
-    async def test_pre_call_hook_allowed(
-        self, enkryptai_guardrail, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_pre_call_hook_allowed(self, enkryptai_guardrail, mock_user_api_key_dict, mock_request_data):
         """Test pre-call hook when content is allowed"""
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -141,9 +137,7 @@ class TestEnkryptAIGuardrailHooks:
         mock_response.raise_for_status = MagicMock()
         mock_response.status_code = 200
 
-        with patch.object(
-            enkryptai_guardrail.async_handler, "post", return_value=mock_response
-        ) as mock_post:
+        with patch.object(enkryptai_guardrail.async_handler, "post", return_value=mock_response) as mock_post:
             result = await enkryptai_guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
                 cache=MagicMock(),
@@ -162,9 +156,7 @@ class TestEnkryptAIGuardrailHooks:
             assert call_args[1]["json"]["text"] == "Hello, how are you?"
 
     @pytest.mark.asyncio
-    async def test_pre_call_hook_blocked(
-        self, enkryptai_guardrail, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_pre_call_hook_blocked(self, enkryptai_guardrail, mock_user_api_key_dict, mock_request_data):
         """Test pre-call hook when content is blocked"""
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -175,9 +167,7 @@ class TestEnkryptAIGuardrailHooks:
         mock_response.raise_for_status = MagicMock()
         mock_response.status_code = 200
 
-        with patch.object(
-            enkryptai_guardrail.async_handler, "post", return_value=mock_response
-        ):
+        with patch.object(enkryptai_guardrail.async_handler, "post", return_value=mock_response):
             with pytest.raises(ValueError) as exc_info:
                 await enkryptai_guardrail.async_pre_call_hook(
                     user_api_key_dict=mock_user_api_key_dict,
@@ -189,9 +179,7 @@ class TestEnkryptAIGuardrailHooks:
             assert "Guardrail failed" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_pre_call_hook_with_policy_header(
-        self, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_pre_call_hook_with_policy_header(self, mock_user_api_key_dict, mock_request_data):
         """Test pre-call hook with policy header"""
         guardrail = EnkryptAIGuardrails(
             api_key="test-key",
@@ -208,9 +196,7 @@ class TestEnkryptAIGuardrailHooks:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            guardrail.async_handler, "post", return_value=mock_response
-        ) as mock_post:
+        with patch.object(guardrail.async_handler, "post", return_value=mock_response) as mock_post:
             await guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
                 cache=MagicMock(),
@@ -223,9 +209,7 @@ class TestEnkryptAIGuardrailHooks:
             assert call_args[1]["headers"]["x-enkrypt-policy"] == "my-policy"
 
     @pytest.mark.asyncio
-    async def test_post_call_success_hook(
-        self, enkryptai_guardrail, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_post_call_success_hook(self, enkryptai_guardrail, mock_user_api_key_dict, mock_request_data):
         """Test post-call success hook"""
         # Create a mock ModelResponse
         response = ModelResponse(
@@ -234,9 +218,7 @@ class TestEnkryptAIGuardrailHooks:
                 Choices(
                     finish_reason="stop",
                     index=0,
-                    message=Message(
-                        content="I'm doing well, thank you!", role="assistant"
-                    ),
+                    message=Message(content="I'm doing well, thank you!", role="assistant"),
                 )
             ],
             created=1234567890,
@@ -256,9 +238,7 @@ class TestEnkryptAIGuardrailHooks:
         # Update guardrail to use post_call event hook
         enkryptai_guardrail.event_hook = "post_call"
 
-        with patch.object(
-            enkryptai_guardrail.async_handler, "post", return_value=mock_api_response
-        ) as mock_post:
+        with patch.object(enkryptai_guardrail.async_handler, "post", return_value=mock_api_response) as mock_post:
             # Method doesn't return anything, just verify it doesn't raise an exception
             await enkryptai_guardrail.async_post_call_success_hook(
                 data=mock_request_data,
@@ -273,9 +253,7 @@ class TestEnkryptAIGuardrailHooks:
             assert call_args[1]["json"]["text"] == "I'm doing well, thank you!"
 
     @pytest.mark.asyncio
-    async def test_moderation_hook(
-        self, enkryptai_guardrail, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_moderation_hook(self, enkryptai_guardrail, mock_user_api_key_dict, mock_request_data):
         """Test moderation hook (during_call)"""
         # Update guardrail to use during_call event hook
         enkryptai_guardrail.event_hook = "during_call"
@@ -287,9 +265,7 @@ class TestEnkryptAIGuardrailHooks:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            enkryptai_guardrail.async_handler, "post", return_value=mock_response
-        ):
+        with patch.object(enkryptai_guardrail.async_handler, "post", return_value=mock_response):
             result = await enkryptai_guardrail.async_moderation_hook(
                 data=mock_request_data,
                 user_api_key_dict=mock_user_api_key_dict,
@@ -299,16 +275,12 @@ class TestEnkryptAIGuardrailHooks:
             assert result == mock_request_data
 
     @pytest.mark.asyncio
-    async def test_api_failure_handling(
-        self, enkryptai_guardrail, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_api_failure_handling(self, enkryptai_guardrail, mock_user_api_key_dict, mock_request_data):
         """Test API failure handling"""
         with patch.object(
             enkryptai_guardrail.async_handler,
             "post",
-            side_effect=httpx.HTTPStatusError(
-                "API Error", request=MagicMock(), response=MagicMock(status_code=500)
-            ),
+            side_effect=httpx.HTTPStatusError("API Error", request=MagicMock(), response=MagicMock(status_code=500)),
         ):
             with pytest.raises(httpx.HTTPStatusError):
                 await enkryptai_guardrail.async_pre_call_hook(

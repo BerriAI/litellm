@@ -43,8 +43,7 @@ def load_manifest(path: Path) -> Dict[str, Any]:
     schema_version = str(raw.get("schema_version", ""))
     if schema_version != SCHEMA_VERSION:
         raise ManifestError(
-            f"manifest schema_version {schema_version!r} does not match "
-            f"builder version {SCHEMA_VERSION!r}"
+            f"manifest schema_version {schema_version!r} does not match builder version {SCHEMA_VERSION!r}"
         )
     providers = raw.get("providers")
     if not isinstance(providers, list) or not providers:

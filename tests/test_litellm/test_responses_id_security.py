@@ -46,11 +46,11 @@ class TestIsEncryptedResponseId:
         import litellm.proxy.hooks.responses_id_security as responses_module
 
         with patch.object(responses_module, "decrypt_value_helper") as mock_decrypt:
-            mock_decrypt.return_value = f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}response_id:resp_123;user_id:user-456"
-
-            result = responses_id_security._is_encrypted_response_id(
-                "resp_encrypted_value"
+            mock_decrypt.return_value = (
+                f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}response_id:resp_123;user_id:user-456"
             )
+
+            result = responses_id_security._is_encrypted_response_id("resp_encrypted_value")
 
             assert result is True
             mock_decrypt.assert_called_once()
@@ -79,9 +79,7 @@ class TestDecryptResponseId:
         with patch.object(responses_module, "decrypt_value_helper") as mock_decrypt:
             mock_decrypt.return_value = f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}response_id:resp_original_123;user_id:user-456;team_id:team-789"
 
-            original_id, user_id, team_id = responses_id_security._decrypt_response_id(
-                "resp_encrypted_value"
-            )
+            original_id, user_id, team_id = responses_id_security._decrypt_response_id("resp_encrypted_value")
 
             assert original_id == "resp_original_123"
             assert user_id == "user-456"
@@ -95,9 +93,7 @@ class TestDecryptResponseId:
         with patch.object(responses_module, "decrypt_value_helper") as mock_decrypt:
             mock_decrypt.return_value = None
 
-            original_id, user_id, team_id = responses_id_security._decrypt_response_id(
-                "resp_plain_value"
-            )
+            original_id, user_id, team_id = responses_id_security._decrypt_response_id("resp_plain_value")
 
             assert original_id == "resp_plain_value"
             assert user_id is None
@@ -107,54 +103,32 @@ class TestDecryptResponseId:
 class TestEncryptResponseId:
     """Test _encrypt_response_id function"""
 
-    @pytest.mark.skip(
-        reason="Flaky on CI; disabling temporarily until responses_id_security is fixed"
-    )
-    def test_encrypt_response_id_success(
-        self, responses_id_security, mock_user_api_key_dict
-    ):
+    @pytest.mark.skip(reason="Flaky on CI; disabling temporarily until responses_id_security is fixed")
+    def test_encrypt_response_id_success(self, responses_id_security, mock_user_api_key_dict):
         """Test encrypting a response ID with user information"""
-        mock_response = ResponsesAPIResponse(
-            id="resp_123", created_at=1234567890, output=[], status="completed"
-        )
+        mock_response = ResponsesAPIResponse(id="resp_123", created_at=1234567890, output=[], status="completed")
 
-        with patch(
-            "litellm.proxy.hooks.responses_id_security.encrypt_value_helper"
-        ) as mock_encrypt:
+        with patch("litellm.proxy.hooks.responses_id_security.encrypt_value_helper") as mock_encrypt:
             mock_encrypt.return_value = "encrypted_base64_value"
 
-            with patch.object(
-                responses_id_security, "_get_signing_key", return_value="test-key"
-            ):
-                result = responses_id_security._encrypt_response_id(
-                    mock_response, mock_user_api_key_dict
-                )
+            with patch.object(responses_id_security, "_get_signing_key", return_value="test-key"):
+                result = responses_id_security._encrypt_response_id(mock_response, mock_user_api_key_dict)
 
                 assert result.id == "resp_encrypted_base64_value"
                 assert result.id.startswith("resp_")
                 mock_encrypt.assert_called_once()
 
-    @pytest.mark.skip(
-        reason="Flaky on CI; disabling temporarily until responses_id_security is fixed"
-    )
-    def test_encrypt_response_id_maintains_prefix(
-        self, responses_id_security, mock_user_api_key_dict
-    ):
+    @pytest.mark.skip(reason="Flaky on CI; disabling temporarily until responses_id_security is fixed")
+    def test_encrypt_response_id_maintains_prefix(self, responses_id_security, mock_user_api_key_dict):
         """Test that encrypted response ID maintains 'resp_' prefix"""
-        mock_response = ResponsesAPIResponse(
-            id="resp_456", created_at=1234567890, output=[], status="in_progress"
-        )
+        mock_response = ResponsesAPIResponse(id="resp_456", created_at=1234567890, output=[], status="in_progress")
 
         with patch(
             "litellm.proxy.common_utils.encrypt_decrypt_utils._get_salt_key",
             return_value="test-salt-key",
         ):
-            with patch.object(
-                responses_id_security, "_get_signing_key", return_value="test-key"
-            ):
-                result = responses_id_security._encrypt_response_id(
-                    mock_response, mock_user_api_key_dict
-                )
+            with patch.object(responses_id_security, "_get_signing_key", return_value="test-key"):
+                result = responses_id_security._encrypt_response_id(mock_response, mock_user_api_key_dict)
 
                 assert result.id.startswith("resp_")
                 # The encrypted ID should be different from the original
@@ -164,9 +138,7 @@ class TestEncryptResponseId:
 class TestCheckUserAccessToResponseId:
     """Test check_user_access_to_response_id function"""
 
-    def test_check_user_access_same_user(
-        self, responses_id_security, mock_user_api_key_dict
-    ):
+    def test_check_user_access_same_user(self, responses_id_security, mock_user_api_key_dict):
         """Test that same user has access to their response ID"""
         result = responses_id_security.check_user_access_to_response_id(
             response_id_user_id="test-user-123",
@@ -176,9 +148,7 @@ class TestCheckUserAccessToResponseId:
 
         assert result is True
 
-    def test_check_user_access_different_user_raises_exception(
-        self, responses_id_security, mock_user_api_key_dict
-    ):
+    def test_check_user_access_different_user_raises_exception(self, responses_id_security, mock_user_api_key_dict):
         """Test that different user is denied access to response ID"""
         with patch("litellm.proxy.proxy_server.general_settings", {}):
             with pytest.raises(HTTPException) as exc_info:
@@ -191,9 +161,7 @@ class TestCheckUserAccessToResponseId:
             assert exc_info.value.status_code == 403
             assert "Forbidden" in exc_info.value.detail
 
-    def test_check_user_access_different_team_raises_exception(
-        self, responses_id_security, mock_user_api_key_dict
-    ):
+    def test_check_user_access_different_team_raises_exception(self, responses_id_security, mock_user_api_key_dict):
         """Test that different team is denied access to response ID"""
         with patch("litellm.proxy.proxy_server.general_settings", {}):
             with pytest.raises(HTTPException) as exc_info:
@@ -206,9 +174,7 @@ class TestCheckUserAccessToResponseId:
             assert exc_info.value.status_code == 403
             assert "Forbidden" in exc_info.value.detail
 
-    def test_check_user_access_team_a_to_team_b_without_user_id(
-        self, responses_id_security
-    ):
+    def test_check_user_access_team_a_to_team_b_without_user_id(self, responses_id_security):
         """Test that key from team A (without user_id) cannot access response from team B (without user_id)"""
         # Create a mock user from team A without user_id
         mock_auth_team_a = MagicMock()
@@ -227,9 +193,7 @@ class TestCheckUserAccessToResponseId:
             assert exc_info.value.status_code == 403
             assert "team" in exc_info.value.detail.lower()
 
-    def test_check_user_access_team_a_to_team_b_with_user_id(
-        self, responses_id_security
-    ):
+    def test_check_user_access_team_a_to_team_b_with_user_id(self, responses_id_security):
         """Test that key from team A (without user_id) cannot access response from team B (with user_id)"""
         # Create a mock user from team A without user_id
         mock_auth_team_a = MagicMock()
@@ -265,9 +229,7 @@ class TestCheckUserAccessToResponseId:
 
         assert result is True
 
-    def test_check_user_access_admin_can_access_any_response(
-        self, responses_id_security
-    ):
+    def test_check_user_access_admin_can_access_any_response(self, responses_id_security):
         """Test that proxy admin can access any response ID"""
         from litellm.proxy._types import LitellmUserRoles
 
@@ -286,9 +248,7 @@ class TestCheckUserAccessToResponseId:
 
         assert result is True
 
-    def test_check_user_access_security_disabled(
-        self, responses_id_security, mock_user_api_key_dict
-    ):
+    def test_check_user_access_security_disabled(self, responses_id_security, mock_user_api_key_dict):
         """Test that when security is disabled, any user can access any response"""
         with patch(
             "litellm.proxy.proxy_server.general_settings",
@@ -314,9 +274,7 @@ class TestAsyncPreCallHook:
         """Test pre-call hook decrypts previous_response_id for aresponses call"""
         data = {"previous_response_id": "resp_encrypted_value"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -332,15 +290,11 @@ class TestAsyncPreCallHook:
                 assert result["previous_response_id"] == "resp_original_123"
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_aget_responses(
-        self, responses_id_security, mock_user_api_key_dict, mock_cache
-    ):
+    async def test_async_pre_call_hook_aget_responses(self, responses_id_security, mock_user_api_key_dict, mock_cache):
         """Test pre-call hook decrypts response_id for aget_responses call"""
         data = {"response_id": "resp_encrypted_456"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -356,9 +310,7 @@ class TestAsyncPreCallHook:
                 assert result["response_id"] == "resp_original_456"
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_team_a_accessing_team_b_response(
-        self, responses_id_security, mock_cache
-    ):
+    async def test_async_pre_call_hook_team_a_accessing_team_b_response(self, responses_id_security, mock_cache):
         """Test pre-call hook prevents team A from accessing team B response"""
         # Create a mock user from team A
         mock_auth_team_a = MagicMock()
@@ -368,9 +320,7 @@ class TestAsyncPreCallHook:
 
         data = {"response_id": "resp_encrypted_team_b"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -389,9 +339,7 @@ class TestAsyncPreCallHook:
                     assert "team" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_team_a_accessing_team_b_with_user(
-        self, responses_id_security, mock_cache
-    ):
+    async def test_async_pre_call_hook_team_a_accessing_team_b_with_user(self, responses_id_security, mock_cache):
         """Test pre-call hook prevents team A (no user) from accessing team B response (with user)"""
         # Create a mock user from team A without user_id
         mock_auth_team_a = MagicMock()
@@ -401,9 +349,7 @@ class TestAsyncPreCallHook:
 
         data = {"response_id": "resp_encrypted_team_b_with_user"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -423,9 +369,7 @@ class TestAsyncPreCallHook:
                     assert "forbidden" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_same_team_access(
-        self, responses_id_security, mock_cache
-    ):
+    async def test_async_pre_call_hook_same_team_access(self, responses_id_security, mock_cache):
         """Test pre-call hook allows team A to access their own team's response"""
         # Create a mock user from team A
         mock_auth_team_a = MagicMock()
@@ -435,9 +379,7 @@ class TestAsyncPreCallHook:
 
         data = {"response_id": "resp_encrypted_team_a"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -453,9 +395,7 @@ class TestAsyncPreCallHook:
                 assert result["response_id"] == "resp_original_team_a"
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_adelete_responses_team_security(
-        self, responses_id_security, mock_cache
-    ):
+    async def test_async_pre_call_hook_adelete_responses_team_security(self, responses_id_security, mock_cache):
         """Test pre-call hook prevents team A from deleting team B's response"""
         # Create a mock user from team A
         mock_auth_team_a = MagicMock()
@@ -465,9 +405,7 @@ class TestAsyncPreCallHook:
 
         data = {"response_id": "resp_encrypted_team_b"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -486,9 +424,7 @@ class TestAsyncPreCallHook:
                     assert "team" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_acancel_responses_team_security(
-        self, responses_id_security, mock_cache
-    ):
+    async def test_async_pre_call_hook_acancel_responses_team_security(self, responses_id_security, mock_cache):
         """Test pre-call hook prevents team A from canceling team B's response"""
         # Create a mock user from team A
         mock_auth_team_a = MagicMock()
@@ -498,9 +434,7 @@ class TestAsyncPreCallHook:
 
         data = {"response_id": "resp_encrypted_team_b"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -518,16 +452,13 @@ class TestAsyncPreCallHook:
                     assert exc_info.value.status_code == 403
                     assert "team" in exc_info.value.detail.lower()
 
-
     @pytest.mark.asyncio
     async def test_async_pre_call_hook_alist_input_items_decrypts_response_id(
         self, responses_id_security, mock_user_api_key_dict, mock_cache
     ):
         data = {"response_id": "resp_encrypted_789"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -544,9 +475,7 @@ class TestAsyncPreCallHook:
                 assert result["response_id"] == "resp_original_789"
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_alist_input_items_team_security(
-        self, responses_id_security, mock_cache
-    ):
+    async def test_async_pre_call_hook_alist_input_items_team_security(self, responses_id_security, mock_cache):
         mock_auth_team_a = MagicMock()
         mock_auth_team_a.user_id = None
         mock_auth_team_a.team_id = "team-a"
@@ -554,9 +483,7 @@ class TestAsyncPreCallHook:
 
         data = {"response_id": "resp_encrypted_team_b"}
 
-        with patch.object(
-            responses_id_security, "_is_encrypted_response_id", return_value=True
-        ):
+        with patch.object(responses_id_security, "_is_encrypted_response_id", return_value=True):
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
@@ -579,27 +506,19 @@ class TestAsyncPostCallSuccessHook:
     """Test async_post_call_success_hook function"""
 
     @pytest.mark.asyncio
-    async def test_async_post_call_success_hook_encrypts_response(
-        self, responses_id_security, mock_user_api_key_dict
-    ):
+    async def test_async_post_call_success_hook_encrypts_response(self, responses_id_security, mock_user_api_key_dict):
         """Test post-call hook encrypts ResponsesAPIResponse"""
-        mock_response = ResponsesAPIResponse(
-            id="resp_789", created_at=1234567890, output=[], status="completed"
-        )
+        mock_response = ResponsesAPIResponse(id="resp_789", created_at=1234567890, output=[], status="completed")
         data = {}
 
-        with patch.object(
-            responses_id_security, "_encrypt_response_id", return_value=mock_response
-        ) as mock_encrypt:
+        with patch.object(responses_id_security, "_encrypt_response_id", return_value=mock_response) as mock_encrypt:
             result = await responses_id_security.async_post_call_success_hook(
                 data=data,
                 user_api_key_dict=mock_user_api_key_dict,
                 response=mock_response,
             )
 
-            mock_encrypt.assert_called_once_with(
-                mock_response, mock_user_api_key_dict, request_cache=None
-            )
+            mock_encrypt.assert_called_once_with(mock_response, mock_user_api_key_dict, request_cache=None)
             assert result == mock_response
 
     @pytest.mark.asyncio

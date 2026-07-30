@@ -510,11 +510,7 @@ def _thinking_first_chunks() -> List[MagicMock]:
 
 
 def _assert_thinking_first_block_opens_at_index_zero(events: List[dict]) -> None:
-    starts = [
-        (e["index"], e["content_block"]["type"])
-        for e in events
-        if e.get("type") == "content_block_start"
-    ]
+    starts = [(e["index"], e["content_block"]["type"]) for e in events if e.get("type") == "content_block_start"]
     assert starts == [(0, "thinking"), (1, "text")], starts
     assert "" not in _text_deltas(events)
     assert _thinking_deltas(events) == ["Let me think", "about it."]

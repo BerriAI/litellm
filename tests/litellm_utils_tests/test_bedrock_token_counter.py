@@ -15,9 +15,7 @@ from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
@@ -51,9 +49,7 @@ class TestBedrockTokenCounter(BaseTokenCounterTest):
         aws_region = os.getenv("AWS_REGION_NAME", "us-east-1")
 
         if not aws_access_key or not aws_secret_key:
-            pytest.skip(
-                "AWS credentials not set (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)"
-            )
+            pytest.skip("AWS credentials not set (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)")
 
         return {
             "litellm_params": {
@@ -91,25 +87,15 @@ class TestBedrockTokenCounter(BaseTokenCounterTest):
         print(f"Token count result: {result}")
 
         assert result is not None, "Token counter should return a result"
-        assert isinstance(
-            result, TokenCountResponse
-        ), "Result should be TokenCountResponse"
+        assert isinstance(result, TokenCountResponse), "Result should be TokenCountResponse"
 
         # Check if the model doesn't support token counting
-        if result.error and "doesn't support counting tokens" in str(
-            result.error_message
-        ):
-            pytest.skip(
-                f"Model {model} doesn't support token counting: {result.error_message}"
-            )
+        if result.error and "doesn't support counting tokens" in str(result.error_message):
+            pytest.skip(f"Model {model} doesn't support token counting: {result.error_message}")
 
-        assert (
-            result.total_tokens > 0
-        ), f"Token count should be > 0, got {result.total_tokens}"
+        assert result.total_tokens > 0, f"Token count should be > 0, got {result.total_tokens}"
         assert result.tokenizer_type is not None, "tokenizer_type should be set"
-        assert (
-            result.error is not True
-        ), f"Token counting should not error: {result.error_message}"
+        assert result.error is not True, f"Token counting should not error: {result.error_message}"
 
 
 class TestBedrockCountTokensEndpoint:
@@ -128,10 +114,7 @@ class TestBedrockCountTokensEndpoint:
             model="amazon.nova-lite-v1:0",
             aws_region_name="us-east-1",
         )
-        assert (
-            url
-            == "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.nova-lite-v1%3A0/count-tokens"
-        )
+        assert url == "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.nova-lite-v1%3A0/count-tokens"
 
     def test_api_base_overrides_default(self):
         handler = self._make_handler()
@@ -145,9 +128,7 @@ class TestBedrockCountTokensEndpoint:
 
     def test_aws_bedrock_runtime_endpoint_overrides_default(self):
         handler = self._make_handler()
-        custom_endpoint = (
-            "https://vpce-yyy.bedrock-runtime.eu-west-1.vpce.amazonaws.com"
-        )
+        custom_endpoint = "https://vpce-yyy.bedrock-runtime.eu-west-1.vpce.amazonaws.com"
         url = handler.get_bedrock_count_tokens_endpoint(
             model="amazon.nova-lite-v1:0",
             aws_region_name="eu-west-1",
@@ -177,6 +158,4 @@ class TestBedrockCountTokensEndpoint:
             model="amazon.nova-lite-v1:0",
             aws_region_name="us-west-2",
         )
-        assert url.startswith(
-            "https://env-endpoint.bedrock-runtime.us-west-2.amazonaws.com"
-        )
+        assert url.startswith("https://env-endpoint.bedrock-runtime.us-west-2.amazonaws.com")

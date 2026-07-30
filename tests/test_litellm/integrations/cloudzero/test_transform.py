@@ -93,14 +93,9 @@ class TestCBFTransformer:
         """Test _create_cbf_record method with valid row data."""
         transformer = CBFTransformer()
         with (
-            patch.object(
-                transformer.czrn_generator, "create_from_litellm_data"
-            ) as mock_czrn,
-            patch.object(
-                transformer.czrn_generator, "extract_components"
-            ) as mock_extract,
+            patch.object(transformer.czrn_generator, "create_from_litellm_data") as mock_czrn,
+            patch.object(transformer.czrn_generator, "extract_components") as mock_extract,
         ):
-
             mock_czrn.return_value = "test-czrn"
             mock_extract.return_value = (
                 "service",
@@ -139,14 +134,9 @@ class TestCBFTransformer:
         """Test that user_email field is emitted as a resource tag when present."""
         transformer = CBFTransformer()
         with (
-            patch.object(
-                transformer.czrn_generator, "create_from_litellm_data"
-            ) as mock_czrn,
-            patch.object(
-                transformer.czrn_generator, "extract_components"
-            ) as mock_extract,
+            patch.object(transformer.czrn_generator, "create_from_litellm_data") as mock_czrn,
+            patch.object(transformer.czrn_generator, "extract_components") as mock_extract,
         ):
-
             mock_czrn.return_value = "test-czrn"
             mock_extract.return_value = (
                 "service",
@@ -177,14 +167,9 @@ class TestCBFTransformer:
         """Test that empty user_email values are not added as resource tags."""
         transformer = CBFTransformer()
         with (
-            patch.object(
-                transformer.czrn_generator, "create_from_litellm_data"
-            ) as mock_czrn,
-            patch.object(
-                transformer.czrn_generator, "extract_components"
-            ) as mock_extract,
+            patch.object(transformer.czrn_generator, "create_from_litellm_data") as mock_czrn,
+            patch.object(transformer.czrn_generator, "extract_components") as mock_extract,
         ):
-
             mock_czrn.return_value = "test-czrn"
             mock_extract.return_value = (
                 "service",
@@ -215,14 +200,9 @@ class TestCBFTransformer:
         """Test _create_cbf_record method with minimal row data."""
         transformer = CBFTransformer()
         with (
-            patch.object(
-                transformer.czrn_generator, "create_from_litellm_data"
-            ) as mock_czrn,
-            patch.object(
-                transformer.czrn_generator, "extract_components"
-            ) as mock_extract,
+            patch.object(transformer.czrn_generator, "create_from_litellm_data") as mock_czrn,
+            patch.object(transformer.czrn_generator, "extract_components") as mock_extract,
         ):
-
             mock_czrn.return_value = "test-czrn"
             mock_extract.return_value = (
                 "service",

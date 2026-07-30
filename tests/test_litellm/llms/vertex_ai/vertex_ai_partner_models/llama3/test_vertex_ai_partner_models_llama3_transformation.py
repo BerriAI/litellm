@@ -6,9 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
     VertexAILlama3Config,
@@ -55,9 +53,7 @@ class TestVertexAILlama3Config:
             }
         ]
         optional_params = {"tools": tools}
-        response = config._transform_choices(
-            choices=choices, json_mode=False, optional_params=optional_params
-        )
+        response = config._transform_choices(choices=choices, json_mode=False, optional_params=optional_params)
         assert response[0].message.tool_calls is not None
         assert response[0].finish_reason == "tool_calls"
 

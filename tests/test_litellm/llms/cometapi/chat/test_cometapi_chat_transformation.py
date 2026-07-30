@@ -9,9 +9,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.cometapi.chat.transformation import (
     CometAPIChatCompletionStreamingHandler,
@@ -22,9 +20,7 @@ from litellm.llms.cometapi.common_utils import CometAPIException
 
 class TestCometAPIChatCompletionStreamingHandler:
     def test_chunk_parser_successful(self):
-        handler = CometAPIChatCompletionStreamingHandler(
-            streaming_response=None, sync_stream=True
-        )
+        handler = CometAPIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
         # Test input chunk
         chunk = {
@@ -32,9 +28,7 @@ class TestCometAPIChatCompletionStreamingHandler:
             "created": 1234567890,
             "model": "gpt-3.5-turbo",
             "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
-            "choices": [
-                {"delta": {"content": "test content", "reasoning": "test reasoning"}}
-            ],
+            "choices": [{"delta": {"content": "test content", "reasoning": "test reasoning"}}],
         }
 
         # Parse chunk
@@ -52,9 +46,7 @@ class TestCometAPIChatCompletionStreamingHandler:
         assert result.choices[0]["delta"]["reasoning_content"] == "test reasoning"
 
     def test_chunk_parser_error_response(self):
-        handler = CometAPIChatCompletionStreamingHandler(
-            streaming_response=None, sync_stream=True
-        )
+        handler = CometAPIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
         # Test error chunk
         error_chunk = {
@@ -72,9 +64,7 @@ class TestCometAPIChatCompletionStreamingHandler:
         assert exc_info.value.status_code == 400
 
     def test_chunk_parser_key_error(self):
-        handler = CometAPIChatCompletionStreamingHandler(
-            streaming_response=None, sync_stream=True
-        )
+        handler = CometAPIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
         # Test invalid chunk missing required fields
         invalid_chunk = {"incomplete": "data"}
@@ -101,9 +91,7 @@ class TestCometAPIConfig:
         )
 
         assert transformed_request["model"] == "cometapi/gpt-3.5-turbo"
-        assert transformed_request["messages"] == [
-            {"role": "user", "content": "Hello, world!"}
-        ]
+        assert transformed_request["messages"] == [{"role": "user", "content": "Hello, world!"}]
 
     def test_transform_request_with_extra_body(self):
         """Test request transformation with extra_body parameters"""
@@ -119,9 +107,7 @@ class TestCometAPIConfig:
 
         # Validate that extra_body parameters are merged into the request
         assert transformed_request["custom_param"] == "custom_value"
-        assert transformed_request["messages"] == [
-            {"role": "user", "content": "Hello, world!"}
-        ]
+        assert transformed_request["messages"] == [{"role": "user", "content": "Hello, world!"}]
 
     def test_cache_control_flag_removal(self):
         """Test cache control flag removal from messages"""
@@ -191,11 +177,7 @@ def test_cometapi_integration():
     from litellm import completion
 
     # Try to get API key from multiple environment variables
-    api_key = (
-        os.getenv("COMETAPI_API_KEY")
-        or os.getenv("COMETAPI_KEY")
-        or os.getenv("COMET_API_KEY")
-    )
+    api_key = os.getenv("COMETAPI_API_KEY") or os.getenv("COMETAPI_KEY") or os.getenv("COMET_API_KEY")
 
     if not api_key:
         pytest.skip("COMETAPI_API_KEY not set - skipping integration test")
@@ -225,19 +207,13 @@ def test_cometapi_streaming_integration():
     from litellm import completion
 
     # Try to get API key from multiple environment variables
-    api_key = (
-        os.getenv("COMETAPI_API_KEY")
-        or os.getenv("COMETAPI_KEY")
-        or os.getenv("COMET_API_KEY")
-    )
+    api_key = os.getenv("COMETAPI_API_KEY") or os.getenv("COMETAPI_KEY") or os.getenv("COMET_API_KEY")
 
     if not api_key:
         pytest.skip("COMETAPI_API_KEY not set - skipping streaming integration test")
 
     try:
-        print(
-            f"🔍 Testing streaming with API key: {api_key[:6]}...{api_key[-4:]} (length: {len(api_key)})"
-        )
+        print(f"🔍 Testing streaming with API key: {api_key[:6]}...{api_key[-4:]} (length: {len(api_key)})")
         print(f"🔍 API base URL: {os.getenv('COMETAPI_API_BASE', 'default')}")
 
         # test streaming API call
@@ -288,11 +264,7 @@ def test_cometapi_with_custom_base_url():
     import os
     from litellm import completion
 
-    api_key = (
-        os.getenv("COMETAPI_API_KEY")
-        or os.getenv("COMETAPI_KEY")
-        or os.getenv("COMET_API_KEY")
-    )
+    api_key = os.getenv("COMETAPI_API_KEY") or os.getenv("COMETAPI_KEY") or os.getenv("COMET_API_KEY")
 
     custom_base_url = os.getenv("COMETAPI_API_BASE", "https://api.cometapi.com/v1")
 

@@ -54,9 +54,7 @@ class TestReasoningContentStreaming:
         )
 
         # Execute
-        transformed_chunk = (
-            iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
-        )
+        transformed_chunk = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
 
         # Assert
         assert transformed_chunk.delta == "Let me think about this problem..."
@@ -92,9 +90,7 @@ class TestReasoningContentStreaming:
         )
 
         # Execute
-        transformed_chunk = (
-            iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
-        )
+        transformed_chunk = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
 
         # Assert
         assert transformed_chunk.delta == "First, let me analyze..."
@@ -129,9 +125,7 @@ class TestReasoningContentStreaming:
         )
 
         # Execute
-        transformed_chunk = (
-            iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
-        )
+        transformed_chunk = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
 
         # Assert
         assert transformed_chunk.delta == "Regular content only"
@@ -163,26 +157,23 @@ class TestReasoningContentFinalResponse:
         )
 
         # Execute
-        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-            request_input="Test input",
-            responses_api_request={},
-            chat_completion_response=response,
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="Test input",
+                responses_api_request={},
+                chat_completion_response=response,
+            )
         )
 
         # Assert
         assert hasattr(responses_api_response, "output")
         assert len(responses_api_response.output) > 0
 
-        reasoning_items = [
-            item for item in responses_api_response.output if item.type == "reasoning"
-        ]
+        reasoning_items = [item for item in responses_api_response.output if item.type == "reasoning"]
         assert len(reasoning_items) > 0, "No reasoning item found in output"
 
         reasoning_item = reasoning_items[0]
-        assert (
-            reasoning_item.content[0].text
-            == "Let me think step by step about this problem..."
-        )
+        assert reasoning_item.content[0].text == "Let me think step by step about this problem..."
 
     def test_no_reasoning_content_in_response(self):
         """Test handling when no reasoning content in response"""
@@ -205,19 +196,17 @@ class TestReasoningContentFinalResponse:
         )
 
         # Execute
-        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-            request_input="Test input",
-            responses_api_request={},
-            chat_completion_response=response,
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="Test input",
+                responses_api_request={},
+                chat_completion_response=response,
+            )
         )
 
         # Assert
-        reasoning_items = [
-            item for item in responses_api_response.output if item.type == "reasoning"
-        ]
-        assert (
-            len(reasoning_items) == 0
-        ), "Should have no reasoning items when no reasoning content present"
+        reasoning_items = [item for item in responses_api_response.output if item.type == "reasoning"]
+        assert len(reasoning_items) == 0, "Should have no reasoning items when no reasoning content present"
 
     def test_multiple_choices_with_reasoning(self):
         """Test handling multiple choices, first with reasoning content"""
@@ -250,16 +239,16 @@ class TestReasoningContentFinalResponse:
         )
 
         # Execute
-        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-            request_input="Test input",
-            responses_api_request={},
-            chat_completion_response=response,
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="Test input",
+                responses_api_request={},
+                chat_completion_response=response,
+            )
         )
 
         # Assert
-        reasoning_items = [
-            item for item in responses_api_response.output if item.type == "reasoning"
-        ]
+        reasoning_items = [item for item in responses_api_response.output if item.type == "reasoning"]
         assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
         assert reasoning_items[0].content[0].text == "Reasoning for first answer"
 

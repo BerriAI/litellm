@@ -160,12 +160,8 @@ class TestLevoIntegration(unittest.TestCase):
             "LEVOAI_COLLECTOR_URL": "https://collector.levo.ai",
         },
     )
-    @pytest.mark.skipif(
-        not OPENTELEMETRY_AVAILABLE, reason="OpenTelemetry packages not installed"
-    )
-    @patch(
-        "litellm.integrations.opentelemetry.OpenTelemetry._init_otel_logger_on_litellm_proxy"
-    )
+    @pytest.mark.skipif(not OPENTELEMETRY_AVAILABLE, reason="OpenTelemetry packages not installed")
+    @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_otel_logger_on_litellm_proxy")
     @pytest.mark.asyncio
     async def test_levo_logger_health_check_healthy(self, mock_init_proxy):
         """Test health check returns healthy status when config is valid."""
@@ -183,9 +179,7 @@ class TestLevoIntegration(unittest.TestCase):
         tracer_provider = TracerProvider()
         tracer_provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
 
-        levo_logger = LevoLogger(
-            config=otel_config, callback_name="levo", tracer_provider=tracer_provider
-        )
+        levo_logger = LevoLogger(config=otel_config, callback_name="levo", tracer_provider=tracer_provider)
 
         # Run health check
         result = await levo_logger.async_health_check()
@@ -210,12 +204,8 @@ class TestLevoIntegration(unittest.TestCase):
             "LEVOAI_COLLECTOR_URL": "https://collector.levo.ai",
         },
     )
-    @pytest.mark.skipif(
-        not OPENTELEMETRY_AVAILABLE, reason="OpenTelemetry packages not installed"
-    )
-    @patch(
-        "litellm.integrations.opentelemetry.OpenTelemetry._init_otel_logger_on_litellm_proxy"
-    )
+    @pytest.mark.skipif(not OPENTELEMETRY_AVAILABLE, reason="OpenTelemetry packages not installed")
+    @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_otel_logger_on_litellm_proxy")
     def test_levo_logger_callback_name(self, mock_init_proxy):
         """Test that callback_name is properly set and used."""
         # Mock the proxy initialization to avoid importing proxy code
@@ -232,9 +222,7 @@ class TestLevoIntegration(unittest.TestCase):
         tracer_provider = TracerProvider()
         tracer_provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
 
-        levo_logger = LevoLogger(
-            config=otel_config, callback_name="levo", tracer_provider=tracer_provider
-        )
+        levo_logger = LevoLogger(config=otel_config, callback_name="levo", tracer_provider=tracer_provider)
 
         # Verify callback_name attribute
         self.assertEqual(levo_logger.callback_name, "levo")

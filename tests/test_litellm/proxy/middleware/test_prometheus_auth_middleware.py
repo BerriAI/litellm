@@ -141,9 +141,7 @@ def test_invalid_auth_metrics_includes_optout_hint(app_with_middleware, monkeypa
     assert "false" in response.text
 
 
-def test_metrics_auth_uses_real_auth_when_route_is_public(
-    app_with_middleware, monkeypatch
-):
+def test_metrics_auth_uses_real_auth_when_route_is_public(app_with_middleware, monkeypatch):
     """
     Regression: /metrics is statically public, but require_auth_for_metrics_endpoint
     must still force the real auth path.

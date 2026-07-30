@@ -26,7 +26,8 @@ import litellm
 from tests._live_test_helpers import _skip_live_prompt_caching_test
 
 # Large document for caching tests (needs 1024+ tokens for Claude models)
-LARGE_DOCUMENT_FOR_CACHING = """
+LARGE_DOCUMENT_FOR_CACHING = (
+    """
 This is a comprehensive legal agreement between Party A and Party B.
 
 ARTICLE 1: DEFINITIONS
@@ -78,7 +79,9 @@ ARTICLE 9: GENERAL PROVISIONS
 9.5 Waiver of any provision shall not constitute ongoing waiver.
 
 IN WITNESS WHEREOF, the parties have executed this Agreement.
-""" * 8  # Repeat to ensure we have enough tokens (need 1024+ for Claude models)
+"""
+    * 8
+)  # Repeat to ensure we have enough tokens (need 1024+ for Claude models)
 
 
 class BaseAnthropicMessagesPromptCachingTest(ABC):
@@ -179,9 +182,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
             max_tokens=100,
         )
 
-        print(
-            f"First response usage: {json.dumps(response1.get('usage', {}), indent=2)}"
-        )
+        print(f"First response usage: {json.dumps(response1.get('usage', {}), indent=2)}")
 
         # Second call - should read from cache
         response2 = await litellm.anthropic.messages.acreate(
@@ -190,17 +191,14 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
             max_tokens=100,
         )
 
-        print(
-            f"Second response usage: {json.dumps(response2.get('usage', {}), indent=2)}"
-        )
+        print(f"Second response usage: {json.dumps(response2.get('usage', {}), indent=2)}")
 
         usage = response2.get("usage", {})
         cache_read = usage.get("cache_read_input_tokens", 0)
 
         # Second call should read from cache
         assert cache_read > 0, (
-            f"Expected cache_read_input_tokens > 0 on second call, "
-            f"but got {cache_read}. Full usage: {usage}"
+            f"Expected cache_read_input_tokens > 0 on second call, but got {cache_read}. Full usage: {usage}"
         )
 
     @pytest.mark.asyncio
@@ -292,9 +290,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
             if isinstance(chunk, bytes):
                 json_chunks = self._parse_sse_chunks(chunk)
                 for json_data in json_chunks:
-                    print(
-                        f"Parsed chunk: {json.dumps(json_data, indent=2, default=str)}"
-                    )
+                    print(f"Parsed chunk: {json.dumps(json_data, indent=2, default=str)}")
 
                     # Look for message_delta with usage (final chunk)
                     if json_data.get("type") == "message_delta":
@@ -305,9 +301,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
                                 cache_creation,
                                 usage.get("cache_creation_input_tokens", 0),
                             )
-                            cache_read = max(
-                                cache_read, usage.get("cache_read_input_tokens", 0)
-                            )
+                            cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
                             print(
                                 f"Found usage in message_delta: cache_creation={cache_creation}, cache_read={cache_read}"
                             )
@@ -322,9 +316,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
                                 cache_creation,
                                 usage.get("cache_creation_input_tokens", 0),
                             )
-                            cache_read = max(
-                                cache_read, usage.get("cache_read_input_tokens", 0)
-                            )
+                            cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
                             print(
                                 f"Found usage in message_start: cache_creation={cache_creation}, cache_read={cache_read}"
                             )
@@ -335,24 +327,16 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
                     usage = chunk.get("usage", {})
                     if usage:
                         found_usage = True
-                        cache_creation = max(
-                            cache_creation, usage.get("cache_creation_input_tokens", 0)
-                        )
-                        cache_read = max(
-                            cache_read, usage.get("cache_read_input_tokens", 0)
-                        )
+                        cache_creation = max(cache_creation, usage.get("cache_creation_input_tokens", 0))
+                        cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
 
                 if chunk.get("type") == "message_start":
                     message = chunk.get("message", {})
                     usage = message.get("usage", {})
                     if usage:
                         found_usage = True
-                        cache_creation = max(
-                            cache_creation, usage.get("cache_creation_input_tokens", 0)
-                        )
-                        cache_read = max(
-                            cache_read, usage.get("cache_read_input_tokens", 0)
-                        )
+                        cache_creation = max(cache_creation, usage.get("cache_creation_input_tokens", 0))
+                        cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
 
         assert found_usage, "Expected to find usage in streaming response"
 
@@ -399,40 +383,27 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
             if isinstance(chunk, bytes):
                 json_chunks = self._parse_sse_chunks(chunk)
                 for json_data in json_chunks:
-                    print(
-                        f"Second call parsed chunk: {json.dumps(json_data, indent=2, default=str)}"
-                    )
+                    print(f"Second call parsed chunk: {json.dumps(json_data, indent=2, default=str)}")
 
                     if json_data.get("type") == "message_delta":
                         usage = json_data.get("usage", {})
-                        cache_read = max(
-                            cache_read, usage.get("cache_read_input_tokens", 0)
-                        )
+                        cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
 
                     if json_data.get("type") == "message_start":
                         message = json_data.get("message", {})
                         usage = message.get("usage", {})
-                        cache_read = max(
-                            cache_read, usage.get("cache_read_input_tokens", 0)
-                        )
+                        cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
             elif isinstance(chunk, dict):
                 if chunk.get("type") == "message_delta":
                     usage = chunk.get("usage", {})
-                    cache_read = max(
-                        cache_read, usage.get("cache_read_input_tokens", 0)
-                    )
+                    cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
 
                 if chunk.get("type") == "message_start":
                     message = chunk.get("message", {})
                     usage = message.get("usage", {})
-                    cache_read = max(
-                        cache_read, usage.get("cache_read_input_tokens", 0)
-                    )
+                    cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
 
-        assert cache_read > 0, (
-            f"Expected cache_read_input_tokens > 0 on second streaming call, "
-            f"but got {cache_read}"
-        )
+        assert cache_read > 0, f"Expected cache_read_input_tokens > 0 on second streaming call, but got {cache_read}"
 
     @pytest.mark.asyncio
     async def test_prompt_caching_message_start_indicates_caching_support(self):
@@ -474,9 +445,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
                         message = json_data.get("message", {})
                         usage = message.get("usage", {})
 
-                        print(
-                            f"message_start usage: {json.dumps(usage, indent=2, default=str)}"
-                        )
+                        print(f"message_start usage: {json.dumps(usage, indent=2, default=str)}")
 
                         # Check that cache fields are present (even if 0)
                         if "cache_creation_input_tokens" in usage:
@@ -492,9 +461,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
                     message = chunk.get("message", {})
                     usage = message.get("usage", {})
 
-                    print(
-                        f"message_start usage: {json.dumps(usage, indent=2, default=str)}"
-                    )
+                    print(f"message_start usage: {json.dumps(usage, indent=2, default=str)}")
 
                     # Check that cache fields are present (even if 0)
                     if "cache_creation_input_tokens" in usage:
@@ -510,9 +477,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
                 break
 
         # Validate that message_start was found
-        assert (
-            message_start_found
-        ), "Expected to find message_start event in streaming response"
+        assert message_start_found, "Expected to find message_start event in streaming response"
 
         # Validate that cache fields are present in message_start
         assert message_start_has_cache_creation_field, (

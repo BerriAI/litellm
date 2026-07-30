@@ -31,9 +31,7 @@ def _payloads(n, message=None):
 def _raised_413():
     request = Request("POST", "https://example.com")
     response = Response(413, request=request, text="Payload Too Large")
-    return MaskedHTTPStatusError(
-        httpx.HTTPStatusError("413", request=request, response=response)
-    )
+    return MaskedHTTPStatusError(httpx.HTTPStatusError("413", request=request, response=response))
 
 
 def _make_send(max_ok, delivered, *, raise_413=True):
@@ -85,9 +83,7 @@ async def test_async_send_batch_keeps_events_appended_during_send(datadog_env):
                 status="info",
             )
         )
-        return Response(
-            202, request=Request("POST", "https://example.com"), text="Accepted"
-        )
+        return Response(202, request=Request("POST", "https://example.com"), text="Accepted")
 
     logger.async_send_compressed_data = AsyncMock(side_effect=_mock_send)
 
@@ -172,9 +168,7 @@ async def test_413_returned_response_also_splits(datadog_env):
 
     logger.log_queue = _payloads(4)
     delivered: list = []
-    logger.async_send_compressed_data = AsyncMock(
-        side_effect=_make_send(1, delivered, raise_413=False)
-    )
+    logger.async_send_compressed_data = AsyncMock(side_effect=_make_send(1, delivered, raise_413=False))
 
     await logger.async_send_batch()
 
@@ -186,9 +180,7 @@ def _make_recording_send(sent_batches, delivered):
     async def _send(data):
         sent_batches.append(list(data))
         delivered.extend(data)
-        return Response(
-            202, request=Request("POST", "https://example.com"), text="Accepted"
-        )
+        return Response(202, request=Request("POST", "https://example.com"), text="Accepted")
 
     return _send
 
@@ -206,18 +198,13 @@ async def test_oversized_payload_splits_before_any_send(datadog_env):
     logger.log_queue = list(events)
     sent_batches: list = []
     delivered: list = []
-    logger.async_send_compressed_data = AsyncMock(
-        side_effect=_make_recording_send(sent_batches, delivered)
-    )
+    logger.async_send_compressed_data = AsyncMock(side_effect=_make_recording_send(sent_batches, delivered))
 
     await logger.async_send_batch()
 
     assert delivered == events
     assert len(sent_batches) == 3
-    assert all(
-        len(safe_dumps(batch).encode("utf-8")) <= DD_MAX_PAYLOAD_SIZE_BYTES
-        for batch in sent_batches
-    )
+    assert all(len(safe_dumps(batch).encode("utf-8")) <= DD_MAX_PAYLOAD_SIZE_BYTES for batch in sent_batches)
     assert logger.log_queue == []
 
 
@@ -232,9 +219,7 @@ async def test_batch_over_max_event_count_splits_before_any_send(datadog_env):
     logger.log_queue = list(events)
     sent_batches: list = []
     delivered: list = []
-    logger.async_send_compressed_data = AsyncMock(
-        side_effect=_make_recording_send(sent_batches, delivered)
-    )
+    logger.async_send_compressed_data = AsyncMock(side_effect=_make_recording_send(sent_batches, delivered))
 
     await logger.async_send_batch()
 
@@ -281,9 +266,7 @@ async def test_partial_delivery_then_transient_error_requeues_only_undelivered(
         if messages == ['{"event": 2}', '{"event": 3}']:
             raise RuntimeError("transient network error")
         delivered.extend(messages)
-        return Response(
-            202, request=Request("POST", "https://example.com"), text="Accepted"
-        )
+        return Response(202, request=Request("POST", "https://example.com"), text="Accepted")
 
     logger.async_send_compressed_data = AsyncMock(side_effect=_send)
 
@@ -304,9 +287,7 @@ async def test_unexpected_non_202_status_requeues(datadog_env):
 
     logger.log_queue = _payloads(2)
     logger.async_send_compressed_data = AsyncMock(
-        return_value=Response(
-            200, request=Request("POST", "https://example.com"), text="OK"
-        )
+        return_value=Response(200, request=Request("POST", "https://example.com"), text="OK")
     )
 
     await logger.async_send_batch()

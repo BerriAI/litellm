@@ -64,9 +64,7 @@ class TestSharedSessionIntegration:
 
         # Mock the completion function to avoid actual API calls
         with patch("litellm.completion") as mock_completion:
-            mock_completion.return_value = {
-                "choices": [{"message": {"content": "test"}}]
-            }
+            mock_completion.return_value = {"choices": [{"message": {"content": "test"}}]}
 
             # This should not raise an error even though we can't make actual API calls
             try:
@@ -161,9 +159,7 @@ class TestSharedSessionUsage:
         expected_params = ["model", "messages", "shared_session"]
 
         for param in expected_params:
-            assert (
-                param in params
-            ), f"Parameter {param} not found in acompletion signature"
+            assert param in params, f"Parameter {param} not found in acompletion signature"
 
         # Verify shared_session is optional
         assert params["shared_session"].default is None

@@ -3,9 +3,7 @@ import pytest
 import sys
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.types.llms.bedrock import BedrockInvokeNovaRequest
 
@@ -36,17 +34,13 @@ class TestBedrockInvokeNovaJson(BaseLLMChatTest):
     @pytest.fixture(autouse=True)
     def skip_non_json_tests(self, request):
         if not "json" in request.function.__name__.lower():
-            pytest.skip(
-                f"Skipping non-JSON test: {request.function.__name__} does not contain 'json'"
-            )
+            pytest.skip(f"Skipping non-JSON test: {request.function.__name__} does not contain 'json'")
 
     def test_json_response_pydantic_obj(self):
         if os.environ.get("LITELLM_RUN_LIVE_BEDROCK_NOVA_JSON_TESTS") != "1":
             pytest.skip("Live Bedrock Nova response-schema E2E tests are opt-in")
         if os.environ.get("CASSETTE_REDIS_URL"):
-            pytest.skip(
-                "Live Bedrock Nova response-schema E2E tests cannot run under VCR replay"
-            )
+            pytest.skip("Live Bedrock Nova response-schema E2E tests cannot run under VCR replay")
         super().test_json_response_pydantic_obj()
 
 
@@ -140,10 +134,7 @@ def test_nova_invoke_streaming_chunk_parsing():
     assert result.choices[0].delta.content == ""
     assert result.choices[0].index == 0
     assert result.choices[0].delta.tool_calls is not None
-    assert (
-        result.choices[0].delta.tool_calls[0].function.arguments
-        == '{"location": "New York"}'
-    )
+    assert result.choices[0].delta.tool_calls[0].function.arguments == '{"location": "New York"}'
 
     # Test case 4: Stop reason in contentBlockDelta
     nova_stop_chunk = {

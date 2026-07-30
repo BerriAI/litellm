@@ -107,9 +107,7 @@ class TestWatsonxOrchestrateTransformation:
             "https://cpd.example.com/",
             "1769134113217795",
         )
-        assert (
-            url == "https://cpd.example.com/orchestrate/cpd/instances/1769134113217795"
-        )
+        assert url == "https://cpd.example.com/orchestrate/cpd/instances/1769134113217795"
 
     def test_extract_text_from_a2a_params(self):
         params = {
@@ -121,10 +119,7 @@ class TestWatsonxOrchestrateTransformation:
                 ],
             }
         }
-        assert (
-            WatsonxOrchestrateTransformation.extract_text_from_a2a_params(params)
-            == "Hello world"
-        )
+        assert WatsonxOrchestrateTransformation.extract_text_from_a2a_params(params) == "Hello world"
 
     def test_extract_text_from_a2a_params_ignores_non_text_parts_with_text(self):
         params = {
@@ -139,10 +134,7 @@ class TestWatsonxOrchestrateTransformation:
                 ],
             }
         }
-        assert (
-            WatsonxOrchestrateTransformation.extract_text_from_a2a_params(params)
-            == "Hello legacy empty-kind"
-        )
+        assert WatsonxOrchestrateTransformation.extract_text_from_a2a_params(params) == "Hello legacy empty-kind"
 
     def test_build_wxo_run_body_with_thread(self):
         body = WatsonxOrchestrateTransformation.build_wxo_run_body(
@@ -159,64 +151,35 @@ class TestWatsonxOrchestrateTransformation:
         "result,expected",
         [
             (
-                {
-                    "last_message": {
-                        "content": [{"type": "text", "text": "from last_message"}]
-                    }
-                },
+                {"last_message": {"content": [{"type": "text", "text": "from last_message"}]}},
                 "from last_message",
             ),
             (
-                {
-                    "result": {
-                        "data": {
-                            "message": {"content": [{"text": "from nested result"}]}
-                        }
-                    }
-                },
+                {"result": {"data": {"message": {"content": [{"text": "from nested result"}]}}}},
                 "from nested result",
             ),
             ({"results": "raw string"}, "raw string"),
         ],
     )
     def test_extract_text_from_wxo_result(self, result, expected):
-        assert (
-            WatsonxOrchestrateTransformation.extract_text_from_wxo_result(result)
-            == expected
-        )
+        assert WatsonxOrchestrateTransformation.extract_text_from_wxo_result(result) == expected
 
     def test_build_a2a_message_response(self):
-        out = WatsonxOrchestrateTransformation.build_a2a_message_response(
-            "req-1", "answer"
-        )
+        out = WatsonxOrchestrateTransformation.build_a2a_message_response("req-1", "answer")
         assert out["jsonrpc"] == "2.0"
         assert out["id"] == "req-1"
         assert out["result"]["kind"] == "message"
         assert out["result"]["parts"][0]["text"] == "answer"
 
     def test_extract_text_from_a2a_message_response(self):
-        envelope = WatsonxOrchestrateTransformation.build_a2a_message_response(
-            "req-1", "answer"
-        )
-        assert (
-            WatsonxOrchestrateTransformation.extract_text_from_a2a_message_response(
-                envelope
-            )
-            == "answer"
-        )
-        assert (
-            WatsonxOrchestrateTransformation.extract_text_from_a2a_message_response(
-                {"result": {}}
-            )
-            == ""
-        )
+        envelope = WatsonxOrchestrateTransformation.build_a2a_message_response("req-1", "answer")
+        assert WatsonxOrchestrateTransformation.extract_text_from_a2a_message_response(envelope) == "answer"
+        assert WatsonxOrchestrateTransformation.extract_text_from_a2a_message_response({"result": {}}) == ""
 
 
 def test_cp4d_token_ttl_from_absolute_expiration():
     wall = 1_750_000_000.0
-    assert (
-        WatsonxOrchestrateHandler._cp4d_token_ttl_seconds(1_750_003_600, wall) == 3600
-    )
+    assert WatsonxOrchestrateHandler._cp4d_token_ttl_seconds(1_750_003_600, wall) == 3600
     assert WatsonxOrchestrateHandler._cp4d_token_ttl_seconds(1_749_999_000, wall) == 0
 
 
@@ -229,9 +192,7 @@ async def test_accumulate_wxo_sse_text_ignores_non_dict_json_events():
             'data: {"results": "streamed text"}',
         ]
     )
-    assert await WatsonxOrchestrateHandler._accumulate_wxo_sse_text(response) == (
-        "streamed text"
-    )
+    assert await WatsonxOrchestrateHandler._accumulate_wxo_sse_text(response) == ("streamed text")
 
 
 @pytest.mark.asyncio
@@ -569,22 +530,15 @@ async def test_handle_streaming_falls_back_when_initial_post_fails(monkeypatch):
 
 
 def test_config_manager_returns_wxo_provider():
-    config = A2AProviderConfigManager.get_provider_config(
-        custom_llm_provider="watsonx_orchestrate"
-    )
+    config = A2AProviderConfigManager.get_provider_config(custom_llm_provider="watsonx_orchestrate")
     assert config is not None
     assert config.__class__.__name__ == "WatsonxOrchestrateA2AConfig"
 
 
 def test_wxo_dashboard_auth_fields():
-    fields_path = (
-        Path(__file__).resolve().parents[5]
-        / "litellm/proxy/public_endpoints/agent_create_fields.json"
-    )
+    fields_path = Path(__file__).resolve().parents[5] / "litellm/proxy/public_endpoints/agent_create_fields.json"
     agent_fields = json.loads(fields_path.read_text())
-    wxo_agent = next(
-        agent for agent in agent_fields if agent["agent_type"] == "watsonx_orchestrate"
-    )
+    wxo_agent = next(agent for agent in agent_fields if agent["agent_type"] == "watsonx_orchestrate")
     fields_by_key = {field["key"]: field for field in wxo_agent["credential_fields"]}
 
     assert fields_by_key["auth_mode"]["default_value"] == "cp4d"

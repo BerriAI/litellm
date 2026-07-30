@@ -111,9 +111,7 @@ async def test_invoke_agent_a2a_adds_litellm_data():
 
         MessageSendParams = make_mock_pydantic_class("MessageSendParams")
         SendMessageRequest = make_mock_pydantic_class("SendMessageRequest")
-        SendStreamingMessageRequest = make_mock_pydantic_class(
-            "SendStreamingMessageRequest"
-        )
+        SendStreamingMessageRequest = make_mock_pydantic_class("SendStreamingMessageRequest")
 
     # Create a mock module for a2a.types
     mock_a2a_types = MagicMock()
@@ -346,10 +344,9 @@ async def test_invoke_agent_a2a_injects_authenticated_key_hash_for_bridge():
             user_api_key_dict=mock_user_api_key_dict,
         )
 
-    assert (
-        captured.get("litellm_params", {}).get(A2A_USER_API_KEY_HASH_PARAM)
-        == mock_user_api_key_dict.api_key
-    ), "authenticated key hash was not forwarded to the completion bridge"
+    assert captured.get("litellm_params", {}).get(A2A_USER_API_KEY_HASH_PARAM) == mock_user_api_key_dict.api_key, (
+        "authenticated key hash was not forwarded to the completion bridge"
+    )
 
 
 def _make_agent_mock(url: str = "http://backend-agent:10001") -> MagicMock:
@@ -363,9 +360,7 @@ def _make_agent_mock(url: str = "http://backend-agent:10001") -> MagicMock:
     return agent
 
 
-def _make_request_mock(
-    method: str, params: dict, request_id: object = "req-1"
-) -> MagicMock:
+def _make_request_mock(method: str, params: dict, request_id: object = "req-1") -> MagicMock:
     req = MagicMock()
     req.headers = {}
     req.json = AsyncMock(
@@ -735,9 +730,7 @@ async def test_subscribe_to_task_calls_pre_call_hook():
             yield chunk
 
     mock_proxy_logging = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(
-        side_effect=lambda user_api_key_dict, data, call_type: data
-    )
+    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
     mock_proxy_logging.async_post_call_streaming_iterator_hook = _passthrough_iterator
     mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
 
@@ -793,9 +786,7 @@ async def test_subscribe_to_task_runs_post_call_streaming_guardrail():
             inspected.append(response)
             return response
 
-    guardrail = _RecordingGuardrail(
-        guardrail_name="record-a2a", default_on=True, event_hook="post_call"
-    )
+    guardrail = _RecordingGuardrail(guardrail_name="record-a2a", default_on=True, event_hook="post_call")
 
     agent = _make_agent_mock()
     mock_request = _make_request_mock("tasks/resubscribe", {"id": "task-1"})
@@ -845,8 +836,7 @@ async def test_subscribe_to_task_runs_post_call_streaming_guardrail():
             pass
 
     assert any("resubscribe-secret" in str(r) for r in inspected), (
-        "tasks/resubscribe streamed content was not passed to the post-call "
-        "streaming guardrail hook"
+        "tasks/resubscribe streamed content was not passed to the post-call streaming guardrail hook"
     )
 
 
@@ -873,9 +863,7 @@ async def test_task_method_failure_hook_uses_enriched_request_data():
     mock_handler.post = AsyncMock(side_effect=RuntimeError("upstream failed"))
 
     mock_proxy_logging = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(
-        side_effect=lambda user_api_key_dict, data, call_type: data
-    )
+    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
     mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
 
     with ExitStack() as stack:
@@ -911,9 +899,7 @@ async def test_task_method_failure_hook_uses_enriched_request_data():
 
     body = json.loads(response.body.decode())
     assert body["error"]["code"] == -32603
-    failure_data = mock_proxy_logging.post_call_failure_hook.await_args.kwargs[
-        "request_data"
-    ]
+    failure_data = mock_proxy_logging.post_call_failure_hook.await_args.kwargs["request_data"]
     assert failure_data.get("litellm_call_id")
     assert failure_data.get("agent_id") == "test-agent"
 
@@ -1000,10 +986,7 @@ async def test_get_agent_card_uses_proxy_base_url_when_set(monkeypatch):
 
     body = json.loads(response.body.decode())
     assert body["url"] == "https://litellm.example.com/a2a/test-agent"
-    assert (
-        body["supportedInterfaces"][0]["url"]
-        == "https://litellm.example.com/a2a/test-agent"
-    )
+    assert body["supportedInterfaces"][0]["url"] == "https://litellm.example.com/a2a/test-agent"
 
 
 @pytest.mark.asyncio
@@ -1053,9 +1036,7 @@ async def test_get_agent_card_0_3_card_with_a2a_version_1_0_header():
         "url": "http://backend-agent:10001",
         "version": "1.0.0",
         "capabilities": {"streaming": True},
-        "skills": [
-            {"id": "s1", "name": "skill one", "description": "d", "tags": ["t"]}
-        ],
+        "skills": [{"id": "s1", "name": "skill one", "description": "d", "tags": ["t"]}],
         "defaultInputModes": ["text"],
         "defaultOutputModes": ["text"],
     }
@@ -1078,9 +1059,7 @@ async def test_get_agent_card_0_3_card_with_a2a_version_1_0_header():
 
     body = json.loads(response.body.decode())
     assert "url" not in body
-    assert body["supportedInterfaces"][0]["url"] == (
-        "http://localhost:4000/a2a/test-agent"
-    )
+    assert body["supportedInterfaces"][0]["url"] == ("http://localhost:4000/a2a/test-agent")
 
 
 @pytest.mark.asyncio
@@ -1149,9 +1128,7 @@ def test_build_merged_agent_card_uses_proxy_base_url_for_supported_interfaces(
         http_request=mock_request,
     )
 
-    assert merged["supportedInterfaces"][0]["url"] == (
-        "https://litellm.example.com/a2a/jenkins_agent"
-    )
+    assert merged["supportedInterfaces"][0]["url"] == ("https://litellm.example.com/a2a/jenkins_agent")
 
 
 @pytest.mark.asyncio
@@ -1195,9 +1172,7 @@ async def test_unknown_method_returns_jsonrpc_error():
         ("GetExtendedAgentCard", "agent/getAuthenticatedExtendedCard"),
     ],
 )
-async def test_pascal_method_names_normalize_to_wire_format(
-    pascal_method: str, expected_wire_method: str
-):
+async def test_pascal_method_names_normalize_to_wire_format(pascal_method: str, expected_wire_method: str):
     from litellm.proxy._types import UserAPIKeyAuth
 
     agent = _make_agent_mock()
@@ -1318,9 +1293,7 @@ async def test_handle_stream_message_rejects_invalid_params_with_32602():
         params={"message": 12345},
     )
     chunks = [chunk async for chunk in response.body_iterator]
-    body = "".join(
-        chunk.decode() if isinstance(chunk, bytes) else chunk for chunk in chunks
-    )
+    body = "".join(chunk.decode() if isinstance(chunk, bytes) else chunk for chunk in chunks)
     payload = json.loads(body.strip())
     assert payload["error"]["code"] == -32602
     assert payload["id"] == "req-1"
@@ -1424,10 +1397,7 @@ def test_normalize_response_keeps_wire_format_for_0_3():
             "role": "agent",
         },
     }
-    assert (
-        normalize_jsonrpc_response(wire_response, "0.3", method="message/send")
-        is wire_response
-    )
+    assert normalize_jsonrpc_response(wire_response, "0.3", method="message/send") is wire_response
 
 
 @pytest.mark.asyncio
@@ -1449,9 +1419,7 @@ async def test_task_method_upstream_jsonrpc_error_on_http_4xx_is_relayed():
     mock_http_response = MagicMock()
     mock_http_response.json.return_value = upstream_error
     mock_http_response.is_success = False
-    mock_http_response.raise_for_status = MagicMock(
-        side_effect=Exception("404 Not Found")
-    )
+    mock_http_response.raise_for_status = MagicMock(side_effect=Exception("404 Not Found"))
 
     mock_handler = MagicMock()
     mock_handler.post = AsyncMock(return_value=mock_http_response)
@@ -1495,9 +1463,7 @@ async def test_subscribe_to_task_upstream_error_yields_jsonrpc_error_event():
     mock_resp.is_success = False
     mock_resp.status_code = 404
     mock_resp.reason_phrase = "Not Found"
-    mock_resp.aread = AsyncMock(
-        return_value=b'{"jsonrpc":"2.0","error":{"code":-32001,"message":"Task not found"}}'
-    )
+    mock_resp.aread = AsyncMock(return_value=b'{"jsonrpc":"2.0","error":{"code":-32001,"message":"Task not found"}}')
     mock_resp.aclose = AsyncMock()
 
     mock_async_client = MagicMock()
@@ -1589,9 +1555,7 @@ async def test_task_methods_forward_caller_identity_headers():
     }
     agent = _make_agent_mock()
     mock_request = _make_request_mock("tasks/get", {"id": "task-1"})
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="sk-test", user_id="user-abc", team_id="team-xyz"
-    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="user-abc", team_id="team-xyz")
 
     mock_http_response = MagicMock()
     mock_http_response.json.return_value = upstream_response
@@ -1877,9 +1841,7 @@ async def test_caller_identity_headers_cannot_be_spoofed_via_forwarded_headers()
         "x-a2a-test-agent-x-litellm-user-id": "attacker-user",
         "x-a2a-test-agent-x-litellm-team-id": "attacker-team",
     }
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="sk-test", user_id="real-user", team_id="real-team"
-    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="real-user", team_id="real-team")
 
     mock_http_response = MagicMock()
     mock_http_response.json.return_value = upstream_response
@@ -1908,19 +1870,17 @@ async def test_caller_identity_headers_cannot_be_spoofed_via_forwarded_headers()
         )
 
     posted_headers = mock_handler.post.call_args.kwargs.get("headers") or {}
-    assert (
-        posted_headers.get("X-LiteLLM-User-Id") == "real-user"
-    ), "authenticated user id must not be overridden by forwarded client headers"
-    assert (
-        posted_headers.get("X-LiteLLM-Team-Id") == "real-team"
-    ), "authenticated team id must not be overridden by forwarded client headers"
+    assert posted_headers.get("X-LiteLLM-User-Id") == "real-user", (
+        "authenticated user id must not be overridden by forwarded client headers"
+    )
+    assert posted_headers.get("X-LiteLLM-Team-Id") == "real-team", (
+        "authenticated team id must not be overridden by forwarded client headers"
+    )
 
 
 def _agent(protocol_version):
     agent = MagicMock()
-    agent.agent_card_params = (
-        {"protocolVersion": protocol_version} if protocol_version is not None else {}
-    )
+    agent.agent_card_params = {"protocolVersion": protocol_version} if protocol_version is not None else {}
     return agent
 
 

@@ -12,7 +12,6 @@ import pytest
 
 
 class TestMultipartNestedBypass:
-
     def test_nested_banned_param_caught_when_dict(self):
         """Baseline: nested api_base inside a dict IS caught."""
         from litellm.proxy.auth.auth_utils import is_request_body_safe
@@ -42,9 +41,7 @@ class TestMultipartNestedBypass:
         # dict(await request.form()) gives string values for non-file fields.
         request_body = {
             "model": "text-embedding-ada-002",
-            "litellm_embedding_config": json.dumps(
-                {"api_base": "https://attacker.com"}
-            ),
+            "litellm_embedding_config": json.dumps({"api_base": "https://attacker.com"}),
         }
 
         with pytest.raises(ValueError, match="api_base"):
@@ -61,9 +58,7 @@ class TestMultipartNestedBypass:
 
         request_body = {
             "model": "text-embedding-ada-002",
-            "litellm_embedding_config": json.dumps(
-                {"aws_sts_endpoint": "https://attacker.com/sts"}
-            ),
+            "litellm_embedding_config": json.dumps({"aws_sts_endpoint": "https://attacker.com/sts"}),
         }
 
         with pytest.raises(ValueError, match="aws_sts_endpoint"):

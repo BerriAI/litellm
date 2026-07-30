@@ -14,9 +14,7 @@ import time
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import datetime
 import json
@@ -193,18 +191,14 @@ def test_spend_logs_payload(model_id: Optional[str]):
                 litellm.Choices(
                     finish_reason="length",
                     index=0,
-                    message=litellm.Message(
-                        content="Bom dia! Como posso ajudar você", role="assistant"
-                    ),
+                    message=litellm.Message(content="Bom dia! Como posso ajudar você", role="assistant"),
                 )
             ],
             created=1717789410,
             model="gpt-35-turbo",
             object="chat.completion",
             system_fingerprint=None,
-            usage=litellm.Usage(
-                completion_tokens=10, prompt_tokens=20, total_tokens=30
-            ),
+            usage=litellm.Usage(completion_tokens=10, prompt_tokens=20, total_tokens=30),
         ),
         "start_time": datetime.datetime(2024, 6, 7, 12, 43, 30, 308604),
         "end_time": datetime.datetime(2024, 6, 7, 12, 43, 30, 954146),
@@ -223,9 +217,7 @@ def test_spend_logs_payload(model_id: Optional[str]):
     assert set(payload["metadata"].keys()) == set(expected_metadata_keys)
 
     # This is crucial - used in PROD, it should pass, related issue: https://github.com/BerriAI/litellm/issues/4334
-    assert (
-        payload["request_tags"] == '["model-anthropic-claude-v2.1", "app-ishaan-prod"]'
-    )
+    assert payload["request_tags"] == '["model-anthropic-claude-v2.1", "app-ishaan-prod"]'
     assert payload["metadata"]["user_api_key_org_id"] == "custom-org-id"
     assert payload["metadata"]["user_api_key_team_id"] == "custom-team-id"
     assert payload["metadata"]["user_api_key_team_alias"] == "custom-team-alias"
@@ -385,9 +377,7 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
     print("json payload: ", json.dumps(payload, indent=4, default=str))
 
     # Verify messages and response are included in payload
-    assert payload["response"] == json.dumps(
-        {"role": "assistant", "content": "Hi there!"}
-    )
+    assert payload["response"] == json.dumps({"role": "assistant", "content": "Hi there!"})
     proxy_server_request = json.loads(payload["proxy_server_request"] or "{}")
     assert proxy_server_request["model"] == "gpt-5.5"
     assert proxy_server_request["messages"] == [{"role": "user", "content": "Hello!"}]
@@ -461,9 +451,7 @@ def test_small_request_no_truncation():
 
     # Verify the content was NOT truncated
     assert sanitized["messages"][0]["content"] == small_content
-    assert (
-        len(sanitized["messages"][0]["content"]) == MAX_STRING_LENGTH_PROMPT_IN_DB - 100
-    )
+    assert len(sanitized["messages"][0]["content"]) == MAX_STRING_LENGTH_PROMPT_IN_DB - 100
 
 
 def test_configurable_string_length_env_var(monkeypatch):

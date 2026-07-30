@@ -219,11 +219,7 @@ async def test_block_carries_original_guardrail_exception():
 
     pipeline = GuardrailPipeline(
         mode="pre_call",
-        steps=[
-            PipelineStep(
-                guardrail="moderation-filter", on_fail="block", on_pass="allow"
-            )
-        ],
+        steps=[PipelineStep(guardrail="moderation-filter", on_fail="block", on_pass="allow")],
     )
 
     original_callbacks = litellm.callbacks.copy()
@@ -269,10 +265,7 @@ async def test_unsupported_mode_yields_error_outcome_without_exception():
         assert guard.calls == 0
         assert result.terminal_action == "block"
         assert result.step_results[0].outcome == "error"
-        assert (
-            "Unsupported pipeline mode: during_call"
-            in result.step_results[0].error_detail
-        )
+        assert "Unsupported pipeline mode: during_call" in result.step_results[0].error_detail
         assert result.original_exception is None
     finally:
         litellm.callbacks = original_callbacks
@@ -334,10 +327,7 @@ async def test_custom_code_guardrail_failure_can_pipeline_block():
     """
     custom_guard = CustomCodeGuardrail(
         guardrail_name="custom-code-filter",
-        custom_code=(
-            "def apply_guardrail(inputs, request_data, input_type):\n"
-            '    return block("SSN detected")\n'
-        ),
+        custom_code=('def apply_guardrail(inputs, request_data, input_type):\n    return block("SSN detected")\n'),
     )
 
     pipeline = GuardrailPipeline(

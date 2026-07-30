@@ -38,9 +38,7 @@ def _make_db(active_token_id: Optional[str]) -> MagicMock:
     row.revoke_at = datetime.now(timezone.utc) + timedelta(minutes=5)
     db = MagicMock()
     db.litellm_deprecatedverificationtoken = MagicMock()
-    db.litellm_deprecatedverificationtoken.find_first = AsyncMock(
-        return_value=row if active_token_id else None
-    )
+    db.litellm_deprecatedverificationtoken.find_first = AsyncMock(return_value=row if active_token_id else None)
     return db
 
 

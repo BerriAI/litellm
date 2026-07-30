@@ -11,9 +11,7 @@ from tests.test_keys import generate_key
 from fastapi import HTTPException
 
 
-async def new_user(
-    session, i, user_id=None, budget=None, budget_duration=None, models=None
-):
+async def new_user(session, i, user_id=None, budget=None, budget_duration=None, models=None):
     url = "http://0.0.0.0:4000/user/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
@@ -137,9 +135,7 @@ async def test_user_info():
         key_gen = await new_user(session, 0, user_id=get_user)
         key = key_gen["key"]
         ## as admin ##
-        resp = await get_user_info(
-            session=session, get_user=get_user, call_user="sk-1234"
-        )
+        resp = await get_user_info(session=session, get_user=get_user, call_user="sk-1234")
         assert isinstance(resp["user_info"], dict)
         assert len(resp["user_info"]) > 0
         ## as user themself ##
@@ -149,9 +145,7 @@ async def test_user_info():
         # as random user #
         key_gen = await new_user(session=session, i=0)
         random_key = key_gen["key"]
-        status = await get_user_info(
-            session=session, get_user=get_user, call_user=random_key
-        )
+        status = await get_user_info(session=session, get_user=get_user, call_user=random_key)
         assert status == 403
 
 
@@ -176,21 +170,15 @@ async def test_users_budgets_reset():
     """
     get_user = f"krrish_{time.time()}@berri.ai"
     async with aiohttp.ClientSession() as session:
-        key_gen = await new_user(
-            session, 0, user_id=get_user, budget=10, budget_duration="5s"
-        )
+        key_gen = await new_user(session, 0, user_id=get_user, budget=10, budget_duration="5s")
         key = key_gen["key"]
-        user_info = await get_user_info(
-            session=session, get_user=get_user, call_user=key
-        )
+        user_info = await get_user_info(session=session, get_user=get_user, call_user=key)
         reset_at_init_value = user_info["user_info"]["budget_reset_at"]
         i = 0
         reset_at_new_value = None
         while i < 3:
             await asyncio.sleep(70)
-            user_info = await get_user_info(
-                session=session, get_user=get_user, call_user=key
-            )
+            user_info = await get_user_info(session=session, get_user=get_user, call_user=key)
             reset_at_new_value = user_info["user_info"]["budget_reset_at"]
             try:
                 assert reset_at_init_value != reset_at_new_value
@@ -239,23 +227,17 @@ async def test_global_proxy_budget_update():
     """
     get_user = f"litellm-proxy-budget"
     async with aiohttp.ClientSession() as session:
-        user_info = await get_user_info(
-            session=session, get_user=get_user, call_user="sk-1234"
-        )
+        user_info = await get_user_info(session=session, get_user=get_user, call_user="sk-1234")
         original_spend = user_info["user_info"]["spend"]
         await chat_completion(session=session, key="sk-1234")
         await asyncio.sleep(5)  # let db update
-        user_info = await get_user_info(
-            session=session, get_user=get_user, call_user="sk-1234"
-        )
+        user_info = await get_user_info(session=session, get_user=get_user, call_user="sk-1234")
         new_spend = user_info["user_info"]["spend"]
         print(f"new_spend: {new_spend}; original_spend: {original_spend}")
         assert new_spend > original_spend
         await chat_completion_streaming(session=session, key="sk-1234")
         await asyncio.sleep(5)  # let db update
-        user_info = await get_user_info(
-            session=session, get_user=get_user, call_user="sk-1234"
-        )
+        user_info = await get_user_info(session=session, get_user=get_user, call_user="sk-1234")
         new_new_spend = user_info["user_info"]["spend"]
         print(f"new_spend: {new_spend}; original_spend: {original_spend}")
         assert new_new_spend > new_spend
@@ -364,9 +346,7 @@ async def setup_test_users(session: aiohttp.ClientSession) -> Tuple[Dict, Dict]:
     }
 
     print("\nGenerating additional key for user1...")
-    key_response = await session.post(
-        f"http://0.0.0.0:4000/key/generate", headers=headers, json=key_payload
-    )
+    key_response = await session.post(f"http://0.0.0.0:4000/key/generate", headers=headers, json=key_payload)
 
     assert key_response.status == 200, "Failed to generate additional key for user1"
     user1_additional_key = await key_response.json()
@@ -409,9 +389,7 @@ async def test_key_update_user_isolation():
         # Try to update the key to belong to user2
         update_payload = {
             "key": user1_data["additional_key"]["key"],
-            "user_id": user2_data["user_data"][
-                "user_id"
-            ],  # Attempting to change ownership
+            "user_id": user2_data["user_data"]["user_id"],  # Attempting to change ownership
             "metadata": {"purpose": "testing_user_isolation", "environment": "test"},
         }
 
@@ -425,9 +403,7 @@ async def test_key_update_user_isolation():
         await print_response_details(update_response)
 
         # Verify update attempt was rejected
-        assert (
-            update_response.status == 403
-        ), "Request should have been rejected with 403 status code"
+        assert update_response.status == 403, "Request should have been rejected with 403 status code"
 
 
 @pytest.mark.asyncio
@@ -451,6 +427,4 @@ async def test_key_delete_user_isolation():
         await print_response_details(delete_response)
 
         # Verify delete attempt was rejected
-        assert (
-            delete_response.status == 403
-        ), "Request should have been rejected with 403 status code"
+        assert delete_response.status == 403, "Request should have been rejected with 403 status code"

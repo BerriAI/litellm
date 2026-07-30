@@ -17,9 +17,7 @@ import time
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import logging
 
@@ -62,29 +60,12 @@ def test_is_llm_api_route():
     assert RouteChecks.is_llm_api_route("/anthropic/messages") is True
     assert RouteChecks.is_llm_api_route("/anthropic/v1/messages") is True
     assert RouteChecks.is_llm_api_route("/azure/endpoint") is True
+    assert RouteChecks.is_llm_api_route("/v1/realtime?model=gpt-4o-realtime-preview") is True
+    assert RouteChecks.is_llm_api_route("/realtime?model=gpt-4o-realtime-preview") is True
+    assert RouteChecks.is_llm_api_route("/openai/deployments/vertex_ai/gemini-1.5-flash/chat/completions") is True
+    assert RouteChecks.is_llm_api_route("/openai/deployments/gemini/gemini-1.5-flash/chat/completions") is True
     assert (
-        RouteChecks.is_llm_api_route("/v1/realtime?model=gpt-4o-realtime-preview")
-        is True
-    )
-    assert (
-        RouteChecks.is_llm_api_route("/realtime?model=gpt-4o-realtime-preview") is True
-    )
-    assert (
-        RouteChecks.is_llm_api_route(
-            "/openai/deployments/vertex_ai/gemini-1.5-flash/chat/completions"
-        )
-        is True
-    )
-    assert (
-        RouteChecks.is_llm_api_route(
-            "/openai/deployments/gemini/gemini-1.5-flash/chat/completions"
-        )
-        is True
-    )
-    assert (
-        RouteChecks.is_llm_api_route(
-            "/openai/deployments/anthropic/claude-sonnet-4-5-20250929/chat/completions"
-        )
+        RouteChecks.is_llm_api_route("/openai/deployments/anthropic/claude-sonnet-4-5-20250929/chat/completions")
         is True
     )
 
@@ -113,44 +94,19 @@ def test_is_llm_api_route():
 # Test _route_matches_pattern
 def test_route_matches_pattern():
     # check matching routes
+    assert RouteChecks._route_matches_pattern("/threads/thread_12345", "/threads/{thread_id}") is True
     assert (
-        RouteChecks._route_matches_pattern(
-            "/threads/thread_12345", "/threads/{thread_id}"
-        )
-        is True
+        RouteChecks._route_matches_pattern("/key/regenerate/82akk800000000jjsk", "/key/{token_id}/regenerate") is False
     )
-    assert (
-        RouteChecks._route_matches_pattern(
-            "/key/regenerate/82akk800000000jjsk", "/key/{token_id}/regenerate"
-        )
-        is False
-    )
-    assert (
-        RouteChecks._route_matches_pattern(
-            "/v1/chat/completions", "/v1/chat/completions"
-        )
-        is True
-    )
-    assert (
-        RouteChecks._route_matches_pattern(
-            "/v1/models/gpt-4", "/v1/models/{model_name}"
-        )
-        is True
-    )
+    assert RouteChecks._route_matches_pattern("/v1/chat/completions", "/v1/chat/completions") is True
+    assert RouteChecks._route_matches_pattern("/v1/models/gpt-4", "/v1/models/{model_name}") is True
 
     # check non-matching routes
     assert (
-        RouteChecks._route_matches_pattern(
-            "/v1/chat/completionz/thread_12345", "/v1/chat/completions/{thread_id}"
-        )
+        RouteChecks._route_matches_pattern("/v1/chat/completionz/thread_12345", "/v1/chat/completions/{thread_id}")
         is False
     )
-    assert (
-        RouteChecks._route_matches_pattern(
-            "/v1/{thread_id}/messages", "/v1/messages/thread_2345"
-        )
-        is False
-    )
+    assert RouteChecks._route_matches_pattern("/v1/{thread_id}/messages", "/v1/messages/thread_2345") is False
 
 
 @pytest.fixture

@@ -73,9 +73,9 @@ class TestCredentialLiteLLMParamsAzureAdToken:
             "azure_ad_token": "tok-123",
             "api_key": None,  # M2M deployment has no static key
         }
-        rebuilt = CredentialLiteLLMParams(
-            **{k: v for k, v in source.items() if v is not None}
-        ).model_dump(exclude_none=True)
+        rebuilt = CredentialLiteLLMParams(**{k: v for k, v in source.items() if v is not None}).model_dump(
+            exclude_none=True
+        )
         assert rebuilt.get("azure_ad_token") == "tok-123"
         assert rebuilt.get("api_base") == "https://my.openai.azure.com"
         assert "api_key" not in rebuilt
@@ -105,9 +105,7 @@ class TestRouterCredentialResolution:
             ]
         )
 
-        credentials = router.get_deployment_credentials_with_provider(
-            model_id=deployment_id
-        )
+        credentials = router.get_deployment_credentials_with_provider(model_id=deployment_id)
         assert credentials is not None
         assert credentials.get("azure_ad_token") == "tok-azure-m2m-xyz", (
             "Router credential resolution dropped azure_ad_token; the "
@@ -137,9 +135,7 @@ class TestRouterCredentialResolution:
             ]
         )
 
-        credentials = router.get_deployment_credentials_with_provider(
-            model_id=deployment_id
-        )
+        credentials = router.get_deployment_credentials_with_provider(model_id=deployment_id)
         assert credentials is not None
         assert credentials.get("api_key") == "sk-static-key"
         assert "azure_ad_token" not in credentials

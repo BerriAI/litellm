@@ -5,9 +5,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 # Use the same token_counter as the main test.
 from tests.test_litellm.litellm_core_utils.test_token_counter import token_counter
@@ -36,9 +34,7 @@ def test_token_counter_tool_increases(messages):
         conversation.append(message)
         tokens = token_counter(model="gpt-3.5-turbo", messages=conversation, tools=TOOLS)  # type: ignore
         print(f"tokens: {tokens}")
-        assert (
-            tokens > prev_tokens
-        ), f"Token did not increase: {tokens} <= {prev_tokens}"
+        assert tokens > prev_tokens, f"Token did not increase: {tokens} <= {prev_tokens}"
         prev_tokens = tokens
 
 

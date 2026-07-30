@@ -47,9 +47,7 @@ def _make_spend_counter_cache(
     cache.in_memory_cache.delete_cache = MagicMock()
     if with_redis:
         cache.redis_cache = MagicMock()
-        cache.redis_cache.async_get_cache = AsyncMock(
-            return_value=redis_get_value, side_effect=redis_get_side_effect
-        )
+        cache.redis_cache.async_get_cache = AsyncMock(return_value=redis_get_value, side_effect=redis_get_side_effect)
         cache.redis_cache.async_increment = AsyncMock(
             return_value=redis_increment_value,
             side_effect=redis_increment_side_effect,
@@ -69,9 +67,7 @@ def _make_spend_counter_cache(
 
 def _make_user_api_key_cache(get_value=None, get_side_effect=None):
     cache = MagicMock()
-    cache.async_get_cache = AsyncMock(
-        return_value=get_value, side_effect=get_side_effect
-    )
+    cache.async_get_cache = AsyncMock(return_value=get_value, side_effect=get_side_effect)
     cache.async_set_cache_pipeline = AsyncMock()
     return cache
 
@@ -108,9 +104,7 @@ async def test_get_current_spend_redis_error_falls_back_to_in_memory(monkeypatch
     )
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
 
-    result = await ps.get_current_spend(
-        counter_key="spend:key:abc", fallback_spend=99.0
-    )
+    result = await ps.get_current_spend(counter_key="spend:key:abc", fallback_spend=99.0)
     assert result == 17.0
 
 
@@ -135,9 +129,7 @@ async def test_get_current_spend_floors_stale_low_counter_against_db(monkeypatch
     # the stale counter is repaired up to the authoritative DB value via a
     # monotonic set-max so other workers read the corrected total, and a
     # concurrent increment cannot be clobbered
-    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
-        key="spend:key:abc", value=12.0
-    )
+    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(key="spend:key:abc", value=12.0)
 
 
 @pytest.mark.asyncio
@@ -168,9 +160,7 @@ async def test_get_current_spend_no_floor_without_max_budget(monkeypatch):
     from_db = AsyncMock(return_value=12.0)
     monkeypatch.setattr(ps.SpendCounterReseed, "from_db", from_db)
 
-    result = await ps.get_current_spend(
-        counter_key="spend:key:abc", fallback_spend=12.0
-    )
+    result = await ps.get_current_spend(counter_key="spend:key:abc", fallback_spend=12.0)
 
     assert result == 2.0
     assert from_db.await_count == 0
@@ -209,12 +199,8 @@ async def test_get_current_spend_floor_caches_db_read(monkeypatch):
     from_db = AsyncMock(return_value=12.0)
     monkeypatch.setattr(ps.SpendCounterReseed, "from_db", from_db)
 
-    first = await ps.get_current_spend(
-        counter_key="spend:key:abc", fallback_spend=12.0, max_budget=10.0
-    )
-    second = await ps.get_current_spend(
-        counter_key="spend:key:abc", fallback_spend=12.0, max_budget=10.0
-    )
+    first = await ps.get_current_spend(counter_key="spend:key:abc", fallback_spend=12.0, max_budget=10.0)
+    second = await ps.get_current_spend(counter_key="spend:key:abc", fallback_spend=12.0, max_budget=10.0)
 
     assert first == 12.0
     assert second == 12.0
@@ -266,9 +252,7 @@ async def test_get_current_spend_floors_window_against_spend_logs(monkeypatch):
 
     assert result == 15.0
     assert wfsl.await_count == 1
-    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
-        key=counter_key, value=15.0
-    )
+    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(key=counter_key, value=15.0)
 
 
 @pytest.mark.asyncio
@@ -278,21 +262,13 @@ async def test_get_current_spend_fail_closed_rejects_when_unverifiable(monkeypat
     rather than admitted on an unverifiable budget."""
     from fastapi import HTTPException
 
-    fake_cache = _make_spend_counter_cache(
-        redis_get_side_effect=RuntimeError("redis down")
-    )
+    fake_cache = _make_spend_counter_cache(redis_get_side_effect=RuntimeError("redis down"))
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
-    monkeypatch.setattr(
-        ps, "general_settings", {"fail_closed_budget_enforcement": True}
-    )
-    monkeypatch.setattr(
-        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr(ps, "general_settings", {"fail_closed_budget_enforcement": True})
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
 
     with pytest.raises(HTTPException) as exc:
-        await ps.get_current_spend(
-            counter_key="spend:key:abc", fallback_spend=1.0, max_budget=10.0
-        )
+        await ps.get_current_spend(counter_key="spend:key:abc", fallback_spend=1.0, max_budget=10.0)
     assert exc.value.status_code == 503
 
 
@@ -300,18 +276,12 @@ async def test_get_current_spend_fail_closed_rejects_when_unverifiable(monkeypat
 async def test_get_current_spend_fail_closed_off_admits_when_unverifiable(monkeypatch):
     """Default (flag off): an unverifiable read keeps the existing behavior and
     admits using the cached fallback — no new rejection."""
-    fake_cache = _make_spend_counter_cache(
-        redis_get_side_effect=RuntimeError("redis down")
-    )
+    fake_cache = _make_spend_counter_cache(redis_get_side_effect=RuntimeError("redis down"))
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
     monkeypatch.setattr(ps, "general_settings", {})
-    monkeypatch.setattr(
-        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
 
-    result = await ps.get_current_spend(
-        counter_key="spend:key:abc", fallback_spend=1.0, max_budget=10.0
-    )
+    result = await ps.get_current_spend(counter_key="spend:key:abc", fallback_spend=1.0, max_budget=10.0)
     assert result == 1.0
 
 
@@ -321,13 +291,9 @@ async def test_get_current_spend_fail_closed_admits_when_redis_verified(monkeypa
     authoritative, so an under-budget request is admitted normally."""
     fake_cache = _make_spend_counter_cache(redis_get_value=1.0)
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
-    monkeypatch.setattr(
-        ps, "general_settings", {"fail_closed_budget_enforcement": True}
-    )
+    monkeypatch.setattr(ps, "general_settings", {"fail_closed_budget_enforcement": True})
 
-    result = await ps.get_current_spend(
-        counter_key="spend:key:abc", fallback_spend=1.0, max_budget=10.0
-    )
+    result = await ps.get_current_spend(counter_key="spend:key:abc", fallback_spend=1.0, max_budget=10.0)
     assert result == 1.0
 
 
@@ -336,16 +302,10 @@ async def test_get_current_spend_fail_closed_allows_authoritative_fallback(monke
     """End-user/tag callers pass fallback_authoritative=True (their spend is
     loaded fresh from the DB in auth), so fail-closed does not reject them even
     when the counter path is unreadable."""
-    fake_cache = _make_spend_counter_cache(
-        redis_get_side_effect=RuntimeError("redis down")
-    )
+    fake_cache = _make_spend_counter_cache(redis_get_side_effect=RuntimeError("redis down"))
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
-    monkeypatch.setattr(
-        ps, "general_settings", {"fail_closed_budget_enforcement": True}
-    )
-    monkeypatch.setattr(
-        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr(ps, "general_settings", {"fail_closed_budget_enforcement": True})
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
 
     result = await ps.get_current_spend(
         counter_key="spend:end_user:e1",
@@ -363,9 +323,7 @@ async def test_get_current_spend_strict_floors_when_fallback_also_stale(monkeypa
     re-checks the authoritative DB and enforces against it."""
     fake_cache = _make_spend_counter_cache(redis_get_value=0.00001)
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
-    monkeypatch.setattr(
-        ps, "general_settings", {"fail_closed_budget_enforcement": True}
-    )
+    monkeypatch.setattr(ps, "general_settings", {"fail_closed_budget_enforcement": True})
     from_db = AsyncMock(return_value=0.5)
     monkeypatch.setattr(ps.SpendCounterReseed, "from_db", from_db)
 
@@ -387,9 +345,7 @@ async def test_get_current_spend_strict_floors_when_fallback_also_stale(monkeypa
 
 @pytest.mark.asyncio
 async def test_increment_spend_counters_increments_all_buckets(monkeypatch):
-    fake_cache = _make_spend_counter_cache(
-        redis_get_value=None, redis_increment_value=5.0
-    )
+    fake_cache = _make_spend_counter_cache(redis_get_value=None, redis_increment_value=5.0)
     fake_user_cache = _make_user_api_key_cache(get_value=None)
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
@@ -398,9 +354,7 @@ async def test_increment_spend_counters_increments_all_buckets(monkeypatch):
     async def _fake_coalesced(**kwargs):
         return None
 
-    monkeypatch.setattr(
-        ps.SpendCounterReseed, "coalesced", AsyncMock(side_effect=_fake_coalesced)
-    )
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(side_effect=_fake_coalesced))
 
     await ps.increment_spend_counters(
         token="hashed-tok",
@@ -463,9 +417,7 @@ async def test_increment_spend_counters_runs_scopes_concurrently(monkeypatch):
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
     monkeypatch.setattr(ps, "prisma_client", None)
-    monkeypatch.setattr(
-        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
 
     task = asyncio.create_task(
         ps.increment_spend_counters(
@@ -514,9 +466,7 @@ async def test_increment_spend_counters_skips_reserved_counter_keys(monkeypatch)
     import litellm.proxy.spend_tracking.budget_reservation as br
 
     reserved = {"spend:key:hashed-tok", "spend:org:org1"}
-    monkeypatch.setattr(
-        br, "get_reserved_counter_keys", MagicMock(return_value=set(reserved))
-    )
+    monkeypatch.setattr(br, "get_reserved_counter_keys", MagicMock(return_value=set(reserved)))
     monkeypatch.setattr(br, "reconcile_budget_reservation", AsyncMock())
 
     recorded: dict[str, float] = {}
@@ -531,9 +481,7 @@ async def test_increment_spend_counters_skips_reserved_counter_keys(monkeypatch)
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
     monkeypatch.setattr(ps, "prisma_client", None)
-    monkeypatch.setattr(
-        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
 
     reservation = {"finalized": False}
     await ps.increment_spend_counters(
@@ -578,9 +526,7 @@ async def test_increment_spend_counters_failing_scope_propagates_after_siblings_
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
     monkeypatch.setattr(ps, "prisma_client", None)
-    monkeypatch.setattr(
-        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
 
     reservation = {"finalized": False}
     with pytest.raises(RuntimeError, match="redis increment failed"):
@@ -636,9 +582,7 @@ async def test_increment_spend_counters_zero_cost_is_noop_finalizes_reservation(
 
 @pytest.mark.asyncio
 async def test_reconcile_budget_reservation_for_counter_update_returns_empty_set_when_none():
-    result = await ps._reconcile_budget_reservation_for_counter_update(
-        budget_reservation=None, response_cost=1.0
-    )
+    result = await ps._reconcile_budget_reservation_for_counter_update(budget_reservation=None, response_cost=1.0)
     assert result == set()
 
 
@@ -681,16 +625,12 @@ async def test_reconcile_budget_reservation_for_counter_update_failure_invalidat
 async def test_increment_end_user_and_tag_spend_counters_increments_each_unique_tag(
     monkeypatch,
 ):
-    fake_cache = _make_spend_counter_cache(
-        redis_get_value=None, redis_increment_value=3.0
-    )
+    fake_cache = _make_spend_counter_cache(redis_get_value=None, redis_increment_value=3.0)
     fake_user_cache = _make_user_api_key_cache()
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
     monkeypatch.setattr(ps, "prisma_client", None)
-    monkeypatch.setattr(
-        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
 
     await ps._increment_end_user_and_tag_spend_counters(
         end_user_id="eu1",
@@ -735,16 +675,12 @@ async def test_increment_end_user_and_tag_spend_counters_no_end_user_no_tags_inv
 
 @pytest.mark.asyncio
 async def test_increment_org_spend_counter_increments_when_org_present(monkeypatch):
-    fake_cache = _make_spend_counter_cache(
-        redis_get_value=None, redis_increment_value=10.0
-    )
+    fake_cache = _make_spend_counter_cache(redis_get_value=None, redis_increment_value=10.0)
     fake_user_cache = _make_user_api_key_cache()
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
     monkeypatch.setattr(ps, "prisma_client", None)
-    monkeypatch.setattr(
-        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
 
     await ps._increment_org_spend_counter(
         org_id="org-1",
@@ -755,9 +691,7 @@ async def test_increment_org_spend_counter_increments_when_org_present(monkeypat
     observed = {
         "increment_called": fake_cache.redis_cache.async_increment.called,
         "increment_calls": fake_cache.redis_cache.async_increment.call_count,
-        "counter_key_arg": fake_cache.redis_cache.async_increment.call_args.kwargs[
-            "key"
-        ],
+        "counter_key_arg": fake_cache.redis_cache.async_increment.call_args.kwargs["key"],
     }
     assert normalize(observed) == {
         "increment_called": True,
@@ -806,16 +740,12 @@ async def test_init_and_increment_unreserved_spend_counter_skips_reserved_keys(
 async def test_init_and_increment_unreserved_spend_counter_proceeds_when_not_reserved(
     monkeypatch,
 ):
-    fake_cache = _make_spend_counter_cache(
-        redis_get_value=None, redis_increment_value=2.0
-    )
+    fake_cache = _make_spend_counter_cache(redis_get_value=None, redis_increment_value=2.0)
     fake_user_cache = _make_user_api_key_cache()
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
     monkeypatch.setattr(ps, "prisma_client", None)
-    monkeypatch.setattr(
-        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
 
     await ps._init_and_increment_unreserved_spend_counter(
         counter_key="spend:tag:y",
@@ -843,9 +773,7 @@ async def test_init_and_increment_unreserved_spend_counter_proceeds_when_not_res
 
 @pytest.mark.asyncio
 async def test_init_and_increment_spend_counter_warm_cache_skips_reseed(monkeypatch):
-    fake_cache = _make_spend_counter_cache(
-        redis_get_value=11.0, redis_increment_value=14.0
-    )
+    fake_cache = _make_spend_counter_cache(redis_get_value=11.0, redis_increment_value=14.0)
     fake_user_cache = _make_user_api_key_cache()
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
@@ -880,9 +808,7 @@ async def test_init_and_increment_spend_counter_warm_cache_skips_reseed(monkeypa
 async def test_init_and_increment_window_spend_counter_increments_when_initialized(
     monkeypatch,
 ):
-    fake_cache = _make_spend_counter_cache(
-        redis_get_value=0.0, redis_increment_value=5.0
-    )
+    fake_cache = _make_spend_counter_cache(redis_get_value=0.0, redis_increment_value=5.0)
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
     monkeypatch.setattr(ps, "prisma_client", None)
     monkeypatch.setattr(
@@ -967,16 +893,12 @@ async def test_ensure_spend_counter_initialized_warm_skips_reseed_and_source(
 async def test_ensure_spend_counter_initialized_cold_seeds_from_source_cache(
     monkeypatch,
 ):
-    fake_cache = _make_spend_counter_cache(
-        redis_get_value=None, redis_increment_value=7.0
-    )
+    fake_cache = _make_spend_counter_cache(redis_get_value=None, redis_increment_value=7.0)
     fake_user_cache = _make_user_api_key_cache(get_value={"spend": 7.0})
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
     monkeypatch.setattr(ps, "prisma_client", None)
-    monkeypatch.setattr(
-        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
 
     await ps._ensure_spend_counter_initialized(
         counter_key="spend:user:u",
@@ -1016,9 +938,7 @@ async def test_get_source_cache_base_spend_reads_first_hit_from_list(monkeypatch
     fake_user_cache.async_get_cache = AsyncMock(side_effect=_get)
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
 
-    result = await ps._get_source_cache_base_spend(
-        source_cache_key=["miss", "hit-obj", "miss2"]
-    )
+    result = await ps._get_source_cache_base_spend(source_cache_key=["miss", "hit-obj", "miss2"])
 
     observed = {
         "result": result,
@@ -1145,9 +1065,7 @@ async def test_increment_spend_counter_cache_redis_path_returns_new_value(monkey
     fake_cache = _make_spend_counter_cache(redis_increment_value=44.0)
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
 
-    result = await ps._increment_spend_counter_cache(
-        counter_key="spend:key:k", increment=4.0
-    )
+    result = await ps._increment_spend_counter_cache(counter_key="spend:key:k", increment=4.0)
 
     observed = {
         "result": result,
@@ -1165,15 +1083,11 @@ async def test_increment_spend_counter_cache_redis_path_returns_new_value(monkey
 async def test_increment_spend_counter_cache_redis_error_raises_and_invalidates(
     monkeypatch,
 ):
-    fake_cache = _make_spend_counter_cache(
-        redis_increment_side_effect=RuntimeError("incr fail")
-    )
+    fake_cache = _make_spend_counter_cache(redis_increment_side_effect=RuntimeError("incr fail"))
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
 
     with pytest.raises(RuntimeError):
-        await ps._increment_spend_counter_cache(
-            counter_key="spend:key:k", increment=1.0
-        )
+        await ps._increment_spend_counter_cache(counter_key="spend:key:k", increment=1.0)
 
     assert fake_cache.in_memory_cache.delete_cache.called is True
     assert fake_cache.redis_cache.async_delete_cache.called is True
@@ -1194,9 +1108,7 @@ async def test_invalidate_spend_counter_deletes_in_memory_and_redis(monkeypatch)
     observed = {
         "in_memory_delete_called": fake_cache.in_memory_cache.delete_cache.called,
         "redis_delete_called": fake_cache.redis_cache.async_delete_cache.called,
-        "delete_args_key": fake_cache.redis_cache.async_delete_cache.call_args.kwargs[
-            "key"
-        ],
+        "delete_args_key": fake_cache.redis_cache.async_delete_cache.call_args.kwargs["key"],
     }
     assert normalize(observed) == {
         "in_memory_delete_called": True,
@@ -1208,9 +1120,7 @@ async def test_invalidate_spend_counter_deletes_in_memory_and_redis(monkeypatch)
 @pytest.mark.asyncio
 async def test_invalidate_spend_counter_swallows_redis_failure_no_raise(monkeypatch):
     fake_cache = _make_spend_counter_cache()
-    fake_cache.redis_cache.async_delete_cache = AsyncMock(
-        side_effect=RuntimeError("redis down")
-    )
+    fake_cache.redis_cache.async_delete_cache = AsyncMock(side_effect=RuntimeError("redis down"))
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
 
     await ps._invalidate_spend_counter(counter_key="spend:key:k")

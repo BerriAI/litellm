@@ -120,8 +120,6 @@ def _ensure_complexity_smart_router(  # pyright: ignore[reportUnusedFunction]  #
 @pytest.fixture
 def complexity_key(resources: ResourceManager, client: ComplexityRouterClient) -> str:
     """Per-test key allowed to call the complexity router and its tier backends."""
-    key = client.proxy.generate_key(
-        KeyGenerateBody(models=ROUTER_KEY_MODELS, user_id="e2e-complexity-router")
-    )
+    key = client.proxy.generate_key(KeyGenerateBody(models=ROUTER_KEY_MODELS, user_id="e2e-complexity-router"))
     resources.defer(lambda: client.proxy.delete_key(key))
     return key

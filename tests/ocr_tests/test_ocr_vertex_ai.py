@@ -66,9 +66,7 @@ class TestVertexAIMistralOCR(BaseOCRTest):
         if os.environ.get("LITELLM_RUN_LIVE_VERTEX_MISTRAL_OCR_TESTS") != "1":
             pytest.skip("Live Vertex AI Mistral OCR E2E tests are opt-in")
         if os.environ.get("CASSETTE_REDIS_URL"):
-            pytest.skip(
-                "Live Vertex AI Mistral OCR E2E tests cannot run under VCR replay"
-            )
+            pytest.skip("Live Vertex AI Mistral OCR E2E tests cannot run under VCR replay")
 
     def get_base_ocr_call_args(self) -> dict:
         """
@@ -124,18 +122,16 @@ def test_vertex_ai_ocr_routing():
 
     # Test DeepSeek OCR routing
     deepseek_config = get_vertex_ai_ocr_config("vertex_ai/deepseek-ocr-maas")
-    assert isinstance(
-        deepseek_config, VertexAIDeepSeekOCRConfig
-    ), "DeepSeek model should route to VertexAIDeepSeekOCRConfig"
+    assert isinstance(deepseek_config, VertexAIDeepSeekOCRConfig), (
+        "DeepSeek model should route to VertexAIDeepSeekOCRConfig"
+    )
 
     # Test Mistral OCR routing (should use default VertexAIOCRConfig)
     mistral_config = get_vertex_ai_ocr_config("vertex_ai/mistral-ocr-2505")
-    assert isinstance(
-        mistral_config, VertexAIOCRConfig
-    ), "Mistral model should route to VertexAIOCRConfig"
+    assert isinstance(mistral_config, VertexAIOCRConfig), "Mistral model should route to VertexAIOCRConfig"
 
     # Test other DeepSeek variants
     deepseek_variant = get_vertex_ai_ocr_config("vertex_ai/deepseek-ocr-maas")
-    assert isinstance(
-        deepseek_variant, VertexAIDeepSeekOCRConfig
-    ), "DeepSeek variant should route to VertexAIDeepSeekOCRConfig"
+    assert isinstance(deepseek_variant, VertexAIDeepSeekOCRConfig), (
+        "DeepSeek variant should route to VertexAIDeepSeekOCRConfig"
+    )

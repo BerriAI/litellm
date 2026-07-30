@@ -88,9 +88,7 @@ async def test_post_call_success_hook_invoked_for_image_generation():
             user_api_key_dict=user_api_key_dict,
         )
 
-    assert (
-        guardrail.called is True
-    ), "Guardrail hook was not invoked for image generation"
+    assert guardrail.called is True, "Guardrail hook was not invoked for image generation"
     assert guardrail.received_data is not None
     assert guardrail.received_data["model"] == "dall-e-3"
     assert isinstance(guardrail.received_response, ImageResponse)
@@ -292,6 +290,4 @@ async def test_non_default_guardrail_skipped_for_image_generation():
             user_api_key_dict=user_api_key_dict,
         )
 
-    assert (
-        guardrail.called is False
-    ), "Opt-in guardrail should not fire without explicit request"
+    assert guardrail.called is False, "Opt-in guardrail should not fire without explicit request"

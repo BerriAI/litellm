@@ -32,9 +32,7 @@ from litellm.utils import get_optional_params_image_gen
 class TestAzureMAIImageGeneration:
     def test_is_mai_model(self):
         assert AzureFoundryMAIImageGenerationConfig.is_mai_model("MAI-Image-2.5")
-        assert AzureFoundryMAIImageGenerationConfig.is_mai_model(
-            "azure_ai/MAI-Image-2.5"
-        )
+        assert AzureFoundryMAIImageGenerationConfig.is_mai_model("azure_ai/MAI-Image-2.5")
         assert AzureFoundryMAIImageGenerationConfig.is_mai_model("MAI-Image-2.5-Flash")
         assert AzureFoundryMAIImageGenerationConfig.is_mai_model("MAI-Image-2e")
         assert not AzureFoundryMAIImageGenerationConfig.is_mai_model("flux.2-pro")
@@ -64,16 +62,10 @@ class TestAzureMAIImageGeneration:
             api_base="https://my-resource.services.ai.azure.com",
             api_version="preview",
         )
-        assert (
-            url
-            == "https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"
-        )
+        assert url == "https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"
 
     def test_get_mai_image_generation_url_preserves_full_path(self):
-        api = (
-            "https://my-resource.services.ai.azure.com/mai/v1/images/generations"
-            "?api-version=preview"
-        )
+        api = "https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"
         url = AzureFoundryMAIImageGenerationConfig.get_mai_image_generation_url(
             api_base=api,
             api_version="preview",
@@ -85,10 +77,7 @@ class TestAzureMAIImageGeneration:
             api_base="https://my-resource.services.ai.azure.com/mai/v1",
             api_version="preview",
         )
-        assert (
-            url
-            == "https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"
-        )
+        assert url == "https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"
 
     def test_get_azure_ai_image_generation_config_returns_mai(self):
         config = get_azure_ai_image_generation_config("MAI-Image-2.5")
@@ -149,10 +138,7 @@ class TestAzureMAIImageGeneration:
         assert "api-version=preview" in url
 
     def test_mai_json_body_keeps_model(self):
-        api = (
-            "https://my-resource.services.ai.azure.com/mai/v1/images/generations"
-            "?api-version=preview"
-        )
+        api = "https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"
         data = {
             "model": "MAI-Image-2.5",
             "prompt": "A photograph of a red fox",
@@ -365,16 +351,12 @@ class TestAzureMAIImageGeneration:
         litellm.model_cost = litellm.get_model_cost_map(url="")
         model = "azure_ai/MAI-Image-2.5"
         model_info = litellm.get_model_info(model=model, custom_llm_provider="azure_ai")
-        image_response = ImageResponse(
-            data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")]
-        )
+        image_response = ImageResponse(data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")])
 
         cost = azure_ai_image_cost_calculator(
             model=model,
             image_response=image_response,
         )
 
-        assert (
-            cost == len(image_response.data or []) * model_info["output_cost_per_image"]
-        )
+        assert cost == len(image_response.data or []) * model_info["output_cost_per_image"]
         assert cost > 0

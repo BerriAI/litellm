@@ -39,17 +39,11 @@ def _mock_azure_client(
         azure_endpoint="https://exampleopenaiendpoint-production.up.railway.app",
     )
     client.fine_tuning.jobs.create = AsyncMock(
-        return_value=(
-            _MockSDKResponse(create_payload) if create_payload is not None else None
-        )
+        return_value=(_MockSDKResponse(create_payload) if create_payload is not None else None)
     )  # type: ignore[method-assign]
-    client.fine_tuning.jobs.list = AsyncMock(
-        return_value=list_payload
-    )  # type: ignore[method-assign]
+    client.fine_tuning.jobs.list = AsyncMock(return_value=list_payload)  # type: ignore[method-assign]
     client.fine_tuning.jobs.cancel = AsyncMock(
-        return_value=(
-            _MockSDKResponse(cancel_payload) if cancel_payload is not None else None
-        )
+        return_value=(_MockSDKResponse(cancel_payload) if cancel_payload is not None else None)
     )  # type: ignore[method-assign]
     return client
 
@@ -62,9 +56,7 @@ async def test_azure_acreate_fine_tuning_job_request_and_output_match_expected_j
 
     mock_client = _mock_azure_client(create_payload=raw_response)
 
-    with patch.object(
-        AzureOpenAIFineTuningAPI, "get_openai_client", return_value=mock_client
-    ):
+    with patch.object(AzureOpenAIFineTuningAPI, "get_openai_client", return_value=mock_client):
         response = await litellm.acreate_fine_tuning_job(
             model="gpt-35-turbo-1106",
             training_file="file-5e4b20ecbd724182b9964f3cd2ab7212",
@@ -93,9 +85,7 @@ async def test_azure_alist_fine_tuning_jobs_request_matches_expected_json():
 
     mock_client = _mock_azure_client(list_payload=raw_list_response)
 
-    with patch.object(
-        AzureOpenAIFineTuningAPI, "get_openai_client", return_value=mock_client
-    ):
+    with patch.object(AzureOpenAIFineTuningAPI, "get_openai_client", return_value=mock_client):
         response = await litellm.alist_fine_tuning_jobs(
             after=expected_request["after"],
             limit=expected_request["limit"],
@@ -118,9 +108,7 @@ async def test_azure_acancel_fine_tuning_job_request_and_output_match_expected_j
 
     mock_client = _mock_azure_client(cancel_payload=raw_response)
 
-    with patch.object(
-        AzureOpenAIFineTuningAPI, "get_openai_client", return_value=mock_client
-    ):
+    with patch.object(AzureOpenAIFineTuningAPI, "get_openai_client", return_value=mock_client):
         response = await litellm.acancel_fine_tuning_job(
             fine_tuning_job_id=expected_request["fine_tuning_job_id"],
             custom_llm_provider="azure",

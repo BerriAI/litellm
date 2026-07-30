@@ -76,11 +76,7 @@ async def test_langgraph_acompletion_streaming():
 
         async for chunk in response:
             chunk_count += 1
-            if (
-                chunk.choices
-                and chunk.choices[0].delta
-                and chunk.choices[0].delta.content
-            ):
+            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
                 full_content += chunk.choices[0].delta.content
 
         assert chunk_count > 0, "Should receive at least one chunk"

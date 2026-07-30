@@ -6,9 +6,7 @@ import traceback
 from dotenv import load_dotenv
 from openai.types.image import Image
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.bedrock.image_generation.amazon_nova_canvas_transformation import (
     AmazonNovaCanvasConfig,
@@ -18,9 +16,7 @@ logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
 import asyncio
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 from litellm.llms.bedrock.image_generation.cost_calculator import cost_calculator
 from litellm.types.utils import ImageResponse, ImageObject
@@ -96,9 +92,7 @@ def test_map_openai_params():
     non_default_params = {"n": 2, "size": "1024x1024"}
     optional_params = {"cfg_scale": 7}
 
-    result = AmazonStability3Config.map_openai_params(
-        non_default_params, optional_params
-    )
+    result = AmazonStability3Config.map_openai_params(non_default_params, optional_params)
 
     assert result == optional_params
     assert "n" not in result  # OpenAI params should not be included
@@ -109,9 +103,7 @@ def test_transform_response_dict_to_openai_response():
     response_dict = {"images": ["base64_encoded_image_1", "base64_encoded_image_2"]}
     model_response = ImageResponse()
 
-    result = AmazonStability3Config.transform_response_dict_to_openai_response(
-        model_response, response_dict
-    )
+    result = AmazonStability3Config.transform_response_dict_to_openai_response(model_response, response_dict)
 
     assert isinstance(result, ImageResponse)
     assert len(result.data) == 2
@@ -125,9 +117,7 @@ def test_transform_response_dict_to_openai_response_from_stability_3_models_with
     model_response = ImageResponse()
 
     with pytest.raises(BedrockError) as exc_info:
-        AmazonStability3Config.transform_response_dict_to_openai_response(
-            model_response, response_dict
-        )
+        AmazonStability3Config.transform_response_dict_to_openai_response(model_response, response_dict)
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.message == "Filter reason: prompt"
@@ -143,9 +133,7 @@ def test_amazon_stability_map_openai_params():
     non_default_params = {"size": "512x512"}
     optional_params = {"cfg_scale": 7}
 
-    result = AmazonStabilityConfig.map_openai_params(
-        non_default_params, optional_params
-    )
+    result = AmazonStabilityConfig.map_openai_params(non_default_params, optional_params)
 
     assert result["width"] == 512
     assert result["height"] == 512
@@ -162,9 +150,7 @@ def test_amazon_stability_transform_response():
     }
     model_response = ImageResponse()
 
-    result = AmazonStabilityConfig.transform_response_dict_to_openai_response(
-        model_response, response_dict
-    )
+    result = AmazonStabilityConfig.transform_response_dict_to_openai_response(model_response, response_dict)
 
     assert isinstance(result, ImageResponse)
     assert len(result.data) == 2
@@ -181,9 +167,7 @@ def test_get_request_body_stability3():
     optional_params = {}
     model = "stability.sd3-large"
 
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=model, prompt=prompt, optional_params=optional_params)
 
     assert result["prompt"] == prompt
 
@@ -194,9 +178,7 @@ def test_get_request_body_stability():
     optional_params = {"cfg_scale": 7}
     model = "stability.stable-diffusion-xl-v1"
 
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=model, prompt=prompt, optional_params=optional_params)
 
     assert result["text_prompts"][0]["text"] == prompt
     assert result["text_prompts"][0]["weight"] == 1
@@ -218,9 +200,7 @@ def test_map_openai_params_nova_canvas():
     non_default_params = {"n": 2, "size": "1024x1024"}
     optional_params = {"cfg_scale": 7}
 
-    result = AmazonNovaCanvasConfig.map_openai_params(
-        non_default_params, optional_params
-    )
+    result = AmazonNovaCanvasConfig.map_openai_params(non_default_params, optional_params)
 
     assert result == optional_params
     assert "n" not in result  # OpenAI params should not be included
@@ -231,9 +211,7 @@ def test_transform_response_dict_to_openai_response_nova_canvas():
     response_dict = {"images": ["base64_encoded_image_1", "base64_encoded_image_2"]}
     model_response = ImageResponse()
 
-    result = AmazonNovaCanvasConfig.transform_response_dict_to_openai_response(
-        model_response, response_dict
-    )
+    result = AmazonNovaCanvasConfig.transform_response_dict_to_openai_response(model_response, response_dict)
 
     assert isinstance(result, ImageResponse)
     assert len(result.data) == 2
@@ -252,9 +230,7 @@ def test_get_request_body_nova_canvas_default():
     optional_params = {"cfg_scale": 7}
     model = "amazon.nova-canvas-v1"
 
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=model, prompt=prompt, optional_params=optional_params)
 
     assert result["taskType"] == "TEXT_IMAGE"
     assert result["textToImageParams"]["text"] == prompt
@@ -267,9 +243,7 @@ def test_get_request_body_nova_canvas_text_image():
     optional_params = {"cfg_scale": 7, "taskType": "TEXT_IMAGE"}
     model = "amazon.nova-canvas-v1"
 
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=model, prompt=prompt, optional_params=optional_params)
 
     assert result["taskType"] == "TEXT_IMAGE"
     assert result["textToImageParams"]["text"] == prompt
@@ -286,9 +260,7 @@ def test_get_request_body_nova_canvas_color_guided_generation():
     }
     model = "amazon.nova-canvas-v1"
 
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=model, prompt=prompt, optional_params=optional_params)
 
     assert result["taskType"] == "COLOR_GUIDED_GENERATION"
     assert result["colorGuidedGenerationParams"]["text"] == prompt
@@ -301,9 +273,7 @@ def test_transform_request_body_with_invalid_task_type():
     optional_params = {"taskType": "INVALID_TASK"}
 
     with pytest.raises(NotImplementedError) as exc_info:
-        AmazonNovaCanvasConfig.transform_request_body(
-            text=text, optional_params=optional_params
-        )
+        AmazonNovaCanvasConfig.transform_request_body(text=text, optional_params=optional_params)
     assert "Task type INVALID_TASK is not supported" in str(exc_info.value)
 
 
@@ -450,9 +420,7 @@ def test_get_request_body_nova_canvas_inference_profile_arn():
     # Get the provider using the method from the handler
     bedrock_provider = handler.get_bedrock_invoke_provider(model=nova_model)
 
-    result = handler._get_request_body(
-        model=nova_model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=nova_model, prompt=prompt, optional_params=optional_params)
 
     assert result["taskType"] == "TEXT_IMAGE"
     assert result["textToImageParams"]["text"] == prompt
@@ -466,9 +434,7 @@ def test_get_request_body_nova_canvas_with_model_id_param():
     optional_params = {"model_id": "amazon.nova-canvas-v1:0", "cfg_scale": 7}
     model = "amazon.nova-canvas-v1"
 
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=model, prompt=prompt, optional_params=optional_params)
 
     # After fix, model_id should not appear in the result
     # Currently this might pass through and cause the Bedrock API error
@@ -503,9 +469,7 @@ def test_get_request_body_cross_region_inference_profile():
     model = "us.amazon.nova-canvas-v1:0"
 
     # This should work after the fix - cross-region format should be detected as 'nova'
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=model, prompt=prompt, optional_params=optional_params)
 
     assert result["taskType"] == "TEXT_IMAGE"
     assert result["textToImageParams"]["text"] == prompt
@@ -518,9 +482,7 @@ def test_backward_compatibility_regular_nova_model():
     optional_params = {"cfg_scale": 7}
     model = "amazon.nova-canvas-v1"
 
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=model, prompt=prompt, optional_params=optional_params)
 
     assert result["taskType"] == "TEXT_IMAGE"
     assert result["textToImageParams"]["text"] == prompt

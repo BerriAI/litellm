@@ -63,9 +63,7 @@ class TestPerplexityResponsesTransformation:
         assert len(result["tools"]) == 1
         assert result["tools"][0]["type"] == "function"
         assert result["tools"][0]["function"]["name"] == "get_weather"
-        assert (
-            result["tools"][0]["function"]["description"] == "Get the current weather"
-        )
+        assert result["tools"][0]["function"]["description"] == "Get the current weather"
         assert "parameters" in result["tools"][0]["function"]
 
     def test_web_search_tool_passthrough(self):
@@ -133,9 +131,7 @@ class TestPerplexityResponsesTransformation:
         """tool_choice passes through"""
         config = PerplexityResponsesConfig()
 
-        params = ResponsesAPIOptionalRequestParams(
-            tool_choice="required", temperature=0.7
-        )
+        params = ResponsesAPIOptionalRequestParams(tool_choice="required", temperature=0.7)
 
         result = config.map_openai_params(
             response_api_optional_params=params,
@@ -149,9 +145,7 @@ class TestPerplexityResponsesTransformation:
         """parallel_tool_calls passes through"""
         config = PerplexityResponsesConfig()
 
-        params = ResponsesAPIOptionalRequestParams(
-            parallel_tool_calls=True, temperature=0.7
-        )
+        params = ResponsesAPIOptionalRequestParams(parallel_tool_calls=True, temperature=0.7)
 
         result = config.map_openai_params(
             response_api_optional_params=params,
@@ -495,9 +489,7 @@ class TestPerplexityResponsesTransformation:
                     "id": "msg_123",
                     "role": "assistant",
                     "status": "completed",
-                    "content": [
-                        {"type": "output_text", "text": "Hello!", "annotations": []}
-                    ],
+                    "content": [{"type": "output_text", "text": "Hello!", "annotations": []}],
                 }
             ],
             "usage": {
@@ -552,9 +544,7 @@ class TestPerplexityResponsesTransformation:
                         "id": "msg_123",
                         "role": "assistant",
                         "status": "completed",
-                        "content": [
-                            {"type": "output_text", "text": "Hello!", "annotations": []}
-                        ],
+                        "content": [{"type": "output_text", "text": "Hello!", "annotations": []}],
                     }
                 ],
                 "usage": {

@@ -17,9 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 from fastapi import Request, Response
 from starlette.datastructures import URL
@@ -232,7 +230,6 @@ async def test_basic_secret_detection_embeddings_list():
 
 
 class testLogger(CustomLogger):
-
     def __init__(self):
         self.logged_message = None
 
@@ -304,7 +301,5 @@ async def test_chat_completion_request_with_redaction():
 
     print("Info in callback after running request=", _test_logger.logged_message)
 
-    assert _test_logger.logged_message == [
-        {"role": "user", "content": "Hello here is my OPENAI_API_KEY = [REDACTED]"}
-    ]
+    assert _test_logger.logged_message == [{"role": "user", "content": "Hello here is my OPENAI_API_KEY = [REDACTED]"}]
     pass

@@ -10,9 +10,7 @@ import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -60,7 +58,6 @@ async def test_cooldown_badrequest_error():
 
     # Act & Assert
     try:
-
         response = await router.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "gm"}],
@@ -151,9 +148,7 @@ async def test_cooldown_time_zero_uses_zero_not_default():
     )
 
     # Mock the add_deployment_to_cooldown method to verify it's NOT called
-    with patch.object(
-        router.cooldown_cache, "add_deployment_to_cooldown"
-    ) as mock_add_cooldown:
+    with patch.object(router.cooldown_cache, "add_deployment_to_cooldown") as mock_add_cooldown:
         try:
             await router.acompletion(
                 model="gpt-3.5-turbo",
@@ -167,15 +162,11 @@ async def test_cooldown_time_zero_uses_zero_not_default():
         mock_add_cooldown.assert_not_called()
 
     # Also verify the deployment is not in cooldown
-    cooldown_list = await _async_get_cooldown_deployments(
-        litellm_router_instance=router, parent_otel_span=None
-    )
+    cooldown_list = await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
     assert len(cooldown_list) == 0
 
     # Verify the deployment is still healthy and available
-    healthy_deployments, _ = await router._async_get_healthy_deployments(
-        model="gpt-3.5-turbo", parent_otel_span=None
-    )
+    healthy_deployments, _ = await router._async_get_healthy_deployments(model="gpt-3.5-turbo", parent_otel_span=None)
     assert len(healthy_deployments) == 1
 
 
@@ -203,9 +194,7 @@ def test_should_run_cooldown_logic_early_exit_on_zero_cooldown():
         litellm_router_instance=router,
         deployment="test-deployment-id",
         exception_status=429,
-        original_exception=litellm.RateLimitError(
-            "test error", "openai", "gpt-3.5-turbo"
-        ),
+        original_exception=litellm.RateLimitError("test error", "openai", "gpt-3.5-turbo"),
         time_to_cooldown=0.0,
     )
     assert result is False, "Should not run cooldown logic when time_to_cooldown is 0"
@@ -215,23 +204,17 @@ def test_should_run_cooldown_logic_early_exit_on_zero_cooldown():
         litellm_router_instance=router,
         deployment="test-deployment-id",
         exception_status=429,
-        original_exception=litellm.RateLimitError(
-            "test error", "openai", "gpt-3.5-turbo"
-        ),
+        original_exception=litellm.RateLimitError("test error", "openai", "gpt-3.5-turbo"),
         time_to_cooldown=1e-10,
     )
-    assert (
-        result is False
-    ), "Should not run cooldown logic when time_to_cooldown is effectively 0"
+    assert result is False, "Should not run cooldown logic when time_to_cooldown is effectively 0"
 
     # Test with None time_to_cooldown - should return True (use default cooldown logic)
     result = _should_run_cooldown_logic(
         litellm_router_instance=router,
         deployment="test-deployment-id",
         exception_status=429,
-        original_exception=litellm.RateLimitError(
-            "test error", "openai", "gpt-3.5-turbo"
-        ),
+        original_exception=litellm.RateLimitError("test error", "openai", "gpt-3.5-turbo"),
         time_to_cooldown=None,
     )
     assert result is True, "Should run cooldown logic when time_to_cooldown is None"
@@ -241,9 +224,7 @@ def test_should_run_cooldown_logic_early_exit_on_zero_cooldown():
         litellm_router_instance=router,
         deployment="test-deployment-id",
         exception_status=429,
-        original_exception=litellm.RateLimitError(
-            "test error", "openai", "gpt-3.5-turbo"
-        ),
+        original_exception=litellm.RateLimitError("test error", "openai", "gpt-3.5-turbo"),
         time_to_cooldown=60.0,
     )
     assert result is True, "Should run cooldown logic when time_to_cooldown is positive"
@@ -268,9 +249,7 @@ def test_single_deployment_no_cooldowns(num_deployments):
 
     router = Router(model_list=model_list, num_retries=0)
 
-    with patch.object(
-        router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()
-    ) as mock_client:
+    with patch.object(router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()) as mock_client:
         try:
             router.completion(
                 model="gpt-3.5-turbo",
@@ -316,9 +295,7 @@ async def test_single_deployment_no_cooldowns_test_prod():
         num_retries=0,
     )
 
-    with patch.object(
-        router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()
-    ) as mock_client:
+    with patch.object(router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()) as mock_client:
         try:
             await router.acompletion(
                 model="gpt-3.5-turbo",
@@ -363,9 +340,7 @@ async def test_single_deployment_cooldown_with_allowed_fails():
         num_retries=0,
     )
 
-    with patch.object(
-        router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()
-    ) as mock_client:
+    with patch.object(router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()) as mock_client:
         for _ in range(2):
             try:
                 await router.acompletion(
@@ -417,9 +392,7 @@ async def test_single_deployment_cooldown_with_allowed_fail_policy():
         num_retries=0,
     )
 
-    with patch.object(
-        router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()
-    ) as mock_client:
+    with patch.object(router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()) as mock_client:
         for _ in range(2):
             try:
                 await router.acompletion(
@@ -478,14 +451,10 @@ async def test_single_deployment_no_cooldowns_test_prod_mock_completion_calls():
         except litellm.RateLimitError:
             pass
 
-    cooldown_list = await _async_get_cooldown_deployments(
-        litellm_router_instance=router, parent_otel_span=None
-    )
+    cooldown_list = await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
     assert len(cooldown_list) == 0
 
-    healthy_deployments, _ = await router._async_get_healthy_deployments(
-        model="gpt-3.5-turbo", parent_otel_span=None
-    )
+    healthy_deployments, _ = await router._async_get_healthy_deployments(model="gpt-3.5-turbo", parent_otel_span=None)
 
     print("healthy_deployments: ", healthy_deployments)
 
@@ -587,9 +556,7 @@ async def test_high_traffic_cooldowns_all_healthy_deployments():
             raise e
     print("model_stats: ", model_stats)
 
-    cooldown_list = await _async_get_cooldown_deployments(
-        litellm_router_instance=router, parent_otel_span=None
-    )
+    cooldown_list = await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
     assert len(cooldown_list) == 0
 
 
@@ -657,7 +624,6 @@ async def test_high_traffic_cooldowns_one_bad_deployment():
                 mock_response = "hi"
             elif bad_deployment_id == model_id:
                 if num_failures / total_requests <= 0.6:
-
                     mock_response = "litellm.InternalServerError"
 
             elif num_failures / total_requests <= 0.25:
@@ -685,9 +651,7 @@ async def test_high_traffic_cooldowns_one_bad_deployment():
             raise e
     print("model_stats: ", model_stats)
 
-    cooldown_list = await _async_get_cooldown_deployments(
-        litellm_router_instance=router, parent_otel_span=None
-    )
+    cooldown_list = await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
     assert len(cooldown_list) == 1
 
 
@@ -755,7 +719,6 @@ async def test_high_traffic_cooldowns_one_rate_limited_deployment():
                 mock_response = "hi"
             elif bad_deployment_id == model_id:
                 if num_failures / total_requests <= 0.6:
-
                     mock_response = "litellm.RateLimitError"
 
             elif num_failures / total_requests <= 0.25:
@@ -786,9 +749,7 @@ async def test_high_traffic_cooldowns_one_rate_limited_deployment():
             raise e
     print("model_stats: ", model_stats)
 
-    cooldown_list = await _async_get_cooldown_deployments(
-        litellm_router_instance=router, parent_otel_span=None
-    )
+    cooldown_list = await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
     assert len(cooldown_list) == 1
 
 
@@ -871,9 +832,7 @@ async def test_router_fallbacks_with_cooldowns_and_dynamic_credentials():
 
     await asyncio.sleep(1)
 
-    cooldown_list = await _async_get_cooldown_deployments(
-        litellm_router_instance=router, parent_otel_span=None
-    )
+    cooldown_list = await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
     print("cooldown_list: ", cooldown_list)
     assert len(cooldown_list) == 1
 

@@ -112,9 +112,7 @@ def test_reload_model_cost_map_no_db_500(client, auth_as, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_schedule_model_cost_map_reload_happy(
-    client, auth_as, monkeypatch, mock_prisma
-):
+def test_schedule_model_cost_map_reload_happy(client, auth_as, monkeypatch, mock_prisma):
     """Admin schedules a reload — handler upserts config and echoes interval."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -140,9 +138,7 @@ def test_schedule_model_cost_map_reload_happy(
     assert table.upsert.await_count == 1
 
 
-def test_schedule_model_cost_map_reload_invalid_hours(
-    client, auth_as, monkeypatch, mock_prisma
-):
+def test_schedule_model_cost_map_reload_invalid_hours(client, auth_as, monkeypatch, mock_prisma):
     """hours <= 0 is rejected with 400."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -221,9 +217,7 @@ def test_cancel_model_cost_map_reload_no_db_500(client, auth_as, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_get_model_cost_map_reload_status_no_db_not_scheduled(
-    client, auth_as, monkeypatch
-):
+def test_get_model_cost_map_reload_status_no_db_not_scheduled(client, auth_as, monkeypatch):
     """No prisma client → returns the not-scheduled shape (4 keys, all-null)."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -240,9 +234,7 @@ def test_get_model_cost_map_reload_status_no_db_not_scheduled(
     }
 
 
-def test_get_model_cost_map_reload_status_scheduled(
-    client, auth_as, monkeypatch, mock_prisma
-):
+def test_get_model_cost_map_reload_status_scheduled(client, auth_as, monkeypatch, mock_prisma):
     """A valid config row → scheduled=True and the interval is echoed."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -265,9 +257,7 @@ def test_get_model_cost_map_reload_status_scheduled(
     }
 
 
-def test_get_model_cost_map_reload_status_no_config_not_scheduled(
-    client, auth_as, monkeypatch, mock_prisma
-):
+def test_get_model_cost_map_reload_status_no_config_not_scheduled(client, auth_as, monkeypatch, mock_prisma):
     """Config row exists but interval_hours=None → not scheduled."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -332,9 +322,7 @@ def test_get_model_cost_map_source_happy(client, auth_as, monkeypatch):
     }
 
 
-def test_get_model_cost_map_source_admin_view_only_allowed(
-    client, auth_as, monkeypatch
-):
+def test_get_model_cost_map_source_admin_view_only_allowed(client, auth_as, monkeypatch):
     """PROXY_ADMIN_VIEW_ONLY can read source info — pins the read-only ACL."""
     from litellm.proxy._types import LitellmUserRoles
 

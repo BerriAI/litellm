@@ -4,9 +4,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 
 from unittest.mock import MagicMock, patch
@@ -41,9 +39,7 @@ class TestVoyageAI(BaseLLMEmbeddingTest):
             mock_response = MagicMock()
             mock_response.model = "voyage-3-lite"
             mock_response.object = "list"
-            mock_response.data = [
-                {"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}
-            ]
+            mock_response.data = [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}]
             mock_response.usage.prompt_tokens = 24
             mock_response.usage.total_tokens = 24
 
@@ -164,9 +160,7 @@ class TestVoyageContextualEmbeddings:
         assert url == "https://api.voyageai.com/v1/contextualizedembeddings"
 
         # Test custom API base
-        url = config.get_complete_url(
-            "https://custom.api.com", None, "voyage-context-3", {}, {}
-        )
+        url = config.get_complete_url("https://custom.api.com", None, "voyage-context-3", {}, {})
         assert url == "https://custom.api.com/contextualizedembeddings"
 
         # Test API base that already ends with endpoint
@@ -191,9 +185,7 @@ class TestVoyageContextualEmbeddings:
         input_data = [["Hello", "world"], ["Test", "sentence"]]
         optional_params = {"encoding_format": "float"}
 
-        transformed = config.transform_embedding_request(
-            "voyage-context-3", input_data, optional_params, {}
-        )
+        transformed = config.transform_embedding_request("voyage-context-3", input_data, optional_params, {})
 
         assert transformed["inputs"] == input_data
         assert transformed["model"] == "voyage-context-3"
@@ -260,9 +252,7 @@ class TestVoyageContextualEmbeddings:
         non_default_params = {"encoding_format": "float", "dimensions": 512}
         optional_params = {}
 
-        mapped = config.map_openai_params(
-            non_default_params, optional_params, "voyage-context-3", False
-        )
+        mapped = config.map_openai_params(non_default_params, optional_params, "voyage-context-3", False)
 
         assert mapped["encoding_format"] == "float"
         assert mapped["output_dimension"] == 512
@@ -282,9 +272,7 @@ class TestVoyageContextualEmbeddings:
         assert headers["Authorization"] == "Bearer test-key"
 
         # Test with custom API key
-        headers = config.validate_environment(
-            {}, "voyage-context-3", [], {}, {}, api_key="custom-key"
-        )
+        headers = config.validate_environment({}, "voyage-context-3", [], {}, {}, api_key="custom-key")
         assert headers["Authorization"] == "Bearer custom-key"
 
     def test_contextual_embedding_error_handling(self):
@@ -313,23 +301,15 @@ class TestVoyageContextualEmbeddings:
         contextual_config = VoyageContextualEmbeddingConfig()
 
         # Test URL differences
-        regular_url = regular_config.get_complete_url(
-            None, None, "voyage-3-lite", {}, {}
-        )
-        contextual_url = contextual_config.get_complete_url(
-            None, None, "voyage-context-3", {}, {}
-        )
+        regular_url = regular_config.get_complete_url(None, None, "voyage-3-lite", {}, {})
+        contextual_url = contextual_config.get_complete_url(None, None, "voyage-context-3", {}, {})
 
         assert regular_url == "https://api.voyageai.com/v1/embeddings"
         assert contextual_url == "https://api.voyageai.com/v1/contextualizedembeddings"
 
         # Test request transformation differences
-        regular_transformed = regular_config.transform_embedding_request(
-            "voyage-3-lite", ["Hello"], {}, {}
-        )
-        contextual_transformed = contextual_config.transform_embedding_request(
-            "voyage-context-3", [["Hello"]], {}, {}
-        )
+        regular_transformed = regular_config.transform_embedding_request("voyage-3-lite", ["Hello"], {}, {})
+        contextual_transformed = contextual_config.transform_embedding_request("voyage-context-3", [["Hello"]], {}, {})
 
         assert regular_transformed["input"] == ["Hello"]
         assert contextual_transformed["inputs"] == [["Hello"]]
@@ -406,9 +386,7 @@ class TestVoyageContextualEmbeddings:
                     },
                     {
                         "object": "list",
-                        "data": [
-                            {"object": "embedding", "embedding": [0.5, 0.6], "index": 0}
-                        ],
+                        "data": [{"object": "embedding", "embedding": [0.5, 0.6], "index": 0}],
                         "index": 1,
                     },
                 ]

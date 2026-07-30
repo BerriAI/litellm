@@ -58,41 +58,29 @@ class TestMaybeWrapInFakeStream:
     def test_wraps_dict_when_converted_stream_flag_is_true(self):
         """When websearch_interception_converted_stream is True and response is dict, wrap it."""
         logging_obj = MagicMock()
-        logging_obj.model_call_details = {
-            "websearch_interception_converted_stream": True
-        }
+        logging_obj.model_call_details = {"websearch_interception_converted_stream": True}
 
-        result = self.handler._maybe_wrap_in_fake_stream(
-            _anthropic_response(), logging_obj, "anthropic_messages"
-        )
+        result = self.handler._maybe_wrap_in_fake_stream(_anthropic_response(), logging_obj, "anthropic_messages")
 
         assert isinstance(result, FakeAnthropicMessagesStreamIterator)
 
     def test_returns_response_unchanged_when_flag_is_false(self):
         """When flag is False, return response as-is."""
         logging_obj = MagicMock()
-        logging_obj.model_call_details = {
-            "websearch_interception_converted_stream": False
-        }
+        logging_obj.model_call_details = {"websearch_interception_converted_stream": False}
         response = {"id": "msg_123", "content": []}
 
-        result = self.handler._maybe_wrap_in_fake_stream(
-            response, logging_obj, "anthropic_messages"
-        )
+        result = self.handler._maybe_wrap_in_fake_stream(response, logging_obj, "anthropic_messages")
 
         assert result is response
 
     def test_returns_response_unchanged_when_not_dict(self):
         """When response is not a dict (e.g., already a stream), return as-is."""
         logging_obj = MagicMock()
-        logging_obj.model_call_details = {
-            "websearch_interception_converted_stream": True
-        }
+        logging_obj.model_call_details = {"websearch_interception_converted_stream": True}
         response = MagicMock()  # Not a dict
 
-        result = self.handler._maybe_wrap_in_fake_stream(
-            response, logging_obj, "anthropic_messages"
-        )
+        result = self.handler._maybe_wrap_in_fake_stream(response, logging_obj, "anthropic_messages")
 
         assert result is response
 
@@ -100,22 +88,16 @@ class TestMaybeWrapInFakeStream:
         """When logging_obj is None, return response as-is."""
         response = {"id": "msg_123", "content": []}
 
-        result = self.handler._maybe_wrap_in_fake_stream(
-            response, None, "anthropic_messages"
-        )
+        result = self.handler._maybe_wrap_in_fake_stream(response, None, "anthropic_messages")
 
         assert result is response
 
     def test_does_not_wrap_for_non_anthropic_surface(self):
         """Even with the flag set and a dict response, leave non-anthropic surfaces untouched."""
         logging_obj = MagicMock()
-        logging_obj.model_call_details = {
-            "websearch_interception_converted_stream": True
-        }
+        logging_obj.model_call_details = {"websearch_interception_converted_stream": True}
 
-        result = self.handler._maybe_wrap_in_fake_stream(
-            _anthropic_response(), logging_obj, "responses"
-        )
+        result = self.handler._maybe_wrap_in_fake_stream(_anthropic_response(), logging_obj, "responses")
 
         assert isinstance(result, dict)
 

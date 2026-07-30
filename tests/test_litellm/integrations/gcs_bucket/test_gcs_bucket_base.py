@@ -22,12 +22,8 @@ class TestGCSBucketBase:
             mock_token = "mock-token"
 
             with (
-                patch(
-                    "litellm.vertex_chat_completion._ensure_access_token"
-                ) as mock_ensure_token,
-                patch(
-                    "litellm.vertex_chat_completion._get_token_and_url"
-                ) as mock_get_token,
+                patch("litellm.vertex_chat_completion._ensure_access_token") as mock_ensure_token,
+                patch("litellm.vertex_chat_completion._get_token_and_url") as mock_get_token,
             ):
                 mock_ensure_token.return_value = (mock_auth_header, test_project_id)
                 mock_get_token.return_value = (mock_token, "mock-url")
@@ -65,12 +61,8 @@ class TestGCSBucketBase:
         mock_token = "mock-token"
 
         with (
-            patch(
-                "litellm.vertex_chat_completion._ensure_access_token"
-            ) as mock_ensure_token,
-            patch(
-                "litellm.vertex_chat_completion._get_token_and_url"
-            ) as mock_get_token,
+            patch("litellm.vertex_chat_completion._ensure_access_token") as mock_ensure_token,
+            patch("litellm.vertex_chat_completion._get_token_and_url") as mock_get_token,
         ):
             mock_ensure_token.return_value = (mock_auth_header, None)
             mock_get_token.return_value = (mock_token, "mock-url")
@@ -115,11 +107,7 @@ class TestGCSBucketBase:
         logger = GCSBucketLogger.__new__(GCSBucketLogger)
 
         object_name = logger._get_object_name(
-            kwargs={
-                "litellm_params": {
-                    "metadata": {"gcs_log_id": "../../target?uploadType=media"}
-                }
-            },
+            kwargs={"litellm_params": {"metadata": {"gcs_log_id": "../../target?uploadType=media"}}},
             logging_payload={"id": "payload"},
             response_obj={"id": "response-id"},
         )

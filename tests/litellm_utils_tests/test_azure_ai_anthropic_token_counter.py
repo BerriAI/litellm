@@ -10,9 +10,7 @@ from typing import Any, Dict, List
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.azure_ai.anthropic.count_tokens import AzureAIAnthropicTokenCounter
 from litellm.llms.base_llm.base_utils import BaseTokenCounter

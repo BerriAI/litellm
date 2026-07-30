@@ -95,7 +95,9 @@ class TestVertexAIPSCEndpointSupport:
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
-        expected_url = f"{psc_api_base}/v1beta1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}:predict"
+        expected_url = (
+            f"{psc_api_base}/v1beta1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}:predict"
+        )
         assert url == expected_url, f"Expected {expected_url}, but got {url}"
 
     def test_psc_endpoint_url_with_https(self):
@@ -148,7 +150,9 @@ class TestVertexAIPSCEndpointSupport:
         )
 
         # rstrip('/') should remove the trailing slash
-        expected_url = f"{psc_api_base.rstrip('/')}/v1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}:predict"
+        expected_url = (
+            f"{psc_api_base.rstrip('/')}/v1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}:predict"
+        )
         assert url == expected_url, f"Expected {expected_url}, but got {url}"
 
     def test_standard_proxy_with_googleapis(self):
@@ -247,6 +251,4 @@ class TestVertexAIPSCEndpointSupport:
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
-        assert (
-            auth_header == test_auth_header
-        ), f"Auth header should be preserved, got {auth_header}"
+        assert auth_header == test_auth_header, f"Auth header should be preserved, got {auth_header}"

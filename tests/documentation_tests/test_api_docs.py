@@ -6,9 +6,7 @@ import argparse
 import re
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 
 
@@ -62,9 +60,7 @@ class FastAPIDocVisitor(ast.NodeVisitor):
         return self.visit_FunctionDef(node)
 
 
-def find_functions_in_file(
-    file_path: str, target_functions: Set[str]
-) -> Dict[str, FunctionInfo]:
+def find_functions_in_file(file_path: str, target_functions: Set[str]) -> Dict[str, FunctionInfo]:
     """Find target functions in a Python file using AST."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:

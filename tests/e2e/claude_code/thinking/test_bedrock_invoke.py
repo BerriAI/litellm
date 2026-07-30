@@ -84,9 +84,7 @@ def test_thinking_bedrock_invoke(compat_result):
             continue
 
         if not _has_thinking_block(outcome.events):
-            error = (
-                f"[{model}] no `thinking` content block observed in stream-json events"
-            )
+            error = f"[{model}] no `thinking` content block observed in stream-json events"
             compat_result.add({"status": "fail", "error": error})
             failures.append(error)
             continue

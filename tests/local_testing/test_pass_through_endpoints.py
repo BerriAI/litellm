@@ -9,9 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds-the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds-the parent directory to the system path
 
 import asyncio
 from unittest.mock import Mock
@@ -61,9 +59,7 @@ async def test_pass_through_endpoint_no_headers(client, monkeypatch):
 
     # Initialize the pass-through endpoint
     await initialize_pass_through_endpoints(pass_through_endpoints)
-    general_settings: dict = (
-        getattr(litellm.proxy.proxy_server, "general_settings", {}) or {}
-    )
+    general_settings: dict = getattr(litellm.proxy.proxy_server, "general_settings", {}) or {}
     general_settings.update({"pass_through_endpoints": pass_through_endpoints})
     setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
 
@@ -92,9 +88,7 @@ async def test_pass_through_endpoint(client, monkeypatch):
 
     # Initialize the pass-through endpoint
     await initialize_pass_through_endpoints(pass_through_endpoints)
-    general_settings: Optional[dict] = (
-        getattr(litellm.proxy.proxy_server, "general_settings", {}) or {}
-    )
+    general_settings: Optional[dict] = getattr(litellm.proxy.proxy_server, "general_settings", {}) or {}
     general_settings.update({"pass_through_endpoints": pass_through_endpoints})
     setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
 
@@ -122,9 +116,7 @@ async def test_pass_through_endpoint_rerank(client):
 
     # Initialize the pass-through endpoint
     await initialize_pass_through_endpoints(pass_through_endpoints)
-    general_settings: Optional[dict] = (
-        getattr(litellm.proxy.proxy_server, "general_settings", {}) or {}
-    )
+    general_settings: Optional[dict] = getattr(litellm.proxy.proxy_server, "general_settings", {}) or {}
     general_settings.update({"pass_through_endpoints": pass_through_endpoints})
     setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
 
@@ -132,9 +124,7 @@ async def test_pass_through_endpoint_rerank(client):
         "model": "rerank-english-v3.0",
         "query": "What is the capital of the United States?",
         "top_n": 3,
-        "documents": [
-            "Carson City is the capital city of the American state of Nevada."
-        ],
+        "documents": ["Carson City is the capital city of the American state of Nevada."],
     }
 
     # Make a request to the pass-through endpoint
@@ -205,9 +195,7 @@ async def test_pass_through_endpoint_rpm_limit(
 
     # Initialize the pass-through endpoint
     await initialize_pass_through_endpoints(pass_through_endpoints)
-    general_settings: Optional[dict] = (
-        getattr(litellm.proxy.proxy_server, "general_settings", {}) or {}
-    )
+    general_settings: Optional[dict] = getattr(litellm.proxy.proxy_server, "general_settings", {}) or {}
     general_settings.update({"pass_through_endpoints": pass_through_endpoints})
     setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
 
@@ -226,9 +214,7 @@ async def test_pass_through_endpoint_rpm_limit(
         "model": "rerank-english-v3.0",
         "query": "What is the capital of the United States?",
         "top_n": 3,
-        "documents": [
-            "Carson City is the capital city of the American state of Nevada."
-        ],
+        "documents": ["Carson City is the capital city of the American state of Nevada."],
     }
 
     # Make requests sequentially to avoid race conditions in rate limiter
@@ -251,12 +237,8 @@ async def test_pass_through_endpoint_rpm_limit(
         first_user_responses = responses[requests_to_make:]
         second_user_responses = responses[:requests_to_make]
 
-        first_user_status_codes = sorted(
-            [response.status_code for response in first_user_responses]
-        )
-        second_user_status_codes = sorted(
-            [response.status_code for response in second_user_responses]
-        )
+        first_user_status_codes = sorted([response.status_code for response in first_user_responses])
+        second_user_status_codes = sorted([response.status_code for response in second_user_responses])
 
         expected_status_codes.sort()
         assert first_user_status_codes == expected_status_codes
@@ -309,9 +291,7 @@ async def test_pass_through_endpoint_sequential_rpm_limit(
 
     # Initialize the pass-through endpoint
     await initialize_pass_through_endpoints(pass_through_endpoints)
-    general_settings: Optional[dict] = (
-        getattr(litellm.proxy.proxy_server, "general_settings", {}) or {}
-    )
+    general_settings: Optional[dict] = getattr(litellm.proxy.proxy_server, "general_settings", {}) or {}
     general_settings.update({"pass_through_endpoints": pass_through_endpoints})
     setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
 
@@ -330,9 +310,7 @@ async def test_pass_through_endpoint_sequential_rpm_limit(
         "model": "rerank-english-v3.0",
         "query": "What is the capital of the United States?",
         "top_n": 3,
-        "documents": [
-            "Carson City is the capital city of the American state of Nevada."
-        ],
+        "documents": ["Carson City is the capital city of the American state of Nevada."],
     }
 
     # Make a request to the pass-through endpoint
@@ -356,12 +334,8 @@ async def test_pass_through_endpoint_sequential_rpm_limit(
         first_user_responses.append(first_user_response)
         second_user_responses.append(second_user_response)
 
-    first_user_status_codes = sorted(
-        [response.status_code for response in first_user_responses]
-    )
-    second_user_status_codes = sorted(
-        [response.status_code for response in second_user_responses]
-    )
+    first_user_status_codes = sorted([response.status_code for response in first_user_responses])
+    second_user_status_codes = sorted([response.status_code for response in second_user_responses])
 
     expected_status_codes.sort()
     assert first_user_status_codes == expected_status_codes
@@ -375,9 +349,7 @@ async def test_pass_through_endpoint_sequential_rpm_limit(
     [(True, 0, 429), (True, 2, 207), (False, 0, 207)],
 )
 @pytest.mark.asyncio
-async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
-    auth, expected_error_code, rpm_limit
-):
+async def test_aaapass_through_endpoint_pass_through_keys_langfuse(auth, expected_error_code, rpm_limit):
     from litellm.proxy.proxy_server import app
 
     client = TestClient(app)
@@ -387,17 +359,12 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
     from litellm.proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
 
     # Store original values
-    original_user_api_key_cache = getattr(
-        litellm.proxy.proxy_server, "user_api_key_cache", None
-    )
+    original_user_api_key_cache = getattr(litellm.proxy.proxy_server, "user_api_key_cache", None)
     original_master_key = getattr(litellm.proxy.proxy_server, "master_key", None)
     original_prisma_client = getattr(litellm.proxy.proxy_server, "prisma_client", None)
-    original_proxy_logging_obj = getattr(
-        litellm.proxy.proxy_server, "proxy_logging_obj", None
-    )
+    original_proxy_logging_obj = getattr(litellm.proxy.proxy_server, "proxy_logging_obj", None)
 
     try:
-
         mock_api_key = "sk-my-test-key"
         cache_value = UserAPIKeyAuth(
             token=hash_token(mock_api_key),
@@ -433,9 +400,7 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
 
         # Initialize the pass-through endpoint
         await initialize_pass_through_endpoints(pass_through_endpoints)
-        general_settings: Optional[dict] = (
-            getattr(litellm.proxy.proxy_server, "general_settings", {}) or {}
-        )
+        general_settings: Optional[dict] = getattr(litellm.proxy.proxy_server, "general_settings", {}) or {}
         old_general_settings = general_settings
         general_settings.update({"pass_through_endpoints": pass_through_endpoints})
         setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
@@ -491,9 +456,7 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
         )
         setattr(litellm.proxy.proxy_server, "master_key", original_master_key)
         setattr(litellm.proxy.proxy_server, "prisma_client", original_prisma_client)
-        setattr(
-            litellm.proxy.proxy_server, "proxy_logging_obj", original_proxy_logging_obj
-        )
+        setattr(litellm.proxy.proxy_server, "proxy_logging_obj", original_proxy_logging_obj)
 
 
 @pytest.mark.asyncio
@@ -542,9 +505,7 @@ async def test_pass_through_endpoint_bing(client, monkeypatch):
 
     # Initialize the pass-through endpoint
     await initialize_pass_through_endpoints(pass_through_endpoints)
-    general_settings: Optional[dict] = (
-        getattr(litellm.proxy.proxy_server, "general_settings", {}) or {}
-    )
+    general_settings: Optional[dict] = getattr(litellm.proxy.proxy_server, "general_settings", {}) or {}
     general_settings.update({"pass_through_endpoints": pass_through_endpoints})
     setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
 

@@ -49,9 +49,7 @@ async def test_async_sqs_logger_flush():
 
     # Verify the URL is correct
     called_url = call_args[0][0]  # First positional argument
-    assert (
-        called_url == expected_queue_url
-    ), f"Expected URL {expected_queue_url}, got {called_url}"
+    assert called_url == expected_queue_url, f"Expected URL {expected_queue_url}, got {called_url}"
 
     # Verify the payload contains StandardLoggingPayload data
     called_data = call_args.kwargs["data"]
@@ -114,9 +112,7 @@ async def test_async_sqs_logger_error_flush():
 
     # Verify the URL is correct
     called_url = call_args[0][0]  # First positional argument
-    assert (
-        called_url == expected_queue_url
-    ), f"Expected URL {expected_queue_url}, got {called_url}"
+    assert called_url == expected_queue_url, f"Expected URL {expected_queue_url}, got {called_url}"
 
     # Verify the payload contains StandardLoggingPayload data
     called_data = call_args.kwargs["data"]
@@ -156,9 +152,7 @@ async def test_async_log_success_event_adds_to_queue(monkeypatch):
     logger = SQSLogger(sqs_queue_url="https://example.com", sqs_region_name="us-west-2")
 
     fake_payload = {"some": "data"}
-    await logger.async_log_success_event(
-        {"standard_logging_object": fake_payload}, None, None, None
-    )
+    await logger.async_log_success_event({"standard_logging_object": fake_payload}, None, None, None)
     assert fake_payload in logger.log_queue
 
 
@@ -168,9 +162,7 @@ async def test_async_log_failure_event_adds_to_queue(monkeypatch):
     logger = SQSLogger(sqs_queue_url="https://example.com", sqs_region_name="us-west-2")
 
     fake_payload = {"fail": True}
-    await logger.async_log_failure_event(
-        {"standard_logging_object": fake_payload}, None, None, None
-    )
+    await logger.async_log_failure_event({"standard_logging_object": fake_payload}, None, None, None)
     assert fake_payload in logger.log_queue
 
 
@@ -264,9 +256,7 @@ async def test_async_log_success_event_adds_to_queue(monkeypatch):
     logger = SQSLogger(sqs_queue_url="https://example.com", sqs_region_name="us-west-2")
 
     fake_payload = {"some": "data"}
-    await logger.async_log_success_event(
-        {"standard_logging_object": fake_payload}, None, None, None
-    )
+    await logger.async_log_success_event({"standard_logging_object": fake_payload}, None, None, None)
     assert fake_payload in logger.log_queue
 
 
@@ -277,9 +267,7 @@ async def test_async_log_failure_event_adds_to_queue(monkeypatch):
     logger = SQSLogger(sqs_queue_url="https://example.com", sqs_region_name="us-west-2")
 
     fake_payload = {"fail": True}
-    await logger.async_log_failure_event(
-        {"standard_logging_object": fake_payload}, None, None, None
-    )
+    await logger.async_log_failure_event({"standard_logging_object": fake_payload}, None, None, None)
     assert fake_payload in logger.log_queue
 
 

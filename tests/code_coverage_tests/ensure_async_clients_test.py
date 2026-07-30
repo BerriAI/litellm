@@ -24,7 +24,9 @@ ALLOWED_FILES = [
     "./litellm/experimental_mcp_client/client.py",
 ]
 
-warning_msg = "this is a serious violation that can impact latency. Creating Async clients per request can add +500ms per request"
+warning_msg = (
+    "this is a serious violation that can impact latency. Creating Async clients per request can add +500ms per request"
+)
 
 
 def check_for_async_http_handler(file_path):
@@ -51,9 +53,7 @@ def check_for_async_http_handler(file_path):
     ]  # Add variations here
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name) and node.func.id.lower() in [
-                name.lower() for name in target_names
-            ]:
+            if isinstance(node.func, ast.Name) and node.func.id.lower() in [name.lower() for name in target_names]:
                 raise ValueError(
                     f"found violation in file {file_path} line: {node.lineno}. Please use `get_async_httpx_client` instead. {warning_msg}"
                 )
@@ -103,12 +103,8 @@ def test_no_async_http_handler_usage():
     if violations:
         violation_messages = []
         for file_path, line_numbers in violations.items():
-            violation_messages.append(
-                f"Found AsyncHttpHandler in {file_path} at lines: {line_numbers}"
-            )
-        raise AssertionError(
-            "AsyncHttpHandler usage detected:\n" + "\n".join(violation_messages)
-        )
+            violation_messages.append(f"Found AsyncHttpHandler in {file_path} at lines: {line_numbers}")
+        raise AssertionError("AsyncHttpHandler usage detected:\n" + "\n".join(violation_messages))
 
 
 if __name__ == "__main__":

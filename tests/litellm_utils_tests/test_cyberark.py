@@ -35,9 +35,7 @@ def create_mock_response(status_code: int, text: str = ""):
     if status_code >= 400:
         import httpx
 
-        error = httpx.HTTPStatusError(
-            message=f"HTTP {status_code}", request=MagicMock(), response=mock_response
-        )
+        error = httpx.HTTPStatusError(message=f"HTTP {status_code}", request=MagicMock(), response=mock_response)
         mock_response.raise_for_status.side_effect = error
 
     return mock_response
@@ -133,19 +131,13 @@ async def test_cyberark_write_and_read_secret():
         # The _get_httpx_client returns an HTTPHandler with a .client property
         mock_sync_client = MagicMock()
         # Auth response - note: the actual client is accessed via .client property
-        mock_sync_client.client.post.return_value = create_mock_response(
-            status_code=200, text="mock-token"
-        )
+        mock_sync_client.client.post.return_value = create_mock_response(status_code=200, text="mock-token")
         # Sync read response
-        mock_sync_client.client.get.return_value = create_mock_response(
-            status_code=200, text=secret_value
-        )
+        mock_sync_client.client.get.return_value = create_mock_response(status_code=200, text=secret_value)
 
         # Mock async httpx client (for async write)
         mock_async_client = AsyncMock()
-        mock_async_client.post.return_value = create_mock_response(
-            status_code=201, text=""
-        )
+        mock_async_client.post.return_value = create_mock_response(status_code=201, text="")
 
         with (
             patch(
@@ -207,9 +199,7 @@ async def test_cyberark_rotate_secret():
         # The _get_httpx_client returns an HTTPHandler with a .client property
         mock_sync_client = MagicMock()
         # Auth response - note: the actual client is accessed via .client property
-        mock_sync_client.client.post.return_value = create_mock_response(
-            status_code=200, text="mock-token"
-        )
+        mock_sync_client.client.post.return_value = create_mock_response(status_code=200, text="mock-token")
 
         # Sync reads return the current value from our simulated storage
         def get_mock_sync_read_response(*args, **kwargs):
@@ -283,9 +273,7 @@ async def test_cyberark_rotate_secret():
             assert rotated_read == rotated_key_value
             assert rotated_read != initial_key_value
 
-            print(
-                f"\n✅ Rotation successful: {initial_key_value} → {rotated_key_value}"
-            )
+            print(f"\n✅ Rotation successful: {initial_key_value} → {rotated_key_value}")
 
 
 @pytest.mark.asyncio
@@ -318,9 +306,7 @@ async def test_cyberark_rotate_secret_with_new_alias():
         # The _get_httpx_client returns an HTTPHandler with a .client property
         mock_sync_client = MagicMock()
         # Auth response - note: the actual client is accessed via .client property
-        mock_sync_client.client.post.return_value = create_mock_response(
-            status_code=200, text="mock-token"
-        )
+        mock_sync_client.client.post.return_value = create_mock_response(status_code=200, text="mock-token")
 
         # Mock sync reads to return from our store
         def get_mock_sync_read(*args, **kwargs):

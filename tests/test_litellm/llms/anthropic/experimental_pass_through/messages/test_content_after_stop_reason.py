@@ -33,26 +33,14 @@ class MockCompletionStreamWithContentAfterStopReason:
         self.responses = [
             # Initial text content
             ModelResponseStream(
-                choices=[
-                    StreamingChoices(
-                        delta=Delta(content="Hello"), index=0, finish_reason=None
-                    )
-                ],
+                choices=[StreamingChoices(delta=Delta(content="Hello"), index=0, finish_reason=None)],
             ),
             ModelResponseStream(
-                choices=[
-                    StreamingChoices(
-                        delta=Delta(content=" world"), index=0, finish_reason=None
-                    )
-                ],
+                choices=[StreamingChoices(delta=Delta(content=" world"), index=0, finish_reason=None)],
             ),
             # Message delta with stop_reason AND usage (this is how it actually comes from the API)
             ModelResponseStream(
-                choices=[
-                    StreamingChoices(
-                        delta=Delta(content=""), index=0, finish_reason="stop"
-                    )
-                ],
+                choices=[StreamingChoices(delta=Delta(content=""), index=0, finish_reason="stop")],
                 usage=Usage(prompt_tokens=230, completion_tokens=65, total_tokens=295),
             ),
             # Additional content after the stop_reason - this simulates the scenario
@@ -121,9 +109,9 @@ def test_anthropic_stream_wrapper_content_after_stop_reason():
     print(f"Expected chunk types: {expected_types}")
 
     # Verify we have the expected number of chunks
-    assert len(chunk_types) >= len(
-        expected_types
-    ), f"Expected at least {len(expected_types)} chunks, got {len(chunk_types)}"
+    assert len(chunk_types) >= len(expected_types), (
+        f"Expected at least {len(expected_types)} chunks, got {len(chunk_types)}"
+    )
 
     # Verify key chunk types are present
     assert "message_start" in chunk_types
@@ -146,15 +134,9 @@ def test_anthropic_stream_wrapper_content_after_stop_reason():
     delta = message_delta_chunk.get("delta", {})
     usage = message_delta_chunk.get("usage", {})
 
-    assert (
-        delta.get("stop_reason") == "end_turn"
-    ), f"Expected stop_reason 'end_turn', got {delta.get('stop_reason')}"
-    assert (
-        usage.get("input_tokens") == 230
-    ), f"Expected input_tokens 230, got {usage.get('input_tokens')}"
-    assert (
-        usage.get("output_tokens") == 65
-    ), f"Expected output_tokens 65, got {usage.get('output_tokens')}"
+    assert delta.get("stop_reason") == "end_turn", f"Expected stop_reason 'end_turn', got {delta.get('stop_reason')}"
+    assert usage.get("input_tokens") == 230, f"Expected input_tokens 230, got {usage.get('input_tokens')}"
+    assert usage.get("output_tokens") == 65, f"Expected output_tokens 65, got {usage.get('output_tokens')}"
 
     # Verify content_block_stop comes before message_delta
     content_block_stop_index = None
@@ -168,9 +150,7 @@ def test_anthropic_stream_wrapper_content_after_stop_reason():
 
     assert content_block_stop_index is not None, "content_block_stop not found"
     assert message_delta_index is not None, "message_delta not found"
-    assert (
-        content_block_stop_index < message_delta_index
-    ), "content_block_stop should come before message_delta"
+    assert content_block_stop_index < message_delta_index, "content_block_stop should come before message_delta"
 
 
 @pytest.mark.asyncio
@@ -213,15 +193,9 @@ async def test_async_anthropic_stream_wrapper_content_after_stop_reason():
     delta = message_delta_chunk.get("delta", {})
     usage = message_delta_chunk.get("usage", {})
 
-    assert (
-        delta.get("stop_reason") == "end_turn"
-    ), f"Expected stop_reason 'end_turn', got {delta.get('stop_reason')}"
-    assert (
-        usage.get("input_tokens") == 230
-    ), f"Expected input_tokens 230, got {usage.get('input_tokens')}"
-    assert (
-        usage.get("output_tokens") == 65
-    ), f"Expected output_tokens 65, got {usage.get('output_tokens')}"
+    assert delta.get("stop_reason") == "end_turn", f"Expected stop_reason 'end_turn', got {delta.get('stop_reason')}"
+    assert usage.get("input_tokens") == 230, f"Expected input_tokens 230, got {usage.get('input_tokens')}"
+    assert usage.get("output_tokens") == 65, f"Expected output_tokens 65, got {usage.get('output_tokens')}"
 
 
 def test_usage_merging_behavior():
@@ -237,18 +211,10 @@ def test_usage_merging_behavior():
     for chunk in wrapper:
         chunks.append(chunk)
         # If this is a message_delta with stop_reason, verify it has usage
-        if (
-            chunk.get("type") == "message_delta"
-            and chunk.get("delta", {}).get("stop_reason") is not None
-        ):
-
+        if chunk.get("type") == "message_delta" and chunk.get("delta", {}).get("stop_reason") is not None:
             usage = chunk.get("usage", {})
-            assert (
-                usage.get("input_tokens") is not None
-            ), "Usage should be merged with stop_reason chunk"
-            assert (
-                usage.get("output_tokens") is not None
-            ), "Usage should be merged with stop_reason chunk"
+            assert usage.get("input_tokens") is not None, "Usage should be merged with stop_reason chunk"
+            assert usage.get("output_tokens") is not None, "Usage should be merged with stop_reason chunk"
             break
 
 
@@ -276,12 +242,8 @@ def test_sse_wrapper_with_content_after_stop_reason():
         lines = chunk_str.split("\n")
 
         # Should have event and data lines
-        assert any(
-            line.startswith("event: ") for line in lines
-        ), f"Missing event line in: {chunk_str}"
-        assert any(
-            line.startswith("data: ") for line in lines
-        ), f"Missing data line in: {chunk_str}"
+        assert any(line.startswith("event: ") for line in lines), f"Missing event line in: {chunk_str}"
+        assert any(line.startswith("data: ") for line in lines), f"Missing data line in: {chunk_str}"
 
 
 @pytest.mark.asyncio
@@ -309,12 +271,8 @@ async def test_async_sse_wrapper_with_content_after_stop_reason():
         lines = chunk_str.split("\n")
 
         # Should have event and data lines
-        assert any(
-            line.startswith("event: ") for line in lines
-        ), f"Missing event line in: {chunk_str}"
-        assert any(
-            line.startswith("data: ") for line in lines
-        ), f"Missing data line in: {chunk_str}"
+        assert any(line.startswith("event: ") for line in lines), f"Missing event line in: {chunk_str}"
+        assert any(line.startswith("data: ") for line in lines), f"Missing data line in: {chunk_str}"
 
 
 if __name__ == "__main__":

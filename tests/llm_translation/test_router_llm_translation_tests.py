@@ -8,9 +8,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from base_llm_unit_tests import BaseLLMChatTest
@@ -92,9 +90,7 @@ def test_router_azure_acompletion():
             },
         ]
 
-        router = Router(
-            model_list=model_list, routing_strategy="simple-shuffle", set_verbose=True
-        )  # type: ignore
+        router = Router(model_list=model_list, routing_strategy="simple-shuffle", set_verbose=True)  # type: ignore
 
         async def test1():
             response = await router.acompletion(

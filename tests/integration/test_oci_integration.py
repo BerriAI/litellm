@@ -61,9 +61,7 @@ def oci_signer():
     if "security_token_file" in config:
         with open(os.path.expanduser(config["security_token_file"])) as f:
             token = f.read().strip()
-        private_key = oci.signer.load_private_key_from_file(
-            config["key_file"], config.get("pass_phrase")
-        )
+        private_key = oci.signer.load_private_key_from_file(config["key_file"], config.get("pass_phrase"))
         return oci.auth.signers.SecurityTokenSigner(token, private_key)
 
     return oci.Signer(
@@ -452,7 +450,6 @@ def test_reasoning_tokens_in_usage(oci_params):
 
 
 class TestOCIEmbeddings:
-
     def test_english_v3_basic(self, oci_params):
         import litellm
 
@@ -534,9 +531,7 @@ class TestOCIEmbeddings:
         stock = resp.data[2]["embedding"]
         sim_cats = cosine(cat1, cat2)
         sim_diff = cosine(cat1, stock)
-        assert (
-            sim_cats > sim_diff
-        ), f"Expected similar sentences to score higher ({sim_cats:.3f} vs {sim_diff:.3f})"
+        assert sim_cats > sim_diff, f"Expected similar sentences to score higher ({sim_cats:.3f} vs {sim_diff:.3f})"
 
     def test_embed_v4(self, oci_params):
         import litellm
@@ -569,7 +564,6 @@ class TestOCIEmbeddings:
 
 
 class TestOCIAsyncEmbeddings:
-
     @pytest.mark.asyncio
     async def test_async_embedding_basic(self, oci_params):
         import litellm

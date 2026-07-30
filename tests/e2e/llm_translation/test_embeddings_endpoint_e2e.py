@@ -21,15 +21,11 @@ pytestmark = pytest.mark.e2e
 
 class TestEmbeddingsEndpoint:
     @pytest.mark.covers("llm.embeddings.openai.basic.nonstream.works")
-    def test_embeddings_returns_vector(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> None:
+    def test_embeddings_returns_vector(self, endpoints_client: EndpointsClient, resources: ResourceManager) -> None:
         model = f"e2e-embeddings-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
-            LiteLLMParamsBody(
-                model="openai/text-embedding-3-small", api_key="os.environ/OPENAI_API_KEY"
-            ),
+            LiteLLMParamsBody(model="openai/text-embedding-3-small", api_key="os.environ/OPENAI_API_KEY"),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()
@@ -49,9 +45,7 @@ class TestEmbeddingsEndpoint:
         model = f"e2e-embeddings-bedrock-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
-            LiteLLMParamsBody(
-                model="bedrock/amazon.titan-embed-text-v2:0", aws_region_name="us-west-2"
-            ),
+            LiteLLMParamsBody(model="bedrock/amazon.titan-embed-text-v2:0", aws_region_name="us-west-2"),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()

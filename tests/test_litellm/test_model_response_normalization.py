@@ -29,11 +29,7 @@ def test_modelresponse_normalizes_openai_base_models() -> None:
     assert isinstance(response.choices[0], Choices)
     assert isinstance(response.choices[0].message, Message)
 
-    assert not any(
-        "Pydantic serializer warnings" in str(w.message)
-        for w in captured
-        if isinstance(w.message, Warning)
-    )
+    assert not any("Pydantic serializer warnings" in str(w.message) for w in captured if isinstance(w.message, Warning))
 
 
 def test_modelresponse_serialization_avoids_pydantic_warnings() -> None:
@@ -62,8 +58,7 @@ def test_modelresponse_serialization_avoids_pydantic_warnings() -> None:
         _ = response.model_dump(exclude_none=True)
 
     assert not any(
-        "PydanticSerializationUnexpectedValue" in str(w.message)
-        or "Pydantic serializer warnings" in str(w.message)
+        "PydanticSerializationUnexpectedValue" in str(w.message) or "Pydantic serializer warnings" in str(w.message)
         for w in captured
     )
 
@@ -91,12 +86,9 @@ def test_modelresponse_model_dump_json_no_pydantic_warnings() -> None:
     pydantic_warnings = [
         w
         for w in captured
-        if "PydanticSerializationUnexpectedValue" in str(w.message)
-        or "Pydantic serializer warnings" in str(w.message)
+        if "PydanticSerializationUnexpectedValue" in str(w.message) or "Pydantic serializer warnings" in str(w.message)
     ]
-    assert (
-        pydantic_warnings == []
-    ), f"Unexpected Pydantic serialization warnings: {pydantic_warnings}"
+    assert pydantic_warnings == [], f"Unexpected Pydantic serialization warnings: {pydantic_warnings}"
 
 
 def test_streaming_modelresponsestream_no_pydantic_warnings() -> None:
@@ -120,9 +112,6 @@ def test_streaming_modelresponsestream_no_pydantic_warnings() -> None:
     pydantic_warnings = [
         w
         for w in captured
-        if "PydanticSerializationUnexpectedValue" in str(w.message)
-        or "Pydantic serializer warnings" in str(w.message)
+        if "PydanticSerializationUnexpectedValue" in str(w.message) or "Pydantic serializer warnings" in str(w.message)
     ]
-    assert (
-        pydantic_warnings == []
-    ), f"Unexpected Pydantic serialization warnings: {pydantic_warnings}"
+    assert pydantic_warnings == [], f"Unexpected Pydantic serialization warnings: {pydantic_warnings}"

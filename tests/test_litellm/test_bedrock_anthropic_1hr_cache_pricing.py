@@ -32,9 +32,7 @@ import pytest
 
 @pytest.fixture(scope="module")
 def model_data():
-    json_path = os.path.join(
-        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
-    )
+    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
     with open(json_path) as f:
         return json.load(f)
 
@@ -107,9 +105,7 @@ REGIONAL_EXPECTED = [
     "model_key, expected_1hr, expected_1hr_lc",
     GLOBAL_EXPECTED + US_EXPECTED + REGIONAL_EXPECTED,
 )
-def test_bedrock_anthropic_1hr_cache_write_pricing(
-    model_data, model_key, expected_1hr, expected_1hr_lc
-):
+def test_bedrock_anthropic_1hr_cache_write_pricing(model_data, model_key, expected_1hr, expected_1hr_lc):
     assert model_key in model_data, f"Missing model entry: {model_key}"
     info = model_data[model_key]
 
@@ -127,28 +123,18 @@ def test_bedrock_anthropic_1hr_cache_write_pricing(
     # 1hr cache write rate must be 1.6x the 5-minute rate (AWS standard ratio).
     five_min = info["cache_creation_input_token_cost"]
     ratio = info["cache_creation_input_token_cost_above_1hr"] / five_min
-    assert (
-        abs(ratio - 1.6) < 1e-9
-    ), f"{model_key}: 1hr/5min ratio is {ratio}, expected 1.6"
+    assert abs(ratio - 1.6) < 1e-9, f"{model_key}: 1hr/5min ratio is {ratio}, expected 1.6"
 
     # Long-context (>200K) tier, where AWS publishes one.
     if expected_1hr_lc is not None:
-        assert (
-            "cache_creation_input_token_cost_above_1hr_above_200k_tokens" in info
-        ), f"{model_key}: missing 1hr cache write tier for >200K context"
-        assert (
-            info["cache_creation_input_token_cost_above_1hr_above_200k_tokens"]
-            == expected_1hr_lc
-        ), (
+        assert "cache_creation_input_token_cost_above_1hr_above_200k_tokens" in info, (
+            f"{model_key}: missing 1hr cache write tier for >200K context"
+        )
+        assert info["cache_creation_input_token_cost_above_1hr_above_200k_tokens"] == expected_1hr_lc, (
             f"{model_key}: long-context 1hr cache write rate "
             f"{info['cache_creation_input_token_cost_above_1hr_above_200k_tokens']} "
             f"does not match expected {expected_1hr_lc}"
         )
         five_min_lc = info["cache_creation_input_token_cost_above_200k_tokens"]
-        ratio_lc = (
-            info["cache_creation_input_token_cost_above_1hr_above_200k_tokens"]
-            / five_min_lc
-        )
-        assert (
-            abs(ratio_lc - 1.6) < 1e-9
-        ), f"{model_key}: long-context 1hr/5min ratio is {ratio_lc}, expected 1.6"
+        ratio_lc = info["cache_creation_input_token_cost_above_1hr_above_200k_tokens"] / five_min_lc
+        assert abs(ratio_lc - 1.6) < 1e-9, f"{model_key}: long-context 1hr/5min ratio is {ratio_lc}, expected 1.6"

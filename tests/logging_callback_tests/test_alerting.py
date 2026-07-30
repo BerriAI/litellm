@@ -94,10 +94,10 @@ async def test_get_api_base():
     assert api_base is not None
     assert isinstance(api_base, str)
     assert len(api_base) > 0
-    request_info = (
-        f"\nRequest Model: `{model}`\nAPI Base: `{api_base}`\nMessages: `{messages}`"
+    request_info = f"\nRequest Model: `{model}`\nAPI Base: `{api_base}`\nMessages: `{messages}`"
+    slow_message = (
+        f"`Responses are slow - {round(time_difference_float, 2)}s response time > Alerting threshold: {100}s`"
     )
-    slow_message = f"`Responses are slow - {round(time_difference_float,2)}s response time > Alerting threshold: {100}s`"
     await _pl.alerting_handler(
         message=slow_message + request_info,
         level="Low",
@@ -138,9 +138,7 @@ from unittest.mock import AsyncMock, patch
 
 @pytest.fixture
 def slack_alerting():
-    return SlackAlerting(
-        alerting_threshold=1, internal_usage_cache=DualCache(), alerting=["slack"]
-    )
+    return SlackAlerting(alerting_threshold=1, internal_usage_cache=DualCache(), alerting=["slack"])
 
 
 # Test for slow LLM responses
@@ -150,9 +148,7 @@ async def test_response_taking_too_long_callback(slack_alerting):
     end_time = start_time + timedelta(seconds=301)
     kwargs = {"model": "test_model", "messages": "test_messages", "litellm_params": {}}
     with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
-        await slack_alerting.response_taking_too_long_callback(
-            kwargs, None, start_time, end_time
-        )
+        await slack_alerting.response_taking_too_long_callback(kwargs, None, start_time, end_time)
         mock_send_alert.assert_awaited_once()
 
 
@@ -169,11 +165,8 @@ async def test_alerting_metadata(slack_alerting):
         "litellm_params": {"metadata": {"alerting_metadata": {"hello": "world"}}},
     }
     with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
-
         ## RESPONSE TAKING TOO LONG
-        await slack_alerting.response_taking_too_long_callback(
-            kwargs, None, start_time, end_time
-        )
+        await slack_alerting.response_taking_too_long_callback(kwargs, None, start_time, end_time)
         mock_send_alert.assert_awaited_once()
 
         assert "hello" in mock_send_alert.call_args[1]["alerting_metadata"]
@@ -235,13 +228,9 @@ async def test_send_alert(slack_alerting):
 
     asyncio.create_task(slack_alerting.periodic_flush())
     verbose_logger.setLevel(level=logging.DEBUG)
-    with patch.object(
-        slack_alerting.async_http_handler, "post", new=AsyncMock()
-    ) as mock_post:
+    with patch.object(slack_alerting.async_http_handler, "post", new=AsyncMock()) as mock_post:
         mock_post.return_value.status_code = 200
-        await slack_alerting.send_alert(
-            "Test message", "Low", "budget_alerts", alerting_metadata={}
-        )
+        await slack_alerting.send_alert("Test message", "Low", "budget_alerts", alerting_metadata={})
 
         await asyncio.sleep(6)
         mock_post.assert_awaited_once()
@@ -266,9 +255,7 @@ async def test_daily_reports_unit_test(slack_alerting):
             updated_at=litellm.utils.get_utc_datetime(),
         )
 
-        updated_val = await slack_alerting.async_update_daily_reports(
-            deployment_metrics=deployment_metrics
-        )
+        updated_val = await slack_alerting.async_update_daily_reports(deployment_metrics=deployment_metrics)
 
         assert updated_val == 1
 
@@ -335,9 +322,7 @@ async def test_daily_reports_completion(slack_alerting):
 @pytest.mark.asyncio
 async def test_daily_reports_redis_cache_scheduler():
     redis_cache = RedisCache()
-    slack_alerting = SlackAlerting(
-        internal_usage_cache=DualCache(redis_cache=redis_cache)
-    )
+    slack_alerting = SlackAlerting(internal_usage_cache=DualCache(redis_cache=redis_cache))
 
     # we need this to be 0 so it actualy sends the report
     slack_alerting.alerting_args.daily_report_frequency = 0
@@ -357,9 +342,7 @@ async def test_daily_reports_redis_cache_scheduler():
 
     with (
         patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert,
-        patch.object(
-            redis_cache, "async_set_cache", new=AsyncMock()
-        ) as mock_redis_set_cache,
+        patch.object(redis_cache, "async_set_cache", new=AsyncMock()) as mock_redis_set_cache,
     ):
         # initial call - expect empty
         await slack_alerting._run_scheduler_helper(llm_router=router)
@@ -367,11 +350,7 @@ async def test_daily_reports_redis_cache_scheduler():
         try:
             json.dumps(mock_redis_set_cache.call_args[0][1])
         except Exception as e:
-            pytest.fail(
-                "Cache value can't be json dumped - {}".format(
-                    mock_redis_set_cache.call_args[0][1]
-                )
-            )
+            pytest.fail("Cache value can't be json dumped - {}".format(mock_redis_set_cache.call_args[0][1]))
 
         mock_redis_set_cache.assert_awaited_once()
 
@@ -401,9 +380,7 @@ async def test_send_llm_exception_to_slack():
                 },
             },
         ],
-        alerting_config=AlertingConfig(
-            alerting_threshold=0.5, webhook_url=os.getenv("SLACK_WEBHOOK_URL")
-        ),
+        alerting_config=AlertingConfig(alerting_threshold=0.5, webhook_url=os.getenv("SLACK_WEBHOOK_URL")),
     )
     try:
         await router.acompletion(
@@ -429,9 +406,7 @@ async def test_send_daily_reports_ignores_zero_values():
 
     slack_alerting = SlackAlerting(internal_usage_cache=MagicMock())
     # model1:failed=None, model2:failed=0, model3:failed=10, model1:latency=0; model2:latency=0; model3:latency=None
-    slack_alerting.internal_usage_cache.async_batch_get_cache = AsyncMock(
-        return_value=[None, 0, 10, 0, 0, None]
-    )
+    slack_alerting.internal_usage_cache.async_batch_get_cache = AsyncMock(return_value=[None, 0, 10, 0, 0, None])
     slack_alerting.internal_usage_cache.async_set_cache_pipeline = AsyncMock()
 
     router.get_model_info.side_effect = lambda x: {"litellm_params": {"model": x}}
@@ -458,9 +433,7 @@ async def test_send_daily_reports_all_zero_or_none():
     router.get_model_ids.return_value = ["model1", "model2", "model3"]
 
     slack_alerting = SlackAlerting(internal_usage_cache=MagicMock())
-    slack_alerting.internal_usage_cache.async_batch_get_cache = AsyncMock(
-        return_value=[None, 0, None, 0, None, 0]
-    )
+    slack_alerting.internal_usage_cache.async_batch_get_cache = AsyncMock(return_value=[None, 0, None, 0, None, 0])
 
     with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
         result = await slack_alerting.send_daily_reports(router)
@@ -525,9 +498,7 @@ async def test_send_token_budget_crossed_alerts(alerting_type):
 async def test_webhook_alerting(alerting_type):
     slack_alerting = SlackAlerting(alerting=["webhook"])
 
-    with patch.object(
-        slack_alerting, "send_webhook_alert", new=AsyncMock()
-    ) as mock_send_alert:
+    with patch.object(slack_alerting, "send_webhook_alert", new=AsyncMock()) as mock_send_alert:
         user_info = {
             "token": "sk-test-mock-token-606",
             "spend": 1,
@@ -595,9 +566,7 @@ async def test_webhook_alerting(alerting_type):
 )
 @pytest.mark.parametrize("error_code", [500, 408, 400])
 @pytest.mark.asyncio
-async def test_outage_alerting_called(
-    model, api_base, llm_provider, vertex_project, vertex_location, error_code
-):
+async def test_outage_alerting_called(model, api_base, llm_provider, vertex_project, vertex_location, error_code):
     """
     If call fails, outage alert is called
 
@@ -618,9 +587,7 @@ async def test_outage_alerting_called(
         )
     elif error_code == 408:
         print("RAISING 408 ERROR CODE")
-        error_to_raise = litellm.Timeout(
-            message="A timeout occurred", model=model, llm_provider=llm_provider
-        )
+        error_to_raise = litellm.Timeout(message="A timeout occurred", model=model, llm_provider=llm_provider)
     elif error_code == 500:
         print("RAISING 500 ERROR CODE")
         error_to_raise = litellm.ServiceUnavailableError(
@@ -654,9 +621,7 @@ async def test_outage_alerting_called(
     )
 
     slack_alerting.update_values(llm_router=router)
-    with patch.object(
-        slack_alerting, "outage_alerts", new=AsyncMock()
-    ) as mock_outage_alert:
+    with patch.object(slack_alerting, "outage_alerts", new=AsyncMock()) as mock_outage_alert:
         try:
             await router.acompletion(
                 model=model,
@@ -709,9 +674,7 @@ async def test_region_outage_alerting_called(
 
     If multiple calls fail, outage alert is sent
     """
-    slack_alerting = SlackAlerting(
-        alerting=["webhook"], alert_types=[AlertType.region_outage_alerts]
-    )
+    slack_alerting = SlackAlerting(alerting=["webhook"], alert_types=[AlertType.region_outage_alerts])
 
     litellm.callbacks = [slack_alerting]
 
@@ -726,9 +689,7 @@ async def test_region_outage_alerting_called(
         )
     elif error_code == 408:
         print("RAISING 408 ERROR CODE")
-        error_to_raise = litellm.Timeout(
-            message="A timeout occurred", model=model, llm_provider=llm_provider
-        )
+        error_to_raise = litellm.Timeout(message="A timeout occurred", model=model, llm_provider=llm_provider)
     elif error_code == 500:
         print("RAISING 500 ERROR CODE")
         error_to_raise = litellm.ServiceUnavailableError(
@@ -781,7 +742,8 @@ async def test_region_outage_alerting_called(
             else:
                 deployment_id = "2"
             await slack_alerting.region_outage_alerts(
-                exception=error_to_raise, deployment_id=deployment_id  # type: ignore
+                exception=error_to_raise,
+                deployment_id=deployment_id,  # type: ignore
             )
         if model == "gemini-2.0-flash" and (error_code == 500 or error_code == 408):
             mock_send_alert.assert_called_once()
@@ -827,17 +789,13 @@ async def test_langfuse_trace_id():
         internal_usage_cache=DualCache(),
     )
 
-    trace_url = await _add_langfuse_trace_id_to_alert(
-        request_data={"litellm_logging_obj": litellm_logging_obj}
-    )
+    trace_url = await _add_langfuse_trace_id_to_alert(request_data={"litellm_logging_obj": litellm_logging_obj})
 
     assert trace_url is not None
 
     returned_trace_id = trace_url.split("/")[-1]
 
-    assert returned_trace_id == litellm_logging_obj._get_trace_id(
-        service_name="langfuse"
-    )
+    assert returned_trace_id == litellm_logging_obj._get_trace_id(service_name="langfuse")
 
 
 @pytest.mark.asyncio
@@ -868,9 +826,7 @@ async def test_print_alerting_payload_warning():
     test_payload = {"text": "Test alert message"}
 
     # Send an alert
-    with patch.object(
-        slack_alerting.async_http_handler, "post", new=AsyncMock()
-    ) as mock_post:
+    with patch.object(slack_alerting.async_http_handler, "post", new=AsyncMock()) as mock_post:
         await send_to_webhook(
             slackAlertingInstance=slack_alerting,
             item={
@@ -910,13 +866,9 @@ async def test_spend_report_cache(report_type):
 
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
         # Setup mock for database query
-        mock_prisma.db.query_raw = AsyncMock(
-            side_effect=[mock_spend_data, mock_tag_data]
-        )
+        mock_prisma.db.query_raw = AsyncMock(side_effect=[mock_spend_data, mock_tag_data])
 
-        slack_alerting = SlackAlerting(
-            alerting=["webhook"], internal_usage_cache=DualCache()
-        )
+        slack_alerting = SlackAlerting(alerting=["webhook"], internal_usage_cache=DualCache())
 
         user_info = CallInfo(
             token="test_token",
@@ -928,9 +880,7 @@ async def test_spend_report_cache(report_type):
             event_group=Litellm_EntityType.KEY,
         )
 
-        with patch.object(
-            slack_alerting, "send_alert", new=AsyncMock()
-        ) as mock_send_alert:
+        with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
             # First call should send alert
             if report_type == "weekly":
                 await slack_alerting.send_weekly_spend_report()

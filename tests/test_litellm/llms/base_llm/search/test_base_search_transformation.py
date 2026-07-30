@@ -101,9 +101,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
 _IDS = tuple(spec[0].__name__ for spec in PROVIDERS)
 
 
-@pytest.mark.parametrize(
-    "config_cls, server_env, caller_key, extra_env", PROVIDERS, ids=_IDS
-)
+@pytest.mark.parametrize("config_cls, server_env, caller_key, extra_env", PROVIDERS, ids=_IDS)
 def test_server_secret_refused_for_caller_api_base(
     config_cls: Type[BaseSearchConfig],
     server_env: Dict[str, str],
@@ -118,9 +116,7 @@ def test_server_secret_refused_for_caller_api_base(
         config_cls().validate_environment(headers={}, api_base=ATTACKER_BASE)
 
 
-@pytest.mark.parametrize(
-    "config_cls, server_env, caller_key, extra_env", PROVIDERS, ids=_IDS
-)
+@pytest.mark.parametrize("config_cls, server_env, caller_key, extra_env", PROVIDERS, ids=_IDS)
 def test_caller_supplied_key_is_honored_for_custom_api_base(
     config_cls: Type[BaseSearchConfig],
     server_env: Dict[str, str],
@@ -133,14 +129,10 @@ def test_caller_supplied_key_is_honored_for_custom_api_base(
 
     # An explicit caller key is the caller's own credential, so pointing it at
     # the caller's own host must be allowed.
-    config_cls().validate_environment(
-        headers={}, api_key=caller_key, api_base=ATTACKER_BASE
-    )
+    config_cls().validate_environment(headers={}, api_key=caller_key, api_base=ATTACKER_BASE)
 
 
-@pytest.mark.parametrize(
-    "config_cls, server_env, caller_key, extra_env", PROVIDERS, ids=_IDS
-)
+@pytest.mark.parametrize("config_cls, server_env, caller_key, extra_env", PROVIDERS, ids=_IDS)
 def test_server_secret_used_without_caller_api_base(
     config_cls: Type[BaseSearchConfig],
     server_env: Dict[str, str],
@@ -161,9 +153,7 @@ def test_keyless_provider_allows_caller_api_base(
 ) -> None:
     monkeypatch.delenv("SEARXNG_API_KEY", raising=False)
 
-    headers = SearXNGSearchConfig().validate_environment(
-        headers={}, api_base="https://my-searxng.internal"
-    )
+    headers = SearXNGSearchConfig().validate_environment(headers={}, api_base="https://my-searxng.internal")
 
     assert "Authorization" not in headers
 
@@ -176,9 +166,7 @@ def test_operator_env_base_override_is_trusted(
 
     # Mirrors the second validate_environment call in the search handler, which
     # receives the already-resolved operator base as api_base.
-    headers = SerperSearchConfig().validate_environment(
-        headers={}, api_base="https://serper.internal.corp/search"
-    )
+    headers = SerperSearchConfig().validate_environment(headers={}, api_base="https://serper.internal.corp/search")
 
     assert headers["X-API-KEY"] == "srv"
 
@@ -194,9 +182,7 @@ class TestResolveServerApiKey:
         )
         assert result == "mine"
 
-    def test_returns_none_when_no_server_secret(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_none_when_no_server_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("SEARXNG_API_KEY", raising=False)
         result = BaseSearchConfig().resolve_server_api_key(
             caller_api_key=None,
@@ -222,14 +208,10 @@ class TestResolveServerApiKey:
 
 class TestIsTrustedSearchApiBase:
     def test_matches_default_host(self) -> None:
-        assert _is_trusted_search_api_base(
-            "https://google.serper.dev/search", "https://google.serper.dev", None
-        )
+        assert _is_trusted_search_api_base("https://google.serper.dev/search", "https://google.serper.dev", None)
 
     def test_foreign_host_untrusted(self) -> None:
-        assert not _is_trusted_search_api_base(
-            ATTACKER_BASE, "https://google.serper.dev", None
-        )
+        assert not _is_trusted_search_api_base(ATTACKER_BASE, "https://google.serper.dev", None)
 
     def test_env_override_host_trusted(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SERPER_API_BASE", "https://serper.internal.corp")
@@ -242,9 +224,7 @@ class TestIsTrustedSearchApiBase:
     def test_schemeless_candidate_untrusted(self) -> None:
         # Without a scheme urlsplit puts the value in the path, leaving an empty
         # netloc; an unparseable host must never be treated as trusted.
-        assert not _is_trusted_search_api_base(
-            "attacker.example.com", "https://google.serper.dev", None
-        )
+        assert not _is_trusted_search_api_base("attacker.example.com", "https://google.serper.dev", None)
 
 
 @pytest.mark.asyncio

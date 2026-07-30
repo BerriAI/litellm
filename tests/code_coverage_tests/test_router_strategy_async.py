@@ -8,9 +8,7 @@ import sys
 from typing import Dict, List, Tuple
 import ast
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import os
 
 
@@ -51,9 +49,7 @@ class AsyncCacheCallVisitor(ast.NodeVisitor):
                     else:
                         full_call = method_name
                     # Store both the call and its line number
-                    self.async_functions[self.current_function].append(
-                        (full_call, node.lineno)
-                    )
+                    self.async_functions[self.current_function].append((full_call, node.lineno))
         self.generic_visit(node)
 
 
@@ -106,14 +102,12 @@ def test_router_strategy_async_cache_calls():
                 # Assert that cache calls in async functions use async methods
                 for call, line_number in cache_calls:
                     if any(keyword in call.lower() for keyword in ["cache"]):
-                        assert (
-                            "async" in call.lower()
-                        ), f"VIOLATION: Cache call '{call}' in async function '{func_name}' should be async. file path: {file_path}, line number: {line_number}"
+                        assert "async" in call.lower(), (
+                            f"VIOLATION: Cache call '{call}' in async function '{func_name}' should be async. file path: {file_path}, line number: {line_number}"
+                        )
 
     # Assert we found async functions to analyze
-    assert (
-        len(all_async_functions) > 0
-    ), "No async functions found in router_strategy directory"
+    assert len(all_async_functions) > 0, "No async functions found in router_strategy directory"
 
 
 if __name__ == "__main__":

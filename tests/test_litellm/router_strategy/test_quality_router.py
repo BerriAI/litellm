@@ -118,9 +118,7 @@ class TestTierIndex:
             model_name="qr",
             litellm_router_instance=router,
             default_model="haiku",
-            quality_router_config={
-                "available_models": ["haiku", "sonnet", "opus", "opus-next"]
-            },
+            quality_router_config={"available_models": ["haiku", "sonnet", "opus", "opus-next"]},
         )
 
         for models in qr._tier_to_models.values():
@@ -536,9 +534,7 @@ class TestKeywordOverride:
         assert match == ("with-price", "data")
 
     @pytest.mark.asyncio
-    async def test_hook_short_circuits_complexity_on_keyword_match(
-        self, keyword_router
-    ):
+    async def test_hook_short_circuits_complexity_on_keyword_match(self, keyword_router):
         # A reasoning-style prompt would normally route to a high-quality model
         # via the complexity flow — but the keyword "code" should short-circuit
         # to smart-coder (highest tier among "code" models).
@@ -589,9 +585,7 @@ class TestKeywordOverride:
             model_name="qr",
             litellm_router_instance=router,
             default_model="ordered-tier2",
-            quality_router_config={
-                "available_models": ["ordered-tier2", "implicit-tier3"]
-            },
+            quality_router_config={"available_models": ["ordered-tier2", "implicit-tier3"]},
         )
         match = qr._keyword_override("write some code")
         assert match == ("implicit-tier3", "code")
@@ -647,9 +641,7 @@ class TestKeywordOverride:
             model_name="qr",
             litellm_router_instance=router,
             default_model="cheap-default",
-            quality_router_config={
-                "available_models": ["expensive-but-preferred", "cheap-default"]
-            },
+            quality_router_config={"available_models": ["expensive-but-preferred", "cheap-default"]},
         )
         match = qr._keyword_override("show me the data")
         assert match == ("expensive-but-preferred", "data")
@@ -743,9 +735,7 @@ class TestKeywordOverride:
             model_name="qr",
             litellm_router_instance=router,
             default_model="default-pick",
-            quality_router_config={
-                "available_models": ["default-pick", "preferred-pick"]
-            },
+            quality_router_config={"available_models": ["default-pick", "preferred-pick"]},
         )
         assert qr._resolve_model_for_quality_tier(2) == "preferred-pick"
 
@@ -774,9 +764,7 @@ class TestKeywordOverride:
 
 class TestDecisionMetadata:
     @pytest.mark.asyncio
-    async def test_hook_stashes_decision_in_request_kwargs_metadata(
-        self, quality_router
-    ):
+    async def test_hook_stashes_decision_in_request_kwargs_metadata(self, quality_router):
         # Reasoning prompt → REASONING → quality tier 4 → opus-next.
         messages = [
             {
@@ -806,9 +794,7 @@ class TestDecisionMetadata:
 
     @pytest.mark.asyncio
     async def test_decision_metadata_preserves_existing_metadata(self, quality_router):
-        request_kwargs: Dict[str, Any] = {
-            "metadata": {"trace_id": "abc-123", "user_id": "u-1"}
-        }
+        request_kwargs: Dict[str, Any] = {"metadata": {"trace_id": "abc-123", "user_id": "u-1"}}
 
         await quality_router.async_pre_routing_hook(
             model="quality-router-test",

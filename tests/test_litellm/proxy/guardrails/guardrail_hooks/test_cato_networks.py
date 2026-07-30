@@ -18,9 +18,7 @@ from litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks import
 from litellm.proxy.proxy_server import UserAPIKeyAuth
 from litellm.types.utils import ModelResponse, ResponsesAPIResponse
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
@@ -81,9 +79,7 @@ async def test_block_callback(mode: str):
         ],
         config_file_path="",
     )
-    cato_guardrails = [
-        callback for callback in litellm.callbacks if isinstance(callback, CatoNetworksGuardrail)
-    ]
+    cato_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, CatoNetworksGuardrail)]
     assert len(cato_guardrails) == 1
     cato_guardrail = cato_guardrails[0]
 
@@ -144,9 +140,7 @@ async def test_anonymize_callback__it_returns_redacted_content(mode: str):
         ],
         config_file_path="",
     )
-    cato_guardrails = [
-        callback for callback in litellm.callbacks if isinstance(callback, CatoNetworksGuardrail)
-    ]
+    cato_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, CatoNetworksGuardrail)]
     assert len(cato_guardrails) == 1
     cato_guardrail = cato_guardrails[0]
 
@@ -191,9 +185,7 @@ async def test_post_call__with_anonymized_entities__it_doesnt_deanonymize_output
         ],
         config_file_path="",
     )
-    cato_guardrails = [
-        callback for callback in litellm.callbacks if isinstance(callback, CatoNetworksGuardrail)
-    ]
+    cato_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, CatoNetworksGuardrail)]
     assert len(cato_guardrails) == 1
     cato_guardrail = cato_guardrails[0]
 
@@ -204,19 +196,13 @@ async def test_post_call__with_anonymized_entities__it_doesnt_deanonymize_output
         "litellm_call_id": "test-call-id",
     }
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
 
         def mock_post_detect_side_effect(url, *args, **kwargs):
             request_body = kwargs.get("json", {})
             request_headers = kwargs.get("headers", {})
-            assert (
-                request_headers["x-cato-call-id"] == "test-call-id"
-            ), "Wrong header: x-cato-call-id"
-            assert (
-                request_headers["x-cato-gateway-key-alias"] == "test-key"
-            ), "Wrong header: x-cato-gateway-key-alias"
+            assert request_headers["x-cato-call-id"] == "test-call-id", "Wrong header: x-cato-call-id"
+            assert request_headers["x-cato-gateway-key-alias"] == "test-key", "Wrong header: x-cato-gateway-key-alias"
             if request_body["messages"][-1]["role"] == "user":
                 return response_with_detections
             elif request_body["messages"][-1]["role"] == "assistant":
@@ -253,9 +239,7 @@ async def test_post_call__with_anonymized_entities__it_doesnt_deanonymize_output
             response=llm_response(),
             user_api_key_dict=UserAPIKeyAuth(key_alias="test-key"),
         )
-        assert (
-            result["choices"][0]["message"]["content"] == "Hello [NAME_1]! How are you?"
-        )
+        assert result["choices"][0]["message"]["content"] == "Hello [NAME_1]! How are you?"
 
 
 response_with_detections = Response(
@@ -293,9 +277,7 @@ response_with_detections = Response(
                     "additional_content_index": None,
                 }
             ],
-            "session_entities": [
-                {"type": "NAME", "content": "Brian", "name": "NAME_1"}
-            ],
+            "session_entities": [{"type": "NAME", "content": "Brian", "name": "NAME_1"}],
         },
         "required_action": {
             "action_type": "anonymize_action",
@@ -386,10 +368,13 @@ def test_init_http_api_base_maps_to_ws():
     assert guard.ws_api_base == "ws://insecure.example.com"
 
 
-@pytest.mark.parametrize("api_base", [
-    "https://api.aisec.catonetworks.com/",
-    "https://api.aisec.catonetworks.com",
-])
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://api.aisec.catonetworks.com/",
+        "https://api.aisec.catonetworks.com",
+    ],
+)
 def test_base_url_trailing_slash(monkeypatch, api_base):
     monkeypatch.setenv("CATO_API_KEY", "test-key")
     guardrail = CatoNetworksGuardrail(api_base=api_base)
@@ -544,9 +529,7 @@ async def test_anonymize_action_preserves_non_text_message_fields():
 async def test_call_cato_guardrail_no_required_action_returns_data_unchanged():
     guard = _make_guardrail()
     data = {"messages": [{"role": "user", "content": "hi"}]}
-    response = _make_response(
-        {"analysis_result": {"policy_drill_down": {}}, "required_action": None}
-    )
+    response = _make_response({"analysis_result": {"policy_drill_down": {}}, "required_action": None})
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         return_value=response,
@@ -684,9 +667,7 @@ async def test_call_cato_guardrail_inspects_responses_api_input():
             await guard.call_cato_guardrail(data, hook="pre_call", key_alias=None)
 
     assert exc.value.status_code == 400
-    assert any(
-        "hunter2" in (m.get("content") or "") for m in captured["messages"]
-    )
+    assert any("hunter2" in (m.get("content") or "") for m in captured["messages"])
 
 
 @pytest.mark.asyncio
@@ -759,17 +740,13 @@ async def test_call_cato_guardrail_on_output_flattens_multimodal_context():
 
     def side_effect(url, *args, **kwargs):
         captured["messages"] = kwargs.get("json", {}).get("messages")
-        return _make_response(
-            {"analysis_result": {"policy_drill_down": {}}, "required_action": None}
-        )
+        return _make_response({"analysis_result": {"policy_drill_down": {}}, "required_action": None})
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         side_effect=side_effect,
     ):
-        await guard.call_cato_guardrail_on_output(
-            request_data, "the answer", hook="output", key_alias=None
-        )
+        await guard.call_cato_guardrail_on_output(request_data, "the answer", hook="output", key_alias=None)
 
     sent = captured["messages"]
     assert sent[0]["content"] == "remember secret hunter2"
@@ -1210,10 +1187,7 @@ async def test_anonymize_action_redacts_nested_and_legacy_schema_descriptions():
 
     function = result["tools"][0]["function"]
     assert function["description"] == "Greet [NAME_1] warmly"
-    assert (
-        function["parameters"]["properties"]["who"]["description"]
-        == "Default to [NAME_1]"
-    )
+    assert function["parameters"]["properties"]["who"]["description"] == "Default to [NAME_1]"
     assert result["functions"][0]["description"] == "Legacy greet for [NAME_1]"
 
 
@@ -1310,10 +1284,7 @@ async def test_anonymize_action_redacts_response_format_schema_descriptions():
 
     json_schema = result["response_format"]["json_schema"]
     assert json_schema["description"] == "Greeting for [NAME_1]"
-    assert (
-        json_schema["schema"]["properties"]["who"]["description"]
-        == "Default to [NAME_1]"
-    )
+    assert json_schema["schema"]["properties"]["who"]["description"] == "Default to [NAME_1]"
 
 
 @pytest.mark.asyncio
@@ -1442,17 +1413,13 @@ async def test_call_cato_guardrail_on_output_includes_responses_api_input():
 
     def side_effect(url, *args, **kwargs):
         captured["messages"] = kwargs.get("json", {}).get("messages")
-        return _make_response(
-            {"analysis_result": {"policy_drill_down": {}}, "required_action": None}
-        )
+        return _make_response({"analysis_result": {"policy_drill_down": {}}, "required_action": None})
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         side_effect=side_effect,
     ):
-        await guard.call_cato_guardrail_on_output(
-            request_data, "the answer", hook="output", key_alias=None
-        )
+        await guard.call_cato_guardrail_on_output(request_data, "the answer", hook="output", key_alias=None)
 
     assert any("hunter2" in (m.get("content") or "") for m in captured["messages"])
     assert captured["messages"][-1] == {"role": "assistant", "content": "the answer"}
@@ -1465,9 +1432,7 @@ async def test_call_cato_guardrail_forwards_user_email_from_auth():
         "messages": [{"role": "user", "content": "hi"}],
         "litellm_call_id": "call-xyz",
     }
-    response = _make_response(
-        {"analysis_result": {"policy_drill_down": {}}, "required_action": None}
-    )
+    response = _make_response({"analysis_result": {"policy_drill_down": {}}, "required_action": None})
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         return_value=response,
@@ -1475,9 +1440,7 @@ async def test_call_cato_guardrail_forwards_user_email_from_auth():
         await guard.async_pre_call_hook(
             data=data,
             cache=DualCache(),
-            user_api_key_dict=UserAPIKeyAuth(
-                key_alias="alias-1", user_email="alice@example.com"
-            ),
+            user_api_key_dict=UserAPIKeyAuth(key_alias="alias-1", user_email="alice@example.com"),
             call_type="completion",
         )
     sent_headers = mock_post.call_args.kwargs["headers"]
@@ -1494,9 +1457,7 @@ async def test_call_cato_guardrail_ignores_spoofable_metadata_user_email():
         "messages": [{"role": "user", "content": "hi"}],
         "metadata": {"headers": {"x-cato-user-email": "victim@example.com"}},
     }
-    response = _make_response(
-        {"analysis_result": {"policy_drill_down": {}}, "required_action": None}
-    )
+    response = _make_response({"analysis_result": {"policy_drill_down": {}}, "required_action": None})
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         return_value=response,
@@ -1519,12 +1480,7 @@ async def test_resolve_cato_user_email_ignores_spoofable_end_user_id():
         )
         == "user@example.com"
     )
-    assert (
-        CatoNetworksGuardrail._resolve_cato_user_email(
-            UserAPIKeyAuth(end_user_id="victim@example.com")
-        )
-        is None
-    )
+    assert CatoNetworksGuardrail._resolve_cato_user_email(UserAPIKeyAuth(end_user_id="victim@example.com")) is None
     assert CatoNetworksGuardrail._resolve_cato_user_email(UserAPIKeyAuth()) is None
 
 
@@ -1532,9 +1488,7 @@ async def test_resolve_cato_user_email_ignores_spoofable_end_user_id():
 async def test_call_cato_guardrail_omits_user_email_for_spoofable_end_user_id():
     guard = _make_guardrail()
     data = {"messages": [{"role": "user", "content": "hi"}]}
-    response = _make_response(
-        {"analysis_result": {"policy_drill_down": {}}, "required_action": None}
-    )
+    response = _make_response({"analysis_result": {"policy_drill_down": {}}, "required_action": None})
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         return_value=response,
@@ -2031,10 +1985,7 @@ async def test_post_call_success_hook_redacts_tool_call_arguments_keeps_none_con
     posted = mock_post.call_args.kwargs["json"]["messages"]
     assert posted[-1] == {"role": "assistant", "content": '{"recipient": "Brian"}'}
     assert result.choices[0].message.content is None
-    assert (
-        result.choices[0].message.tool_calls[0].function.arguments
-        == '{"recipient": "[NAME_1]"}'
-    )
+    assert result.choices[0].message.tool_calls[0].function.arguments == '{"recipient": "[NAME_1]"}'
 
 
 @pytest.mark.asyncio
@@ -2385,9 +2336,7 @@ async def _run_streaming_hook(guard):
 
 @pytest.mark.asyncio
 async def test_streaming_connect_disables_ssl_verification_when_ssl_verify_false():
-    guard = _make_guardrail(
-        api_base="https://self-signed.example.com", ssl_verify=False
-    )
+    guard = _make_guardrail(api_base="https://self-signed.example.com", ssl_verify=False)
     mock_connect = await _run_streaming_hook(guard)
     ssl_ctx = mock_connect.call_args.kwargs["ssl"]
     assert isinstance(ssl_ctx, ssl.SSLContext)
@@ -2399,9 +2348,7 @@ async def test_streaming_connect_disables_ssl_verification_when_ssl_verify_false
 async def test_streaming_connect_uses_verifying_context_for_ca_bundle():
     import certifi
 
-    guard = _make_guardrail(
-        api_base="https://corp-cato.example.com", ssl_verify=certifi.where()
-    )
+    guard = _make_guardrail(api_base="https://corp-cato.example.com", ssl_verify=certifi.where())
     mock_connect = await _run_streaming_hook(guard)
     ssl_ctx = mock_connect.call_args.kwargs["ssl"]
     assert isinstance(ssl_ctx, ssl.SSLContext)
@@ -2416,10 +2363,7 @@ async def test_streaming_connect_omits_ssl_when_not_configured():
 
 
 def test_build_ws_ssl_kwargs_skips_insecure_ws_scheme():
-    assert (
-        CatoNetworksGuardrail._build_ws_ssl_kwargs(False, "ws://insecure.example.com")
-        == {}
-    )
+    assert CatoNetworksGuardrail._build_ws_ssl_kwargs(False, "ws://insecure.example.com") == {}
 
 
 @pytest.mark.asyncio
@@ -2444,9 +2388,7 @@ async def test_streaming_iterator_raises_on_connection_closed():
         "litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks.connect",
         return_value=ClosedWebSocket(),
     ):
-        with pytest.raises(
-            StreamingCallbackError, match="connection closed unexpectedly"
-        ):
+        with pytest.raises(StreamingCallbackError, match="connection closed unexpectedly"):
             async for _ in guard.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 response=_mock_llm_stream(),

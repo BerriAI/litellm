@@ -121,9 +121,7 @@ async def test_a_failed_row_does_not_abort_the_rest():
     """Per-row best effort: one write failure must not leave later rows unhealed, and the next boot
     retries the failed one since its updated_by is unchanged."""
     prisma_client = _prisma([_row(server_id="bad"), _row(server_id="good")])
-    prisma_client.db.litellm_mcpservertable.update = AsyncMock(
-        side_effect=[Exception("write failed"), MagicMock()]
-    )
+    prisma_client.db.litellm_mcpservertable.update = AsyncMock(side_effect=[Exception("write failed"), MagicMock()])
 
     assert await backfill_discovery_stamped_issuers(prisma_client) == 1
     assert prisma_client.db.litellm_mcpservertable.update.await_count == 2

@@ -73,9 +73,7 @@ def _build_simple_text_stream() -> List[bytes]:
             },
         )
     )
-    chunks.append(
-        _sse_event("content_block_stop", {"type": "content_block_stop", "index": 0})
-    )
+    chunks.append(_sse_event("content_block_stop", {"type": "content_block_stop", "index": 0}))
     chunks.append(
         _sse_event(
             "message_delta",
@@ -148,9 +146,7 @@ def _build_tool_use_stream() -> List[bytes]:
             },
         )
     )
-    chunks.append(
-        _sse_event("content_block_stop", {"type": "content_block_stop", "index": 0})
-    )
+    chunks.append(_sse_event("content_block_stop", {"type": "content_block_stop", "index": 0}))
     # tool_use block
     chunks.append(
         _sse_event(
@@ -190,9 +186,7 @@ def _build_tool_use_stream() -> List[bytes]:
             },
         )
     )
-    chunks.append(
-        _sse_event("content_block_stop", {"type": "content_block_stop", "index": 1})
-    )
+    chunks.append(_sse_event("content_block_stop", {"type": "content_block_stop", "index": 1}))
     chunks.append(
         _sse_event(
             "message_delta",
@@ -237,9 +231,7 @@ class MockAsyncStream:
 
 class TestParseSSEEvents:
     def test_should_parse_single_event(self):
-        raw = _sse_event(
-            "message_start", {"type": "message_start", "message": {"id": "1"}}
-        )
+        raw = _sse_event("message_start", {"type": "message_start", "message": {"id": "1"}})
         events = _parse_sse_events(raw)
         assert len(events) == 1
         assert events[0][0] == "message_start"
@@ -410,9 +402,7 @@ class TestHandleMessageDelta:
 class TestRebuildAnthropicResponse:
     def test_should_rebuild_simple_text_response(self):
         raw_bytes = _build_simple_text_stream()
-        result = AgenticAnthropicStreamingIterator._rebuild_anthropic_response_from_sse(
-            raw_bytes
-        )
+        result = AgenticAnthropicStreamingIterator._rebuild_anthropic_response_from_sse(raw_bytes)
         assert result is not None
         assert result["id"] == "msg_123"
         assert result["model"] == "claude-sonnet-4-20250514"
@@ -425,9 +415,7 @@ class TestRebuildAnthropicResponse:
 
     def test_should_rebuild_tool_use_response(self):
         raw_bytes = _build_tool_use_stream()
-        result = AgenticAnthropicStreamingIterator._rebuild_anthropic_response_from_sse(
-            raw_bytes
-        )
+        result = AgenticAnthropicStreamingIterator._rebuild_anthropic_response_from_sse(raw_bytes)
         assert result is not None
         assert result["id"] == "msg_tool_456"
         assert result["stop_reason"] == "tool_use"
@@ -455,23 +443,17 @@ class TestRebuildAnthropicResponse:
                 },
             )
         ]
-        result = AgenticAnthropicStreamingIterator._rebuild_anthropic_response_from_sse(
-            raw_bytes
-        )
+        result = AgenticAnthropicStreamingIterator._rebuild_anthropic_response_from_sse(raw_bytes)
         assert result is None
 
     def test_should_handle_empty_bytes(self):
-        result = AgenticAnthropicStreamingIterator._rebuild_anthropic_response_from_sse(
-            []
-        )
+        result = AgenticAnthropicStreamingIterator._rebuild_anthropic_response_from_sse([])
         assert result is None
 
     def test_should_handle_multi_event_chunks(self):
         """When multiple SSE events arrive in a single bytes chunk."""
         combined = b"".join(_build_simple_text_stream())
-        result = AgenticAnthropicStreamingIterator._rebuild_anthropic_response_from_sse(
-            [combined]
-        )
+        result = AgenticAnthropicStreamingIterator._rebuild_anthropic_response_from_sse([combined])
         assert result is not None
         assert result["content"][0]["text"] == "Hello, world!"
 
@@ -503,9 +485,7 @@ class TestRebuildAnthropicResponse:
             ),
             _sse_event("message_stop", {"type": "message_stop"}),
         ]
-        result = AgenticAnthropicStreamingIterator._rebuild_anthropic_response_from_sse(
-            raw_bytes
-        )
+        result = AgenticAnthropicStreamingIterator._rebuild_anthropic_response_from_sse(raw_bytes)
         assert result is not None
         assert result["usage"]["cache_creation_input_tokens"] == 50
         assert result["usage"]["cache_read_input_tokens"] == 30
@@ -546,9 +526,7 @@ class TestRebuildAnthropicResponse:
             ),
             _sse_event("message_stop", {"type": "message_stop"}),
         ]
-        result = AgenticAnthropicStreamingIterator._rebuild_anthropic_response_from_sse(
-            raw_bytes
-        )
+        result = AgenticAnthropicStreamingIterator._rebuild_anthropic_response_from_sse(raw_bytes)
         assert result is not None
         assert result["content"][0]["type"] == "redacted_thinking"
 
@@ -675,9 +653,7 @@ class TestAgenticStreamingIteratorPhase2:
         }
 
         mock_handler = MagicMock()
-        mock_handler._call_agentic_completion_hooks = AsyncMock(
-            return_value=fake_response
-        )
+        mock_handler._call_agentic_completion_hooks = AsyncMock(return_value=fake_response)
 
         iterator = AgenticAnthropicStreamingIterator(
             completion_stream=mock_stream,
@@ -710,9 +686,7 @@ class TestAgenticStreamingIteratorErrorHandling:
         mock_stream = MockAsyncStream(chunks)
 
         mock_handler = MagicMock()
-        mock_handler._call_agentic_completion_hooks = AsyncMock(
-            side_effect=RuntimeError("hook exploded")
-        )
+        mock_handler._call_agentic_completion_hooks = AsyncMock(side_effect=RuntimeError("hook exploded"))
 
         mock_logging = MagicMock()
         mock_logging.litellm_call_id = "test_call_123"

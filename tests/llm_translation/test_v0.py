@@ -29,20 +29,14 @@ def test_v0_get_openai_compatible_provider_info():
         assert api_key is None
 
     # Test with environment variables
-    with mock.patch.dict(
-        os.environ, {"V0_API_KEY": "test-key", "V0_API_BASE": "https://custom.v0.ai/v1"}
-    ):
+    with mock.patch.dict(os.environ, {"V0_API_KEY": "test-key", "V0_API_BASE": "https://custom.v0.ai/v1"}):
         api_base, api_key = config._get_openai_compatible_provider_info(None, None)
         assert api_base == "https://custom.v0.ai/v1"
         assert api_key == "test-key"
 
     # Test with explicit parameters (should override env vars)
-    with mock.patch.dict(
-        os.environ, {"V0_API_KEY": "env-key", "V0_API_BASE": "https://env.v0.ai/v1"}
-    ):
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            "https://param.v0.ai/v1", "param-key"
-        )
+    with mock.patch.dict(os.environ, {"V0_API_KEY": "env-key", "V0_API_BASE": "https://env.v0.ai/v1"}):
+        api_base, api_key = config._get_openai_compatible_provider_info("https://param.v0.ai/v1", "param-key")
         assert api_base == "https://param.v0.ai/v1"
         assert api_key == "param-key"
 
@@ -57,9 +51,7 @@ def test_get_llm_provider_v0():
     assert provider == "v0"
 
     # Test with api_base containing v0 endpoint
-    model, provider, api_key, api_base = get_llm_provider(
-        "gpt-4-turbo", api_base="https://api.v0.dev/v1"
-    )
+    model, provider, api_key, api_base = get_llm_provider("gpt-4-turbo", api_base="https://api.v0.dev/v1")
     assert model == "gpt-4-turbo"
     assert provider == "v0"
     assert api_base == "https://api.v0.dev/v1"
@@ -128,16 +120,8 @@ def test_v0_models_configuration():
         model_info = get_model_info(model)
         assert model_info is not None, f"Model info not found for {model}"
         # All v0 models support vision (multimodal)
-        assert (
-            model_info.get("supports_vision") is True
-        ), f"{model} should support vision"
-        assert (
-            model_info.get("litellm_provider") == "v0"
-        ), f"{model} should have v0 as provider"
+        assert model_info.get("supports_vision") is True, f"{model} should support vision"
+        assert model_info.get("litellm_provider") == "v0", f"{model} should have v0 as provider"
         assert model_info.get("mode") == "chat", f"{model} should be in chat mode"
-        assert (
-            model_info.get("supports_function_calling") is True
-        ), f"{model} should support function calling"
-        assert (
-            model_info.get("supports_system_messages") is True
-        ), f"{model} should support system messages"
+        assert model_info.get("supports_function_calling") is True, f"{model} should support function calling"
+        assert model_info.get("supports_system_messages") is True, f"{model} should support system messages"

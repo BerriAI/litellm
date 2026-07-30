@@ -5,9 +5,7 @@ from unittest.mock import patch
 
 import requests
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
 import pytest
@@ -35,9 +33,7 @@ def mock_env():
 
 @pytest.fixture
 def mock_keys_client():
-    with patch(
-        "litellm.proxy.client.cli.commands.keys.KeysManagementClient"
-    ) as MockClient:
+    with patch("litellm.proxy.client.cli.commands.keys.KeysManagementClient") as MockClient:
         yield MockClient
 
 
@@ -89,9 +85,7 @@ def test_async_keys_generate_success(mock_keys_client, cli_runner):
         "key": "new-key",
         "spend": 100.0,
     }
-    result = cli_runner.invoke(
-        cli, ["keys", "generate", "--models", "gpt-4", "--spend", "100"]
-    )
+    result = cli_runner.invoke(cli, ["keys", "generate", "--models", "gpt-4", "--spend", "100"])
     assert result.exit_code == 0
     assert "new-key" in result.output
     mock_keys_client.return_value.generate.assert_called_once()
@@ -127,9 +121,7 @@ def test_async_keys_delete_error_handling(mock_keys_client, cli_runner):
     import requests
 
     # Mock a connection error that would normally happen in CI
-    mock_keys_client.return_value.delete.side_effect = (
-        requests.exceptions.ConnectionError("Connection error")
-    )
+    mock_keys_client.return_value.delete.side_effect = requests.exceptions.ConnectionError("Connection error")
     result = cli_runner.invoke(cli, ["keys", "delete", "--keys", "abc123"])
     assert result.exit_code != 0
     # Check that the exception is properly propagated
@@ -137,10 +129,7 @@ def test_async_keys_delete_error_handling(mock_keys_client, cli_runner):
     # The ConnectionError should propagate since it's not caught by HTTPError handler
     # Check for connection-related keywords that appear in both mocked and real errors
     error_str = str(result.exception).lower()
-    assert any(
-        keyword in error_str
-        for keyword in ["connection", "connect", "refused", "error"]
-    )
+    assert any(keyword in error_str for keyword in ["connection", "connect", "refused", "error"])
 
 
 def test_async_keys_delete_http_error_handling(mock_keys_client, cli_runner):
@@ -220,9 +209,7 @@ def test_keys_import_dry_run_success(mock_keys_client, cli_runner):
 def test_keys_import_actual_import_success(mock_keys_client, cli_runner):
     """Test successful actual import of keys"""
     # Create separate mock instances for source and destination
-    with patch(
-        "litellm.proxy.client.cli.commands.keys.KeysManagementClient"
-    ) as MockClient:
+    with patch("litellm.proxy.client.cli.commands.keys.KeysManagementClient") as MockClient:
         mock_source_instance = MockClient.return_value
         mock_dest_instance = MockClient.return_value
 
@@ -281,16 +268,10 @@ def test_keys_import_pagination_handling(mock_keys_client, cli_runner):
     mock_source_instance = mock_keys_client.return_value
     mock_source_instance.list.side_effect = [
         {
-            "keys": [
-                {"key_alias": f"key-{i}", "user_id": f"user{i}@example.com"}
-                for i in range(100)
-            ]
+            "keys": [{"key_alias": f"key-{i}", "user_id": f"user{i}@example.com"} for i in range(100)]
         },  # Page 1: 100 keys
         {
-            "keys": [
-                {"key_alias": f"key-{i}", "user_id": f"user{i}@example.com"}
-                for i in range(100, 150)
-            ]
+            "keys": [{"key_alias": f"key-{i}", "user_id": f"user{i}@example.com"} for i in range(100, 150)]
         },  # Page 2: 50 keys
         {"keys": []},  # Page 3: Empty
     ]
@@ -453,9 +434,7 @@ def test_keys_import_source_api_error(mock_keys_client, cli_runner):
 
 def test_keys_import_partial_failure(mock_keys_client, cli_runner):
     """Test handling when some keys fail to import"""
-    with patch(
-        "litellm.proxy.client.cli.commands.keys.KeysManagementClient"
-    ) as MockClient:
+    with patch("litellm.proxy.client.cli.commands.keys.KeysManagementClient") as MockClient:
         mock_source_instance = MockClient.return_value
         mock_dest_instance = MockClient.return_value
 
@@ -476,9 +455,7 @@ def test_keys_import_partial_failure(mock_keys_client, cli_runner):
             Exception("Import failed for this key"),
         ]
 
-        result = cli_runner.invoke(
-            cli, ["keys", "import", "--source-base-url", "https://source.example.com"]
-        )
+        result = cli_runner.invoke(cli, ["keys", "import", "--source-base-url", "https://source.example.com"])
 
         assert result.exit_code == 0  # Command completes even with partial failures
         assert "Imported key: success-key" in result.output
@@ -498,9 +475,7 @@ def test_keys_import_missing_required_source_url(cli_runner):
 
 def test_keys_import_with_all_key_properties(mock_keys_client, cli_runner):
     """Test import preserves all key properties (models, aliases, config, etc.)"""
-    with patch(
-        "litellm.proxy.client.cli.commands.keys.KeysManagementClient"
-    ) as MockClient:
+    with patch("litellm.proxy.client.cli.commands.keys.KeysManagementClient") as MockClient:
         mock_source_instance = MockClient.return_value
         mock_dest_instance = MockClient.return_value
 
@@ -527,9 +502,7 @@ def test_keys_import_with_all_key_properties(mock_keys_client, cli_runner):
             "status": "success",
         }
 
-        result = cli_runner.invoke(
-            cli, ["keys", "import", "--source-base-url", "https://source.example.com"]
-        )
+        result = cli_runner.invoke(cli, ["keys", "import", "--source-base-url", "https://source.example.com"])
 
         assert result.exit_code == 0
 

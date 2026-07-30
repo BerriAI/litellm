@@ -34,9 +34,7 @@ class BaseAnthropicMessagesTest(ABC):
         client = self.get_client()
         with client.messages.stream(
             max_tokens=10,
-            messages=[
-                {"role": "user", "content": "Say 'hello stream test' and nothing else"}
-            ],
+            messages=[{"role": "user", "content": "Say 'hello stream test' and nothing else"}],
             model="claude-sonnet-4-5-20250929",
             extra_body={
                 "litellm_metadata": {
@@ -57,9 +55,7 @@ class BaseAnthropicMessagesTest(ABC):
             model="claude-haiku-4-5-20251001",
             max_tokens=20000,
             thinking={"type": "enabled", "budget_tokens": 16000},
-            messages=[
-                {"role": "user", "content": "Just pinging with thinking enabled"}
-            ],
+            messages=[{"role": "user", "content": "Just pinging with thinking enabled"}],
         )
 
         print(response)
@@ -78,9 +74,7 @@ class BaseAnthropicMessagesTest(ABC):
             model="claude-haiku-4-5-20251001",
             max_tokens=20000,
             thinking={"type": "enabled", "budget_tokens": 16000},
-            messages=[
-                {"role": "user", "content": "Just pinging with thinking enabled"}
-            ],
+            messages=[{"role": "user", "content": "Just pinging with thinking enabled"}],
         ) as stream:
             for event in stream:
                 if event.type == "content_block_delta":
@@ -92,9 +86,7 @@ class BaseAnthropicMessagesTest(ABC):
         full_thinking = "".join(collected_thinking)
         full_response = "".join(collected_response)
 
-        print(
-            f"Thinking Response: {full_thinking[:100]}..."
-        )  # Print first 100 chars of thinking
+        print(f"Thinking Response: {full_thinking[:100]}...")  # Print first 100 chars of thinking
         print(f"Response: {full_response}")
 
         # Verify we received thinking content

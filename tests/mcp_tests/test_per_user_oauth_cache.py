@@ -262,9 +262,7 @@ class TestMCPPerUserTokenCache:
     @pytest.mark.asyncio
     async def test_get_returns_none_on_miss(self, cache, mock_dual_cache):
         with (
-            patch(
-                "litellm.proxy._experimental.mcp_server.oauth2_token_cache.decrypt_value_helper"
-            ) as mock_decrypt,
+            patch("litellm.proxy._experimental.mcp_server.oauth2_token_cache.decrypt_value_helper") as mock_decrypt,
             patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
         ):
             mock_dual_cache.async_get_cache.return_value = None
@@ -331,9 +329,7 @@ class TestMCPPerUserTokenCache:
         with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache):
             await cache.delete("alice", "slack-test")
 
-        mock_dual_cache.async_delete_cache.assert_called_once_with(
-            "mcp:per_user_token:alice:slack-test"
-        )
+        mock_dual_cache.async_delete_cache.assert_called_once_with("mcp:per_user_token:alice:slack-test")
         mock_dual_cache.async_set_cache.assert_not_called()
 
     @pytest.mark.asyncio

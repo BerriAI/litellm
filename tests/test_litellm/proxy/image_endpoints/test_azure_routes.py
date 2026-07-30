@@ -19,9 +19,7 @@ example_image_generation_result = {
 example_image_edit_result = {
     "created": 1589478400,
     "data": [
-        {
-            "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
-        }
+        {"b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="}
     ],
 }
 
@@ -52,13 +50,7 @@ def client_no_auth():
 
     cleanup_router_config_variables()
     repo_root = Path(__file__).resolve().parents[4]
-    config_fp = (
-        repo_root
-        / "tests"
-        / "proxy_unit_tests"
-        / "test_configs"
-        / "test_config_no_auth.yaml"
-    )
+    config_fp = repo_root / "tests" / "proxy_unit_tests" / "test_configs" / "test_config_no_auth.yaml"
     config_fp = str(config_fp)
 
     # Create mock objects with __name__ attribute
@@ -86,9 +78,7 @@ def client_no_auth():
 def test_azure_image_generation_route(client_no_auth):
     client, mock_aimage_generation, _ = client_no_auth
     test_data = {"prompt": "A cute baby sea otter", "n": 1, "size": "1024x1024"}
-    response = client.post(
-        "/openai/deployments/dall-e-3/images/generations", json=test_data
-    )
+    response = client.post("/openai/deployments/dall-e-3/images/generations", json=test_data)
 
     mock_aimage_generation.assert_called_once()
     call_kwargs = mock_aimage_generation.call_args.kwargs
@@ -110,9 +100,7 @@ def test_azure_image_edit_route(client_no_auth):
     with open(image_path, "rb") as f:
         files = {"image": ("test_image.png", f, "image/png")}
         data = {"prompt": "A cute baby sea otter"}
-        response = client.post(
-            "/openai/deployments/dall-e-3/images/edits", files=files, data=data
-        )
+        response = client.post("/openai/deployments/dall-e-3/images/edits", files=files, data=data)
 
     mock_aimage_edit.assert_called_once()
     called_kwargs = mock_aimage_edit.call_args.kwargs

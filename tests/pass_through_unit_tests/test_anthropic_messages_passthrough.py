@@ -7,9 +7,7 @@ import asyncio
 import unittest.mock
 from unittest.mock import AsyncMock, MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 import litellm
 import pytest
 from dotenv import load_dotenv
@@ -296,13 +294,7 @@ async def test_anthropic_messages_fallbacks():
                 },
             },
         ],
-        fallbacks=[
-            {
-                "anthropic/claude-opus-4-7": [
-                    "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-                ]
-            }
-        ],
+        fallbacks=[{"anthropic/claude-opus-4-7": ["bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"]}],
     )
 
     # Set up test parameters
@@ -389,26 +381,20 @@ async def test_anthropic_messages_litellm_router_latency_metadata_tracking():
         print("Call kwargs:", json.dumps(call_kwargs, indent=2, default=str))
 
         # Verify that litellm_metadata was passed and contains _latency_per_deployment
-        assert (
-            "litellm_metadata" in call_kwargs
-        ), "litellm_metadata should be passed to anthropic_messages"
+        assert "litellm_metadata" in call_kwargs, "litellm_metadata should be passed to anthropic_messages"
 
         litellm_metadata = call_kwargs["litellm_metadata"]
         assert litellm_metadata is not None, "litellm_metadata should not be None"
-        assert isinstance(
-            litellm_metadata, dict
-        ), "litellm_metadata should be a dictionary"
+        assert isinstance(litellm_metadata, dict), "litellm_metadata should be a dictionary"
 
         # Verify _latency_per_deployment is present
-        assert (
-            "_latency_per_deployment" in litellm_metadata
-        ), "litellm_metadata should contain _latency_per_deployment field"
+        assert "_latency_per_deployment" in litellm_metadata, (
+            "litellm_metadata should contain _latency_per_deployment field"
+        )
 
         # Verify the structure of _latency_per_deployment
         latency_per_deployment = litellm_metadata["_latency_per_deployment"]
-        assert isinstance(
-            latency_per_deployment, dict
-        ), "_latency_per_deployment should be a dictionary"
+        assert isinstance(latency_per_deployment, dict), "_latency_per_deployment should be a dictionary"
 
         print(f"✅ Latency per deployment data: {latency_per_deployment}")
 
@@ -483,37 +469,22 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
 
     await asyncio.sleep(1)
 
-    assert (
-        test_custom_logger.logged_standard_logging_payload is not None
-    ), "Logging payload should not be None"
+    assert test_custom_logger.logged_standard_logging_payload is not None, "Logging payload should not be None"
     print(
         "tracked standard logging payload",
-        json.dumps(
-            test_custom_logger.logged_standard_logging_payload, indent=4, default=str
-        ),
+        json.dumps(test_custom_logger.logged_standard_logging_payload, indent=4, default=str),
     )
     assert test_custom_logger.logged_standard_logging_payload["messages"] == messages
     assert test_custom_logger.logged_standard_logging_payload["response"] is not None
-    assert (
-        test_custom_logger.logged_standard_logging_payload["model"]
-        == "claude-haiku-4-5-20251001"
-    )
+    assert test_custom_logger.logged_standard_logging_payload["model"] == "claude-haiku-4-5-20251001"
 
     # check logged usage + spend
     assert test_custom_logger.logged_standard_logging_payload["response_cost"] > 0
-    assert (
-        test_custom_logger.logged_standard_logging_payload["prompt_tokens"]
-        == response["usage"]["input_tokens"]
-    )
-    assert (
-        test_custom_logger.logged_standard_logging_payload["completion_tokens"]
-        == response["usage"]["output_tokens"]
-    )
+    assert test_custom_logger.logged_standard_logging_payload["prompt_tokens"] == response["usage"]["input_tokens"]
+    assert test_custom_logger.logged_standard_logging_payload["completion_tokens"] == response["usage"]["output_tokens"]
 
     # assert model_group
-    assert (
-        test_custom_logger.logged_standard_logging_payload["model_group"] == MODEL_GROUP
-    )
+    assert test_custom_logger.logged_standard_logging_payload["model_group"] == MODEL_GROUP
 
 
 @pytest.mark.asyncio
@@ -734,9 +705,7 @@ async def test_anthropic_messages_bedrock_credentials_passthrough():
     when using anthropic.messages.acreate with a bedrock model
     """
     # Mock the get_credentials method
-    with unittest.mock.patch.object(
-        BaseAWSLLM, "get_credentials"
-    ) as mock_get_credentials:
+    with unittest.mock.patch.object(BaseAWSLLM, "get_credentials") as mock_get_credentials:
         # Create a proper mock for credentials with the necessary attributes
         mock_credentials = unittest.mock.MagicMock()
         mock_credentials.access_key = "mock_access_key"
@@ -747,9 +716,7 @@ async def test_anthropic_messages_bedrock_credentials_passthrough():
         # We also need to mock the actual AWS request signing to avoid real API calls
         with unittest.mock.patch("botocore.auth.SigV4Auth.add_auth"):
             # Set up mock for AsyncHTTPHandler.post to avoid actual API calls
-            with unittest.mock.patch(
-                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-            ) as mock_post:
+            with unittest.mock.patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
                 # Configure mock response
                 mock_response = unittest.mock.MagicMock()
                 mock_response.raise_for_status = unittest.mock.MagicMock()
@@ -791,9 +758,7 @@ async def test_anthropic_messages_bedrock_credentials_passthrough():
 
                 # Assert that our test credentials were passed correctly
                 for param_name, param_value in aws_params.items():
-                    assert (
-                        call_args[param_name] == param_value
-                    ), f"Parameter {param_name} was not passed correctly"
+                    assert call_args[param_name] == param_value, f"Parameter {param_name} was not passed correctly"
 
 
 @pytest.mark.asyncio
@@ -821,11 +786,8 @@ async def test_anthropic_messages_bedrock_dynamic_region():
     # Patch necessary AWS components
     with (
         unittest.mock.patch("botocore.auth.SigV4Auth.add_auth"),
-        unittest.mock.patch.object(
-            BaseAWSLLM, "get_credentials"
-        ) as mock_get_credentials,
+        unittest.mock.patch.object(BaseAWSLLM, "get_credentials") as mock_get_credentials,
     ):
-
         # Setup mock credentials
         mock_credentials = unittest.mock.MagicMock()
         mock_credentials.access_key = "test_access_key"
@@ -854,9 +816,9 @@ async def test_anthropic_messages_bedrock_dynamic_region():
 
         # Check that the URL contains the correct region
         url = call_args.kwargs.get("url", "")
-        assert (
-            f"bedrock-runtime.{test_region}.amazonaws.com" in url
-        ), f"URL does not contain the correct region. URL: {url}"
+        assert f"bedrock-runtime.{test_region}.amazonaws.com" in url, (
+            f"URL does not contain the correct region. URL: {url}"
+        )
 
         # Verify get_credentials was called with the correct region
         mock_get_credentials.assert_called_once()

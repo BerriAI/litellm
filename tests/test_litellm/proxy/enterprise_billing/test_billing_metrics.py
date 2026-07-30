@@ -110,9 +110,7 @@ def test_premium_with_full_config_builds_recorder(monkeypatch, tmp_path):
 
     monkeypatch.setattr(socket, "getaddrinfo", _spy_getaddrinfo)
 
-    recorder = bm.build_billing_metrics_recorder(
-        premium=True, license_data={"user_id": "org-1"}, litellm_version="1.0"
-    )
+    recorder = bm.build_billing_metrics_recorder(premium=True, license_data={"user_id": "org-1"}, litellm_version="1.0")
     assert isinstance(recorder, bm.BillingMetricsRecorder)
     recorder.record(category=BillableCategory.LLM, route="/chat/completions", status_code=200, model_id=None)
     bm.shutdown_billing_metrics_recorder()
@@ -321,7 +319,9 @@ def test_export_interval_default_and_override(monkeypatch):
 def test_metrics_endpoint_appends_signal_path():
     assert bm._metrics_endpoint("https://telemetry.example.com") == "https://telemetry.example.com/v1/metrics"
     assert bm._metrics_endpoint("https://telemetry.example.com/") == "https://telemetry.example.com/v1/metrics"
-    assert bm._metrics_endpoint("https://telemetry.example.com/v1/metrics") == "https://telemetry.example.com/v1/metrics"
+    assert (
+        bm._metrics_endpoint("https://telemetry.example.com/v1/metrics") == "https://telemetry.example.com/v1/metrics"
+    )
 
 
 def _fake_exporter_class(captured: Dict[str, object]) -> type:

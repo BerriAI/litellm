@@ -28,9 +28,7 @@ from litellm.proxy._experimental.mcp_server.sampling_handler import (
 
 
 def _tool_call(*, call_id: str, name: str, arguments):
-    return SimpleNamespace(
-        id=call_id, function=SimpleNamespace(name=name, arguments=arguments)
-    )
+    return SimpleNamespace(id=call_id, function=SimpleNamespace(name=name, arguments=arguments))
 
 
 def _response(*, content=None, tool_calls=None, finish_reason="stop", model="gpt-4o"):
@@ -47,9 +45,7 @@ class TestConvertOpenAIResponseToMcpResult:
         assert "no choices" in result.message.lower()
 
     def test_should_convert_plain_text_response(self):
-        result = _convert_openai_response_to_mcp_result(
-            _response(content="hello world"), "gpt-4o"
-        )
+        result = _convert_openai_response_to_mcp_result(_response(content="hello world"), "gpt-4o")
         assert isinstance(result, CreateMessageResult)
         assert isinstance(result.content, TextContent)
         assert result.content.text == "hello world"
@@ -63,9 +59,7 @@ class TestConvertOpenAIResponseToMcpResult:
         assert result.stopReason == "maxTokens"
 
     def test_should_prefer_actual_model_from_response(self):
-        result = _convert_openai_response_to_mcp_result(
-            _response(content="hi", model="gpt-4o-2024-08-06"), "gpt-4o"
-        )
+        result = _convert_openai_response_to_mcp_result(_response(content="hi", model="gpt-4o-2024-08-06"), "gpt-4o")
         assert result.model == "gpt-4o-2024-08-06"
 
     def test_should_convert_tool_calls_response(self):
@@ -89,9 +83,7 @@ class TestConvertOpenAIResponseToMcpResult:
     def test_should_keep_text_alongside_tool_calls(self):
         tc = _tool_call(call_id="call_1", name="search", arguments="{}")
         result = _convert_openai_response_to_mcp_result(
-            _response(
-                content="let me check", tool_calls=[tc], finish_reason="tool_calls"
-            ),
+            _response(content="let me check", tool_calls=[tc], finish_reason="tool_calls"),
             "gpt-4o",
         )
         texts = [c for c in result.content if isinstance(c, TextContent)]
@@ -112,9 +104,7 @@ class TestConvertMcpToolsToOpenAI:
 
     def test_should_convert_tool_with_schema(self):
         schema = {"type": "object", "properties": {"q": {"type": "string"}}}
-        tool = SimpleNamespace(
-            name="search", description="search the web", inputSchema=schema
-        )
+        tool = SimpleNamespace(name="search", description="search the web", inputSchema=schema)
         result = _convert_mcp_tools_to_openai([tool])
         assert result == [
             {

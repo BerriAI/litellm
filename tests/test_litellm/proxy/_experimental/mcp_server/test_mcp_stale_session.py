@@ -750,8 +750,7 @@ async def test_admitted_subject_missing_stored_token_challenged_with_resource_me
     challenge = exc_info.value.headers["www-authenticate"]
     assert "authorization_uri=" not in challenge
     assert challenge == (
-        'Bearer resource_metadata="http://localhost:8000'
-        '/.well-known/oauth-protected-resource/mcp/repro_oauth_server"'
+        'Bearer resource_metadata="http://localhost:8000/.well-known/oauth-protected-resource/mcp/repro_oauth_server"'
     )
 
 

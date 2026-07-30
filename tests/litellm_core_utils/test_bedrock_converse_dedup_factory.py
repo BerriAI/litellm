@@ -92,13 +92,7 @@ def _make_duplicate_tool_use_messages():
 
 def _extract_blocks(result, role, key):
     """Extract all content blocks containing ``key`` from messages with ``role``."""
-    return [
-        block
-        for msg in result
-        if msg["role"] == role
-        for block in msg["content"]
-        if key in block
-    ]
+    return [block for msg in result if msg["role"] == role for block in msg["content"] if key in block]
 
 
 # ---------------------------------------------------------------------------
@@ -122,9 +116,7 @@ async def test_bedrock_converse_deduplicates_tool_results_async():
     """Verify the async path also deduplicates toolResult blocks with the
     same toolUseId when merging consecutive tool messages."""
     messages = _make_duplicate_tool_result_messages()
-    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages, MODEL, PROVIDER
-    )
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(messages, MODEL, PROVIDER)
 
     tool_results = _extract_blocks(result, "user", "toolResult")
     ids = [tr["toolResult"]["toolUseId"] for tr in tool_results]
@@ -226,9 +218,7 @@ async def test_bedrock_converse_deduplicates_tool_use_async():
     """Verify the async path deduplicates toolUse blocks with the same
     toolUseId when merging consecutive assistant messages."""
     messages = _make_duplicate_tool_use_messages()
-    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages, MODEL, PROVIDER
-    )
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(messages, MODEL, PROVIDER)
 
     tool_uses = _extract_blocks(result, "assistant", "toolUse")
     ids = [tu["toolUse"]["toolUseId"] for tu in tool_uses]
@@ -241,11 +231,7 @@ async def test_bedrock_converse_tool_use_sync_async_parity():
     toolUse blocks."""
     messages = _make_duplicate_tool_use_messages()
     sync_result = _bedrock_converse_messages_pt(messages, MODEL, PROVIDER)
-    async_result = (
-        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages, MODEL, PROVIDER
-        )
-    )
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(messages, MODEL, PROVIDER)
     assert sync_result == async_result
 
 
@@ -312,9 +298,7 @@ def test_deduplicate_bedrock_tool_content_convenience_wrapper():
         {"toolResult": {"toolUseId": "id_1", "content": [{"text": "b"}]}},
     ]
 
-    assert _deduplicate_bedrock_tool_content(
-        blocks
-    ) == _deduplicate_bedrock_content_blocks(blocks, "toolResult")
+    assert _deduplicate_bedrock_tool_content(blocks) == _deduplicate_bedrock_content_blocks(blocks, "toolResult")
 
 
 # ---------------------------------------------------------------------------
@@ -329,11 +313,7 @@ async def test_bedrock_converse_sync_async_parity_with_duplicates():
     messages = _make_duplicate_tool_result_messages()
 
     sync_result = _bedrock_converse_messages_pt(messages, MODEL, PROVIDER)
-    async_result = (
-        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages, MODEL, PROVIDER
-        )
-    )
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(messages, MODEL, PROVIDER)
 
     assert sync_result == async_result
 
@@ -386,9 +366,7 @@ async def test_bedrock_converse_filters_empty_assistant_content_async():
         {"role": "user", "content": "How are you?"},
     ]
 
-    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages, MODEL, PROVIDER
-    )
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(messages, MODEL, PROVIDER)
 
     # Should have 3 messages: user, assistant (with merged non-empty content), user
     assert len(result) == 3
@@ -556,9 +534,7 @@ async def test_bedrock_converse_sorts_text_before_tooluse_async():
     """Verify the async path sorts text blocks before toolUse blocks in
     assistant messages."""
     messages = _make_tooluse_before_text_messages()
-    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages, MODEL, PROVIDER
-    )
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(messages, MODEL, PROVIDER)
 
     assistant_msgs = [msg for msg in result if msg["role"] == "assistant"]
     assert len(assistant_msgs) == 1
@@ -577,7 +553,5 @@ async def test_bedrock_converse_content_ordering_sync_async_parity():
     """Sync and async paths should produce identical content block ordering."""
     messages = _make_tooluse_before_text_messages()
     sync_result = _bedrock_converse_messages_pt(messages, MODEL, PROVIDER)
-    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages, MODEL, PROVIDER
-    )
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(messages, MODEL, PROVIDER)
     assert sync_result == async_result

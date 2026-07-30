@@ -4,9 +4,7 @@ import sys
 
 from typing import get_type_hints
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 from litellm.types.utils import StandardLoggingPayload
 
@@ -65,15 +63,9 @@ def test_standard_logging_payload_documentation():
                 print(_field)
 
             if undocumented_fields:
-                raise Exception(
-                    f"\nFields not documented in 'StandardLoggingPayload': {undocumented_fields}"
-                )
+                raise Exception(f"\nFields not documented in 'StandardLoggingPayload': {undocumented_fields}")
 
-            print(
-                f"All {len(all_fields)} fields are documented in 'StandardLoggingPayload'"
-            )
+            print(f"All {len(all_fields)} fields are documented in 'StandardLoggingPayload'")
 
     except FileNotFoundError:
-        raise Exception(
-            f"Documentation file not found at {docs_path}. Please ensure the documentation exists."
-        )
+        raise Exception(f"Documentation file not found at {docs_path}. Please ensure the documentation exists.")

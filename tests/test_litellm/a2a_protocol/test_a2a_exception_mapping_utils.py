@@ -38,9 +38,7 @@ async def test_localhost_retry_reuses_stashed_httpx_client():
         patch.object(emu, "A2A_SDK_AVAILABLE", True),
         patch.object(emu, "set_agent_card_url") as mock_set_url,
         patch.object(emu, "ClientConfig", side_effect=fake_client_config),
-        patch.object(
-            emu, "create_client", new=AsyncMock(return_value=new_client)
-        ) as mock_create,
+        patch.object(emu, "create_client", new=AsyncMock(return_value=new_client)) as mock_create,
     ):
         result = await emu.handle_a2a_localhost_retry(
             error=_localhost_error(),

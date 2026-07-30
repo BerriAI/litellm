@@ -43,11 +43,7 @@ def _build_minimal_pdf(marker: str) -> bytes:
             b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
             b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>"
         ),
-        (
-            b"<< /Length %d >>\nstream\nBT /F1 24 Tf 50 100 Td ("
-            + marker.encode("ascii")
-            + b") Tj ET\nendstream"
-        ),
+        (b"<< /Length %d >>\nstream\nBT /F1 24 Tf 50 100 Td (" + marker.encode("ascii") + b") Tj ET\nendstream"),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     ]
     body_open = objects[3].index(b"\nstream\n") + len(b"\nstream\n")
@@ -92,8 +88,7 @@ def test_pdf_input_vertex_ai(compat_result, tmp_path):
     outcomes = run_claude_models_parallel(
         models=VERTEX_AI_MODELS,
         prompt=(
-            f"Use the Read tool to read the file at {pdf_path}. "
-            "Report the single word that appears in the document."
+            f"Use the Read tool to read the file at {pdf_path}. Report the single word that appears in the document."
         ),
         base_url=base_url,
         api_key=api_key,
@@ -116,10 +111,7 @@ def test_pdf_input_vertex_ai(compat_result, tmp_path):
             continue
 
         if PDF_MARKER not in outcome.text.upper():
-            error = (
-                f"[{model}] reply did not reference the PDF marker {PDF_MARKER!r}; "
-                f"got: {outcome.text.strip()!r}"
-            )
+            error = f"[{model}] reply did not reference the PDF marker {PDF_MARKER!r}; got: {outcome.text.strip()!r}"
             compat_result.add({"status": "fail", "error": error})
             failures.append(error)
             continue

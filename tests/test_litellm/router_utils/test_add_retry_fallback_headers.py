@@ -48,15 +48,8 @@ def test_add_fallback_headers_serializes_fallback_errors():
     )
 
     assert result is response
-    assert response._hidden_params["additional_headers"][
-        "x-litellm-attempted-fallbacks"
-    ] == 1
-    assert (
-        json.loads(
-            response._hidden_params["additional_headers"]["x-litellm-fallback-errors"]
-        )
-        == fallback_errors
-    )
+    assert response._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
+    assert json.loads(response._hidden_params["additional_headers"]["x-litellm-fallback-errors"]) == fallback_errors
 
 
 def test_add_retry_headers_to_streaming_wrapper():
@@ -82,9 +75,7 @@ def test_get_hidden_params_dict_with_pydantic_model_hidden_params():
 
     class Response:
         def __init__(self):
-            self._hidden_params = InnerHiddenParams(
-                additional_headers={"x-custom": "value"}
-            )
+            self._hidden_params = InnerHiddenParams(additional_headers={"x-custom": "value"})
 
     result = get_hidden_params_dict(Response())
     assert result == {"additional_headers": {"x-custom": "value"}}
@@ -131,9 +122,7 @@ def test_get_fallback_errors_from_headers_existing_list_passthrough():
 
 
 def test_get_fallback_errors_from_headers_invalid_json_returns_empty():
-    result = get_fallback_errors_from_headers(
-        {"x-litellm-fallback-errors": "not-valid-json-{"}
-    )
+    result = get_fallback_errors_from_headers({"x-litellm-fallback-errors": "not-valid-json-{"})
     assert result == []
 
 

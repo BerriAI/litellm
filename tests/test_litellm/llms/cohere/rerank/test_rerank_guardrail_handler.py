@@ -19,9 +19,7 @@ from litellm.types.utils import CallTypes
 class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing"""
 
-    async def apply_guardrail(
-        self, inputs: dict, request_data: dict, input_type: str, **kwargs
-    ) -> dict:
+    async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
         texts = inputs.get("texts", [])
         return {"texts": [f"{text} [GUARDRAILED]" for text in texts]}
 
@@ -118,9 +116,7 @@ class TestInputProcessing:
         """A masking guardrail rewrites instruction, not just query"""
 
         class PIIMaskingGuardrail(CustomGuardrail):
-            async def apply_guardrail(
-                self, inputs: dict, request_data: dict, input_type: str, **kwargs
-            ) -> dict:
+            async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
                 texts = inputs.get("texts", [])
                 return {"texts": [t.replace("John Doe", "[NAME_REDACTED]") for t in texts]}
 
@@ -252,9 +248,7 @@ class TestPIIMaskingScenario:
         class PIIMaskingGuardrail(CustomGuardrail):
             """Mock PII masking guardrail"""
 
-            async def apply_guardrail(
-                self, inputs: dict, request_data: dict, input_type: str, **kwargs
-            ) -> dict:
+            async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
                 import re
 
                 texts = inputs.get("texts", [])
@@ -304,9 +298,7 @@ class TestPIIMaskingScenario:
         class PIIMaskingGuardrail(CustomGuardrail):
             """Mock PII masking guardrail"""
 
-            async def apply_guardrail(
-                self, inputs: dict, request_data: dict, input_type: str, **kwargs
-            ) -> dict:
+            async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
                 import re
 
                 texts = inputs.get("texts", [])
@@ -417,9 +409,7 @@ class TestContentFilteringScenario:
         class ContentFilterGuardrail(CustomGuardrail):
             """Mock content filter guardrail"""
 
-            async def apply_guardrail(
-                self, inputs: dict, request_data: dict, input_type: str, **kwargs
-            ) -> dict:
+            async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
                 bad_words = ["inappropriate", "offensive"]
                 texts = inputs.get("texts", [])
                 filtered_texts = []

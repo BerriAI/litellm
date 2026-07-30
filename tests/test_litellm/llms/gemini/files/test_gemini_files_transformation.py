@@ -43,9 +43,7 @@ class TestGoogleAIStudioFilesTransformation:
         # CRITICAL: params should be empty dict, not contain Content-Type or any other params
         # These would be incorrectly interpreted as query parameters
         assert params == {}, f"Expected empty params dict, got: {params}"
-        assert (
-            "Content-Type" not in params
-        ), "Content-Type should not be in query params"
+        assert "Content-Type" not in params, "Content-Type should not be in query params"
 
     def test_transform_retrieve_file_request_with_file_name_only(self):
         """
@@ -66,9 +64,7 @@ class TestGoogleAIStudioFilesTransformation:
 
         # CRITICAL: params should be empty dict
         assert params == {}, f"Expected empty params dict, got: {params}"
-        assert (
-            "Content-Type" not in params
-        ), "Content-Type should not be in query params"
+        assert "Content-Type" not in params, "Content-Type should not be in query params"
 
     def test_transform_retrieve_file_request_with_raw_id_only(self):
         """
@@ -86,9 +82,7 @@ class TestGoogleAIStudioFilesTransformation:
             litellm_params=litellm_params,
         )
 
-        assert (
-            url == "https://generativelanguage.googleapis.com/v1beta/files/cctqueckiggb"
-        )
+        assert url == "https://generativelanguage.googleapis.com/v1beta/files/cctqueckiggb"
         assert "key=" not in url
         assert params == {}
 
@@ -103,8 +97,7 @@ class TestGoogleAIStudioFilesTransformation:
         )
 
         assert (
-            url
-            == "https://generativelanguage.googleapis.com/v1beta/files/..%2F..%2Fmodels%2Fgemini-pro%3Fx%3D1%23frag"
+            url == "https://generativelanguage.googleapis.com/v1beta/files/..%2F..%2Fmodels%2Fgemini-pro%3Fx%3D1%23frag"
         )
         assert params == {}
 
@@ -358,7 +351,6 @@ class TestGoogleAIStudioFilesTransformation:
         )
 
         assert (
-            url
-            == "https://generativelanguage.googleapis.com/v1beta/files/..%2F..%2Fmodels%2Fgemini-pro%3Fx%3D1%23frag"
+            url == "https://generativelanguage.googleapis.com/v1beta/files/..%2F..%2Fmodels%2Fgemini-pro%3Fx%3D1%23frag"
         )
         assert params == {}

@@ -140,7 +140,7 @@ async def test_async_responses_api_routing_with_previous_response_id():
 
             response = await router.aresponses(
                 model=MODEL,
-                input=f"Follow-up question {i+1}",
+                input=f"Follow-up question {i + 1}",
                 truncation="auto",
                 previous_response_id=response_id,
             )
@@ -166,9 +166,7 @@ async def test_async_routing_without_previous_response_id():
                 "id": "msg_123",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "Hello there!", "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": "Hello there!", "annotations": []}],
             }
         ],
         "parallel_tool_calls": True,
@@ -269,9 +267,7 @@ async def test_async_routing_without_previous_response_id():
             used_model_ids.add(response._hidden_params["model_id"])
 
         # We should have used more than one model_id if load balancing is working
-        assert (
-            len(used_model_ids) > 1
-        ), "Load balancing isn't working, only one deployment was used"
+        assert len(used_model_ids) > 1, "Load balancing isn't working, only one deployment was used"
 
 
 @pytest.mark.asyncio

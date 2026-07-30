@@ -187,10 +187,7 @@ class TestAnthropicFilesConfig:
             litellm_params={},
         )
 
-        assert (
-            url
-            == f"{ANTHROPIC_FILES_API_BASE}/v1/files/..%2F..%2Fv1%2Fmessages%2Fbatches%3Flimit%3D1%23frag"
-        )
+        assert url == f"{ANTHROPIC_FILES_API_BASE}/v1/files/..%2F..%2Fv1%2Fmessages%2Fbatches%3Flimit%3D1%23frag"
         assert params == {}
 
     def test_transform_retrieve_file_response(self):

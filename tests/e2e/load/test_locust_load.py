@@ -133,8 +133,7 @@ class TestErrorBreakdown:
     def test_diagnosis_caps_the_list_and_says_how_many_it_left_out(self) -> None:
         result = _result(
             errors=tuple(
-                LoadError(name="/chat/completions", error=f"error-{index}", occurrences=index)
-                for index in range(1, 9)
+                LoadError(name="/chat/completions", error=f"error-{index}", occurrences=index) for index in range(1, 9)
             )
         )
 

@@ -2,6 +2,7 @@
 """
 Test to verify the new Google GenAI router methods
 """
+
 import asyncio
 import os
 import sys
@@ -9,9 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.types.utils import ModelResponse
@@ -33,14 +32,10 @@ async def test_router_agenerate_content_method():
     )
 
     # Create a mock response in Google GenAI format
-    mock_response = {
-        "candidates": [{"content": {"parts": [{"text": "Hello, world!"}]}}]
-    }
+    mock_response = {"candidates": [{"content": {"parts": [{"text": "Hello, world!"}]}}]}
 
     # Mock the router's underlying agenerate_content method to return a mock response
-    with patch.object(
-        router, "agenerate_content", new=AsyncMock(return_value=mock_response)
-    ) as mock_agenerate_content:
+    with patch.object(router, "agenerate_content", new=AsyncMock(return_value=mock_response)) as mock_agenerate_content:
         # Call the agenerate_content method
         response = await router.agenerate_content(
             model="test-model",
@@ -51,9 +46,7 @@ async def test_router_agenerate_content_method():
         mock_agenerate_content.assert_called_once()
         call_args = mock_agenerate_content.call_args
         assert call_args[1]["model"] == "test-model"
-        assert call_args[1]["contents"] == [
-            {"role": "user", "parts": [{"text": "Hello"}]}
-        ]
+        assert call_args[1]["contents"] == [{"role": "user", "parts": [{"text": "Hello"}]}]
 
         # Verify that the response is the mock response we created
         assert response == mock_response
@@ -75,9 +68,7 @@ async def test_router_aadapter_generate_content_method():
     )
 
     # Create a mock response in Google GenAI format
-    mock_response = {
-        "candidates": [{"content": {"parts": [{"text": "Hello, world!"}]}}]
-    }
+    mock_response = {"candidates": [{"content": {"parts": [{"text": "Hello, world!"}]}}]}
 
     # Mock the router's underlying aadapter_generate_content method to return a mock response
     with patch.object(
@@ -93,9 +84,7 @@ async def test_router_aadapter_generate_content_method():
         mock_aadapter_generate_content.assert_called_once()
         call_args = mock_aadapter_generate_content.call_args
         assert call_args[1]["model"] == "test-model"
-        assert call_args[1]["contents"] == [
-            {"role": "user", "parts": [{"text": "Hello"}]}
-        ]
+        assert call_args[1]["contents"] == [{"role": "user", "parts": [{"text": "Hello"}]}]
 
         # Verify that the response is the mock response we created
         assert response == mock_response

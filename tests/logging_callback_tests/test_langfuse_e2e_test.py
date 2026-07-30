@@ -41,9 +41,7 @@ def assert_langfuse_request_matches_expected(
     """
     # Get the current directory and read the expected request body
     pwd = os.path.dirname(os.path.realpath(__file__))
-    expected_body_path = os.path.join(
-        pwd, "langfuse_expected_request_body", expected_file_name
-    )
+    expected_body_path = os.path.join(pwd, "langfuse_expected_request_body", expected_file_name)
 
     with open(expected_body_path, "r") as f:
         expected_request_body = json.load(f)
@@ -54,10 +52,7 @@ def assert_langfuse_request_matches_expected(
             item
             for item in actual_request_body["batch"]
             if (item["type"] == "trace-create" and item["body"].get("id") == trace_id)
-            or (
-                item["type"] == "generation-create"
-                and item["body"].get("traceId") == trace_id
-            )
+            or (item["type"] == "generation-create" and item["body"].get("traceId") == trace_id)
         ]
 
     # When aggregating from multiple flush cycles, deduplicate by keeping
@@ -72,13 +67,9 @@ def assert_langfuse_request_matches_expected(
     actual_request_body["batch"] = deduped_batch
 
     # Ensure canonical order: trace-create first, generation-create second
-    actual_request_body["batch"].sort(
-        key=lambda x: 0 if x["type"] == "trace-create" else 1
-    )
+    actual_request_body["batch"].sort(key=lambda x: 0 if x["type"] == "trace-create" else 1)
 
-    print(
-        "actual_request_body after filtering", json.dumps(actual_request_body, indent=4)
-    )
+    print("actual_request_body after filtering", json.dumps(actual_request_body, indent=4))
 
     assert len(actual_request_body["batch"]) >= 2, (
         f"Expected at least 2 batch items (trace-create + generation-create) "
@@ -89,28 +80,19 @@ def assert_langfuse_request_matches_expected(
 
     # Replace dynamic values in actual request body
     for item in actual_request_body["batch"]:
-
         # Replace IDs with expected IDs
         if item["type"] == "trace-create":
             item["id"] = expected_request_body["batch"][0]["id"]
             item["body"]["id"] = expected_request_body["batch"][0]["body"]["id"]
             item["timestamp"] = expected_request_body["batch"][0]["timestamp"]
-            item["body"]["timestamp"] = expected_request_body["batch"][0]["body"][
-                "timestamp"
-            ]
+            item["body"]["timestamp"] = expected_request_body["batch"][0]["body"]["timestamp"]
         elif item["type"] == "generation-create":
             item["id"] = expected_request_body["batch"][1]["id"]
             item["body"]["id"] = expected_request_body["batch"][1]["body"]["id"]
             item["timestamp"] = expected_request_body["batch"][1]["timestamp"]
-            item["body"]["startTime"] = expected_request_body["batch"][1]["body"][
-                "startTime"
-            ]
-            item["body"]["endTime"] = expected_request_body["batch"][1]["body"][
-                "endTime"
-            ]
-            item["body"]["completionStartTime"] = expected_request_body["batch"][1][
-                "body"
-            ]["completionStartTime"]
+            item["body"]["startTime"] = expected_request_body["batch"][1]["body"]["startTime"]
+            item["body"]["endTime"] = expected_request_body["batch"][1]["body"]["endTime"]
+            item["body"]["completionStartTime"] = expected_request_body["batch"][1]["body"]["completionStartTime"]
             if trace_id is None:
                 print("popping traceId")
                 item["body"].pop("traceId")
@@ -120,26 +102,16 @@ def assert_langfuse_request_matches_expected(
 
     # Replace SDK version with expected version
     actual_request_body["batch"][0]["body"].pop("release", None)
-    actual_request_body["metadata"]["sdk_version"] = expected_request_body["metadata"][
-        "sdk_version"
-    ]
+    actual_request_body["metadata"]["sdk_version"] = expected_request_body["metadata"]["sdk_version"]
     # replace "public_key" with expected public key
-    actual_request_body["metadata"]["public_key"] = expected_request_body["metadata"][
-        "public_key"
-    ]
-    actual_request_body["batch"][1]["body"]["metadata"] = expected_request_body[
-        "batch"
-    ][1]["body"]["metadata"]
-    actual_request_body["metadata"]["sdk_integration"] = expected_request_body[
-        "metadata"
-    ]["sdk_integration"]
-    actual_request_body["metadata"]["batch_size"] = expected_request_body["metadata"][
-        "batch_size"
-    ]
+    actual_request_body["metadata"]["public_key"] = expected_request_body["metadata"]["public_key"]
+    actual_request_body["batch"][1]["body"]["metadata"] = expected_request_body["batch"][1]["body"]["metadata"]
+    actual_request_body["metadata"]["sdk_integration"] = expected_request_body["metadata"]["sdk_integration"]
+    actual_request_body["metadata"]["batch_size"] = expected_request_body["metadata"]["batch_size"]
     # Assert the entire request body matches
-    assert (
-        actual_request_body == expected_request_body
-    ), f"Difference in request bodies: {json.dumps(actual_request_body, indent=2)} != {json.dumps(expected_request_body, indent=2)}"
+    assert actual_request_body == expected_request_body, (
+        f"Difference in request bodies: {json.dumps(actual_request_body, indent=2)} != {json.dumps(expected_request_body, indent=2)}"
+    )
 
 
 class TestLangfuseLogging:
@@ -221,9 +193,7 @@ class TestLangfuseLogging:
                 mock_response="Hello! How can I assist you today?",
                 metadata={"trace_id": setup["trace_id"]},
             )
-            await self._verify_langfuse_call(
-                setup["mock_post"], "completion.json", setup["trace_id"]
-            )
+            await self._verify_langfuse_call(setup["mock_post"], "completion.json", setup["trace_id"])
 
     @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=1)
@@ -240,9 +210,7 @@ class TestLangfuseLogging:
                     "tags": ["test_tag", "test_tag_2"],
                 },
             )
-            await self._verify_langfuse_call(
-                setup["mock_post"], "completion_with_tags.json", setup["trace_id"]
-            )
+            await self._verify_langfuse_call(setup["mock_post"], "completion_with_tags.json", setup["trace_id"])
 
     @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=1)
@@ -377,9 +345,7 @@ class TestLangfuseLogging:
         ],
     )
     @pytest.mark.flaky(retries=6, delay=1)
-    async def test_langfuse_logging_with_various_metadata_types(
-        self, mock_setup, test_metadata, response_json_file
-    ):
+    async def test_langfuse_logging_with_various_metadata_types(self, mock_setup, test_metadata, response_json_file):
         """Test Langfuse logging with various metadata types including non-serializable objects"""
         import threading
 
@@ -404,9 +370,7 @@ class TestLangfuseLogging:
 
     @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=1)
-    async def test_langfuse_logging_completion_with_malformed_llm_response(
-        self, mock_setup
-    ):
+    async def test_langfuse_logging_completion_with_malformed_llm_response(self, mock_setup):
         """Test Langfuse logging for chat completion with malformed LLM response"""
         setup = mock_setup
         litellm._turn_on_debug()
@@ -428,15 +392,11 @@ class TestLangfuseLogging:
                 mock_response=mock_response,
                 metadata={"trace_id": setup["trace_id"]},
             )
-            await self._verify_langfuse_call(
-                setup["mock_post"], "completion_with_no_choices.json", setup["trace_id"]
-            )
+            await self._verify_langfuse_call(setup["mock_post"], "completion_with_no_choices.json", setup["trace_id"])
 
     @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=1)
-    async def test_langfuse_logging_completion_with_bedrock_llm_response(
-        self, mock_setup
-    ):
+    async def test_langfuse_logging_completion_with_bedrock_llm_response(self, mock_setup):
         """Test Langfuse logging for chat completion with malformed LLM response"""
         setup = mock_setup
         litellm._turn_on_debug()
@@ -469,9 +429,7 @@ class TestLangfuseLogging:
 
     @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=1)
-    async def test_langfuse_logging_completion_with_vertex_llm_response(
-        self, mock_setup
-    ):
+    async def test_langfuse_logging_completion_with_vertex_llm_response(self, mock_setup):
         """Test Langfuse logging for chat completion with malformed LLM response"""
         setup = mock_setup
         litellm._turn_on_debug()
@@ -541,9 +499,7 @@ class TestLangfuseLogging:
         actual_vllm_request = mock_async_client.post.call_args.kwargs["json"]
 
         pwd = os.path.dirname(os.path.realpath(__file__))
-        expected_body_path = os.path.join(
-            pwd, "langfuse_expected_request_body", "embedding_with_vllm.json"
-        )
+        expected_body_path = os.path.join(pwd, "langfuse_expected_request_body", "embedding_with_vllm.json")
         with open(expected_body_path, "r") as f:
             expected_vllm_request = json.load(f)
 

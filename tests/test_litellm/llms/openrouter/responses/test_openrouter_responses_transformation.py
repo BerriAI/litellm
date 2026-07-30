@@ -55,9 +55,7 @@ class TestOpenRouterResponsesAPIConfig:
         from litellm.types.router import GenericLiteLLMParams
 
         params = GenericLiteLLMParams(api_key="sk-or-test-key")
-        headers = config.validate_environment(
-            headers={}, model="openai/o4-mini", litellm_params=params
-        )
+        headers = config.validate_environment(headers={}, model="openai/o4-mini", litellm_params=params)
         assert headers["Authorization"] == "Bearer sk-or-test-key"
 
     def test_validate_environment_raises_without_key(self, monkeypatch):
@@ -96,8 +94,7 @@ class TestOpenRouterResponsesAPIRegistration:
             provider=LlmProviders.OPENROUTER,
         )
         assert config is not None, (
-            "OpenRouter must be registered as a native Responses API provider "
-            "to preserve reasoning.encrypted_content"
+            "OpenRouter must be registered as a native Responses API provider to preserve reasoning.encrypted_content"
         )
         assert isinstance(config, OpenRouterResponsesAPIConfig)
 

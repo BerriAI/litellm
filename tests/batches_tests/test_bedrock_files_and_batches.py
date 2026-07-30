@@ -9,9 +9,7 @@ import tempfile
 from dotenv import load_dotenv
 
 load_dotenv()
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 
 
 import pytest
@@ -146,18 +144,12 @@ async def test_async_create_file():
 
     assert len(capture_client.put_calls) == 1
     put_call = capture_client.put_calls[0]
-    assert put_call["url"].startswith(
-        "https://s3.us-west-2.amazonaws.com/litellm-proxy-941277531214/"
-    )
-    assert "/litellm-bedrock-files-us.anthropic.claude-haiku-4-5-20251001-v1-0-" in (
-        put_call["url"]
-    )
+    assert put_call["url"].startswith("https://s3.us-west-2.amazonaws.com/litellm-proxy-941277531214/")
+    assert "/litellm-bedrock-files-us.anthropic.claude-haiku-4-5-20251001-v1-0-" in (put_call["url"])
     assert put_call["url"].endswith(".jsonl")
     assert put_call["headers"]["Authorization"].startswith("AWS4-HMAC-SHA256")
     assert "recordId" in put_call["data"]
-    assert file_obj.id.startswith(
-        "s3://litellm-proxy-941277531214/litellm-bedrock-files-"
-    )
+    assert file_obj.id.startswith("s3://litellm-proxy-941277531214/litellm-bedrock-files-")
     assert file_obj.filename.endswith(".jsonl")
 
 
@@ -205,18 +197,16 @@ async def test_async_file_and_batch():
 
             # retrieve batch
             mock_bedrock_client = MagicMock()
-            mock_bedrock_client.get_model_invocation_job.side_effect = (
-                lambda jobIdentifier: capture_client.batch_jobs[jobIdentifier]
-            )
+            mock_bedrock_client.get_model_invocation_job.side_effect = lambda jobIdentifier: capture_client.batch_jobs[
+                jobIdentifier
+            ]
             with patch("boto3.client", return_value=mock_bedrock_client):
                 retrieve_batch_response = await litellm.aretrieve_batch(
                     batch_id=create_batch_response.id,
                     custom_llm_provider="bedrock",
                     model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 )
-            mock_bedrock_client.get_model_invocation_job.assert_called_once_with(
-                jobIdentifier=create_batch_response.id
-            )
+            mock_bedrock_client.get_model_invocation_job.assert_called_once_with(jobIdentifier=create_batch_response.id)
             print("RETRIEVED BATCH RESPONSE=", retrieve_batch_response)
 
     # Validate the response
@@ -288,12 +278,8 @@ async def test_bedrock_retrieve_batch():
         "submitTime": "2024-01-01T12:00:00Z",
         "lastModifiedTime": "2024-01-01T12:30:00Z",
         "endTime": "2024-01-01T13:00:00Z",
-        "inputDataConfig": {
-            "s3InputDataConfig": {"s3Uri": "s3://test-bucket/input/test-input.jsonl"}
-        },
-        "outputDataConfig": {
-            "s3OutputDataConfig": {"s3Uri": "s3://test-bucket/output/"}
-        },
+        "inputDataConfig": {"s3InputDataConfig": {"s3Uri": "s3://test-bucket/input/test-input.jsonl"}},
+        "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://test-bucket/output/"}},
     }
 
     mock_bedrock_client = MagicMock()
@@ -313,10 +299,7 @@ async def test_bedrock_retrieve_batch():
             model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
         )
 
-        assert (
-            batch_response.id
-            == "arn:aws:bedrock:us-west-2:123456789012:model-invocation-job/test-job-123"
-        )
+        assert batch_response.id == "arn:aws:bedrock:us-west-2:123456789012:model-invocation-job/test-job-123"
         assert batch_response.object == "batch"
         assert batch_response.status == "completed"
         assert batch_response.endpoint == "/v1/chat/completions"
@@ -324,10 +307,7 @@ async def test_bedrock_retrieve_batch():
         assert batch_response.input_file_id == "s3://test-bucket/input/test-input.jsonl"
         # Bedrock returns only the output *prefix*; the handler predicts the
         # actual output object as <prefix>/<job-id>/<basename(input)>.out.
-        assert (
-            batch_response.output_file_id
-            == "s3://test-bucket/output/test-job-123/test-input.jsonl.out"
-        )
+        assert batch_response.output_file_id == "s3://test-bucket/output/test-job-123/test-input.jsonl.out"
 
 
 def test_bedrock_batch_with_encryption_key_in_post_request():
@@ -337,9 +317,7 @@ def test_bedrock_batch_with_encryption_key_in_post_request():
     import json
     import litellm
 
-    test_kms_key_id = (
-        "arn:aws:kms:us-west-2:123456789012:key/12345678-1234-1234-1234-123456789012"
-    )
+    test_kms_key_id = "arn:aws:kms:us-west-2:123456789012:key/12345678-1234-1234-1234-123456789012"
 
     captured_request_body = None
 
@@ -383,9 +361,6 @@ def test_bedrock_batch_with_encryption_key_in_post_request():
     assert "outputDataConfig" in request_data
     assert "s3OutputDataConfig" in request_data["outputDataConfig"]
     assert "s3EncryptionKeyId" in request_data["outputDataConfig"]["s3OutputDataConfig"]
-    assert (
-        request_data["outputDataConfig"]["s3OutputDataConfig"]["s3EncryptionKeyId"]
-        == test_kms_key_id
-    )
+    assert request_data["outputDataConfig"]["s3OutputDataConfig"]["s3EncryptionKeyId"] == test_kms_key_id
 
     print("SUCCESS: s3_encryption_key_id properly included in AWS POST request")

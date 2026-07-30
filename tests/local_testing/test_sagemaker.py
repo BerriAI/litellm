@@ -11,9 +11,7 @@ import os
 import litellm
 from test_streaming import streaming_format_tests
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -79,9 +77,7 @@ async def test_completion_sagemaker(sync_mode):
         print(response)
         cost = completion_cost(completion_response=response)
         print("calculated cost", cost)
-        assert (
-            cost > 0.0 and cost < 1.0
-        )  # should never be > $1 for a single completion call
+        assert cost > 0.0 and cost < 1.0  # should never be > $1 for a single completion call
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -115,10 +111,7 @@ async def test_completion_sagemaker_messages_api(sync_mode):
                     print(e)
                 mock_post.assert_called_once()
                 json_data = json.loads(mock_post.call_args.kwargs["data"])
-                assert (
-                    json_data["model"]
-                    == "huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245"
-                )
+                assert json_data["model"] == "huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245"
                 assert json_data["messages"] == [{"role": "user", "content": "hi"}]
                 assert json_data["temperature"] == 0.2
                 assert json_data["max_tokens"] == 80
@@ -141,10 +134,7 @@ async def test_completion_sagemaker_messages_api(sync_mode):
                     print(e)
                 mock_post.assert_called_once()
                 json_data = json.loads(mock_post.call_args.kwargs["data"])
-                assert (
-                    json_data["model"]
-                    == "huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245"
-                )
+                assert json_data["model"] == "huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245"
                 assert json_data["messages"] == [{"role": "user", "content": "hi"}]
                 assert json_data["temperature"] == 0.2
                 assert json_data["max_tokens"] == 80

@@ -182,8 +182,6 @@ class TestDeepSeekThinkingParams:
 
         result = self.config._drop_unsupported_tools(optional_params)
 
-        assert result["tools"] == [
-            {"type": "function", "function": {"name": "get_weather"}}
-        ]
+        assert result["tools"] == [{"type": "function", "function": {"name": "get_weather"}}]
         assert "tool_choice" not in result
         assert result["parallel_tool_calls"] is True

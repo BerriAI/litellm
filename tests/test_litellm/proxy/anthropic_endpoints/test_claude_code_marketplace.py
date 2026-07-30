@@ -68,18 +68,14 @@ _GIT_SUBDIR_SOURCE = {
 @pytest.fixture(autouse=True)
 def _patch_proxy_globals(monkeypatch):
     """Scope prisma_client/master_key mutations to each test via monkeypatch."""
-    monkeypatch.setattr(
-        litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma()
-    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma())
     monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
 
 
 @pytest.mark.asyncio
 async def test_register_plugin_git_subdir_success():
     """git-subdir with both url and path fields registers successfully."""
-    request = RegisterPluginRequest(
-        name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE
-    )
+    request = RegisterPluginRequest(name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE)
 
     response = await register_plugin(request=request, user_api_key_dict=_USER)
 
@@ -92,14 +88,10 @@ async def test_register_plugin_git_subdir_success():
 @pytest.mark.asyncio
 async def test_register_plugin_git_subdir_update():
     """Registering the same git-subdir plugin twice returns action=updated."""
-    request = RegisterPluginRequest(
-        name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE, version="1.0.0"
-    )
+    request = RegisterPluginRequest(name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE, version="1.0.0")
     await register_plugin(request=request, user_api_key_dict=_USER)
 
-    request2 = RegisterPluginRequest(
-        name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE, version="2.0.0"
-    )
+    request2 = RegisterPluginRequest(name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE, version="2.0.0")
     response = await register_plugin(request=request2, user_api_key_dict=_USER)
 
     assert response["status"] == "success"

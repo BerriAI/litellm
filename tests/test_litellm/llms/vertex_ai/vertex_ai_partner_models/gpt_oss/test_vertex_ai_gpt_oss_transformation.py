@@ -5,9 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.vertex_ai.vertex_ai_partner_models.gpt_oss.transformation import (
@@ -55,9 +53,7 @@ class TestVertexAIGPTOSSTransformation:
     def test_supports_reasoning_effort(self):
         """Test that reasoning_effort parameter is supported for GPT-OSS models."""
         config = VertexAIGPTOSSTransformation()
-        supported_params = config.get_supported_openai_params(
-            model="openai/gpt-oss-20b-maas"
-        )
+        supported_params = config.get_supported_openai_params(model="openai/gpt-oss-20b-maas")
 
         assert "reasoning_effort" in supported_params
 
@@ -67,9 +63,7 @@ class TestVertexAIGPTOSSTransformation:
 
         # Mock litellm.supports_function_calling to return False
         with patch("litellm.supports_function_calling", return_value=False):
-            supported_params = config.get_supported_openai_params(
-                model="openai/gpt-oss-20b-maas"
-            )
+            supported_params = config.get_supported_openai_params(model="openai/gpt-oss-20b-maas")
 
             # Tool calling params should be removed
             assert "tool" not in supported_params
@@ -114,9 +108,7 @@ async def test_vertex_ai_gpt_oss_simple_request():
     mock_vertexai.preview.language_models = MagicMock()
 
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
-        ) as mock_http_handler,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler,
         patch(
             "litellm.llms.vertex_ai.vertex_ai_partner_models.main.VertexAIPartnerModels._ensure_access_token",
             return_value=("fake-token", "pathrise-convert-1606954137718"),
@@ -213,9 +205,7 @@ async def test_vertex_ai_gpt_oss_reasoning_effort():
     mock_vertexai.preview.language_models = MagicMock()
 
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
-        ) as mock_http_handler,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler,
         patch(
             "litellm.llms.vertex_ai.vertex_ai_partner_models.main.VertexAIPartnerModels._ensure_access_token",
             return_value=("fake-token", "pathrise-convert-1606954137718"),

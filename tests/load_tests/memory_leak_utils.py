@@ -116,9 +116,7 @@ def mock_server():
             sock.bind(("127.0.0.1", port))
             sock.close()
         except OSError:
-            pytest.fail(
-                f"Could not find available port for mock server (tried 18888, 18889)"
-            )
+            pytest.fail(f"Could not find available port for mock server (tried 18888, 18889)")
 
     # Start server in background thread
     thread = Thread(target=lambda: run_server(app, port), daemon=True)
@@ -161,9 +159,7 @@ def mock_server():
             break
 
     if not server_ready:
-        pytest.fail(
-            f"Mock server not accessible at {server_url} after {max_attempts} attempts"
-        )
+        pytest.fail(f"Mock server not accessible at {server_url} after {max_attempts} attempts")
 
     yield server_url
 
@@ -300,9 +296,7 @@ async def run_memory_baseline_test(num_requests: int, router: Router, limit_memo
             if isinstance(response, Exception):
                 failed_count += 1
                 # Log exception but continue
-                print(
-                    f"  Warning: Request {batch_start + i} failed: {type(response).__name__}: {response}"
-                )
+                print(f"  Warning: Request {batch_start + i} failed: {type(response).__name__}: {response}")
             elif response is None:
                 failed_count += 1
                 print(f"  Warning: Request {batch_start + i} returned None")

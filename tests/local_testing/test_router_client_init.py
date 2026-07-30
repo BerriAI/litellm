@@ -15,17 +15,13 @@ from unittest.mock import MagicMock, PropertyMock, patch
 import pytest
 from openai.lib.azure import OpenAIError
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm import APIConnectionError, Router
 from unittest.mock import ANY
 
 
-@pytest.mark.skip(
-    reason="This test is not relevant to the current codebase. The default Azure AD workflow is used."
-)
+@pytest.mark.skip(reason="This test is not relevant to the current codebase. The default Azure AD workflow is used.")
 @patch("litellm.secret_managers.get_azure_ad_token_provider.os")
 def test_router_init_with_neither_api_key_nor_azure_service_principal_with_secret(
     mocked_os_lib: MagicMock,
@@ -141,9 +137,7 @@ def test_router_init_azure_service_principal_with_secret_with_environment_variab
     # now let's try to make a completion call
     deployment = model_list[0]
     model = deployment["model_name"]
-    messages = [
-        {"role": "user", "content": f"write a one sentence poem {time.time()}?"}
-    ]
+    messages = [{"role": "user", "content": f"write a one sentence poem {time.time()}?"}]
     with pytest.raises(APIConnectionError):
         # of course, it will raise an error, because URL is mocked
         router.completion(model=model, messages=messages, temperature=1)  # type: ignore
@@ -191,9 +185,7 @@ async def test_audio_speech_router():
             input="the quick brown fox jumped over the lazy dogs",
         )
 
-        print(
-            "litellm.aspeech was called with kwargs = ", mock_aspeech.call_args.kwargs
-        )
+        print("litellm.aspeech was called with kwargs = ", mock_aspeech.call_args.kwargs)
 
         # Get the actual client that was passed
         client_passed_in_request = mock_aspeech.call_args.kwargs["client"]

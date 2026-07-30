@@ -8,9 +8,7 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 from typing import Literal
 
 import pytest
@@ -86,9 +84,7 @@ def test_run(model: str):
     print(f"Non-stream usage : {response.usage}")  # type: ignore
     non_stream_usage = response.usage
     try:
-        print(
-            f"Non-stream cost  : {response._hidden_params['response_cost'] * 100:.4f}"
-        )
+        print(f"Non-stream cost  : {response._hidden_params['response_cost'] * 100:.4f}")
     except TypeError:
         print("Non-stream cost  : NONE")
     print(f"Non-stream cost  : {completion_cost(response) * 100:.4f} (response)")
@@ -98,9 +94,7 @@ def test_run(model: str):
     output = response.choices[0].message.content.replace("\n", "")  # type: ignore
 
     if response.usage.completion_tokens != non_stream_usage.completion_tokens:
-        pytest.skip(
-            "LLM API returning inconsistent usage"
-        )  # handles transient openai errors
+        pytest.skip("LLM API returning inconsistent usage")  # handles transient openai errors
     streaming_cost_calc = (
         completion_cost(
             response,

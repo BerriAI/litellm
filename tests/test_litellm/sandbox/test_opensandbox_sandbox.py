@@ -78,9 +78,7 @@ class FakeHTTPClient:
             "endpoint": "execd.local:44772",
             "headers": {"X-EXECD-ACCESS-TOKEN": "execd-token"},
         }
-        self.endpoint_responses = (
-            list(endpoint_responses) if endpoint_responses is not None else None
-        )
+        self.endpoint_responses = list(endpoint_responses) if endpoint_responses is not None else None
         self.execute_lines = execute_lines or []
         self.delete_status = delete_status
         self.execute_raises = execute_raises
@@ -269,9 +267,7 @@ def test_static_helpers_cover_defaults_and_fallbacks(monkeypatch):
     assert config._sandbox_state(None) is None
     assert config._sandbox_state({"status": "Running"}) is None
     assert config._as_str_dict(None) == {}
-    assert config._endpoint_base_url("http://execd.local", "https://api/v1") == (
-        "http://execd.local"
-    )
+    assert config._endpoint_base_url("http://execd.local", "https://api/v1") == ("http://execd.local")
     assert config._api_base(None) == TEST_API_BASE
     assert config._api_base("https://direct.test/v1/") == "https://direct.test/v1"
     assert config._as_int("9") == 9
@@ -297,9 +293,7 @@ def test_api_base_requires_kwarg_or_env(monkeypatch):
 async def test_create_posts_default_body_and_omits_empty_api_key():
     client = FakeHTTPClient()
 
-    handle = await OpenSandboxSandboxConfig().acreate_sandbox(
-        api_key="", api_base=TEST_API_BASE, client=client
-    )
+    handle = await OpenSandboxSandboxConfig().acreate_sandbox(api_key="", api_base=TEST_API_BASE, client=client)
 
     method, url, headers, body, _ = client.calls[0]
     assert method == "POST"
@@ -402,9 +396,7 @@ async def test_create_waits_across_pending_state(monkeypatch):
     async def fake_sleep(interval):
         sleeps.append(interval)
 
-    monkeypatch.setattr(
-        "litellm.llms.opensandbox.sandbox.transformation.asyncio.sleep", fake_sleep
-    )
+    monkeypatch.setattr("litellm.llms.opensandbox.sandbox.transformation.asyncio.sleep", fake_sleep)
 
     handle = await OpenSandboxSandboxConfig().acreate_sandbox(
         api_key="",
@@ -428,9 +420,7 @@ async def test_create_raises_for_terminal_state():
     )
 
     with pytest.raises(ValueError, match="entered Failed"):
-        await OpenSandboxSandboxConfig().acreate_sandbox(
-            api_key="", api_base=TEST_API_BASE, client=client
-        )
+        await OpenSandboxSandboxConfig().acreate_sandbox(api_key="", api_base=TEST_API_BASE, client=client)
 
 
 @pytest.mark.asyncio
@@ -468,9 +458,7 @@ async def test_create_waits_for_endpoint_resolution(monkeypatch):
     async def fake_sleep(interval):
         sleeps.append(interval)
 
-    monkeypatch.setattr(
-        "litellm.llms.opensandbox.sandbox.transformation.asyncio.sleep", fake_sleep
-    )
+    monkeypatch.setattr("litellm.llms.opensandbox.sandbox.transformation.asyncio.sleep", fake_sleep)
 
     handle = await OpenSandboxSandboxConfig().acreate_sandbox(
         api_key="",
@@ -501,9 +489,7 @@ async def test_create_reraises_non_404_endpoint_error():
     client = FakeHTTPClient(endpoint_responses=[http_status_error(500)])
 
     with pytest.raises(httpx.HTTPStatusError):
-        await OpenSandboxSandboxConfig().acreate_sandbox(
-            api_key="", api_base=TEST_API_BASE, client=client
-        )
+        await OpenSandboxSandboxConfig().acreate_sandbox(api_key="", api_base=TEST_API_BASE, client=client)
 
 
 @pytest.mark.asyncio
@@ -526,9 +512,7 @@ async def test_run_code_resolves_bare_id_and_posts_sse_request():
     endpoint_call = client.calls[0]
     run_call = client.calls[1]
     assert endpoint_call[0] == "GET"
-    assert (
-        endpoint_call[1] == "http://sandbox.local/v1/sandboxes/osb_bare/endpoints/44772"
-    )
+    assert endpoint_call[1] == "http://sandbox.local/v1/sandboxes/osb_bare/endpoints/44772"
     assert run_call[0] == "POST"
     assert run_call[1] == "http://execd.local:44772/code"
     assert run_call[2]["X-EXECD-ACCESS-TOKEN"] == "execd-token"
@@ -543,17 +527,13 @@ async def test_run_code_resolves_bare_id_and_posts_sse_request():
 @pytest.mark.asyncio
 async def test_run_code_uses_https_for_scheme_less_endpoint_when_api_base_is_https():
     client = FakeHTTPClient()
-    handle = ContainerHandle(
-        id="osb_https", provider="opensandbox", domain="https://sandbox.example/v1"
-    )
+    handle = ContainerHandle(id="osb_https", provider="opensandbox", domain="https://sandbox.example/v1")
     handle._hidden_params = {
         "execd_endpoint": "execd.example/route/44772",
         "execd_headers": {},
     }
 
-    await OpenSandboxSandboxConfig().arun_code(
-        container=handle, code="print(1)", client=client
-    )
+    await OpenSandboxSandboxConfig().arun_code(container=handle, code="print(1)", client=client)
 
     assert client.calls[0][1] == "https://execd.example/route/44772/code"
 
@@ -565,9 +545,7 @@ async def test_run_code_aborts_on_output_over_cap():
     handle._hidden_params = {"execd_endpoint": "execd.local:44772", "execd_headers": {}}
 
     with pytest.raises(ValueError, match="exceeded"):
-        await OpenSandboxSandboxConfig().arun_code(
-            container=handle, code="print('x')", client=client
-        )
+        await OpenSandboxSandboxConfig().arun_code(container=handle, code="print('x')", client=client)
 
 
 @pytest.mark.asyncio
@@ -605,9 +583,7 @@ async def test_public_lifecycle_create_run_delete():
         ]
     )
 
-    container = await litellm.acreate_sandbox(
-        provider="opensandbox", api_key="", api_base=TEST_API_BASE, client=client
-    )
+    container = await litellm.acreate_sandbox(provider="opensandbox", api_key="", api_base=TEST_API_BASE, client=client)
     result = await litellm.arun_code(
         provider="opensandbox",
         container=container,

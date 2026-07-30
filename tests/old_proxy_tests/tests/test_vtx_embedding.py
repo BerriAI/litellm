@@ -9,9 +9,7 @@ response = client.embeddings.create(
     extra_body={
         "instances": [
             {
-                "image": {
-                    "gcsUri": "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
-                },
+                "image": {"gcsUri": "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"},
                 "text": "this is a unicorn",
             },
         ],

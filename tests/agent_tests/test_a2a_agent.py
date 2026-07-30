@@ -36,9 +36,7 @@ class MockA2AStreamingChunk(MockA2AResponse):
 
 class MockA2AClient:
     def __init__(self):
-        self._litellm_agent_card = SimpleNamespace(
-            name="mock-agent", url="http://mock-agent.local"
-        )
+        self._litellm_agent_card = SimpleNamespace(name="mock-agent", url="http://mock-agent.local")
 
     async def send_message(self, request):
         from a2a.compat.v0_3.conversions import pb2_v10
@@ -56,9 +54,7 @@ class MockA2AClient:
 def mock_a2a_client(monkeypatch):
     import litellm.a2a_protocol.main as a2a_main
 
-    async def _fake_create_a2a_client(
-        base_url, timeout=60.0, extra_headers=None, streaming=False
-    ):
+    async def _fake_create_a2a_client(base_url, timeout=60.0, extra_headers=None, streaming=False):
         return MockA2AClient()
 
     monkeypatch.setattr(a2a_main, "create_a2a_client", _fake_create_a2a_client)

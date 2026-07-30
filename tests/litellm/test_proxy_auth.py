@@ -111,18 +111,14 @@ class TestAzureADCredential:
         """Test that AzureADCredential wraps an azure-identity credential."""
         # Mock Azure credential
         mock_azure_cred = Mock()
-        mock_azure_cred.get_token.return_value = Mock(
-            token="azure-token", expires_on=9999999999
-        )
+        mock_azure_cred.get_token.return_value = Mock(token="azure-token", expires_on=9999999999)
 
         cred = AzureADCredential(credential=mock_azure_cred)
         token = cred.get_token("https://graph.microsoft.com/.default")
 
         assert token.token == "azure-token"
         assert token.expires_on == 9999999999
-        mock_azure_cred.get_token.assert_called_once_with(
-            "https://graph.microsoft.com/.default"
-        )
+        mock_azure_cred.get_token.assert_called_once_with("https://graph.microsoft.com/.default")
 
 
 class TestGenericOAuth2Credential:

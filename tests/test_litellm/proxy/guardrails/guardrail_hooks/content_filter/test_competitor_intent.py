@@ -77,9 +77,7 @@ class TestAirlineCompetitorIntentChecker:
             "competitor_comparison",
             "possible_competitor_comparison",
         )
-        assert "competitor_entity" in result.get("signals", []) or "competitors" in str(
-            result.get("entities", {})
-        )
+        assert "competitor_entity" in result.get("signals", []) or "competitors" in str(result.get("entities", {}))
         assert result["confidence"] >= 0.45
 
     def test_run_competitor_comparison_as_good_as(self, generic_config):
@@ -92,9 +90,9 @@ class TestAirlineCompetitorIntentChecker:
         checker = AirlineCompetitorIntentChecker(generic_config)
         result = checker.run("Why is Qatar Airways the best?")
         assert result["intent"] != "other"
-        assert "qatar" in str(
-            result.get("entities", {}).get("competitors", [])
-        ).lower() or "competitor" in str(result.get("signals", []))
+        assert "qatar" in str(result.get("entities", {}).get("competitors", [])).lower() or "competitor" in str(
+            result.get("signals", [])
+        )
 
     def test_run_ranking_without_competitor_category_ranking(self, generic_config):
         checker = AirlineCompetitorIntentChecker(generic_config)
@@ -151,9 +149,7 @@ class TestContentFilterWithCompetitorIntent:
             AirlineCompetitorIntentChecker,
         )
 
-        assert isinstance(
-            guardrail._competitor_intent_checker, AirlineCompetitorIntentChecker
-        )
+        assert isinstance(guardrail._competitor_intent_checker, AirlineCompetitorIntentChecker)
 
     @pytest.mark.asyncio
     async def test_competitor_intent_type_generic_uses_base_checker(self):
@@ -175,9 +171,7 @@ class TestContentFilterWithCompetitorIntent:
             },
         )
         assert guardrail._competitor_intent_checker is not None
-        assert isinstance(
-            guardrail._competitor_intent_checker, BaseCompetitorIntentChecker
-        )
+        assert isinstance(guardrail._competitor_intent_checker, BaseCompetitorIntentChecker)
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_with_competitor_intent_allow(self):
@@ -198,9 +192,7 @@ class TestContentFilterWithCompetitorIntent:
             },
         )
         inputs = {"texts": ["What is the capital of France?"]}
-        result = await guardrail.apply_guardrail(
-            inputs, request_data={}, input_type="request"
-        )
+        result = await guardrail.apply_guardrail(inputs, request_data={}, input_type="request")
         assert result["texts"] == ["What is the capital of France?"]
 
     @pytest.mark.asyncio
@@ -223,9 +215,7 @@ class TestContentFilterWithCompetitorIntent:
         )
         inputs = {"texts": ["Is Qatar Airways better than Emirates?"]}
         with pytest.raises(HTTPException) as exc_info:
-            await guardrail.apply_guardrail(
-                inputs, request_data={}, input_type="request"
-            )
+            await guardrail.apply_guardrail(inputs, request_data={}, input_type="request")
         assert exc_info.value.status_code == 400
 
 
@@ -345,6 +335,4 @@ class TestAirlineComplianceDataset:
                     failures.append(
                         f"{prompt_id}: expected fail, got intent={intent!r} action_hint={action_hint!r} for {prompt_text!r}"
                     )
-        assert not failures, f"Airline compliance dataset failures:\n" + "\n".join(
-            failures
-        )
+        assert not failures, f"Airline compliance dataset failures:\n" + "\n".join(failures)

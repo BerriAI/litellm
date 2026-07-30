@@ -6,9 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.litellm_core_utils.specialty_caches.dynamic_logging_cache import (
@@ -37,9 +35,7 @@ class TestLangfuseInMemoryCache:
         mock_logger = MockLangFuseLogger()
 
         # Patch the LangFuseLogger import to return our mock class
-        with patch(
-            "litellm.integrations.langfuse.langfuse.LangFuseLogger", MockLangFuseLogger
-        ):
+        with patch("litellm.integrations.langfuse.langfuse.LangFuseLogger", MockLangFuseLogger):
             # Add the mock logger to cache with expired TTL
             expired_time = time.time() - 1  # Already expired
             self.cache.cache_dict["test_key"] = mock_logger
@@ -68,9 +64,7 @@ class TestLangfuseInMemoryCache:
         mock_logger = MockLangFuseLogger()
 
         # Patch the LangFuseLogger import to return our mock class
-        with patch(
-            "litellm.integrations.langfuse.langfuse.LangFuseLogger", MockLangFuseLogger
-        ):
+        with patch("litellm.integrations.langfuse.langfuse.LangFuseLogger", MockLangFuseLogger):
             # Add the mock logger to cache
             self.cache.cache_dict["test_key"] = mock_logger
             self.cache.ttl_dict["test_key"] = time.time() + 100

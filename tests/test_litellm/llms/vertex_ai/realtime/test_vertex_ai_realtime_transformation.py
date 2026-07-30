@@ -28,31 +28,21 @@ from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfi
 
 
 def test_get_complete_url_regional():
-    cfg = VertexAIRealtimeConfig(
-        access_token="tok", project="my-proj", location="us-central1"
-    )
+    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
     url = cfg.get_complete_url(api_base=None, model="gemini-2.0-flash-live-001")
     assert url == (
-        "wss://us-central1-aiplatform.googleapis.com"
-        "/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+        "wss://us-central1-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
     )
 
 
 def test_get_complete_url_global():
-    cfg = VertexAIRealtimeConfig(
-        access_token="tok", project="my-proj", location="global"
-    )
+    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="global")
     url = cfg.get_complete_url(api_base=None, model="gemini-2.0-flash-live-001")
-    assert url == (
-        "wss://aiplatform.googleapis.com"
-        "/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
-    )
+    assert url == ("wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent")
 
 
 def test_get_complete_url_custom_api_base():
-    cfg = VertexAIRealtimeConfig(
-        access_token="tok", project="my-proj", location="us-central1"
-    )
+    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
     url = cfg.get_complete_url(
         api_base="https://custom-gateway.example.com",
         model="gemini-2.0-flash-live-001",
@@ -62,20 +52,14 @@ def test_get_complete_url_custom_api_base():
 
 
 def test_validate_environment_sets_bearer_and_project():
-    cfg = VertexAIRealtimeConfig(
-        access_token="mytoken", project="proj-123", location="us-central1"
-    )
-    headers = cfg.validate_environment(
-        headers={}, model="gemini-2.0-flash-live-001", api_key=None
-    )
+    cfg = VertexAIRealtimeConfig(access_token="mytoken", project="proj-123", location="us-central1")
+    headers = cfg.validate_environment(headers={}, model="gemini-2.0-flash-live-001", api_key=None)
     assert headers["Authorization"] == "Bearer mytoken"
     assert headers["x-goog-user-project"] == "proj-123"
 
 
 def test_session_configuration_request_model_format():
-    cfg = VertexAIRealtimeConfig(
-        access_token="tok", project="my-proj", location="us-central1"
-    )
+    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
     raw = cfg.session_configuration_request("gemini-2.0-flash-live-001")
     parsed = json.loads(raw)
     assert parsed["setup"]["model"] == (
@@ -84,9 +68,7 @@ def test_session_configuration_request_model_format():
 
 
 def test_vertex_requires_session_configuration_feature_flag(monkeypatch):
-    cfg = VertexAIRealtimeConfig(
-        access_token="tok", project="my-proj", location="us-central1"
-    )
+    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
 
     # Default remains backwards-compatible (auto setup on connect)
     monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
@@ -98,9 +80,7 @@ def test_vertex_requires_session_configuration_feature_flag(monkeypatch):
 
 
 def test_vertex_session_update_defaults_to_audio_modality():
-    cfg = VertexAIRealtimeConfig(
-        access_token="tok", project="my-proj", location="us-central1"
-    )
+    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
 
     session_update = {
         "type": "session.update",
@@ -140,9 +120,7 @@ def test_vertex_audio_only_live_model_coerces_text_modality_to_audio(
     patch_native_audio_cost_map_entry,
 ):
     """Regression: TEXT-only responseModalities causes 1007 on native-audio Live models."""
-    cfg = VertexAIRealtimeConfig(
-        access_token="tok", project="my-proj", location="us-central1"
-    )
+    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
     session_update = {
         "type": "session.update",
         "session": {
@@ -169,9 +147,7 @@ def test_vertex_session_update_normalizes_ga_remapped_fields(
     be normalised back to the flat beta keys before ``map_openai_params``
     runs so client preferences aren't silently dropped.
     """
-    cfg = VertexAIRealtimeConfig(
-        access_token="tok", project="my-proj", location="us-central1"
-    )
+    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
 
     session_update = {
         "type": "session.update",
@@ -197,12 +173,7 @@ def test_vertex_session_update_normalizes_ga_remapped_fields(
 
     assert setup_payload["generationConfig"]["responseModalities"] == ["AUDIO"]
     assert setup_payload["inputAudioTranscription"] == {}
-    assert (
-        setup_payload["realtimeInputConfig"]["automaticActivityDetection"][
-            "silenceDurationMs"
-        ]
-        == 1500
-    )
+    assert setup_payload["realtimeInputConfig"]["automaticActivityDetection"]["silenceDurationMs"] == 1500
 
 
 # ---------------------------------------------------------------------------
@@ -217,9 +188,7 @@ def test_vertex_session_update_normalizes_ga_remapped_fields(
 
 SETUP_COMPLETE = json.dumps({"setupComplete": {}})
 
-SERVER_TEXT_DELTA = json.dumps(
-    {"serverContent": {"modelTurn": {"parts": [{"text": "Hello from Vertex AI!"}]}}}
-)
+SERVER_TEXT_DELTA = json.dumps({"serverContent": {"modelTurn": {"parts": [{"text": "Hello from Vertex AI!"}]}}})
 
 # generationComplete fires RESPONSE_TEXT_DONE; turnComplete fires RESPONSE_DONE
 # They must be separate messages (the transformer processes one top-level key per message).
@@ -267,9 +236,7 @@ async def test_vertex_realtime_text_in_text_out():
     client_ws.send_text = AsyncMock(side_effect=_client_send_text)
 
     # Client sends one text message then raises to end the loop
-    client_ws.receive_text = AsyncMock(
-        side_effect=[CLIENT_TEXT_MESSAGE, Exception("client done")]
-    )
+    client_ws.receive_text = AsyncMock(side_effect=[CLIENT_TEXT_MESSAGE, Exception("client done")])
 
     # --- mock backend WebSocket (Vertex AI side) ---
     backend_ws = MagicMock()
@@ -340,9 +307,7 @@ def test_vertex_warns_when_dropping_guardrail_turn_detection_update(caplog):
     suppression is being silently dropped."""
     import logging
 
-    cfg = VertexAIRealtimeConfig(
-        access_token="tok", project="my-proj", location="us-central1"
-    )
+    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
 
     session_update = {
         "type": "session.update",
@@ -358,8 +323,7 @@ def test_vertex_warns_when_dropping_guardrail_turn_detection_update(caplog):
 
     assert result == []
     assert any(
-        "Vertex AI Realtime" in record.message
-        and "create_response=False" in record.message
+        "Vertex AI Realtime" in record.message and "create_response=False" in record.message
         for record in caplog.records
     )
 
@@ -369,9 +333,7 @@ def test_vertex_does_not_warn_when_dropping_non_guardrail_session_update(caplog)
     routine drop and should stay at debug level (no warning)."""
     import logging
 
-    cfg = VertexAIRealtimeConfig(
-        access_token="tok", project="my-proj", location="us-central1"
-    )
+    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
 
     session_update = {
         "type": "session.update",
@@ -386,8 +348,7 @@ def test_vertex_does_not_warn_when_dropping_non_guardrail_session_update(caplog)
         )
 
     assert not any(
-        "Vertex AI Realtime" in record.message and "session.update" in record.message
-        for record in caplog.records
+        "Vertex AI Realtime" in record.message and "session.update" in record.message for record in caplog.records
     )
 
 
@@ -404,9 +365,7 @@ async def test_async_realtime_does_not_forward_client_query_params_to_vertex_bac
 
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 
-    cfg = VertexAIRealtimeConfig(
-        access_token="tok", project="my-proj", location="us-central1"
-    )
+    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
 
     captured: dict = {}
 
@@ -439,9 +398,7 @@ async def test_async_realtime_does_not_forward_client_query_params_to_vertex_bac
 
 def test_vertex_function_call_output_omits_id():
     """Regression: Vertex Live rejects ``id`` on toolResponse.functionResponses (1007)."""
-    cfg = VertexAIRealtimeConfig(
-        access_token="tok", project="my-proj", location="us-central1"
-    )
+    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
     cfg._tool_call_id_to_name["call_abc123"] = "terminate_call"
 
     messages = cfg.transform_realtime_request(

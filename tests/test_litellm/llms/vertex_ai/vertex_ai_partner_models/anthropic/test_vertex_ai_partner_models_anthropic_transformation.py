@@ -3,9 +3,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../../.."))  # Adds the parent directory to the system path
 from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
 )
@@ -21,9 +19,7 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
     ],
 )
 def test_vertex_ai_anthropic_thinking_param(model, expected_thinking):
-    supported_openai_params = VertexAIAnthropicConfig().get_supported_openai_params(
-        model=model
-    )
+    supported_openai_params = VertexAIAnthropicConfig().get_supported_openai_params(model=model)
 
     if expected_thinking:
         assert "thinking" in supported_openai_params
@@ -62,9 +58,9 @@ def test_vertex_ai_anthropic_web_search_header_in_completion():
 
     # Assert that the anthropic-beta header with web-search is present
     assert "anthropic-beta" in headers, "anthropic-beta header should be present"
-    assert (
-        headers["anthropic-beta"] == "web-search-2025-03-05"
-    ), f"anthropic-beta should be 'web-search-2025-03-05', got: {headers['anthropic-beta']}"
+    assert headers["anthropic-beta"] == "web-search-2025-03-05", (
+        f"anthropic-beta should be 'web-search-2025-03-05', got: {headers['anthropic-beta']}"
+    )
 
     # Test that header is NOT added for non-Vertex requests
     headers_non_vertex = model_info.get_anthropic_headers(
@@ -75,9 +71,8 @@ def test_vertex_ai_anthropic_web_search_header_in_completion():
 
     # For non-Vertex (Anthropic-hosted), the web search header should NOT be in anthropic-beta
     # because Anthropic doesn't require it
-    assert (
-        "anthropic-beta" not in headers_non_vertex
-        or "web-search" not in headers_non_vertex.get("anthropic-beta", "")
+    assert "anthropic-beta" not in headers_non_vertex or "web-search" not in headers_non_vertex.get(
+        "anthropic-beta", ""
     ), "anthropic-beta with web-search should not be present for non-Vertex requests"
 
 
@@ -168,13 +163,11 @@ def test_vertex_ai_anthropic_structured_output_header_not_added():
         },
         "is_vertex_request": True,
     }
-    result_vertex = config.update_headers_with_optional_anthropic_beta(
-        headers_vertex, optional_params_vertex
-    )
+    result_vertex = config.update_headers_with_optional_anthropic_beta(headers_vertex, optional_params_vertex)
 
-    assert (
-        "anthropic-beta" not in result_vertex
-    ), f"Vertex request should NOT have anthropic-beta header for structured output, got: {result_vertex.get('anthropic-beta')}"
+    assert "anthropic-beta" not in result_vertex, (
+        f"Vertex request should NOT have anthropic-beta header for structured output, got: {result_vertex.get('anthropic-beta')}"
+    )
 
     # Test case 2: Non-Vertex request with output_format SHOULD add beta header
     headers_non_vertex = {}
@@ -192,12 +185,12 @@ def test_vertex_ai_anthropic_structured_output_header_not_added():
         headers_non_vertex, optional_params_non_vertex
     )
 
-    assert (
-        "anthropic-beta" in result_non_vertex
-    ), "Non-Vertex request SHOULD have anthropic-beta header for structured output"
-    assert (
-        result_non_vertex["anthropic-beta"] == "structured-outputs-2025-11-13"
-    ), f"Expected 'structured-outputs-2025-11-13', got: {result_non_vertex.get('anthropic-beta')}"
+    assert "anthropic-beta" in result_non_vertex, (
+        "Non-Vertex request SHOULD have anthropic-beta header for structured output"
+    )
+    assert result_non_vertex["anthropic-beta"] == "structured-outputs-2025-11-13", (
+        f"Expected 'structured-outputs-2025-11-13', got: {result_non_vertex.get('anthropic-beta')}"
+    )
 
 
 def test_vertex_ai_claude_sonnet_4_5_structured_output_fix():
@@ -252,9 +245,7 @@ def test_vertex_ai_claude_sonnet_4_5_structured_output_fix():
 
     # Should have tools and tool_choice (tool-based approach)
     assert "tools" in result_params, "Tools should be present for structured output"
-    assert (
-        "tool_choice" in result_params
-    ), "Tool choice should be present for structured output"
+    assert "tool_choice" in result_params, "Tool choice should be present for structured output"
     assert "json_mode" in result_params, "JSON mode should be enabled"
 
     # Verify the tool is the response format tool
@@ -279,9 +270,7 @@ def test_vertex_ai_claude_sonnet_4_5_structured_output_fix():
     # Mock the parent transform_request to return data with output_format
     original_transform = config.__class__.__bases__[0].transform_request
 
-    def mock_transform_request(
-        self, model, messages, optional_params, litellm_params, headers
-    ):
+    def mock_transform_request(self, model, messages, optional_params, litellm_params, headers):
         # Return test data that includes output_format
         return test_data.copy()
 
@@ -303,9 +292,7 @@ def test_vertex_ai_claude_sonnet_4_5_structured_output_fix():
         # callers who explicitly requested them.
         assert "output_format" in final_data
         assert final_data["output_format"]["type"] == "json_schema"
-        assert (
-            "model" not in final_data
-        ), "model is still stripped (Vertex routes by URL)"
+        assert "model" not in final_data, "model is still stripped (Vertex routes by URL)"
         assert "tools" in final_data, "tools should still be present"
         assert "tool_choice" in final_data, "tool_choice should still be present"
 
@@ -341,9 +328,7 @@ def test_vertex_ai_anthropic_other_models_still_use_tools():
     )
 
     # Should still use tool-based approach
-    assert (
-        "tools" in result_params
-    ), "Claude 3 Sonnet should also use tool-based structured output"
+    assert "tools" in result_params, "Claude 3 Sonnet should also use tool-based structured output"
     assert "tool_choice" in result_params, "Tool choice should be present"
     assert "json_mode" in result_params, "JSON mode should be enabled"
 
@@ -474,28 +459,18 @@ def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_hea
 
     # This beta header should be removed
     PROMPT_CACHING_BETA_HEADER = "prompt-caching-scope-2026-01-05"
-    headers = {
-        "anthropic-beta": f"other-feature,{PROMPT_CACHING_BETA_HEADER},web-search-2025-03-05"
-    }
+    headers = {"anthropic-beta": f"other-feature,{PROMPT_CACHING_BETA_HEADER},web-search-2025-03-05"}
 
     headers = update_headers_with_filtered_beta(headers, "vertex_ai")
 
     beta_header = headers.get("anthropic-beta")
-    assert PROMPT_CACHING_BETA_HEADER not in (
-        beta_header or ""
-    ), f"{PROMPT_CACHING_BETA_HEADER} should be filtered out"
-    assert "other-feature" not in (
-        beta_header or ""
-    ), "Other non-excluded beta headers should remain"
-    assert "web-search-2025-03-05" in (
-        beta_header or ""
-    ), "Other non-excluded beta headers should remain"
+    assert PROMPT_CACHING_BETA_HEADER not in (beta_header or ""), f"{PROMPT_CACHING_BETA_HEADER} should be filtered out"
+    assert "other-feature" not in (beta_header or ""), "Other non-excluded beta headers should remain"
+    assert "web-search-2025-03-05" in (beta_header or ""), "Other non-excluded beta headers should remain"
     # If prompt-caching was the only value, header should be removed completely
     headers2 = {"anthropic-beta": PROMPT_CACHING_BETA_HEADER}
     headers2 = update_headers_with_filtered_beta(headers2, "vertex_ai")
-    assert (
-        "anthropic-beta" not in headers2
-    ), "Header should be removed if no supported values remain"
+    assert "anthropic-beta" not in headers2, "Header should be removed if no supported values remain"
 
 
 def test_vertex_ai_anthropic_output_config_effort_only_forwarded():
@@ -641,9 +616,7 @@ def test_vertex_ai_anthropic_output_format_and_output_config_effort_preserved():
 
     original_transform = config.__class__.__bases__[0].transform_request
 
-    def mock_transform_request(
-        self, model, messages, optional_params, litellm_params, headers
-    ):
+    def mock_transform_request(self, model, messages, optional_params, litellm_params, headers):
         return test_data.copy()
 
     config.__class__.__bases__[0].transform_request = mock_transform_request

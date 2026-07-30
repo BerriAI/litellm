@@ -26,9 +26,7 @@ import pytest
 
 @pytest.fixture(scope="module")
 def model_data():
-    json_path = os.path.join(
-        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
-    )
+    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
     with open(json_path) as f:
         return json.load(f)
 
@@ -43,9 +41,7 @@ EXPECTED = [
 
 
 @pytest.mark.parametrize("model_key, expected_1hr, expected_1hr_lc", EXPECTED)
-def test_anthropic_sonnet_1hr_cache_write_pricing(
-    model_data, model_key, expected_1hr, expected_1hr_lc
-):
+def test_anthropic_sonnet_1hr_cache_write_pricing(model_data, model_key, expected_1hr, expected_1hr_lc):
     assert model_key in model_data, f"Missing model entry: {model_key}"
     info = model_data[model_key]
 
@@ -61,29 +57,19 @@ def test_anthropic_sonnet_1hr_cache_write_pricing(
     )
 
     # 1hr write must be 1.6x the 5-minute write (Anthropic 2x-base / 1.25x-base).
-    ratio = (
-        info["cache_creation_input_token_cost_above_1hr"]
-        / info["cache_creation_input_token_cost"]
-    )
-    assert (
-        abs(ratio - 1.6) < 1e-9
-    ), f"{model_key}: 1hr/5min ratio is {ratio}, expected 1.6"
+    ratio = info["cache_creation_input_token_cost_above_1hr"] / info["cache_creation_input_token_cost"]
+    assert abs(ratio - 1.6) < 1e-9, f"{model_key}: 1hr/5min ratio is {ratio}, expected 1.6"
 
     # Long-context (>200K) 1hr tier, where the model publishes a >200K tier.
     if expected_1hr_lc is not None:
-        assert (
-            "cache_creation_input_token_cost_above_1hr_above_200k_tokens" in info
-        ), f"{model_key}: missing 1hr cache write tier for >200K context"
-        assert (
-            info["cache_creation_input_token_cost_above_1hr_above_200k_tokens"]
-            == expected_1hr_lc
+        assert "cache_creation_input_token_cost_above_1hr_above_200k_tokens" in info, (
+            f"{model_key}: missing 1hr cache write tier for >200K context"
         )
+        assert info["cache_creation_input_token_cost_above_1hr_above_200k_tokens"] == expected_1hr_lc
         ratio_lc = (
             info["cache_creation_input_token_cost_above_1hr_above_200k_tokens"]
             / info["cache_creation_input_token_cost_above_200k_tokens"]
         )
-        assert (
-            abs(ratio_lc - 1.6) < 1e-9
-        ), f"{model_key}: long-context 1hr/5min ratio is {ratio_lc}, expected 1.6"
+        assert abs(ratio_lc - 1.6) < 1e-9, f"{model_key}: long-context 1hr/5min ratio is {ratio_lc}, expected 1.6"
     else:
         assert "cache_creation_input_token_cost_above_1hr_above_200k_tokens" not in info

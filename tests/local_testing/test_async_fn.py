@@ -9,9 +9,7 @@ import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm import acompletion, acreate, completion
 
@@ -188,9 +186,7 @@ def test_get_cloudflare_response_streaming():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="HF Inference API is unstable, this is now the 3rd time it's stopped working"
-)
+@pytest.mark.skip(reason="HF Inference API is unstable, this is now the 3rd time it's stopped working")
 async def test_hf_completion_tgi():
     # litellm.set_verbose=True
     try:
@@ -228,9 +224,7 @@ def test_get_response_streaming():
         messages = [{"content": user_message, "role": "user"}]
         try:
             litellm.set_verbose = True
-            response = await acompletion(
-                model="gpt-3.5-turbo", messages=messages, stream=True, timeout=5
-            )
+            response = await acompletion(model="gpt-3.5-turbo", messages=messages, stream=True, timeout=5)
             print(type(response))
 
             import inspect

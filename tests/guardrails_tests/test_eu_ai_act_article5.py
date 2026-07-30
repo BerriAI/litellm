@@ -167,9 +167,7 @@ def content_filter_guardrail():
         os.path.dirname(__file__),
         "../../litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter",
     )
-    policy_template_path = os.path.join(
-        content_filter_dir, "policy_templates/eu_ai_act_article5.yaml"
-    )
+    policy_template_path = os.path.join(content_filter_dir, "policy_templates/eu_ai_act_article5.yaml")
     policy_template_path = os.path.abspath(policy_template_path)
 
     # Load the EU AI Act Article 5 policy template
@@ -198,7 +196,7 @@ class TestEUAIActArticle5ConditionalMatching:
     @pytest.mark.parametrize(
         "sentence,expected,reason",
         TEST_CASES,
-        ids=[f"test_{i+1}" for i in range(len(TEST_CASES))],
+        ids=[f"test_{i + 1}" for i in range(len(TEST_CASES))],
     )
     @pytest.mark.asyncio
     async def test_sentence(self, content_filter_guardrail, sentence, expected, reason):
@@ -218,10 +216,9 @@ class TestEUAIActArticle5ConditionalMatching:
                 )
 
             # Verify the exception indicates a policy violation
-            assert (
-                "blocked" in str(exc_info.value).lower()
-                or "violation" in str(exc_info.value).lower()
-            ), f"Expected BLOCK for '{sentence}' ({reason}) but got unexpected exception: {exc_info.value}"
+            assert "blocked" in str(exc_info.value).lower() or "violation" in str(exc_info.value).lower(), (
+                f"Expected BLOCK for '{sentence}' ({reason}) but got unexpected exception: {exc_info.value}"
+            )
 
         else:  # expected == "ALLOW"
             # Should not raise an exception
@@ -232,9 +229,9 @@ class TestEUAIActArticle5ConditionalMatching:
             )
 
             # Result should be None or unchanged (no violation)
-            assert (
-                result is None or result["texts"][0] == sentence
-            ), f"Expected ALLOW for '{sentence}' ({reason}) but request was blocked or modified"
+            assert result is None or result["texts"][0] == sentence, (
+                f"Expected ALLOW for '{sentence}' ({reason}) but request was blocked or modified"
+            )
 
     @pytest.mark.asyncio
     async def test_summary_statistics(self, content_filter_guardrail):
@@ -243,19 +240,19 @@ class TestEUAIActArticle5ConditionalMatching:
         blocked_count = sum(1 for _, expected, _ in TEST_CASES if expected == "BLOCK")
         allowed_count = sum(1 for _, expected, _ in TEST_CASES if expected == "ALLOW")
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"EU AI Act Article 5 Test Summary")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         print(f"Total test cases: {total}")
-        print(f"Expected BLOCK: {blocked_count} ({blocked_count/total*100:.1f}%)")
-        print(f"Expected ALLOW: {allowed_count} ({allowed_count/total*100:.1f}%)")
-        print(f"{'='*60}")
+        print(f"Expected BLOCK: {blocked_count} ({blocked_count / total * 100:.1f}%)")
+        print(f"Expected ALLOW: {allowed_count} ({allowed_count / total * 100:.1f}%)")
+        print(f"{'=' * 60}")
         print(f"\nBreakdown by category:")
         print(f"  Always block keywords: 10")
         print(f"  Conditional matches: 15")
         print(f"  Exceptions: 8")
         print(f"  No matches: 7")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
 
 # Additional edge case tests

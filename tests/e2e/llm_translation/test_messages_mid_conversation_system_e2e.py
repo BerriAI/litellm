@@ -51,9 +51,7 @@ CACHE_PRIMING_INTERVAL_SECONDS = 3.0
 def _cacheable_system_block(marker: str) -> TextBlock:
     """A system prompt comfortably above Sonnet's 1024-token minimum cacheable
     size, unique per run so no other run's cache entry can satisfy the read."""
-    text = " ".join(
-        f"Reference paragraph {index} for run {marker}." for index in range(300)
-    )
+    text = " ".join(f"Reference paragraph {index} for run {marker}." for index in range(300))
     return TextBlock(text=text, cache_control=CacheControl())
 
 
@@ -65,17 +63,11 @@ def _user_turn(text: str, *, cached: bool = False) -> RichMessage:
 def _system_reminder_turn() -> RichMessage:
     return RichMessage(
         role="system",
-        content=[
-            TextBlock(
-                text="<system-reminder>Answer with exactly one word.</system-reminder>"
-            )
-        ],
+        content=[TextBlock(text="<system-reminder>Answer with exactly one word.</system-reminder>")],
     )
 
 
-def _post_messages(
-    client: EndpointsClient, key: str, body: RichMessagesRequest
-) -> Result[MessagesResult]:
+def _post_messages(client: EndpointsClient, key: str, body: RichMessagesRequest) -> Result[MessagesResult]:
     return client.proxy.transport.post(
         "/v1/messages",
         headers=client.proxy.transport.bearer(key),
@@ -84,13 +76,9 @@ def _post_messages(
     )
 
 
-def _register_invoke_deployment(
-    client: EndpointsClient, resources: ResourceManager, bedrock_model: str
-) -> str:
+def _register_invoke_deployment(client: EndpointsClient, resources: ResourceManager, bedrock_model: str) -> str:
     model = f"e2e-midsys-{unique_marker()}"
-    model_id = client.create_model(
-        model, LiteLLMParamsBody(model=bedrock_model, aws_region_name=AWS_REGION)
-    )
+    model_id = client.create_model(model, LiteLLMParamsBody(model=bedrock_model, aws_region_name=AWS_REGION))
     resources.defer(lambda: client.delete_model(model_id))
     return model
 
@@ -113,9 +101,7 @@ class PrimedCache(BaseModel):
         return self.prefix_read_tokens + self.first_turn_creation_tokens
 
 
-def _prime_prompt_cache(
-    client: EndpointsClient, key: str, model: str, system_block: TextBlock
-) -> PrimedCache:
+def _prime_prompt_cache(client: EndpointsClient, key: str, model: str, system_block: TextBlock) -> PrimedCache:
     """Send first-turn calls (fresh cache-marked user turn each attempt,
     identical system prefix) until one both reads the system prefix back from
     cache and writes its own user-turn chunk, proving the cache is live in both
@@ -164,9 +150,7 @@ class TestBedrockInvokeMidConversationSystem:
     def test_flagged_model_keeps_prompt_cache_across_system_reminder(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        model = _register_invoke_deployment(
-            endpoints_client, resources, FLAGGED_INVOKE_MODEL
-        )
+        model = _register_invoke_deployment(endpoints_client, resources, FLAGGED_INVOKE_MODEL)
         key = resources.key(models=[model])
         system_block = _cacheable_system_block(unique_marker())
 
@@ -184,9 +168,7 @@ class TestBedrockInvokeMidConversationSystem:
         )
         second = unwrap(_post_messages(endpoints_client, key, reminder_turn_body))
 
-        assert second.text.strip(), (
-            f"{model}: reminder turn returned no completion text"
-        )
+        assert second.text.strip(), f"{model}: reminder turn returned no completion text"
         assert second.usage.cache_read_input_tokens >= primed.full_prefix_tokens, (
             f"{model}: turn with a mid-conversation system reminder read "
             f"{second.usage.cache_read_input_tokens} cached tokens, expected at "
@@ -204,9 +186,7 @@ class TestBedrockInvokeMidConversationSystem:
     def test_unflagged_model_hoists_system_reminder_and_succeeds(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        model = _register_invoke_deployment(
-            endpoints_client, resources, UNFLAGGED_INVOKE_MODEL
-        )
+        model = _register_invoke_deployment(endpoints_client, resources, UNFLAGGED_INVOKE_MODEL)
         key = resources.key(models=[model])
 
         body = RichMessagesRequest(
@@ -221,9 +201,7 @@ class TestBedrockInvokeMidConversationSystem:
         )
         completion = unwrap(_post_messages(endpoints_client, key, body))
 
-        assert completion.role == "assistant", (
-            f"{model}: unexpected role {completion.role!r}"
-        )
+        assert completion.role == "assistant", f"{model}: unexpected role {completion.role!r}"
         assert completion.text.strip(), (
             f"{model}: conversation with a mid-conversation system reminder "
             f"returned no text; the reminder was forwarded in place to a model "

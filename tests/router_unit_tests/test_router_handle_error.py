@@ -3,9 +3,7 @@ import traceback, asyncio
 import pytest
 from typing import List
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params
@@ -43,9 +41,7 @@ async def test_send_llm_exception_alert_success():
     # Call the function
     from litellm.router_utils.handle_error import send_llm_exception_alert
 
-    await send_llm_exception_alert(
-        mock_router, request_kwargs, error_traceback, mock_exception
-    )
+    await send_llm_exception_alert(mock_router, request_kwargs, error_traceback, mock_exception)
 
     # Assert that the slack_alerting_logger's send_alert method was called
     mock_router.slack_alerting_logger.send_alert.assert_called_once()
@@ -75,9 +71,7 @@ async def test_send_llm_exception_alert_no_logger():
     # Call the function
     from litellm.router_utils.handle_error import send_llm_exception_alert
 
-    await send_llm_exception_alert(
-        mock_router, request_kwargs, error_traceback, mock_exception
-    )
+    await send_llm_exception_alert(mock_router, request_kwargs, error_traceback, mock_exception)
 
 
 @pytest.mark.asyncio
@@ -105,9 +99,7 @@ async def test_send_llm_exception_alert_when_proxy_server_request_in_kwargs():
     # Call the function
     from litellm.router_utils.handle_error import send_llm_exception_alert
 
-    await send_llm_exception_alert(
-        mock_router, request_kwargs, error_traceback, mock_exception
-    )
+    await send_llm_exception_alert(mock_router, request_kwargs, error_traceback, mock_exception)
 
     # Assert that no exception was raised and the function completed successfully
 

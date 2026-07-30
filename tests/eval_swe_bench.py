@@ -199,9 +199,7 @@ def extract_patch(text: str) -> str:
 
 
 def is_valid_diff(patch: str) -> bool:
-    return bool(
-        re.search(r"^@@.*@@", patch, re.MULTILINE) and "---" in patch and "+++" in patch
-    )
+    return bool(re.search(r"^@@.*@@", patch, re.MULTILINE) and "---" in patch and "+++" in patch)
 
 
 # ---------------------------------------------------------------------------
@@ -299,9 +297,7 @@ def proxy_eval(generated_text: str, instance: dict) -> dict:
 
     has_diff = is_valid_diff(generated_patch)
 
-    file_overlap = (
-        len(gold_files & generated_files) / len(gold_files) if gold_files else 0.0
-    )
+    file_overlap = len(gold_files & generated_files) / len(gold_files) if gold_files else 0.0
     exact_file_match = (gold_files == generated_files) and bool(gold_files)
 
     # Hunk-level: do they modify the same line ranges?
@@ -513,23 +509,15 @@ def aggregate(results: list[SWERunResult]) -> dict:
     return {
         "total": len(results),
         "errors": errors,
-        "has_diff_rate": round(
-            sum(r.has_diff for r in results) / len(results) * 100, 1
-        ),
+        "has_diff_rate": round(sum(r.has_diff for r in results) / len(results) * 100, 1),
         "avg_file_overlap": round(statistics.mean(r.file_overlap for r in results), 3),
-        "exact_file_match_rate": round(
-            sum(r.exact_file_match for r in results) / len(results) * 100, 1
-        ),
+        "exact_file_match_rate": round(sum(r.exact_file_match for r in results) / len(results) * 100, 1),
         "avg_hunk_overlap": round(statistics.mean(r.hunk_overlap for r in results), 3),
-        "avg_content_similarity": round(
-            statistics.mean(r.content_similarity for r in results), 3
-        ),
+        "avg_content_similarity": round(statistics.mean(r.content_similarity for r in results), 3),
         "avg_prompt_tokens": round(statistics.mean(r.prompt_tokens for r in results)),
         "avg_total_tokens": round(statistics.mean(r.total_tokens for r in results)),
         "avg_latency_ms": round(statistics.mean(r.latency_ms for r in results), 1),
-        "avg_compression_ratio": round(
-            statistics.mean(r.compression_ratio for r in results), 4
-        ),
+        "avg_compression_ratio": round(statistics.mean(r.compression_ratio for r in results), 4),
         "total_cost_usd": round(sum(r.cost_usd for r in results), 6),
         "avg_cost_usd": round(statistics.mean(r.cost_usd for r in results), 6),
     }
@@ -565,11 +553,7 @@ def run_benchmark(
     print(f"{'=' * 60}")
     print(f"Model:               {model}")
     print(f"Problems:            {len(problems)}")
-    effective_target = (
-        compression_target
-        if compression_target is not None
-        else compression_trigger * 7 // 10
-    )
+    effective_target = compression_target if compression_target is not None else compression_trigger * 7 // 10
     print(f"Compression trigger: {compression_trigger} tokens")
     print(f"Compression target:  {effective_target} tokens")
     print(f"Embedding model:     {embedding_model or 'None (BM25 only)'}")
@@ -581,7 +565,7 @@ def run_benchmark(
     for i, instance in enumerate(problems):
         iid = instance["instance_id"]
 
-        print(f"[{i+1}/{len(problems)}] {iid}")
+        print(f"[{i + 1}/{len(problems)}] {iid}")
 
         print(f"  baseline   ...", end=" ", flush=True)
         r_base = eval_instance(
@@ -653,37 +637,17 @@ def run_benchmark(
     print(f"    Avg compression:     {comp_agg['avg_compression_ratio']:.2%}")
 
     token_savings = base_agg["avg_prompt_tokens"] - comp_agg["avg_prompt_tokens"]
-    token_pct = (
-        round(token_savings / base_agg["avg_prompt_tokens"] * 100, 1)
-        if base_agg["avg_prompt_tokens"]
-        else 0
-    )
+    token_pct = round(token_savings / base_agg["avg_prompt_tokens"] * 100, 1) if base_agg["avg_prompt_tokens"] else 0
     print(f"\n  Delta (compressed vs baseline):")
     print(f"    Token savings:       {token_savings} ({token_pct}%)")
-    print(
-        f"    Latency delta:       {base_agg['avg_latency_ms'] - comp_agg['avg_latency_ms']:+.1f}ms"
-    )
-    print(
-        f"    Has-diff delta:      {comp_agg['has_diff_rate'] - base_agg['has_diff_rate']:+.1f}%"
-    )
-    print(
-        f"    File overlap delta:  {comp_agg['avg_file_overlap'] - base_agg['avg_file_overlap']:+.3f}"
-    )
-    print(
-        f"    Exact match delta:   {comp_agg['exact_file_match_rate'] - base_agg['exact_file_match_rate']:+.1f}%"
-    )
-    print(
-        f"    Hunk overlap delta:  {comp_agg['avg_hunk_overlap'] - base_agg['avg_hunk_overlap']:+.3f}"
-    )
-    print(
-        f"    Content sim delta:   {comp_agg['avg_content_similarity'] - base_agg['avg_content_similarity']:+.3f}"
-    )
+    print(f"    Latency delta:       {base_agg['avg_latency_ms'] - comp_agg['avg_latency_ms']:+.1f}ms")
+    print(f"    Has-diff delta:      {comp_agg['has_diff_rate'] - base_agg['has_diff_rate']:+.1f}%")
+    print(f"    File overlap delta:  {comp_agg['avg_file_overlap'] - base_agg['avg_file_overlap']:+.3f}")
+    print(f"    Exact match delta:   {comp_agg['exact_file_match_rate'] - base_agg['exact_file_match_rate']:+.1f}%")
+    print(f"    Hunk overlap delta:  {comp_agg['avg_hunk_overlap'] - base_agg['avg_hunk_overlap']:+.3f}")
+    print(f"    Content sim delta:   {comp_agg['avg_content_similarity'] - base_agg['avg_content_similarity']:+.3f}")
     cost_savings = base_agg["total_cost_usd"] - comp_agg["total_cost_usd"]
-    cost_pct = (
-        round(cost_savings / base_agg["total_cost_usd"] * 100, 1)
-        if base_agg["total_cost_usd"]
-        else 0
-    )
+    cost_pct = round(cost_savings / base_agg["total_cost_usd"] * 100, 1) if base_agg["total_cost_usd"] else 0
     print(f"    Cost savings:        ${cost_savings:.4f} ({cost_pct}%)")
 
     ts = time.strftime("%Y-%m-%d_%H-%M-%S")
@@ -712,9 +676,7 @@ def run_benchmark(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SWE-bench Compression Evaluation")
-    parser.add_argument(
-        "--model", default="gpt-4o-mini", help="Model name (litellm format)"
-    )
+    parser.add_argument("--model", default="gpt-4o-mini", help="Model name (litellm format)")
     parser.add_argument(
         "--problems",
         type=int,

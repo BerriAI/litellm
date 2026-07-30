@@ -66,9 +66,7 @@ class TestReplicateStartingStatus:
             "status": "succeeded",
             "output": ["Hello", " from", " DeepSeek!"],
         }
-        get_response_succeeded.text = json.dumps(
-            get_response_succeeded.json.return_value
-        )
+        get_response_succeeded.text = json.dumps(get_response_succeeded.json.return_value)
         get_response_succeeded.headers = {}
 
         # Configure mock to return different responses on successive calls
@@ -147,9 +145,7 @@ class TestReplicateStartingStatus:
             "status": "succeeded",
             "output": ["Hello", " DeepSeek!"],
         }
-        get_response_succeeded.text = json.dumps(
-            get_response_succeeded.json.return_value
-        )
+        get_response_succeeded.text = json.dumps(get_response_succeeded.json.return_value)
         get_response_succeeded.headers = {}
 
         # Configure mock to return different responses
@@ -274,9 +270,7 @@ def test_replicate_deepseek_integration():
     try:
         response = completion(
             model="replicate/deepseek-ai/deepseek-v3",
-            messages=[
-                {"role": "user", "content": "Say 'Hello World' and nothing else"}
-            ],
+            messages=[{"role": "user", "content": "Say 'Hello World' and nothing else"}],
             max_tokens=20,
         )
 

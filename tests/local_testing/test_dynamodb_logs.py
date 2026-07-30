@@ -37,9 +37,7 @@ import re
 def verify_log_file(log_file_path):
     with open(log_file_path, "r") as log_file:
         log_content = log_file.read()
-        print(
-            f"\nVerifying DynamoDB file = {log_file_path}. File content=", log_content
-        )
+        print(f"\nVerifying DynamoDB file = {log_file_path}. File content=", log_content)
 
         # Define the pattern to search for in the log file
         pattern = r"Response from DynamoDB:{.*?}"
@@ -57,9 +55,7 @@ def verify_log_file(log_file_path):
 
         # Count the occurrences of successful responses (status code 200 or 201)
         success_count = sum(
-            1
-            for match in matches
-            if "'HTTPStatusCode': 200" in match or "'HTTPStatusCode': 201" in match
+            1 for match in matches if "'HTTPStatusCode': 200" in match or "'HTTPStatusCode': 201" in match
         )
 
         # Print the count of successful responses
@@ -111,9 +107,7 @@ def test_dynamo_logging():
 
         # aembedding()
         async def _test3():
-            return await litellm.aembedding(
-                model="text-embedding-ada-002", input=["hi"], user="ishaan-2"
-            )
+            return await litellm.aembedding(model="text-embedding-ada-002", input=["hi"], user="ishaan-2")
 
         response = asyncio.run(_test3())
         time.sleep(1)

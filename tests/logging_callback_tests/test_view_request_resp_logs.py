@@ -65,9 +65,7 @@ mock_response_data = {
     "model_group": "fake-openai-endpoint",
     "model_id": "b68d56d76b0c24ac9462ab69541e90886342508212210116e300441155f37865",
     "requester_ip_address": "127.0.0.1",
-    "messages": [
-        {"role": "user", "content": [{"type": "text", "text": "very gm to u"}]}
-    ],
+    "messages": [{"role": "user", "content": [{"type": "text", "text": "very gm to u"}]}],
     "response": {
         "id": "chatcmpl-9870a859d6df402795f75dc5fca5b2e0",
         "created": 1677652288,
@@ -133,9 +131,7 @@ async def test_get_payload_current_day():
 
     gcs_logger.download_gcs_object = fake_download
 
-    payload = await gcs_logger.get_request_response_payload(
-        request_id, start_time, None
-    )
+    payload = await gcs_logger.get_request_response_payload(request_id, start_time, None)
     assert payload is not None
     assert payload["id"] == request_id
 
@@ -157,9 +153,7 @@ async def test_get_payload_next_day():
 
     gcs_logger.download_gcs_object = fake_download
 
-    payload = await gcs_logger.get_request_response_payload(
-        request_id, start_time, None
-    )
+    payload = await gcs_logger.get_request_response_payload(request_id, start_time, None)
     assert payload is not None
     assert payload["id"] == request_id
 
@@ -181,9 +175,7 @@ async def test_get_payload_previous_day():
 
     gcs_logger.download_gcs_object = fake_download
 
-    payload = await gcs_logger.get_request_response_payload(
-        request_id, start_time, None
-    )
+    payload = await gcs_logger.get_request_response_payload(request_id, start_time, None)
     assert payload is not None
     assert payload["id"] == request_id
 
@@ -202,7 +194,5 @@ async def test_get_payload_not_found():
 
     gcs_logger.download_gcs_object = fake_download
 
-    payload = await gcs_logger.get_request_response_payload(
-        request_id, start_time, None
-    )
+    payload = await gcs_logger.get_request_response_payload(request_id, start_time, None)
     assert payload is None

@@ -7,9 +7,7 @@ import pytest
 
 import litellm
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm import get_model_info, supports_reasoning, supports_vision
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
@@ -209,9 +207,7 @@ def test_validate_environment_raises_without_api_key(monkeypatch):
 
 def test_get_fireworks_session_id_prefers_litellm_session_id_over_trace_id():
     assert (
-        get_fireworks_session_id(
-            {"litellm_session_id": "session-123", "litellm_trace_id": "trace-123"}
-        )
+        get_fireworks_session_id({"litellm_session_id": "session-123", "litellm_trace_id": "trace-123"})
         == "session-123"
     )
 
@@ -248,16 +244,11 @@ def test_handle_message_content_with_tool_calls():
             },
         }
     ]
-    updated_message = config._handle_message_content_with_tool_calls(
-        message, tool_calls
-    )
+    updated_message = config._handle_message_content_with_tool_calls(message, tool_calls)
     assert updated_message.tool_calls is not None
     assert len(updated_message.tool_calls) == 1
     assert updated_message.tool_calls[0].function.name == "get_current_weather"
-    assert (
-        updated_message.tool_calls[0].function.arguments
-        == expected_tool_call.function.arguments
-    )
+    assert updated_message.tool_calls[0].function.arguments == expected_tool_call.function.arguments
 
 
 def test_supports_reasoning_effort():
@@ -284,23 +275,21 @@ def test_supports_reasoning_effort():
     ]
 
     for model in supported_models:
-        assert (
-            supports_reasoning(model=model, custom_llm_provider="fireworks_ai") is True
-        ), f"{model} should support reasoning_effort"
+        assert supports_reasoning(model=model, custom_llm_provider="fireworks_ai") is True, (
+            f"{model} should support reasoning_effort"
+        )
 
     for model in unsupported_models:
-        assert (
-            supports_reasoning(model=model, custom_llm_provider="fireworks_ai") is False
-        ), f"{model} should not support reasoning_effort"
+        assert supports_reasoning(model=model, custom_llm_provider="fireworks_ai") is False, (
+            f"{model} should not support reasoning_effort"
+        )
 
 
 def test_get_supported_openai_params_reasoning_effort():
     """Test that reasoning_effort is only included in supported params for models that support it."""
     config = FireworksAIConfig()
 
-    supported_params = config.get_supported_openai_params(
-        "fireworks_ai/accounts/fireworks/models/glm-5p1"
-    )
+    supported_params = config.get_supported_openai_params("fireworks_ai/accounts/fireworks/models/glm-5p1")
     assert "reasoning_effort" in supported_params
     assert "thinking" in supported_params
 
@@ -315,9 +304,7 @@ def test_get_supported_openai_params_parallel_tool_calls():
     """Test that parallel_tool_calls is included for models that support function calling."""
     config = FireworksAIConfig()
 
-    supported_params = config.get_supported_openai_params(
-        "fireworks_ai/accounts/fireworks/models/glm-5p1"
-    )
+    supported_params = config.get_supported_openai_params("fireworks_ai/accounts/fireworks/models/glm-5p1")
     assert "parallel_tool_calls" in supported_params
     assert "tools" in supported_params
     assert "tool_choice" in supported_params
@@ -399,14 +386,10 @@ def test_get_models_url_no_double_v1(api_base, expected_url_prefix):
 
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "models": [{"name": "accounts/fireworks/models/llama-v3-70b"}]
-    }
+    mock_response.json.return_value = {"models": [{"name": "accounts/fireworks/models/llama-v3-70b"}]}
 
     with (
-        patch(
-            "litellm.module_level_client.get", return_value=mock_response
-        ) as mock_get,
+        patch("litellm.module_level_client.get", return_value=mock_response) as mock_get,
         patch(
             "litellm.llms.fireworks_ai.chat.transformation.get_secret_str",
             side_effect=lambda key: {
@@ -418,13 +401,9 @@ def test_get_models_url_no_double_v1(api_base, expected_url_prefix):
     ):
         result = config.get_models(api_key="test-key", api_base=api_base)
 
-        called_url = mock_get.call_args.kwargs.get("url") or mock_get.call_args[1].get(
-            "url", ""
-        )
+        called_url = mock_get.call_args.kwargs.get("url") or mock_get.call_args[1].get("url", "")
         assert "/v1/v1/" not in called_url, f"Double /v1/ detected in URL: {called_url}"
-        assert called_url.startswith(
-            expected_url_prefix
-        ), f"URL {called_url} does not start with {expected_url_prefix}"
+        assert called_url.startswith(expected_url_prefix), f"URL {called_url} does not start with {expected_url_prefix}"
         assert result == ["fireworks_ai/accounts/fireworks/models/llama-v3-70b"]
 
 
@@ -452,9 +431,7 @@ def test_transform_messages_helper_removes_provider_specific_fields():
         },
     ]
     # Call helper
-    out = config._transform_messages_helper(
-        messages, model="fireworks/test", litellm_params={}
-    )
+    out = config._transform_messages_helper(messages, model="fireworks/test", litellm_params={})
     for msg in out:
         assert "provider_specific_fields" not in msg
 
@@ -475,14 +452,10 @@ def test_transform_messages_helper_strips_thinking_blocks():
         {
             "role": "assistant",
             "content": "I can help.",
-            "thinking_blocks": [
-                {"type": "thinking", "thinking": "internal", "signature": ""}
-            ],
+            "thinking_blocks": [{"type": "thinking", "thinking": "internal", "signature": ""}],
         },
     ]
-    out = config._transform_messages_helper(
-        messages, model="accounts/fireworks/models/glm-5p1", litellm_params={}
-    )
+    out = config._transform_messages_helper(messages, model="accounts/fireworks/models/glm-5p1", litellm_params={})
     assert "thinking_blocks" not in out[1]
     assert out[1]["content"] == "I can help."
 
@@ -970,9 +943,7 @@ def test_transform_messages_helper_rejects_file_blocks():
         litellm.BadRequestError,
         match="Fireworks AI chat completions does not support file content blocks",
     ):
-        config._transform_messages_helper(
-            messages, model="accounts/fireworks/models/kimi-k2p6", litellm_params={}
-        )
+        config._transform_messages_helper(messages, model="accounts/fireworks/models/kimi-k2p6", litellm_params={})
 
 
 def test_transform_messages_helper_rejects_non_vision_image_inputs():
@@ -984,18 +955,14 @@ def test_transform_messages_helper_rejects_non_vision_image_inputs():
                 {"type": "text", "text": "Describe this"},
                 {
                     "type": "image_url",
-                    "image_url": {
-                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAE="
-                    },
+                    "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAE="},
                 },
             ],
         }
     ]
 
     with pytest.raises(litellm.BadRequestError, match="does not support image inputs"):
-        config._transform_messages_helper(
-            messages, model="accounts/fireworks/models/glm-5p2", litellm_params={}
-        )
+        config._transform_messages_helper(messages, model="accounts/fireworks/models/glm-5p2", litellm_params={})
 
 
 def test_transform_messages_helper_allows_vision_image_inputs():
@@ -1007,17 +974,13 @@ def test_transform_messages_helper_allows_vision_image_inputs():
                 {"type": "text", "text": "Describe this"},
                 {
                     "type": "image_url",
-                    "image_url": {
-                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAE="
-                    },
+                    "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAE="},
                 },
             ],
         }
     ]
 
-    out = config._transform_messages_helper(
-        messages, model="accounts/fireworks/models/minimax-m3", litellm_params={}
-    )
+    out = config._transform_messages_helper(messages, model="accounts/fireworks/models/minimax-m3", litellm_params={})
     assert out == messages
 
 
@@ -1033,9 +996,7 @@ def test_image_inputs_not_rejected_for_fuzzy_non_vision_match():
     custom_model = "accounts/myorg/models/custom-glm-5p2"
 
     assert config._get_model_cost_capability(custom_model, "supports_vision") is False
-    assert (
-        config._get_model_cost_capability_exact(custom_model, "supports_vision") is None
-    )
+    assert config._get_model_cost_capability_exact(custom_model, "supports_vision") is None
 
     messages = [
         {
@@ -1043,16 +1004,12 @@ def test_image_inputs_not_rejected_for_fuzzy_non_vision_match():
             "content": [
                 {
                     "type": "image_url",
-                    "image_url": {
-                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAE="
-                    },
+                    "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAE="},
                 },
             ],
         }
     ]
-    out = config._transform_messages_helper(
-        messages, model=custom_model, litellm_params={}
-    )
+    out = config._transform_messages_helper(messages, model=custom_model, litellm_params={})
     assert out == messages
 
 
@@ -1065,9 +1022,7 @@ def test_transform_messages_helper_skips_non_dict_content():
         }
     ]
 
-    out = config._transform_messages_helper(
-        messages, model="accounts/fireworks/models/glm-5p2", litellm_params={}
-    )
+    out = config._transform_messages_helper(messages, model="accounts/fireworks/models/glm-5p2", litellm_params={})
     assert out == messages
 
 
@@ -1080,9 +1035,7 @@ def test_transform_messages_helper_no_transform_inline():
             "content": [{"type": "image_url", "image_url": url}],
         }
     ]
-    out = config._transform_messages_helper(
-        messages, model="accounts/fireworks/models/minimax-m3", litellm_params={}
-    )
+    out = config._transform_messages_helper(messages, model="accounts/fireworks/models/minimax-m3", litellm_params={})
     block = out[0]["content"][0]
     assert block["image_url"] == url
     assert "#transform=inline" not in block["image_url"]
@@ -1274,9 +1227,7 @@ def test_streaming_surfaces_fireworks_response_fields():
         surfaced: dict = {}
         for chunk in stream:
             fields = getattr(chunk, "provider_specific_fields", None) or {}
-            surfaced.update(
-                {k: v for k, v in fields.items() if k.startswith("fireworks_")}
-            )
+            surfaced.update({k: v for k, v in fields.items() if k.startswith("fireworks_")})
 
     assert surfaced["fireworks_token_ids"] == [[123]]
     assert surfaced["fireworks_raw_outputs"] == [raw_output]

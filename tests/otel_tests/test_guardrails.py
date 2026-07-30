@@ -47,9 +47,7 @@ async def chat_completion(
         return await response.json(), response_headers
 
 
-async def generate_key(
-    session, guardrails: Optional[List] = None, team_id: Optional[str] = None
-):
+async def generate_key(session, guardrails: Optional[List] = None, team_id: Optional[str] = None):
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {}
@@ -95,10 +93,7 @@ async def test_llm_guard_triggered_safe_request():
 
         assert "x-litellm-applied-guardrails" in headers
 
-        assert (
-            headers["x-litellm-applied-guardrails"]
-            == "aporia-pre-guard,aporia-post-guard"
-        )
+        assert headers["x-litellm-applied-guardrails"] == "aporia-pre-guard,aporia-post-guard"
 
 
 @pytest.mark.asyncio
@@ -114,9 +109,7 @@ async def test_llm_guard_triggered():
                 session,
                 "sk-1234",
                 model="fake-openai-endpoint",
-                messages=[
-                    {"role": "user", "content": f"Hello my name is ishaan@berri.ai"}
-                ],
+                messages=[{"role": "user", "content": f"Hello my name is ishaan@berri.ai"}],
                 guardrails=[
                     "aporia-post-guard",
                     "aporia-pre-guard",
@@ -269,7 +262,6 @@ async def test_guardrails_with_team_controls():
     - Request with Key 2 -> should error since team guardrails are triggered
     """
     async with aiohttp.ClientSession() as session:
-
         # Create team with guardrails
         team = await create_team(
             session=session,

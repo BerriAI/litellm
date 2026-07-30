@@ -38,18 +38,12 @@ async def chat_completion_with_headers(session, key, model="gpt-4"):
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
 
-        response_header_check(
-            response
-        )  # calling the function to check response headers
+        response_header_check(response)  # calling the function to check response headers
 
         raw_headers = response.raw_headers
         raw_headers_json = {}
 
-        for (
-            item
-        ) in (
-            response.raw_headers
-        ):  # ((b'date', b'Fri, 19 Apr 2024 21:17:29 GMT'), (), )
+        for item in response.raw_headers:  # ((b'date', b'Fri, 19 Apr 2024 21:17:29 GMT'), (), )
             raw_headers_json[item[0].decode("utf-8")] = item[1].decode("utf-8")
 
         return raw_headers_json
@@ -179,9 +173,7 @@ async def test_aaaend_user_specific_region():
         )
 
         ## MAKE CALL ##
-        key_gen = await generate_key(
-            session=session, i=0, models=["gpt-5-mini-end-user-test"]
-        )
+        key_gen = await generate_key(session=session, i=0, models=["gpt-5-mini-end-user-test"])
 
         key = key_gen["key"]
 
@@ -215,9 +207,7 @@ async def test_enduser_tpm_limits_non_master_key():
 
         end_user_id = str(uuid.uuid4())
 
-        await new_end_user(
-            session=session, i=0, user_id=end_user_id, budget_id=budget_id
-        )
+        await new_end_user(session=session, i=0, user_id=end_user_id, budget_id=budget_id)
 
         ## MAKE CALL ##
         key_gen = await generate_key(session=session, i=0, models=[])
@@ -241,9 +231,9 @@ async def test_enduser_tpm_limits_non_master_key():
             pass
     print("Passed requests=", passed)
 
-    assert (
-        passed < 5
-    ), f"Sent 10 requests and end-user has tpm_limit of 2. Number requests passed: {passed}. Expected less than 5 to pass"
+    assert passed < 5, (
+        f"Sent 10 requests and end-user has tpm_limit of 2. Number requests passed: {passed}. Expected less than 5 to pass"
+    )
 
 
 @pytest.mark.asyncio
@@ -262,14 +252,10 @@ async def test_enduser_tpm_limits_with_master_key():
 
         end_user_id = str(uuid.uuid4())
 
-        await new_end_user(
-            session=session, i=0, user_id=end_user_id, budget_id=budget_id
-        )
+        await new_end_user(session=session, i=0, user_id=end_user_id, budget_id=budget_id)
 
     # chat completion 1
-    client = AsyncOpenAI(
-        api_key="sk-1234", base_url="http://0.0.0.0:4000", max_retries=0
-    )
+    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000", max_retries=0)
 
     # chat completion 2
     passed = 0
@@ -285,6 +271,6 @@ async def test_enduser_tpm_limits_with_master_key():
             pass
     print("Passed requests=", passed)
 
-    assert (
-        passed < 5
-    ), f"Sent 10 requests and end-user has tpm_limit of 2. Number requests passed: {passed}. Expected less than 5 to pass"
+    assert passed < 5, (
+        f"Sent 10 requests and end-user has tpm_limit of 2. Number requests passed: {passed}. Expected less than 5 to pass"
+    )

@@ -65,7 +65,9 @@ def test_protocol_fault_renders_502_note():
 
 
 def test_dcr_caller_rejection_is_400_per_rfc7591_regardless_of_upstream_status():
-    status_code, detail = dcr_fault_detail(CallerRejected(code="invalid_client_metadata", description="bad grant types"))
+    status_code, detail = dcr_fault_detail(
+        CallerRejected(code="invalid_client_metadata", description="bad grant types")
+    )
     assert status_code == 400
     assert detail == "invalid_client_metadata: bad grant types"
 

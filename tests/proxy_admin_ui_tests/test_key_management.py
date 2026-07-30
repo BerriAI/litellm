@@ -17,9 +17,7 @@ import time
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import logging
 
@@ -109,14 +107,10 @@ def prisma_client():
     os.environ["DATABASE_URL"] = modified_url
 
     # Assuming PrismaClient is a class that needs to be instantiated
-    prisma_client = PrismaClient(
-        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-    )
+    prisma_client = PrismaClient(database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj)
 
     # Reset litellm.proxy.proxy_server.prisma_client to None
-    litellm.proxy.proxy_server.litellm_proxy_budget_name = (
-        f"litellm-proxy-budget-{time.time()}"
-    )
+    litellm.proxy.proxy_server.litellm_proxy_budget_name = f"litellm-proxy-budget-{time.time()}"
     litellm.proxy.proxy_server.user_custom_key_generate = None
 
     return prisma_client
@@ -137,9 +131,7 @@ async def test_regenerate_api_key(prisma_client):
     max_budget = 400
     models = ["fake-openai-endpoint"]
     new_key = await generate_key_fn(
-        data=GenerateKeyRequest(
-            key_alias=key_alias, spend=spend, max_budget=max_budget, models=models
-        ),
+        data=GenerateKeyRequest(key_alias=key_alias, spend=spend, max_budget=max_budget, models=models),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             api_key="sk-1234",
@@ -199,9 +191,7 @@ async def test_regenerate_api_key(prisma_client):
 
     request.body = return_body_3
     try:
-        result = await user_api_key_auth(
-            request=request, api_key=f"Bearer {generated_key}"
-        )
+        result = await user_api_key_auth(request=request, api_key=f"Bearer {generated_key}")
         print(result)
         pytest.fail(f"This should have failed!. the key has been regenerated")
     except Exception as e:
@@ -210,15 +200,9 @@ async def test_regenerate_api_key(prisma_client):
 
     # Check that the regenerated key has the same spend, max_budget, models and key_alias
     assert new_key.spend == spend, f"Expected spend {spend} but got {new_key.spend}"
-    assert (
-        new_key.max_budget == max_budget
-    ), f"Expected max_budget {max_budget} but got {new_key.max_budget}"
-    assert (
-        new_key.key_alias == key_alias
-    ), f"Expected key_alias {key_alias} but got {new_key.key_alias}"
-    assert (
-        new_key.models == models
-    ), f"Expected models {models} but got {new_key.models}"
+    assert new_key.max_budget == max_budget, f"Expected max_budget {max_budget} but got {new_key.max_budget}"
+    assert new_key.key_alias == key_alias, f"Expected key_alias {key_alias} but got {new_key.key_alias}"
+    assert new_key.models == models, f"Expected models {models} but got {new_key.models}"
 
     assert new_key.key_name == f"sk-...{new_key.key[-4:]}"
 
@@ -240,9 +224,7 @@ async def test_regenerate_api_key_with_new_alias_and_expiration(prisma_client):
     max_budget = 400
     models = ["fake-openai-endpoint"]
     new_key = await generate_key_fn(
-        data=GenerateKeyRequest(
-            key_alias=key_alias, spend=spend, max_budget=max_budget, models=models
-        ),
+        data=GenerateKeyRequest(key_alias=key_alias, spend=spend, max_budget=max_budget, models=models),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             api_key="sk-1234",
@@ -292,9 +274,7 @@ async def test_regenerate_key_ui(prisma_client):
     max_budget = 400
     models = ["fake-openai-endpoint"]
     new_key = await generate_key_fn(
-        data=GenerateKeyRequest(
-            key_alias=key_alias, spend=spend, max_budget=max_budget, models=models
-        ),
+        data=GenerateKeyRequest(key_alias=key_alias, spend=spend, max_budget=max_budget, models=models),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             api_key="sk-1234",
@@ -348,11 +328,7 @@ async def test_get_users(prisma_client):
     test_users = [
         NewUserRequest(
             user_id=f"test_user_{i}_{uuid.uuid4()}",
-            user_role=(
-                LitellmUserRoles.INTERNAL_USER.value
-                if i % 2 == 0
-                else LitellmUserRoles.PROXY_ADMIN.value
-            ),
+            user_role=(LitellmUserRoles.INTERNAL_USER.value if i % 2 == 0 else LitellmUserRoles.PROXY_ADMIN.value),
         )
         for i in range(5)
     ]
@@ -465,9 +441,7 @@ async def test_get_users_filters_dashboard_keys(prisma_client):
     assert user.key_count == 2  # Only count the regular keys, not the UI dashboard key
 
     # Clean up test user and keys
-    await prisma_client.db.litellm_usertable.delete(
-        where={"user_id": test_user.user_id}
-    )
+    await prisma_client.db.litellm_usertable.delete(where={"user_id": test_user.user_id})
 
 
 @pytest.mark.asyncio
@@ -510,9 +484,7 @@ async def test_get_users_key_count(prisma_client):
     test_user = initial_users["users"][0]
     assert test_user.user_id == test_user_id
     initial_key_count = test_user.key_count
-    assert (
-        initial_key_count == 0
-    ), f"Expected initial key count to be 0, but got {initial_key_count}"
+    assert initial_key_count == 0, f"Expected initial key count to be 0, but got {initial_key_count}"
 
     # Create a new key for the test user
     new_key = await generate_key_fn(
@@ -540,9 +512,9 @@ async def test_get_users_key_count(prisma_client):
     updated_user = updated_users["users"][0]
     updated_key_count = updated_user.key_count
 
-    assert (
-        updated_key_count == initial_key_count + 1
-    ), f"Expected key count to increase by 1, but got {updated_key_count} (was {initial_key_count})"
+    assert updated_key_count == initial_key_count + 1, (
+        f"Expected key count to increase by 1, but got {updated_key_count} (was {initial_key_count})"
+    )
 
     # Clean up test user and keys
     await prisma_client.db.litellm_usertable.delete(where={"user_id": test_user_id})
@@ -586,9 +558,7 @@ async def test_list_teams(prisma_client):
             max_budget=1000,
         ),
         http_request=Request(scope={"type": "http"}),
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
-        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"),
     )
 
     # Create a key for the team
@@ -597,17 +567,13 @@ async def test_list_teams(prisma_client):
             team_id=team_id,
             key_alias=f"test_key_{uuid.uuid4()}",
         ),
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
-        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"),
     )
 
     # Get team list
     teams = await list_team(
         http_request=Request(scope={"type": "http"}),
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
-        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"),
         user_id=None,
     )
 
@@ -620,47 +586,29 @@ async def test_list_teams(prisma_client):
             test_team_response = team
             break
 
-    assert (
-        test_team_response is not None
-    ), f"Could not find test team {team_id} in response"
+    assert test_team_response is not None, f"Could not find test team {team_id} in response"
 
     # Verify members_with_roles
-    assert (
-        len(test_team_response.members_with_roles) == 3
-    ), "Expected 3 members in team"  # 2 members + 1 team admin
+    assert len(test_team_response.members_with_roles) == 3, "Expected 3 members in team"  # 2 members + 1 team admin
     member_roles = {m.role for m in test_team_response.members_with_roles}
     assert "admin" in member_roles, "Expected admin role in members"
     assert "user" in member_roles, "Expected user role in members"
 
     # Verify all required fields in TeamListResponseObject
-    assert (
-        test_team_response.team_id == team_id
-    ), f"team_id should be expected value {team_id}"
-    assert (
-        test_team_response.team_alias == team_alias
-    ), f"team_alias should be expected value {team_alias}"
+    assert test_team_response.team_id == team_id, f"team_id should be expected value {team_id}"
+    assert test_team_response.team_alias == team_alias, f"team_alias should be expected value {team_alias}"
     assert test_team_response.spend is not None, "spend should not be None"
-    assert (
-        test_team_response.max_budget == 1000
-    ), f"max_budget should be expected value 1000"
-    assert test_team_response.models == [
-        "gpt-4"
-    ], f"models should be expected value ['gpt-4']"
-    assert (
-        test_team_response.tpm_limit == 1000
-    ), f"tpm_limit should be expected value 1000"
-    assert (
-        test_team_response.rpm_limit == 1000
-    ), f"rpm_limit should be expected value 1000"
-    assert (
-        test_team_response.budget_reset_at is not None
-    ), "budget_reset_at should not be None since budget_duration is 30d"
+    assert test_team_response.max_budget == 1000, f"max_budget should be expected value 1000"
+    assert test_team_response.models == ["gpt-4"], f"models should be expected value ['gpt-4']"
+    assert test_team_response.tpm_limit == 1000, f"tpm_limit should be expected value 1000"
+    assert test_team_response.rpm_limit == 1000, f"rpm_limit should be expected value 1000"
+    assert test_team_response.budget_reset_at is not None, (
+        "budget_reset_at should not be None since budget_duration is 30d"
+    )
 
     # Verify keys are returned
     assert len(test_team_response.keys) > 0, "Expected at least one key for team"
-    assert any(
-        k.team_id == team_id for k in test_team_response.keys
-    ), "Expected to find team key in response"
+    assert any(k.team_id == team_id for k in test_team_response.keys), "Expected to find team key in response"
 
     # Clean up
     await prisma_client.delete_data(team_id_list=[team_id], table_name="team")
@@ -680,9 +628,7 @@ def test_team_key_generation_team_member_check():
     from fastapi import HTTPException
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
 
-    litellm.key_generation_settings = {
-        "team_key_generation": {"allowed_team_member_roles": ["admin"]}
-    }
+    litellm.key_generation_settings = {"team_key_generation": {"allowed_team_member_roles": ["admin"]}}
 
     team_table = LiteLLM_TeamTableCachedObj(
         team_id="test_team_id",
@@ -735,9 +681,7 @@ def test_team_key_generation_team_member_check():
     ],
 )
 @pytest.mark.parametrize("key_type", ["team_key", "personal_key"])
-def test_key_generation_required_params_check(
-    team_key_generation_settings, input_data, expected_result, key_type
-):
+def test_key_generation_required_params_check(team_key_generation_settings, input_data, expected_result, key_type):
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _team_key_generation_check,
         _personal_key_generation_check,
@@ -766,15 +710,11 @@ def test_key_generation_required_params_check(
 
     if key_type == "team_key":
         litellm.key_generation_settings = StandardKeyGenerationConfig(
-            team_key_generation=TeamUIKeyGenerationConfig(
-                **team_key_generation_settings
-            )
+            team_key_generation=TeamUIKeyGenerationConfig(**team_key_generation_settings)
         )
     elif key_type == "personal_key":
         litellm.key_generation_settings = StandardKeyGenerationConfig(
-            personal_key_generation=PersonalUIKeyGenerationConfig(
-                **team_key_generation_settings
-            )
+            personal_key_generation=PersonalUIKeyGenerationConfig(**team_key_generation_settings)
         )
 
     if expected_result:
@@ -810,14 +750,10 @@ def test_personal_key_generation_check():
     )
     from fastapi import HTTPException
 
-    litellm.key_generation_settings = {
-        "personal_key_generation": {"allowed_user_roles": ["proxy_admin"]}
-    }
+    litellm.key_generation_settings = {"personal_key_generation": {"allowed_user_roles": ["proxy_admin"]}}
 
     assert _personal_key_generation_check(
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
-        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"),
         data=GenerateKeyRequest(),
     )
 
@@ -867,17 +803,13 @@ def test_personal_key_generation_check():
         ),
     ],
 )
-def test_prepare_metadata_fields(
-    update_request_data, non_default_values, existing_metadata, expected_result
-):
+def test_prepare_metadata_fields(update_request_data, non_default_values, existing_metadata, expected_result):
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         prepare_metadata_fields,
     )
 
     args = {
-        "data": UpdateKeyRequest(
-            key="sk-1qGQUJJTcljeaPfzgWRrXQ", **update_request_data
-        ),
+        "data": UpdateKeyRequest(key="sk-1qGQUJJTcljeaPfzgWRrXQ", **update_request_data),
         "non_default_values": non_default_values,
         "existing_metadata": existing_metadata,
     }
@@ -1100,9 +1032,7 @@ async def test_list_key_helper(prisma_client):
         return_full_object=True,
         organization_id=None,
     )
-    assert all(
-        isinstance(key, UserAPIKeyAuth) for key in result["keys"]
-    ), "Should return UserAPIKeyAuth objects"
+    assert all(isinstance(key, UserAPIKeyAuth) for key in result["keys"]), "Should return UserAPIKeyAuth objects"
     assert len(result["keys"]) == 3, "Should return exactly 3 keys for test user"
 
     # Clean up test keys
@@ -1222,9 +1152,7 @@ async def test_list_key_helper_team_filtering(prisma_client):
 
         # Verify keys with team_id=None are included
         no_team_keys = [k for k in all_keys if k.team_id is None]
-        assert (
-            len(no_team_keys) > 0
-        ), f"Expected more than 0 keys with no team, got {len(no_team_keys)}"
+        assert len(no_team_keys) > 0, f"Expected more than 0 keys with no team, got {len(no_team_keys)}"
 
     finally:
         # Clean up test keys
@@ -1298,9 +1226,7 @@ async def test_team_model_alias(prisma_client, requested_model, should_pass):
             model_aliases={"gpt-4o": "gpt-4o-team1"},
         ),
         http_request=Request(scope={"type": "http"}),
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
-        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"),
     )
 
     # Generate key for the team
@@ -1309,9 +1235,7 @@ async def test_team_model_alias(prisma_client, requested_model, should_pass):
             team_id=team_id,
             models=["gpt-4o-team1"],
         ),
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
-        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"),
     )
 
     generated_key = new_key.key
@@ -1328,16 +1252,10 @@ async def test_team_model_alias(prisma_client, requested_model, should_pass):
 
     if should_pass:
         # Verify the key works with the aliased model
-        result = await user_api_key_auth(
-            request=request, api_key=f"Bearer {generated_key}"
-        )
+        result = await user_api_key_auth(request=request, api_key=f"Bearer {generated_key}")
 
-        assert result.models == [
-            "gpt-4o-team1"
-        ], "Expected model list to contain aliased model"
-        assert result.team_model_aliases == {
-            "gpt-4o": "gpt-4o-team1"
-        }, "Expected model aliases to be present"
+        assert result.models == ["gpt-4o-team1"], "Expected model list to contain aliased model"
+        assert result.team_model_aliases == {"gpt-4o": "gpt-4o-team1"}, "Expected model aliases to be present"
     else:
         # Verify the key fails with non-aliased models
         with pytest.raises(Exception) as exc_info:

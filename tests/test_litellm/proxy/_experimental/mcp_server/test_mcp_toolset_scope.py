@@ -42,8 +42,7 @@ class TestApplyToolsetScope:
             "server-b": ["tool3"],
         }
         with patch(
-            "litellm.proxy._experimental.mcp_server.server."
-            "global_mcp_server_manager.resolve_toolset_tool_permissions",
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.resolve_toolset_tool_permissions",
             new=AsyncMock(return_value=toolset_perms),
         ):
             # Key has been explicitly granted toolset-123 — access check passes.
@@ -65,8 +64,7 @@ class TestApplyToolsetScope:
 
         toolset_perms = {"server-a": ["tool1"]}
         with patch(
-            "litellm.proxy._experimental.mcp_server.server."
-            "global_mcp_server_manager.resolve_toolset_tool_permissions",
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.resolve_toolset_tool_permissions",
             new=AsyncMock(return_value=toolset_perms),
         ):
             auth = UserAPIKeyAuth(
@@ -108,14 +106,11 @@ class TestApplyToolsetScope:
             mcp_servers=["no-mcp-servers"],
             mcp_toolsets=["toolset-123"],
         )
-        auth = UserAPIKeyAuth(
-            api_key="sk-test", object_permission=op, user_role=user_role
-        )
+        auth = UserAPIKeyAuth(api_key="sk-test", object_permission=op, user_role=user_role)
 
         resolve = AsyncMock(return_value={"server-a": ["tool1"]})
         with patch(
-            "litellm.proxy._experimental.mcp_server.server."
-            "global_mcp_server_manager.resolve_toolset_tool_permissions",
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.resolve_toolset_tool_permissions",
             new=resolve,
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -267,9 +262,7 @@ class TestToolsetPrefixResolution:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("alias, server_name, server_id", PREFIX_CASES)
-    async def test_filter_keeps_tools_when_prefix_contains_separator(
-        self, alias, server_name, server_id
-    ):
+    async def test_filter_keeps_tools_when_prefix_contains_separator(self, alias, server_name, server_id):
         from mcp.types import Tool as MCPTool
 
         from litellm.proxy._experimental.mcp_server.server import (
@@ -294,13 +287,11 @@ class TestToolsetPrefixResolution:
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.server."
-                "MCPRequestHandler.get_allowed_tools_for_server",
+                "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.get_allowed_tools_for_server",
                 new=AsyncMock(return_value=allowed),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.server."
-                "global_mcp_server_manager.get_mcp_server_by_id",
+                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_id",
                 return_value=server,
             ),
         ):
@@ -311,15 +302,12 @@ class TestToolsetPrefixResolution:
             )
 
         assert sorted(t.name for t in result) == sorted(
-            add_server_prefix_to_name(name, prefix)
-            for name in ("read_wiki_contents", "read_wiki_structure")
+            add_server_prefix_to_name(name, prefix) for name in ("read_wiki_contents", "read_wiki_structure")
         )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("alias, server_name, server_id", PREFIX_CASES)
-    async def test_resolve_uses_the_stored_name_as_written(
-        self, alias, server_name, server_id
-    ):
+    async def test_resolve_uses_the_stored_name_as_written(self, alias, server_name, server_id):
         """The row names a tool; resolution must not rewrite that name.
 
         A name that merely looks prefixed is still the tool's own name, and the
@@ -333,9 +321,7 @@ class TestToolsetPrefixResolution:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("alias, server_name, server_id", PREFIX_CASES)
-    async def test_resolve_keeps_a_name_that_looks_like_its_own_server_prefix(
-        self, alias, server_name, server_id
-    ):
+    async def test_resolve_keeps_a_name_that_looks_like_its_own_server_prefix(self, alias, server_name, server_id):
         from litellm.proxy._experimental.mcp_server.utils import (
             add_server_prefix_to_name,
             get_server_prefix,
@@ -344,9 +330,7 @@ class TestToolsetPrefixResolution:
         server = self._server(alias, server_name, server_id)
         # A native tool whose own name begins with what the gateway would use as
         # this server's wire prefix.
-        stored = add_server_prefix_to_name(
-            "read_wiki_contents", get_server_prefix(server)
-        )
+        stored = add_server_prefix_to_name("read_wiki_contents", get_server_prefix(server))
 
         assert await self._resolve(server, server_id, stored) == {server_id: [stored]}
 
@@ -376,9 +360,7 @@ class TestToolsetPrefixResolution:
                 new=AsyncMock(return_value=[toolset]),
             ),
         ):
-            return await global_mcp_server_manager.resolve_toolset_tool_permissions(
-                toolset_ids=["ts-1"]
-            )
+            return await global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=["ts-1"])
 
     @pytest.mark.asyncio
     async def test_bare_stored_name_starting_with_server_prefix_stays_granted(self):
@@ -421,13 +403,11 @@ class TestToolsetPrefixResolution:
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.server."
-                "MCPRequestHandler.get_allowed_tools_for_server",
+                "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.get_allowed_tools_for_server",
                 new=AsyncMock(return_value=resolved["srv-collide"]),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.server."
-                "global_mcp_server_manager.get_mcp_server_by_id",
+                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_id",
                 return_value=server,
             ),
         ):
@@ -478,13 +458,11 @@ class TestToolsetPrefixResolution:
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.server."
-                "MCPRequestHandler.get_allowed_tools_for_server",
+                "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.get_allowed_tools_for_server",
                 new=AsyncMock(return_value=resolved["srv-lonely"]),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.server."
-                "global_mcp_server_manager.get_mcp_server_by_id",
+                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_id",
                 return_value=server,
             ),
         ):
@@ -555,9 +533,7 @@ class TestMCPActiveToolsetContextVar:
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-                new=AsyncMock(
-                    return_value=(mock_auth, None, [], {}, {}, scope["headers"])
-                ),
+                new=AsyncMock(return_value=(mock_auth, None, [], {}, {}, scope["headers"])),
             ),
             patch(
                 "litellm.proxy._experimental.mcp_server.server.IPAddressUtils",

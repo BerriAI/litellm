@@ -3,9 +3,7 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -111,9 +109,7 @@ def test_hosted_vllm_chat_transformation_with_audio_url():
 
 def test_hosted_vllm_supports_reasoning_effort():
     config = HostedVLLMChatConfig()
-    supported_params = config.get_supported_openai_params(
-        model="hosted_vllm/gpt-oss-120b"
-    )
+    supported_params = config.get_supported_openai_params(model="hosted_vllm/gpt-oss-120b")
     assert "reasoning_effort" in supported_params
     optional_params = config.map_openai_params(
         non_default_params={"reasoning_effort": "high"},
@@ -134,9 +130,7 @@ def test_hosted_vllm_supports_thinking():
     Related issue: https://github.com/BerriAI/litellm/issues/19761
     """
     config = HostedVLLMChatConfig()
-    supported_params = config.get_supported_openai_params(
-        model="hosted_vllm/GLM-4.6-FP8"
-    )
+    supported_params = config.get_supported_openai_params(model="hosted_vllm/GLM-4.6-FP8")
     assert "thinking" in supported_params
 
     # Test thinking below the low threshold -> "minimal"

@@ -219,13 +219,11 @@ class TestAssistantMessageImageUrlContent:
         # convert to list to consume it — this must not raise ValidationError.
         content_blocks = list(raw_content) if raw_content is not None else []
 
-        assert (
-            len(content_blocks) == 2
-        ), f"Expected 2 content blocks (text + image_url), got {len(content_blocks)}: {content_blocks}"
+        assert len(content_blocks) == 2, (
+            f"Expected 2 content blocks (text + image_url), got {len(content_blocks)}: {content_blocks}"
+        )
         types = [b.get("type") for b in content_blocks if isinstance(b, dict)]
-        assert (
-            "image_url" in types
-        ), f"image_url block was silently dropped; blocks: {content_blocks}"
+        assert "image_url" in types, f"image_url block was silently dropped; blocks: {content_blocks}"
 
     def test_assistant_message_image_url_preserved_in_all_message_values(self):
         """
@@ -257,16 +255,12 @@ class TestAssistantMessageImageUrlContent:
         assert assistant is not None, "Assistant message missing after serialisation"
 
         content = assistant.get("content", [])
-        assert isinstance(
-            content, list
-        ), f"content should be a list, got {type(content)}"
-        assert (
-            len(content) == 2
-        ), f"Expected 2 content blocks (text + image_url), got {len(content)}: {content}"
+        assert isinstance(content, list), f"content should be a list, got {type(content)}"
+        assert len(content) == 2, f"Expected 2 content blocks (text + image_url), got {len(content)}: {content}"
         types = [b.get("type") for b in content if isinstance(b, dict)]
-        assert (
-            "image_url" in types
-        ), f"image_url block was silently dropped during AllMessageValues serialisation; blocks: {content}"
+        assert "image_url" in types, (
+            f"image_url block was silently dropped during AllMessageValues serialisation; blocks: {content}"
+        )
 
 
 class TestResponsesAPIReasoningNullFields:
@@ -298,9 +292,7 @@ class TestResponsesAPIReasoningNullFields:
 
     def test_reasoning_item_null_fields_removed_model_dump(self):
         """Null status/content/encrypted_content should be absent from model_dump."""
-        response = self._make_response(
-            output=[{"id": "rs_abc", "type": "reasoning", "summary": []}]
-        )
+        response = self._make_response(output=[{"id": "rs_abc", "type": "reasoning", "summary": []}])
         dumped = response.model_dump()
         reasoning = dumped["output"][0]
         assert "status" not in reasoning
@@ -309,9 +301,7 @@ class TestResponsesAPIReasoningNullFields:
 
     def test_reasoning_item_null_fields_removed_model_dump_json(self):
         """Null fields should also be absent from model_dump_json."""
-        response = self._make_response(
-            output=[{"id": "rs_abc", "type": "reasoning", "summary": []}]
-        )
+        response = self._make_response(output=[{"id": "rs_abc", "type": "reasoning", "summary": []}])
         parsed = json.loads(response.model_dump_json())
         reasoning = parsed["output"][0]
         assert "status" not in reasoning
@@ -382,16 +372,8 @@ class TestResponsesAPIReasoningNullFields:
             ]
         )
         dumped = response.model_dump()
-        reasoning = [
-            o
-            for o in dumped["output"]
-            if isinstance(o, dict) and o.get("type") == "reasoning"
-        ][0]
-        message = [
-            o
-            for o in dumped["output"]
-            if isinstance(o, dict) and o.get("type") == "message"
-        ][0]
+        reasoning = [o for o in dumped["output"] if isinstance(o, dict) and o.get("type") == "reasoning"][0]
+        message = [o for o in dumped["output"] if isinstance(o, dict) and o.get("type") == "message"][0]
         assert "status" not in reasoning
         assert "content" not in reasoning
         assert message["status"] == "completed"
@@ -399,9 +381,7 @@ class TestResponsesAPIReasoningNullFields:
 
     def test_reasoning_core_fields_preserved(self):
         """id, type, summary should always be present on reasoning items."""
-        response = self._make_response(
-            output=[{"id": "rs_abc", "type": "reasoning", "summary": ["thinking..."]}]
-        )
+        response = self._make_response(output=[{"id": "rs_abc", "type": "reasoning", "summary": ["thinking..."]}])
         dumped = response.model_dump()
         reasoning = dumped["output"][0]
         assert reasoning["id"] == "rs_abc"
@@ -410,9 +390,7 @@ class TestResponsesAPIReasoningNullFields:
 
     def test_top_level_null_fields_unaffected(self):
         """Top-level response fields with None should not be affected."""
-        response = self._make_response(
-            output=[{"id": "rs_abc", "type": "reasoning", "summary": []}]
-        )
+        response = self._make_response(output=[{"id": "rs_abc", "type": "reasoning", "summary": []}])
         dumped = response.model_dump()
         assert "error" in dumped
         assert dumped["error"] is None

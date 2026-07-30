@@ -13,10 +13,7 @@ def test_video_content_request_encodes_video_id_path_segment():
         headers={},
     )
 
-    assert (
-        url
-        == "https://api.openai.com/v1/videos/..%2F..%2Fresponses%3Fx%3D1%23frag/content"
-    )
+    assert url == "https://api.openai.com/v1/videos/..%2F..%2Fresponses%3Fx%3D1%23frag/content"
     assert params == {}
 
 
@@ -63,8 +60,5 @@ def test_wrapped_character_id_is_decoded_then_encoded_as_path_segment():
         headers={},
     )
 
-    assert (
-        url
-        == "https://api.openai.com/v1/videos/characters/..%2F..%2Fcharacters%3Fx%3D1%23frag"
-    )
+    assert url == "https://api.openai.com/v1/videos/characters/..%2F..%2Fcharacters%3Fx%3D1%23frag"
     assert params == {}

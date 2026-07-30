@@ -9,9 +9,7 @@ import pytest
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 
 def _run_uv(*args: str, **kwargs) -> subprocess.CompletedProcess:
@@ -74,22 +72,15 @@ def test_package_dependencies():
         for extra_name, requirements in optional_deps.items():
             assert requirements, f"Optional dependency group '{extra_name}' is empty"
             for requirement in requirements:
-                assert isinstance(
-                    requirement, str
-                ), f"Expected string requirement in extra '{extra_name}'"
+                assert isinstance(requirement, str), f"Expected string requirement in extra '{extra_name}'"
                 parsed = Requirement(requirement)
                 parsed_requirements.add(parsed.name.lower())
 
         print(parsed_requirements)
-        print(
-            f"Validated {len(parsed_requirements)} optional dependencies across {len(optional_deps)} extras groups"
-        )
+        print(f"Validated {len(parsed_requirements)} optional dependencies across {len(optional_deps)} extras groups")
 
     except Exception as e:
-        pytest.fail(
-            f"Error occurred while checking dependencies: {str(e)}\n"
-            + traceback.format_exc()
-        )
+        pytest.fail(f"Error occurred while checking dependencies: {str(e)}\n" + traceback.format_exc())
 
 
 def test_cli_extra_is_a_thin_client_install():

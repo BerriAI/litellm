@@ -39,12 +39,8 @@ from litellm.types.utils import LiteLLMBatch
 client = TestClient(app)
 
 BEDROCK_MODEL = "bedrock-claude-test"
-BEDROCK_BATCH_ARN = (
-    "arn:aws:bedrock:us-east-1:000000000000:model-invocation-job/test-job-id"
-)
-BEDROCK_OUTPUT_S3_URI = (
-    "s3://test-bedrock-batch-output/job-output/test-job-id/output.jsonl.out"
-)
+BEDROCK_BATCH_ARN = "arn:aws:bedrock:us-east-1:000000000000:model-invocation-job/test-job-id"
+BEDROCK_OUTPUT_S3_URI = "s3://test-bedrock-batch-output/job-output/test-job-id/output.jsonl.out"
 
 
 @pytest.fixture
@@ -66,20 +62,14 @@ def bedrock_router() -> Router:
 
 
 def _setup_proxy(monkeypatch, llm_router: Router):
-    proxy_logging_obj = ProxyLogging(
-        user_api_key_cache=DualCache(default_in_memory_ttl=1)
-    )
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache(default_in_memory_ttl=1))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
 
 
 def _encoded_bedrock_batch_id() -> str:
-    return encode_file_id_with_model(
-        file_id=BEDROCK_BATCH_ARN, model=BEDROCK_MODEL, id_type="batch"
-    )
+    return encode_file_id_with_model(file_id=BEDROCK_BATCH_ARN, model=BEDROCK_MODEL, id_type="batch")
 
 
 def _make_in_progress_batch_response(batch_id: str) -> LiteLLMBatch:
@@ -94,9 +84,7 @@ def _make_in_progress_batch_response(batch_id: str) -> LiteLLMBatch:
     )
 
 
-def test_retrieve_batch_passes_model_for_bedrock_encoded_id(
-    monkeypatch, bedrock_router
-):
+def test_retrieve_batch_passes_model_for_bedrock_encoded_id(monkeypatch, bedrock_router):
     """Encoded batch_id → proxy must pass `model` to litellm.aretrieve_batch
     so BedrockBatchesConfig is loaded.
 
@@ -134,9 +122,7 @@ def test_retrieve_batch_passes_model_for_bedrock_encoded_id(
     assert captured_kwargs.get("batch_id") == BEDROCK_BATCH_ARN
 
 
-def test_retrieve_batch_response_id_is_re_encoded_with_model(
-    monkeypatch, bedrock_router
-):
+def test_retrieve_batch_response_id_is_re_encoded_with_model(monkeypatch, bedrock_router):
     """After provider returns the raw ARN, the proxy must re-encode the
     response id with the model so subsequent client calls keep routing to
     bedrock."""
@@ -165,9 +151,7 @@ def test_retrieve_batch_response_id_is_re_encoded_with_model(
     assert body["id"] == encoded_batch_id
 
 
-def test_file_content_routes_to_bedrock_for_encoded_output_file_id(
-    monkeypatch, bedrock_router
-):
+def test_file_content_routes_to_bedrock_for_encoded_output_file_id(monkeypatch, bedrock_router):
     """`client.files.content(output_file_id)` for a bedrock-encoded file ID
     must reach `litellm.afile_content` with `custom_llm_provider="bedrock"`,
     the raw S3 URI as `file_id`, and AWS credentials sourced from the router.
@@ -181,9 +165,7 @@ def test_file_content_routes_to_bedrock_for_encoded_output_file_id(
     user_key = UserAPIKeyAuth(api_key="test-key")
     app.dependency_overrides[user_api_key_auth] = lambda: user_key
 
-    encoded_file_id = encode_file_id_with_model(
-        file_id=BEDROCK_OUTPUT_S3_URI, model=BEDROCK_MODEL, id_type="file"
-    )
+    encoded_file_id = encode_file_id_with_model(file_id=BEDROCK_OUTPUT_S3_URI, model=BEDROCK_MODEL, id_type="file")
     captured_kwargs: dict = {}
     file_bytes = b'{"custom_id":"r1","response":{"body":{"choices":[]}}}\n'
 

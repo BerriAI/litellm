@@ -77,9 +77,7 @@ def test_claude_platform_uses_bedrock_subroute():
     import litellm
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
-    model, provider, _, _ = litellm.get_llm_provider(
-        model="bedrock/claude_platform/claude-sonnet-4-6"
-    )
+    model, provider, _, _ = litellm.get_llm_provider(model="bedrock/claude_platform/claude-sonnet-4-6")
 
     assert provider == "bedrock"
     assert model == "claude_platform/claude-sonnet-4-6"
@@ -177,9 +175,7 @@ def test_claude_platform_sigv4_signs_transformed_request_body():
     assert signed_body == json.dumps(request_body).encode()
     assert headers["Authorization"] == "signed"
     mock_sign_request.assert_called_once()
-    assert (
-        mock_sign_request.call_args.kwargs["service_name"] == "aws-external-anthropic"
-    )
+    assert mock_sign_request.call_args.kwargs["service_name"] == "aws-external-anthropic"
     assert mock_sign_request.call_args.kwargs["request_data"] == request_body
 
 

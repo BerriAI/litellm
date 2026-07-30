@@ -63,9 +63,7 @@ def test_generate_stable_operation_id_multi_method_no_suffix():
     observed = {
         "operation_id": _generate_stable_operation_id(route),
         "method_count": len(route.methods),
-        "has_method_suffix": _generate_stable_operation_id(route).endswith(
-            ("_get", "_post")
-        ),
+        "has_method_suffix": _generate_stable_operation_id(route).endswith(("_get", "_post")),
     }
     assert normalize(observed) == {
         "operation_id": "multi_op_v1_things__id_",
@@ -156,9 +154,7 @@ def test_ensure_unique_openapi_operation_ids_respects_reserved():
         }
     }
     reserved = {"reserved_get"}
-    result = ensure_unique_openapi_operation_ids(
-        schema, reserved_operation_ids=reserved
-    )
+    result = ensure_unique_openapi_operation_ids(schema, reserved_operation_ids=reserved)
     observed = {
         "rewritten": result["paths"]["/a"]["get"]["operationId"],
         "still_includes_original": "reserved_get" in reserved,
@@ -367,9 +363,7 @@ def test_mount_swagger_ui_mounts_static_route(monkeypatch):
     mount_names = [getattr(r, "name", None) for r in fresh_app.routes]
     observed = {
         "swagger_mounted": "swagger" in mount_names,
-        "patched_get_swagger": (
-            fa_applications.get_swagger_ui_html is original_get_swagger
-        ),
+        "patched_get_swagger": (fa_applications.get_swagger_ui_html is original_get_swagger),
         "route_count_positive": len(fresh_app.routes) > 0,
     }
     assert normalize(observed) == {
@@ -386,9 +380,7 @@ def test_mount_swagger_ui_missing_directory_raises_error(monkeypatch, tmp_path):
 
     fresh_app = FastAPI()
     monkeypatch.setattr(ps, "app", fresh_app, raising=True)
-    monkeypatch.setattr(
-        ps, "current_dir", str(tmp_path / "does_not_exist"), raising=True
-    )
+    monkeypatch.setattr(ps, "current_dir", str(tmp_path / "does_not_exist"), raising=True)
     original_get_swagger = fa_applications.get_swagger_ui_html
 
     try:

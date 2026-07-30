@@ -65,16 +65,14 @@ class TestLiteLLMAgentModelResolver:
         resolver = LiteLLMAgentModelResolver()
         messages = [{"role": "user", "content": "Hello"}]
 
-        resolved_model, out_messages, _ = (
-            await resolver.async_get_chat_completion_prompt(
-                model="litellm_agent/gpt-3.5-turbo",
-                messages=messages,
-                non_default_params={},
-                prompt_id=None,
-                prompt_variables=None,
-                dynamic_callback_params={},
-                litellm_logging_obj=MagicMock(),
-            )
+        resolved_model, out_messages, _ = await resolver.async_get_chat_completion_prompt(
+            model="litellm_agent/gpt-3.5-turbo",
+            messages=messages,
+            non_default_params={},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+            litellm_logging_obj=MagicMock(),
         )
 
         assert resolved_model == "gpt-3.5-turbo"

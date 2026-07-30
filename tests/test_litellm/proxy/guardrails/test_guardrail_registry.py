@@ -120,9 +120,7 @@ def test_explicit_config_guardrail_id_wins_over_derived_id():
     registry_module = _register_noop_initializer("explicit_id_test")
     try:
         result = InMemoryGuardrailHandler().initialize_guardrail(
-            guardrail=_config_guardrail(
-                "tooling", "explicit_id_test", guardrail_id="my-explicit-id"
-            )
+            guardrail=_config_guardrail("tooling", "explicit_id_test", guardrail_id="my-explicit-id")
         )
 
         assert result["guardrail_id"] == "my-explicit-id"
@@ -138,20 +136,12 @@ def test_duplicate_config_guardrail_names_get_distinct_stable_ids():
     registry_module = _register_noop_initializer("dup_name_test")
     try:
         handler = InMemoryGuardrailHandler()
-        first = handler.initialize_guardrail(
-            guardrail=_config_guardrail("dup", "dup_name_test")
-        )
-        second = handler.initialize_guardrail(
-            guardrail=_config_guardrail("dup", "dup_name_test")
-        )
+        first = handler.initialize_guardrail(guardrail=_config_guardrail("dup", "dup_name_test"))
+        second = handler.initialize_guardrail(guardrail=_config_guardrail("dup", "dup_name_test"))
 
         rebooted_handler = InMemoryGuardrailHandler()
-        rebooted_first = rebooted_handler.initialize_guardrail(
-            guardrail=_config_guardrail("dup", "dup_name_test")
-        )
-        rebooted_second = rebooted_handler.initialize_guardrail(
-            guardrail=_config_guardrail("dup", "dup_name_test")
-        )
+        rebooted_first = rebooted_handler.initialize_guardrail(guardrail=_config_guardrail("dup", "dup_name_test"))
+        rebooted_second = rebooted_handler.initialize_guardrail(guardrail=_config_guardrail("dup", "dup_name_test"))
 
         assert first["guardrail_id"] != second["guardrail_id"]
         assert first["guardrail_id"] == rebooted_first["guardrail_id"]

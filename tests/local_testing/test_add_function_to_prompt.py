@@ -4,9 +4,7 @@
 import sys, os, pytest
 import traceback
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 
 
@@ -32,9 +30,7 @@ def test_function_call_non_openai_model():
                 },
             }
         ]
-        response = litellm.completion(
-            model=model, messages=messages, functions=functions
-        )
+        response = litellm.completion(model=model, messages=messages, functions=functions)
         pytest.fail(f"An error occurred")
     except Exception as e:
         print(e)

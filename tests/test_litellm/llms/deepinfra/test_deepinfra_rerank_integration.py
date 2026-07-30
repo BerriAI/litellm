@@ -128,9 +128,7 @@ def test_basic_rerank_deepinfra(mock_sync_post, mock_async_post, sync_mode):
 @pytest.mark.parametrize("sync_mode", [True, False])
 @patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post")
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
-def test_deepinfra_rerank_with_queries_param(
-    mock_sync_post, mock_async_post, sync_mode
-):
+def test_deepinfra_rerank_with_queries_param(mock_sync_post, mock_async_post, sync_mode):
     """Test DeepInfra rerank with multiple queries parameter."""
     mock_response_data = {
         "scores": [0.8, 0.6, 0.2],
@@ -301,9 +299,7 @@ def test_deepinfra_rerank_error_handling(mock_post):
     )
 
     # Verify that the response contains error information
-    assert (
-        response._hidden_params["status"] == "unknown"
-    )  # Default status when error occurs
+    assert response._hidden_params["status"] == "unknown"  # Default status when error occurs
 
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
@@ -395,9 +391,7 @@ def test_deepinfra_rerank_models():
         except Exception as e:
             # We expect this to potentially fail due to missing api_base/key
             # but the model format should be recognized
-            assert "api_base" in str(e) or "API key" in str(
-                e
-            ), f"Unexpected error for model {model}: {e}"
+            assert "api_base" in str(e) or "API key" in str(e), f"Unexpected error for model {model}: {e}"
 
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")

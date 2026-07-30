@@ -104,16 +104,11 @@ def test_load_does_not_refresh_ttl_so_cassettes_lapse_after_write():
 
 def test_redis_key_normalizes_path_passed_by_pytest_recording():
     raw = "tests/llm_translation/cassettes/test_anthropic/test_streaming.yaml"
-    assert (
-        redis_key_for(raw)
-        == "litellm:vcr:cassette:tests/llm_translation/test_anthropic/test_streaming"
-    )
+    assert redis_key_for(raw) == "litellm:vcr:cassette:tests/llm_translation/test_anthropic/test_streaming"
 
 
 def test_redis_key_is_stable_across_working_directories(tmp_path, monkeypatch):
-    repo_root = os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    )
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     abs_cassette = os.path.join(
         repo_root,
         "tests/llm_translation/cassettes/test_anthropic/test_streaming.yaml",
@@ -129,10 +124,7 @@ def test_redis_key_is_stable_across_working_directories(tmp_path, monkeypatch):
     key_from_tmp = redis_key_for(abs_cassette)
 
     assert key_from_root == key_from_subdir == key_from_tmp
-    assert (
-        key_from_root
-        == "litellm:vcr:cassette:tests/llm_translation/test_anthropic/test_streaming"
-    )
+    assert key_from_root == "litellm:vcr:cassette:tests/llm_translation/test_anthropic/test_streaming"
 
 
 class _FlakyRedis:
@@ -291,9 +283,7 @@ def test_load_treats_redis_errors_as_cassette_miss(exc):
     persister = make_redis_persister(client=flaky)
 
     with pytest.raises(CassetteNotFoundError):
-        persister.load_cassette(
-            "tests/llm_translation/test_x/test_load_outage", yamlserializer
-        )
+        persister.load_cassette("tests/llm_translation/test_x/test_load_outage", yamlserializer)
 
 
 @pytest.mark.parametrize(
@@ -336,9 +326,7 @@ def test_save_failure_increments_health_counter_and_emits_warning(reset_health):
     flaky = _FlakyRedis(
         fakeredis.FakeStrictRedis(),
         fail_on="set",
-        exc=RedisOutOfMemoryError(
-            "command not allowed when used memory > 'maxmemory'."
-        ),
+        exc=RedisOutOfMemoryError("command not allowed when used memory > 'maxmemory'."),
     )
     persister = make_redis_persister(client=flaky)
 
@@ -365,9 +353,7 @@ def test_load_failure_increments_health_counter_and_emits_warning(reset_health):
 
     with pytest.warns(VCRCassetteCacheWarning, match="ConnectionError"):
         with pytest.raises(CassetteNotFoundError):
-            persister.load_cassette(
-                "tests/llm_translation/test_x/test_load_outage", yamlserializer
-            )
+            persister.load_cassette("tests/llm_translation/test_x/test_load_outage", yamlserializer)
 
     health = cassette_cache_health()
     assert health["load_failures"] == 1

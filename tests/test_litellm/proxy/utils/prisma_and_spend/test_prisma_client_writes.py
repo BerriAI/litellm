@@ -24,8 +24,7 @@ from litellm.proxy.utils import PrismaClient
 @pytest.mark.asyncio
 async def test_insert_data_hashes_token_and_upserts(prisma_client: PrismaClient) -> None:
     token = "sk-secret-1"
-    response = SimpleNamespace(token=hashlib.sha256(token.encode()).hexdigest(),
-                               key_alias="alias", user_id="u1")
+    response = SimpleNamespace(token=hashlib.sha256(token.encode()).hexdigest(), key_alias="alias", user_id="u1")
     prisma_client.db.litellm_verificationtoken.upsert = AsyncMock(return_value=response)
     data = {
         "token": token,
@@ -40,9 +39,7 @@ async def test_insert_data_hashes_token_and_upserts(prisma_client: PrismaClient)
         "where": upsert_kwargs["where"],
         "include": upsert_kwargs["include"],
         "create_token": upsert_kwargs["data"]["create"]["token"],
-        "create_metadata_serialized": isinstance(
-            upsert_kwargs["data"]["create"]["metadata"], str
-        ),
+        "create_metadata_serialized": isinstance(upsert_kwargs["data"]["create"]["metadata"], str),
         "update_empty": upsert_kwargs["data"]["update"],
     }
     expected_hash = hashlib.sha256(token.encode()).hexdigest()
@@ -59,12 +56,8 @@ async def test_insert_data_hashes_token_and_upserts(prisma_client: PrismaClient)
 @pytest.mark.asyncio
 async def test_insert_data_strips_null_budget_limits(prisma_client: PrismaClient) -> None:
     prisma_client.db.litellm_verificationtoken.upsert = AsyncMock(return_value=None)
-    await prisma_client.insert_data(
-        data={"token": "sk-1", "budget_limits": None}, table_name="key"
-    )
-    create_payload = prisma_client.db.litellm_verificationtoken.upsert.await_args.kwargs[
-        "data"
-    ]["create"]
+    await prisma_client.insert_data(data={"token": "sk-1", "budget_limits": None}, table_name="key")
+    create_payload = prisma_client.db.litellm_verificationtoken.upsert.await_args.kwargs["data"]["create"]
     assert "budget_limits" not in create_payload
 
 
@@ -79,9 +72,7 @@ async def test_insert_data_team_serializes_members(prisma_client: PrismaClient) 
         "members_with_roles": [{"role": "admin", "user_id": "u1"}],
     }
     result = await prisma_client.insert_data(data=data, table_name="team")
-    create_payload = prisma_client.db.litellm_teamtable.upsert.await_args.kwargs["data"][
-        "create"
-    ]
+    create_payload = prisma_client.db.litellm_teamtable.upsert.await_args.kwargs["data"]["create"]
     assert result.team_id == "t1"
     assert create_payload["members_with_roles"] == json.dumps(data["members_with_roles"])
     assert create_payload["team_id"] == "t1"
@@ -91,14 +82,10 @@ async def test_insert_data_team_serializes_members(prisma_client: PrismaClient) 
 async def test_insert_data_user_organization_fk_raises_400(
     prisma_client: PrismaClient,
 ) -> None:
-    err = RuntimeError(
-        "Foreign key constraint failed on the field: `LiteLLM_UserTable_organization_id_fkey (index)`"
-    )
+    err = RuntimeError("Foreign key constraint failed on the field: `LiteLLM_UserTable_organization_id_fkey (index)`")
     prisma_client.db.litellm_usertable.upsert = AsyncMock(side_effect=err)
     with pytest.raises(HTTPException) as excinfo:
-        await prisma_client.insert_data(
-            data={"user_id": "u1", "organization_id": "org-bad"}, table_name="user"
-        )
+        await prisma_client.insert_data(data={"user_id": "u1", "organization_id": "org-bad"}, table_name="user")
     raised = excinfo.value
     assert "Foreign Key Constraint failed" in raised.detail["error"]
     assert raised.status_code == 400
@@ -137,9 +124,7 @@ async def test_insert_data_debug_log_tolerates_none_token(
 async def test_insert_data_logs_and_raises_generic_error(
     prisma_client: PrismaClient,
 ) -> None:
-    prisma_client.db.litellm_verificationtoken.upsert = AsyncMock(
-        side_effect=RuntimeError("write boom")
-    )
+    prisma_client.db.litellm_verificationtoken.upsert = AsyncMock(side_effect=RuntimeError("write boom"))
     with pytest.raises(RuntimeError, match="write boom"):
         await prisma_client.insert_data(data={"token": "sk-1"}, table_name="key")
 
@@ -225,9 +210,7 @@ async def test_update_data_team_serializes_members_when_list(
 async def test_update_data_logs_and_raises_on_error(
     prisma_client: PrismaClient,
 ) -> None:
-    prisma_client.db.litellm_verificationtoken.update = AsyncMock(
-        side_effect=RuntimeError("update fail")
-    )
+    prisma_client.db.litellm_verificationtoken.update = AsyncMock(side_effect=RuntimeError("update fail"))
     with pytest.raises(RuntimeError, match="update fail"):
         await prisma_client.update_data(token="sk-x", data={"spend": 1.0})
 
@@ -237,14 +220,10 @@ async def test_delete_data_hashes_sk_tokens_and_calls_delete_many(
     prisma_client: PrismaClient,
 ) -> None:
     deleted = SimpleNamespace(count=2)
-    prisma_client.db.litellm_verificationtoken.delete_many = AsyncMock(
-        return_value=deleted
-    )
+    prisma_client.db.litellm_verificationtoken.delete_many = AsyncMock(return_value=deleted)
     tokens = ["sk-one", "sk-two", "raw-hashed-token"]
     result = await prisma_client.delete_data(tokens=tokens)
-    where = prisma_client.db.litellm_verificationtoken.delete_many.await_args.kwargs[
-        "where"
-    ]
+    where = prisma_client.db.litellm_verificationtoken.delete_many.await_args.kwargs["where"]
     expected_hashes = sorted(
         [
             hashlib.sha256(b"sk-one").hexdigest(),
@@ -271,9 +250,7 @@ async def test_delete_data_team_calls_team_delete_many(
     prisma_client: PrismaClient,
 ) -> None:
     prisma_client.db.litellm_teamtable.delete_many = AsyncMock()
-    result = await prisma_client.delete_data(
-        team_id_list=["t1", "t2"], table_name="team"
-    )
+    result = await prisma_client.delete_data(team_id_list=["t1", "t2"], table_name="team")
     where = prisma_client.db.litellm_teamtable.delete_many.await_args.kwargs["where"]
     assert result == {"deleted_teams": ["t1", "t2"]}
     assert where == {"team_id": {"in": ["t1", "t2"]}}
@@ -283,8 +260,6 @@ async def test_delete_data_team_calls_team_delete_many(
 async def test_delete_data_logs_and_raises_on_error(
     prisma_client: PrismaClient,
 ) -> None:
-    prisma_client.db.litellm_verificationtoken.delete_many = AsyncMock(
-        side_effect=RuntimeError("delete fail")
-    )
+    prisma_client.db.litellm_verificationtoken.delete_many = AsyncMock(side_effect=RuntimeError("delete fail"))
     with pytest.raises(RuntimeError, match="delete fail"):
         await prisma_client.delete_data(tokens=["sk-x"])

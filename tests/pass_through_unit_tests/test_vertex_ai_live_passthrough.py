@@ -195,12 +195,8 @@ class TestVertexAILivePassthroughLoggingHandler:
         assert len(result["candidatesTokensDetails"]) == 2
 
         # Check modality aggregation
-        text_prompt = next(
-            d for d in result["promptTokensDetails"] if d["modality"] == "TEXT"
-        )
-        audio_prompt = next(
-            d for d in result["promptTokensDetails"] if d["modality"] == "AUDIO"
-        )
+        text_prompt = next(d for d in result["promptTokensDetails"] if d["modality"] == "TEXT")
+        audio_prompt = next(d for d in result["promptTokensDetails"] if d["modality"] == "AUDIO")
         assert text_prompt["tokenCount"] == 10
         assert audio_prompt["tokenCount"] == 10
 
@@ -257,9 +253,7 @@ class TestVertexAILivePassthroughLoggingHandler:
 
         # Should include both text and audio costs
         assert cost > 0
-        assert cost > (100 * 0.000001) + (
-            50 * 0.000002
-        )  # Should be higher due to audio
+        assert cost > (100 * 0.000001) + (50 * 0.000002)  # Should be higher due to audio
 
     @patch(
         "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_ai_live_passthrough_logging_handler.get_model_info"
@@ -287,9 +281,7 @@ class TestVertexAILivePassthroughLoggingHandler:
         assert cost >= expected_base_cost
         assert cost > 0
 
-    def test_vertex_ai_live_passthrough_handler_integration(
-        self, handler, mock_logging_obj, sample_websocket_messages
-    ):
+    def test_vertex_ai_live_passthrough_handler_integration(self, handler, mock_logging_obj, sample_websocket_messages):
         """Test the main passthrough handler method"""
         url_route = "/vertex_ai/live"
         start_time = datetime.now()
@@ -320,9 +312,7 @@ class TestVertexAILivePassthroughLoggingHandler:
         assert "completion_tokens" in usage
         assert "total_tokens" in usage
 
-    def test_vertex_ai_live_passthrough_handler_no_usage(
-        self, handler, mock_logging_obj
-    ):
+    def test_vertex_ai_live_passthrough_handler_no_usage(self, handler, mock_logging_obj):
         """Test handler with messages that don't contain usage metadata"""
         messages = [
             {"type": "session.created", "session": {"id": "test"}},
@@ -381,15 +371,9 @@ class TestVertexAILivePassthroughIntegration:
         mock.model_call_details = {}
         return mock
 
-    @patch(
-        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.websocket_passthrough_request"
-    )
-    @patch(
-        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router"
-    )
-    @patch(
-        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
-    )
+    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.websocket_passthrough_request")
+    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router")
+    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async")
     @patch("litellm.proxy.proxy_server.proxy_logging_obj")
     @pytest.mark.asyncio
     async def test_vertex_ai_live_websocket_passthrough_route(
@@ -460,9 +444,7 @@ class TestVertexAILivePassthroughIntegration:
         "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_ai_live_passthrough_logging_handler.VertexAILivePassthroughLoggingHandler"
     )
     @pytest.mark.asyncio
-    async def test_success_handler_vertex_ai_live_integration(
-        self, mock_handler_class, mock_logging_obj
-    ):
+    async def test_success_handler_vertex_ai_live_integration(self, mock_handler_class, mock_logging_obj):
         """Test the success handler integration with Vertex AI Live"""
         from litellm.proxy.pass_through_endpoints.success_handler import (
             PassThroughEndpointLogging,
@@ -532,9 +514,7 @@ class TestVertexAILivePassthroughErrorHandling:
         ]
 
         # Should not raise an exception
-        result = handler._extract_usage_metadata_from_websocket_messages(
-            invalid_messages
-        )
+        result = handler._extract_usage_metadata_from_websocket_messages(invalid_messages)
         assert result is None
 
     def test_missing_usage_metadata(self):

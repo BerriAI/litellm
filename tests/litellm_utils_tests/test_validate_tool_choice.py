@@ -31,9 +31,7 @@ def test_validate_tool_choice_cursor_format():
     """Test Cursor IDE format: {"type": "auto"} -> {"type": "auto"}."""
     assert validate_chat_completion_tool_choice({"type": "auto"}) == {"type": "auto"}
     assert validate_chat_completion_tool_choice({"type": "none"}) == {"type": "none"}
-    assert validate_chat_completion_tool_choice({"type": "required"}) == {
-        "type": "required"
-    }
+    assert validate_chat_completion_tool_choice({"type": "required"}) == {"type": "required"}
 
 
 def test_validate_tool_choice_invalid_dict():

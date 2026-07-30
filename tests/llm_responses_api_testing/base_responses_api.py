@@ -9,9 +9,7 @@ from litellm._uuid import uuid
 import time
 import base64
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from abc import ABC, abstractmethod
 
@@ -43,21 +41,17 @@ def validate_responses_api_response(response, final_chunk: bool = False):
     """
     # Validate response structure
     print("response=", json.dumps(response, indent=4, default=str))
-    assert isinstance(
-        response, ResponsesAPIResponse
-    ), "Response should be an instance of ResponsesAPIResponse"
+    assert isinstance(response, ResponsesAPIResponse), "Response should be an instance of ResponsesAPIResponse"
 
     # Required fields
-    assert "id" in response and isinstance(
-        response["id"], str
-    ), "Response should have a string 'id' field"
-    assert "created_at" in response and isinstance(
-        response["created_at"], int
-    ), "Response should have an integer 'created_at' field"
+    assert "id" in response and isinstance(response["id"], str), "Response should have a string 'id' field"
+    assert "created_at" in response and isinstance(response["created_at"], int), (
+        "Response should have an integer 'created_at' field"
+    )
     if response.get("status") == "completed":
-        assert "output" in response and isinstance(
-            response["output"], list
-        ), "Response should have a list 'output' field"
+        assert "output" in response and isinstance(response["output"], list), (
+            "Response should have a list 'output' field"
+        )
 
     # Optional fields with their expected types
     optional_fields = {
@@ -87,15 +81,13 @@ def validate_responses_api_response(response, final_chunk: bool = False):
 
     for field, expected_type in optional_fields.items():
         if field in response:
-            assert isinstance(
-                response[field], expected_type
-            ), f"Field '{field}' should be of type {expected_type}, but got {type(response[field])}"
+            assert isinstance(response[field], expected_type), (
+                f"Field '{field}' should be of type {expected_type}, but got {type(response[field])}"
+            )
 
     # Check if output has at least one item
     if final_chunk is True and response.get("status") == "completed":
-        assert (
-            len(response["output"]) > 0
-        ), "Response 'output' field should have at least one item"
+        assert len(response["output"]) > 0, "Response 'output' field should have at least one item"
 
     return True  # Return True if validation passes
 
@@ -155,9 +147,7 @@ class BaseResponsesAPITest(ABC):
         collected_content_string = ""
         response_completed_event = None
         if sync_mode:
-            response = litellm.responses(
-                input="Basic ping", stream=True, **base_completion_call_args
-            )
+            response = litellm.responses(input="Basic ping", stream=True, **base_completion_call_args)
             for event in response:
                 print("litellm response=", json.dumps(event, indent=4, default=str))
                 if event.type == "response.output_text.delta":
@@ -165,9 +155,7 @@ class BaseResponsesAPITest(ABC):
                 elif event.type == "response.completed":
                     response_completed_event = event
         else:
-            response = await litellm.aresponses(
-                input="Basic ping", stream=True, **base_completion_call_args
-            )
+            response = await litellm.aresponses(input="Basic ping", stream=True, **base_completion_call_args)
             async for event in response:
                 print("litellm response=", json.dumps(event, indent=4, default=str))
                 if event.type == "response.output_text.delta":
@@ -186,9 +174,7 @@ class BaseResponsesAPITest(ABC):
         response_status = response_completed_event.response.status
         if response_status in ["running", "pending"]:
             # Running/pending state is acceptable - task started successfully
-            print(
-                f"Response is in '{response_status}' state - async agent API behavior"
-            )
+            print(f"Response is in '{response_status}' state - async agent API behavior")
             assert response_completed_event.response.id is not None
         else:
             # For completed responses, validate content and usage
@@ -225,15 +211,11 @@ class BaseResponsesAPITest(ABC):
             )
 
             # assert the response completed event includes cost when include_cost_in_streaming_usage is True
-            assert hasattr(
-                response_completed_event.response.usage, "cost"
-            ), "Cost should be included in streaming responses API usage object"
-            assert (
-                response_completed_event.response.usage.cost > 0
-            ), "Cost should be greater than 0"
-            print(
-                f"Cost found in streaming response: {response_completed_event.response.usage.cost}"
+            assert hasattr(response_completed_event.response.usage, "cost"), (
+                "Cost should be included in streaming responses API usage object"
             )
+            assert response_completed_event.response.usage.cost > 0, "Cost should be greater than 0"
+            print(f"Cost found in streaming response: {response_completed_event.response.usage.cost}")
 
         # Reset the setting
         litellm.include_cost_in_streaming_usage = False
@@ -245,27 +227,19 @@ class BaseResponsesAPITest(ABC):
         litellm.set_verbose = True
         base_completion_call_args = self.get_base_completion_call_args()
         if sync_mode:
-            response = litellm.responses(
-                input="Basic ping", max_output_tokens=20, **base_completion_call_args
-            )
+            response = litellm.responses(input="Basic ping", max_output_tokens=20, **base_completion_call_args)
 
             # delete the response
             if isinstance(response, ResponsesAPIResponse):
-                litellm.delete_responses(
-                    response_id=response.id, **base_completion_call_args
-                )
+                litellm.delete_responses(response_id=response.id, **base_completion_call_args)
             else:
                 raise ValueError("response is not a ResponsesAPIResponse")
         else:
-            response = await litellm.aresponses(
-                input="Basic ping", max_output_tokens=20, **base_completion_call_args
-            )
+            response = await litellm.aresponses(input="Basic ping", max_output_tokens=20, **base_completion_call_args)
 
             # async delete the response
             if isinstance(response, ResponsesAPIResponse):
-                await litellm.adelete_responses(
-                    response_id=response.id, **base_completion_call_args
-                )
+                await litellm.adelete_responses(response_id=response.id, **base_completion_call_args)
             else:
                 raise ValueError("response is not a ResponsesAPIResponse")
 
@@ -295,9 +269,7 @@ class BaseResponsesAPITest(ABC):
 
             # delete the response
             assert response_id is not None
-            litellm.delete_responses(
-                response_id=response_id, **base_completion_call_args
-            )
+            litellm.delete_responses(response_id=response_id, **base_completion_call_args)
         else:
             response = await litellm.aresponses(
                 input="Basic ping",
@@ -315,9 +287,7 @@ class BaseResponsesAPITest(ABC):
 
             # delete the response
             assert response_id is not None
-            await litellm.adelete_responses(
-                response_id=response_id, **base_completion_call_args
-            )
+            await litellm.adelete_responses(response_id=response_id, **base_completion_call_args)
 
     @pytest.mark.parametrize("sync_mode", [False, True])
     @pytest.mark.flaky(retries=3, delay=2)
@@ -327,29 +297,21 @@ class BaseResponsesAPITest(ABC):
         litellm.set_verbose = True
         base_completion_call_args = self.get_base_completion_call_args()
         if sync_mode:
-            response = litellm.responses(
-                input="Basic ping", max_output_tokens=20, **base_completion_call_args
-            )
+            response = litellm.responses(input="Basic ping", max_output_tokens=20, **base_completion_call_args)
 
             # get the response
             if isinstance(response, ResponsesAPIResponse):
-                result = litellm.get_responses(
-                    response_id=response.id, **base_completion_call_args
-                )
+                result = litellm.get_responses(response_id=response.id, **base_completion_call_args)
                 assert result is not None
                 assert result.id == response.id
                 assert result.output == response.output
             else:
                 raise ValueError("response is not a ResponsesAPIResponse")
         else:
-            response = await litellm.aresponses(
-                input="Basic ping", max_output_tokens=20, **base_completion_call_args
-            )
+            response = await litellm.aresponses(input="Basic ping", max_output_tokens=20, **base_completion_call_args)
             # async get the response
             if isinstance(response, ResponsesAPIResponse):
-                result = await litellm.aget_responses(
-                    response_id=response.id, **base_completion_call_args
-                )
+                result = await litellm.aget_responses(response_id=response.id, **base_completion_call_args)
                 assert result is not None
                 assert result.id == response.id
                 assert result.output == response.output
@@ -388,9 +350,7 @@ class BaseResponsesAPITest(ABC):
         litellm.set_verbose = True
         try:
             base_completion_call_args = self.get_base_completion_call_args()
-            response_1 = await litellm.aresponses(
-                input="Basic ping", max_output_tokens=20, **base_completion_call_args
-            )
+            response_1 = await litellm.aresponses(input="Basic ping", max_output_tokens=20, **base_completion_call_args)
 
             # follow up with a second request
             response_1_id = response_1.id
@@ -458,9 +418,7 @@ class BaseResponsesAPITest(ABC):
 
         try:
             # Make the responses API call
-            response = await litellm.aresponses(
-                input=input_data, store=False, tools=tools, **base_completion_call_args
-            )
+            response = await litellm.aresponses(input=input_data, store=False, tools=tools, **base_completion_call_args)
         except litellm.InternalServerError:
             pytest.skip("Skipping test due to litellm.InternalServerError")
 
@@ -475,9 +433,7 @@ class BaseResponsesAPITest(ABC):
         # For async agent APIs (like Manus), the response may be in 'running' state
         # without output yet - this is valid behavior
         if response.get("status") in ["running", "pending"]:
-            print(
-                f"Response is in '{response.get('status')}' state - async agent API behavior"
-            )
+            print(f"Response is in '{response.get('status')}' state - async agent API behavior")
             assert response.get("id") is not None
         else:
             assert len(response["output"]) > 0
@@ -614,15 +570,11 @@ class BaseResponsesAPITest(ABC):
         # Check reasoning item (index 1)
         reasoning_item = validated_input[1]
         assert reasoning_item["type"] == "reasoning"
-        assert (
-            "status" not in reasoning_item
-        ), "status field should be filtered out from reasoning item"
-        assert (
-            "content" not in reasoning_item
-        ), "content field should be filtered out from reasoning item"
-        assert (
-            "encrypted_content" not in reasoning_item
-        ), "encrypted_content field should be filtered out from reasoning item"
+        assert "status" not in reasoning_item, "status field should be filtered out from reasoning item"
+        assert "content" not in reasoning_item, "content field should be filtered out from reasoning item"
+        assert "encrypted_content" not in reasoning_item, (
+            "encrypted_content field should be filtered out from reasoning item"
+        )
         # Note: ID auto-generation was disabled, so reasoning items may not have IDs
         # Only check for ID if it was present in the original input
         if "id" in reasoning_item:
@@ -632,12 +584,8 @@ class BaseResponsesAPITest(ABC):
         # Check function call item (index 2)
         function_call_item = validated_input[2]
         assert function_call_item["type"] == "function_call"
-        assert (
-            "status" in function_call_item
-        ), "status field should be preserved in function call item"
-        assert (
-            function_call_item["status"] == "completed"
-        ), "status value should be preserved"
+        assert "status" in function_call_item, "status field should be preserved in function call item"
+        assert function_call_item["status"] == "completed", "status value should be preserved"
 
         print("✅ OpenAI Responses API dict input filtering test passed")
 
@@ -659,9 +607,7 @@ class BaseResponsesAPITest(ABC):
 
                 # cancel the response
                 if isinstance(response, ResponsesAPIResponse):
-                    cancel_result = litellm.cancel_responses(
-                        response_id=response.id, **base_completion_call_args
-                    )
+                    cancel_result = litellm.cancel_responses(response_id=response.id, **base_completion_call_args)
                     assert cancel_result is not None
                     assert hasattr(cancel_result, "id")
                     # The actual response structure depends on the provider implementation
@@ -701,14 +647,10 @@ class BaseResponsesAPITest(ABC):
 
         if sync_mode:
             with pytest.raises(Exception):
-                litellm.cancel_responses(
-                    response_id="invalid_response_id_12345", **base_completion_call_args
-                )
+                litellm.cancel_responses(response_id="invalid_response_id_12345", **base_completion_call_args)
         else:
             with pytest.raises(Exception):
-                await litellm.acancel_responses(
-                    response_id="invalid_response_id_12345", **base_completion_call_args
-                )
+                await litellm.acancel_responses(response_id="invalid_response_id_12345", **base_completion_call_args)
 
     @pytest.mark.asyncio
     async def test_responses_api_context_management_server_side_compaction(self):
@@ -723,9 +665,7 @@ class BaseResponsesAPITest(ABC):
         if "azure/" in str(model):
             pytest.skip("context_management compaction is not supported on Azure")
         if "openai/" not in str(model):
-            pytest.skip(
-                "context_management server-side compaction e2e is only run for OpenAI"
-            )
+            pytest.skip("context_management server-side compaction e2e is only run for OpenAI")
         context_management = [{"type": "compaction", "compact_threshold": 200000}]
         try:
             response = await litellm.aresponses(
@@ -750,11 +690,7 @@ class BaseResponsesAPITest(ABC):
         tests/test_litellm/responses/test_responses_api_request_body.py.
         """
         base_completion_call_args = self.get_base_completion_call_args()
-        model = (
-            self.get_advanced_model_for_shell_tool()
-            or base_completion_call_args.get("model")
-            or ""
-        )
+        model = self.get_advanced_model_for_shell_tool() or base_completion_call_args.get("model") or ""
         if "openai/" not in str(model):
             pytest.skip(
                 "Shell tool e2e is OpenAI-only; no Azure deployment supports the shell tool yet, re-enable once one exists"
@@ -794,15 +730,9 @@ class BaseResponsesAPITest(ABC):
         Skips when model does not support shell (e.g. gpt-5.5).
         """
         base_completion_call_args = self.get_base_completion_call_args()
-        model = (
-            self.get_advanced_model_for_shell_tool()
-            or base_completion_call_args.get("model")
-            or "openai/gpt-5.2"
-        )
+        model = self.get_advanced_model_for_shell_tool() or base_completion_call_args.get("model") or "openai/gpt-5.2"
         if "openai/" not in str(model):
-            pytest.skip(
-                "Shell tool streaming e2e is only run for OpenAI/Azure Responses API"
-            )
+            pytest.skip("Shell tool streaming e2e is only run for OpenAI/Azure Responses API")
         tools = [{"type": "shell", "environment": {"type": "container_auto"}}]
         input_msg = "List files in /mnt/data and run python --version."
 
@@ -820,9 +750,7 @@ class BaseResponsesAPITest(ABC):
 
         async for event in stream:
             print("event=", json.dumps(event, indent=4, default=str))
-            event_type = getattr(event, "type", None) or (
-                event.get("type") if isinstance(event, dict) else None
-            )
+            event_type = getattr(event, "type", None) or (event.get("type") if isinstance(event, dict) else None)
             if event_type is not None:
                 event_types_seen.append(str(event_type))
             if "shell" in str(event_type or "").lower():
@@ -832,9 +760,7 @@ class BaseResponsesAPITest(ABC):
             )
             if response_obj is not None:
                 output = getattr(response_obj, "output", None) or (
-                    response_obj.get("output")
-                    if isinstance(response_obj, dict)
-                    else None
+                    response_obj.get("output") if isinstance(response_obj, dict) else None
                 )
                 if isinstance(output, list):
                     for item in output:
@@ -845,6 +771,6 @@ class BaseResponsesAPITest(ABC):
                             output_items_with_shell.append(item_type)
 
         assert len(event_types_seen) > 0, "Expected at least one stream event"
-        assert (
-            len(output_items_with_shell) > 0
-        ), f"Expected to see shell output in stream; event types seen: {event_types_seen!r}"
+        assert len(output_items_with_shell) > 0, (
+            f"Expected to see shell output in stream; event types seen: {event_types_seen!r}"
+        )

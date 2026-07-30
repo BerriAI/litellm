@@ -5,32 +5,24 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.base import HiddenParams
 
 # Mock async invoke responses
-async_invoke_response = {
-    "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456"
-}
+async_invoke_response = {"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456"}
 
 async_invoke_status_response = {
     "status": "InProgress",
     "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456",
-    "outputDataConfig": {
-        "s3OutputDataConfig": {"s3Uri": "s3://test-bucket/async-invoke-output/"}
-    },
+    "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://test-bucket/async-invoke-output/"}},
 }
 
 async_invoke_completed_response = {
     "status": "Completed",
     "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456",
-    "outputDataConfig": {
-        "s3OutputDataConfig": {"s3Uri": "s3://test-bucket/async-invoke-output/"}
-    },
+    "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://test-bucket/async-invoke-output/"}},
 }
 
 # Test data
@@ -48,9 +40,7 @@ class TestBedrockAsyncInvokeEmbedding:
         )
 
         config = TwelveLabsMarengoEmbeddingConfig()
-        response = config._transform_async_invoke_response(
-            async_invoke_response, "test-model"
-        )
+        response = config._transform_async_invoke_response(async_invoke_response, "test-model")
 
         # Verify response structure
         assert isinstance(response, litellm.EmbeddingResponse)
@@ -106,9 +96,7 @@ class TestBedrockAsyncInvokeEmbedding:
             ("bedrock/async_invoke/twelvelabs.marengo-embed-2-7-v1:0", "audio"),
         ],
     )
-    def test_async_invoke_twelvelabs_embedding_request_transformation(
-        self, model, input_type
-    ):
+    def test_async_invoke_twelvelabs_embedding_request_transformation(self, model, input_type):
         """Test that async invoke requests are properly transformed for TwelveLabs."""
         from litellm.llms.bedrock.embed.twelvelabs_marengo_transformation import (
             TwelveLabsMarengoEmbeddingConfig,
@@ -122,11 +110,7 @@ class TestBedrockAsyncInvokeEmbedding:
         elif input_type == "image":
             input_data = test_image_base64
         elif input_type in ["video", "audio"]:
-            input_data = (
-                "s3://test-bucket/test-file.mp4"
-                if input_type == "video"
-                else "s3://test-bucket/test-file.wav"
-            )
+            input_data = "s3://test-bucket/test-file.mp4" if input_type == "video" else "s3://test-bucket/test-file.wav"
 
         inference_params = {
             "inputType": input_type,  # This will be set by the parameter mapping
@@ -254,9 +238,7 @@ class TestBedrockAsyncInvokeEmbedding:
 
         config = TwelveLabsMarengoEmbeddingConfig()
 
-        with pytest.raises(
-            ValueError, match="output_s3_uri cannot be empty for async invoke requests"
-        ):
+        with pytest.raises(ValueError, match="output_s3_uri cannot be empty for async invoke requests"):
             config._transform_request(
                 input=test_input,
                 inference_params={"inputType": "text"},
@@ -273,9 +255,7 @@ class TestBedrockAsyncInvokeEmbedding:
 
         config = TwelveLabsMarengoEmbeddingConfig()
 
-        with pytest.raises(
-            ValueError, match="Input type 'video' requires async_invoke route"
-        ):
+        with pytest.raises(ValueError, match="Input type 'video' requires async_invoke route"):
             config._transform_request(
                 input="s3://test-bucket/test-video.mp4",
                 inference_params={"inputType": "video"},
@@ -302,9 +282,7 @@ class TestBedrockAsyncInvokeEmbedding:
 
         for arn in test_cases:
             mock_response = {"invocationArn": arn}
-            response = config._transform_async_invoke_response(
-                mock_response, "test-model"
-            )
+            response = config._transform_async_invoke_response(mock_response, "test-model")
 
             assert response._hidden_params._invocation_arn == arn
 
@@ -315,9 +293,7 @@ class TestBedrockAsyncInvokeEmbedding:
         )
 
         config = TwelveLabsMarengoEmbeddingConfig()
-        response = config._transform_async_invoke_response(
-            async_invoke_response, "test-model"
-        )
+        response = config._transform_async_invoke_response(async_invoke_response, "test-model")
 
         # Test that hidden params can be accessed like a dictionary
         assert (
@@ -386,7 +362,4 @@ class TestBedrockAsyncInvokeEmbedding:
 
             # For async invoke, the endpoint should be modified
             async_endpoint = f"{endpoint_url}/async-invoke"
-            assert (
-                async_endpoint
-                == "https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke"
-            )
+            assert async_endpoint == "https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke"

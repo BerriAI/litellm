@@ -4,9 +4,7 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import httpx
 import pytest
@@ -84,18 +82,16 @@ async def test_chunk_processor_yields_raw_bytes(endpoint_type, url_route):
         # Assert each chunk is bytes
         assert isinstance(chunk, bytes), f"Chunk should be bytes, got {type(chunk)}"
         # Assert no decoding/encoding occurred (chunk should be exactly as input)
-        assert (
-            chunk in raw_chunks
-        ), f"Chunk {chunk} was modified during processing. For pass throughs streaming, chunks should be raw bytes"
+        assert chunk in raw_chunks, (
+            f"Chunk {chunk} was modified during processing. For pass throughs streaming, chunks should be raw bytes"
+        )
         received_chunks.append(chunk)
 
     # Assert all chunks were processed
     assert len(received_chunks) == len(raw_chunks), "Not all chunks were processed"
 
     # collected chunks all together
-    assert b"".join(received_chunks) == b"".join(
-        raw_chunks
-    ), "Collected chunks do not match raw chunks"
+    assert b"".join(received_chunks) == b"".join(raw_chunks), "Collected chunks do not match raw chunks"
 
 
 @pytest.mark.asyncio
@@ -130,12 +126,8 @@ async def test_route_streaming_logging_runs_async_handler_for_sdk_passthrough():
             "_build_passthrough_logging_result",
             return_value=({"id": "slp"}, {}),
         ),
-        patch.object(
-            logging_obj, "async_success_handler", new_callable=AsyncMock
-        ) as mock_async,
-        patch.object(
-            logging_obj, "success_handler", new_callable=MagicMock
-        ) as mock_sync,
+        patch.object(logging_obj, "async_success_handler", new_callable=AsyncMock) as mock_async,
+        patch.object(logging_obj, "success_handler", new_callable=MagicMock) as mock_sync,
         patch.object(
             logging_obj,
             "_should_run_sync_callbacks_for_async_calls",
@@ -190,12 +182,8 @@ async def test_handle_logging_runs_async_handler_for_passthrough():
     handler = PassThroughEndpointLogging()
 
     with (
-        patch.object(
-            logging_obj, "async_success_handler", new_callable=AsyncMock
-        ) as mock_async,
-        patch.object(
-            logging_obj, "success_handler", new_callable=MagicMock
-        ) as mock_sync,
+        patch.object(logging_obj, "async_success_handler", new_callable=AsyncMock) as mock_async,
+        patch.object(logging_obj, "success_handler", new_callable=MagicMock) as mock_sync,
         patch.object(
             logging_obj,
             "_should_run_sync_callbacks_for_async_calls",

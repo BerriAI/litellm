@@ -63,9 +63,7 @@ def test_identity_promoted_onto_every_span():
     root = engine.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions", ctx)
     root_ctx = ctx_mod.context_from_span(root, ctx)
     engine.emit(SpanRole.LLM_CALL, data, parent_context=root_ctx)
-    engine.emit(
-        SpanRole.GUARDRAIL, GuardrailSpanData("presidio", status="success"), root_ctx
-    )
+    engine.emit(SpanRole.GUARDRAIL, GuardrailSpanData("presidio", status="success"), root_ctx)
     engine.emit(SpanRole.SERVICE, ServiceSpanData("redis", call_type="set"), root_ctx)
     root.end()
 
@@ -161,9 +159,7 @@ def test_allowlisted_metadata_subkey_promoted_blob_excluded():
     engine.emit(SpanRole.SERVICE, ServiceSpanData("redis", call_type="set"), ctx)
     (span,) = exporter.get_finished_spans()
     # allowlisted metadata sub-key is promoted
-    assert (
-        span.attributes.get(f"{LiteLLM.METADATA_PREFIX}user_api_key_org_id") == "org1"
-    )
+    assert span.attributes.get(f"{LiteLLM.METADATA_PREFIX}user_api_key_org_id") == "org1"
     # non-allowlisted metadata is NOT promoted (no full-blob dumping)
     assert all("private_note" not in k for k in span.attributes)
 
@@ -188,9 +184,7 @@ def test_http_attributes_never_promoted():
 
 def test_arbitrary_upstream_baggage_not_promoted():
     engine, exporter = _engine_and_exporter()
-    ctx = ctx_mod.set_request_baggage(
-        {LiteLLM.TEAM_ID: "t1", "some.upstream.key": "leak"}
-    )
+    ctx = ctx_mod.set_request_baggage({LiteLLM.TEAM_ID: "t1", "some.upstream.key": "leak"})
     engine.emit(SpanRole.SERVICE, ServiceSpanData("redis", call_type="set"), ctx)
     (span,) = exporter.get_finished_spans()
     assert span.attributes.get(LiteLLM.TEAM_ID) == "t1"

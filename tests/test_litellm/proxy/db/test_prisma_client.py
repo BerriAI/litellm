@@ -7,9 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 
 from litellm.proxy.db.prisma_client import PrismaWrapper, should_update_prisma_schema
@@ -166,22 +164,16 @@ async def test_recreate_prisma_client_handles_missing_engine_pid(
 def test_get_engine_pid_returns_zero_for_disconnected_client(disconnected_prisma):
     """A disconnected client must read as "no engine" instead of raising,
     otherwise the reconnect path can never recover."""
-    wrapper = PrismaWrapper(
-        original_prisma=disconnected_prisma, iam_token_db_auth=False
-    )
+    wrapper = PrismaWrapper(original_prisma=disconnected_prisma, iam_token_db_auth=False)
 
     assert wrapper._get_engine_pid() == 0
 
 
 @pytest.mark.asyncio
-async def test_recreate_prisma_client_recovers_from_disconnected_client(
-    mock_prisma_binary, disconnected_prisma
-):
+async def test_recreate_prisma_client_recovers_from_disconnected_client(mock_prisma_binary, disconnected_prisma):
     """recreate_prisma_client must still build a replacement client when the
     current one is disconnected."""
-    wrapper = PrismaWrapper(
-        original_prisma=disconnected_prisma, iam_token_db_auth=False
-    )
+    wrapper = PrismaWrapper(original_prisma=disconnected_prisma, iam_token_db_auth=False)
 
     mock_new_prisma = AsyncMock()
     mock_prisma_binary.Prisma.return_value = mock_new_prisma

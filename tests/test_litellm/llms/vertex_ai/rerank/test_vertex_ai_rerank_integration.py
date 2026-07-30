@@ -23,9 +23,7 @@ class TestVertexAIRerankIntegration:
         importlib.reload(litellm) in conftest.py.
         """
         # Mock authentication at instance level
-        mock_ensure_access_token = MagicMock(
-            return_value=("test-access-token", "test-project-123")
-        )
+        mock_ensure_access_token = MagicMock(return_value=("test-access-token", "test-project-123"))
         self.config._ensure_access_token = mock_ensure_access_token
 
         # Test documents
@@ -39,9 +37,7 @@ class TestVertexAIRerankIntegration:
 
         # Step 1: Test request transformation
         # Validate environment
-        headers = self.config.validate_environment(
-            headers={}, model=self.model, api_key=None
-        )
+        headers = self.config.validate_environment(headers={}, model=self.model, api_key=None)
 
         # Transform request
         request_data = self.config.transform_rerank_request(
@@ -162,9 +158,7 @@ class TestVertexAIRerankIntegration:
         # Verify response structure with default scores
         assert len(result.results) == 3
         for result_item in result.results:
-            assert (
-                result_item["relevance_score"] == 1.0
-            )  # Default score when details are ignored
+            assert result_item["relevance_score"] == 1.0  # Default score when details are ignored
             assert "index" in result_item
 
     def test_document_title_generation(self):
@@ -184,9 +178,7 @@ class TestVertexAIRerankIntegration:
         # Verify title generation
         assert request_data["records"][0]["title"] == "This is a"  # First 3 words
         assert request_data["records"][1]["title"] == "Short doc"  # Less than 3 words
-        assert (
-            request_data["records"][2]["title"] == "Another document with"
-        )  # First 3 words
+        assert request_data["records"][2]["title"] == "Another document with"  # First 3 words
 
     def test_dictionary_document_handling(self):
         """Test handling of dictionary-format documents."""
@@ -195,9 +187,7 @@ class TestVertexAIRerankIntegration:
                 "text": "Gemini is a cutting edge large language model created by Google.",
                 "title": "Custom Title 1",
             },
-            {
-                "text": "The Gemini zodiac symbol often depicts two figures standing side-by-side."
-            },
+            {"text": "The Gemini zodiac symbol often depicts two figures standing side-by-side."},
             {
                 "text": "Gemini is a constellation that can be seen in the night sky.",
                 "title": "Custom Title 3",
@@ -212,21 +202,15 @@ class TestVertexAIRerankIntegration:
 
         # Verify custom titles are used when provided
         assert request_data["records"][0]["title"] == "Custom Title 1"
-        assert (
-            request_data["records"][1]["title"] == "The Gemini zodiac"
-        )  # Generated from first 3 words
+        assert request_data["records"][1]["title"] == "The Gemini zodiac"  # Generated from first 3 words
         assert request_data["records"][2]["title"] == "Custom Title 3"
 
         # Verify content is extracted correctly
         assert (
-            request_data["records"][0]["content"]
-            == "Gemini is a cutting edge large language model created by Google."
+            request_data["records"][0]["content"] == "Gemini is a cutting edge large language model created by Google."
         )
         assert (
             request_data["records"][1]["content"]
             == "The Gemini zodiac symbol often depicts two figures standing side-by-side."
         )
-        assert (
-            request_data["records"][2]["content"]
-            == "Gemini is a constellation that can be seen in the night sky."
-        )
+        assert request_data["records"][2]["content"] == "Gemini is a constellation that can be seen in the night sky."

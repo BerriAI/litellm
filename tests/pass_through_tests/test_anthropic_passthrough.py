@@ -30,9 +30,7 @@ async def test_anthropic_basic_completion_with_headers():
     }
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(
-            "http://0.0.0.0:4000/anthropic/v1/messages", json=payload, headers=headers
-        ) as response:
+        async with session.post("http://0.0.0.0:4000/anthropic/v1/messages", json=payload, headers=headers) as response:
             response_text = await response.text()
             print(f"Response text: {response_text}")
 
@@ -44,12 +42,8 @@ async def test_anthropic_basic_completion_with_headers():
             )
             reported_usage = response_json.get("usage", None)
             # fix null checks for reported_usage
-            anthropic_api_input_tokens = (
-                reported_usage.get("input_tokens", None) if reported_usage else None
-            )
-            anthropic_api_output_tokens = (
-                reported_usage.get("output_tokens", None) if reported_usage else None
-            )
+            anthropic_api_input_tokens = reported_usage.get("input_tokens", None) if reported_usage else None
+            anthropic_api_output_tokens = reported_usage.get("output_tokens", None) if reported_usage else None
             litellm_call_id = response_headers.get("x-litellm-call-id")
 
             print(f"LiteLLM Call ID: {litellm_call_id}")
@@ -78,9 +72,7 @@ async def test_anthropic_basic_completion_with_headers():
                         break
                     else:
                         print("Spend logs not found yet...")
-                        if (
-                            attempt < max_retries - 1
-                        ):  # Don't wait after the last attempt
+                        if attempt < max_retries - 1:  # Don't wait after the last attempt
                             print("Waiting 10 seconds before retry...")
                             await asyncio.sleep(10)
 
@@ -103,38 +95,30 @@ async def test_anthropic_basic_completion_with_headers():
 
             # Request metadata assertions
             assert log_entry["request_id"] == litellm_call_id, "Request ID should match"
-            assert (
-                log_entry["call_type"] == "pass_through_endpoint"
-            ), "Call type should be pass_through_endpoint"
-            assert (
-                log_entry["api_base"] == "https://api.anthropic.com/v1/messages"
-            ), "API base should be Anthropic's endpoint"
+            assert log_entry["call_type"] == "pass_through_endpoint", "Call type should be pass_through_endpoint"
+            assert log_entry["api_base"] == "https://api.anthropic.com/v1/messages", (
+                "API base should be Anthropic's endpoint"
+            )
 
             # Token and spend assertions
             assert log_entry["spend"] > 0, "Spend value should not be None"
-            assert isinstance(
-                log_entry["spend"], (int, float)
-            ), "Spend should be a number"
+            assert isinstance(log_entry["spend"], (int, float)), "Spend should be a number"
             assert log_entry["total_tokens"] > 0, "Should have some tokens"
-            assert (
-                log_entry["prompt_tokens"] == anthropic_api_input_tokens
-            ), f"Should have prompt tokens matching anthropic api. Expected {anthropic_api_input_tokens} but got {log_entry['prompt_tokens']}"
-            assert (
-                log_entry["completion_tokens"] == anthropic_api_output_tokens
-            ), f"Should have completion tokens matching anthropic api. Expected {anthropic_api_output_tokens} but got {log_entry['completion_tokens']}"
-            assert (
-                log_entry["total_tokens"]
-                == log_entry["prompt_tokens"] + log_entry["completion_tokens"]
-            ), "Total tokens should equal prompt + completion"
+            assert log_entry["prompt_tokens"] == anthropic_api_input_tokens, (
+                f"Should have prompt tokens matching anthropic api. Expected {anthropic_api_input_tokens} but got {log_entry['prompt_tokens']}"
+            )
+            assert log_entry["completion_tokens"] == anthropic_api_output_tokens, (
+                f"Should have completion tokens matching anthropic api. Expected {anthropic_api_output_tokens} but got {log_entry['completion_tokens']}"
+            )
+            assert log_entry["total_tokens"] == log_entry["prompt_tokens"] + log_entry["completion_tokens"], (
+                "Total tokens should equal prompt + completion"
+            )
 
             # Time assertions
-            assert all(
-                key in log_entry
-                for key in ["startTime", "endTime", "completionStartTime"]
-            ), "Should have all time fields"
-            assert (
-                log_entry["startTime"] < log_entry["endTime"]
-            ), "Start time should be before end time"
+            assert all(key in log_entry for key in ["startTime", "endTime", "completionStartTime"]), (
+                "Should have all time fields"
+            )
+            assert log_entry["startTime"] < log_entry["endTime"], "Start time should be before end time"
 
             # Metadata assertions
             assert str(log_entry["cache_hit"]).lower() != "true", "Cache should be off"
@@ -142,9 +126,7 @@ async def test_anthropic_basic_completion_with_headers():
                 "test-tag-1",
                 "test-tag-2",
             ], "Tags should match input"
-            assert (
-                "user_api_key" in log_entry["metadata"]
-            ), "Should have user API key in metadata"
+            assert "user_api_key" in log_entry["metadata"], "Should have user API key in metadata"
 
             assert "claude" in log_entry["model"]
             assert log_entry["custom_llm_provider"] == "anthropic"
@@ -163,9 +145,7 @@ async def test_anthropic_streaming_with_headers():
     payload = {
         "model": "claude-sonnet-4-5-20250929",
         "max_tokens": 10,
-        "messages": [
-            {"role": "user", "content": "Say 'hello stream test' and nothing else"}
-        ],
+        "messages": [{"role": "user", "content": "Say 'hello stream test' and nothing else"}],
         "stream": True,
         "litellm_metadata": {
             "tags": ["test-tag-stream-1", "test-tag-stream-2"],
@@ -174,9 +154,7 @@ async def test_anthropic_streaming_with_headers():
     }
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(
-            "http://0.0.0.0:4000/anthropic/v1/messages", json=payload, headers=headers
-        ) as response:
+        async with session.post("http://0.0.0.0:4000/anthropic/v1/messages", json=payload, headers=headers) as response:
             print("response status")
             print(response.status)
             assert response.status == 200, "Response should be successful"
@@ -244,9 +222,7 @@ async def test_anthropic_streaming_with_headers():
                         break
                     else:
                         print("Spend logs not found yet...")
-                        if (
-                            attempt < max_retries - 1
-                        ):  # Don't wait after the last attempt
+                        if attempt < max_retries - 1:  # Don't wait after the last attempt
                             print("Waiting 10 seconds before retry...")
                             await asyncio.sleep(10)
 
@@ -269,38 +245,30 @@ async def test_anthropic_streaming_with_headers():
 
             # Request metadata assertions
             assert log_entry["request_id"] == litellm_call_id, "Request ID should match"
-            assert (
-                log_entry["call_type"] == "pass_through_endpoint"
-            ), "Call type should be pass_through_endpoint"
+            assert log_entry["call_type"] == "pass_through_endpoint", "Call type should be pass_through_endpoint"
             # assert (
             #     log_entry["api_base"] == "https://api.anthropic.com/v1/messages"
             # ), "API base should be Anthropic's endpoint"
 
             # Token and spend assertions
             assert log_entry["spend"] > 0, "Spend value should not be None"
-            assert isinstance(
-                log_entry["spend"], (int, float)
-            ), "Spend should be a number"
+            assert isinstance(log_entry["spend"], (int, float)), "Spend should be a number"
             assert log_entry["total_tokens"] > 0, "Should have some tokens"
-            assert (
-                log_entry["prompt_tokens"] == anthropic_api_input_tokens
-            ), f"Should have prompt tokens matching anthropic api. Expected {anthropic_api_input_tokens} but got {log_entry['prompt_tokens']}"
-            assert (
-                log_entry["completion_tokens"] == anthropic_api_output_tokens
-            ), f"Should have completion tokens matching anthropic api. Expected {anthropic_api_output_tokens} but got {log_entry['completion_tokens']}"
-            assert (
-                log_entry["total_tokens"]
-                == log_entry["prompt_tokens"] + log_entry["completion_tokens"]
-            ), "Total tokens should equal prompt + completion"
+            assert log_entry["prompt_tokens"] == anthropic_api_input_tokens, (
+                f"Should have prompt tokens matching anthropic api. Expected {anthropic_api_input_tokens} but got {log_entry['prompt_tokens']}"
+            )
+            assert log_entry["completion_tokens"] == anthropic_api_output_tokens, (
+                f"Should have completion tokens matching anthropic api. Expected {anthropic_api_output_tokens} but got {log_entry['completion_tokens']}"
+            )
+            assert log_entry["total_tokens"] == log_entry["prompt_tokens"] + log_entry["completion_tokens"], (
+                "Total tokens should equal prompt + completion"
+            )
 
             # Time assertions
-            assert all(
-                key in log_entry
-                for key in ["startTime", "endTime", "completionStartTime"]
-            ), "Should have all time fields"
-            assert (
-                log_entry["startTime"] < log_entry["endTime"]
-            ), "Start time should be before end time"
+            assert all(key in log_entry for key in ["startTime", "endTime", "completionStartTime"]), (
+                "Should have all time fields"
+            )
+            assert log_entry["startTime"] < log_entry["endTime"], "Start time should be before end time"
 
             # Metadata assertions
             assert str(log_entry["cache_hit"]).lower() != "true", "Cache should be off"
@@ -308,9 +276,7 @@ async def test_anthropic_streaming_with_headers():
                 "test-tag-stream-1",
                 "test-tag-stream-2",
             ], "Tags should match input"
-            assert (
-                "user_api_key" in log_entry["metadata"]
-            ), "Should have user API key in metadata"
+            assert "user_api_key" in log_entry["metadata"], "Should have user API key in metadata"
 
             assert "claude" in log_entry["model"]
 
@@ -365,31 +331,21 @@ async def test_anthropic_messages_streaming_cost_injection():
 
             # Find message_delta event with usage
             message_delta_events = [
-                event
-                for event in events
-                if event.get("type") == "message_delta" and "usage" in event
+                event for event in events if event.get("type") == "message_delta" and "usage" in event
             ]
 
-            assert (
-                len(message_delta_events) > 0
-            ), "No message_delta events with usage found"
+            assert len(message_delta_events) > 0, "No message_delta events with usage found"
 
             # Check that cost is included in usage
             for event in message_delta_events:
                 usage = event.get("usage", {})
                 assert "cost" in usage, f"Cost not found in usage: {usage}"
-                assert isinstance(
-                    usage["cost"], (int, float)
-                ), f"Cost should be numeric: {usage['cost']}"
-                assert (
-                    usage["cost"] >= 0
-                ), f"Cost should be non-negative: {usage['cost']}"
+                assert isinstance(usage["cost"], (int, float)), f"Cost should be numeric: {usage['cost']}"
+                assert usage["cost"] >= 0, f"Cost should be non-negative: {usage['cost']}"
 
                 print(f"Found message_delta with cost: {usage}")
 
-            print(
-                f"Test passed: Found {len(message_delta_events)} message_delta events with cost"
-            )
+            print(f"Test passed: Found {len(message_delta_events)} message_delta events with cost")
 
 
 @pytest.mark.asyncio
@@ -441,28 +397,18 @@ async def test_anthropic_messages_openai_model_streaming_cost_injection():
 
             # Find message_delta event with usage
             message_delta_events = [
-                event
-                for event in events
-                if event.get("type") == "message_delta" and "usage" in event
+                event for event in events if event.get("type") == "message_delta" and "usage" in event
             ]
 
-            assert (
-                len(message_delta_events) > 0
-            ), "No message_delta events with usage found"
+            assert len(message_delta_events) > 0, "No message_delta events with usage found"
 
             # Check that cost is included in usage
             for event in message_delta_events:
                 usage = event.get("usage", {})
                 assert "cost" in usage, f"Cost not found in usage: {usage}"
-                assert isinstance(
-                    usage["cost"], (int, float)
-                ), f"Cost should be numeric: {usage['cost']}"
-                assert (
-                    usage["cost"] >= 0
-                ), f"Cost should be non-negative: {usage['cost']}"
+                assert isinstance(usage["cost"], (int, float)), f"Cost should be numeric: {usage['cost']}"
+                assert usage["cost"] >= 0, f"Cost should be non-negative: {usage['cost']}"
 
                 print(f"Found message_delta with cost: {usage}")
 
-            print(
-                f"Test passed: Found {len(message_delta_events)} message_delta events with cost"
-            )
+            print(f"Test passed: Found {len(message_delta_events)} message_delta events with cost")
