@@ -200,6 +200,18 @@ class TestGroqWebSearchUsageSignal:
         response = _groq_completion_with_mocked_response(_searched_groq_response(None))
         assert getattr(response.usage, "server_tool_use", None) is None
 
+    def test_malformed_executed_tools_skips_billing_without_breaking_response(self):
+        response = _groq_completion_with_mocked_response(
+            _searched_groq_response(["not-a-dict", {"name": {"nested": "junk"}}])
+        )
+        assert response.choices[0].message.content == "Top headline: example"
+        assert getattr(response.usage, "server_tool_use", None) is None
+
+    def test_response_without_usage_is_left_untouched(self):
+        model_response = litellm.ModelResponse()
+        GroqChatConfig()._add_web_search_usage(model_response=model_response)
+        assert getattr(model_response, "usage", None) is None
+
     @pytest.mark.usefixtures("local_model_cost_map")
     @pytest.mark.parametrize(
         "executed_tools, expected_cost",
