@@ -95,6 +95,7 @@ from litellm.utils import (
 from ..common_utils import (
     AnthropicError,
     AnthropicModelInfo,
+    clamped_effort_for_disabled_thinking,
     process_anthropic_headers,
     strip_advisor_blocks_from_messages,
 )
@@ -1991,7 +1992,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 model=model,
                 llm_provider=self._resolved_provider,
             )
-        data["output_config"] = output_config
+        clamped_effort = clamped_effort_for_disabled_thinking(
+            model=model,
+            custom_llm_provider=self._resolved_provider,
+            optional_params=optional_params,
+        )
+        if clamped_effort is None:
+            data["output_config"] = output_config
+            return
+        data["output_config"] = {**output_config, "effort": clamped_effort}
 
     def _resolve_json_mode_non_streaming(
         self,

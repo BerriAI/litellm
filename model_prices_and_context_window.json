@@ -1534,6 +1534,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
+        "disabled_thinking_output_config_effort_ceiling": "high",
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 512
@@ -1570,6 +1571,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
+        "disabled_thinking_output_config_effort_ceiling": "high",
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 512
@@ -1606,6 +1608,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
+        "disabled_thinking_output_config_effort_ceiling": "high",
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 512
@@ -1642,6 +1645,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
+        "disabled_thinking_output_config_effort_ceiling": "high",
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 512
@@ -1678,6 +1682,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
+        "disabled_thinking_output_config_effort_ceiling": "high",
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 512
@@ -1714,6 +1719,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
+        "disabled_thinking_output_config_effort_ceiling": "high",
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 512
@@ -3002,6 +3008,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
+        "disabled_thinking_output_config_effort_ceiling": "high",
         "prompt_cache_min_tokens": 512
     },
     "azure_ai/claude-opus-4-8": {
@@ -12124,6 +12131,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
+        "disabled_thinking_output_config_effort_ceiling": "high",
         "provider_specific_entry": {
             "us": 1.1,
             "fast": 2.0
@@ -37353,6 +37361,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
+        "disabled_thinking_output_config_effort_ceiling": "high",
         "prompt_cache_min_tokens": 512
     },
     "vertex_ai/claude-opus-5@default": {
@@ -37385,6 +37394,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
+        "disabled_thinking_output_config_effort_ceiling": "high",
         "prompt_cache_min_tokens": 512
     },
     "vertex_ai/claude-opus-4-8": {
@@ -46363,6 +46373,14 @@
                 "description": "Claude at version 4.8 or higher, in any id shape that contains claude-<family>-: minors 4.8 through 4.99, any later major-minor, and bare 5+ majors so a new family like claude-fable-5 matches. Anthropic introduced mid-conversation system messages with Opus 4.8 and every newer Claude keeps them; 4.7 and below reject the system role inside messages.",
                 "model_info": {
                     "supports_mid_conversation_system": true
+                }
+            },
+            {
+                "name": "claude-opus-disabled-thinking-effort-ceiling",
+                "pattern": "claude-opus-(?:[5-9]|[1-9]\\d)(?!\\d)(?:[-._]\\d{1,2}(?!\\d))?",
+                "description": "Claude Opus at major version 5 or higher, in any id shape that contains claude-opus-: bare 5+ majors and any later major-minor. Anthropic caps output_config.effort at high while thinking is explicitly disabled starting with Opus 5, so xhigh and max combined with thinking.type: disabled return a 400 there, and the restriction carries forward to later Opus versions. Scoped to the Opus family because that is what Anthropic documents; other families are only capped where their own entry says so.",
+                "model_info": {
+                    "disabled_thinking_output_config_effort_ceiling": "high"
                 }
             }
         ]

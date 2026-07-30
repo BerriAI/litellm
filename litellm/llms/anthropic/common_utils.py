@@ -4,11 +4,13 @@ This file contains common utils for anthropic calls.
 
 import copy
 import re
-from typing import Any, Dict, List, Optional, Union
+from types import MappingProxyType
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
 )
@@ -30,6 +32,23 @@ _BEDROCK_VERSION_SUFFIX_RE = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE = re.compile(r"(\d)\.(\d)")
+
+ANTHROPIC_OUTPUT_CONFIG_EFFORT_ORDER: Mapping[str, int] = MappingProxyType(
+    {
+        "low": 0,
+        "medium": 1,
+        "high": 2,
+        "xhigh": 3,
+        "max": 4,
+    }
+)
+
+DISABLED_THINKING_EFFORT_CEILING_KEY = "disabled_thinking_output_config_effort_ceiling"
+
+CLAMPED_EFFORT_FOR_DISABLED_THINKING_MESSAGE = (
+    "Lowering output_config.effort %s -> %s for model=%s: the model caps effort at that level "
+    "while `thinking` is explicitly disabled."
+)
 
 
 def _strip_bedrock_id_suffixes(model: str) -> str:
@@ -348,6 +367,38 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 for cand in candidates:
                     value = model_cost.get(cand, {}).get(key)
                     if isinstance(value, bool):
+                        return value
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _get_model_string_capability(model: str, key: str, custom_llm_provider: str) -> Optional[str]:
+        """Read string-valued model-map field ``key`` for ``model``, or None when no
+        entry declares it.
+
+        The string sibling of ``_supports_model_capability``: the provider-aware lookup
+        (which also applies ``fallback_generalizations``) is authoritative, and the raw
+        model-map walk over ``_model_map_lookup_candidates`` is the backstop for alias
+        forms that lookup misses.
+        """
+        from litellm.utils import _get_bundled_model_cost_map, _get_model_info_helper
+
+        try:
+            resolved_model, resolved_provider, _, _ = litellm.get_llm_provider(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+            value = _get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider).get(key)
+            if isinstance(value, str):
+                return value
+        except Exception:  # noqa: BLE001  # _get_model_info_helper raises bare Exception for unmapped models
+            pass
+        try:
+            candidates = AnthropicModelInfo._model_map_lookup_candidates(model)
+            for model_cost in (litellm.model_cost, _get_bundled_model_cost_map()):
+                for cand in candidates:
+                    value = model_cost.get(cand, {}).get(key)
+                    if isinstance(value, str):
                         return value
         except Exception:
             pass
@@ -816,6 +867,60 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
 
         return AnthropicTokenCounter()
+
+
+def _nested_string_value(container: object, key: str) -> Optional[str]:
+    """Read ``key`` off ``container`` when it is a mapping holding a string there.
+
+    Provider payloads reach these transforms as untyped dicts, so the read is validated
+    rather than asserted: anything that is not a mapping, or that holds a non-string at
+    ``key``, reads as absent.
+    """
+    if not isinstance(container, Mapping):
+        return None
+    entries: Mapping[object, object] = container
+    value = entries.get(key)
+    return value if isinstance(value, str) else None
+
+
+def clamped_effort_for_disabled_thinking(
+    *,
+    model: str,
+    custom_llm_provider: str,
+    optional_params: Mapping[str, object],
+) -> Optional[str]:
+    """Lowered ``output_config.effort`` for a request that explicitly disables thinking, or
+    ``None`` when the request needs no change.
+
+    Anthropic caps effort while ``thinking`` is explicitly disabled: Claude Opus 5 accepts
+    ``thinking={"type": "disabled"}`` only at effort ``high`` or below, and rejects ``xhigh``
+    or ``max`` with a 400 ("output_config.effort 'xhigh' is not supported when thinking is
+    disabled on this model"). Clients like Claude Code hit this by disabling thinking for a
+    hosted-tool hop (e.g. web search) while still carrying a session-wide ``xhigh``.
+
+    The cap is per model generation, not universal: Opus 4.7/4.8 accept the same combination,
+    so the ceiling is read from the model map
+    (``disabled_thinking_output_config_effort_ceiling``) rather than assumed. Effort is lowered
+    instead of re-enabling thinking because the caller asked not to think, and ``high`` is the
+    API default, so the clamped request behaves exactly like one that omits effort.
+
+    An unrecognized effort value reads as no change so the surface's own validation still
+    owns rejecting it.
+    """
+    effort = _nested_string_value(optional_params.get("output_config"), "effort")
+    if effort is None or effort not in ANTHROPIC_OUTPUT_CONFIG_EFFORT_ORDER:
+        return None
+    if _nested_string_value(optional_params.get("thinking"), "type") != "disabled":
+        return None
+    ceiling = AnthropicModelInfo._get_model_string_capability(
+        model, DISABLED_THINKING_EFFORT_CEILING_KEY, custom_llm_provider
+    )
+    if ceiling is None or ceiling not in ANTHROPIC_OUTPUT_CONFIG_EFFORT_ORDER:
+        return None
+    if ANTHROPIC_OUTPUT_CONFIG_EFFORT_ORDER[effort] <= ANTHROPIC_OUTPUT_CONFIG_EFFORT_ORDER[ceiling]:
+        return None
+    verbose_logger.debug(CLAMPED_EFFORT_FOR_DISABLED_THINKING_MESSAGE, effort, ceiling, model)
+    return ceiling
 
 
 def strip_advisor_blocks_from_messages(messages: List[Any], replace_with_text: bool = False) -> List[Any]:

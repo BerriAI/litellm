@@ -1903,6 +1903,60 @@ def test_anthropic_drop_params_false_forwards_to_unsupported_model():
     assert result.get("output_config") == {"effort": "low"}
 
 
+def _transform_with_thinking_and_effort(model, thinking, effort, **output_config_extra):
+    return AnthropicConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "max_tokens": 4096,
+            "thinking": thinking,
+            "output_config": {"effort": effort, **output_config_extra},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize("effort", ["xhigh", "max"])
+def test_anthropic_clamps_effort_when_thinking_disabled_for_opus_5(effort):
+    """Opus 5 caps ``output_config.effort`` at ``high`` while ``thinking`` is explicitly
+    disabled and 400s above it ("output_config.effort 'xhigh' is not supported when thinking
+    is disabled on this model"). The chat path builds the same Anthropic payload as the
+    /v1/messages pass-through, so it has to lower the effort too."""
+    result = _transform_with_thinking_and_effort("claude-opus-5", {"type": "disabled"}, effort)
+
+    assert result["output_config"] == {"effort": "high"}
+    assert result["thinking"] == {"type": "disabled"}
+
+
+def test_anthropic_keeps_effort_below_ceiling_when_thinking_disabled_for_opus_5():
+    result = _transform_with_thinking_and_effort("claude-opus-5", {"type": "disabled"}, "medium")
+
+    assert result["output_config"] == {"effort": "medium"}
+
+
+def test_anthropic_keeps_xhigh_effort_with_adaptive_thinking_for_opus_5():
+    """The cap is tied to disabled thinking; adaptive thinking must keep ``xhigh``."""
+    result = _transform_with_thinking_and_effort("claude-opus-5", {"type": "adaptive"}, "xhigh")
+
+    assert result["output_config"] == {"effort": "xhigh"}
+
+
+def test_anthropic_keeps_xhigh_effort_when_thinking_disabled_for_opus_4_8():
+    """Opus 4.8 accepts the combination, so clamping there would silently downgrade it."""
+    result = _transform_with_thinking_and_effort("claude-opus-4-8", {"type": "disabled"}, "xhigh")
+
+    assert result["output_config"] == {"effort": "xhigh"}
+
+
+def test_anthropic_effort_clamp_preserves_other_output_config_keys():
+    result = _transform_with_thinking_and_effort(
+        "claude-opus-5", {"type": "disabled"}, "xhigh", format={"type": "text"}
+    )
+
+    assert result["output_config"] == {"effort": "high", "format": {"type": "text"}}
+
+
 @pytest.mark.parametrize(
     "model",
     [

@@ -164,6 +164,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_output_config: Optional[bool]
     supports_image_size: Optional[bool]
     bedrock_output_config_effort_ceiling: Optional[Literal["low", "medium", "high", "max", "xhigh"]]
+    disabled_thinking_output_config_effort_ceiling: Optional[Literal["low", "medium", "high", "max", "xhigh"]]
     bedrock_converse_supports_strict_tools: Optional[bool]
 
 

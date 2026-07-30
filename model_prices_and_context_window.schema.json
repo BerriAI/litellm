@@ -170,6 +170,17 @@
           "format": "date",
           "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$"
         },
+        "disabled_thinking_output_config_effort_ceiling": {
+          "type": "string",
+          "description": "Highest reasoning effort this model accepts while thinking is explicitly disabled (thinking.type: disabled); higher levels are rejected with a 400.",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "max",
+            "xhigh"
+          ]
+        },
         "gemini_audio_only_live": {
           "type": "boolean"
         },

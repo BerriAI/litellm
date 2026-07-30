@@ -200,6 +200,14 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
             "description": "Highest reasoning effort the Bedrock output_config accepts for this model.",
             "enum": ["low", "medium", "high", "max", "xhigh"],
         },
+        "disabled_thinking_output_config_effort_ceiling": {
+            "type": "string",
+            "description": (
+                "Highest reasoning effort this model accepts while thinking is explicitly disabled "
+                "(thinking.type: disabled); higher levels are rejected with a 400."
+            ),
+            "enum": ["low", "medium", "high", "max", "xhigh"],
+        },
         "comment": STRING,
         "audio_transcription_config": STRING,
     }

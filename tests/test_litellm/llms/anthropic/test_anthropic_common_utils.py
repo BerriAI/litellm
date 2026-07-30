@@ -1842,3 +1842,111 @@ class TestCapabilityProbeUsesCallerProvider:
             AnthropicModelInfo._is_adaptive_thinking_model("claude-opus-4-8", "anthropic")
             is True
         )
+
+
+class TestClampedEffortForDisabledThinking:
+    """Anthropic caps ``output_config.effort`` while ``thinking`` is explicitly disabled:
+    Opus 5 accepts ``thinking={"type": "disabled"}`` only at effort ``high`` or below and
+    400s above it ("output_config.effort 'xhigh' is not supported when thinking is disabled
+    on this model"). Claude Code hits this on every WebSearch hop, which disables thinking
+    for the hop while keeping the session-wide ``xhigh``. The ceiling is cost-map driven
+    because Opus 4.7/4.8 accept the same combination."""
+
+    @staticmethod
+    def _forwarded_effort(model, provider, thinking, effort):
+        """The effort the request ends up carrying: the clamp when one applies, otherwise the
+        caller's own value (``None`` from the helper means "leave the request alone")."""
+        from litellm.llms.anthropic.common_utils import (
+            clamped_effort_for_disabled_thinking,
+        )
+
+        optional_params = {"output_config": {"effort": effort}}
+        if thinking is not None:
+            optional_params["thinking"] = thinking
+        clamped = clamped_effort_for_disabled_thinking(
+            model=model,
+            custom_llm_provider=provider,
+            optional_params=optional_params,
+        )
+        return effort if clamped is None else clamped
+
+    @pytest.mark.parametrize(
+        "model,provider",
+        [
+            ("claude-opus-5", "anthropic"),
+            ("anthropic/claude-opus-5", "anthropic"),
+            ("vertex_ai/claude-opus-5", "vertex_ai"),
+            ("vertex_ai/claude-opus-5@default", "vertex_ai"),
+            ("azure_ai/claude-opus-5", "azure_ai"),
+            ("us.anthropic.claude-opus-5", "bedrock"),
+            ("bedrock/us.anthropic.claude-opus-5", "bedrock"),
+            ("bedrock/invoke/global.anthropic.claude-opus-5", "bedrock"),
+            ("claude-opus-5-20260115", "anthropic"),
+        ],
+    )
+    @pytest.mark.parametrize("effort", ["xhigh", "max"])
+    def test_effort_above_ceiling_clamped_for_every_opus_5_routing_shape(
+        self, local_model_cost_map, model, provider, effort
+    ):
+        assert self._forwarded_effort(model, provider, {"type": "disabled"}, effort) == "high"
+
+    @pytest.mark.parametrize("effort", ["high", "medium", "low"])
+    def test_effort_at_or_below_ceiling_untouched(self, local_model_cost_map, effort):
+        assert self._forwarded_effort("claude-opus-5", "anthropic", {"type": "disabled"}, effort) == effort
+
+    @pytest.mark.parametrize(
+        "thinking", [None, {"type": "adaptive"}, {"type": "enabled"}, {}, "not-a-dict"]
+    )
+    def test_effort_untouched_unless_thinking_explicitly_disabled(self, local_model_cost_map, thinking):
+        assert self._forwarded_effort("claude-opus-5", "anthropic", thinking, "xhigh") == "xhigh"
+
+    @pytest.mark.parametrize(
+        "model,provider",
+        [
+            ("claude-opus-4-8", "anthropic"),
+            ("claude-opus-4-7", "anthropic"),
+            ("claude-sonnet-4-6", "anthropic"),
+            ("bedrock/us.anthropic.claude-opus-4-8", "bedrock"),
+        ],
+    )
+    def test_models_without_a_ceiling_are_untouched(self, local_model_cost_map, model, provider):
+        """Opus 4.7/4.8 accept disabled thinking at ``xhigh``; clamping there would silently
+        downgrade a working request."""
+        assert self._forwarded_effort(model, provider, {"type": "disabled"}, "xhigh") == "xhigh"
+
+    def test_unmapped_future_opus_inherits_ceiling_from_generalization_rule(self, local_model_cost_map):
+        """Anthropic documents the cap as applying to Opus 5 "and later models", so an Opus
+        release that has not reached the cost map yet must still be capped."""
+        assert self._forwarded_effort("claude-opus-6", "anthropic", {"type": "disabled"}, "xhigh") == "high"
+
+    def test_unmapped_non_opus_family_not_capped_by_generalization_rule(self, local_model_cost_map):
+        """The rule is scoped to the Opus family, which is what Anthropic documents; other
+        families are only capped where their own cost-map entry says so."""
+        assert self._forwarded_effort("claude-newfamily-6", "anthropic", {"type": "disabled"}, "xhigh") == "xhigh"
+
+    @pytest.mark.parametrize(
+        "optional_params",
+        [
+            {},
+            {"thinking": {"type": "disabled"}},
+            {"thinking": {"type": "disabled"}, "output_config": {}},
+            {"thinking": {"type": "disabled"}, "output_config": {"format": {"type": "text"}}},
+            {"thinking": {"type": "disabled"}, "output_config": "not-a-dict"},
+            {"thinking": {"type": "disabled"}, "output_config": {"effort": "bogus"}},
+        ],
+    )
+    def test_requests_without_a_usable_effort_report_no_change(self, local_model_cost_map, optional_params):
+        """``None`` means "nothing to rewrite"; an unrecognized effort in particular must be
+        left for the existing validation to reject rather than silently replaced."""
+        from litellm.llms.anthropic.common_utils import (
+            clamped_effort_for_disabled_thinking,
+        )
+
+        assert (
+            clamped_effort_for_disabled_thinking(
+                model="claude-opus-5",
+                custom_llm_provider="anthropic",
+                optional_params=optional_params,
+            )
+            is None
+        )

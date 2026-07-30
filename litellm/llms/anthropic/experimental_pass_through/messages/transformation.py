@@ -26,6 +26,7 @@ from litellm.types.router import GenericLiteLLMParams
 from ...common_utils import (
     AnthropicError,
     AnthropicModelInfo,
+    clamped_effort_for_disabled_thinking,
     optionally_handle_anthropic_oauth,
     strip_advisor_blocks_from_messages,
 )
@@ -514,6 +515,18 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             max_tokens=max_tokens,
             custom_llm_provider=self._resolved_provider,
         )
+
+        clamped_effort = clamped_effort_for_disabled_thinking(
+            model=model,
+            custom_llm_provider=self._resolved_provider,
+            optional_params=anthropic_messages_optional_request_params,
+        )
+        existing_output_config = anthropic_messages_optional_request_params.get("output_config")
+        if clamped_effort is not None and isinstance(existing_output_config, dict):
+            anthropic_messages_optional_request_params["output_config"] = {
+                **existing_output_config,
+                "effort": clamped_effort,
+            }
 
         self._drop_incompatible_temperature_for_thinking(
             model=model,

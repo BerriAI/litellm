@@ -414,6 +414,35 @@ def test_messages_request_strips_effort_for_haiku_45():
     assert opus_result["output_config"] == {"effort": "high"}
 
 
+def test_messages_request_clamps_effort_when_thinking_disabled_for_opus_5():
+    """Regression: Claude Code on ``vertex_ai/claude-opus-5`` 400s the moment it uses
+    WebSearch — the hop sends ``thinking={"type": "disabled"}`` while the session-wide
+    ``output_config.effort: xhigh`` stays attached, and Opus 5 caps effort at ``high``
+    while thinking is disabled ("output_config.effort 'xhigh' is not supported when
+    thinking is disabled on this model", ``req_vrtx_*``). The pass-through must lower the
+    effort instead of forwarding the rejected combination, and must leave the rest of the
+    Vertex shaping intact."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+
+    result = config.transform_anthropic_messages_request(
+        model="claude-opus-5",
+        messages=[{"role": "user", "content": "search the web for litellm releases"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 8192,
+            "thinking": {"type": "disabled"},
+            "output_config": {"effort": "xhigh"},
+            "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["output_config"] == {"effort": "high"}
+    assert result["thinking"] == {"type": "disabled"}
+    assert result["anthropic_version"] == "vertex-2023-10-16"
+    assert "model" not in result
+
+
 def test_provider_config_manager_reuses_vertex_anthropic_messages_config_instance():
     """
     Regression test: repeated provider config lookups for the same Vertex Claude model

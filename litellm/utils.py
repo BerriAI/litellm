@@ -5521,6 +5521,9 @@ def _get_model_info_helper(
                 supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
                 supports_max_reasoning_effort=_model_info.get("supports_max_reasoning_effort", None),
                 bedrock_output_config_effort_ceiling=_model_info.get("bedrock_output_config_effort_ceiling", None),
+                disabled_thinking_output_config_effort_ceiling=_model_info.get(
+                    "disabled_thinking_output_config_effort_ceiling", None
+                ),
                 bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get("search_context_cost_per_query", None),

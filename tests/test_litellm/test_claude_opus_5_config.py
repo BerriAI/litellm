@@ -275,3 +275,29 @@ def test_opus_5_all_variants_carry_512_token_cache_minimum(cost_map):
         if cost_map[k].get("prompt_cache_min_tokens") != 512
     }
     assert not wrong, f"prompt_cache_min_tokens must be 512: {wrong}"
+
+@pytest.mark.parametrize(
+    "cost_map",
+    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
+    ids=["root", "bundled_backup"],
+)
+def test_disabled_thinking_effort_ceiling_declared_on_opus_5_only(cost_map):
+    """Opus 5 caps ``output_config.effort`` at ``high`` while ``thinking`` is explicitly
+    disabled and 400s above it, which is what Claude Code hits on every WebSearch hop
+    (thinking off for the hop, session-wide ``xhigh`` still attached). The clamp is
+    cost-map driven, so every Opus 5 variant needs the ceiling.
+
+    The set equality also pins the other direction: Opus 4.7/4.8 accept the same
+    combination, so a stray ceiling on them would silently downgrade a working request.
+    Sonnet 5 is deliberately absent; Anthropic documents the cap for Opus 5 and later and
+    a Sonnet 5 entry should only be added once a live request confirms it."""
+    flagged = {
+        name
+        for name, entry in cost_map.items()
+        if isinstance(entry, dict) and entry.get("disabled_thinking_output_config_effort_ceiling")
+    }
+    expected = {name for name in cost_map if "claude-opus-5" in name}
+
+    assert expected, "no claude-opus-5 entries found in cost map"
+    assert flagged == expected
+    assert {cost_map[name]["disabled_thinking_output_config_effort_ceiling"] for name in flagged} == {"high"}
