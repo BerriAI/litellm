@@ -281,13 +281,29 @@ class OpenTelemetryV2(CustomLogger):
         self._record_metrics(kwargs, response_obj, start_time, end_time)
 
     def _record_metrics(self, kwargs, response_obj, start_time, end_time) -> None:
-        """Record the GenAI metrics for a successful LLM call. Best-effort: a
-        recording failure (e.g. a malformed payload) must never break the span
-        close or the request itself."""
+        """Record the GenAI metrics for a successful LLM call."""
+        self._guarded_record(lambda recorder: recorder.record(kwargs, response_obj, start_time, end_time))
+
+    def _record_failure_metrics(self, kwargs, start_time, end_time) -> None:
+        """Record the GenAI metrics for a failed LLM call, so the duration
+        histogram covers the whole traffic rather than only what survived.
+
+        A synthetic proxy-gate log (auth / rate-limit rejection) is skipped for the
+        same reason it gets no span: no upstream call happened, so its duration is
+        not a GenAI operation's duration and would pull the histogram down."""
+        if LLMCallEvent.from_dict(kwargs).is_no_upstream_call:
+            return
+        self._guarded_record(lambda recorder: recorder.record_failure(kwargs, start_time, end_time))
+
+    def _guarded_record(self, record: "Callable[[GenAIMetricRecorder], None]") -> None:
+        """Run one metric recording. Best-effort: a recording failure (e.g. a
+        malformed payload) must never break the span close or the request itself. A
+        misconfigured attribute filter is operator-fixable, so it is surfaced once
+        at ERROR instead of being swallowed."""
         if self._metrics_recorder is None:
             return
         try:
-            self._metrics_recorder.record(kwargs, response_obj, start_time, end_time)
+            record(self._metrics_recorder)
         except ValueError as exc:
             if not self._metric_filter_error_logged:
                 verbose_logger.error(
@@ -304,6 +320,7 @@ class OpenTelemetryV2(CustomLogger):
         if self._emit_mcp_list_tools(kwargs, start_time, end_time):
             return
         self._close_llm_call(kwargs, start_time, end_time)
+        self._record_failure_metrics(kwargs, start_time, end_time)
 
     def _seed_identity_baggage(self, identity: RequestIdentity, model: str | None, context: Context) -> Context:
         """Seed authenticated request-identity Baggage onto ``context`` so the Baggage
