@@ -370,3 +370,14 @@ async def test_a_direct_sdk_session_with_no_recorded_identity_still_warms_unattr
     await tick(llm_router, active=refresher(keys=FakeKeyDirectory({})))
     assert replayed_models(llm_router) == ["smart-claude"]
     assert llm_router.completion_calls[0]["metadata"]["user_api_key_team_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_replay_never_falls_back_to_a_group_warming_did_not_validate():
+    """Eligibility, every-member cacheability, affinity and pricing are properties of the target GROUP, so a
+    fallback would substitute a group carrying none of them and spend the customer's money warming nothing."""
+    llm_router, redis = warming_rig(redis=FakeRedisCache())
+    seed_session(redis)
+    await tick(llm_router)
+    assert llm_router.completion_calls, "expected a replay"
+    assert all(call["disable_fallbacks"] is True for call in llm_router.completion_calls)

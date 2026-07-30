@@ -99,7 +99,13 @@ def _replay_body(
     default would collide every replay onto one entry. The warming marker rides spend_logs_metadata, not
     metadata.tags: tags are an input to deployment selection (enable_tag_filtering makes an unmatched tag
     unroutable) and to policy (_reject_clientside_metadata_tags_check refuses any request carrying them),
-    while spend_logs_metadata exists to label spend rows, which is all this marker is for."""
+    while spend_logs_metadata exists to label spend rows, which is all this marker is for. Fallbacks are disabled at the
+    dispatch site rather than in the body so no key-level or pre-call mutation can re-enable them: everything
+    warming validated -- prompt-cache eligibility, every-member cacheability, deployment affinity, pricing --
+    is a property of the target GROUP, and a fallback substitutes a different group carrying none of it,
+    spending the customer's money to warm nothing. router.py:6157 raises before fallbacks,
+    context_window_fallbacks and content_policy_fallbacks are consulted, so one flag covers all three; a
+    failed replay simply retries next tick."""
     from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
@@ -637,6 +643,7 @@ class CacheWarmingRefresher:
         if admitted is None:
             return False
         data, principal = admitted
+        data["disable_fallbacks"] = True
         try:
             await (
                 llm_router.aanthropic_messages(**data)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # factory-generated router surface is legacy-untyped
