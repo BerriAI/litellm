@@ -32,6 +32,72 @@ from litellm.types.proxy.policy_engine import (
 
 router = APIRouter()
 
+CONFIG_ATTACHMENT_ID_PREFIX = "config-attachment-"
+
+
+def _config_policies_as_responses() -> list[PolicyDBResponse]:
+    """
+    Render config.yaml policies in the same shape as DB-backed ones.
+
+    Config policies are not versioned, so they are reported as the production version
+    and keyed by their name; they have no DB row to take a UUID from.
+    """
+    return [
+        PolicyDBResponse(
+            policy_id=policy_name,
+            policy_name=policy_name,
+            inherit=policy.inherit,
+            description=policy.description,
+            guardrails_add=policy.guardrails.get_add(),
+            guardrails_remove=policy.guardrails.get_remove(),
+            condition=policy.condition.model_dump() if policy.condition else None,
+            pipeline=policy.pipeline.model_dump() if policy.pipeline else None,
+            policy_definition_location="config",
+        )
+        for policy_name, policy in get_policy_registry().get_config_policies().items()
+    ]
+
+
+def _config_policy_response(policy_id: str) -> PolicyDBResponse | None:
+    """
+    Look up a config.yaml policy by the ID the list endpoint reports for it.
+    """
+    return next(
+        (policy for policy in _config_policies_as_responses() if policy.policy_id == policy_id),
+        None,
+    )
+
+
+def _reject_if_config_policy(policy_id: str) -> None:
+    """
+    Config-defined policies have no DB row to mutate; say so instead of 404ing.
+    """
+    if _config_policy_response(policy_id) is None:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=f"Policy '{policy_id}' is defined in config.yaml and can only be changed there",
+    )
+
+
+def _config_attachments_as_responses() -> list[PolicyAttachmentDBResponse]:
+    """
+    Render config.yaml policy attachments in the same shape as DB-backed ones.
+    """
+    return [
+        PolicyAttachmentDBResponse(
+            attachment_id=f"{CONFIG_ATTACHMENT_ID_PREFIX}{index}",
+            policy_name=attachment.policy,
+            scope=attachment.scope,
+            teams=attachment.teams or [],
+            keys=attachment.keys or [],
+            models=attachment.models or [],
+            tags=attachment.tags or [],
+            policy_definition_location="config",
+        )
+        for index, attachment in enumerate(get_attachment_registry().get_config_attachments())
+    ]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Policy CRUD Endpoints
@@ -46,7 +112,10 @@ router = APIRouter()
 )
 async def list_policies(version_status: Optional[str] = None):
     """
-    List all policies from the database. Optionally filter by version_status.
+    List all policies from the database and from config.yaml. Optionally filter by version_status.
+
+    Config-defined policies are reported with policy_definition_location="config"; they have no
+    versions, so they are only included when version_status is unset or "production".
 
     Query params:
     - version_status: Optional. One of "draft", "published", "production".
@@ -84,11 +153,14 @@ async def list_policies(version_status: Optional[str] = None):
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    config_policies = _config_policies_as_responses() if version_status in (None, "production") else []
+
     if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Database not connected")
+        return PolicyListDBResponse(policies=config_policies, total_count=len(config_policies))
 
     try:
-        policies = await get_policy_registry().get_all_policies_from_db(prisma_client, version_status=version_status)
+        db_policies = await get_policy_registry().get_all_policies_from_db(prisma_client, version_status=version_status)
+        policies = db_policies + config_policies
         return PolicyListDBResponse(policies=policies, total_count=len(policies))
     except Exception as e:
         verbose_proxy_logger.exception(f"Error listing policies: {e}")
@@ -333,7 +405,7 @@ async def delete_all_policy_versions(policy_name: str):
 )
 async def get_policy(policy_id: str):
     """
-    Get a policy by ID.
+    Get a policy by ID. Config-defined policies are looked up by their name.
 
     Example Request:
     ```bash
@@ -343,14 +415,20 @@ async def get_policy(policy_id: str):
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    config_policy = _config_policy_response(policy_id)
+
     if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Database not connected")
+        if config_policy is None:
+            raise HTTPException(status_code=404, detail=f"Policy with ID {policy_id} not found")
+        return config_policy
 
     try:
         result = await get_policy_registry().get_policy_by_id_from_db(
             policy_id=policy_id,
             prisma_client=prisma_client,
         )
+        if result is None:
+            result = config_policy
         if result is None:
             raise HTTPException(status_code=404, detail=f"Policy with ID {policy_id} not found")
         return result
@@ -387,6 +465,8 @@ async def update_policy(
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
+
+    _reject_if_config_policy(policy_id)
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -443,6 +523,8 @@ async def delete_policy(policy_id: str):
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
+
+    _reject_if_config_policy(policy_id)
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -606,7 +688,9 @@ async def test_pipeline(
 )
 async def list_policy_attachments():
     """
-    List all policy attachments from the database.
+    List all policy attachments from the database and from config.yaml.
+
+    Config-defined attachments are reported with policy_definition_location="config".
 
     Example Request:
     ```bash
@@ -635,11 +719,14 @@ async def list_policy_attachments():
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    config_attachments = _config_attachments_as_responses()
+
     if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Database not connected")
+        return PolicyAttachmentListResponse(attachments=config_attachments, total_count=len(config_attachments))
 
     try:
-        attachments = await get_attachment_registry().get_all_attachments_from_db(prisma_client)
+        db_attachments = await get_attachment_registry().get_all_attachments_from_db(prisma_client)
+        attachments = db_attachments + config_attachments
         return PolicyAttachmentListResponse(attachments=attachments, total_count=len(attachments))
     except Exception as e:
         verbose_proxy_logger.exception(f"Error listing policy attachments: {e}")
@@ -756,8 +843,18 @@ async def get_policy_attachment(attachment_id: str):
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Database not connected")
+    config_attachment = next(
+        (a for a in _config_attachments_as_responses() if a.attachment_id == attachment_id),
+        None,
+    )
+
+    if prisma_client is None or config_attachment is not None:
+        if config_attachment is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Attachment with ID {attachment_id} not found",
+            )
+        return config_attachment
 
     try:
         result = await get_attachment_registry().get_attachment_by_id_from_db(
@@ -800,6 +897,12 @@ async def delete_policy_attachment(attachment_id: str):
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
+
+    if attachment_id.startswith(CONFIG_ATTACHMENT_ID_PREFIX):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Attachment '{attachment_id}' is defined in config.yaml and can only be removed there",
+        )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")

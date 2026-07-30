@@ -389,3 +389,37 @@ class TestAttachmentRegistrySingleton:
         registry1 = get_attachment_registry()
         registry2 = get_attachment_registry()
         assert registry1 is registry2
+
+class TestConfigAttachmentsSurviveDbSync:
+    """A DB-connected proxy must keep enforcing attachments defined in config.yaml."""
+
+    @pytest.mark.asyncio
+    async def test_config_attachment_survives_sync(self):
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, MagicMock
+
+        registry = AttachmentRegistry()
+        registry.load_attachments([{"policy": "config-policy", "scope": "*"}])
+
+        db_row = MagicMock()
+        db_row.attachment_id = "aid-1"
+        db_row.policy_name = "db-policy"
+        db_row.scope = "*"
+        db_row.teams = []
+        db_row.keys = []
+        db_row.models = []
+        db_row.tags = []
+        db_row.created_at = datetime.now(timezone.utc)
+        db_row.updated_at = datetime.now(timezone.utc)
+        db_row.created_by = None
+        db_row.updated_by = None
+        prisma = MagicMock()
+        prisma.db.litellm_policyattachmenttable.find_many = AsyncMock(return_value=[db_row])
+
+        await registry.sync_attachments_from_db(prisma)
+        await registry.sync_attachments_from_db(prisma)
+
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-4")
+        attached = registry.get_attached_policies(context)
+        assert attached == ["config-policy", "db-policy"]
+        assert [a.policy for a in registry.get_config_attachments()] == ["config-policy"]

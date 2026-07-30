@@ -42,6 +42,7 @@ class AttachmentRegistry:
 
     def __init__(self):
         self._attachments: List[PolicyAttachment] = []
+        self._config_attachments: List[PolicyAttachment] = []
         self._initialized: bool = False
 
     def load_attachments(self, attachments_config: List[Dict[str, Any]]) -> None:
@@ -52,11 +53,13 @@ class AttachmentRegistry:
             attachments_config: List of attachment dictionaries from YAML.
         """
         self._attachments = []
+        self._config_attachments = []
 
         for attachment_data in attachments_config:
             try:
                 attachment = self._parse_attachment(attachment_data)
                 self._attachments.append(attachment)
+                self._config_attachments.append(attachment)
                 verbose_proxy_logger.debug(f"Loaded attachment for policy: {attachment.policy}")
             except Exception as e:
                 verbose_proxy_logger.error(f"Error loading attachment: {str(e)}")
@@ -173,6 +176,12 @@ class AttachmentRegistry:
         """
         return self._attachments.copy()
 
+    def get_config_attachments(self) -> List[PolicyAttachment]:
+        """
+        Get the attachments that came from config.yaml.
+        """
+        return self._config_attachments.copy()
+
     def get_attachments_for_policy(self, policy_name: str) -> List[PolicyAttachment]:
         """
         Get all attachments for a specific policy.
@@ -199,6 +208,7 @@ class AttachmentRegistry:
         Clear all attachments from the registry.
         """
         self._attachments = []
+        self._config_attachments = []
         self._initialized = False
 
     def add_attachment(self, attachment: PolicyAttachment) -> None:
@@ -435,8 +445,7 @@ class AttachmentRegistry:
         try:
             attachments = await self.get_all_attachments_from_db(prisma_client)
 
-            # Clear existing attachments and reload from DB
-            self._attachments = []
+            self._attachments = list(self._config_attachments)
 
             for attachment_response in attachments:
                 attachment = PolicyAttachment(
