@@ -195,6 +195,11 @@ class PrismaDBExceptionHandler:
         """
         import asyncio
 
+        from prisma.errors import DataError
+
+        if isinstance(e, DataError) and e.code == "P2037":
+            return True
+
         if PrismaDBExceptionHandler.is_database_connection_error(e):
             return True
         if PrismaDBExceptionHandler.is_database_transport_error(e):
