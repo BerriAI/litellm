@@ -28,6 +28,7 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
+    TypeVar,
     Union,
     cast,
     overload,
@@ -178,7 +179,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
 
-    Span = Union[_Span, Any]
+    Span = _Span
 else:
     Span = Any
 
@@ -345,7 +346,7 @@ def _accepts_litellm_call_info(cb: CustomLogger) -> bool:
     return _CALLBACK_ACCEPTS_CALL_INFO[key]
 
 
-def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: Any) -> None:
+def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: CustomLogger) -> None:
     """
     If `exc` is an HTTPException with a dict `detail`, mutate it in place to
     add `guardrail_name` and `guardrail_mode` taken from the callback instance.
@@ -365,6 +366,9 @@ def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: 
     event_hook = getattr(callback, "event_hook", None)
     if event_hook:
         detail.setdefault("guardrail_mode", event_hook)
+
+
+_GuardrailResultT = TypeVar("_GuardrailResultT")
 
 
 def _exception_changes_request_flow(exc: BaseException) -> bool:
@@ -394,11 +398,11 @@ class _CallbackCapabilities:
     # Tuple[(resolved_callback, "override" | "apply_guardrail"), ...]
     # Ordered the same as ``litellm.callbacks``; used to build the streaming
     # iterator chain without re-scanning per request.
-    iterator_overrides: Tuple[Tuple[Any, str], ...] = field(default_factory=tuple)
+    iterator_overrides: Tuple[Tuple[CustomLogger, str], ...] = field(default_factory=tuple)
     # Resolved CustomLogger callbacks in original order. Pre-resolving once
     # avoids the per-request ``get_custom_logger_compatible_class`` walk for
     # every string entry in ``litellm.callbacks``.
-    resolved_callbacks: Tuple[Any, ...] = field(default_factory=tuple)
+    resolved_callbacks: Tuple[CustomLogger, ...] = field(default_factory=tuple)
 
 
 class ProxyLogging:
@@ -676,7 +680,7 @@ class ProxyLogging:
 
         return synthetic_data
 
-    def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> Optional[Any]:
+    def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> MCPPreCallResponseObject | None:
         """
         Convert LLM guardrail result back to MCP response format.
         """
@@ -802,7 +806,7 @@ class ProxyLogging:
             verbose_proxy_logger.error(f"Error in manual argument parsing: {e}")
             return None
 
-    def _convert_llm_result_to_mcp_during_response(self, llm_result, request_obj) -> Optional[Any]:
+    def _convert_llm_result_to_mcp_during_response(self, llm_result, request_obj) -> MCPDuringCallResponseObject | None:
         """
         Convert LLM guardrail result back to MCP during call response format.
         """
@@ -1438,9 +1442,7 @@ class ProxyLogging:
                         data = result
 
                     elif (
-                        _callback is not None
-                        and isinstance(_callback, CustomLogger)
-                        and "async_pre_call_hook" in vars(_callback.__class__)
+                        "async_pre_call_hook" in vars(_callback.__class__)
                         and _callback.__class__.async_pre_call_hook != CustomLogger.async_pre_call_hook
                     ):
                         if call_type == "call_mcp_tool" and user_api_key_dict is None:
@@ -1614,7 +1616,9 @@ class ProxyLogging:
                 break
 
     @staticmethod
-    async def _run_guardrail_with_metrics(callback: Any, coro: Awaitable[Any], hook_type: str) -> Any:
+    async def _run_guardrail_with_metrics(
+        callback: CustomLogger, coro: Awaitable[_GuardrailResultT], hook_type: str
+    ) -> _GuardrailResultT:
         """
         Await `coro`, recording its latency and status to the
         `litellm_guardrail_latency_seconds` metric under `hook_type`, and
@@ -1646,7 +1650,7 @@ class ProxyLogging:
 
     @staticmethod
     async def _wrap_streaming_iterator_with_enrichment(
-        callback: Any, gen: AsyncGenerator[Any, None]
+        callback: CustomLogger, gen: AsyncGenerator[Any, None]
     ) -> AsyncGenerator[Any, None]:
         """
         Yield from `gen`; if iteration raises an HTTPException with dict detail,
@@ -1691,12 +1695,12 @@ class ProxyLogging:
         has_streaming_chunk_override = False
         has_guardrail = False
         has_pre_call_override = False
-        iterator_overrides: List[Tuple[Any, str]] = []  # (callback, kind)
-        resolved_callbacks: List[Any] = []
+        iterator_overrides: List[Tuple[CustomLogger, str]] = []  # (callback, kind)
+        resolved_callbacks: List[CustomLogger] = []
 
         for callback in callbacks:
             if isinstance(callback, str):
-                resolved: Any = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                resolved = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
                     cast(_custom_logger_compatible_callbacks_literal, callback)
                 )
             else:
@@ -2795,7 +2799,7 @@ _DEPRECATED_KEY_CACHE_TTL_SECONDS = 60
 
 
 async def _lookup_deprecated_key(
-    db: Any,
+    db: Union[PrismaWrapper, RoutingPrismaWrapper],
     hashed_token: str,
 ) -> Optional[str]:
     """
@@ -2875,7 +2879,7 @@ def _unpack_config_row(cached: Any) -> Optional[_ConfigRow]:
     return None
 
 
-async def get_config_param(prisma_client: Any, param_name: str) -> Optional[Any]:
+async def get_config_param(prisma_client: "PrismaClient", param_name: str) -> Any | None:
     """Cached read of a LiteLLM_Config row; returns row, _ConfigRow shim, or None."""
     cache_key = _config_cache_key(param_name)
     cached = await litellm_config_cache.async_get_cache(cache_key)
@@ -2883,7 +2887,7 @@ async def get_config_param(prisma_client: Any, param_name: str) -> Optional[Any]
         return _unpack_config_row(cached)
 
     row = await prisma_client.get_generic_data(key="param_name", value=param_name, table_name="config")
-    cache_value: Any = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
+    cache_value = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
     await litellm_config_cache.async_set_cache(cache_key, cache_value, ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS)
     return row
 
@@ -2893,7 +2897,7 @@ async def invalidate_config_param(param_name: str) -> None:
     await litellm_config_cache.async_delete_cache(_config_cache_key(param_name))
 
 
-async def prefetch_config_params(prisma_client: Any, param_names: List[str]) -> None:
+async def prefetch_config_params(prisma_client: "PrismaClient", param_names: List[str]) -> None:
     """Batch-load LiteLLM_Config rows into the cache with one find_many."""
     if not param_names:
         return
@@ -2910,7 +2914,7 @@ async def prefetch_config_params(prisma_client: Any, param_names: List[str]) -> 
     by_name = {row.param_name: row for row in rows}
     for name in param_names:
         row = by_name.get(name)
-        cache_value: Any = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
+        cache_value = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
         await litellm_config_cache.async_set_cache(
             _config_cache_key(name), cache_value, ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS
         )

@@ -21,10 +21,10 @@ class AzureRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         api_key: Optional[str] = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         return {
             **headers,
             "api-key": api_key or "",
@@ -43,7 +43,7 @@ class AzureRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
         version = api_version or get_secret_str("AZURE_API_VERSION") or "2024-12-17"
         return f"{base}/openai/realtime/transcription_sessions?api-version={version}"
 
-    def get_realtime_calls_headers(self, ephemeral_key: str) -> dict:
+    def get_realtime_calls_headers(self, ephemeral_key: str) -> dict[str, str]:
         return {
             "api-key": ephemeral_key,
         }

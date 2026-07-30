@@ -1,9 +1,9 @@
 {
   "reportAny": {
-    "limit": 33171
+    "limit": 32379
   },
   "reportArgumentType": {
-    "limit": 2645
+    "limit": 2633
   },
   "reportAssignmentType": {
     "limit": 329
@@ -24,7 +24,7 @@
     "limit": 42
   },
   "reportExplicitAny": {
-    "limit": 10228
+    "limit": 9602
   },
   "reportFunctionMemberAccess": {
     "limit": 11
@@ -54,10 +54,10 @@
     "limit": 0
   },
   "reportMissingParameterType": {
-    "limit": 5869
+    "limit": 5857
   },
   "reportMissingTypeArgument": {
-    "limit": 15864
+    "limit": 15831
   },
   "reportMissingTypeStubs": {
     "limit": 41
@@ -99,19 +99,19 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 45522
+    "limit": 45456
   },
   "reportUnknownLambdaType": {
     "limit": 113
   },
   "reportUnknownMemberType": {
-    "limit": 40479
+    "limit": 40416
   },
   "reportUnknownParameterType": {
-    "limit": 20341
+    "limit": 20296
   },
   "reportUnknownVariableType": {
-    "limit": 32052
+    "limit": 31976
   },
   "reportUnnecessaryCast": {
     "limit": 177

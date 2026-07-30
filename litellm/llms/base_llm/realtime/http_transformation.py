@@ -69,10 +69,10 @@ class BaseRealtimeHTTPConfig(ABC):
     @abstractmethod
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         api_key: Optional[str] = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Build and return the request headers for the client_secrets call.
 
@@ -89,7 +89,7 @@ class BaseRealtimeHTTPConfig(ABC):
         base = (api_base or "").rstrip("/")
         return f"{base}/v1/realtime/calls"
 
-    def get_realtime_calls_headers(self, ephemeral_key: str) -> dict:
+    def get_realtime_calls_headers(self, ephemeral_key: str) -> dict[str, str]:
         """
         Build headers for the realtime_calls POST.
 

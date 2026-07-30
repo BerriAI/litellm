@@ -648,7 +648,7 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
 )
-from fastapi.routing import APIRouter
+from fastapi.routing import APIRoute, APIRouter
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
@@ -839,21 +839,14 @@ async def _initialize_shared_aiohttp_session():
             _build_aiohttp_keepalive_socket_factory,
         )
 
-        connector_kwargs: Dict[str, Any] = {
-            "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
-            "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
-        }
-        if AIOHTTP_NEEDS_CLEANUP_CLOSED:
-            connector_kwargs["enable_cleanup_closed"] = True
-        if AIOHTTP_CONNECTOR_LIMIT > 0:
-            connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
-        if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
-            connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
-        socket_factory = _build_aiohttp_keepalive_socket_factory()
-        if socket_factory is not None:
-            connector_kwargs["socket_factory"] = socket_factory
-
-        connector = TCPConnector(**connector_kwargs)
+        connector = TCPConnector(
+            keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
+            ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
+            enable_cleanup_closed=AIOHTTP_NEEDS_CLEANUP_CLOSED,
+            limit=AIOHTTP_CONNECTOR_LIMIT if AIOHTTP_CONNECTOR_LIMIT > 0 else 100,
+            limit_per_host=AIOHTTP_CONNECTOR_LIMIT_PER_HOST if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0 else 0,
+            socket_factory=_build_aiohttp_keepalive_socket_factory(),
+        )
         session = ClientSession(connector=connector)
 
         verbose_proxy_logger.info(
@@ -1153,7 +1146,7 @@ async def proxy_startup_event(app: FastAPI):
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
 
-def _generate_stable_operation_id(route: Any) -> str:
+def _generate_stable_operation_id(route: APIRoute) -> str:
     operation_id = re.sub(r"\W", "_", f"{route.name}{route.path_format}")
     route_methods = sorted(route.methods or [])
     if len(route_methods) == 1:
@@ -1195,7 +1188,9 @@ def ensure_unique_openapi_operation_ids(
 ) -> Dict[str, Any]:
     operation_entries = []
     operation_id_counts: Dict[str, int] = {}
-    for path_item in openapi_schema.get("paths", {}).values():
+    paths = openapi_schema.get("paths", {})
+    paths_dict = paths if isinstance(paths, dict) else {}
+    for path_item in paths_dict.values():
         if not isinstance(path_item, dict):
             continue
         for method, operation in path_item.items():
@@ -3518,11 +3513,11 @@ _DB_OVERLAY_REMOTE_MODULE_LIST_FIELDS: Dict[str, Tuple[str, ...]] = {
 }
 
 
-def _is_remote_module_url(value: Any) -> bool:
+def _is_remote_module_url(value: object) -> bool:
     return isinstance(value, str) and (value.startswith("s3://") or value.startswith("gcs://"))
 
 
-def _scrub_guardrail_inner(inner: Dict[str, Any]) -> None:
+def _scrub_guardrail_inner(inner: Dict[str, JsonValue]) -> None:
     """Strip remote-URL entries from a guardrail's ``callbacks`` list
     and ``guardrail`` (v2 module-path) field. Mutates in place."""
     cbs = inner.get("callbacks")
@@ -3542,7 +3537,7 @@ def _scrub_guardrail_inner(inner: Dict[str, Any]) -> None:
         inner["guardrail"] = None
 
 
-def _scrub_db_overlay_remote_module_loads(section: str, db_value: Any) -> Any:
+def _scrub_db_overlay_remote_module_loads(section: str, db_value: JsonValue) -> JsonValue:
     """Strip ``s3://`` / ``gcs://`` entries from the DB-overlay value for
     fields whose contents reach ``get_instance_fn``. The same scheme is
     allowed from a YAML config (the documented operator flow) but a
@@ -5649,7 +5644,7 @@ class ProxyConfig:
         )
 
     @staticmethod
-    def _parse_router_settings_value(value: Any) -> Optional[dict]:
+    def _parse_router_settings_value(value: object) -> dict | None:
         """
         Parse a router_settings value that may be a dict or a JSON/YAML string.
 
@@ -8945,7 +8940,7 @@ async def model_info(
     )
 
 
-def _blocked_response_usage(original_response: Optional[Any]) -> "litellm.Usage":
+def _blocked_response_usage(original_response: object | None) -> "litellm.Usage":
     """
     Token usage for a synthetic guardrail-blocked response.
 
@@ -11467,7 +11462,7 @@ def _enrich_model_info_with_litellm_data(
 
 async def _get_caller_byok_team_scope(
     user_api_key_dict: Optional[UserAPIKeyAuth],
-    prisma_client: Optional[Any],
+    prisma_client: PrismaClient | None,
 ) -> Optional[Set[str]]:
     """
     Return the team IDs whose BYOK rows the caller is allowed to see via
@@ -11524,8 +11519,8 @@ _SORTED_SEARCH_DB_FETCH_CAP = 500
 
 
 async def _fetch_db_models_for_search(
-    prisma_client: Any,
-    proxy_config: Any,
+    prisma_client: PrismaClient,
+    proxy_config: ProxyConfig,
     search_lower: str,
     db_model_ids_in_router: Set[str],
     router_models_count: int,
@@ -11590,8 +11585,8 @@ async def _fetch_db_models_for_search(
 async def _apply_search_filter_to_models(
     all_models: List[Dict[str, Any]],
     search: str,
-    prisma_client: Optional[Any],
-    proxy_config: Any,
+    prisma_client: PrismaClient | None,
+    proxy_config: ProxyConfig,
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
     page: int = 1,
     size: int = 50,
@@ -11696,7 +11691,7 @@ async def _apply_search_filter_to_models(
     return filtered_router_models + db_models, search_total_count
 
 
-def _normalize_datetime_for_sorting(dt: Any) -> Optional[datetime]:
+def _normalize_datetime_for_sorting(dt: object) -> datetime | None:
     """
     Normalize a datetime value to a timezone-aware UTC datetime for sorting.
 
@@ -15095,7 +15090,7 @@ def _general_settings_ui_litellm_default(
     return False if spec["type"] == "Boolean" else None
 
 
-def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> GeneralSettingsUILiteLLMValue:
+def _validate_general_settings_ui_litellm_value(field_name: str, value: JsonValue) -> GeneralSettingsUILiteLLMValue:
     spec = _GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name]
     field_type = spec["type"]
     if value is None or value == "":
@@ -15135,7 +15130,7 @@ def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> 
 
 
 async def _persist_general_settings_ui_litellm_field(
-    field_name: str, value: Any, user_api_key_dict: UserAPIKeyAuth
+    field_name: str, value: JsonValue, user_api_key_dict: UserAPIKeyAuth
 ) -> dict:
     validated = _validate_general_settings_ui_litellm_value(field_name, value)
     config = await proxy_config.get_config()
