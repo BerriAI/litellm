@@ -12,6 +12,7 @@ import json
 
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
+from collections.abc import Mapping
 from typing import Callable, List, Optional, Union
 
 import redis  # type: ignore
@@ -652,6 +653,34 @@ def get_redis_async_client(
     )
 
 
+SSL_CONNECTION_KWARGS = frozenset(inspect.signature(async_redis.SSLConnection.__init__).parameters) - frozenset(
+    ("self", "kwargs")
+)
+
+
+def _connection_pool_kwargs(redis_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    """
+    Build the kwargs for a BlockingConnectionPool from a resolved Redis config.
+
+    The pool forwards every leftover kwarg to its connection class, and only
+    ``SSLConnection`` accepts the ``ssl_*`` arguments. Callers routinely carry
+    those alongside a plaintext target (the admin UI's cache settings form
+    submits ``ssl_check_hostname`` on every save), so they have to be dropped
+    when TLS is off, or each connection the pool makes dies with a TypeError.
+    """
+    ssl_enabled = bool(redis_kwargs.get("ssl"))
+    supported_ssl_kwargs = SSL_CONNECTION_KWARGS if ssl_enabled else frozenset()
+    pool_kwargs = {
+        key: value
+        for key, value in redis_kwargs.items()
+        if key != "ssl" and (not key.startswith("ssl_") or key in supported_ssl_kwargs)
+    }
+
+    if ssl_enabled:
+        return {**pool_kwargs, "connection_class": async_redis.SSLConnection}
+    return pool_kwargs
+
+
 def get_redis_connection_pool(
     **env_overrides,
 ) -> Optional[async_redis.BlockingConnectionPool]:
@@ -688,9 +717,9 @@ def get_redis_connection_pool(
     elif redis_connect_func and hasattr(redis_connect_func, "_gcp_service_account"):
         redis_kwargs["credential_provider"] = GCPIAMCredentialProvider(redis_connect_func._gcp_service_account)
 
-    if redis_kwargs.pop("ssl", None):
-        redis_kwargs["connection_class"] = async_redis.SSLConnection
-    return async_redis.BlockingConnectionPool(timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs)
+    return async_redis.BlockingConnectionPool(
+        timeout=REDIS_CONNECTION_POOL_TIMEOUT, **_connection_pool_kwargs(redis_kwargs)
+    )
 
 
 def _pretty_print_redis_config(redis_kwargs: dict) -> None:
