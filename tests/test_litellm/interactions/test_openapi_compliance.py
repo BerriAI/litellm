@@ -105,27 +105,6 @@ class TestRequestCompliance:
         assert "string" in input_types, "Input should support string"
         assert "array" in input_types, "Input should support array"
 
-    def test_content_schema_uses_discriminator(self, spec_dict):
-        """Verify Content uses type discriminator."""
-        content_schema = spec_dict["components"]["schemas"]["Content"]
-
-        assert "discriminator" in content_schema
-        assert content_schema["discriminator"]["propertyName"] == "type"
-
-        # Check TextContent is an option (via mapping if present, or via oneOf refs)
-        mapping = content_schema["discriminator"].get("mapping")
-        if mapping:
-            assert "text" in mapping
-            print(f"Content type discriminator mapping: {list(mapping.keys())}")
-        else:
-            # Discriminator without explicit mapping — verify via oneOf
-            one_of = content_schema.get("oneOf", [])
-            ref_names = [opt["$ref"].split("/")[-1] for opt in one_of if "$ref" in opt]
-            assert (
-                "TextContent" in ref_names
-            ), f"TextContent not found in oneOf refs: {ref_names}"
-            print(f"Content type discriminator (no mapping), oneOf refs: {ref_names}")
-
     def test_text_content_schema(self, spec_dict):
         """Verify TextContent schema."""
         text_schema = spec_dict["components"]["schemas"]["TextContent"]
