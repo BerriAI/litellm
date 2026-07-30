@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import random
 import re
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal, Union, cast
 
 from pydantic import BaseModel
@@ -25,6 +26,7 @@ from pydantic import BaseModel
 from litellm._logging import verbose_router_logger
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.utils import ModelResponse
 
 from .config import (
@@ -110,6 +112,16 @@ def _classifier_call_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]
         for k, v in metadata.items()
         if k not in _BUDGET_RESERVATION_METADATA_KEYS
     }
+
+
+def _effective_turn_off_message_logging(request_kwargs: Mapping[str, Any] | None) -> bool | None:
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+
+    return initialize_standard_callback_dynamic_params(dict(request_kwargs) if request_kwargs else {}).get(
+        "turn_off_message_logging"
+    )
 
 
 class DimensionScore:
@@ -427,7 +439,17 @@ class ComplexityRouter(CustomLogger):
         # attributed to the calling key/team instead of being dropped. Excludes the
         # parent request's budget reservation, which the routed completion (not this
         # internal classifier call) is responsible for reconciling.
-        metadata = _classifier_call_metadata((request_kwargs or {}).get("litellm_metadata"))
+        request_metadata = (request_kwargs or {}).get("litellm_metadata") or (request_kwargs or {}).get("metadata")
+        metadata = _classifier_call_metadata(request_metadata)
+        turn_off_message_logging = _effective_turn_off_message_logging(request_kwargs)
+
+        proxy_server_request = {
+            "body": {
+                "model": llm_config.model,
+                "messages": [{"role": "user", "content": classification_prompt}],
+                "response_format": type_to_response_format_param(TierClassification),
+            }
+        }
 
         response: ModelResponse = await self.litellm_router_instance.acompletion(
             model=llm_config.model,
@@ -435,6 +457,8 @@ class ComplexityRouter(CustomLogger):
             response_format=TierClassification,
             timeout=llm_config.timeout_ms / 1000,
             metadata=metadata,
+            proxy_server_request=proxy_server_request,
+            turn_off_message_logging=turn_off_message_logging,
         )
         content = response.choices[0].message.content
         if not content:
@@ -821,8 +845,16 @@ class ComplexityRouter(CustomLogger):
         # key/team budget. Key/team attribution fields are preserved for spend logging.
         metadata = _classifier_call_metadata(request_kwargs.get("metadata"))
         litellm_metadata = _classifier_call_metadata(request_kwargs.get("litellm_metadata"))
+        turn_off_message_logging = _effective_turn_off_message_logging(request_kwargs)
+        proxy_server_request = {"body": {"model": self.config.embedding_model, "input": [user_message]}}
         query_vector = (
-            await encoder.aencode_queries([user_message], metadata=metadata, litellm_metadata=litellm_metadata)
+            await encoder.aencode_queries(
+                [user_message],
+                metadata=metadata,
+                litellm_metadata=litellm_metadata,
+                proxy_server_request=proxy_server_request,
+                turn_off_message_logging=turn_off_message_logging,
+            )
         )[0]
         route_choice = await routelayer.acall(vector=query_vector)
 
