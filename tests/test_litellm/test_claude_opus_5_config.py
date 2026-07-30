@@ -282,15 +282,10 @@ def test_opus_5_all_variants_carry_512_token_cache_minimum(cost_map):
     ids=["root", "bundled_backup"],
 )
 def test_disabled_thinking_effort_ceiling_declared_on_opus_5_only(cost_map):
-    """Opus 5 caps ``output_config.effort`` at ``high`` while ``thinking`` is explicitly
-    disabled and 400s above it, which is what Claude Code hits on every WebSearch hop
-    (thinking off for the hop, session-wide ``xhigh`` still attached). The clamp is
-    cost-map driven, so every Opus 5 variant needs the ceiling.
-
-    The set equality also pins the other direction: Opus 4.7/4.8 accept the same
-    combination, so a stray ceiling on them would silently downgrade a working request.
-    Sonnet 5 is deliberately absent; Anthropic documents the cap for Opus 5 and later and
-    a Sonnet 5 entry should only be added once a live request confirms it."""
+    """The clamp is cost-map driven, so every Opus 5 variant needs the ceiling. The set
+    equality pins the other direction too: Opus 4.7/4.8 accept the combination, so a stray
+    ceiling would silently downgrade them. Sonnet 5 is deliberately absent until a live
+    request confirms the cap applies there."""
     flagged = {
         name
         for name, entry in cost_map.items()

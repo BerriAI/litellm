@@ -1845,17 +1845,13 @@ class TestCapabilityProbeUsesCallerProvider:
 
 
 class TestClampedEffortForDisabledThinking:
-    """Anthropic caps ``output_config.effort`` while ``thinking`` is explicitly disabled:
-    Opus 5 accepts ``thinking={"type": "disabled"}`` only at effort ``high`` or below and
-    400s above it ("output_config.effort 'xhigh' is not supported when thinking is disabled
-    on this model"). Claude Code hits this on every WebSearch hop, which disables thinking
-    for the hop while keeping the session-wide ``xhigh``. The ceiling is cost-map driven
-    because Opus 4.7/4.8 accept the same combination."""
+    """Opus 5 rejects ``thinking={"type": "disabled"}`` above effort ``high`` with a 400,
+    which Claude Code triggers on every WebSearch hop; Opus 4.7/4.8 accept it, so the
+    ceiling is cost-map driven."""
 
     @staticmethod
     def _forwarded_effort(model, provider, thinking, effort):
-        """The effort the request ends up carrying: the clamp when one applies, otherwise the
-        caller's own value (``None`` from the helper means "leave the request alone")."""
+        """The effort the request ends up carrying (``None`` from the helper means no change)."""
         from litellm.llms.anthropic.common_utils import (
             clamped_effort_for_disabled_thinking,
         )
@@ -1910,19 +1906,20 @@ class TestClampedEffortForDisabledThinking:
         ],
     )
     def test_models_without_a_ceiling_are_untouched(self, local_model_cost_map, model, provider):
-        """Opus 4.7/4.8 accept disabled thinking at ``xhigh``; clamping there would silently
-        downgrade a working request."""
+        """Clamping a model that accepts the combination would silently downgrade it."""
         assert self._forwarded_effort(model, provider, {"type": "disabled"}, "xhigh") == "xhigh"
 
     def test_unmapped_future_opus_inherits_ceiling_from_generalization_rule(self, local_model_cost_map):
-        """Anthropic documents the cap as applying to Opus 5 "and later models", so an Opus
-        release that has not reached the cost map yet must still be capped."""
         assert self._forwarded_effort("claude-opus-6", "anthropic", {"type": "disabled"}, "xhigh") == "high"
 
     def test_unmapped_non_opus_family_not_capped_by_generalization_rule(self, local_model_cost_map):
-        """The rule is scoped to the Opus family, which is what Anthropic documents; other
-        families are only capped where their own cost-map entry says so."""
         assert self._forwarded_effort("claude-newfamily-6", "anthropic", {"type": "disabled"}, "xhigh") == "xhigh"
+
+    def test_clamp_applies_when_the_fetched_cost_map_predates_the_ceiling_entry(self):
+        """No ``local_model_cost_map``: a released proxy resolves ``litellm.model_cost`` from
+        the remote ``main`` copy, which lacks this entry until merge. The clamp has to fall
+        back to the bundled map, or the fix would not reach users on a released build."""
+        assert self._forwarded_effort("claude-opus-5", "anthropic", {"type": "disabled"}, "xhigh") == "high"
 
     @pytest.mark.parametrize(
         "optional_params",
@@ -1936,8 +1933,7 @@ class TestClampedEffortForDisabledThinking:
         ],
     )
     def test_requests_without_a_usable_effort_report_no_change(self, local_model_cost_map, optional_params):
-        """``None`` means "nothing to rewrite"; an unrecognized effort in particular must be
-        left for the existing validation to reject rather than silently replaced."""
+        """An unrecognized effort stays for the existing validation to reject, not replaced."""
         from litellm.llms.anthropic.common_utils import (
             clamped_effort_for_disabled_thinking,
         )

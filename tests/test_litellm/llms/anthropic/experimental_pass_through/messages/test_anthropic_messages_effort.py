@@ -23,8 +23,7 @@ def _claude_code_payload(effort="medium", max_tokens=8192, **output_config_extra
 
 
 def _claude_code_web_search_payload(effort="xhigh", **output_config_extra):
-    """The shape Claude Code sends for a hosted web-search hop: thinking off for the
-    hop, the session-wide effort still attached."""
+    """The shape Claude Code sends for a hosted web-search hop: thinking off, effort kept."""
     params = _claude_code_payload(effort=effort, **output_config_extra)
     params["thinking"] = {"type": "disabled"}
     params["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
@@ -307,11 +306,8 @@ def test_non_adaptive_request_without_effort_is_untouched():
 
 @pytest.mark.parametrize("effort", ["xhigh", "max"])
 def test_disabled_thinking_effort_clamped_to_ceiling_for_opus_5(effort):
-    """Regression: Claude Code's web-search hop disables thinking while still carrying the
-    session-wide ``xhigh``. Opus 5 accepts ``thinking={"type": "disabled"}`` only at effort
-    ``high`` or below and 400s otherwise ("output_config.effort 'xhigh' is not supported when
-    thinking is disabled on this model"), so the effort must be lowered to the ceiling while
-    the caller's request not to think is honored."""
+    """Regression: Opus 5 400s on disabled thinking above ``high``, which is what Claude
+    Code's web-search hop sends. Lower the effort, keep thinking off."""
     result = _transform("claude-opus-5", _claude_code_web_search_payload(effort=effort))
 
     assert result["thinking"] == {"type": "disabled"}
@@ -320,8 +316,7 @@ def test_disabled_thinking_effort_clamped_to_ceiling_for_opus_5(effort):
 
 @pytest.mark.parametrize("effort", ["high", "medium", "low"])
 def test_disabled_thinking_effort_at_or_below_ceiling_untouched(effort):
-    """Only levels above the ceiling are invalid; everything at or below it must pass
-    through unchanged."""
+    """Only levels above the ceiling are invalid."""
     result = _transform("claude-opus-5", _claude_code_web_search_payload(effort=effort))
 
     assert result["thinking"] == {"type": "disabled"}
@@ -329,8 +324,7 @@ def test_disabled_thinking_effort_at_or_below_ceiling_untouched(effort):
 
 
 def test_adaptive_thinking_keeps_xhigh_effort_for_opus_5():
-    """The cap applies only while thinking is explicitly disabled; adaptive thinking is
-    exactly how ``xhigh`` is meant to be used and must survive."""
+    """The cap applies only while thinking is explicitly disabled."""
     result = _transform("claude-opus-5", _claude_code_payload(effort="xhigh"))
 
     assert result["thinking"] == {"type": "adaptive"}
@@ -349,8 +343,7 @@ def test_omitted_thinking_keeps_xhigh_effort_for_opus_5():
 
 
 def test_disabled_thinking_effort_not_clamped_for_opus_4_8():
-    """The cap is per model generation, not universal: Opus 4.8 accepts disabled thinking at
-    ``xhigh``, so clamping there would silently downgrade a working request."""
+    """Opus 4.8 accepts the combination; clamping there would silently downgrade it."""
     result = _transform("claude-opus-4-8", _claude_code_web_search_payload(effort="xhigh"))
 
     assert result["thinking"] == {"type": "disabled"}
@@ -368,8 +361,8 @@ def test_disabled_thinking_clamp_preserves_other_output_config_keys():
 
 
 def test_disabled_thinking_clamp_does_not_mutate_caller_output_config():
-    """The transform must not rewrite the caller's ``output_config`` in place; the router
-    hands the same dict to fallbacks and retries."""
+    """The router hands the same dict to fallbacks and retries, so it must not be rewritten
+    in place."""
     params = _claude_code_web_search_payload(effort="xhigh")
     caller_output_config = params["output_config"]
 

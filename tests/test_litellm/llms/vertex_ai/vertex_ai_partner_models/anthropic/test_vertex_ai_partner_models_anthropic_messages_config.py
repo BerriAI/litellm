@@ -416,12 +416,8 @@ def test_messages_request_strips_effort_for_haiku_45():
 
 def test_messages_request_clamps_effort_when_thinking_disabled_for_opus_5():
     """Regression: Claude Code on ``vertex_ai/claude-opus-5`` 400s the moment it uses
-    WebSearch — the hop sends ``thinking={"type": "disabled"}`` while the session-wide
-    ``output_config.effort: xhigh`` stays attached, and Opus 5 caps effort at ``high``
-    while thinking is disabled ("output_config.effort 'xhigh' is not supported when
-    thinking is disabled on this model", ``req_vrtx_*``). The pass-through must lower the
-    effort instead of forwarding the rejected combination, and must leave the rest of the
-    Vertex shaping intact."""
+    WebSearch, which sends disabled thinking with the session-wide ``xhigh``. Lower the
+    effort and leave the rest of the Vertex shaping intact."""
     config = VertexAIPartnerModelsAnthropicMessagesConfig()
 
     result = config.transform_anthropic_messages_request(

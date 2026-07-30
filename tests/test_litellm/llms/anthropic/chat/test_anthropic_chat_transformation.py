@@ -1919,10 +1919,8 @@ def _transform_with_thinking_and_effort(model, thinking, effort, **output_config
 
 @pytest.mark.parametrize("effort", ["xhigh", "max"])
 def test_anthropic_clamps_effort_when_thinking_disabled_for_opus_5(effort):
-    """Opus 5 caps ``output_config.effort`` at ``high`` while ``thinking`` is explicitly
-    disabled and 400s above it ("output_config.effort 'xhigh' is not supported when thinking
-    is disabled on this model"). The chat path builds the same Anthropic payload as the
-    /v1/messages pass-through, so it has to lower the effort too."""
+    """The chat path builds the same Anthropic payload as the /v1/messages pass-through, so
+    it has to lower the effort for disabled thinking too."""
     result = _transform_with_thinking_and_effort("claude-opus-5", {"type": "disabled"}, effort)
 
     assert result["output_config"] == {"effort": "high"}
@@ -1936,14 +1934,14 @@ def test_anthropic_keeps_effort_below_ceiling_when_thinking_disabled_for_opus_5(
 
 
 def test_anthropic_keeps_xhigh_effort_with_adaptive_thinking_for_opus_5():
-    """The cap is tied to disabled thinking; adaptive thinking must keep ``xhigh``."""
+    """The cap is tied to disabled thinking."""
     result = _transform_with_thinking_and_effort("claude-opus-5", {"type": "adaptive"}, "xhigh")
 
     assert result["output_config"] == {"effort": "xhigh"}
 
 
 def test_anthropic_keeps_xhigh_effort_when_thinking_disabled_for_opus_4_8():
-    """Opus 4.8 accepts the combination, so clamping there would silently downgrade it."""
+    """Opus 4.8 accepts the combination; clamping there would silently downgrade it."""
     result = _transform_with_thinking_and_effort("claude-opus-4-8", {"type": "disabled"}, "xhigh")
 
     assert result["output_config"] == {"effort": "xhigh"}
