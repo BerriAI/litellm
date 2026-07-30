@@ -149,7 +149,7 @@ async def test_non_coroutine_validator_is_rejected():
     with pytest.raises(HTTPException) as exc_info:
         await _run(validator)
     assert exc_info.value.status_code == 500
-    assert "async" in exc_info.value.detail["error"]
+    assert exc_info.value.detail == {"error": "custom_team_metadata_validate must be an async function"}
 
 
 @pytest.mark.parametrize(
@@ -160,6 +160,7 @@ async def test_non_coroutine_validator_is_rejected():
         ({"team_metadata_validation_timeout": 0.5}, 0.5),
         ({"team_metadata_validation_timeout": True}, DEFAULT_TEAM_METADATA_VALIDATION_TIMEOUT_SECONDS),
         ({"team_metadata_validation_timeout": -1}, DEFAULT_TEAM_METADATA_VALIDATION_TIMEOUT_SECONDS),
+        ({"team_metadata_validation_timeout": 0}, DEFAULT_TEAM_METADATA_VALIDATION_TIMEOUT_SECONDS),
         ({"team_metadata_validation_timeout": "3"}, DEFAULT_TEAM_METADATA_VALIDATION_TIMEOUT_SECONDS),
     ],
 )
@@ -652,3 +653,52 @@ def test_schema_registry_defaults_empty_and_round_trips():
 
     registry.set(())
     assert registry.get() == ()
+
+
+@pytest.mark.asyncio
+async def test_non_callable_validator_is_rejected_with_clean_500():
+    class NotCallable:
+        pass
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _run(NotCallable())
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == {"error": "custom_team_metadata_validate must be an async function"}
+
+
+def test_parse_schema_duplicate_error_lists_offending_keys():
+    with pytest.raises(ValueError) as exc_info:
+        parse_team_metadata_schema(
+            [{"key": "cost_center"}, {"key": "app_name"}, {"key": "cost_center"}, {"key": "app_name"}]
+        )
+    assert str(exc_info.value) == "team_metadata_schema contains duplicate keys: app_name, cost_center"
+
+
+@pytest.mark.asyncio
+async def test_adapter_applies_configured_timeout_to_slow_validator():
+    async def slow_validator(payload):
+        await asyncio.sleep(0.2)
+        return TeamMetadataValidationResult(valid=True)
+
+    registry = TeamMetadataValidatorRegistry()
+    registry.set(slow_validator)
+
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"team_metadata_validation_timeout": 0.01},
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await validate_team_metadata_if_configured(
+                operation="create",
+                metadata={"cost_center": "CC-1001"},
+                existing_metadata=None,
+                team_id="team-1",
+                team_alias="alias-1",
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="u1"),
+                registry=registry,
+            )
+
+    assert exc_info.value.status_code == 503
