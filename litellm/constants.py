@@ -551,6 +551,7 @@ LITELLM_CHAT_PROVIDERS = [
     "modelscope",
     "moonshot",
     "publicai",
+    "poolside",
     "v0",
     "heroku",
     "oci",
@@ -710,6 +711,7 @@ openai_compatible_endpoints: List = [
     "https://api-inference.modelscope.cn/v1",
     "https://api.moonshot.ai/v1",
     "https://api.publicai.co/v1",
+    "https://inference.poolside.ai/v1",
     "https://api.synthetic.new/openai/v1",
     "https://serverless.tensormesh.ai/v1",
     "https://api.stima.tech/v1",
@@ -765,6 +767,7 @@ openai_compatible_providers: List = [
     "novita",
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
+    "poolside",  # Poolside - JSON-configured provider
     "synthetic",  # Synthetic - JSON-configured provider
     "tensormesh",  # Tensormesh - JSON-configured provider
     "apertis",  # Apertis - JSON-configured provider

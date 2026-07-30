@@ -3,6 +3,7 @@ import { Typography, Button, Divider } from "antd";
 import { WarningOutlined, InfoCircleOutlined, CopyOutlined } from "@ant-design/icons";
 import { testConnectionRequest } from "../networking";
 import { prepareModelAddRequest } from "./handle_add_model_submit";
+import { buildTestConnectionCurl } from "./model_connection_curl";
 import NotificationsManager from "../molecules/notifications_manager";
 const { Text } = Typography;
 
@@ -102,34 +103,13 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
         ? getCleanErrorMessage(error.message)
         : "Unknown error";
 
-  const formatCurlCommand = (
-    apiBase: string,
-    requestBody: Record<string, any>,
-    requestHeaders: Record<string, string>,
-  ) => {
-    const formattedBody = JSON.stringify(requestBody, null, 2)
-      .split("\n")
-      .map((line) => `  ${line}`)
-      .join("\n");
-
-    const headerString = Object.entries(requestHeaders)
-      .map(([key, value]) => `-H '${key}: ${value}'`)
-      .join(" \\\n  ");
-
-    return `curl -X POST \\
-  ${apiBase} \\
-  ${headerString ? `${headerString} \\\n  ` : ""}-H 'Content-Type: application/json' \\
-  -d '{
-${formattedBody}
-  }'`;
-  };
-
   const curlCommand = rawResponse
-    ? formatCurlCommand(
-        rawResponse.raw_request_api_base,
-        rawResponse.raw_request_body,
-        rawResponse.raw_request_headers || {},
-      )
+    ? buildTestConnectionCurl({
+        apiBase: rawResponse.raw_request_api_base,
+        testMode,
+        requestBody: rawResponse.raw_request_body,
+        requestHeaders: rawResponse.raw_request_headers || {},
+      })
     : "";
 
   return (

@@ -50,6 +50,60 @@ def create_config_class(provider: SimpleProviderConfig):
             else:
                 return super()._transform_messages(messages=messages, model=model, is_async=False)
 
+        def _apply_provider_prefixed_model(self, data: dict) -> dict:
+            """Re-attach the provider slug to the model id when the upstream API
+            expects the fully-qualified id (e.g. poolside expects
+            ``poolside/laguna-s-2.1``, not the ``laguna-s-2.1`` litellm strips to)."""
+
+            if not provider.special_handling.get("send_provider_prefixed_model"):
+                return data
+
+            model_id = data.get("model")
+            if not isinstance(model_id, str):
+                return data
+
+            prefix = f"{provider.slug}/"
+            if model_id.startswith(prefix):
+                return data
+
+            return {**data, "model": f"{prefix}{model_id}"}
+
+        def transform_request(
+            self,
+            model: str,
+            messages: List[AllMessageValues],
+            optional_params: dict,
+            litellm_params: dict,
+            headers: dict,
+        ) -> dict:
+            return self._apply_provider_prefixed_model(
+                super().transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    headers=headers,
+                )
+            )
+
+        async def async_transform_request(
+            self,
+            model: str,
+            messages: List[AllMessageValues],
+            optional_params: dict,
+            litellm_params: dict,
+            headers: dict,
+        ) -> dict:
+            return self._apply_provider_prefixed_model(
+                await super().async_transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    headers=headers,
+                )
+            )
+
         def _get_openai_compatible_provider_info(
             self, api_base: Optional[str], api_key: Optional[str]
         ) -> Tuple[Optional[str], Optional[str]]:

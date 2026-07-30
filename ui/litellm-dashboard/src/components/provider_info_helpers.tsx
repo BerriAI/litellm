@@ -44,6 +44,7 @@ import openaiSmallLogo from "../../public/assets/logos/openai_small.svg";
 import openrouterLogo from "../../public/assets/logos/openrouter.svg";
 import oracleLogo from "../../public/assets/logos/oracle.svg";
 import perplexityAiLogo from "../../public/assets/logos/perplexity-ai.svg";
+import poolsideAiLogo from "../../public/assets/logos/poolside.svg";
 import qwenLogo from "../../public/assets/logos/qwen.png";
 import recraftLogo from "../../public/assets/logos/recraft.svg";
 import replicateLogo from "../../public/assets/logos/replicate.svg";
@@ -143,6 +144,7 @@ export enum Providers {
   OVHCLOUD = "Ovhcloud",
   Perplexity = "Perplexity",
   PETALS = "Petals",
+  Poolside = "Poolside",
   PG_VECTOR = "Pg Vector",
   PREDIBASE = "Predibase",
   RECRAFT = "Recraft",
@@ -251,6 +253,7 @@ export const provider_map: Record<string, string> = {
   OVHCLOUD: "ovhcloud",
   Perplexity: "perplexity",
   PETALS: "petals",
+  Poolside: "poolside",
   PG_VECTOR: "pg_vector",
   PREDIBASE: "predibase",
   RECRAFT: "recraft",
@@ -345,6 +348,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Openrouter]: openrouterLogo.src,
   [Providers.Oracle]: oracleLogo.src,
   [Providers.Perplexity]: perplexityAiLogo.src,
+  [Providers.Poolside]: poolsideAiLogo.src,
   [Providers.RECRAFT]: recraftLogo.src,
   [Providers.REPLICATE]: replicateLogo.src,
   [Providers.RunwayML]: runwayLogo.src,

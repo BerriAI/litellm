@@ -638,6 +638,7 @@ elevenlabs_models: Set = set()
 dashscope_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
+poolside_models: Set = set()
 darkbloom_models: Set = set()
 v0_models: Set = set()
 morph_models: Set = set()
@@ -891,6 +892,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             moonshot_models.add(key)
         elif value.get("litellm_provider") == "publicai":
             publicai_models.add(key)
+        elif value.get("litellm_provider") == "poolside":
+            poolside_models.add(key)
         elif value.get("litellm_provider") == "darkbloom":
             darkbloom_models.add(key)
         elif value.get("litellm_provider") == "v0":
@@ -1041,6 +1044,7 @@ model_list = list(
     | dashscope_models
     | moonshot_models
     | publicai_models
+    | poolside_models
     | darkbloom_models
     | v0_models
     | morph_models
@@ -1147,6 +1151,7 @@ models_by_provider: dict = {
     "modelscope": modelscope_models,
     "moonshot": moonshot_models,
     "publicai": publicai_models,
+    "poolside": poolside_models,
     "darkbloom": darkbloom_models,
     "v0": v0_models,
     "morph": morph_models,

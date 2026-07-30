@@ -183,5 +183,18 @@
       "max_completion_tokens": "max_tokens"
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
+  },
+  "poolside": {
+    "base_url": "https://inference.poolside.ai/v1",
+    "api_key_env": "POOLSIDE_API_KEY",
+    "api_base_env": "POOLSIDE_API_BASE",
+    "base_class": "openai_gpt",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "special_handling": {
+      "send_provider_prefixed_model": true
+    },
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
