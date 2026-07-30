@@ -1654,6 +1654,9 @@ class PromptTokensDetailsWrapper(
     google_maps_grounding_requests: int | None = None
     """Number of Grounding with Google Maps requests made by the tool call. Used for Gemini to calculate Maps cost."""
 
+    web_search_premium_requests: int | None = None
+    """Number of premium web search requests. Used for Mistral to bill web_search_premium calls."""
+
     tool_use_tokens: int | None = None
     """Prompt tokens consumed by server-side tool use (e.g. Gemini grounding via googleSearch)."""
 

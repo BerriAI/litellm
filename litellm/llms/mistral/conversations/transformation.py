@@ -12,7 +12,7 @@ annotations for the web sources.
 Docs - https://docs.mistral.ai/agents/connectors/websearch/
 """
 
-from typing import Optional
+from typing import Mapping, Sequence
 
 import httpx
 
@@ -66,7 +66,7 @@ def _content_to_str(content: object) -> str:
     return "" if content is None else str(content)
 
 
-def _function_call_entry(call: dict[str, object]) -> dict[str, object]:
+def _function_call_entry(call: Mapping[str, object]) -> Mapping[str, object]:
     fn = STR_OBJ_DICT.validate_python(call["function"]) if isinstance(call.get("function"), dict) else {}
     return {
         "type": "function.call",
@@ -93,26 +93,26 @@ class MistralConversationsConfig(MistralConfig):
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         return bool(stream)
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
-        stream: Optional[bool] = None,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        stream: bool | None = None,
     ) -> str:
         base = (api_base or "https://api.mistral.ai/v1").rstrip("/")
         return f"{base}/conversations"
 
     @staticmethod
-    def _build_tools(optional_params: dict[str, object]) -> list[dict[str, object]]:
+    def _build_tools(optional_params: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
         raw_tools = optional_params.get("tools")
         candidate_tools = OBJ_LIST.validate_python(raw_tools) if isinstance(raw_tools, list) else []
         dict_tools = [STR_OBJ_DICT.validate_python(tool) for tool in candidate_tools if isinstance(tool, dict)]
@@ -127,17 +127,17 @@ class MistralConversationsConfig(MistralConfig):
             and STR_OBJ_DICT.validate_python(web_search_options).get("premium") is True
         )
 
-        web_search_tool: tuple[dict[str, object], ...] = (
+        web_search_tool: tuple[Mapping[str, object], ...] = (
             ({"type": "web_search_premium" if premium else "web_search"},) if wants_web_search else ()
         )
         return list(web_search_tool + passthrough)
 
     @staticmethod
-    def _build_completion_args(optional_params: dict[str, object]) -> dict[str, object]:
+    def _build_completion_args(optional_params: Mapping[str, object]) -> Mapping[str, object]:
         return {key: optional_params[key] for key in _COMPLETION_ARG_KEYS if optional_params.get(key) is not None}
 
     @staticmethod
-    def _input_entries_for_message(message: AllMessageValues) -> tuple[dict[str, object], ...]:
+    def _input_entries_for_message(message: AllMessageValues) -> tuple[Mapping[str, object], ...]:
         """Map one OpenAI message to its Conversations ``inputs`` entries.
 
         A ``tool`` message becomes a ``function.result`` entry; an assistant
@@ -157,9 +157,9 @@ class MistralConversationsConfig(MistralConfig):
                 },
             )
         raw_calls = typed.get("tool_calls") if role == "assistant" else None
-        calls = OBJ_LIST.validate_python(raw_calls) if isinstance(raw_calls, list) else []
+        calls = OBJ_LIST.validate_python(raw_calls) if isinstance(raw_calls, list) else ()
         content = _content_to_str(typed.get("content"))
-        message_entry: tuple[dict[str, object], ...] = (
+        message_entry: tuple[Mapping[str, object], ...] = (
             ({"role": role, "content": content},) if content or not calls else ()
         )
         call_entries = tuple(
@@ -170,11 +170,11 @@ class MistralConversationsConfig(MistralConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict[str, object]:
+        messages: Sequence[AllMessageValues],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, str],
+    ) -> dict[str, object]:  # mutable-ok: BaseConfig contract; the HTTP handler mutates the returned request body
         params = STR_OBJ_DICT.validate_python(optional_params)
         instructions = "\n\n".join(
             _content_to_str(message.get("content"))
@@ -199,24 +199,24 @@ class MistralConversationsConfig(MistralConfig):
 
     @staticmethod
     def _extract_message(
-        outputs: list[MistralConversationOutput],
-    ) -> tuple[str, list[ChatCompletionAnnotation]]:
+        outputs: Sequence[MistralConversationOutput],
+    ) -> tuple[str, tuple[ChatCompletionAnnotation, ...]]:
         message_output = next((output for output in outputs if output.type == "message.output"), None)
         if message_output is None:
-            return "", []
+            return "", ()
         content = message_output.content
         if isinstance(content, str):
-            return content, []
-        if not isinstance(content, list):
-            return "", []
+            return content, ()
+        if not isinstance(content, tuple):
+            return "", ()
         text = "".join(chunk.text for chunk in content if chunk.type == "text" and chunk.text)
-        annotations = [_to_annotation(chunk) for chunk in content if chunk.type == "tool_reference" and chunk.url]
+        annotations = tuple(_to_annotation(chunk) for chunk in content if chunk.type == "tool_reference" and chunk.url)
         return text, annotations
 
     @staticmethod
     def _count_web_searches(
-        usage: Optional[MistralConversationUsage],
-        outputs: list[MistralConversationOutput],
+        usage: MistralConversationUsage | None,
+        outputs: Sequence[MistralConversationOutput],
     ) -> tuple[int, int]:
         """Return ``(standard, premium)`` web search call counts.
 
@@ -236,7 +236,7 @@ class MistralConversationsConfig(MistralConfig):
 
     @staticmethod
     def _build_usage(
-        usage: Optional[MistralConversationUsage],
+        usage: MistralConversationUsage | None,
         web_search_requests: int,
         web_search_premium_requests: int,
     ) -> Usage:
@@ -245,19 +245,23 @@ class MistralConversationsConfig(MistralConfig):
         total_tokens = (
             usage.total_tokens if usage and usage.total_tokens is not None else prompt_tokens + completion_tokens
         )
-        details = PromptTokensDetailsWrapper(web_search_requests=web_search_requests) if web_search_requests else None
-        usage_obj = Usage(
+        details = (
+            PromptTokensDetailsWrapper(
+                web_search_requests=web_search_requests,
+                web_search_premium_requests=web_search_premium_requests or None,
+            )
+            if web_search_requests
+            else None
+        )
+        return Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
             prompt_tokens_details=details,
         )
-        if web_search_premium_requests:
-            setattr(usage_obj, "web_search_premium_requests", web_search_premium_requests)
-        return usage_obj
 
     @staticmethod
-    def _finish_reason(request_data: dict, usage: Optional[MistralConversationUsage]) -> str:
+    def _finish_reason(request_data: Mapping[str, object], usage: MistralConversationUsage | None) -> str:
         """The Conversations API returns no finish/stop reason, so infer truncation
         from the token budget: ``length`` when the completion filled the requested
         ``max_tokens``, otherwise ``stop``."""
@@ -274,13 +278,13 @@ class MistralConversationsConfig(MistralConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        messages: Sequence[AllMessageValues],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: object,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         logging_obj.post_call(original_response=raw_response.text)
         logging_obj.model_call_details["response_headers"] = raw_response.headers
@@ -294,15 +298,10 @@ class MistralConversationsConfig(MistralConfig):
             content=text or None,
             annotations=annotations or None,
         )
-        model_response.choices = [
-            Choices(index=0, message=message, finish_reason=self._finish_reason(request_data, parsed.usage))
-        ]
-        model_response.model = model
-        if parsed.conversation_id:
-            model_response.id = parsed.conversation_id
-        setattr(
-            model_response,
-            "usage",
-            self._build_usage(parsed.usage, standard_searches + premium_searches, premium_searches),
+        return ModelResponse(
+            id=parsed.conversation_id or model_response.id,
+            created=model_response.created,
+            model=model,
+            choices=[Choices(index=0, message=message, finish_reason=self._finish_reason(request_data, parsed.usage))],
+            usage=self._build_usage(parsed.usage, standard_searches + premium_searches, premium_searches),
         )
-        return model_response

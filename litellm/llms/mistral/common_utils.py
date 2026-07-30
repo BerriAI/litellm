@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Mapping, Sequence
 
 import httpx
 from pydantic import TypeAdapter
@@ -10,11 +10,11 @@ from litellm.types.llms.openai import AllMessageValues
 
 WEB_SEARCH_TOOL_TYPES: tuple[str, ...] = ("web_search", "web_search_premium")
 
-STR_OBJ_DICT: TypeAdapter[dict[str, object]] = TypeAdapter(dict[str, object])
-OBJ_LIST: TypeAdapter[list[object]] = TypeAdapter(list[object])
+STR_OBJ_DICT: TypeAdapter[Mapping[str, object]] = TypeAdapter(Mapping[str, object])
+OBJ_LIST: TypeAdapter[Sequence[object]] = TypeAdapter(Sequence[object])
 
 
-def is_web_search_request(optional_params: dict) -> bool:
+def is_web_search_request(optional_params: Mapping[str, object]) -> bool:
     """True when a Mistral request should route to the Conversations API for web search."""
     params = STR_OBJ_DICT.validate_python(optional_params)
     if params.get("web_search_options") is not None:
@@ -31,33 +31,35 @@ def is_web_search_request(optional_params: dict) -> bool:
 class MistralModelInfo(BaseLLMModelInfo):
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, str],
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> dict:
-        if api_key is not None:
-            headers["Authorization"] = f"Bearer {api_key}"
-        if "content-type" not in headers and "Content-Type" not in headers:
-            headers["Content-Type"] = "application/json"
-        return headers
+        messages: Sequence[AllMessageValues],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:  # mutable-ok: BaseLLMModelInfo contract returns the headers dict
+        auth = {"Authorization": f"Bearer {api_key}"} if api_key is not None else {}
+        content_type = (
+            {} if "content-type" in headers or "Content-Type" in headers else {"Content-Type": "application/json"}
+        )
+        return {**headers, **auth, **content_type}
 
     @staticmethod
-    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+    def get_api_base(api_base: str | None = None) -> str | None:
         return api_base or get_secret_str("MISTRAL_API_BASE") or "https://api.mistral.ai"
 
     @staticmethod
-    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def get_api_key(api_key: str | None = None) -> str | None:
         return api_key or get_secret_str("MISTRAL_API_KEY")
 
     @staticmethod
-    def get_base_model(model: str) -> Optional[str]:
+    def get_base_model(model: str) -> str | None:
         return model.replace("mistral/", "")
 
-    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> list[str]:
+    def get_models(
+        self, api_key: str | None = None, api_base: str | None = None
+    ) -> list[str]:  # mutable-ok: BaseLLMModelInfo contract returns List[str]
         api_base = self.get_api_base(api_base)
         api_key = self.get_api_key(api_key)
         if api_base is None or api_key is None:

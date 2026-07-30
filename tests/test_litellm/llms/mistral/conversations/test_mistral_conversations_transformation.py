@@ -342,7 +342,7 @@ def test_transform_response_counts_web_searches_from_connectors():
         }
     )
     assert mr.usage.prompt_tokens_details.web_search_requests == 3
-    assert mr.usage.web_search_premium_requests == 2
+    assert mr.usage.prompt_tokens_details.web_search_premium_requests == 2
 
 
 def test_transform_response_counts_fall_back_to_tool_execution_by_name():
@@ -359,7 +359,7 @@ def test_transform_response_counts_fall_back_to_tool_execution_by_name():
         }
     )
     assert mr.usage.prompt_tokens_details.web_search_requests == 2
-    assert mr.usage.web_search_premium_requests == 1
+    assert mr.usage.prompt_tokens_details.web_search_premium_requests == 1
 
 
 def test_transform_response_string_content_no_citations():

@@ -1,6 +1,7 @@
+from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 from typing_extensions import TypedDict
 
 
@@ -44,7 +45,7 @@ class MistralConversationOutput(BaseModel):
     model_config = ConfigDict(extra="allow")
     type: str | None = None
     name: str | None = None
-    content: str | list[MistralConversationContentChunk] | None = None
+    content: str | tuple[MistralConversationContentChunk, ...] | None = None
 
 
 class MistralConversationUsage(BaseModel):
@@ -52,11 +53,11 @@ class MistralConversationUsage(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
-    connectors: dict[str, int] | None = None
+    connectors: Mapping[str, int] | None = None
 
 
 class MistralConversationsResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
     conversation_id: str | None = None
-    outputs: list[MistralConversationOutput] = Field(default_factory=list)
+    outputs: tuple[MistralConversationOutput, ...] = ()
     usage: MistralConversationUsage | None = None
