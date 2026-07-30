@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import json
 import logging
 import math
@@ -9,10 +10,13 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Awaitable,
     Callable,
+    Concatenate,
     Dict,
     Literal,
     Optional,
+    ParamSpec,
     Tuple,
     Union,
 )
@@ -34,6 +38,7 @@ from litellm.constants import (
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
+    SSE_KEEPALIVE_INTERVAL_SECONDS,
     STREAM_SSE_DATA_PREFIX,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -83,6 +88,9 @@ from litellm.types.utils import (
 # the per-chunk hot path can skip the context manager entirely when tracing
 # is off (the default).
 _DD_STREAMING_TRACE_ENABLED = not isinstance(tracer, NullTracer)
+
+
+SSE_KEEPALIVE_FRAME = ": litellm-keepalive\n\n"
 
 
 _CLIENT_DISCONNECTED_ERROR_INFORMATION: StandardLoggingPayloadErrorInformation = {
@@ -508,6 +516,144 @@ async def _buffer_first_chunk_honoring_disconnect(
     raise _ClientDisconnectedBeforeFirstChunk()
 
 
+def _build_stream_error_payload(e: Exception) -> tuple[int, dict[str, Any]]:
+    """Map an exception raised while starting a stream to (status code, error
+    object matching ProxyException.to_dict()), so streaming and non-streaming
+    error frames are byte-identical.
+    """
+    error_status = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
+    raw_detail = getattr(e, "detail", "Error processing stream start")
+    message, structured_fields = _serialize_http_exception_detail(raw_detail)
+
+    existing_fields = getattr(e, "provider_specific_fields", None) or {}
+    merged_fields = {**existing_fields, **structured_fields} if structured_fields else existing_fields
+
+    error_obj: dict[str, Any] = {
+        "message": message,
+        "type": getattr(e, "type", "None"),
+        "param": getattr(e, "param", "None"),
+        "code": str(error_status),
+        **({"provider_specific_fields": merged_fields} if merged_fields else {}),
+    }
+    return error_status, error_obj
+
+
+def _sse_error_frame(error_obj: dict[str, Any]) -> str:
+    return f"data: {json.dumps({'error': error_obj})}\n\ndata: [DONE]\n\n"
+
+
+def _error_obj_from_response(response: Response) -> dict[str, Any]:
+    body = getattr(response, "body", b"")
+    decoded = body.decode("utf-8") if isinstance(body, bytes) else str(body)
+    fallback: dict[str, Any] = {
+        "message": decoded,
+        "type": "None",
+        "param": "None",
+        "code": str(response.status_code),
+    }
+    try:
+        parsed = json.loads(decoded)
+    except json.JSONDecodeError:
+        return fallback
+    error_obj = parsed.get("error") if isinstance(parsed, dict) else None
+    return error_obj if isinstance(error_obj, dict) else fallback
+
+
+async def _close_stream_targets(response: Response | None) -> None:
+    with anyio.CancelScope(shield=True):
+        for target in (
+            getattr(response, "body_iterator", None),
+            getattr(response, "_upstream_generator", None),
+        ):
+            aclose = getattr(target, "aclose", None)
+            if aclose is None:
+                continue
+            try:
+                await aclose()
+            except BaseException as e:  # noqa: BLE001
+                verbose_proxy_logger.debug("error closing streaming generator after keepalive: %s", e)
+
+
+async def _keepalive_until_response(
+    response_task: "asyncio.Task[Response]",
+    keepalive_interval_seconds: float,
+) -> AsyncGenerator[str, None]:
+    """Heartbeat until the request coroutine returns a response, then forward it.
+
+    Providers hold back the upstream response headers while a reasoning model
+    thinks (OpenAI does this for over a minute on gpt-5.x), so the proxy has
+    not entered the ASGI response phase yet and nothing further down the
+    streaming path can put a byte on the wire. Committing the SSE response
+    early and heartbeating covers that whole window; the tradeoff is that the
+    per-request ``x-litellm-*`` headers and a non-200 status can no longer be
+    set, so a failure surfacing after the first heartbeat is delivered as an
+    SSE error frame.
+    """
+    response: Response | None = None
+    try:
+        while not response_task.done():
+            await asyncio.wait((response_task,), timeout=keepalive_interval_seconds)
+            if not response_task.done():
+                yield SSE_KEEPALIVE_FRAME
+        try:
+            response = response_task.result()
+        except Exception as e:  # noqa: BLE001
+            verbose_proxy_logger.exception(f"Error starting stream after keepalive response start: {e}")
+            _, error_obj = _build_stream_error_payload(e)
+            yield _sse_error_frame(error_obj)
+            return
+        if not isinstance(response, StreamingResponse):
+            yield _sse_error_frame(_error_obj_from_response(response))
+            return
+        async for chunk in response.body_iterator:
+            yield chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+    finally:
+        if not response_task.done():
+            response_task.cancel()
+            with anyio.CancelScope(shield=True):
+                try:
+                    await response_task
+                except BaseException:  # noqa: BLE001
+                    pass
+        await _close_stream_targets(response)
+
+
+_P = ParamSpec("_P")
+
+
+def sse_keepalive_during_slow_ttft(
+    process_request: Callable[Concatenate["ProxyBaseLLMRequestProcessing", _P], Awaitable[Any]],
+    *,
+    interval_seconds: Callable[[], float] = lambda: SSE_KEEPALIVE_INTERVAL_SECONDS,
+) -> Callable[Concatenate["ProxyBaseLLMRequestProcessing", _P], Awaitable[Any]]:
+    """Start the SSE response and heartbeat when a streaming request stays silent.
+
+    Disabled unless ``SSE_KEEPALIVE_INTERVAL_SECONDS`` is positive, in which
+    case a streaming request that has produced nothing after that many seconds
+    gets its response committed early so idle watchdogs (AWS ALB and nginx
+    default to 60s) see bytes instead of reaping a healthy connection.
+    """
+
+    @functools.wraps(process_request)
+    async def wrapper(self: "ProxyBaseLLMRequestProcessing", *args: _P.args, **kwargs: _P.kwargs) -> Any:
+        keepalive_interval_seconds = interval_seconds()
+        if keepalive_interval_seconds <= 0 or self.data.get("stream") is not True:
+            return await process_request(self, *args, **kwargs)
+
+        response_task = asyncio.create_task(process_request(self, *args, **kwargs))
+        await asyncio.wait((response_task,), timeout=keepalive_interval_seconds)
+        if response_task.done():
+            return response_task.result()
+
+        return StreamingResponse(
+            _keepalive_until_response(response_task, keepalive_interval_seconds),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    return wrapper
+
+
 async def create_response(
     generator: AsyncGenerator[str, None],
     media_type: str,
@@ -598,27 +744,7 @@ async def create_response(
         # Unexpected error consuming first chunk.
         verbose_proxy_logger.exception(f"Error consuming first chunk from generator: {e}")
 
-        # Preserve status code from HTTPException (e.g., guardrail blocks)
-        error_status = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
-        raw_detail = getattr(e, "detail", "Error processing stream start")
-        message, structured_fields = _serialize_http_exception_detail(raw_detail)
-
-        existing_fields = getattr(e, "provider_specific_fields", None) or {}
-        if structured_fields:
-            merged_fields: Optional[dict] = {**existing_fields, **structured_fields}
-        else:
-            merged_fields = existing_fields or None
-
-        # Match ProxyException.to_dict() shape so streaming and non-streaming
-        # error frames are byte-identical.
-        error_obj: Dict[str, Any] = {
-            "message": message,
-            "type": getattr(e, "type", "None"),
-            "param": getattr(e, "param", "None"),
-            "code": str(error_status),
-        }
-        if merged_fields:
-            error_obj["provider_specific_fields"] = merged_fields
+        error_status, error_obj = _build_stream_error_payload(e)
 
         async def error_gen_message() -> AsyncGenerator[str, None]:
             yield f"data: {json.dumps({'error': error_obj})}\n\n"
@@ -1482,6 +1608,7 @@ class ProxyBaseLLMRequestProcessing:
                 _payload_str,
             )
 
+    @sse_keepalive_during_slow_ttft
     async def base_process_llm_request(
         self,
         request: Request,
