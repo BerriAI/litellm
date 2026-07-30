@@ -17,12 +17,12 @@ unknown impl value raises, which the proxy converts to the fail-closed 503.
 
 import os
 
-import httpx
-
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy.management_helpers.team_metadata_validation import (
     TeamMetadataValidationPayload,
     TeamMetadataValidationResult,
 )
+from litellm.types.llms.custom_http import httpxSpecialProvider
 
 ALLOWED_COST_CENTERS = frozenset({"CC-1001", "CC-1002"})
 CLOSED_PORT_URL = "http://127.0.0.1:9/validate"
@@ -44,13 +44,13 @@ async def _validate_allowlist(payload: TeamMetadataValidationPayload) -> TeamMet
 
 
 async def _validate_via_http(payload: TeamMetadataValidationPayload, service_url: str) -> TeamMetadataValidationResult:
-    async with httpx.AsyncClient(timeout=2.0) as client:
-        response = await client.post(
-            service_url,
-            json={"operation": payload.operation, "metadata": payload.metadata},
-        )
-        response.raise_for_status()
-        body = response.json()
+    client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+    response = await client.post(
+        service_url,
+        json={"operation": payload.operation, "metadata": payload.metadata},
+        timeout=2.0,
+    )
+    body = response.json()
     if body.get("ok") is True:
         return TeamMetadataValidationResult(valid=True)
     return TeamMetadataValidationResult(
