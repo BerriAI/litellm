@@ -113,6 +113,14 @@ def _classifier_call_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]
     }
 
 
+def _effective_turn_off_message_logging(request_kwargs: dict[str, Any] | None) -> bool | None:
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+
+    return initialize_standard_callback_dynamic_params(request_kwargs or {}).get("turn_off_message_logging")
+
+
 class DimensionScore:
     """Represents a score for a single dimension with optional signal."""
 
@@ -430,6 +438,7 @@ class ComplexityRouter(CustomLogger):
         # internal classifier call) is responsible for reconciling.
         request_metadata = (request_kwargs or {}).get("litellm_metadata") or (request_kwargs or {}).get("metadata")
         metadata = _classifier_call_metadata(request_metadata)
+        turn_off_message_logging = _effective_turn_off_message_logging(request_kwargs)
 
         proxy_server_request = {
             "body": {
@@ -446,6 +455,7 @@ class ComplexityRouter(CustomLogger):
             timeout=llm_config.timeout_ms / 1000,
             metadata=metadata,
             proxy_server_request=proxy_server_request,
+            turn_off_message_logging=turn_off_message_logging,
         )
         content = response.choices[0].message.content
         if not content:
@@ -832,6 +842,7 @@ class ComplexityRouter(CustomLogger):
         # key/team budget. Key/team attribution fields are preserved for spend logging.
         metadata = _classifier_call_metadata(request_kwargs.get("metadata"))
         litellm_metadata = _classifier_call_metadata(request_kwargs.get("litellm_metadata"))
+        turn_off_message_logging = _effective_turn_off_message_logging(request_kwargs)
         proxy_server_request = {"body": {"model": self.config.embedding_model, "input": [user_message]}}
         query_vector = (
             await encoder.aencode_queries(
@@ -839,6 +850,7 @@ class ComplexityRouter(CustomLogger):
                 metadata=metadata,
                 litellm_metadata=litellm_metadata,
                 proxy_server_request=proxy_server_request,
+                turn_off_message_logging=turn_off_message_logging,
             )
         )[0]
         route_choice = await routelayer.acall(vector=query_vector)

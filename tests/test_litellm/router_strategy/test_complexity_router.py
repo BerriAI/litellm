@@ -1466,6 +1466,54 @@ class TestLLMClassifier:
         ]
 
     @pytest.mark.asyncio
+    async def test_aclassify_propagates_top_level_turn_off_message_logging(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """A caller's top-level turn_off_message_logging must reach the classifier call.
+
+        Without this, a caller who opts a request out of message logging still has their
+        prompt captured in full by the classifier's proxy_server_request: the spend-log
+        redaction gate (should_redact_message_logging) reads turn_off_message_logging off
+        the classifier call's own kwargs, and this internal call is not the caller's
+        request, so it never inherits the opt-out unless it's forwarded explicitly.
+        """
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        await llm_complexity_router.aclassify("secret prompt", request_kwargs={"turn_off_message_logging": True})
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        assert call_kwargs["turn_off_message_logging"] is True
+
+    @pytest.mark.asyncio
+    async def test_aclassify_propagates_metadata_slot_turn_off_message_logging(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """turn_off_message_logging set inside metadata/litellm_metadata must also propagate.
+
+        initialize_standard_callback_dynamic_params reads this flag from either the
+        top-level request kwargs or the metadata/litellm_metadata dicts (the same slots a
+        real HTTP request populates), so the classifier call must resolve it from there too.
+        """
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        await llm_complexity_router.aclassify(
+            "secret prompt", request_kwargs={"litellm_metadata": {"turn_off_message_logging": True}}
+        )
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        assert call_kwargs["turn_off_message_logging"] is True
+
+    @pytest.mark.asyncio
+    async def test_aclassify_defaults_turn_off_message_logging_to_none(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """With no caller opt-out, the classifier call must not force redaction on or off.
+
+        Passing None (rather than omitting the kwarg or defaulting to False) preserves the
+        existing header- and global-setting fallbacks in should_redact_message_logging.
+        """
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        await llm_complexity_router.aclassify("hi")
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        assert call_kwargs["turn_off_message_logging"] is None
+
+    @pytest.mark.asyncio
     async def test_aclassify_strips_budget_reservation_from_classifier_metadata(
         self, llm_complexity_router, mock_router_instance
     ):
@@ -2249,6 +2297,36 @@ class TestSemanticKeywordTierRules:
         body = fake_router.async_embedding_kwargs[0]["proxy_server_request"]["body"]
         assert body["model"] == "fake-embed"
         assert body["input"] == ["roll out my k8s cluster"]
+
+    @pytest.mark.asyncio
+    async def test_semantic_embedding_call_propagates_turn_off_message_logging(self, basic_config):
+        """A caller's turn_off_message_logging must reach the query embedding call.
+
+        The embedding now captures the user's prompt in proxy_server_request, so a caller
+        who opts out of message logging must have that opt-out forwarded; otherwise the
+        embedding's spend-log row stores the prompt in the clear despite the parent request
+        being redacted, exposing it to anyone authorized to read the team's spend logs.
+        """
+        fake_router = FakeEmbeddingRouter()
+        config = {
+            **basic_config,
+            "keyword_tier_rules": [{"keywords": ["kubernetes deployment"], "tier": "REASONING"}],
+            "semantic_keyword_matching": True,
+            "embedding_model": "fake-embed",
+            "match_threshold": 0.5,
+        }
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=fake_router,
+            complexity_router_config=config,
+        )
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"turn_off_message_logging": True},
+            messages=[{"role": "user", "content": "roll out my k8s cluster"}],
+        )
+        assert fake_router.async_embedding_kwargs, "expected an embedding call for the prompt"
+        assert fake_router.async_embedding_kwargs[0]["turn_off_message_logging"] is True
 
     @pytest.mark.asyncio
     async def test_semantic_embedding_call_strips_budget_reservation(self, basic_config):
