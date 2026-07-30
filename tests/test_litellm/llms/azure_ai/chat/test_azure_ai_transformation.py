@@ -334,3 +334,53 @@ def test_azure_ai_strips_non_openai_spec_message_fields():
     assistant_message = transformed_messages[1]
     assert assistant_message["content"] == "I can help."
     assert assistant_message["tool_calls"][0]["function"]["name"] == "read_file"
+
+
+def test_azure_ai_stripping_does_not_mutate_caller_messages():
+    """
+    The stripping must not touch the caller's messages. LiteLLM reuses the same
+    message objects when falling back to another provider, so stripping in place
+    would hand the fallback a conversation history with its thinking blocks and
+    provider metadata already destroyed.
+    """
+    config = AzureAIStudioConfig()
+
+    messages = [
+        {"role": "user", "content": "Read a file."},
+        {
+            "role": "assistant",
+            "content": "I can help.",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "Reading the file.", "signature": "sig"}
+            ],
+            "provider_specific_fields": {"thought_signature": "sig-top"},
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": "{}",
+                        "provider_specific_fields": {"thought_signature": "sig-nested"},
+                    },
+                }
+            ],
+        },
+    ]
+
+    request = config.transform_request(
+        model="fw-glm-5.2",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert not _find_key_anywhere(request["messages"], "thinking_blocks")
+
+    original_assistant = messages[1]
+    assert original_assistant["thinking_blocks"][0]["thinking"] == "Reading the file."
+    assert original_assistant["provider_specific_fields"] == {"thought_signature": "sig-top"}
+    assert original_assistant["tool_calls"][0]["function"]["provider_specific_fields"] == {
+        "thought_signature": "sig-nested"
+    }
