@@ -592,14 +592,15 @@ class BaseResponsesAPIStreamingIterator:
                     _slot = {"type": "output_text", "text": _text, "annotations": _annotations or []}
                     if _content_index < len(_existing_content):
                         _content = (
-                            _existing_content[:_content_index]
-                            + [_slot]
-                            + _existing_content[_content_index + 1:]
+                            _existing_content[:_content_index] + [_slot] + _existing_content[_content_index + 1 :]
                         )
                     else:
                         _content = (
                             _existing_content
-                            + [{"type": "output_text", "text": "", "annotations": []} for _ in range(_content_index - len(_existing_content))]
+                            + [
+                                {"type": "output_text", "text": "", "annotations": []}
+                                for _ in range(_content_index - len(_existing_content))
+                            ]
                             + [_slot]
                         )
                     self._streamed_text_only_items[_output_index] = BaseLiteLLMOpenAIResponseObject(  # mutable-ok

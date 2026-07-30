@@ -114,8 +114,8 @@ class TestStreamingIteratorOutputRecovery:
         iterator = _make_iterator()
 
         with patch.object(iterator, "_handle_logging_completed_response"):
-            _process_and_accumulate(iterator, 
-                json.dumps({"type": "response.output_item.done", "output_index": 0, "item": _OUTPUT_ITEM})
+            _process_and_accumulate(
+                iterator, json.dumps({"type": "response.output_item.done", "output_index": 0, "item": _OUTPUT_ITEM})
             )
             iterator._process_chunk(
                 json.dumps({"type": "response.completed", "response": {**_RESPONSE_BASE, "output": []}})
@@ -141,8 +141,8 @@ class TestStreamingIteratorOutputRecovery:
         iterator = _make_iterator()
 
         with patch.object(iterator, "_handle_logging_completed_response"):
-            _process_and_accumulate(iterator, 
-                json.dumps({"type": "response.output_item.done", "output_index": 0, "item": _OUTPUT_ITEM})
+            _process_and_accumulate(
+                iterator, json.dumps({"type": "response.output_item.done", "output_index": 0, "item": _OUTPUT_ITEM})
             )
             iterator._process_chunk(
                 json.dumps(
@@ -175,11 +175,11 @@ class TestStreamingIteratorOutputRecovery:
         iterator = _make_iterator()
 
         with patch.object(iterator, "_handle_logging_completed_response"):
-            _process_and_accumulate(iterator, 
-                json.dumps({"type": "response.output_item.done", "output_index": 1, "item": item_b})
+            _process_and_accumulate(
+                iterator, json.dumps({"type": "response.output_item.done", "output_index": 1, "item": item_b})
             )
-            _process_and_accumulate(iterator, 
-                json.dumps({"type": "response.output_item.done", "output_index": 0, "item": item_a})
+            _process_and_accumulate(
+                iterator, json.dumps({"type": "response.output_item.done", "output_index": 0, "item": item_a})
             )
             iterator._process_chunk(
                 json.dumps({"type": "response.completed", "response": {**_RESPONSE_BASE, "output": []}})
@@ -199,14 +199,17 @@ class TestStreamingIteratorOutputRecovery:
         iterator = _make_iterator()
 
         with patch.object(iterator, "_handle_logging_completed_response"):
-            _process_and_accumulate(iterator, 
-                json.dumps({
-                    "type": "response.output_text.done",
-                    "output_index": 0,
-                    "content_index": 0,
-                    "item_id": "msg_text_only",
-                    "text": "text only content",
-                })
+            _process_and_accumulate(
+                iterator,
+                json.dumps(
+                    {
+                        "type": "response.output_text.done",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "item_id": "msg_text_only",
+                        "text": "text only content",
+                    }
+                ),
             )
             iterator._process_chunk(
                 json.dumps({"type": "response.completed", "response": {**_RESPONSE_BASE, "output": []}})
@@ -225,17 +228,20 @@ class TestStreamingIteratorOutputRecovery:
         iterator = _make_iterator()
 
         with patch.object(iterator, "_handle_logging_completed_response"):
-            _process_and_accumulate(iterator, 
-                json.dumps({
-                    "type": "response.output_text.done",
-                    "output_index": 0,
-                    "content_index": 0,
-                    "item_id": "msg_text_only",
-                    "text": "text only content",
-                })
+            _process_and_accumulate(
+                iterator,
+                json.dumps(
+                    {
+                        "type": "response.output_text.done",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "item_id": "msg_text_only",
+                        "text": "text only content",
+                    }
+                ),
             )
-            _process_and_accumulate(iterator, 
-                json.dumps({"type": "response.output_item.done", "output_index": 0, "item": _OUTPUT_ITEM})
+            _process_and_accumulate(
+                iterator, json.dumps({"type": "response.output_item.done", "output_index": 0, "item": _OUTPUT_ITEM})
             )
             iterator._process_chunk(
                 json.dumps({"type": "response.completed", "response": {**_RESPONSE_BASE, "output": []}})
@@ -254,14 +260,16 @@ class TestStreamingIteratorOutputRecovery:
         iterator = _make_iterator()
 
         with patch.object(iterator, "_handle_logging_completed_response"):
-            _process_and_accumulate(iterator, 
-                json.dumps({"type": "response.output_item.done", "output_index": 0, "item": _OUTPUT_ITEM})
+            _process_and_accumulate(
+                iterator, json.dumps({"type": "response.output_item.done", "output_index": 0, "item": _OUTPUT_ITEM})
             )
             iterator._process_chunk(
-                json.dumps({
-                    "type": "response.incomplete",
-                    "response": {**_RESPONSE_BASE, "status": "incomplete", "output": []},
-                })
+                json.dumps(
+                    {
+                        "type": "response.incomplete",
+                        "response": {**_RESPONSE_BASE, "status": "incomplete", "output": []},
+                    }
+                )
             )
 
         assert iterator.completed_response is not None
@@ -277,14 +285,16 @@ class TestStreamingIteratorOutputRecovery:
         iterator = _make_iterator()
 
         with patch.object(iterator, "_handle_logging_completed_response"):
-            _process_and_accumulate(iterator, 
-                json.dumps({"type": "response.output_item.done", "output_index": 0, "item": _OUTPUT_ITEM})
+            _process_and_accumulate(
+                iterator, json.dumps({"type": "response.output_item.done", "output_index": 0, "item": _OUTPUT_ITEM})
             )
             iterator._process_chunk(
-                json.dumps({
-                    "type": "response.failed",
-                    "response": {**_RESPONSE_BASE, "status": "failed", "output": []},
-                })
+                json.dumps(
+                    {
+                        "type": "response.failed",
+                        "response": {**_RESPONSE_BASE, "status": "failed", "output": []},
+                    }
+                )
             )
 
         assert iterator.completed_response is not None
@@ -300,23 +310,29 @@ class TestStreamingIteratorOutputRecovery:
         iterator = _make_iterator()
 
         with patch.object(iterator, "_handle_logging_completed_response"):
-            _process_and_accumulate(iterator, 
-                json.dumps({
-                    "type": "response.output_text.done",
-                    "output_index": 0,
-                    "content_index": 0,
-                    "item_id": "msg_replace",
-                    "text": "first",
-                })
+            _process_and_accumulate(
+                iterator,
+                json.dumps(
+                    {
+                        "type": "response.output_text.done",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "item_id": "msg_replace",
+                        "text": "first",
+                    }
+                ),
             )
-            _process_and_accumulate(iterator, 
-                json.dumps({
-                    "type": "response.output_text.done",
-                    "output_index": 0,
-                    "content_index": 0,
-                    "item_id": "msg_replace",
-                    "text": "replaced",
-                })
+            _process_and_accumulate(
+                iterator,
+                json.dumps(
+                    {
+                        "type": "response.output_text.done",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "item_id": "msg_replace",
+                        "text": "replaced",
+                    }
+                ),
             )
             iterator._process_chunk(
                 json.dumps({"type": "response.completed", "response": {**_RESPONSE_BASE, "output": []}})
@@ -336,14 +352,17 @@ class TestStreamingIteratorOutputRecovery:
         iterator = _make_iterator()
 
         with patch.object(iterator, "_handle_logging_completed_response"):
-            _process_and_accumulate(iterator, 
-                json.dumps({
-                    "type": "response.output_text.done",
-                    "output_index": 0,
-                    "content_index": 2,
-                    "item_id": "msg_gap",
-                    "text": "late content",
-                })
+            _process_and_accumulate(
+                iterator,
+                json.dumps(
+                    {
+                        "type": "response.output_text.done",
+                        "output_index": 0,
+                        "content_index": 2,
+                        "item_id": "msg_gap",
+                        "text": "late content",
+                    }
+                ),
             )
             iterator._process_chunk(
                 json.dumps({"type": "response.completed", "response": {**_RESPONSE_BASE, "output": []}})
@@ -368,7 +387,9 @@ class TestStreamingIteratorOutputRecovery:
         iterator = _make_iterator()
 
         with patch.object(iterator, "_handle_logging_completed_response"):
-            _process_and_accumulate(iterator, json.dumps({"type": "response.output_item.done", "output_index": 0, "item": item_a}))
+            _process_and_accumulate(
+                iterator, json.dumps({"type": "response.output_item.done", "output_index": 0, "item": item_a})
+            )
             _process_and_accumulate(iterator, json.dumps({"type": "response.output_item.done", "item": item_b}))
             iterator._process_chunk(
                 json.dumps({"type": "response.completed", "response": {**_RESPONSE_BASE, "output": []}})
@@ -388,8 +409,8 @@ class TestStreamingIteratorOutputRecovery:
         iterator = _make_iterator()
 
         with patch.object(iterator, "_handle_logging_completed_response"):
-            _process_and_accumulate(iterator, 
-                json.dumps({"type": "response.output_item.done", "output_index": 0, "item": _OUTPUT_ITEM})
+            _process_and_accumulate(
+                iterator, json.dumps({"type": "response.output_item.done", "output_index": 0, "item": _OUTPUT_ITEM})
             )
             with patch.object(
                 iterator._streamed_output_items[0],
