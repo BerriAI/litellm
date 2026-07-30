@@ -5,7 +5,9 @@ anywhere; a small allowlist grandfathers the files that legitimately make raw ca
 (the transport itself, the root conftest liveness probe, the claude_code version
 resolver's constant registry URL fetch, and the mcp OAuth client, whose httpx
 client is the object the official mcp SDK's streamable_http_client requires and so
-cannot go through the sync requests transport). Referenced by tests/e2e/CLAUDE.md."""
+cannot go through the sync requests transport), plus the transport's own unit test,
+which builds requests.Response objects in memory to feed the classifier and makes
+no network call at all. Referenced by tests/e2e/CLAUDE.md."""
 
 from __future__ import annotations
 
@@ -22,6 +24,8 @@ ALLOWED_RAW_CLIENT_FILES = {
     "conftest.py": ("requests",),
     "claude_code/pr_gate_version_resolver.py": ("urllib.request",),
     "mcp/oauth_chat_client.py": ("httpx",),
+    # Constructs Response objects offline to test classify_response; sends nothing.
+    "test_e2e_http.py": ("requests",),
 }
 
 EXCEPTION_ONLY_NAMES = frozenset({"RequestException", "ConnectionError", "Timeout", "HTTPError"})
