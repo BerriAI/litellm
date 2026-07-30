@@ -12,17 +12,17 @@ describe("MoneyCell", () => {
     rerender(<MoneyCell value={Number.NaN} />);
     expect(screen.getByText("-")).toBeInTheDocument();
     rerender(<MoneyCell value={Number.POSITIVE_INFINITY} />);
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.getByText("-")).toHaveClass("w-full", "text-right", "tabular-nums");
   });
 
   it("renders the custom emptyText for null budgets", () => {
     render(<MoneyCell value={null} emptyText="Unlimited" />);
-    expect(screen.getByText("Unlimited")).toBeInTheDocument();
+    expect(screen.getByText("Unlimited")).toHaveClass("w-full", "text-right", "tabular-nums");
   });
 
   it("renders '-' for zero by default", () => {
     render(<MoneyCell value={0} />);
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.getByText("-")).toHaveClass("w-full", "text-right", "tabular-nums");
   });
 
   it("renders a formatted zero when showZero is set, never the emptyText", () => {
@@ -35,15 +35,13 @@ describe("MoneyCell", () => {
     const { container } = render(<MoneyCell value={1234.5678} decimals={2} />);
     expect(screen.getByText("$1,234.57")).toBeInTheDocument();
     expect(container.querySelector('[data-slot="money-cell"]')).toHaveClass(
-      "flex",
+      "block",
       "w-full",
-      "justify-end",
-      "gap-x-1",
       "text-right",
       "tabular-nums",
     );
-    expect(container.querySelector('[data-slot="money-cell-currency"]')).toHaveTextContent("$");
-    expect(container.querySelector('[data-slot="money-cell-value"]')).toHaveTextContent("1,234.57");
+    expect(container.querySelector('[data-slot="money-cell"]')).not.toHaveAttribute("aria-hidden");
+    expect(screen.getAllByText("$1,234.57")).toHaveLength(1);
   });
 
   it("defaults to 4 decimals", () => {
@@ -54,6 +52,6 @@ describe("MoneyCell", () => {
   it("renders the sub-threshold form for amounts that round to zero", () => {
     const { container } = render(<MoneyCell value={0.0000001} decimals={6} />);
     expect(screen.getByText("< $0.000001")).toBeInTheDocument();
-    expect(container.querySelector('[data-slot="money-cell-value"]')).toHaveTextContent("< 0.000001");
+    expect(container.querySelector('[data-slot="money-cell"]')).toHaveTextContent("< $0.000001");
   });
 });
