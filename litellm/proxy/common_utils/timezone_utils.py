@@ -1,9 +1,14 @@
 from datetime import datetime, time, timezone
 
 from pydantic import BaseModel, ConfigDict
+from typing_extensions import assert_never
 
 import litellm
-from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
+from litellm.litellm_core_utils.duration_parser import (
+    get_next_rolling_reset_time,
+    get_next_standardized_reset_time,
+)
+from litellm.types.budget import DEFAULT_BUDGET_RESET_ALIGNMENT, BudgetResetAlignment
 
 
 class BudgetResetSettings(BaseModel):
@@ -61,20 +66,49 @@ def get_budget_reset_settings() -> BudgetResetSettings:
     )
 
 
-def compute_budget_reset_at(budget_duration: str, settings: BudgetResetSettings) -> datetime:
-    """Compute the next reset time for a budget duration using injected settings."""
-    return get_next_standardized_reset_time(
-        duration=budget_duration,
-        current_time=datetime.now(timezone.utc),
-        timezone_str=settings.timezone,
-        reset_time_of_day=settings.reset_time_of_day,
-    )
+def compute_budget_reset_at(
+    budget_duration: str,
+    settings: BudgetResetSettings,
+    alignment: BudgetResetAlignment = DEFAULT_BUDGET_RESET_ALIGNMENT,
+    previous_reset_at: datetime | None = None,
+) -> datetime:
+    """Compute the next reset time for a budget duration using injected settings.
+
+    `reset_time_of_day` is a calendar-alignment concept only; rolling budgets keep
+    the time of day of their own anchor, so it does not apply to them.
+    """
+    now = datetime.now(timezone.utc)
+    match alignment:
+        case "calendar":
+            return get_next_standardized_reset_time(
+                duration=budget_duration,
+                current_time=now,
+                timezone_str=settings.timezone,
+                reset_time_of_day=settings.reset_time_of_day,
+            )
+        case "rolling":
+            return get_next_rolling_reset_time(
+                duration=budget_duration,
+                current_time=now,
+                timezone_str=settings.timezone,
+                previous_reset_at=previous_reset_at,
+            )
+    assert_never(alignment)
 
 
-def get_budget_reset_time(budget_duration: str) -> datetime:
+def get_budget_reset_time(
+    budget_duration: str,
+    alignment: BudgetResetAlignment = DEFAULT_BUDGET_RESET_ALIGNMENT,
+    previous_reset_at: datetime | None = None,
+) -> datetime:
     """Get the budget reset time using the globally-configured timezone and reset time.
 
     Thin wrapper over `compute_budget_reset_at` for callers that don't yet receive
     `BudgetResetSettings` by injection (creation/update endpoints, startup backfill).
     """
-    return compute_budget_reset_at(budget_duration, get_budget_reset_settings())
+    return compute_budget_reset_at(
+        budget_duration,
+        get_budget_reset_settings(),
+        alignment=alignment,
+        previous_reset_at=previous_reset_at,
+    )

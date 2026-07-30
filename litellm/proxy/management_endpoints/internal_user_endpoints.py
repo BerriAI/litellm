@@ -58,6 +58,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+from litellm.types.budget import DEFAULT_BUDGET_RESET_ALIGNMENT, BudgetResetAlignment
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -1084,7 +1085,11 @@ def _process_keys_for_user_info(
     return returned_keys
 
 
-def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
+def _update_internal_user_params(
+    data_json: dict,
+    data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail,
+    existing_alignment: BudgetResetAlignment | None = None,
+) -> dict:
     non_default_values = {}
     fields_set = data.fields_set() if hasattr(data, "fields_set") else set()
 
@@ -1107,11 +1112,14 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     if data.user_role == LitellmUserRoles.INTERNAL_USER:
         is_internal_user = True
 
+    effective_alignment = data.budget_reset_alignment or existing_alignment or DEFAULT_BUDGET_RESET_ALIGNMENT
+
     if "budget_duration" in non_default_values:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
         non_default_values["budget_reset_at"] = get_budget_reset_time(
-            budget_duration=non_default_values["budget_duration"]
+            budget_duration=non_default_values["budget_duration"],
+            alignment=effective_alignment,
         )
 
     if "max_budget" not in non_default_values:
@@ -1126,7 +1134,8 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
             from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
             non_default_values["budget_reset_at"] = get_budget_reset_time(
-                budget_duration=non_default_values["budget_duration"]
+                budget_duration=non_default_values["budget_duration"],
+                alignment=effective_alignment,
             )
 
     return non_default_values
@@ -1231,10 +1240,6 @@ async def _update_single_user_helper(
         user_api_key_dict=user_api_key_dict,
     )
 
-    data_json: dict = user_request.model_dump(exclude_unset=True)
-    non_default_values = _update_internal_user_params(data_json=data_json, data=user_request)
-    _hash_password_in_dict(non_default_values)
-
     existing_user_row: BaseModel | None = None
     if user_request.user_id:
         existing_user_row = await UserRepository(prisma_client).table.find_first(
@@ -1249,6 +1254,14 @@ async def _update_single_user_helper(
 
     if existing_user_row is not None:
         existing_user_row = LiteLLM_UserTable.model_validate(existing_user_row.model_dump(exclude_none=True))
+
+    data_json: dict = user_request.model_dump(exclude_unset=True)
+    non_default_values = _update_internal_user_params(
+        data_json=data_json,
+        data=user_request,
+        existing_alignment=getattr(existing_user_row, "budget_reset_alignment", None),
+    )
+    _hash_password_in_dict(non_default_values)
 
     # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
     # must not be able to raise their own budget/spend fields.

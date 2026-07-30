@@ -1817,3 +1817,84 @@ def test_get_data_reset_query_selects_null_budget_reset_at(table_name):
     )
 
     _asserts_null_reset_is_due(_extract_reset_where(find_many))
+
+
+def _make_key(*, budget_duration, budget_reset_at, token, alignment=None):
+    attrs = {
+        "spend": 100.0,
+        "budget_duration": budget_duration,
+        "budget_reset_at": budget_reset_at,
+        "id": token,
+        "token": token,
+    }
+    if alignment is not None:
+        attrs["budget_reset_alignment"] = alignment
+    return type("LiteLLM_VerificationToken", (), attrs)
+
+
+def test_reset_budget_for_key_without_alignment_stays_calendar_aligned(reset_budget_job, mock_prisma_client):
+    """Rows predating the column must keep the old behavior: 1mo snaps to the 1st."""
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["key"] = [
+        _make_key(budget_duration="1mo", budget_reset_at=now, token="tok-no-alignment")
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    write = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "key"][0]
+    reset_at = write["data"]["budget_reset_at"].astimezone(timezone.utc)
+    assert reset_at.day == 1
+    assert reset_at.hour == 0
+
+
+def test_reset_budget_for_key_rolling_keeps_anchor_time_of_day(reset_budget_job, mock_prisma_client):
+    """A rolling key resets one calendar month after its own previous reset, same clock time."""
+    previous_reset_at = datetime(2026, 7, 30, 14, 37, 0, tzinfo=timezone.utc)
+    mock_prisma_client.data["key"] = [
+        _make_key(
+            budget_duration="1mo",
+            budget_reset_at=previous_reset_at,
+            token="tok-rolling",
+            alignment="rolling",
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    write = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "key"][0]
+    reset_at = write["data"]["budget_reset_at"].astimezone(timezone.utc)
+    assert write["data"]["spend"] == 0
+    assert (reset_at.hour, reset_at.minute) == (14, 37)
+    assert reset_at.day == 30
+    assert reset_at > datetime.now(timezone.utc)
+
+
+def test_rolling_and_calendar_keys_reset_to_different_times_in_one_run(reset_budget_job, mock_prisma_client):
+    """Per-key alignment is honored per row, not proxy-wide."""
+    previous_reset_at = datetime(2026, 7, 30, 14, 37, 0, tzinfo=timezone.utc)
+    mock_prisma_client.data["key"] = [
+        _make_key(
+            budget_duration="1mo",
+            budget_reset_at=previous_reset_at,
+            token="tok-cal",
+            alignment="calendar",
+        ),
+        _make_key(
+            budget_duration="1mo",
+            budget_reset_at=previous_reset_at,
+            token="tok-roll",
+            alignment="rolling",
+        ),
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    written = {
+        c["where"]["token"]: c["data"]["budget_reset_at"].astimezone(timezone.utc)
+        for c in mock_prisma_client.db.batch_calls
+        if c["table"] == "key"
+    }
+    assert written["tok-cal"].day == 1
+    assert written["tok-cal"].hour == 0
+    assert (written["tok-roll"].hour, written["tok-roll"].minute) == (14, 37)
+    assert written["tok-cal"] != written["tok-roll"]

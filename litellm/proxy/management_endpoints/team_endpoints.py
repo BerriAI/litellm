@@ -122,6 +122,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router import Router
+from litellm.types.budget import DEFAULT_BUDGET_RESET_ALIGNMENT
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -1221,6 +1222,7 @@ async def new_team(
 
             complete_team_data.budget_reset_at = get_budget_reset_time(
                 budget_duration=complete_team_data.budget_duration,
+                alignment=complete_team_data.budget_reset_alignment or DEFAULT_BUDGET_RESET_ALIGNMENT,
             )
 
         # If budget_limits is set, initialize reset_at for each window
@@ -1824,7 +1826,7 @@ async def update_team(
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(updated_kv["metadata"])
 
         # Check budget_duration and budget_reset_at
-        _set_budget_reset_at(data, updated_kv)
+        _set_budget_reset_at(data, updated_kv, existing_team_row)
 
         _team_member_fields_in_request = {
             field
@@ -2026,15 +2028,33 @@ async def patch_team(
         raise handle_exception_on_proxy(e)
 
 
-def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
+def _set_budget_reset_at(
+    data: UpdateTeamRequest,
+    updated_kv: dict,
+    existing_team_row: LiteLLM_TeamTable | None = None,
+) -> None:
     """Set budget_reset_at in updated_kv if budget_duration is provided."""
+    existing_alignment = existing_team_row.budget_reset_alignment if existing_team_row is not None else None
+    effective_alignment = data.budget_reset_alignment or existing_alignment or DEFAULT_BUDGET_RESET_ALIGNMENT
+
     if data.budget_duration is not None:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
-        reset_at = get_budget_reset_time(budget_duration=data.budget_duration)
+        reset_at = get_budget_reset_time(budget_duration=data.budget_duration, alignment=effective_alignment)
         updated_kv["budget_reset_at"] = reset_at
     elif "budget_duration" in updated_kv and updated_kv["budget_duration"] is None:
         updated_kv["budget_reset_at"] = None
+    elif (
+        data.budget_reset_alignment is not None
+        and existing_team_row is not None
+        and existing_team_row.budget_duration is not None
+    ):
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+        updated_kv["budget_reset_at"] = get_budget_reset_time(
+            budget_duration=existing_team_row.budget_duration,
+            alignment=effective_alignment,
+        )
 
     if data.budget_limits is not None and len(data.budget_limits) > 0:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time

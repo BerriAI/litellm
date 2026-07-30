@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from datetime import datetime, timezone
 
 import litellm
 import pytest
@@ -15256,3 +15257,69 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
         prisma_client=mock_prisma_client,
         new_master_key="sk-new-master-key",
     )
+
+
+@pytest.mark.asyncio
+async def test_key_update_without_alignment_keeps_calendar_reset():
+    """A key that never set an alignment must keep snapping 1mo to the 1st."""
+    data = UpdateKeyRequest(key="sk-1", budget_duration="1mo")
+    existing_key = LiteLLM_VerificationToken(token="hashed", budget_duration="1mo")
+
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert result["budget_reset_at"].day == 1
+    assert result["budget_reset_at"].hour == 0
+
+
+@pytest.mark.asyncio
+async def test_key_update_of_duration_only_preserves_stored_rolling_alignment():
+    """Changing budget_duration must not silently revert a rolling key to calendar."""
+    data = UpdateKeyRequest(key="sk-1", budget_duration="1mo")
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed", budget_duration="1mo", budget_reset_alignment="rolling"
+    )
+
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    reset_at = result["budget_reset_at"]
+    now = datetime.now(timezone.utc)
+    assert reset_at.day != 1 or now.day == 1
+    assert reset_at.hour == now.hour
+
+
+@pytest.mark.asyncio
+async def test_switching_alignment_alone_recomputes_reset_at():
+    """Flipping a key to rolling must take effect immediately, not one period later."""
+    data = UpdateKeyRequest(key="sk-1", budget_reset_alignment="rolling")
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed", budget_duration="1mo", budget_reset_alignment="calendar"
+    )
+
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert result["budget_reset_alignment"] == "rolling"
+    assert result["budget_reset_at"].hour == datetime.now(timezone.utc).hour
+
+
+@pytest.mark.asyncio
+async def test_switching_alignment_alone_is_noop_without_a_budget_duration():
+    """No budget_duration means no window to recompute; reset_at must stay absent."""
+    data = UpdateKeyRequest(key="sk-1", budget_reset_alignment="rolling")
+    existing_key = LiteLLM_VerificationToken(token="hashed", budget_duration=None)
+
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert result["budget_reset_alignment"] == "rolling"
+    assert "budget_reset_at" not in result
+
+
+@pytest.mark.asyncio
+async def test_key_update_alignment_is_persisted_as_plain_string():
+    """The column is TEXT; an enum member would be written as its repr."""
+    data = UpdateKeyRequest(key="sk-1", budget_reset_alignment="rolling")
+    existing_key = LiteLLM_VerificationToken(token="hashed", budget_duration="1mo")
+
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert type(result["budget_reset_alignment"]) is str
+    assert result["budget_reset_alignment"] == "rolling"

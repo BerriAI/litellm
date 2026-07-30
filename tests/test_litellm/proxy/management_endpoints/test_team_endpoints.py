@@ -10289,3 +10289,74 @@ async def test_list_available_teams_filters_joined_and_validates_rows(monkeypatc
     assert result[0].team_alias == "open team"
     find_many_kwargs = mock_prisma_client.db.litellm_teamtable.find_many.call_args.kwargs
     assert find_many_kwargs["where"] == {"team_id": {"in": ["team-open"]}}
+
+
+def test_set_budget_reset_at_defaults_to_calendar_for_teams_without_alignment():
+    """Teams predating the column must keep snapping 1mo to the 1st."""
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+
+    data = UpdateTeamRequest(team_id="t", budget_duration="1mo")
+    updated_kv: dict = {"team_id": "t", "budget_duration": "1mo"}
+
+    _set_budget_reset_at(data, updated_kv)
+
+    assert updated_kv["budget_reset_at"].day == 1
+    assert updated_kv["budget_reset_at"].hour == 0
+
+
+def test_set_budget_reset_at_rolling_keeps_time_of_day():
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+
+    data = UpdateTeamRequest(team_id="t", budget_duration="1mo", budget_reset_alignment="rolling")
+    updated_kv: dict = {"team_id": "t", "budget_duration": "1mo"}
+
+    _set_budget_reset_at(data, updated_kv)
+
+    now = datetime.now(timezone.utc)
+    assert updated_kv["budget_reset_at"].hour == now.hour
+    assert updated_kv["budget_reset_at"].day != 1 or now.day == 1
+
+
+def test_set_budget_reset_at_duration_change_preserves_stored_team_alignment():
+    """Changing only budget_duration must not revert a rolling team to calendar."""
+    from litellm.models.team import LiteLLM_TeamTable
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+
+    existing = LiteLLM_TeamTable(team_id="t", budget_duration="1mo", budget_reset_alignment="rolling")
+    data = UpdateTeamRequest(team_id="t", budget_duration="1mo")
+    updated_kv: dict = {"team_id": "t", "budget_duration": "1mo"}
+
+    _set_budget_reset_at(data, updated_kv, existing)
+
+    assert updated_kv["budget_reset_at"].hour == datetime.now(timezone.utc).hour
+
+
+def test_set_budget_reset_at_alignment_switch_alone_recomputes_from_existing_duration():
+    from litellm.models.team import LiteLLM_TeamTable
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+
+    existing = LiteLLM_TeamTable(team_id="t", budget_duration="1mo", budget_reset_alignment="calendar")
+    data = UpdateTeamRequest(team_id="t", budget_reset_alignment="rolling")
+    updated_kv: dict = {"team_id": "t"}
+
+    _set_budget_reset_at(data, updated_kv, existing)
+
+    assert updated_kv["budget_reset_at"].hour == datetime.now(timezone.utc).hour
+
+
+def test_set_budget_reset_at_alignment_switch_is_noop_without_stored_duration():
+    from litellm.models.team import LiteLLM_TeamTable
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+
+    existing = LiteLLM_TeamTable(team_id="t", budget_duration=None)
+    data = UpdateTeamRequest(team_id="t", budget_reset_alignment="rolling")
+    updated_kv: dict = {"team_id": "t"}
+
+    _set_budget_reset_at(data, updated_kv, existing)
+
+    assert "budget_reset_at" not in updated_kv

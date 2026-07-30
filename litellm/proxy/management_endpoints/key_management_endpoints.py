@@ -117,6 +117,7 @@ from litellm.repositories.verification_token_repository import (
 from litellm.router import Router
 from litellm.secret_managers.base_secret_manager import raise_if_unsafe_secret_name
 from litellm.secret_managers.main import get_secret
+from litellm.types.budget import DEFAULT_BUDGET_RESET_ALIGNMENT, BudgetResetAlignment
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
     BulkUpdateKeyResponse,
@@ -1922,6 +1923,11 @@ async def prepare_key_update_data(
             expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["expires"] = expires
 
+    requested_alignment = non_default_values.get("budget_reset_alignment")
+    effective_alignment = (
+        requested_alignment or existing_key_row.budget_reset_alignment or DEFAULT_BUDGET_RESET_ALIGNMENT
+    )
+
     if "budget_duration" in non_default_values:
         budget_duration = non_default_values.pop("budget_duration")
         if budget_duration is None:
@@ -1930,9 +1936,16 @@ async def prepare_key_update_data(
         elif isinstance(budget_duration, str) and len(budget_duration) > 0:
             from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
-            key_reset_at = get_budget_reset_time(budget_duration=budget_duration)
+            key_reset_at = get_budget_reset_time(budget_duration=budget_duration, alignment=effective_alignment)
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
+    elif requested_alignment is not None and existing_key_row.budget_duration is not None:
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+        non_default_values["budget_reset_at"] = get_budget_reset_time(
+            budget_duration=existing_key_row.budget_duration,
+            alignment=effective_alignment,
+        )
 
     if "budget_limits" in non_default_values:
         raw_windows = non_default_values["budget_limits"]
@@ -3639,6 +3652,7 @@ async def generate_key_helper_fn(
     router_settings: Optional[dict] = None,
     access_group_ids: Optional[list] = None,
     budget_limits: Optional[list] = None,  # multiple concurrent budget windows
+    budget_reset_alignment: BudgetResetAlignment | None = None,
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
@@ -3658,15 +3672,17 @@ async def generate_key_helper_fn(
         duration_seconds = duration_in_seconds(duration)
         expires = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
 
+    reset_alignment = budget_reset_alignment or DEFAULT_BUDGET_RESET_ALIGNMENT
+
     if key_budget_duration is None:  # one-time budget
         key_reset_at = None
     else:
-        key_reset_at = get_budget_reset_time(budget_duration=key_budget_duration)
+        key_reset_at = get_budget_reset_time(budget_duration=key_budget_duration, alignment=reset_alignment)
 
     if budget_duration is None:  # one-time budget
         reset_at = None
     else:
-        reset_at = get_budget_reset_time(budget_duration=budget_duration)
+        reset_at = get_budget_reset_time(budget_duration=budget_duration, alignment=reset_alignment)
 
     # Initialize reset_at for each budget window
     budget_limits_json: Optional[str] = None
@@ -3734,6 +3750,7 @@ async def generate_key_helper_fn(
             "tpm_limit": tpm_limit,
             "rpm_limit": rpm_limit,
             "budget_duration": budget_duration,
+            "budget_reset_alignment": budget_reset_alignment,
             "budget_reset_at": reset_at,
             "allowed_cache_controls": allowed_cache_controls,
             "sso_user_id": sso_user_id,
@@ -3759,6 +3776,7 @@ async def generate_key_helper_fn(
             "tpm_limit": tpm_limit,
             "rpm_limit": rpm_limit,
             "budget_duration": key_budget_duration,
+            "budget_reset_alignment": budget_reset_alignment,
             "budget_reset_at": key_reset_at,
             "allowed_cache_controls": allowed_cache_controls,
             "permissions": permissions_json,

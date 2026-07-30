@@ -1,11 +1,12 @@
 import unittest
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import litellm.litellm_core_utils.duration_parser as duration_parser
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
+    get_next_rolling_reset_time,
     get_next_standardized_reset_time,
 )
 
@@ -383,6 +384,161 @@ class TestWordFormBudgetDurations(unittest.TestCase):
         self.assertEqual(result, datetime(2023, 5, 16, 0, 0, 0, tzinfo=timezone.utc))
         mock_warning.assert_called_once()
         self.assertIn("garbage", mock_warning.call_args.args)
+
+
+class TestRollingResetTime(unittest.TestCase):
+    """Rolling resets measure the duration from the budget's own anchor and keep its
+    time of day, instead of snapping to a shared calendar boundary.
+    """
+
+    def test_rolling_month_lands_on_same_day_and_time_next_month(self):
+        base_time = datetime(2026, 7, 30, 14, 37, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_rolling_reset_time("1mo", base_time, "UTC"),
+            datetime(2026, 8, 30, 14, 37, 0, tzinfo=timezone.utc),
+        )
+
+    def test_rolling_differs_from_calendar_for_month_durations(self):
+        """The whole point of the feature: 1mo and 30d must stop collapsing to the 1st."""
+        base_time = datetime(2026, 7, 30, 14, 37, 0, tzinfo=timezone.utc)
+        for duration in ("1mo", "30d"):
+            calendar = get_next_standardized_reset_time(duration, base_time, "UTC")
+            rolling = get_next_rolling_reset_time(duration, base_time, "UTC")
+            self.assertEqual(calendar, datetime(2026, 8, 1, 0, 0, 0, tzinfo=timezone.utc))
+            self.assertNotEqual(rolling, calendar)
+            self.assertEqual(rolling.hour, 14)
+            self.assertEqual(rolling.minute, 37)
+
+    def test_rolling_30d_is_exactly_30_days(self):
+        base_time = datetime(2026, 7, 30, 14, 37, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_rolling_reset_time("30d", base_time, "UTC"),
+            datetime(2026, 8, 29, 14, 37, 0, tzinfo=timezone.utc),
+        )
+
+    def test_rolling_month_clamps_to_shorter_target_month(self):
+        base_time = datetime(2026, 1, 31, 9, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_rolling_reset_time("1mo", base_time, "UTC"),
+            datetime(2026, 2, 28, 9, 0, 0, tzinfo=timezone.utc),
+        )
+
+    def test_rolling_supports_multi_month_durations_that_calendar_rejects(self):
+        base_time = datetime(2026, 7, 30, 14, 37, 0, tzinfo=timezone.utc)
+        with self.assertRaises(ValueError):
+            get_next_standardized_reset_time("2mo", base_time, "UTC")
+        self.assertEqual(
+            get_next_rolling_reset_time("2mo", base_time, "UTC"),
+            datetime(2026, 9, 30, 14, 37, 0, tzinfo=timezone.utc),
+        )
+
+    def test_rolling_year_end_rollover(self):
+        base_time = datetime(2026, 12, 15, 9, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_rolling_reset_time("1mo", base_time, "UTC"),
+            datetime(2027, 1, 15, 9, 0, 0, tzinfo=timezone.utc),
+        )
+
+    def test_previous_anchor_absorbs_a_late_reset_job(self):
+        """A reset job that fires late must not push the window out permanently."""
+        previous_reset_at = datetime(2026, 7, 30, 14, 37, 0, tzinfo=timezone.utc)
+        ran_late = previous_reset_at + timedelta(minutes=3)
+        self.assertEqual(
+            get_next_rolling_reset_time("1mo", ran_late, "UTC", previous_reset_at=previous_reset_at),
+            datetime(2026, 8, 30, 14, 37, 0, tzinfo=timezone.utc),
+        )
+
+    def test_late_reset_job_does_not_accumulate_drift_over_many_periods(self):
+        """Twelve consecutive late runs must not move the reset's time of day at all.
+
+        Without anchoring on `previous_reset_at` each late run would add its own
+        lateness, so the window would creep later every single period.
+        """
+        anchor = datetime(2026, 7, 30, 14, 37, 0, tzinfo=timezone.utc)
+        previous_reset_at = anchor
+        for _ in range(12):
+            ran_late = previous_reset_at + timedelta(minutes=7)
+            previous_reset_at = get_next_rolling_reset_time(
+                "1mo", ran_late, "UTC", previous_reset_at=previous_reset_at
+            )
+        self.assertEqual(previous_reset_at.hour, anchor.hour)
+        self.assertEqual(previous_reset_at.minute, anchor.minute)
+        self.assertEqual(previous_reset_at.second, anchor.second)
+
+    def test_month_end_clamp_walks_the_day_backwards_and_never_forwards(self):
+        """A day-30 anchor is pulled back to 28 by February and stays there.
+
+        Inherent to anchoring on the previous reset: once clamped, the original
+        day-of-month is lost. Pinned here so the behavior is deliberate.
+        """
+        previous_reset_at = datetime(2026, 7, 30, 14, 37, 0, tzinfo=timezone.utc)
+        days = []
+        for _ in range(9):
+            previous_reset_at = get_next_rolling_reset_time(
+                "1mo", previous_reset_at, "UTC", previous_reset_at=previous_reset_at
+            )
+            days.append(previous_reset_at.day)
+
+        self.assertEqual(days, [30, 30, 30, 30, 30, 30, 28, 28, 28])
+        self.assertTrue(all(later <= earlier for earlier, later in zip(days, days[1:])))
+
+    def test_stale_anchor_jumps_past_now(self):
+        """After a long outage the next reset must be in the future, not the past."""
+        previous_reset_at = datetime(2026, 7, 30, 14, 37, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 11, 2, 8, 0, 0, tzinfo=timezone.utc)
+        result = get_next_rolling_reset_time("1mo", now, "UTC", previous_reset_at=previous_reset_at)
+        self.assertGreater(result, now)
+        self.assertEqual(result, datetime(2026, 12, 2, 8, 0, 0, tzinfo=timezone.utc))
+
+    def test_result_is_always_strictly_after_now(self):
+        """An anchor exactly one period old must roll forward, never return now."""
+        previous_reset_at = datetime(2026, 7, 30, 14, 37, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 8, 30, 14, 37, 0, tzinfo=timezone.utc)
+        result = get_next_rolling_reset_time("1mo", now, "UTC", previous_reset_at=previous_reset_at)
+        self.assertGreater(result, now)
+
+    def test_rolling_respects_timezone(self):
+        base_time = datetime(2026, 7, 30, 14, 37, 0, tzinfo=timezone.utc)
+        result = get_next_rolling_reset_time("1mo", base_time, "Asia/Kolkata")
+        self.assertEqual(result, datetime(2026, 8, 30, 14, 37, 0, tzinfo=timezone.utc))
+        self.assertEqual(result.astimezone(ZoneInfo("Asia/Kolkata")).hour, 20)
+
+    def test_naive_previous_anchor_is_treated_as_utc(self):
+        previous_reset_at = datetime(2026, 7, 30, 14, 37, 0)
+        ran_late = datetime(2026, 7, 30, 14, 40, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_rolling_reset_time("1mo", ran_late, "UTC", previous_reset_at=previous_reset_at),
+            datetime(2026, 8, 30, 14, 37, 0, tzinfo=timezone.utc),
+        )
+
+    def test_sub_day_durations_roll_from_now(self):
+        base_time = datetime(2026, 7, 30, 14, 37, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_rolling_reset_time("12h", base_time, "UTC"),
+            datetime(2026, 7, 31, 2, 37, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(
+            get_next_rolling_reset_time("30m", base_time, "UTC"),
+            datetime(2026, 7, 30, 15, 7, 0, tzinfo=timezone.utc),
+        )
+
+    def test_word_form_durations_are_normalized(self):
+        base_time = datetime(2026, 7, 30, 14, 37, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_rolling_reset_time("monthly", base_time, "UTC"),
+            get_next_rolling_reset_time("30d", base_time, "UTC"),
+        )
+
+    def test_invalid_duration_falls_back_to_calendar_instead_of_raising(self):
+        base_time = datetime(2026, 7, 30, 14, 37, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_rolling_reset_time("garbage", base_time, "UTC"),
+            get_next_standardized_reset_time("garbage", base_time, "UTC"),
+        )
+
+    def test_zero_duration_expires_immediately(self):
+        base_time = datetime(2026, 7, 30, 14, 37, 0, tzinfo=timezone.utc)
+        self.assertEqual(get_next_rolling_reset_time("0d", base_time, "UTC"), base_time)
 
 
 if __name__ == "__main__":

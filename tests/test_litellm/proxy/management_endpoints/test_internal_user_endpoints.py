@@ -3702,3 +3702,54 @@ async def test_get_user_info_for_proxy_admin_validates_keys_and_teams():
     returned_key = result.keys[0]
     assert returned_key["team_id"] == "team-a"
     assert returned_key["models"] == []
+
+
+def test_update_internal_user_params_defaults_to_calendar_alignment():
+    """Users predating the column must keep snapping 1mo to the 1st."""
+    from litellm.proxy._types import UpdateUserRequest
+
+    data = UpdateUserRequest(user_id="u1", budget_duration="1mo")
+    result = _update_internal_user_params(data_json=data.model_dump(exclude_unset=True), data=data)
+
+    assert result["budget_reset_at"].day == 1
+    assert result["budget_reset_at"].hour == 0
+
+
+def test_update_internal_user_params_rolling_keeps_time_of_day():
+    from litellm.proxy._types import UpdateUserRequest
+
+    data = UpdateUserRequest(user_id="u1", budget_duration="1mo", budget_reset_alignment="rolling")
+    result = _update_internal_user_params(data_json=data.model_dump(exclude_unset=True), data=data)
+
+    now = datetime.now(timezone.utc)
+    assert result["budget_reset_at"].hour == now.hour
+    assert result["budget_reset_at"].day != 1 or now.day == 1
+    assert result["budget_reset_alignment"] == "rolling"
+
+
+def test_update_internal_user_params_duration_change_preserves_stored_alignment():
+    """Changing only budget_duration must not revert a rolling user to calendar."""
+    from litellm.proxy._types import UpdateUserRequest
+
+    data = UpdateUserRequest(user_id="u1", budget_duration="1mo")
+    result = _update_internal_user_params(
+        data_json=data.model_dump(exclude_unset=True),
+        data=data,
+        existing_alignment="rolling",
+    )
+
+    assert result["budget_reset_at"].hour == datetime.now(timezone.utc).hour
+
+
+def test_update_internal_user_params_request_alignment_beats_stored_alignment():
+    from litellm.proxy._types import UpdateUserRequest
+
+    data = UpdateUserRequest(user_id="u1", budget_duration="1mo", budget_reset_alignment="calendar")
+    result = _update_internal_user_params(
+        data_json=data.model_dump(exclude_unset=True),
+        data=data,
+        existing_alignment="rolling",
+    )
+
+    assert result["budget_reset_at"].day == 1
+    assert result["budget_reset_at"].hour == 0

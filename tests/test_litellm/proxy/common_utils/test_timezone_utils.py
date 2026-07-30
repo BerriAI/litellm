@@ -1,6 +1,6 @@
 import os
 import sys
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -180,3 +180,65 @@ def test_get_budget_reset_time_honors_global_budget_reset_time():
     finally:
         _restore_attr(litellm, "timezone", orig_tz)
         _restore_attr(litellm, "budget_reset_time", orig_rt)
+
+
+def test_compute_budget_reset_at_defaults_to_calendar_alignment():
+    """Existing deployments must keep snapping to the 1st when no alignment is set."""
+    settings = BudgetResetSettings(timezone="UTC")
+    reset_at = compute_budget_reset_at("1mo", settings)
+    assert reset_at.day == 1
+    assert reset_at.hour == 0
+    assert reset_at.minute == 0
+
+
+def test_compute_budget_reset_at_rolling_keeps_time_of_day():
+    settings = BudgetResetSettings(timezone="UTC")
+    before = datetime.now(timezone.utc)
+    reset_at = compute_budget_reset_at("1mo", settings, alignment="rolling")
+    after = datetime.now(timezone.utc)
+
+    assert reset_at > after
+    assert reset_at.hour == before.hour
+    assert reset_at.minute in (before.minute, after.minute)
+    assert reset_at.day != 1 or before.day == 1
+
+
+def test_rolling_ignores_reset_time_of_day():
+    """reset_time_of_day is a calendar-boundary concept; rolling keeps its own anchor."""
+    settings = BudgetResetSettings(timezone="UTC", reset_time_of_day=time(12, 0))
+    calendar_at = compute_budget_reset_at("1d", settings, alignment="calendar")
+    rolling_at = compute_budget_reset_at("1d", settings, alignment="rolling")
+
+    assert calendar_at.astimezone(timezone.utc).hour == 12
+    assert calendar_at.astimezone(timezone.utc).minute == 0
+    assert rolling_at.hour == datetime.now(timezone.utc).hour
+
+
+def test_compute_budget_reset_at_rolling_uses_previous_anchor():
+    settings = BudgetResetSettings(timezone="UTC")
+    previous_reset_at = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=5)
+    reset_at = compute_budget_reset_at(
+        "1mo", settings, alignment="rolling", previous_reset_at=previous_reset_at
+    )
+    assert reset_at.hour == previous_reset_at.hour
+    assert reset_at.minute == previous_reset_at.minute
+    assert reset_at.second == previous_reset_at.second
+
+
+def test_rolling_and_calendar_disagree_for_month_durations():
+    settings = BudgetResetSettings(timezone="UTC")
+    assert compute_budget_reset_at("1mo", settings, alignment="rolling") != compute_budget_reset_at(
+        "1mo", settings, alignment="calendar"
+    )
+
+
+def test_get_budget_reset_time_forwards_alignment():
+    orig_tz = getattr(litellm, "timezone", None)
+    try:
+        litellm.timezone = "UTC"
+        rolling = get_budget_reset_time(budget_duration="1mo", alignment="rolling")
+        calendar = get_budget_reset_time(budget_duration="1mo", alignment="calendar")
+        assert calendar.day == 1
+        assert rolling != calendar
+    finally:
+        _restore_attr(litellm, "timezone", orig_tz)

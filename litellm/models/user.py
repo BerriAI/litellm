@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 from pydantic import ConfigDict, Field, model_validator
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+from litellm.types.budget import BudgetResetAlignment
 from litellm.models.organization_membership import (
     LiteLLM_OrganizationMembershipTable,
 )
@@ -36,6 +37,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
+    budget_reset_alignment: BudgetResetAlignment | None = None
     budget_reset_at: Optional[datetime] = None
     allowed_cache_controls: List[str] = []
     policies: List[str] = []

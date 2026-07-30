@@ -20,6 +20,7 @@ from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_no_callback_env_reference,
 )
+from litellm.types.budget import BudgetResetAlignment
 from litellm.types.integrations.compression_interception import (
     CompressionSavingsMetadata,
 )
@@ -1045,6 +1046,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
 
     budget_duration: Optional[str] = None
+    budget_reset_alignment: BudgetResetAlignment | None = None
     budget_limits: Optional[List[BudgetLimitEntry]] = None  # multiple concurrent budget windows
     allowed_cache_controls: Optional[list] = []
     config: Optional[dict] = {}
@@ -1841,6 +1843,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     models: Optional[list] = None
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
+    budget_reset_alignment: BudgetResetAlignment | None = None
     tags: Optional[list] = None
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None

@@ -131,7 +131,8 @@ model LiteLLM_TeamTable {
     max_parallel_requests Int?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
-    budget_duration String? 
+    budget_duration String?
+    budget_reset_alignment String? // "calendar" (default) or "rolling"
     budget_reset_at DateTime?
     blocked Boolean @default(false)
     created_at    DateTime               @default(now()) @map("created_at")
@@ -202,6 +203,7 @@ model LiteLLM_DeletedTeamTable {
     tpm_limit               BigInt?
     rpm_limit               BigInt?
     budget_duration         String?
+    budget_reset_alignment  String?
     budget_reset_at         DateTime?
     blocked                 Boolean  @default(false)
     model_spend             Json     @default("{}")
@@ -249,7 +251,8 @@ model LiteLLM_UserTable {
     max_parallel_requests Int?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
-    budget_duration String? 
+    budget_duration String?
+    budget_reset_alignment String? // "calendar" (default) or "rolling"
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
     policies         String[] @default([])
@@ -435,7 +438,8 @@ model LiteLLM_VerificationToken {
     tpm_limit     BigInt?
     rpm_limit     BigInt?
     max_budget Float?    
-    budget_duration String? 
+    budget_duration String?
+    budget_reset_alignment String? // "calendar" (default) or "rolling"
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
     allowed_routes   String[] @default([])
@@ -531,6 +535,7 @@ model LiteLLM_DeletedVerificationToken {
     rpm_limit               BigInt?
     max_budget              Float?
     budget_duration         String?
+    budget_reset_alignment  String?
     budget_reset_at         DateTime?
     allowed_cache_controls  String[] @default([])
     allowed_routes          String[] @default([])

@@ -13,6 +13,7 @@ from typing import List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+from litellm.types.budget import BudgetResetAlignment
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
@@ -74,6 +75,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     max_budget: Optional[float] = None
     soft_budget: Optional[float] = None
     budget_duration: Optional[str] = None
+    budget_reset_alignment: BudgetResetAlignment | None = None
     budget_limits: Optional[List[BudgetLimitEntry]] = None
     models: list = []
     blocked: bool = False

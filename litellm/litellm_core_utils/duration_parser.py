@@ -9,7 +9,8 @@ duration_in_seconds is used in diff parts of the code base, example
 import re
 import time as time_module
 from datetime import datetime, time, timedelta, timezone, tzinfo
-from typing import Final, Optional, Tuple
+from types import MappingProxyType
+from typing import Final, Mapping, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from litellm._logging import verbose_logger
@@ -20,6 +21,16 @@ _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
     "weekly": "7d",
     "monthly": "30d",
 }
+
+_SECONDS_PER_UNIT: Final[Mapping[str, int]] = MappingProxyType(
+    {
+        "s": 1,
+        "m": 60,
+        "h": 3600,
+        "d": 86400,
+        "w": 604800,
+    }
+)
 
 
 def _normalize_duration(duration: str) -> str:
@@ -105,6 +116,70 @@ def duration_in_seconds(duration: str) -> int:
 
     else:
         raise ValueError(f"Unsupported duration unit, passed duration: {duration}")
+
+
+def _add_calendar_months(anchor: datetime, months: int) -> datetime:
+    """Add whole calendar months to `anchor`, keeping its time of day.
+
+    Clamps the day to the target month's length, so 31 Jan + 1mo lands on 28 Feb.
+    """
+    total_months = anchor.month - 1 + months
+    target_year = anchor.year + total_months // 12
+    target_month = total_months % 12 + 1
+    target_day = min(anchor.day, get_last_day_of_month(target_year, target_month))
+    return anchor.replace(year=target_year, month=target_month, day=target_day)
+
+
+def _advance_by_duration(anchor: datetime, value: int, unit: str) -> datetime:
+    if unit == "mo":
+        return _add_calendar_months(anchor, value)
+    return anchor + timedelta(seconds=value * _SECONDS_PER_UNIT[unit])
+
+
+def get_next_rolling_reset_time(
+    duration: str,
+    current_time: datetime,
+    timezone_str: str = "UTC",
+    previous_reset_at: datetime | None = None,
+) -> datetime:
+    """
+    Get the next reset time measured from the budget's own anchor rather than a
+    shared calendar boundary, keeping the anchor's time of day.
+
+    A "1mo" budget created at 14:37 on the 30th resets at 14:37 on the 30th of the
+    next month, where the calendar equivalent would reset at the start of the 1st.
+
+    Parameters:
+    - duration: Duration string (e.g. "30s", "30m", "30h", "30d", "1mo")
+    - current_time: Current datetime
+    - timezone_str: Timezone string (e.g. "UTC", "US/Eastern", "Asia/Kolkata")
+    - previous_reset_at: The reset time this budget is rolling over from. Anchoring
+      to it keeps the reset instant stable when the reset job runs late; without it
+      every late run would push the window further out, permanently.
+
+    Returns:
+    - Next reset time, always strictly after `current_time`
+    """
+    current_time, _ = _setup_timezone(current_time, timezone_str)
+
+    value, unit = _parse_duration(_normalize_duration(duration))
+    if value is None or unit is None or (unit != "mo" and unit not in _SECONDS_PER_UNIT):
+        return get_next_standardized_reset_time(
+            duration=duration,
+            current_time=current_time,
+            timezone_str=timezone_str,
+        )
+
+    if value == 0:
+        return current_time
+
+    if previous_reset_at is not None:
+        anchored, _ = _setup_timezone(previous_reset_at, timezone_str)
+        candidate = _advance_by_duration(anchored, value, unit)
+        if candidate > current_time:
+            return candidate
+
+    return _advance_by_duration(current_time, value, unit)
 
 
 def get_next_standardized_reset_time(

@@ -21,6 +21,7 @@ from litellm.proxy.common_utils.timezone_utils import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.types.budget import DEFAULT_BUDGET_RESET_ALIGNMENT
 from litellm.repositories.table_repositories import (
     EndUserRepository,
     TagRepository,
@@ -804,7 +805,10 @@ class ResetBudgetJob:
             item.spend = 0.0
             if hasattr(item, "budget_duration") and item.budget_duration is not None:
                 item.budget_reset_at = compute_budget_reset_at(
-                    budget_duration=item.budget_duration, settings=reset_settings
+                    budget_duration=item.budget_duration,
+                    settings=reset_settings,
+                    alignment=getattr(item, "budget_reset_alignment", None) or DEFAULT_BUDGET_RESET_ALIGNMENT,
+                    previous_reset_at=getattr(item, "budget_reset_at", None),
                 )
             return item
         except Exception as e:

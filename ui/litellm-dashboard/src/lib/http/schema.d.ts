@@ -23505,7 +23505,7 @@ export interface components {
              * @description Default role assigned to new users created
              * @default internal_user_viewer
              */
-            user_role: ("internal_user" | "internal_user_viewer" | "proxy_admin" | "proxy_admin_viewer") | null;
+            user_role: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
         /**
          * DefaultTeamSSOParams
@@ -24084,6 +24084,8 @@ export interface components {
             budget_id?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /**
              * Config
              * @default {}
@@ -24234,6 +24236,8 @@ export interface components {
             budget_id?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /**
              * Config
              * @default {}
@@ -25102,6 +25106,8 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -25234,6 +25240,8 @@ export interface components {
             budget_limits?: {
                 [key: string]: unknown;
             }[] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -26046,7 +26054,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Stream Timeout */
-            stream_timeout?: number | string | null;
+            stream_timeout?: string | number | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -26295,6 +26303,8 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -26426,6 +26436,8 @@ export interface components {
             allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -26514,6 +26526,8 @@ export interface components {
             allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -26636,6 +26650,8 @@ export interface components {
             budget_limits?: {
                 [key: string]: unknown;
             }[] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -28324,6 +28340,8 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             /** Disable Global Guardrails */
@@ -28450,6 +28468,8 @@ export interface components {
             } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /**
              * Config
              * @default {}
@@ -28594,6 +28614,8 @@ export interface components {
             budget_id?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /**
              * Config
              * @default {}
@@ -29076,6 +29098,8 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             /** Disable Global Guardrails */
@@ -30379,6 +30403,8 @@ export interface components {
             budget_id?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /**
              * Config
              * @default {}
@@ -31490,6 +31516,8 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -31600,6 +31628,8 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -32447,6 +32477,8 @@ export interface components {
             budget_id?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /**
              * Config
              * @default {}
@@ -32809,6 +32841,8 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             /** Disable Global Guardrails */
@@ -32920,6 +32954,8 @@ export interface components {
             } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /**
              * Config
              * @default {}
@@ -33026,6 +33062,8 @@ export interface components {
             } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /**
              * Config
              * @default {}
@@ -33268,6 +33306,8 @@ export interface components {
             budget_limits?: {
                 [key: string]: unknown;
             }[] | null;
+            /** Budget Reset Alignment */
+            budget_reset_alignment?: ("calendar" | "rolling") | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -34136,7 +34176,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Stream Timeout */
-            stream_timeout?: number | string | null;
+            stream_timeout?: string | number | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
