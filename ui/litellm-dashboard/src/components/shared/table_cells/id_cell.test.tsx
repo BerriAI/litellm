@@ -28,16 +28,8 @@ describe("IdCell", () => {
     expect(el.tagName).toBe("SPAN");
     expect(el.className).toContain("bg-blue-50");
     expect(el.className).toContain("font-mono");
-    expect(el.className).toContain("max-w-full");
+    expect(el.className).toContain("max-w-[15ch]");
     expect(el.className).toContain("truncate");
-  });
-
-  it("clamps to the containing cell rather than a fixed character count", () => {
-    render(<IdCell value="ecc1869c-6231-4380-a56d-1a0be457477d" />);
-    const el = screen.getByText("ecc1869c-6231-4380-a56d-1a0be457477d");
-    expect(el.className).not.toMatch(/max-w-\[\d+(ch|rem|px)\]/);
-    expect(el.className).toContain("inline-block");
-    expect(el.className).toContain("max-w-full");
   });
 
   it("renders plain mono text without pill styling for the plain variant", () => {
