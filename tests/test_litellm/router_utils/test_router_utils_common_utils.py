@@ -516,3 +516,38 @@ class TestAddModelFileIdMappings:
     def test_should_return_empty_mapping_when_given_empty_list(self):
         result = add_model_file_id_mappings([], [])
         assert result == {}
+
+
+def test_get_model_group_info_alias_dict_without_hidden_key():
+    """Regression test: get_model_group_info must not raise KeyError when a
+    dict-style model_group_alias entry omits the 'hidden' key.
+
+    RouterModelGroupAliasItem declares 'hidden: bool' as a TypedDict field but
+    TypedDict is a type-hint only — Python does not inject default values at
+    runtime. Any config entry like {"model": "gpt-3.5-turbo"} without 'hidden'
+    triggers a KeyError on every request via set_response_headers.
+    """
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "sk-fake"},
+        }
+    ]
+
+    # Dict alias without 'hidden' key — must not raise KeyError
+    router = Router(
+        model_list=model_list,
+        model_group_alias={"gpt-4-alias": {"model": "gpt-3.5-turbo"}},
+    )
+    result = router.get_model_group_info(model_group="gpt-4-alias")
+    assert result is not None
+
+    # Dict alias with hidden=True must return None
+    router2 = Router(
+        model_list=model_list,
+        model_group_alias={"secret-alias": {"model": "gpt-3.5-turbo", "hidden": True}},
+    )
+    assert router2.get_model_group_info(model_group="secret-alias") is None
+
+    # get_model_list must also not raise KeyError (second affected call site)
+    assert router.get_model_list() is not None

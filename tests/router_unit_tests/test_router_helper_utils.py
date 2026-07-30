@@ -1313,6 +1313,59 @@ def test_update_settings(model_list):
     assert router.allowed_fails == 20
 
 
+def test_get_model_group_info_alias_dict_without_hidden_key(model_list):
+    """Regression test: get_model_group_info must not raise KeyError when a
+    dict-style model_group_alias entry omits the 'hidden' key.
+
+    RouterModelGroupAliasItem declares 'hidden: bool' as a TypedDict field, but
+    TypedDict is a type-hint only — Python does NOT inject default values at
+    runtime.  Any user who writes:
+
+        model_group_alias:
+          "gpt-4-alias": {"model": "gpt-3.5-turbo"}
+
+    gets a plain dict without 'hidden', causing item["hidden"] to raise
+    KeyError on every request (via set_response_headers -> get_model_group_info).
+    """
+    alias_model_list = list(model_list) + [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "sk-fake"},
+        }
+    ]
+    router = Router(
+        model_list=alias_model_list,
+        model_group_alias={
+            "gpt-4-alias": {"model": "gpt-3.5-turbo"},
+        },
+    )
+
+    # Must not raise KeyError — 'hidden' key is absent from the alias dict
+    result = router.get_model_group_info(model_group="gpt-4-alias")
+    assert result is not None
+
+    # Alias with hidden=True must still return None
+    router2 = Router(
+        model_list=alias_model_list,
+        model_group_alias={
+            "secret-alias": {"model": "gpt-3.5-turbo", "hidden": True},
+        },
+    )
+    assert router2.get_model_group_info(model_group="secret-alias") is None
+
+    # Alias with hidden=False (explicit) must return info
+    router3 = Router(
+        model_list=alias_model_list,
+        model_group_alias={
+            "visible-alias": {"model": "gpt-3.5-turbo", "hidden": False},
+        },
+    )
+    assert router3.get_model_group_info(model_group="visible-alias") is not None
+
+    model_list_result = router.get_model_list()
+    assert model_list_result is not None
+
+
 def test_common_checks_available_deployment(model_list):
     """Test if the 'common_checks_available_deployment' function is working correctly"""
     router = Router(model_list=model_list)
