@@ -28,7 +28,7 @@ from litellm.integrations.otel.model.utils import as_str, to_seconds
 from litellm.integrations.otel.plumbing.context import request_destinations
 
 if TYPE_CHECKING:
-    from litellm.types.utils import StandardLoggingPayload
+    from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
 
 
 @dataclass(frozen=True)
@@ -141,6 +141,9 @@ class LLMCallEvent:
     # The success/failure payload; ``None`` at ``pre_call`` or if the call closed with no payload.
     payload: "StandardLoggingPayload | None"
     otel_destinations: tuple[OtelDestination, ...]
+    # The request's ``standard_callback_dynamic_params`` (team/key OTLP credentials), or ``None``
+    # when the call isn't scoped; routes the gen-AI span to a credential-scoped tracer.
+    dynamic_params: "StandardCallbackDynamicParams | None"
     # True for synthetic proxy-gate logs (auth/rate-limit rejections): no upstream call, so no span.
     is_no_upstream_call: bool
     # Best-effort ``"{operation} {model}"`` name at ``pre_call``; only matters for a leaked span (renamed at close).
@@ -157,6 +160,7 @@ class LLMCallEvent:
             call_id=_call_id(payload, kwargs),
             payload=payload,
             otel_destinations=request_destinations(),
+            dynamic_params=kwargs.get("standard_callback_dynamic_params"),
             is_no_upstream_call=bool(kwargs.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL)),
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),

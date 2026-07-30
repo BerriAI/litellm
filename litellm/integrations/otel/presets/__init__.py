@@ -7,22 +7,55 @@ maps a callback name (``"arize"``, ``"langfuse_otel"``, ...) to its preset so
 the factory in ``litellm_logging`` can resolve a name and build a single
 ``OpenTelemetryV2`` instance from the result.
 
-Per-key/team routing does not live here. A trace destination is admin-owned
-infrastructure config, resolved server-side from a named credential into an
-``OtelDestination`` (see ``litellm.integrations.otel.presets.destinations`` and
-``plumbing.routing``); nothing in this package reads vendor credentials or a
-host off a request.
+Admin-owned trace destinations are resolved server-side from a named credential
+into an ``OtelDestination`` (see ``litellm.integrations.otel.presets.destinations``
+and ``plumbing.routing``). Separately, per-request team/key OTLP credentials from
+``standard_callback_dynamic_params`` route the gen-AI span to a credential-scoped
+tracer for the integrations that support it; ``dynamic_otlp_headers`` below builds
+those per-request headers.
 """
 
+from typing import Callable
+
 from litellm.integrations.otel.presets.agentops import agentops_preset
-from litellm.integrations.otel.presets.arize import arize_preset
+from litellm.integrations.otel.presets.arize import arize_dynamic_headers, arize_preset
 from litellm.integrations.otel.presets.base import Preset
 from litellm.integrations.otel.presets.generic import generic_preset
-from litellm.integrations.otel.presets.langfuse import langfuse_preset
+from litellm.integrations.otel.presets.langfuse import (
+    langfuse_dynamic_headers,
+    langfuse_preset,
+)
 from litellm.integrations.otel.presets.langtrace import langtrace_preset
 from litellm.integrations.otel.presets.levo import levo_preset
 from litellm.integrations.otel.presets.phoenix import phoenix_preset
-from litellm.integrations.otel.presets.weave import weave_preset
+from litellm.integrations.otel.presets.weave import weave_dynamic_headers, weave_preset
+from litellm.types.utils import StandardCallbackDynamicParams
+
+#: Callback name -> per-request OTLP header builder (team/key multi-tenant
+#: routing). Only integrations that support dynamic credentials appear here;
+#: Arize-Phoenix/Langtrace/Levo/AgentOps/generic don't, so they use the logger's
+#: default tracer.
+DYNAMIC_HEADERS_BY_CALLBACK: dict[str, Callable[[StandardCallbackDynamicParams], dict[str, str]]] = {
+    "arize": arize_dynamic_headers,
+    "langfuse_otel": langfuse_dynamic_headers,
+    "weave_otel": weave_dynamic_headers,
+}
+
+
+def dynamic_otlp_headers(
+    callback_name: str | None,
+    dynamic_params: "StandardCallbackDynamicParams | None",
+) -> dict[str, str] | None:
+    """Per-request OTLP headers for ``callback_name``, or ``None`` if N/A.
+
+    ``None`` means "no per-request routing" -- the caller uses its default tracer.
+    """
+    builder = DYNAMIC_HEADERS_BY_CALLBACK.get(callback_name or "")
+    if builder is None or not dynamic_params:
+        return None
+    headers = builder(dynamic_params)
+    return headers or None
+
 
 #: Callback name → preset. The ``Preset`` annotation makes mypy verify every
 #: registered value matches the preset interface.
@@ -39,10 +72,12 @@ PRESET_BY_CALLBACK: dict[str, Preset] = {
 
 
 __all__ = [
+    "DYNAMIC_HEADERS_BY_CALLBACK",
     "PRESET_BY_CALLBACK",
     "Preset",
     "agentops_preset",
     "arize_preset",
+    "dynamic_otlp_headers",
     "generic_preset",
     "langfuse_preset",
     "langtrace_preset",

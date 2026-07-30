@@ -1,11 +1,13 @@
-"""Per-tenant tracer routing on admin-owned OTEL destinations, with fan-out.
+"""Per-tenant tracer routing on admin-owned OTEL destinations, with fan-out, plus the
+per-request credential routing layered over it.
 
-A request's identity chain is assigned a set of admin-owned exporters; the v2 logger
-fans the trace out to all of them (plus the configured/global exporter), and never
-routes on request-supplied vendor credentials. These tests lock the contract: the
-request cannot route a trace, each destination's endpoint follows its resolved host
-(cross-host fix), the configured exporters are kept (global also receives), and a
-logger only exports the destinations tagged with its own backend.
+A request's identity chain is assigned a set of admin-owned exporters; the v2 logger fans
+the trace out to all of them (plus the configured/global exporter). Separately, a request's
+``standard_callback_dynamic_params`` (team/key OTLP credentials) route the gen-AI span to a
+credential-scoped tracer for the integrations that support it (V1 parity). These tests lock
+both: each destination's endpoint follows its resolved host (cross-host fix), the configured
+exporters are kept (global also receives), a logger only exports the destinations tagged with
+its own backend, and request credentials rewrite only their own backend's exporter headers.
 """
 
 import os
@@ -319,36 +321,80 @@ def test_clone_provider_emits_genai_span_with_destination_resource():
     assert resource_attrs.get("arize.project.name") == "team-b-proj"
 
 
-# --- security: request credentials never route a trace --------------------- #
+# --- request credentials route the gen-AI span (V1 parity) ------------------ #
 
 
-@pytest.mark.parametrize(
-    "request_creds",
-    [
-        {
-            "langfuse_public_key": "pk-attacker",
-            "langfuse_secret_key": "sk-attacker",
-            "langfuse_host": "https://attacker.example",
-        },
-        {"arize_api_key": "K-attacker", "arize_space_id": "S-attacker"},
-        {"wandb_api_key": "w-attacker", "weave_endpoint": "https://attacker/otel"},
-    ],
-)
-def test_request_credentials_are_inert_on_v2(request_creds):
-    """Any backend's credentials in the request's dynamic params (no admin
-    destinations) produce no per-tenant routing."""
-    event = LLMCallEvent.from_dict(
-        {
-            "standard_callback_dynamic_params": request_creds,
-            "call_type": "acompletion",
-            "model": "gpt-4o",
-        }
+_DYNAMIC_CREDS = [
+    ("langfuse_otel", {"langfuse_public_key": "pk-teamA", "langfuse_secret_key": "sk-teamA"}, "Authorization="),
+    ("arize", {"arize_space_id": "space-teamA", "arize_api_key": "key-teamA"}, "arize-space-id=space-teamA"),
+    ("weave_otel", {"wandb_api_key": "wandb-teamA", "weave_project_id": "proj-teamA"}, "project_id=proj-teamA"),
+]
+
+
+@pytest.mark.parametrize("backend, creds, owned_fragment", _DYNAMIC_CREDS)
+def test_request_credentials_rewrite_only_the_owned_exporter(backend, creds, owned_fragment):
+    """A request's team/key OTLP credentials rewrite the headers of THIS backend's own
+    exporter and nothing else, so the gen-AI span exports to that team's account while a
+    co-configured backend's exporter is untouched (no cross-backend key leak)."""
+    from litellm.integrations.otel.presets import dynamic_otlp_headers
+
+    cache = _cache(
+        backend,
+        exporters=[
+            ExporterSpec(kind="otlp_http", endpoint="http://collector/otel", headers="Authorization=Basic GLOBAL", owner=backend),
+            ExporterSpec(kind="otlp_http", endpoint="http://other/otel", headers="x=coconfigured", owner="levo"),
+        ],
     )
-    assert event.otel_destinations == ()
-    cache = _cache("langfuse_otel")
+    headers = dynamic_otlp_headers(backend, creds)
+    assert headers, f"{backend} must support dynamic credentials"
+    scoped = cache._config_with_headers(headers)
+    assert owned_fragment in (scoped.exporters[0].headers or "")
+    assert "GLOBAL" not in (scoped.exporters[0].headers or "")  # the global header was rewritten away
+    assert scoped.exporters[1].headers == "x=coconfigured"  # a different backend's exporter is untouched
+
+
+@pytest.mark.parametrize("backend, creds, owned_fragment", _DYNAMIC_CREDS)
+def test_genai_tracers_for_spawns_credential_scoped_provider(backend, creds, owned_fragment):
+    """genai_tracers_for with request creds and no admin destination returns exactly the
+    credential-scoped tracer (not the default) and caches its provider under a dynamic key."""
+    cache = _cache(
+        backend,
+        exporters=[ExporterSpec(kind="otlp_http", endpoint="http://c/otel", headers="Authorization=Basic GLOBAL", owner=backend)],
+    )
     default = NoOpTracer()
-    assert cache.tracer_for(default, event.otel_destinations) is default
+    tracers = cache.genai_tracers_for(default, (), creds)
+    assert len(tracers) == 1
+    assert tracers[0] is not default
+    assert len(cache._providers) == 1
+    assert next(iter(cache._providers))[0] == "dynamic"  # namespaced key, never aliases a destination group
+
+
+def test_genai_tracers_for_without_creds_is_plain_default():
+    """No dynamic creds and no destinations -> the logger's default tracer, no provider spawned."""
+    cache = _cache(
+        "langfuse_otel",
+        exporters=[ExporterSpec(kind="otlp_http", endpoint="http://c/otel", headers="", owner="langfuse_otel")],
+    )
+    default = NoOpTracer()
+    assert cache.genai_tracers_for(default, (), None) == (default,)
     assert cache._providers == {}
+
+
+def test_genai_tracers_compose_credential_scoped_plus_destination():
+    """Request creds AND an admin destination: the span exports via the credential-scoped
+    tracer (which carries the global exporter) plus one per-destination tracer that omits the
+    base exporters, so the global collector receives the span exactly once."""
+    cache = _cache(
+        "langfuse_otel",
+        exporters=[ExporterSpec(kind="otlp_http", endpoint="http://global/otel", headers="Authorization=Basic GLOBAL", owner="langfuse_otel")],
+    )
+    creds = {"langfuse_public_key": "pk-teamA", "langfuse_secret_key": "sk-teamA"}
+    destinations = (_dest("https://cloud.langfuse.com/api/public/otel", auth="Basic ADMIN"),)
+    tracers = cache.genai_tracers_for(NoOpTracer(), destinations, creds)
+    assert len(tracers) == 2  # credential-scoped (global) + one destination group
+    # the destination group provider carries no base exporter (base rides the dynamic tracer)
+    dest_only = cache._config_with_destinations(destinations, include_base_exporters=False)
+    assert all(spec.endpoint != "http://global/otel" for spec in dest_only.exporters)
 
 
 def test_admin_destinations_route():

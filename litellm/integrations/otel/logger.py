@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     from litellm.integrations.otel.model.destination import OtelDestination
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.utils import (
+        StandardCallbackDynamicParams,
         StandardLoggingGuardrailInformation,
         StandardLoggingPayload,
     )
@@ -255,7 +256,9 @@ class OpenTelemetryV2(CustomLogger):
                     start_time_ns=start_time_ns,
                     tracer=tracer,
                 )
-                for tracer in self._tenant_tracers.tracers_for(self.tracer, self._destinations_for_backend(call))
+                for tracer in self._tenant_tracers.genai_tracers_for(
+                    self.tracer, self._destinations_for_backend(call), call.dynamic_params
+                )
             )
         self._open_llm_calls[call_id] = _LLMCallSpan(spans=spans, start_time_ns=start_time_ns)
         # Evict the oldest open call if over budget; a call that opens but never closes would
@@ -411,6 +414,7 @@ class OpenTelemetryV2(CustomLogger):
                 to_ns(start_time),
                 to_ns(end_time),
                 call.time_to_first_chunk_seconds,
+                call.dynamic_params,
             )
 
         end_time_ns = to_ns(end_time)
@@ -435,6 +439,7 @@ class OpenTelemetryV2(CustomLogger):
             carrier.start_time_ns,
             end_time_ns,
             call.time_to_first_chunk_seconds,
+            call.dynamic_params,
         )
 
     def _mark_closed(self, call_id: str | None) -> None:
@@ -452,6 +457,7 @@ class OpenTelemetryV2(CustomLogger):
         start_time_ns: int | None,
         end_time_ns: int | None,
         time_to_first_chunk_seconds: float | None = None,
+        dynamic_params: "StandardCallbackDynamicParams | None" = None,
     ) -> Span | None:
         """Emit an LLM-call span outside the ``pre_call`` boundary.
 
@@ -470,7 +476,7 @@ class OpenTelemetryV2(CustomLogger):
             parent_context=parent_ctx,
             start_time_ns=start_time_ns,
             end_time_ns=end_time_ns,
-            tracers=self._tenant_tracers.tracers_for(self.tracer, destinations),
+            tracers=self._tenant_tracers.genai_tracers_for(self.tracer, destinations, dynamic_params),
         )
 
     # ====================================================================== #
