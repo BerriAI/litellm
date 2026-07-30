@@ -200,17 +200,19 @@ def _anthropic_stream_chunks(text_parts):
     return chunks
 
 
-def _content_filter_guardrail(action: str):
+def _content_filter_guardrail(action: str, guardrail_cls=None, **guardrail_kwargs):
     from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
         ContentFilterGuardrail,
     )
     from litellm.types.guardrails import BlockedWord, ContentFilterAction
 
-    return ContentFilterGuardrail(
+    cls = guardrail_cls or ContentFilterGuardrail
+    return cls(
         guardrail_name="output-filter",
         blocked_words=[BlockedWord(keyword="zebra", action=ContentFilterAction(action))],
         event_hook="post_call",
         default_on=True,
+        **guardrail_kwargs,
     )
 
 
@@ -247,6 +249,12 @@ def test_stream_requires_guardrail_translation_route_detection():
         is False
     )
     assert ProxyLogging._stream_requires_guardrail_translation(UserAPIKeyAuth(api_key="sk-1234")) is False
+    assert (
+        ProxyLogging._stream_requires_guardrail_translation(
+            UserAPIKeyAuth(api_key="sk-1234", request_route="/route/without/call/types")
+        )
+        is False
+    )
 
 
 @pytest.mark.asyncio
@@ -367,3 +375,107 @@ async def test_unified_guardrail_iterator_accepts_explicit_guardrail(monkeypatch
             guardrail_to_apply=guardrail,
         ):
             pass
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_guardrail_reroutes_inherited_apply_guardrail(monkeypatch):
+    """
+    The reroute predicate must recognize apply_guardrail implementations
+    inherited from a parent class, not only ones defined on the registered
+    leaf class. A vendor base class can carry apply_guardrail while the leaf
+    only overrides the streaming iterator; a leaf-class ``__dict__`` check
+    would leave that guardrail on the raw Anthropic SSE path unscanned.
+    """
+    from fastapi import HTTPException
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+
+    class _InheritsApplyGuardrail(ContentFilterGuardrail):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            async for item in response:
+                yield item
+
+    guardrail = _content_filter_guardrail("BLOCK", guardrail_cls=_InheritsApplyGuardrail)
+    assert "apply_guardrail" not in type(guardrail).__dict__
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    request_data = {
+        "model": "claude-sonnet-5",
+        "litellm_logging_obj": _streaming_logging_obj(),
+        "metadata": {},
+    }
+
+    async def fake_stream():
+        for chunk in _anthropic_stream_chunks(["the", " zebra runs"]):
+            yield chunk
+
+    delivered = []
+    with pytest.raises(HTTPException) as exc_info:
+        async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=fake_stream(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
+            request_data=request_data,
+        ):
+            delivered.append(chunk)
+
+    assert exc_info.value.detail["keyword"] == "zebra"
+    assert delivered == []
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_masking_guardrail_keeps_own_iterator_on_anthropic(monkeypatch):
+    """
+    A guardrail with mask_response_content=True must stay on its own iterator
+    hook on /v1/messages. The unified streaming path cannot re-emit rewritten
+    text on raw Anthropic SSE (block_only drops rewrites and buffered replay
+    releases the unredacted originals), so rerouting such a guardrail would
+    deliver content it decided to mask. PANW Prisma AIRS is the concrete
+    case: its own hook parses the raw bytes and blocks instead of masking.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+
+    own_hook_streams = []
+
+    class _MasksViaOwnRawStreamHook(ContentFilterGuardrail):
+        apply_guardrail = ContentFilterGuardrail.apply_guardrail
+
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            own_hook_streams.append(request_data.get("model"))
+            async for item in response:
+                yield item
+
+    guardrail = _content_filter_guardrail(
+        "BLOCK", guardrail_cls=_MasksViaOwnRawStreamHook, mask_response_content=True
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    chunks = _anthropic_stream_chunks(["the", " zebra runs"])
+
+    async def fake_stream():
+        for chunk in chunks:
+            yield chunk
+
+    delivered = []
+    async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+        response=fake_stream(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
+        request_data={
+            "model": "claude-sonnet-5",
+            "litellm_logging_obj": _streaming_logging_obj(),
+            "metadata": {},
+        },
+    ):
+        delivered.append(chunk)
+
+    assert own_hook_streams == ["claude-sonnet-5"]
+    assert delivered == chunks

@@ -2699,7 +2699,8 @@ class ProxyLogging:
                     kind == "override"
                     and stream_needs_translation
                     and isinstance(resolved_callback, CustomGuardrail)
-                    and "apply_guardrail" in type(resolved_callback).__dict__
+                    and resolved_callback.uses_apply_guardrail_interface()
+                    and not resolved_callback.mask_response_content
                 )
                 else kind
             )
