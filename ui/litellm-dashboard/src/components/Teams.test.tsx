@@ -680,12 +680,16 @@ describe("Teams - schema-declared metadata fields in team create", () => {
     });
   };
 
-  it("should include declared field values in the created team metadata", async () => {
+  it("should prepopulate the declared key as an ordinary pair row and submit its value", async () => {
     await openCreateModal();
 
     fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Test Team" } });
     fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
-    fireEvent.change(screen.getByPlaceholderText("Cost Center"), { target: { value: "CC-1001" } });
+
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText("Key") as HTMLInputElement).value).toBe("cost_center");
+    });
+    fireEvent.change(screen.getByPlaceholderText("Value"), { target: { value: "CC-1001" } });
 
     const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
     fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
@@ -696,7 +700,6 @@ describe("Teams - schema-declared metadata fields in team create", () => {
 
     const submittedValues = vi.mocked(teamCreateCall).mock.calls[0][1];
     expect(JSON.parse(submittedValues.metadata)).toEqual({ cost_center: "CC-1001" });
-    expect(submittedValues.schema_metadata).toBeUndefined();
   });
 
   it("should toast only the validator's own message when the backend rejects the create", async () => {
@@ -707,7 +710,10 @@ describe("Teams - schema-declared metadata fields in team create", () => {
 
     fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Test Team" } });
     fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
-    fireEvent.change(screen.getByPlaceholderText("Cost Center"), { target: { value: "CC-9999" } });
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText("Key") as HTMLInputElement).value).toBe("cost_center");
+    });
+    fireEvent.change(screen.getByPlaceholderText("Value"), { target: { value: "CC-9999" } });
 
     const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
     fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);

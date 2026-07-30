@@ -14,10 +14,7 @@ import { Button as UIButton } from "@/components/ui/button";
 import { teamsTableKeys } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { TeamsTable } from "./TeamsPage/TeamsTable";
 import AccessGroupSelector from "./common_components/AccessGroupSelector";
-import MetadataKeyValueFields, {
-  metadataPairsToObject,
-  schemaMetadataToObject,
-} from "./common_components/MetadataKeyValueFields";
+import MetadataKeyValueFields, { metadataPairsToObject } from "./common_components/MetadataKeyValueFields";
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import PassThroughRoutesSelector from "./common_components/PassThroughRoutesSelector";
 import AgentSelector from "./agent_management/AgentSelector";
@@ -330,11 +327,9 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
 
         const metadataObject = {
           ...metadataPairsToObject(formValues.metadata),
-          ...schemaMetadataToObject(formValues.schema_metadata),
           ...(loggingSettings.length > 0 ? { logging: loggingSettings.filter((config) => config.callback_name) } : {}),
         };
         formValues.metadata = Object.keys(metadataObject).length > 0 ? JSON.stringify(metadataObject) : undefined;
-        delete formValues.schema_metadata;
 
         if (formValues.secret_manager_settings) {
           if (typeof formValues.secret_manager_settings === "string") {
@@ -587,6 +582,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           footer={null}
           onOk={handleOk}
           onCancel={handleCancel}
+          destroyOnHidden
         >
           <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
             <>

@@ -38,7 +38,6 @@ import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import MetadataKeyValueFields, {
   metadataObjectToPairs,
   metadataPairsToObject,
-  schemaMetadataToObject,
 } from "../common_components/MetadataKeyValueFields";
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import ModelAliasManager from "../common_components/ModelAliasManager";
@@ -472,10 +471,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       if (!accessToken) return;
       setIsTeamSaving(true);
 
-      const parsedMetadata = {
-        ...metadataPairsToObject(values.metadata),
-        ...schemaMetadataToObject(values.schema_metadata),
-      };
+      const parsedMetadata = metadataPairsToObject(values.metadata);
 
       let secretManagerSettings: Record<string, any> | undefined;
       if (typeof values.secret_manager_settings === "string") {
@@ -1169,7 +1165,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         form={form}
                         schemaFields={teamMetadataSchemaFields}
                         schemaLoading={isTeamMetadataSchemaLoading}
-                        sourceMetadata={info.metadata}
                       />
                     </Form.Item>
 

@@ -8,7 +8,6 @@ import MetadataKeyValueFields, {
   MetadataPair,
   metadataObjectToPairs,
   metadataPairsToObject,
-  schemaMetadataToObject,
 } from "./MetadataKeyValueFields";
 
 describe("metadataObjectToPairs", () => {
@@ -89,51 +88,18 @@ describe("metadataPairsToObject", () => {
   });
 });
 
-describe("schemaMetadataToObject", () => {
-  it("should return an empty object for null or undefined values", () => {
-    expect(schemaMetadataToObject(null)).toEqual({});
-    expect(schemaMetadataToObject(undefined)).toEqual({});
-  });
-
-  it("should omit blank and whitespace-only values", () => {
-    expect(schemaMetadataToObject({ cost_center: "CC-1001", app_name: "", notes: "   ", missing: undefined })).toEqual({
-      cost_center: "CC-1001",
-    });
-  });
-
-  it("should parse JSON values into their typed form", () => {
-    expect(schemaMetadataToObject({ tier: "3", beta: "true", code: '"42"' })).toEqual({
-      tier: 3,
-      beta: true,
-      code: "42",
-    });
-  });
-});
-
 interface HarnessProps {
-  onFinish: (values: { metadata?: MetadataPair[]; schema_metadata?: Record<string, string | undefined> }) => void;
+  onFinish: (values: { metadata?: MetadataPair[] }) => void;
   initialMetadata?: MetadataPair[];
   schemaFields?: TeamMetadataField[];
   schemaLoading?: boolean;
-  sourceMetadata?: Record<string, unknown>;
 }
 
-const Harness: React.FC<HarnessProps> = ({
-  onFinish,
-  initialMetadata,
-  schemaFields,
-  schemaLoading,
-  sourceMetadata,
-}) => {
+const Harness: React.FC<HarnessProps> = ({ onFinish, initialMetadata, schemaFields, schemaLoading }) => {
   const [form] = Form.useForm();
   return (
     <Form form={form} onFinish={onFinish} initialValues={{ metadata: initialMetadata }}>
-      <MetadataKeyValueFields
-        form={form}
-        schemaFields={schemaFields}
-        schemaLoading={schemaLoading}
-        sourceMetadata={sourceMetadata}
-      />
+      <MetadataKeyValueFields form={form} schemaFields={schemaFields} schemaLoading={schemaLoading} />
       <button type="submit">Save</button>
     </Form>
   );
@@ -236,66 +202,61 @@ describe("MetadataKeyValueFields with a declared schema", () => {
     { key: "app_name", label: "Application Name" },
   ];
 
-  it("should render a tagged pair row per declared field with no remove icon", () => {
-    render(<Harness onFinish={vi.fn()} schemaFields={schema} initialMetadata={[{ key: "notes", value: "x" }]} />);
+  it("should prepopulate one ordinary editable pair row per declared key", async () => {
+    render(<Harness onFinish={vi.fn()} schemaFields={schema} />);
 
-    expect(screen.getByText("cost_center")).toBeInTheDocument();
-    expect(screen.getByText("app_name")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Cost Center")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Application Name")).toBeInTheDocument();
-    expect(screen.getAllByLabelText("Remove key-value pair")).toHaveLength(1);
-  });
-
-  it("should submit declared field values under schema_metadata", async () => {
-    const user = userEvent.setup();
-    const onFinish = vi.fn();
-    render(<Harness onFinish={onFinish} schemaFields={schema} />);
-
-    await user.type(screen.getByPlaceholderText("Cost Center"), "CC-1001");
-    await user.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => {
-      expect(onFinish).toHaveBeenCalledWith(
-        expect.objectContaining({ schema_metadata: expect.objectContaining({ cost_center: "CC-1001" }) }),
-      );
-    });
-  });
-
-  it("should prefill declared fields from sourceMetadata and prune them from free-form rows", async () => {
-    render(
-      <Harness
-        onFinish={vi.fn()}
-        schemaFields={schema}
-        initialMetadata={[
-          { key: "cost_center", value: "CC-1001" },
-          { key: "notes", value: "x" },
-        ]}
-        sourceMetadata={{ cost_center: "CC-1001", notes: "x" }}
-      />,
-    );
-
-    expect(screen.getByPlaceholderText("Cost Center")).toHaveValue("CC-1001");
     await waitFor(() => {
       expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
-        "notes",
+        "cost_center",
+        "app_name",
       ]);
     });
+    screen.getAllByPlaceholderText("Key").forEach((input) => expect(input).toBeEnabled());
+    expect(screen.getAllByLabelText("Remove key-value pair")).toHaveLength(2);
   });
 
-  it("should reject a free-form key that matches a declared field", async () => {
+  it("should submit a prepopulated key with its typed value", async () => {
     const user = userEvent.setup();
     const onFinish = vi.fn();
-    render(<Harness onFinish={onFinish} schemaFields={schema} />);
+    render(<Harness onFinish={onFinish} schemaFields={[{ key: "cost_center", label: "Cost Center" }]} />);
 
-    await user.type(screen.getByPlaceholderText("Cost Center"), "CC-1001");
-    await user.click(screen.getByRole("button", { name: /add key-value pair/i }));
-    await user.type(screen.getByPlaceholderText("Key"), "cost_center");
+    await user.type(await screen.findByPlaceholderText("Value"), "CC-1001");
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Key is managed by the fields above")).toBeInTheDocument();
+      expect(onFinish).toHaveBeenCalledWith({ metadata: [{ key: "cost_center", value: "CC-1001" }] });
     });
-    expect(onFinish).not.toHaveBeenCalled();
+  });
+
+  it("should not add a second row for keys already present in the form", async () => {
+    render(
+      <Harness onFinish={vi.fn()} schemaFields={schema} initialMetadata={[{ key: "cost_center", value: "CC-1001" }]} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
+        "cost_center",
+        "app_name",
+      ]);
+    });
+    expect(screen.getAllByPlaceholderText("Value").map((input) => (input as HTMLInputElement).value)).toEqual([
+      "CC-1001",
+      "",
+    ]);
+  });
+
+  it("should let the user remove a prepopulated row", async () => {
+    const user = userEvent.setup();
+    render(<Harness onFinish={vi.fn()} schemaFields={schema} />);
+
+    await screen.findAllByPlaceholderText("Key");
+    await user.click(screen.getAllByLabelText("Remove key-value pair")[0]);
+
+    await waitFor(() => {
+      expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
+        "app_name",
+      ]);
+    });
   });
 
   it("should show a skeleton instead of the editor while the schema is loading", () => {

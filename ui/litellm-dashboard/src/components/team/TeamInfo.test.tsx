@@ -961,10 +961,13 @@ describe("TeamInfoView", () => {
       expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].metadata).toMatchObject({ cost_center: "eng-1" });
     });
 
-    it("should prefill declared schema fields from team metadata and submit the edited value", async () => {
+    it("should keep declared keys as ordinary prefilled rows and submit the edited value", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(useTeamMetadataSchema).mockReturnValue({
-        data: [{ key: "cost_center", label: "Cost Center" }],
+        data: [
+          { key: "cost_center", label: "Cost Center" },
+          { key: "app_name", label: "Application Name" },
+        ],
         isLoading: false,
       } as any);
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
@@ -978,15 +981,17 @@ describe("TeamInfoView", () => {
       renderWithProviders(<TeamInfoView {...defaultProps} />);
       await openSettingsEditor(user);
 
-      expect(screen.getByPlaceholderText("Cost Center")).toHaveValue("CC-OLD");
       await waitFor(() => {
         expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
+          "cost_center",
           "department",
+          "app_name",
         ]);
       });
+      expect(screen.getAllByPlaceholderText("Value")[0]).toHaveValue("CC-OLD");
 
-      await user.clear(screen.getByPlaceholderText("Cost Center"));
-      await user.type(screen.getByPlaceholderText("Cost Center"), "CC-NEW");
+      await user.clear(screen.getAllByPlaceholderText("Value")[0]);
+      await user.type(screen.getAllByPlaceholderText("Value")[0], "CC-NEW");
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
@@ -996,6 +1001,7 @@ describe("TeamInfoView", () => {
       expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].metadata).toMatchObject({
         cost_center: "CC-NEW",
         department: "research",
+        app_name: "",
       });
     });
   });
