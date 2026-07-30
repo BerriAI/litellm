@@ -3247,6 +3247,13 @@ async def test_pre_call_hook_does_not_touch_provider_metadata_on_litellm_metadat
             key=key,
         ) == litellm_metadata.get(key)
 
+    for key in _LITELLM_STASH_KEYS:
+        assert handler._lookup_stashed_value(
+            kwargs={"litellm_params": {"litellm_metadata": litellm_metadata}},
+            standard_logging_metadata=None,
+            key=key,
+        ) == litellm_metadata.get(key)
+
 
 @pytest.mark.asyncio
 async def test_pre_call_hook_rejects_caller_supplied_stash_values():
