@@ -104,11 +104,12 @@ def _kwargs(payload=None):
     }
 
 
-def _logger(legacy_compat=True, team_metadata_keys=None):
+def _logger(legacy_compat=True, team_metadata_keys=None, metadata_keys=None):
     cfg = OpenTelemetryV2Config(
         exporter="in_memory",
         legacy_compat=legacy_compat,
         baggage_team_metadata_keys=team_metadata_keys or [],
+        **({"baggage_metadata_keys": metadata_keys} if metadata_keys is not None else {}),
     )
     exporter = InMemorySpanExporter()
     tracer_provider = providers.build_tracer_provider(cfg, exporter=exporter)
@@ -1318,6 +1319,69 @@ def test_provider_model_and_team_metadata_on_real_boundary_flow():
     expected = {"tier": "gold", "cost_center": "42"}
     assert json.loads(llm.attributes[LiteLLM.TEAM_METADATA]) == expected
     assert json.loads(srv.attributes[LiteLLM.TEAM_METADATA]) == expected
+
+
+def test_allowlisted_late_metadata_stamped_on_boundary_born_span():
+    """Regression for #35191: metadata allowlisted via ``baggage_metadata_keys``
+    that is only present in the final payload — not in the auth-time identity —
+    must land on the LLM-call span even when that span was opened at the
+    ``pre_call`` boundary.
+
+    ``request_label`` isn't known at auth, so it never rides the identity Baggage
+    seeded there onto the server span or into the span the boundary opener starts;
+    the close path has to apply the allowlist from the typed payload. This mirrors
+    how ``litellm.provider.model`` reaches the boundary-born span. Unlisted
+    metadata (``private_note``) stays off the span, and the late label is absent
+    from the server span, which started before it was known.
+    """
+    logger, exporter = _logger(metadata_keys=["request_label"])
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    payload = _payload(
+        metadata={
+            "user_api_key_team_id": "t1",
+            "request_label": "canary",
+            "private_note": "do-not-promote",
+        },
+    )
+    kwargs = _kwargs(payload=payload)
+    with trace.use_span(server, end_on_exit=False):
+        logger.seed_request_identity(_Auth(), model="gpt-4o")
+        logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+        assert logger._open_llm_calls["call_1"].span is not None  # born at the boundary
+        asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    server.end()
+
+    spans = {s.name: s for s in exporter.get_finished_spans()}
+    llm = spans["chat gpt-4o"]
+    srv = spans[LITELLM_PROXY_REQUEST_SPAN_NAME]
+    label = f"{LiteLLM.METADATA_PREFIX}request_label"
+    assert llm.attributes[label] == "canary"
+    # not known at auth, so it never reached the server span (started first)
+    assert label not in srv.attributes
+    # unlisted metadata is never stamped, on either span
+    assert f"{LiteLLM.METADATA_PREFIX}private_note" not in llm.attributes
+    assert f"{LiteLLM.METADATA_PREFIX}private_note" not in srv.attributes
+
+
+def test_allowlisted_late_metadata_stamped_on_deferred_span():
+    """Parity with the boundary-born path (#35191): the deferred (SDK / thread-pool)
+    close must stamp the same allowlisted late metadata, so a request carries
+    ``litellm.metadata.request_label`` regardless of which path opened its span."""
+    logger, exporter = _logger(metadata_keys=["request_label"])
+    payload = _payload(
+        metadata={
+            "user_api_key_team_id": "t1",
+            "request_label": "canary",
+            "private_note": "do-not-promote",
+        },
+    )
+    _emit_llm(logger, kwargs=_kwargs(payload=payload))
+    (span,) = exporter.get_finished_spans()
+    assert span.parent is None  # deferred → root span
+    assert span.attributes[f"{LiteLLM.METADATA_PREFIX}request_label"] == "canary"
+    assert f"{LiteLLM.METADATA_PREFIX}private_note" not in span.attributes
 
 
 def test_pre_call_hook_seeds_baggage_onto_server_and_child_spans():

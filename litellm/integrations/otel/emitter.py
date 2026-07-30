@@ -7,9 +7,11 @@ from opentelemetry.context import Context
 from opentelemetry.trace import Link, Span, Tracer
 from opentelemetry.trace.status import Status, StatusCode
 
+from litellm.integrations.otel.model.baggage import promoted_baggage
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.mappers.base import AttributeMapper, SpanData
+from litellm.integrations.otel.model.metadata import RequestIdentity
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
@@ -49,6 +51,24 @@ _NAME_BUILDERS: dict[SpanRole, Callable[..., str]] = {
 # of a single in-flight request, so a bounded LRU keeps memory flat on a
 # long-running proxy while still covering every concurrently-open call.
 _DEDUP_CACHE_MAX = 10_000
+
+
+def _span_identity(data: SpanData) -> RequestIdentity | None:
+    """The request identity a span carries, or ``None`` for span kinds that have
+    none (service / guardrail spans). Only identity-bearing spans get the
+    allowlisted request metadata re-applied at close."""
+    match data:
+        case LLMCallSpanData() | MCPToolCallSpanData() | MCPListToolsSpanData():
+            return data.identity
+        case _:
+            return None
+
+
+def _span_request_model(data: SpanData) -> str | None:
+    """The user-facing request model promoted into Baggage as ``gen_ai.request.model``.
+    Only the LLM-call span carries one; MCP spans promote identity without a model,
+    matching how the deferred path seeds their Baggage."""
+    return data.request_model if isinstance(data, LLMCallSpanData) else None
 
 
 def _stamp_otel_error_attributes(span: Span, error_type: str, resolved_message: str) -> None:
@@ -234,6 +254,7 @@ class SpanEmitter:
         for mapper in self._mappers:
             for key, value in mapper.map(data).items():
                 span.set_attribute(key, value)
+        self._stamp_identity_baggage(span, data)
         error = (
             data.error
             if isinstance(
@@ -264,3 +285,29 @@ class SpanEmitter:
         # span-level health signal litellm doesn't actually evaluate. Only a
         # genuine error sets a status.
         span.end(end_time=end_time_ns)
+
+    def _stamp_identity_baggage(self, span: Span, data: SpanData) -> None:
+        """Re-apply the operator-allowlisted request identity — including the
+        ``litellm.metadata.*`` allowlist — from the final typed payload onto ``span``.
+
+        ``LiteLLMBaggageSpanProcessor`` only stamps whatever was in Baggage when a
+        span *started*. A span opened at the ``pre_call`` boundary starts before the
+        request's full metadata is known — only the auth-time identity is seeded — so
+        late request/routing metadata (and any identity not resolved until routing)
+        never lands on it. Applying ``promoted_baggage`` here, from ``identity.metadata``
+        parsed out of the payload, makes a boundary-born span carry exactly the keys a
+        deferred span already gets from Baggage, and nothing outside the allowlist. It
+        is a no-op-equivalent overlay for the deferred / MCP paths, where the same
+        values were already stamped at start, so both paths end up identical.
+        """
+        identity = _span_identity(data)
+        if identity is None:
+            return
+        for key, value in promoted_baggage(
+            identity,
+            _span_request_model(data),
+            promoted_keys=tuple(self._config.baggage_promoted_keys),
+            metadata_keys=tuple(self._config.baggage_metadata_keys),
+            team_metadata_keys=tuple(self._config.baggage_team_metadata_keys),
+        ).items():
+            span.set_attribute(key, value)
