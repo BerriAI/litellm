@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import random
 import re
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal, Union, cast
 
 from pydantic import BaseModel
@@ -113,12 +114,14 @@ def _classifier_call_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]
     }
 
 
-def _effective_turn_off_message_logging(request_kwargs: dict[str, Any] | None) -> bool | None:
+def _effective_turn_off_message_logging(request_kwargs: Mapping[str, Any] | None) -> bool | None:
     from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
         initialize_standard_callback_dynamic_params,
     )
 
-    return initialize_standard_callback_dynamic_params(request_kwargs or {}).get("turn_off_message_logging")
+    return initialize_standard_callback_dynamic_params(dict(request_kwargs) if request_kwargs else {}).get(
+        "turn_off_message_logging"
+    )
 
 
 class DimensionScore:
