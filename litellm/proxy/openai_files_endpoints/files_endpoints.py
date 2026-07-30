@@ -189,6 +189,7 @@ async def route_create_file(
             llm_router=llm_router,
             model_id=model,
             operation_context="file upload",
+            team_id=user_api_key_dict.team_id,
         )
 
         # Merge credentials into the request
@@ -739,6 +740,7 @@ async def get_file_content(
                 llm_router=llm_router,
                 data=data,
                 check_file_id_encoding=True,
+                team_id=user_api_key_dict.team_id,
             )
 
             if not should_route:
@@ -949,6 +951,7 @@ async def get_file(
             llm_router=llm_router,
             data=data,
             check_file_id_encoding=True,
+            team_id=user_api_key_dict.team_id,
         )
 
         if should_route:
@@ -1147,6 +1150,7 @@ async def delete_file(
             llm_router=llm_router,
             data=data,
             check_file_id_encoding=True,
+            team_id=user_api_key_dict.team_id,
         )
 
         if should_route and credentials is not None:
@@ -1332,6 +1336,7 @@ async def list_files(
             llm_router=llm_router,
             data=data,
             check_file_id_encoding=False,
+            team_id=user_api_key_dict.team_id,
         )
 
         if should_route and credentials is not None:
@@ -1361,6 +1366,7 @@ async def list_files(
                 llm_router=llm_router,
                 model_id=target_model_names_list[0],
                 operation_context="file list",
+                team_id=user_api_key_dict.team_id,
             )
             prepare_data_with_credentials(data=data, credentials=credentials)
             response = await litellm.afile_list(
