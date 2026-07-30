@@ -7429,7 +7429,7 @@ async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
             user_role=None,
         )
 
-    async def _fake_count_billable_users():
+    async def _fake_count_sso_users():
         call_order.append("count")
         return 6
 
@@ -7446,8 +7446,8 @@ async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
         "litellm.proxy.management_endpoints.sso.saml_sso.SAMLAuthHandler.handle_acs",
         new=_fake_handle_acs,
     ), patch(
-        "litellm.repositories.user_repository.UserRepository.count_billable_users",
-        new=AsyncMock(side_effect=_fake_count_billable_users),
+        "litellm.repositories.user_repository.UserRepository.count_sso_users",
+        new=AsyncMock(side_effect=_fake_count_sso_users),
     ):
         with pytest.raises(ProxyException) as exc:
             await saml_callback(request_double)
