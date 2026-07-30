@@ -129,6 +129,21 @@ def test_team_metadata_promoted_only_for_allowlisted_subkeys():
     assert GenAI.REQUEST_MODEL not in span.attributes
 
 
+def test_legacy_gen_ai_request_model_allowlist_remaps_to_vendor_key():
+    """Explicit baggage_promoted_keys with gen_ai.request.model still promote
+    the model, but under litellm.request.model so non-LLM spans are not
+    misclassified as GenAI operations."""
+    data = LLMCallSpanData.from_standard_logging_payload(_payload())
+    bag = promoted_baggage(
+        data.identity,
+        data.request_model,
+        (LiteLLM.TEAM_ID, GenAI.REQUEST_MODEL),
+    )
+    assert bag.get(LiteLLM.REQUEST_MODEL) == "gpt-4o"
+    assert GenAI.REQUEST_MODEL not in bag
+    assert bag.get(LiteLLM.TEAM_ID) == "t1"
+
+
 def test_team_metadata_not_promoted_by_default():
     """The default allowlist is empty, so a team's metadata is never promoted
     even though its dict is present on the request."""

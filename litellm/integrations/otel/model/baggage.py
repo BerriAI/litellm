@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping
 from typing import Final
 
 from litellm.integrations.otel.model.metadata import RequestIdentity
-from litellm.integrations.otel.model.semconv import LiteLLM
+from litellm.integrations.otel.model.semconv import GenAI, LiteLLM
 
 # Attribute key -> value extractor over (identity, request_model,
 # team_metadata_keys). The single definition of what may be promoted and under
@@ -65,6 +65,23 @@ DEFAULT_BAGGAGE_METADATA_KEYS: Final[tuple[str, ...]] = (
 DEFAULT_BAGGAGE_TEAM_METADATA_KEYS: Final[tuple[str, ...]] = ()
 
 
+def _normalize_promoted_keys(promoted_keys: tuple[str, ...]) -> tuple[str, ...]:
+    """Remap legacy ``gen_ai.request.model`` allowlist entries to the vendor key.
+
+    Canonical ``gen_ai.request.model`` must not ride Baggage onto non-LLM spans.
+    Deployments that still list it in ``baggage_promoted_keys`` keep model
+    correlation via ``litellm.request.model`` instead of silently dropping it.
+    """
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for key in promoted_keys:
+        remapped = LiteLLM.REQUEST_MODEL if key == GenAI.REQUEST_MODEL else key
+        if remapped not in seen:
+            seen.add(remapped)
+            normalized.append(remapped)
+    return tuple(normalized)
+
+
 def promoted_baggage(
     identity: RequestIdentity,
     request_model: str | None,
@@ -79,6 +96,7 @@ def promoted_baggage(
     ``team_metadata_keys`` selects sub-keys of the team's metadata to promote
     under ``litellm.team.metadata``. Empty values are dropped.
     """
+    promoted_keys = _normalize_promoted_keys(promoted_keys)
     out: dict[str, str] = {}
     for key, extract in _PROMOTABLE.items():
         if key in promoted_keys:
