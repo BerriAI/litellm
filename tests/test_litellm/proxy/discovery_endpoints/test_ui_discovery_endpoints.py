@@ -12,6 +12,147 @@ from litellm.proxy.discovery_endpoints.ui_discovery_endpoints import router
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 
 
+def get_discovery_response(settings):
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with (
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
+        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
+        patch("litellm.proxy.proxy_server.general_settings", settings),
+    ):
+        return client.get("/.well-known/litellm-ui-config")
+
+
+def test_ui_discovery_endpoints_exposes_valid_native_oidc_config():
+    settings = {
+        "enable_jwt_auth": True,
+        "litellm_jwtauth": {
+            "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration",
+            "native_oidc_client_id": "litellm-native",
+            "native_oidc_scopes": ["openid", "profile", "offline_access"],
+            "client_secret": "must-not-appear",
+        },
+    }
+
+    response = get_discovery_response(settings)
+
+    assert response.status_code == 200
+    assert response.json()["native_oidc"] == {
+        "discovery_url": "https://idp.example.com/.well-known/openid-configuration",
+        "client_id": "litellm-native",
+        "scopes": ["openid", "profile", "offline_access"],
+    }
+    assert "must-not-appear" not in response.text
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"enable_jwt_auth": False, "litellm_jwtauth": {}},
+        {"enable_jwt_auth": "true", "litellm_jwtauth": {}},
+        {"enable_jwt_auth": True, "litellm_jwtauth": {}},
+        {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "native_oidc_discovery_url": "",
+                "native_oidc_client_id": "litellm-native",
+                "native_oidc_scopes": ["openid"],
+            },
+        },
+        {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration",
+                "native_oidc_client_id": "",
+                "native_oidc_scopes": ["openid"],
+            },
+        },
+        {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration",
+                "native_oidc_client_id": "litellm-native",
+                "native_oidc_scopes": [],
+            },
+        },
+        {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration",
+                "native_oidc_client_id": "litellm-native",
+                "native_oidc_scopes": [""],
+            },
+        },
+        {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "native_oidc_discovery_url": "idp.example.com/.well-known/openid-configuration",
+                "native_oidc_client_id": "litellm-native",
+                "native_oidc_scopes": ["openid"],
+            },
+        },
+        {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "native_oidc_discovery_url": "http://idp.example.com/.well-known/openid-configuration",
+                "native_oidc_client_id": "litellm-native",
+                "native_oidc_scopes": ["openid"],
+            },
+        },
+        {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "native_oidc_discovery_url": "https://user:pass@idp.example.com/.well-known/openid-configuration",
+                "native_oidc_client_id": "litellm-native",
+                "native_oidc_scopes": ["openid"],
+            },
+        },
+        {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration?foo=bar",
+                "native_oidc_client_id": "litellm-native",
+                "native_oidc_scopes": ["openid"],
+            },
+        },
+        {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "native_oidc_discovery_url": "https://idp.example.com/.well-known/openid-configuration#fragment",
+                "native_oidc_client_id": "litellm-native",
+                "native_oidc_scopes": ["openid"],
+            },
+        },
+        {"enable_jwt_auth": True, "litellm_jwtauth": "invalid"},
+    ],
+)
+def test_ui_discovery_endpoints_omits_invalid_native_oidc_config(settings):
+    response = get_discovery_response(settings)
+
+    assert response.status_code == 200
+    assert "native_oidc" not in response.json()
+    assert response.json()["proxy_base_url"] is None
+
+
+def test_ui_discovery_endpoints_allows_loopback_http_native_oidc_config():
+    settings = {
+        "enable_jwt_auth": True,
+        "litellm_jwtauth": {
+            "native_oidc_discovery_url": "http://127.0.0.1:8080/.well-known/openid-configuration",
+            "native_oidc_client_id": "litellm-native",
+            "native_oidc_scopes": ["openid"],
+        },
+    }
+
+    response = get_discovery_response(settings)
+
+    assert response.status_code == 200
+    assert response.json()["native_oidc"]["discovery_url"] == settings["litellm_jwtauth"]["native_oidc_discovery_url"]
+
+
 def test_ui_discovery_endpoints_with_defaults():
     app = FastAPI()
     app.include_router(router)
@@ -23,7 +164,6 @@ def test_ui_discovery_endpoints_with_defaults():
         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -46,7 +186,6 @@ def test_ui_discovery_endpoints_with_custom_server_root_path():
         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -71,7 +210,6 @@ def test_ui_discovery_endpoints_with_proxy_base_url_when_set():
         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
     ):
-
         response = client.get("/litellm/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -100,7 +238,6 @@ def test_ui_discovery_endpoints_with_sso_configured_and_auto_redirect_enabled():
             clear=False,
         ),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -157,7 +294,6 @@ def test_ui_discovery_endpoints_with_sso_configured_but_auto_redirect_disabled()
             clear=False,
         ),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -183,7 +319,6 @@ def test_ui_discovery_endpoints_with_sso_not_configured_but_auto_redirect_enable
             clear=False,
         ),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -212,7 +347,6 @@ def test_ui_discovery_endpoints_both_routes_return_same_data():
             clear=False,
         ),
     ):
-
         response1 = client.get("/.well-known/litellm-ui-config")
         response2 = client.get("/litellm/.well-known/litellm-ui-config")
 
@@ -267,7 +401,6 @@ def test_ui_discovery_endpoints_with_auto_redirect_env_var_overrides_general_set
             clear=False,
         ),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -286,7 +419,6 @@ def test_ui_discovery_endpoints_with_admin_ui_disabled():
         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "true"}, clear=False),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -309,7 +441,6 @@ def test_ui_discovery_endpoints_with_admin_ui_enabled():
         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -328,9 +459,7 @@ def test_ui_discovery_endpoints_is_control_plane_true_when_workers_configured():
 
     mock_config = MagicMock()
     mock_config.worker_registry = [
-        WorkerRegistryEntry(
-            worker_id="team-a", name="Team A", url="https://worker-1:4001"
-        ),
+        WorkerRegistryEntry(worker_id="team-a", name="Team A", url="https://worker-1:4001"),
     ]
 
     with (
@@ -340,7 +469,6 @@ def test_ui_discovery_endpoints_is_control_plane_true_when_workers_configured():
         patch("litellm.proxy.proxy_server.proxy_config", mock_config),
         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -392,7 +520,6 @@ def test_ui_discovery_endpoints_hide_default_credentials_hint_via_env_var():
             clear=False,
         ),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
@@ -440,7 +567,6 @@ def test_ui_discovery_endpoints_is_control_plane_false_when_no_workers():
         patch("litellm.proxy.proxy_server.proxy_config", mock_config),
         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
     ):
-
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200

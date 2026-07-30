@@ -2,8 +2,10 @@
 import os
 
 from fastapi import APIRouter
+from pydantic import ValidationError
 
 from litellm.types.proxy.discovery_endpoints.ui_discovery_endpoints import (
+    NativeOIDCConfig,
     UiDiscoveryEndpoints,
 )
 
@@ -16,6 +18,18 @@ async def get_ui_config():
     from litellm.proxy.auth.auth_utils import _has_user_setup_sso
     from litellm.proxy.proxy_server import general_settings
     from litellm.proxy.utils import get_proxy_base_url, get_server_root_path
+
+    native_oidc = None
+    jwt_auth_settings = general_settings.get("litellm_jwtauth")
+    if general_settings.get("enable_jwt_auth") is True and isinstance(jwt_auth_settings, dict):
+        try:
+            native_oidc = NativeOIDCConfig(
+                discovery_url=jwt_auth_settings.get("native_oidc_discovery_url"),
+                client_id=jwt_auth_settings.get("native_oidc_client_id"),
+                scopes=jwt_auth_settings.get("native_oidc_scopes"),
+            )
+        except ValidationError:
+            pass
 
     auto_redirect_ui_login_to_sso = (
         os.getenv("AUTO_REDIRECT_UI_LOGIN_TO_SSO", "false").lower() == "true"
@@ -42,4 +56,5 @@ async def get_ui_config():
         hide_default_credentials_hint=hide_default_credentials_hint,
         is_control_plane=is_control_plane,
         workers=proxy_config.worker_registry if is_control_plane else [],
+        native_oidc=native_oidc,
     )

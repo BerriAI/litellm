@@ -4392,6 +4392,9 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         default=300,
         description="TTL (in seconds) for caching UserInfo responses. Default: 300s (5 minutes).",
     )
+    native_oidc_discovery_url: Optional[str] = None
+    native_oidc_client_id: Optional[str] = None
+    native_oidc_scopes: Optional[List[str]] = None
     # JWT-to-Virtual-Key Mapping
     virtual_key_claim_field: str | None = Field(
         default=None,
