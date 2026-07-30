@@ -33,7 +33,7 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.responses.sse_output_recovery import _MAX_CONTENT_INDEX
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
-from litellm.types.llms.openai import ResponsesAPIStreamEvents
+from litellm.types.llms.openai import ResponsesAPIStreamEvents, ResponsesAPIStreamingResponse
 from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
 
@@ -557,7 +557,7 @@ class BaseResponsesAPIStreamingIterator:
 
         self._completed_response_cached = True
 
-    def _accumulate_streamed_output_item(self, chunk: Any) -> None:
+    def _accumulate_streamed_output_item(self, chunk: ResponsesAPIStreamingResponse) -> None:
         """
         Accumulate OUTPUT_ITEM_DONE / OUTPUT_TEXT_DONE payloads from a post-hook chunk
         so they can backfill response.completed.output when the provider sends it empty.
