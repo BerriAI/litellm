@@ -154,8 +154,20 @@ jobs:
           merge-multiple: true
 
       - name: Upload to Codecov
-        env:
-          ACTIONS_ID_TOKEN_REQUEST_URL: http://127.0.0.1:9/simulated-oidc-broker-outage
+        id: codecov-upload
+        continue-on-error: true
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
+        with:
+          use_oidc: true
+          directory: simulated-first-attempt-outage
+          disable_search: true
+          root_dir: ${{ github.workspace }}
+          flags: ${{ inputs.artifact-name }}
+          fail_ci_if_error: true
+
+      - name: Upload to Codecov (retry)
+        if: steps.codecov-upload.outcome == 'failure'
+        continue-on-error: true
         uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
         with:
           use_oidc: true
