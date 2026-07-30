@@ -67,3 +67,31 @@ def get_routes_for_call_type(call_type: CallTypes) -> list:
         if call_type in types:
             routes.append(route)
     return routes
+
+
+OPENAI_CHUNK_STREAMING_CALL_TYPES = frozenset(
+    {
+        CallTypes.completion,
+        CallTypes.acompletion,
+        CallTypes.text_completion,
+        CallTypes.atext_completion,
+    }
+)
+
+
+def route_streams_openai_format_chunks(route: Optional[str]) -> bool:
+    """
+    Whether streaming chunks emitted by `route` are OpenAI-format
+    ``ModelResponseStream`` objects.
+
+    Routes such as ``/v1/messages`` or ``/v1/responses`` relay provider-native
+    payloads (Anthropic SSE bytes, Responses API events), which hooks written
+    against ``ModelResponseStream`` cannot read. Unknown routes are treated as
+    OpenAI-format to preserve existing behavior.
+    """
+    if route is None:
+        return True
+    call_types = get_call_types_for_route(route)
+    if call_types is None:
+        return True
+    return any(call_type in OPENAI_CHUNK_STREAMING_CALL_TYPES for call_type in call_types)
