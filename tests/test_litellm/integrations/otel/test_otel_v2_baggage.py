@@ -74,7 +74,33 @@ def test_identity_promoted_onto_every_span():
     for span in spans:
         assert span.attributes.get(LiteLLM.TEAM_ID) == "t1"
         assert span.attributes.get(LiteLLM.TEAM_ALIAS) == "team one"
-        assert span.attributes.get(GenAI.REQUEST_MODEL) == "gpt-4o"
+        assert span.attributes.get(LiteLLM.REQUEST_MODEL) == "gpt-4o"
+    for span in spans:
+        if span.name == "chat gpt-4o":
+            assert span.attributes.get(GenAI.REQUEST_MODEL) == "gpt-4o"
+        else:
+            assert GenAI.REQUEST_MODEL not in span.attributes
+
+
+def test_gen_ai_request_model_not_promoted_via_baggage():
+    """Baggage must not stamp canonical gen_ai.request.model on non-LLM spans."""
+    engine, exporter = _engine_and_exporter()
+    data = LLMCallSpanData.from_standard_logging_payload(_payload())
+    bag = promoted_baggage(data.identity, data.request_model, BAGGAGE_PROMOTED_KEYS)
+    ctx = ctx_mod.set_request_baggage(bag)
+
+    root = engine.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions", ctx)
+    root_ctx = ctx_mod.context_from_span(root, ctx)
+    engine.emit(SpanRole.SERVICE, ServiceSpanData("redis", call_type="set"), root_ctx)
+    root.end()
+
+    spans = exporter.get_finished_spans()
+    service_span = next(s for s in spans if s.name != "POST /chat/completions")
+    assert service_span.attributes.get(LiteLLM.REQUEST_MODEL) == "gpt-4o"
+    assert GenAI.REQUEST_MODEL not in service_span.attributes
+    root_span = next(s for s in spans if s.name == "POST /chat/completions")
+    assert root_span.attributes.get(LiteLLM.REQUEST_MODEL) == "gpt-4o"
+    assert GenAI.REQUEST_MODEL not in root_span.attributes
 
 
 def test_team_metadata_promoted_only_for_allowlisted_subkeys():
@@ -99,7 +125,8 @@ def test_team_metadata_promoted_only_for_allowlisted_subkeys():
     assert json.loads(span.attributes[LiteLLM.TEAM_METADATA]) == {"tier": "gold"}
     # provider model is distinct from the user-facing request model
     assert span.attributes.get(LiteLLM.PROVIDER_MODEL) == "azure/my-deployment"
-    assert span.attributes.get(GenAI.REQUEST_MODEL) == "gpt-4o"
+    assert span.attributes.get(LiteLLM.REQUEST_MODEL) == "gpt-4o"
+    assert GenAI.REQUEST_MODEL not in span.attributes
 
 
 def test_team_metadata_not_promoted_by_default():

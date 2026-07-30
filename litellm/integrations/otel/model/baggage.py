@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping
 from typing import Final
 
 from litellm.integrations.otel.model.metadata import RequestIdentity
-from litellm.integrations.otel.model.semconv import GenAI, LiteLLM
+from litellm.integrations.otel.model.semconv import LiteLLM
 
 # Attribute key -> value extractor over (identity, request_model,
 # team_metadata_keys). The single definition of what may be promoted and under
@@ -32,7 +32,7 @@ _PROMOTABLE: Final[dict[str, Callable[[RequestIdentity, str | None, tuple[str, .
     ),
     LiteLLM.KEY_HASH: lambda identity, model, team_metadata_keys: identity.key_hash,
     LiteLLM.END_USER: lambda identity, model, team_metadata_keys: identity.end_user,
-    GenAI.REQUEST_MODEL: lambda identity, model, team_metadata_keys: model,
+    LiteLLM.REQUEST_MODEL: lambda identity, model, team_metadata_keys: model,
     LiteLLM.PROVIDER_MODEL: lambda identity, model, team_metadata_keys: identity.provider_model,
 }
 
@@ -44,7 +44,7 @@ BAGGAGE_PROMOTED_KEYS: Final[tuple[str, ...]] = (
     LiteLLM.TEAM_ALIAS,
     LiteLLM.TEAM_METADATA,
     LiteLLM.KEY_HASH,
-    GenAI.REQUEST_MODEL,
+    LiteLLM.REQUEST_MODEL,
     LiteLLM.PROVIDER_MODEL,
 )
 

@@ -229,8 +229,12 @@ class LiteLLM:
     TEAM_METADATA: Final = "litellm.team.metadata"
     KEY_HASH: Final = "litellm.api_key.hash"
     END_USER: Final = "litellm.end_user.id"
+    # User-facing model from the inbound request. Promoted via Baggage for
+    # correlation on non-GenAI spans; ``gen_ai.request.model`` is stamped only
+    # on LLM-call spans by the GenAI mapper.
+    REQUEST_MODEL: Final = "litellm.request.model"
     # The model string litellm actually sent to the provider (the deployment's
-    # ``litellm_params.model``), distinct from the user-facing ``gen_ai.request.model``.
+    # ``litellm_params.model``), distinct from the user-facing request model.
     PROVIDER_MODEL: Final = "litellm.provider.model"
     REQUEST_STREAMING: Final = "litellm.request.streaming"
     GUARDRAIL_NAME: Final = "litellm.guardrail.name"
