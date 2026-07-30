@@ -72,9 +72,7 @@ def _normalize_promoted_keys(promoted_keys: tuple[str, ...]) -> tuple[str, ...]:
     Deployments that still list it in ``baggage_promoted_keys`` keep model
     correlation via ``litellm.request.model`` instead of silently dropping it.
     """
-    remapped = tuple(
-        LiteLLM.REQUEST_MODEL if key == GenAI.REQUEST_MODEL else key for key in promoted_keys
-    )
+    remapped = tuple(LiteLLM.REQUEST_MODEL if key == GenAI.REQUEST_MODEL else key for key in promoted_keys)
     return tuple(key for i, key in enumerate(remapped) if key not in remapped[:i])
 
 
