@@ -2021,16 +2021,19 @@ def _sanitize_empty_text_content(
     message: AllMessageValues,
 ) -> AllMessageValues:
     """
-    Case C: Sanitize empty text content
+    Case C: Sanitize empty text content on *user* messages only
     - Replace empty or whitespace-only text content with a placeholder message.
     - Handles both string content and list-of-blocks content (rewriting only
       the empty text blocks in place; non-text blocks like images are left
       untouched).
+    - Assistant empties are left alone so callers (anthropic_messages_pt) can
+      drop them. Rewriting assistant content to a placeholder turns empty
+      turns into prefill, which Anthropic rejects on models that disallow it.
 
     Returns:
         The message with sanitized content if needed, otherwise the original message
     """
-    if message.get("role") not in ["user", "assistant"]:
+    if message.get("role") != "user":
         return message
 
     content = message.get("content")
@@ -2236,7 +2239,8 @@ def sanitize_messages_for_tool_calling(
       assistant message, remove that tool message.
 
     Case C: Empty text content
-    - Replace empty or whitespace-only text content with a placeholder message.
+    - Replace empty or whitespace-only *user* text content with a placeholder.
+      Empty assistant content is left alone so downstream transforms can drop it.
 
     Case D: Duplicate tool_result for same tool_use (duplicate results)
     - If multiple tool messages reference the same tool_call_id, keep only the last
@@ -2366,12 +2370,15 @@ def anthropic_messages_pt(
     #   "messages: text content blocks must be non-empty"
     # OpenAI/other providers silently tolerate `{"role": "user", "content": ""}`,
     # so callers (and upstream agent frameworks like pydantic-ai) routinely
-    # send empty user/assistant turns. We always rewrite these to a placeholder
+    # send empty user turns. We always rewrite *user* empties to a placeholder
     # for Anthropic-shaped requests, independent of `litellm.modify_params`,
     # because there is no way to "pass through" an empty text block — the
-    # request will always 400 otherwise. The richer tool-call sanitization
-    # (Cases A/B/D in `sanitize_messages_for_tool_calling`) remains gated on
-    # `modify_params` because it actually mutates conversation structure.
+    # request will always 400 otherwise. Empty *assistant* turns are not
+    # rewritten here; the transform below already skips empty assistant text
+    # (rewriting them causes prefill 400s on models that disallow prefill).
+    # The richer tool-call sanitization (Cases A/B/D in
+    # `sanitize_messages_for_tool_calling`) remains gated on `modify_params`
+    # because it actually mutates conversation structure.
     messages = [_sanitize_empty_text_content(m) for m in messages]
 
     # add role=tool support to allow function call result/error submission

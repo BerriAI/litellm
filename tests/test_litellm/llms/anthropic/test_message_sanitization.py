@@ -195,8 +195,8 @@ class TestMessageSanitization:
 
     def test_case_c_whitespace_only_content(self):
         """
-        Test Case C: Whitespace-only content
-        Should replace with placeholder
+        Test Case C: Whitespace-only user content is replaced with placeholder.
+        Assistant empties are left alone (dropping them avoids prefill 400s).
         """
         messages = [
             {"role": "user", "content": "   \n  \t  "},
@@ -210,10 +210,7 @@ class TestMessageSanitization:
             sanitized[0]["content"]
             == "[System: Empty message content sanitised to satisfy protocol]"
         )
-        assert (
-            sanitized[1]["content"]
-            == "[System: Empty message content sanitised to satisfy protocol]"
-        )
+        assert sanitized[1]["content"] == "  "
 
     def test_case_c_valid_content_preserved(self):
         """
@@ -372,6 +369,43 @@ class TestMessageSanitization:
         assert text_blocks[2]["text"] == (
             "[System: Empty message content sanitised to satisfy protocol]"
         )
+
+    def test_empty_assistant_content_dropped_without_prefill_placeholder(self):
+        """
+        Empty assistant turns must be dropped, not rewritten to a placeholder.
+        Placeholder rewrite looks like assistant prefill and 400s on Anthropic
+        models that disallow prefill.
+        """
+        litellm.modify_params = False
+
+        # Trailing empty assistant: drop it so the conversation ends on user.
+        trailing = anthropic_messages_pt(
+            messages=[
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": ""},
+            ],
+            model="claude-sonnet-4-5",
+            llm_provider="anthropic",
+        )
+        assert [m["role"] for m in trailing] == ["user"]
+        assert trailing[0]["content"][0]["text"] == "Hello"
+
+        # Empty assistant in the middle: drop it (do not inject placeholder text).
+        middle = anthropic_messages_pt(
+            messages=[
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": ""},
+                {"role": "user", "content": "Continue"},
+            ],
+            model="claude-sonnet-4-5",
+            llm_provider="anthropic",
+        )
+        placeholder = "[System: Empty message content sanitised to satisfy protocol]"
+        for msg in middle:
+            for block in msg["content"]:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    assert block["text"] != placeholder
+        assert [m["role"] for m in middle] == ["user", "user"]
 
     def test_empty_text_block_in_list_content_sanitized(self):
         """
