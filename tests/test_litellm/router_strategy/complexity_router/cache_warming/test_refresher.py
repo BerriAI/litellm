@@ -423,3 +423,24 @@ async def test_the_concurrency_bound_bounds_decompressed_payloads_not_just_repla
     assert len(llm_router.completion_calls) == 12, "every seeded session should warm both due models"
     assert llm_router.max_concurrent <= 2, "replays in flight must respect the bound"
     assert max(inflated_before_first_replay_completed) <= 2, "payloads inflated must respect the same bound"
+
+
+@pytest.mark.asyncio
+async def test_a_pooled_tier_warms_the_model_the_session_was_actually_served():
+    """A tier may be a pool that the router picks from at random, so the member holding this session's cache
+    is not necessarily the one the tier resolves to for warming. Warming the tier representative alone left
+    the session's own cache to expire, which is the case the feature exists to prevent, while spending on a
+    member the session never touched."""
+    pool_list = [
+        {"model_name": "haiku-a", "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-t"}},
+        {"model_name": "haiku-b", "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-t"}},
+        {"model_name": "sonnet-a", "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-t"}},
+    ]
+    llm_router, redis = warming_rig(
+        redis=FakeRedisCache(),
+        tiers={"SIMPLE": ["haiku-a", "haiku-b"], "COMPLEX": ["sonnet-a"]},
+        model_list=pool_list,
+    )
+    seed_session(redis, served_model="haiku-b")
+    await tick(llm_router)
+    assert "haiku-b" in replayed_models(llm_router), "the session's own cache must be kept warm"

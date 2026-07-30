@@ -516,8 +516,14 @@ class CacheWarmingRefresher:
         )
         if not active:
             return
-        warm_models = filter_cache_warmable(llm_router, resolve_warm_models(complexity_router.config))
-        if not warm_models:
+        tier_models = resolve_warm_models(complexity_router.config)
+        warmable = frozenset(
+            filter_cache_warmable(
+                llm_router,
+                tuple(dict.fromkeys((*tier_models, *(record.served_model for _, record in active)))),
+            )
+        )
+        if not warmable:
             return
         attributed = frozenset(
             record.attribution.user_api_key
@@ -547,7 +553,9 @@ class CacheWarmingRefresher:
                     store=store,
                     session_key=key,
                     record=record,
-                    warm_models=warm_models,
+                    warm_models=tuple(
+                        model for model in dict.fromkeys((record.served_model, *tier_models)) if model in warmable
+                    ),
                     refresh_interval_seconds=config.refresh_interval_seconds,
                     session_ttl_seconds=config.session_ttl_seconds,
                     semaphore=semaphore,
