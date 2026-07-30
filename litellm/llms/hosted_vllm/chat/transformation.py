@@ -38,10 +38,11 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
-    def _convert_custom_tools_to_function_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _convert_tools_to_function_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         vLLM chat completions currently accepts only OpenAI function tools.
-        Convert custom tools into function tools so request validation does not fail.
+        Convert custom tools and flattened function tools so request validation
+        does not fail.
         """
         converted_tools: List[Dict[str, Any]] = []
         for idx, tool in enumerate(tools):
@@ -49,17 +50,21 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                 converted_tools.append(tool)
                 continue
 
-            if tool.get("type") != "custom":
+            if tool.get("type") == "custom":
+                source_tool = tool.get("custom", {})
+                if not isinstance(source_tool, dict):
+                    source_tool = {}
+                tool_name = source_tool.get("name") or tool.get("name") or f"custom_tool_{idx}"
+                tool_description = source_tool.get("description") or tool.get("description")
+                tool_parameters = source_tool.get("input_schema") or tool.get("input_schema")
+            elif tool.get("type") == "function" and not isinstance(tool.get("function"), dict):
+                source_tool = tool
+                tool_name = source_tool.get("name") or f"function_tool_{idx}"
+                tool_description = source_tool.get("description")
+                tool_parameters = source_tool.get("parameters")
+            else:
                 converted_tools.append(tool)
                 continue
-
-            custom_tool = tool.get("custom", {})
-            if not isinstance(custom_tool, dict):
-                custom_tool = {}
-
-            tool_name = custom_tool.get("name") or tool.get("name") or f"custom_tool_{idx}"
-            tool_description = custom_tool.get("description") or tool.get("description")
-            tool_parameters = custom_tool.get("input_schema") or tool.get("input_schema")
 
             if not isinstance(tool_parameters, dict):
                 tool_parameters = {
@@ -104,7 +109,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             _tools = _remove_additional_properties(_tools)
             _tools = _remove_strict_from_schema(_tools)
             if isinstance(_tools, list):
-                _tools = self._convert_custom_tools_to_function_tools(_tools)
+                _tools = self._convert_tools_to_function_tools(_tools)
         if _tools is not None:
             non_default_params["tools"] = _tools
 
