@@ -67,28 +67,20 @@ const getAvailableModelsForKey = (keyData: KeyResponse, teams: any[] | null): st
   return [];
 };
 
+const keyTypeByPresetRoute: Record<string, string> = {
+  llm_api_routes: "llm_api",
+  management_routes: "management",
+  info_routes: "read_only",
+};
+
 const getExactKeyTypePreset = (allowedRoutes: string[] | null | undefined): string | undefined => {
   if (!allowedRoutes || allowedRoutes.length === 0) {
     return "default";
   }
-
   if (allowedRoutes.length !== 1) {
     return undefined;
   }
-
-  if (allowedRoutes[0] === "llm_api_routes") {
-    return "llm_api";
-  }
-
-  if (allowedRoutes[0] === "management_routes") {
-    return "management";
-  }
-
-  if (allowedRoutes[0] === "info_routes") {
-    return "read_only";
-  }
-
-  return undefined;
+  return keyTypeByPresetRoute[allowedRoutes[0]];
 };
 
 // Helper function to determine key_type display value from allowed_routes
