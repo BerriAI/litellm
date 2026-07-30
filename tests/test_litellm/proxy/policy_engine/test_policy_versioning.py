@@ -13,8 +13,10 @@ from litellm.proxy.policy_engine.policy_registry import (
     get_policy_registry,
 )
 from litellm.types.proxy.policy_engine import (
+    Policy,
     PolicyCreateRequest,
     PolicyDBResponse,
+    PolicyGuardrails,
     PolicyUpdateRequest,
 )
 
@@ -529,3 +531,28 @@ class TestConfigPoliciesPreservedAcrossDbSync:
             context=None,
         )
         assert resolved.guardrails == ["tooling"]
+
+    @pytest.mark.asyncio
+    async def test_add_policy_with_config_source_survives_sync(self):
+        registry = PolicyRegistry()
+        registry.add_policy(
+            "late-config-policy",
+            Policy(guardrails=PolicyGuardrails(add=["tooling"])),
+            source="config",
+        )
+
+        await registry.sync_policies_from_db(_prisma_with_policy_rows([]))
+
+        assert registry.has_policy("late-config-policy")
+        assert registry.get_source("late-config-policy") == "config"
+
+    @pytest.mark.asyncio
+    async def test_clear_removes_config_snapshot_so_sync_does_not_resurrect(self):
+        registry = PolicyRegistry()
+        registry.load_policies({"config-policy": {"guardrails": {"add": ["tooling"]}}})
+
+        registry.clear()
+        await registry.sync_policies_from_db(_prisma_with_policy_rows([]))
+
+        assert not registry.has_policy("config-policy")
+        assert registry.get_source("config-policy") is None
