@@ -396,3 +396,36 @@ def test_scim_deactivation_is_one_predicate_shared_with_the_auth_paths():
     assert user_is_scim_deactivated(user({"scim_active": True})) is False
     assert user_is_scim_deactivated(user({})) is False
     assert user_is_scim_deactivated(None) is False
+
+
+@pytest.mark.asyncio
+async def test_the_concurrency_bound_bounds_decompressed_payloads_not_just_replays():
+    """Every session is started at once, so anything a session materializes before acquiring its slot scales
+    with max_sessions instead of with the concurrency setting. Payloads are held decompressed for the whole
+    replay, and capture admits them up to eight times the compressed cap, so inflating above the semaphore let
+    one tick hold a thousand of them. Pins both halves of the bound: replays in flight and payloads inflated."""
+    from litellm.router_strategy.complexity_router.cache_warming import refresher as refresher_module
+
+    llm_router, redis = warming_rig(redis=FakeRedisCache(), replay_delay=0.02)
+    for index in range(6):
+        seed_session(redis, session_id=f"sess-{index}", caller_scope=f"hash-{index}", user_api_key=f"hash-{index}")
+    real_decompress = refresher_module.decompress_payload
+    inflated_before_first_replay_completed: list[int] = []
+    inflated = 0
+
+    def counting_decompress(blob):
+        nonlocal inflated
+        inflated += 1
+        if not llm_router.completion_calls:
+            inflated_before_first_replay_completed.append(inflated)
+        return real_decompress(blob)
+
+    refresher_module.decompress_payload = counting_decompress
+    try:
+        await tick(llm_router, active=refresher(max_concurrent_replays=2))
+    finally:
+        refresher_module.decompress_payload = real_decompress
+
+    assert len(llm_router.completion_calls) == 12, "every seeded session should warm both due models"
+    assert llm_router.max_concurrent <= 2, "replays in flight must respect the bound"
+    assert max(inflated_before_first_replay_completed) <= 2, "payloads inflated must respect the same bound"
