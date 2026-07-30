@@ -602,5 +602,90 @@ def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
     )
 
 
+def _openai_responses_with_web_search_calls(model, num_calls):
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from openai.types.responses.response_function_web_search import (
+        ActionSearch,
+        ResponseFunctionWebSearch,
+    )
+
+    output = [
+        ResponseFunctionWebSearch(
+            id=f"ws_{i}",
+            type="web_search_call",
+            status="completed",
+            action=ActionSearch(type="search", query="latest news"),
+        )
+        for i in range(num_calls)
+    ]
+    return ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model=model,
+        object="response",
+        output=output,
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+
+
+def test_openai_responses_web_search_priced_per_call(local_model_cost_map):
+    """
+    Regression for LIT-5013 bug 1: OpenAI reasoning models (gpt-5 family, o-series, deep-research)
+    carry supports_web_search but had no search_context_cost_per_query, so get_cost_for_web_search_request
+    (no openai branch) returned None and the default fallback billed web search as $0. gpt-5-nano now
+    prices at $0.01 per call, and two web_search_call items in the Responses output must bill 2 x $0.01.
+    """
+    from litellm.types.utils import Usage
+
+    model = "gpt-5-nano"
+    per_call = litellm.get_model_info(model)["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+    assert per_call == 0.01
+
+    response = _openai_responses_with_web_search_calls(model, num_calls=2)
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=response,
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(2 * per_call), (
+        f"gpt-5-nano web search must bill 2 x ${per_call}, got ${cost}"
+    )
+
+
+def test_openai_responses_web_search_multiplied_by_call_count(local_model_cost_map):
+    """
+    Regression for LIT-5013 bug 2: web_search_call detection was binary, so a Responses output with
+    multiple web searches was charged once. gpt-4o-search-preview carries per-call pricing; N calls
+    must bill N times, and a single call must still bill exactly once.
+    """
+    from litellm.types.utils import Usage
+
+    model = "gpt-4o-search-preview"
+    per_call = litellm.get_model_info(model)["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+    usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+    for num_calls in (1, 3):
+        response = _openai_responses_with_web_search_calls(model, num_calls=num_calls)
+        cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model=model,
+            response_object=response,
+            usage=usage,
+            custom_llm_provider="openai",
+            standard_built_in_tools_params=None,
+        )
+        assert cost == pytest.approx(num_calls * per_call), (
+            f"{num_calls} web searches must bill {num_calls} x ${per_call}, got ${cost}"
+        )
+
+
 # Note: File search integration test removed due to complex annotation detection logic
 # The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage

@@ -117,10 +117,28 @@ class StandardBuiltInToolCostTracking:
             if result is not None:
                 return result
 
-        return StandardBuiltInToolCostTracking.get_cost_for_web_search(
+        per_call_cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
             web_search_options=standard_built_in_tools_params.get("web_search_options", None),
             model_info=model_info,
         )
+        return per_call_cost * StandardBuiltInToolCostTracking._count_web_search_calls(response_object)
+
+    @staticmethod
+    def _count_web_search_calls(response_object: object) -> int:
+        """
+        Number of web searches to bill for on the per-call pricing path.
+
+        Providers that report a request count in usage (gemini, anthropic, xai, vertex) are handled by
+        get_cost_for_web_search_request and never reach here. This path prices per call, so it must count
+        the web_search_call items. Chat-completions responses only expose url_citation annotations with no
+        count, so they floor to a single billable search.
+        """
+        if isinstance(response_object, ResponsesAPIResponse):
+            count = sum(
+                1 for output_item in response_object.output if getattr(output_item, "type", None) == "web_search_call"
+            )
+            return max(count, 1)
+        return 1
 
     @staticmethod
     def _handle_file_search_cost(
