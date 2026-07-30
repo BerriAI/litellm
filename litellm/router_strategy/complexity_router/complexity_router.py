@@ -429,12 +429,21 @@ class ComplexityRouter(CustomLogger):
         # internal classifier call) is responsible for reconciling.
         metadata = _classifier_call_metadata((request_kwargs or {}).get("litellm_metadata"))
 
+        proxy_server_request = {
+            "body": {
+                "model": llm_config.model,
+                "messages": [{"role": "user", "content": classification_prompt}],
+                "response_format": TierClassification.model_json_schema(),
+            }
+        }
+
         response: ModelResponse = await self.litellm_router_instance.acompletion(
             model=llm_config.model,
             messages=[{"role": "user", "content": classification_prompt}],
             response_format=TierClassification,
             timeout=llm_config.timeout_ms / 1000,
             metadata=metadata,
+            proxy_server_request=proxy_server_request,
         )
         content = response.choices[0].message.content
         if not content:
@@ -821,8 +830,14 @@ class ComplexityRouter(CustomLogger):
         # key/team budget. Key/team attribution fields are preserved for spend logging.
         metadata = _classifier_call_metadata(request_kwargs.get("metadata"))
         litellm_metadata = _classifier_call_metadata(request_kwargs.get("litellm_metadata"))
+        proxy_server_request = {"body": {"model": self.config.embedding_model, "input": [user_message]}}
         query_vector = (
-            await encoder.aencode_queries([user_message], metadata=metadata, litellm_metadata=litellm_metadata)
+            await encoder.aencode_queries(
+                [user_message],
+                metadata=metadata,
+                litellm_metadata=litellm_metadata,
+                proxy_server_request=proxy_server_request,
+            )
         )[0]
         route_choice = await routelayer.acall(vector=query_vector)
 
