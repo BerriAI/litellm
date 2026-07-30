@@ -2783,6 +2783,7 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     updated_at: Optional[datetime] = None
     sso_user_id: Optional[str] = None
     teams: List[str] = []  # Just team IDs, not full team objects
+    object_permission: LiteLLM_ObjectPermissionTable | None = None
 
 
 from litellm.models.config import LiteLLM_Config as LiteLLM_Config  # noqa: E402

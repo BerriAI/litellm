@@ -993,6 +993,7 @@ export interface UserInfoV2Response {
   updated_at: string | null;
   sso_user_id: string | null;
   teams: string[];
+  object_permission?: ObjectPermission | null;
 }
 
 /**
