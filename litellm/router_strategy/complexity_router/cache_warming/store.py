@@ -19,11 +19,13 @@ _WARMTH_KEY_PREFIX = "complexity_router_cache_warmth:v1"
 _CAPTURE_SCRIPT = """
 local sessions_key = KEYS[1]
 local index_key = KEYS[2]
+local touched_key = KEYS[3]
 local member = ARGV[1]
 local record_json = ARGV[2]
 local now = tonumber(ARGV[3])
 local expires_at = tonumber(ARGV[4])
 local max_sessions = tonumber(ARGV[5])
+local served_model = ARGV[6]
 local expired = redis.call('ZRANGEBYSCORE', index_key, 0, now)
 if #expired > 0 then
     redis.call('HDEL', sessions_key, unpack(expired))
@@ -34,9 +36,15 @@ if not redis.call('ZSCORE', index_key, member) and redis.call('ZCARD', index_key
 end
 redis.call('HSET', sessions_key, member, record_json)
 redis.call('ZADD', index_key, expires_at, member)
+redis.call('SADD', touched_key, served_model)
 redis.call('EXPIREAT', sessions_key, math.ceil(expires_at))
 redis.call('EXPIREAT', index_key, math.ceil(expires_at))
+redis.call('EXPIREAT', touched_key, math.ceil(expires_at))
 return 1
+"""
+
+_TOUCHED_MODELS_SCRIPT = """
+return redis.call('SMEMBERS', KEYS[1])
 """
 
 _LIST_LIVE_SESSIONS_SCRIPT = """
@@ -114,6 +122,7 @@ class CacheWarmingStore:
             register(_LIST_LIVE_SESSIONS_SCRIPT) if register else None
         )
         self._get: Callable[..., Awaitable[object]] | None = register(_GET_RECORD_SCRIPT) if register else None
+        self._touched: Callable[..., Awaitable[object]] | None = register(_TOUCHED_MODELS_SCRIPT) if register else None
 
     @staticmethod
     def record_key(auto_router_model_name: str, caller_scope: str, session_id: str) -> str:
@@ -121,6 +130,14 @@ class CacheWarmingStore:
         its hash-tagged container, but warmth keys are derived from this identity and live at the top level,
         so without the router in it two warming auto-routers sharing one Redis read each other's warmth."""
         return f"{auto_router_model_name}:{caller_scope}:{session_id}"
+
+    @staticmethod
+    def touched_key(record_key: str) -> str:
+        """The models this session has actually been served on, hash-tagged into the session's own slot family
+        and written inside the capture script so it can never disagree with the record it belongs to. Warming
+        refreshes exactly this set, so a session pays only for caches it has demonstrably used."""
+        auto_router_model_name, _, session_scope = record_key.partition(":")
+        return f"{{cache_warm:v1:{auto_router_model_name}}}:touched:v1:{session_scope}"
 
     @staticmethod
     def warmth_key(record_key: str, model_group: str) -> str:
@@ -146,6 +163,16 @@ class CacheWarmingStore:
             return None
         raw = await self._get(keys=[self.sessions_key()], args=[key])
         return _parse_record(raw)
+
+    async def get_touched_models(self, key: str) -> tuple[str, ...]:
+        if self._require_redis() is None or self._touched is None:
+            return ()
+        raw = await self._touched(keys=[self.touched_key(key)], args=[])
+        try:
+            members = _MEMBERS_ADAPTER.validate_python(raw)
+        except ValidationError:
+            return ()
+        return tuple(member.decode() if isinstance(member, bytes) else member for member in members)
 
     async def upsert_session(
         self,
@@ -178,8 +205,8 @@ class CacheWarmingStore:
         )
         try:
             admitted = await self._capture(
-                keys=[self.sessions_key(), self.index_key()],
-                args=[key, record.model_dump_json(), now, now + ttl_seconds, max_sessions],
+                keys=[self.sessions_key(), self.index_key(), self.touched_key(key)],
+                args=[key, record.model_dump_json(), now, now + ttl_seconds, max_sessions, served_model],
             )
         except Exception:  # noqa: BLE001  # a capture fault fails closed: no capture beats an uncapped write
             verbose_router_logger.warning("cache_warming capture script failed; skipping capture", exc_info=True)

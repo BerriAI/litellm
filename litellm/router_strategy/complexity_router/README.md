@@ -144,7 +144,9 @@ Technical code keywords are detected case-insensitively and include:
 
 ## Cache Warming
 
-Provider prompt caches (Anthropic, Bedrock) are per-model, so a mid-session tier switch pays a fresh cache write on the new model and loses the cache-read discount. `cache_warming` keeps every tier model's prompt cache warm for active sessions: the proxy captures each session's latest payload and a background refresher replays it (`max_tokens=1`) against the other tier models before the provider's ~5 minute cache TTL expires. When the router later switches tiers, the switched-to model already has the session's prefix cached, and the routing pick prefers models whose cache is verifiably warm.
+Provider prompt caches (Anthropic, Bedrock) are per-model, so a session that moves between tiers pays a fresh cache write every time it lands on a model whose cache has expired, and loses the cache-read discount. `cache_warming` keeps a session's own prompt caches alive: the proxy captures each session's latest payload and a background refresher replays it (`max_tokens=1`) against the models that session has been served on, before the provider's ~5 minute cache TTL expires. Returning to a tier the session has already used is then a cache read rather than a fresh write, and the routing pick prefers models whose cache is verifiably warm.
+
+Warming follows the session rather than the configuration: a model is warmed for a session only once that session has actually been routed to it. The first switch to a new tier is therefore a normal cache write, and every subsequent visit to that tier is warm. This is deliberate; pre-warming tiers a session may never reach would spend on caches nobody reads, and most sessions never leave their starting tier.
 
 ```yaml
 model_list:
@@ -162,7 +164,7 @@ model_list:
           session_ttl_seconds: 3600
           idle_timeout_seconds: 600       # stop warming a session this long after its last real request
           max_sessions: 1000
-          # warm_models: [fast-claude, smart-claude]  # default: first member of each tier pool
+          # warm_models: [fast-claude, smart-claude]  # default: every model across the tier pools
 
 general_settings:
   store_prompts_in_spend_logs: true   # consent gate; warming stores full payloads in Redis
@@ -182,7 +184,7 @@ Requirements and semantics:
 - **Guardrails run on replays.** Because a replay goes through `pre_call_hook`, the guardrails configured for the model group (globally and on the deployment) also run on its warming replays. A blocking guardrail costs one skipped warm; a content-rewriting guardrail makes the warm ineffective rather than wrong, because a rewritten prefix simply is not the prefix real traffic sends. Sessions on a key that declares `max_iterations` are skipped instead of warmed, because that limiter counts every request on a `session_id` and cannot be consulted without incrementing it, so warming would consume the caller's own iteration budget.
 - **Multi-deployment groups require deployment affinity.** A replay routes by group name, so with several deployments it warms one member's cache while real traffic spreads across all of them: paying the cache-write premium against 1/N routing odds is worse than not warming, so such a group is skipped (with a one-time warning naming the group and both remedies) unless `DeploymentAffinityCheck` is active for it with the session_id mode, enabled globally via `router_settings.optional_pre_call_checks: ["session_affinity"]` or per group via `router_settings.model_group_affinity_config`. When active, replays carry the session's `session_id` (and the originating key hash), so the affinity check pins warming and real traffic to the same deployment. Single-deployment groups warm regardless. More than one deployment is used as the conservative stand-in for "more than one provider cache domain"
 - **`max_sessions`** caps concurrently warmed sessions per auto-router, enforced atomically at capture; once reached, new sessions are not admitted until existing ones expire.
-- **Interplay with `session_affinity`** (default on): affinity pins a session to its first-turn model, so no tier switch happens and warming buys nothing; with affinity on, captured sessions are still warmed but the pin decides routing. Disable `session_affinity` to let per-turn classification switch tiers and have warming make those switches cache hits.
+- **Interplay with `session_affinity`** (default on): affinity pins a session to its first-turn model, so it only ever touches that one model and warming keeps exactly that cache alive, which is worth having for sessions with long gaps between turns but buys nothing on switching, since no switch happens. Disable `session_affinity` to let per-turn classification move a session between tiers; the first visit to each tier is a normal cache write, and every return to a tier the session has already used is a cache read.
 
 ## Performance
 

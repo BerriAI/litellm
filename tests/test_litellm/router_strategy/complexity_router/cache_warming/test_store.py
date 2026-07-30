@@ -22,6 +22,7 @@ class FakeRedisCache:
         self.ttls: dict[str, int | None] = {}
         self.hashes: dict[str, dict[str, str]] = {}
         self.zsets: dict[str, dict[str, float]] = {}
+        self.sets: dict[str, set[str]] = {}
         self.expire_calls: list[str] = []
 
     def _namespaced(self, key: str) -> str:
@@ -63,6 +64,12 @@ class FakeRedisCache:
                 return 0
 
             return compare_and_delete
+        if "SMEMBERS" in script:
+
+            async def touched_models(keys: list, args: list) -> list:
+                return [member.encode("utf-8") for member in sorted(self.sets.get(self._namespaced(keys[0]), set()))]
+
+            return touched_models
         if "HGET" in script:
 
             async def get_record(keys: list, args: list) -> str | None:
@@ -74,6 +81,7 @@ class FakeRedisCache:
             async def capture(keys: list, args: list) -> int:
                 sessions = self.hashes.setdefault(self._namespaced(keys[0]), {})
                 index = self.zsets.setdefault(self._namespaced(keys[1]), {})
+                touched = self.sets.setdefault(self._namespaced(keys[2]), set())
                 member, record_json = str(args[0]), str(args[1])
                 now, expires_at, max_sessions = float(args[2]), float(args[3]), int(args[4])
                 for stale in [m for m, score in index.items() if score <= now]:
@@ -83,6 +91,7 @@ class FakeRedisCache:
                     return 0
                 sessions[member] = record_json
                 index[member] = expires_at
+                touched.add(str(args[5]))
                 return 1
 
             return capture
@@ -143,8 +152,6 @@ def test_key_shapes_are_scoped_and_hash_tagged():
     assert CacheWarmingStore.warmth_key(record, "opus").startswith(f"{slot}:")
 
 
-
-
 @pytest.mark.asyncio
 async def test_cap_enforced_atomically_with_the_record_write():
     _warn_session_cap_reached.cache_clear()
@@ -157,14 +164,6 @@ async def test_cap_enforced_atomically_with_the_record_write():
     assert len(await store.list_session_keys(max_sessions=10)) == 2
 
 
-
-
-
-
-
-
-
-
 @pytest.mark.asyncio
 async def test_get_record_returns_none_on_schema_version_mismatch():
     redis = FakeRedisCache()
@@ -172,11 +171,3 @@ async def test_get_record_returns_none_on_schema_version_mismatch():
     key = store.record_key("smart-router", "scope", "s1")
     redis.hashes[store.sessions_key()] = {key: _record_json(schema_version=CACHE_WARMING_RECORD_SCHEMA_VERSION + 1)}
     assert await store.get_record(key) is None
-
-
-
-
-
-
-
-

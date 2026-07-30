@@ -516,11 +516,12 @@ class CacheWarmingRefresher:
         )
         if not active:
             return
-        tier_models = resolve_warm_models(complexity_router.config)
+        touched = {key: await store.get_touched_models(key) for key, _ in active}
+        allowed = frozenset(resolve_warm_models(complexity_router.config))
         warmable = frozenset(
             filter_cache_warmable(
                 llm_router,
-                tuple(dict.fromkeys((*tier_models, *(record.served_model for _, record in active)))),
+                tuple(dict.fromkeys(model for models in touched.values() for model in models if model in allowed)),
             )
         )
         if not warmable:
@@ -554,7 +555,7 @@ class CacheWarmingRefresher:
                     session_key=key,
                     record=record,
                     warm_models=tuple(
-                        model for model in dict.fromkeys((record.served_model, *tier_models)) if model in warmable
+                        model for model in dict.fromkeys((record.served_model, *touched[key])) if model in warmable
                     ),
                     refresh_interval_seconds=config.refresh_interval_seconds,
                     session_ttl_seconds=config.session_ttl_seconds,
