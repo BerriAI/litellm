@@ -504,10 +504,22 @@ def _get_dynamic_logging_metadata(
     # Key-based callbacks
     #########################################################################################
     if key_dynamic_logging_settings is not None:
+        from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+            _request_blocked_callback_params,
+        )
+
         for item in key_dynamic_logging_settings:
             callback = _get_validated_callback_metadata(item=item, source="key-level")
             if callback is None:
                 continue
+            # Strip params that could redirect traffic to attacker-controlled
+            # destinations (e.g. dd_site, dd_agent_host). Key metadata is
+            # user-configurable; only team-level callbacks are admin-trusted.
+            callback.callback_vars = {
+                k: v
+                for k, v in callback.callback_vars.items()
+                if k not in _request_blocked_callback_params
+            }
             callback_settings_obj = convert_key_logging_metadata_to_callback(
                 data=callback,
                 team_callback_settings_obj=callback_settings_obj,
