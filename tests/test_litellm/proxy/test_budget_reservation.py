@@ -2587,6 +2587,9 @@ def _temp_boost_metadata(increase: float, hours_from_now: float) -> dict:
 
 
 def test_apply_temp_budget_increase():
+    """A finite boost that overflows the sum to inf must fall back to the raw finite
+    budget; otherwise each enforcement site's math.isfinite guard skips the over-budget
+    check and the window stops rejecting over-budget requests."""
     import math
 
     from litellm.proxy.spend_tracking.budget_reservation import apply_temp_budget_increase
@@ -2594,6 +2597,10 @@ def test_apply_temp_budget_increase():
     assert apply_temp_budget_increase(0.05, 1.0) == pytest.approx(1.05)
     assert apply_temp_budget_increase(0.05, 0.0) == 0.05
     assert apply_temp_budget_increase(math.inf, 1.0) == math.inf
+
+    overflow = apply_temp_budget_increase(1e308, 1e308)
+    assert overflow == 1e308
+    assert math.isfinite(overflow)
 
 
 async def _key_window_counter(valid_token, key_cache):

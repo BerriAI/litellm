@@ -609,9 +609,16 @@ async def _get_org_budget_counter(
 def apply_temp_budget_increase(max_budget: float, temp_budget_increase: float) -> float:
     """Raise a finite budget by an active temp boost. Infinite limits stay infinite,
     and a zero/absent boost is a no-op. Shared by every multi-window enforcement site
-    (auth check and pre-call reservation) so they can never diverge on issue #35247."""
+    (auth check and pre-call reservation) so they can never diverge on issue #35247.
+
+    If the boosted result is not finite (a large finite boost can overflow the sum to
+    inf), fall back to the raw finite budget: an inf/nan ceiling would make every
+    enforcement site's math.isfinite guard skip its over-budget check and disable the
+    window."""
     if temp_budget_increase and math.isfinite(max_budget):
-        return max_budget + temp_budget_increase
+        boosted = max_budget + temp_budget_increase
+        if math.isfinite(boosted):
+            return boosted
     return max_budget
 
 
