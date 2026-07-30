@@ -802,9 +802,7 @@ class ProxyLogging:
             verbose_proxy_logger.error(f"Error in manual argument parsing: {e}")
             return None
 
-    def _convert_llm_result_to_mcp_during_response(
-        self, llm_result, request_obj
-    ) -> MCPDuringCallResponseObject | None:
+    def _convert_llm_result_to_mcp_during_response(self, llm_result, request_obj) -> MCPDuringCallResponseObject | None:
         """
         Convert LLM guardrail result back to MCP during call response format.
         """
