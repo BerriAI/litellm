@@ -21,6 +21,7 @@ from litellm.router_strategy.complexity_router.cache_warming.types import (
     CacheWarmingAttribution,
     CacheWarmingPayload,
     CacheWarmingRecord,
+    WarmthStamp,
     compress_payload,
 )
 from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
@@ -61,6 +62,7 @@ class ReplayRouter(Router):
         )
         self.cache.redis_cache = redis
         self.completion_calls: list[dict] = []
+        self.failed_calls: list[dict] = []
         self.anthropic_calls: list[dict] = []
         self.replay_delay = replay_delay
         self.failing_message_marker: str | None = None
@@ -76,6 +78,7 @@ class ReplayRouter(Router):
     async def acompletion(self, **kwargs: object):  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the overloads
         marker = self.failing_message_marker
         if marker is not None and marker in json.dumps(kwargs.get("messages"), default=str):
+            self.failed_calls.append(kwargs)
             raise RuntimeError("provider down")
         self._in_flight += 1
         self.max_concurrent = max(self.max_concurrent, self._in_flight)
@@ -247,13 +250,15 @@ def seed_session(
     redis.hashes.setdefault(store.sessions_key(), {})[record_key] = json.dumps(record.model_dump())
     redis.zsets.setdefault(store.index_key(), {})[record_key] = time.time() + 3600
     for model_group, stamp in (warmth or {}).items():
-        redis.data[CacheWarmingStore.warmth_key(record_key, model_group)] = json.dumps(stamp)
+        redis.data[CacheWarmingStore.warmth_key(record_key, model_group)] = json.dumps(
+            WarmthStamp(at=stamp, warmed=True).model_dump()
+        )
     return record_key
 
 
-def warmth_stamp(redis: FakeRedisCache, record_key: str, model_group: str) -> float | None:
+def warmth_stamp(redis: FakeRedisCache, record_key: str, model_group: str) -> WarmthStamp | None:
     raw = redis.data.get(CacheWarmingStore.warmth_key(record_key, model_group))
-    return json.loads(raw) if raw is not None else None
+    return WarmthStamp.model_validate_json(raw) if raw is not None else None
 
 
 def proxy_logging_with_hooks(limiter: object | None = None) -> ProxyLogging:

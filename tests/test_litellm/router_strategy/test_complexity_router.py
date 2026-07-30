@@ -3616,7 +3616,7 @@ class TestWarmAwarePick:
         )
 
     @staticmethod
-    def _seed(redis, warmth, last_activity=None, served_model="fast-claude"):
+    def _seed(redis, warmth, last_activity=None, served_model="fast-claude", warmed=True):
         import json
         import time as time_module
 
@@ -3626,6 +3626,7 @@ class TestWarmAwarePick:
             CacheWarmingAttribution,
             CacheWarmingPayload,
             CacheWarmingRecord,
+            WarmthStamp,
             compress_payload,
         )
 
@@ -3649,7 +3650,9 @@ class TestWarmAwarePick:
         key = store.record_key("warm-router", "hash-w", "warm-sess")
         redis.hashes.setdefault(store.sessions_key(), {})[key] = json.dumps(record.model_dump())
         for model_group, stamp in warmth.items():
-            redis.data[CacheWarmingStore.warmth_key(key, model_group)] = json.dumps(stamp)
+            redis.data[CacheWarmingStore.warmth_key(key, model_group)] = json.dumps(
+                WarmthStamp(at=stamp, warmed=warmed).model_dump()
+            )
 
     @staticmethod
     def _kwargs():
@@ -3673,6 +3676,20 @@ class TestWarmAwarePick:
         }
         assert "cold-model" not in picks
         assert picks <= {"fast-claude", "smart-claude"}
+
+    @pytest.mark.asyncio
+    async def test_a_failed_replay_does_not_make_a_model_look_warm(self, mock_router_instance):
+        """A replay that the provider refused leaves that model's cache cold, so its stamp must not steer the
+        pick onto it: the pick falls back to the served model, whose cache the session's own traffic wrote."""
+        import time as time_module
+
+        redis = self._fresh_redis()
+        self._seed(redis, warmth={"smart-claude": time_module.time()}, served_model="fast-claude", warmed=False)
+        router = self._router(mock_router_instance, redis)
+        picks = {
+            await router._pick_model_for_tier(ComplexityTier.SIMPLE, None, None, self._kwargs()) for _ in range(20)
+        }
+        assert picks == {"fast-claude"}
 
     @pytest.mark.asyncio
     async def test_stale_warm_entries_fall_back(self, mock_router_instance):

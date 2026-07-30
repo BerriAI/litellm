@@ -580,7 +580,9 @@ class CacheWarmingRefresher:
         warmth = await store.get_warmth(session_key, warm_models)
         now = time.time()
         due_models = tuple(
-            model for model in warm_models if needs_rewarming(warmth.get(model, 0.0), now, refresh_interval_seconds)
+            model
+            for model in warm_models
+            if needs_rewarming(warmth[model].at if model in warmth else 0.0, now, refresh_interval_seconds)
         )
         if not due_models:
             return
@@ -589,38 +591,68 @@ class CacheWarmingRefresher:
             async with semaphore:
                 if lease_lost.is_set():
                     return
-                admitted = await self._admit_replay(
+                attempted_at = time.time()
+                warmed = await self._replay_once(
                     llm_router=llm_router,
                     payload=payload,
                     record=record,
+                    session_key=session_key,
                     model_group=model_group,
                     key_state=key_state,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                 )
-                if admitted is None:
-                    continue
-                data, principal = admitted
-                attempted_at = time.time()
-                try:
-                    await (
-                        llm_router.aanthropic_messages(**data)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # factory-generated router surface is legacy-untyped
-                        if payload.call_surface == "anthropic_messages"
-                        else llm_router.acompletion(**data)  # pyright: ignore[reportUnknownMemberType, reportCallIssue, reportUnknownVariableType, reportArgumentType]  # router overloads are legacy-untyped
-                    )
-                    await proxy_logging_obj.update_request_status(
-                        litellm_call_id=str(data.get("litellm_call_id") or ""), status="success"
-                    )
-                except Exception as exc:  # noqa: BLE001  # one failing replay must not abort the tick
-                    verbose_router_logger.warning(
-                        "cache_warming replay failed for session %s model %s", session_key, model_group, exc_info=True
-                    )
-                    await self._report_rejection(
-                        data=data, principal=principal, exc=exc, proxy_logging_obj=proxy_logging_obj
-                    )
-                finally:
-                    await store.mark_warm_attempt(session_key, model_group, attempted_at, session_ttl_seconds)
+                await store.mark_warm_attempt(
+                    session_key, model_group, attempted_at, session_ttl_seconds, warmed=warmed
+                )
+
+    async def _replay_once(
+        self,
+        *,
+        llm_router: "Router",
+        payload: CacheWarmingPayload,
+        record: CacheWarmingRecord,
+        session_key: str,
+        model_group: str,
+        key_state: "UserAPIKeyAuth | None",
+        prisma_client: "PrismaClient | None",
+        user_api_key_cache: "DualCache | None",
+        proxy_logging_obj: "ProxyLogging",
+    ) -> bool:
+        """True only when the provider accepted the replay, because a warmth stamp is the claim that the
+        provider now holds this session's prefix on this model. A refused or failed replay leaves it cold, so
+        it is stamped as attempted-but-cold: the pick keeps treating the model as cold, while the attempt
+        still paces the next tick instead of retrying a failing model every 30 seconds."""
+        admitted = await self._admit_replay(
+            llm_router=llm_router,
+            payload=payload,
+            record=record,
+            model_group=model_group,
+            key_state=key_state,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if admitted is None:
+            return False
+        data, principal = admitted
+        try:
+            await (
+                llm_router.aanthropic_messages(**data)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # factory-generated router surface is legacy-untyped
+                if payload.call_surface == "anthropic_messages"
+                else llm_router.acompletion(**data)  # pyright: ignore[reportUnknownMemberType, reportCallIssue, reportUnknownVariableType, reportArgumentType]  # router overloads are legacy-untyped
+            )
+        except Exception as exc:  # noqa: BLE001  # one failing replay must not abort the tick
+            verbose_router_logger.warning(
+                "cache_warming replay failed for session %s model %s", session_key, model_group, exc_info=True
+            )
+            await self._report_rejection(data=data, principal=principal, exc=exc, proxy_logging_obj=proxy_logging_obj)
+            return False
+        await proxy_logging_obj.update_request_status(
+            litellm_call_id=str(data.get("litellm_call_id") or ""), status="success"
+        )
+        return True
 
     async def _admit_replay(
         self,
@@ -675,7 +707,6 @@ class CacheWarmingRefresher:
             await self._report_rejection(data=data, principal=principal, exc=exc, proxy_logging_obj=proxy_logging_obj)
             return None
 
-    @staticmethod
     @staticmethod
     async def _authorize_and_reserve(
         *,

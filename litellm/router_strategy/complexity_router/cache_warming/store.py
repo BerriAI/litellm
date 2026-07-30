@@ -11,6 +11,7 @@ from litellm.router_strategy.complexity_router.cache_warming.types import (
     CACHE_WARMING_RECORD_SCHEMA_VERSION,
     CacheWarmingAttribution,
     CacheWarmingRecord,
+    WarmthStamp,
 )
 
 _WARMTH_KEY_PREFIX = "complexity_router_cache_warmth:v1"
@@ -82,15 +83,13 @@ def _parse_record(raw: object) -> CacheWarmingRecord | None:
     return record
 
 
-def _parse_warmth(raw: object) -> float | None:
-    if isinstance(raw, (int, float)):
-        return float(raw)
-    if isinstance(raw, (str, bytes)):
-        try:
-            return float(raw)
-        except ValueError:
-            return None
-    return None
+def _parse_warmth(raw: object) -> WarmthStamp | None:
+    try:
+        if isinstance(raw, (str, bytes)):
+            return WarmthStamp.model_validate_json(raw)
+        return WarmthStamp.model_validate(raw)
+    except ValidationError:
+        return None
 
 
 class CacheWarmingStore:
@@ -188,17 +187,21 @@ class CacheWarmingStore:
         if admitted != 1:
             _warn_session_cap_reached(self.auto_router_model_name)
             return
-        await self.mark_warm_attempt(key, served_model, attempted_at=now, ttl_seconds=ttl_seconds)
+        await self.mark_warm_attempt(key, served_model, attempted_at=now, ttl_seconds=ttl_seconds, warmed=True)
 
-    async def mark_warm_attempt(self, key: str, model_group: str, attempted_at: float, ttl_seconds: int) -> None:
+    async def mark_warm_attempt(
+        self, key: str, model_group: str, attempted_at: float, ttl_seconds: int, warmed: bool
+    ) -> None:
         redis_cache = self._require_redis()
         if redis_cache is None:
             return
         await redis_cache.async_set_cache(  # pyright: ignore[reportUnknownMemberType]  # RedisCache is legacy-untyped
-            key=self.warmth_key(key, model_group), value=attempted_at, ttl=ttl_seconds
+            key=self.warmth_key(key, model_group),
+            value=WarmthStamp(at=attempted_at, warmed=warmed).model_dump(),
+            ttl=ttl_seconds,
         )
 
-    async def get_warmth(self, key: str, model_groups: tuple[str, ...]) -> Mapping[str, float]:
+    async def get_warmth(self, key: str, model_groups: tuple[str, ...]) -> Mapping[str, WarmthStamp]:
         redis_cache = self._require_redis()
         if redis_cache is None:
             return {}  # mutable-ok: fresh per-call result, not shared state
