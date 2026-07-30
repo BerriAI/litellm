@@ -16,9 +16,11 @@ from litellm.integrations.otel.model.payloads import (
     MCPListToolsSpanData,
     MCPToolCallSpanData,
     ServiceSpanData,
+    SpanError,
 )
+from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
 from litellm.integrations.otel.plumbing.providers import to_otel_span_kind
-from litellm.integrations.otel.model.semconv import Error, ExceptionEvent
+from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError
 from litellm.integrations.otel.model.spans import (
     SPAN_REGISTRY,
     SpanRole,
@@ -49,15 +51,74 @@ _NAME_BUILDERS: dict[SpanRole, Callable[..., str]] = {
 _DEDUP_CACHE_MAX = 10_000
 
 
+def _stamp_otel_error_attributes(span: Span, error_type: str, resolved_message: str) -> None:
+    """Stamp the OTel-semconv error attributes (``error.type`` + ``error.message``).
+    ``error_type`` and ``resolved_message`` are ``finish_span``'s already-computed
+    fallback chains, so the pair on the status, event, and attributes stays in
+    lockstep."""
+    span.set_attribute(Error.TYPE, error_type)
+    span.set_attribute(Error.MESSAGE, resolved_message)
+
+
+def _stamp_litellm_error_attributes(span: Span, error: SpanError) -> None:
+    """Stamp litellm-specific error detail attributes. Emitted only when the
+    corresponding field is populated so guardrail-shape errors carrying only a
+    message aren't polluted with empty detail keys."""
+    if error.code:
+        span.set_attribute(LiteLLMError.CODE, error.code)
+    if error.stack_trace:
+        span.set_attribute(LiteLLMError.STACK_TRACE, error.stack_trace)
+    if error.llm_provider:
+        span.set_attribute(LiteLLMError.LLM_PROVIDER, error.llm_provider)
+
+
+def stamp_error(
+    span: Span,
+    error: SpanError,
+    *,
+    record_event: bool = True,
+    set_status: bool = True,
+) -> tuple[str, str] | None:
+    """Stamp the full v2 error attribute set on ``span`` and return the resolved
+    ``(error_type, message)`` pair, or ``None`` when the error carries neither a
+    type nor a message.
+
+    Shared by the LLM-call span (``finish_span``) and the proxy-level failure
+    spans (the FastAPI SERVER span and the ``auth`` phase span) so every v2 error
+    span carries identical keys. The semconv ``exception`` event rides alongside
+    the attributes so backends that map unknown string attrs to a truncated
+    ``keyword`` (e.g. Elasticsearch's 1024-char ``ignore_above``) still see the
+    full untruncated message on the recognized event field. ``record_event`` and
+    ``set_status`` are opt-outs for callers whose span lifecycle (``use_span``) or
+    owner (the FastAPI instrumentor) already records the event or the status.
+    """
+    if not (error.error_type or error.message):
+        return None
+    error_type = error.error_type or "error"
+    message = error.message or error.error_type or "error"
+    _stamp_otel_error_attributes(span, error_type, message)
+    _stamp_litellm_error_attributes(span, error)
+    if set_status:
+        span.set_status(Status(StatusCode.ERROR, message))
+    if record_event:
+        span.add_event(
+            ExceptionEvent.NAME,
+            {ExceptionEvent.TYPE: error_type, ExceptionEvent.MESSAGE: message},
+        )
+    return error_type, message
+
+
 class SpanEmitter:
     def __init__(
         self,
         tracer: Tracer,
         config: OpenTelemetryV2Config,
         mappers: Sequence[AttributeMapper] | None = None,
+        event_recorder: GenAIEventRecorder | None = None,
     ) -> None:
         self._tracer = tracer
         self._config = config
+        self._event_recorder = event_recorder
         # The mapper chain is the sole source of span attributes. When not
         # passed in, resolve it from the config so there's one source of truth.
         self._mappers: list[AttributeMapper] = (
@@ -187,19 +248,17 @@ class SpanEmitter:
             )
             else None
         )
-        if error and (error.error_type or error.message):
-            error_type = error.error_type or "error"
-            message = error.message or error.error_type or "error"
-            span.set_attribute(Error.TYPE, error_type)
-            span.set_status(Status(StatusCode.ERROR, message))
-            # Carry the full message on the standard ``exception`` event so backends
-            # map it as full text under ``exception.message``. Setting it as a bare
-            # string attribute instead lets backends like Elasticsearch dynamic-map
-            # it to a ``keyword`` capped at 1024 chars, truncating the message.
-            span.add_event(
-                ExceptionEvent.NAME,
-                {ExceptionEvent.TYPE: error_type, ExceptionEvent.MESSAGE: message},
-            )
+        if error:
+            stamped = stamp_error(span, error)
+            if stamped is not None and self._event_recorder is not None and role is SpanRole.LLM_CALL:
+                error_type, message = stamped
+                self._event_recorder.record_operation_exception(
+                    span_context=span.get_span_context(),
+                    error_type=error_type,
+                    message=message,
+                    stack_trace=error.stack_trace,
+                    timestamp_ns=end_time_ns,
+                )
         # On success leave the status UNSET (the semconv default) rather than
         # forcing OK — that matches the FastAPI server span and avoids implying a
         # span-level health signal litellm doesn't actually evaluate. Only a

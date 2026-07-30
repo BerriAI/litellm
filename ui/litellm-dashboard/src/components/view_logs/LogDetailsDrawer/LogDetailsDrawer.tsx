@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Drawer } from "antd";
+import { Button, Drawer, Segmented } from "antd";
 import { CheckOutlined, CopyOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
 import { Bot, Sparkles, Wrench } from "lucide-react";
 import { LogEntry } from "../columns";
+import { AutoRouterIcon, useIsAutoRoutedModelGroup } from "@/components/shared/table_cells";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "../utils";
 import { DrawerHeader } from "./DrawerHeader";
@@ -11,7 +12,7 @@ import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
 import { sessionSpendLogsCall } from "../../networking";
 import { useQuery } from "@tanstack/react-query";
 import { getSpendString } from "@/utils/dataUtils";
-import { normalizeGuardrailEntries } from "./utils";
+import { normalizeGuardrailEntries, sortSessionLogs, SessionLogSortMode } from "./utils";
 import { DRAWER_WIDTH } from "./constants";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
 
@@ -46,9 +47,17 @@ interface TraceEventRowProps {
   onClick: () => void;
 }
 
+const TRACE_EVENT_ICON_CLASS = "text-slate-500 shrink-0";
+
+function TraceEventIcon({ callType, isAutoRouted }: { callType: string; isAutoRouted: boolean }) {
+  if (MCP_CALL_TYPES.includes(callType)) return <Wrench size={12} className={TRACE_EVENT_ICON_CLASS} />;
+  if (AGENT_CALL_TYPES.includes(callType)) return <Bot size={12} className={TRACE_EVENT_ICON_CLASS} />;
+  if (isAutoRouted) return <AutoRouterIcon size={12} className={TRACE_EVENT_ICON_CLASS} />;
+  return <Sparkles size={12} className={TRACE_EVENT_ICON_CLASS} />;
+}
+
 function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
-  const isMcp = MCP_CALL_TYPES.includes(row.call_type);
-  const isAgent = AGENT_CALL_TYPES.includes(row.call_type);
+  const isAutoRouted = useIsAutoRoutedModelGroup(row.model_group);
   const durationValue =
     row.request_duration_ms != null
       ? (row.request_duration_ms / 1000).toFixed(3)
@@ -65,13 +74,7 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
       onClick={onClick}
     >
       <div className="flex items-center gap-1">
-        {isMcp ? (
-          <Wrench size={12} className="text-slate-500 shrink-0" />
-        ) : isAgent ? (
-          <Bot size={12} className="text-slate-500 shrink-0" />
-        ) : (
-          <Sparkles size={12} className="text-slate-500 shrink-0" />
-        )}
+        <TraceEventIcon callType={row.call_type} isAutoRouted={isAutoRouted} />
         <span className="text-xs font-medium text-slate-900 truncate">
           {getEventDisplayName(row.call_type, row.model)}
         </span>
@@ -117,6 +120,7 @@ export function LogDetailsDrawer({
 }: LogDetailsDrawerProps) {
   const isSessionMode = Boolean(sessionId);
   const [selectedSessionRequestId, setSelectedSessionRequestId] = useState<string | null>(null);
+  const [sessionSortMode, setSessionSortMode] = useState<SessionLogSortMode>("duration");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [copiedLeftPanelId, setCopiedLeftPanelId] = useState(false);
 
@@ -152,35 +156,29 @@ export function LogDetailsDrawer({
       // backend omits total, so the truncation note reflects what was fetched.
       const total: number = firstPage.total ?? rows.length;
 
-      const logs = rows
-        .map((row) => ({
-          ...row,
-          request_duration_ms: row.request_duration_ms ?? Date.parse(row.endTime) - Date.parse(row.startTime),
-        }))
-        .sort((a, b) => {
-          const aIsMcp = MCP_CALL_TYPES.includes(a.call_type) ? 1 : 0;
-          const bIsMcp = MCP_CALL_TYPES.includes(b.call_type) ? 1 : 0;
-          if (aIsMcp !== bIsMcp) return aIsMcp - bIsMcp;
-          // Newest first, matching the all-sessions logs overview. MCP calls
-          // stay grouped last (above), newest-first within that group too.
-          return new Date(b.startTime).getTime() - new Date(a.startTime).getTime();
-        });
+      const logs = rows.map((row) => ({
+        ...row,
+        request_duration_ms: row.request_duration_ms ?? Date.parse(row.endTime) - Date.parse(row.startTime),
+      }));
 
       return { logs, total };
     },
     enabled: Boolean(open && isSessionMode && sessionId && accessToken),
   });
 
-  const sessionLogs: LogEntry[] = sessionData?.logs ?? [];
+  const sessionLogs: LogEntry[] = useMemo(
+    () => sortSessionLogs(sessionData?.logs ?? [], sessionSortMode),
+    [sessionData, sessionSortMode],
+  );
   // total reported by the backend; when the page cap truncates the fetch this
   // exceeds sessionLogs.length, which drives the "showing most recent" note.
   const sessionTotalCount = sessionData?.total ?? sessionLogs.length;
   const sessionTruncated = sessionTotalCount > sessionLogs.length;
 
   // Default selection for a freshly opened session: the most recent log (latest
-  // startTime). The list is sorted newest-first, but MCP calls are grouped last,
-  // so the latest log by time is not necessarily sessionLogs[0]; compute it
-  // explicitly. A clicked/remembered log still wins over this default.
+  // startTime). The list is ordered by the selected sort mode, so the latest
+  // log by time is not necessarily sessionLogs[0]; compute it explicitly.
+  // A clicked/remembered log still wins over this default.
   const mostRecentLog = useMemo<LogEntry | null>(
     () =>
       sessionLogs.reduce<LogEntry | null>(
@@ -222,6 +220,7 @@ export function LogDetailsDrawer({
       setIsSidebarCollapsed(false);
     } else {
       if (isSessionMode) setSelectedSessionRequestId(null);
+      setSessionSortMode("duration");
       setCopiedLeftPanelId(false);
     }
   }, [open, isSessionMode]);
@@ -390,6 +389,19 @@ export function LogDetailsDrawer({
                 <div className="mt-1 text-[11px] text-amber-600 font-mono">
                   Showing most recent {logsForList.length} of {sessionTotalCount}
                 </div>
+              )}
+              {isSessionMode && (
+                <Segmented
+                  block
+                  size="small"
+                  className="mt-1.5 [&_.ant-segmented-item-label]:text-[11px]"
+                  options={[
+                    { label: "Duration", value: "duration" },
+                    { label: "Start time", value: "start_time" },
+                  ]}
+                  value={sessionSortMode}
+                  onChange={(value) => setSessionSortMode(value as SessionLogSortMode)}
+                />
               )}
             </div>
 

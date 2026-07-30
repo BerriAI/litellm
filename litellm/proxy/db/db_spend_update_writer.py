@@ -27,14 +27,14 @@ from typing import (
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache, RedisCache
+from litellm.caching import RedisCache
 from litellm.constants import (
     DB_SPEND_UPDATE_JOB_NAME,
     DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
-    DB_CONNECTION_ERROR_TYPES,
+    DB_RETRY_SAFE_ERROR_TYPES,
     BaseDailySpendTransaction,
     DailyAgentSpendTransaction,
     DailyEndUserSpendTransaction,
@@ -44,7 +44,6 @@ from litellm.proxy._types import (
     DailyUserSpendTransaction,
     DBSpendUpdateTransactions,
     Litellm_EntityType,
-    LiteLLM_UserTable,
     SpendLogsMetadata,
     SpendLogsPayload,
     SpendUpdateQueueItem,
@@ -60,6 +59,10 @@ from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     ToolDiscoveryQueue,
 )
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
+from litellm.proxy.spend_tracking.compression_savings import (
+    extract_compression_saved_tokens,
+)
+from litellm.proxy.spend_tracking.savings import compute_savings_spend
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 
 if TYPE_CHECKING:
@@ -137,7 +140,6 @@ class DBSpendUpdateWriter:
             disable_spend_logs,
             litellm_proxy_budget_name,
             prisma_client,
-            user_api_key_cache,
         )
         from litellm.proxy.utils import ProxyUpdateSpend, hash_token
 
@@ -180,6 +182,12 @@ class DBSpendUpdateWriter:
                     payload=payload,
                     prisma_client=prisma_client,
                 )
+                await self._enqueue_tool_usage_transaction(
+                    payload=payload,
+                    completion_response=completion_response,
+                    prisma_client=prisma_client,
+                    kwargs=kwargs,
+                )
             else:
                 verbose_proxy_logger.debug(
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
@@ -195,7 +203,6 @@ class DBSpendUpdateWriter:
                     org_id=org_id,
                     end_user_id=end_user_id,
                     prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
                     litellm_proxy_budget_name=litellm_proxy_budget_name,
                     payload=payload,
                 )
@@ -221,6 +228,36 @@ class DBSpendUpdateWriter:
                 org_id,
                 end_user_id,
             )
+
+    async def _enqueue_tool_usage_transaction(
+        self,
+        payload: SpendLogsPayload,
+        completion_response: "litellm.ModelResponse | Any | Exception | None",
+        prisma_client: "PrismaClient | None",
+        kwargs: "dict | None" = None,
+    ) -> None:
+        try:
+            if prisma_client is None:
+                return
+            from litellm.proxy.db.spend_log_tool_index import (
+                build_tool_usage_transaction,
+            )
+
+            transaction = build_tool_usage_transaction(
+                request_id=payload["request_id"],
+                start_time_iso=str(payload["startTime"]),
+                mcp_namespaced_tool_name=payload.get("mcp_namespaced_tool_name"),
+                spend=payload["spend"],
+                total_tokens=payload["total_tokens"],
+                completion_response=completion_response,
+                realtime_tool_calls=(kwargs or {}).get("realtime_tool_calls"),
+            )
+            if transaction is None:
+                return
+            async with prisma_client._tool_usage_transactions_lock:
+                prisma_client.tool_usage_transactions.append(transaction)
+        except Exception as e:
+            verbose_proxy_logger.debug("_enqueue_tool_usage_transaction error (non-blocking): %s", e)
 
     def _enqueue_tool_registry_upsert(
         self,
@@ -298,21 +335,10 @@ class DBSpendUpdateWriter:
                     _enqueue(name)
 
             # --- Response tool_calls (OpenAI format; Anthropic pass-through converts tool_use here) ---
-            if completion_response is not None and hasattr(completion_response, "choices"):
-                for choice in completion_response.choices or []:
-                    message = getattr(choice, "message", None)
-                    if message is None:
-                        continue
-                    tool_calls = getattr(message, "tool_calls", None)
-                    if not tool_calls:
-                        continue
-                    for tc in tool_calls:
-                        fn = getattr(tc, "function", None)
-                        if fn is None:
-                            continue
-                        tool_name = getattr(fn, "name", None)
-                        if tool_name:
-                            _enqueue(tool_name)
+            from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
+
+            for tool_name in response_tool_call_names(completion_response):
+                _enqueue(tool_name)
         except Exception as e:
             verbose_proxy_logger.debug("_enqueue_tool_registry_upsert error (non-blocking): %s", e)
 
@@ -326,7 +352,6 @@ class DBSpendUpdateWriter:
         org_id: Optional[str],
         end_user_id: Optional[str],
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
         litellm_proxy_budget_name: Optional[str],
         payload: SpendLogsPayload,
     ):
@@ -345,7 +370,6 @@ class DBSpendUpdateWriter:
                 response_cost=response_cost,
                 user_id=user_id,
                 prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
                 litellm_proxy_budget_name=litellm_proxy_budget_name,
                 end_user_id=end_user_id,
             )
@@ -510,7 +534,6 @@ class DBSpendUpdateWriter:
         response_cost: Optional[float],
         user_id: Optional[str],
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
         litellm_proxy_budget_name: Optional[str],
         end_user_id: Optional[str] = None,
     ):
@@ -518,10 +541,6 @@ class DBSpendUpdateWriter:
         - Update that user's row
         - Update litellm-proxy-budget row (global proxy spend)
         """
-        ## if an end-user is passed in, do an upsert - we can't guarantee they already exist in db
-        existing_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
-        if existing_user_obj is not None and isinstance(existing_user_obj, dict):
-            existing_user_obj = LiteLLM_UserTable(**existing_user_obj)
         try:
             if prisma_client is not None:  # update
                 user_ids = [user_id]
@@ -1102,7 +1121,7 @@ class DBSpendUpdateWriter:
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
                     if i >= n_retry_times:  # If we've reached the maximum number of retries
                         _raise_failed_update_spend_exception(
                             e=e,
@@ -1145,7 +1164,7 @@ class DBSpendUpdateWriter:
                                     },
                                 )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
                     if i >= n_retry_times:  # If we've reached the maximum number of retries
                         _raise_failed_update_spend_exception(
                             e=e,
@@ -1178,7 +1197,7 @@ class DBSpendUpdateWriter:
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
                     if i >= n_retry_times:  # If we've reached the maximum number of retries
                         _raise_failed_update_spend_exception(
                             e=e,
@@ -1225,7 +1244,7 @@ class DBSpendUpdateWriter:
                                 )
                     # Transaction succeeded, break out of retry loop
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
                     if i >= n_retry_times:  # If we've reached the maximum number of retries
                         _raise_failed_update_spend_exception(
                             e=e,
@@ -1267,7 +1286,7 @@ class DBSpendUpdateWriter:
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
                     if i >= n_retry_times:  # If we've reached the maximum number of retries
                         _raise_failed_update_spend_exception(
                             e=e,
@@ -1353,7 +1372,7 @@ class DBSpendUpdateWriter:
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
                     if i >= n_retry_times:
                         _raise_failed_update_spend_exception(
                             e=e,
@@ -1564,6 +1583,18 @@ class DBSpendUpdateWriter:
                                         common_data["cache_creation_input_tokens"] = transaction.get(
                                             "cache_creation_input_tokens", 0
                                         )
+                                    if "compression_saved_tokens" in transaction:
+                                        common_data["compression_saved_tokens"] = transaction.get(
+                                            "compression_saved_tokens", 0
+                                        )
+                                    if "compression_savings_spend" in transaction:
+                                        common_data["compression_savings_spend"] = transaction.get(
+                                            "compression_savings_spend", 0
+                                        )
+                                    if "prompt_caching_savings_spend" in transaction:
+                                        common_data["prompt_caching_savings_spend"] = transaction.get(
+                                            "prompt_caching_savings_spend", 0
+                                        )
 
                                     if entity_type == "tag" and "request_id" in transaction:
                                         common_data["request_id"] = transaction.get("request_id")
@@ -1586,6 +1617,18 @@ class DBSpendUpdateWriter:
                                     if "cache_creation_input_tokens" in transaction:
                                         update_data["cache_creation_input_tokens"] = {
                                             "increment": transaction.get("cache_creation_input_tokens", 0)
+                                        }
+                                    if "compression_saved_tokens" in transaction:
+                                        update_data["compression_saved_tokens"] = {
+                                            "increment": transaction.get("compression_saved_tokens", 0)
+                                        }
+                                    if "compression_savings_spend" in transaction:
+                                        update_data["compression_savings_spend"] = {
+                                            "increment": transaction.get("compression_savings_spend", 0)
+                                        }
+                                    if "prompt_caching_savings_spend" in transaction:
+                                        update_data["prompt_caching_savings_spend"] = {
+                                            "increment": transaction.get("prompt_caching_savings_spend", 0)
                                         }
 
                                     if entity_type == "tag" and "request_id" in transaction:
@@ -1626,7 +1669,7 @@ class DBSpendUpdateWriter:
 
                         break
 
-                    except DB_CONNECTION_ERROR_TYPES as e:
+                    except DB_RETRY_SAFE_ERROR_TYPES as e:
                         if i >= n_retry_times:
                             _raise_failed_update_spend_exception(
                                 e=e,
@@ -1836,6 +1879,15 @@ class DBSpendUpdateWriter:
             if call_type:
                 endpoint = ROUTE_ENDPOINT_MAPPING.get(call_type, None)
 
+            cache_read_input_tokens = _extract_cache_read_tokens(usage_obj)
+            compression_saved_tokens = extract_compression_saved_tokens(_metadata)
+            savings_spend = compute_savings_spend(
+                model=payload.get("model", None),
+                custom_llm_provider=payload.get("custom_llm_provider", None),
+                compression_saved_tokens=compression_saved_tokens,
+                cache_read_input_tokens=cache_read_input_tokens,
+            )
+
             daily_transaction = BaseDailySpendTransaction(
                 date=date,
                 api_key=payload["api_key"],
@@ -1850,8 +1902,11 @@ class DBSpendUpdateWriter:
                 api_requests=1,
                 successful_requests=1 if request_status == "success" else 0,
                 failed_requests=1 if request_status != "success" else 0,
-                cache_read_input_tokens=_extract_cache_read_tokens(usage_obj),
+                cache_read_input_tokens=cache_read_input_tokens,
                 cache_creation_input_tokens=_extract_cache_creation_tokens(usage_obj),
+                compression_saved_tokens=compression_saved_tokens,
+                compression_savings_spend=savings_spend.compression,
+                prompt_caching_savings_spend=savings_spend.prompt_caching,
             )
             return daily_transaction
         except Exception as e:

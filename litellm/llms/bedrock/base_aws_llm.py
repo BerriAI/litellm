@@ -50,6 +50,8 @@ _STS_REGION_FROM_ENDPOINT_PATTERN = re.compile(
     r"(?:^|\.)sts(?:-fips)?\.([a-z0-9-]+)\.(?:amazonaws\.com(?:\.cn)?|vpce\.amazonaws\.com)"
 )
 
+SIGV4_COMPUTED_HEADERS = frozenset({"authorization", "x-amz-date", "x-amz-security-token", "date"})
+
 
 class Boto3CredentialsInfo(BaseModel):
     credentials: Credentials
@@ -76,8 +78,10 @@ class BaseAWSLLM:
     # Storage is in-process memory only: default ``DualCache()`` has no Redis backend unless attached
     # elsewhere. Entry TTL: static access-key + secret + region use ``_get_default_ttl_for_boto3_credentials``
     # (~59 minutes); ambient env (``_auth_with_env_vars`` returns ``ttl=None``) uses ``InMemoryCache``'s
-    # ``default_ttl`` (600 seconds / 10 minutes). AssumeRole, web identity, profiles, and explicit
-    # session-token tuples are not cached — see ``get_credentials`` and ``_get_or_set_cached_credentials``.
+    # ``default_ttl`` (600 seconds / 10 minutes); web identity STS credentials use
+    # ``_get_default_ttl_for_boto3_credentials`` (~59 minutes), keyed on all aws_* credential args
+    # plus ssl_verify. AssumeRole, profiles, and explicit session-token tuples are not cached — see
+    # ``get_credentials`` and ``_get_or_set_cached_credentials``.
     _shared_iam_cache: ClassVar[DualCache] = DualCache()
 
     def __init__(self) -> None:
@@ -134,11 +138,12 @@ class BaseAWSLLM:
         which ``InMemoryCache.set_cache`` resolves to ``default_ttl`` (600 seconds / 10 minutes by
         default).
 
-        Used only for static access-key credentials and ambient credentials from
+        Used for static access-key credentials, ambient credentials from
         ``_auth_with_env_vars`` (including when skipping AssumeRole because the runtime identity
-        already matches ``aws_role_name``).
+        already matches ``aws_role_name``), and web identity STS credentials (plain
+        non-refreshable ``Credentials`` cached ~59 min, inside the 3600s STS session).
 
-        AssumeRole, web identity exchange, profiles, and explicit session-token tuples are not
+        AssumeRole, profiles, and explicit session-token tuples are not
         cached here — shared ``Credentials`` / refresh state must not span logical sessions.
         """
         cache_key = self.get_cache_key(credential_args)
@@ -264,23 +269,26 @@ class BaseAWSLLM:
         #   Credentials - boto3.Credentials
         #   cache ttl - Optional[int]. If None, the credentials are not cached. Some auth flows have no expiry time.
         #
-        # iam_cache: static keys and ambient env only (including skip-AssumeRole path).
-        # Do not cache AssumeRole / web identity / profile / explicit session-token paths here.
+        # iam_cache: static keys, ambient env (including skip-AssumeRole path), and web identity.
+        # Do not cache AssumeRole / profile / explicit session-token paths here.
         #########################################################
         if self._is_auth_with_web_identity_token(
             aws_web_identity_token,
             aws_role_name,
             aws_session_name,
         ):
-            credentials, _cache_ttl = self._auth_with_web_identity_token(
-                aws_web_identity_token=cast(str, aws_web_identity_token),
-                aws_role_name=cast(str, aws_role_name),
-                aws_session_name=cast(str, aws_session_name),
-                aws_region_name=aws_region_name,
-                aws_sts_endpoint=aws_sts_endpoint,
-                aws_external_id=aws_external_id,
+            return self._get_or_set_cached_credentials(
+                args,
+                lambda: self._auth_with_web_identity_token(
+                    aws_web_identity_token=cast(str, aws_web_identity_token),
+                    aws_role_name=cast(str, aws_role_name),
+                    aws_session_name=cast(str, aws_session_name),
+                    aws_region_name=aws_region_name,
+                    aws_sts_endpoint=aws_sts_endpoint,
+                    aws_external_id=aws_external_id,
+                    ssl_verify=ssl_verify,
+                ),
             )
-            return credentials
         elif self._is_auth_with_aws_role(aws_role_name):
             # Same role (IRSA/ECS/EC2): ambient creds via _get_or_set_cached_credentials like the
             # default env branch; never pre-read cache (must run _is_already_running_as_role first).
@@ -875,6 +883,15 @@ class BaseAWSLLM:
                     "Resource": "*",
                     "Condition": {"Bool": {"aws:SecureTransport": "true"}},
                 },
+                {
+                    "Sid": "BedrockMantleLiteLLM",
+                    "Effect": "Allow",
+                    "Action": [
+                        "bedrock-mantle:CreateInference",
+                    ],
+                    "Resource": "*",
+                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
+                },
             ],
         }
         assume_role_params = {
@@ -1400,11 +1417,13 @@ class BaseAWSLLM:
 
             # Add back all original headers (including forwarded ones) after signature calculation
             for header_name, header_value in headers.items():
-                if header_value is not None:
+                if header_value is not None and header_name.lower() not in SIGV4_COMPUTED_HEADERS:
                     request.headers[header_name] = header_value
 
             if (
-                extra_headers is not None and "Authorization" in extra_headers
+                extra_headers is not None
+                and "Authorization" in extra_headers
+                and not extra_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
             ):  # prevent sigv4 from overwriting the auth header
                 request.headers["Authorization"] = extra_headers["Authorization"]
         prepped = request.prepare()
@@ -1527,9 +1546,15 @@ class BaseAWSLLM:
         # Add back original headers after signing. Only headers in SignedHeaders
         # are integrity-protected; forwarded headers (x-forwarded-*) must remain unsigned.
         for header_name, header_value in headers.items():
-            if header_value is not None:
+            if header_value is not None and header_name.lower() not in SIGV4_COMPUTED_HEADERS:
                 request_headers_dict[header_name] = header_value
-        if headers is not None and "Authorization" in headers:  # prevent sigv4 from overwriting the auth header
-            request_headers_dict["Authorization"] = headers["Authorization"]
+        incoming_authorization = next(
+            (value for name, value in headers.items() if name.lower() == "authorization" and value is not None),
+            None,
+        )
+        if incoming_authorization is not None and not incoming_authorization.startswith(
+            "AWS4-HMAC-SHA256"
+        ):  # prevent sigv4 from overwriting the auth header
+            request_headers_dict["Authorization"] = incoming_authorization
 
         return request_headers_dict, request.body

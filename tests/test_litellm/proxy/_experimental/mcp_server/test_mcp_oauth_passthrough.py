@@ -34,8 +34,7 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 def _mock_mcp_client_ip():
     """Bypass IP-based access control in tests."""
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints"
-        ".IPAddressUtils.get_mcp_client_ip",
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.get_mcp_client_ip",
         return_value=None,
     ):
         yield
@@ -109,6 +108,42 @@ def test_is_oauth_passthrough_false_without_authorization_header():
         oauth_passthrough=True,
     )
     assert server.is_oauth_passthrough is False
+
+
+@pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+def test_is_dcr_bridge_true_for_flagged_client_forwarded_modes(auth_type):
+    server = MCPServer(
+        server_id="s1",
+        name="s1",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        dcr_bridge=True,
+    )
+    assert server.is_dcr_bridge is True
+
+
+@pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+def test_is_dcr_bridge_false_when_flag_unset(auth_type):
+    server = MCPServer(
+        server_id="s1",
+        name="s1",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+    )
+    assert server.dcr_bridge is None
+    assert server.is_dcr_bridge is False
+
+
+@pytest.mark.parametrize("auth_type", [MCPAuth.oauth2, MCPAuth.none, MCPAuth.api_key, None])
+def test_is_dcr_bridge_false_for_non_client_forwarded_auth_types(auth_type):
+    server = MCPServer(
+        server_id="s1",
+        name="s1",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        dcr_bridge=True,
+    )
+    assert server.is_dcr_bridge is False
 
 
 def test_is_oauth_passthrough_false_without_extra_headers():
@@ -191,9 +226,7 @@ async def test_oauth_protected_resource_passthrough_proxies_upstream_metadata():
         extra_headers=["Authorization"],
         oauth_passthrough=True,
     )
-    global_mcp_server_manager.registry[passthrough_server.server_id] = (
-        passthrough_server
-    )
+    global_mcp_server_manager.registry[passthrough_server.server_id] = passthrough_server
 
     upstream_payload = {
         "resource": "https://upstream.example.com/mcp",
@@ -207,18 +240,14 @@ async def test_oauth_protected_resource_passthrough_proxies_upstream_metadata():
     mock_client = MagicMock()
     mock_client.get = AsyncMock(return_value=mock_response)
 
-    with patch.object(
-        discoverable_endpoints, "get_async_httpx_client", return_value=mock_client
-    ):
+    with patch.object(discoverable_endpoints, "get_async_httpx_client", return_value=mock_client):
         result = await _build_oauth_protected_resource_response(
             request=_make_request(),
             mcp_server_name="sample_docs",
             use_standard_pattern=True,
         )
 
-    assert result["authorization_servers"] == [
-        "https://okta.example.com/oauth2/default"
-    ]
+    assert result["authorization_servers"] == ["https://okta.example.com/oauth2/default"]
     # resource is normalized to the gateway URL so bearers are sent back to us
     assert result["resource"].endswith("/mcp/sample_docs")
     assert result["scopes_supported"] == ["openid", "profile"]
@@ -242,9 +271,7 @@ async def test_oauth_protected_resource_passthrough_cache_hit():
         extra_headers=["Authorization"],
         oauth_passthrough=True,
     )
-    global_mcp_server_manager.registry[passthrough_server.server_id] = (
-        passthrough_server
-    )
+    global_mcp_server_manager.registry[passthrough_server.server_id] = passthrough_server
 
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -254,9 +281,7 @@ async def test_oauth_protected_resource_passthrough_cache_hit():
     mock_client = MagicMock()
     mock_client.get = AsyncMock(return_value=mock_response)
 
-    with patch.object(
-        discoverable_endpoints, "get_async_httpx_client", return_value=mock_client
-    ):
+    with patch.object(discoverable_endpoints, "get_async_httpx_client", return_value=mock_client):
         await _build_oauth_protected_resource_response(
             request=_make_request(),
             mcp_server_name="sample_docs",
@@ -348,12 +373,8 @@ async def test_oauth_metadata_cache_expired_entry_is_refetched():
     mock_client = MagicMock()
     mock_client.get = AsyncMock(return_value=mock_response)
 
-    with patch.object(
-        discoverable_endpoints, "get_async_httpx_client", return_value=mock_client
-    ):
-        result = await discoverable_endpoints.fetch_upstream_oauth_protected_resource(
-            passthrough_server
-        )
+    with patch.object(discoverable_endpoints, "get_async_httpx_client", return_value=mock_client):
+        result = await discoverable_endpoints.fetch_upstream_oauth_protected_resource(passthrough_server)
 
     assert result == {"authorization_servers": ["https://fresh.example.com"]}
     assert mock_client.get.await_count == 1
@@ -377,16 +398,12 @@ async def test_oauth_protected_resource_passthrough_network_error_returns_502():
         extra_headers=["Authorization"],
         oauth_passthrough=True,
     )
-    global_mcp_server_manager.registry[passthrough_server.server_id] = (
-        passthrough_server
-    )
+    global_mcp_server_manager.registry[passthrough_server.server_id] = passthrough_server
 
     mock_client = MagicMock()
     mock_client.get = AsyncMock(side_effect=httpx.ConnectError("boom"))
 
-    with patch.object(
-        discoverable_endpoints, "get_async_httpx_client", return_value=mock_client
-    ):
+    with patch.object(discoverable_endpoints, "get_async_httpx_client", return_value=mock_client):
         with pytest.raises(HTTPException) as exc_info:
             await _build_oauth_protected_resource_response(
                 request=_make_request(),
@@ -414,16 +431,10 @@ async def test_fetch_upstream_metadata_returns_none_when_not_all_candidates_netw
     not_found_response = MagicMock()
     not_found_response.status_code = 404
     mock_client = MagicMock()
-    mock_client.get = AsyncMock(
-        side_effect=[not_found_response, httpx.ConnectError("path fallback failed")]
-    )
+    mock_client.get = AsyncMock(side_effect=[not_found_response, httpx.ConnectError("path fallback failed")])
 
-    with patch.object(
-        discoverable_endpoints, "get_async_httpx_client", return_value=mock_client
-    ):
-        result = await discoverable_endpoints.fetch_upstream_oauth_protected_resource(
-            passthrough_server
-        )
+    with patch.object(discoverable_endpoints, "get_async_httpx_client", return_value=mock_client):
+        result = await discoverable_endpoints.fetch_upstream_oauth_protected_resource(passthrough_server)
 
     assert result is None
     assert mock_client.get.await_count == 2
@@ -458,9 +469,7 @@ async def test_oauth_protected_resource_gateway_managed_unchanged():
     mock_client = MagicMock()
     mock_client.get = AsyncMock()
 
-    with patch.object(
-        discoverable_endpoints, "get_async_httpx_client", return_value=mock_client
-    ):
+    with patch.object(discoverable_endpoints, "get_async_httpx_client", return_value=mock_client):
         result = await _build_oauth_protected_resource_response(
             request=_make_request(),
             mcp_server_name="keycloak_whoami",
@@ -468,7 +477,147 @@ async def test_oauth_protected_resource_gateway_managed_unchanged():
         )
 
     mock_client.get.assert_not_awaited()
-    assert result["authorization_servers"] == [
-        "https://gateway.example.com/keycloak_whoami"
-    ]
+    assert result["authorization_servers"] == ["https://gateway.example.com/keycloak_whoami"]
     assert result["scopes_supported"] == ["read"]
+
+
+def _make_upstream_metadata_client() -> tuple[dict, MagicMock]:
+    upstream_payload = {
+        "resource": "https://upstream.example.com/mcp",
+        "authorization_servers": ["https://okta.example.com/oauth2/default"],
+        "scopes_supported": ["openid", "profile"],
+        "bearer_methods_supported": ["header"],
+    }
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = upstream_payload
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    return upstream_payload, mock_client
+
+
+@pytest.mark.asyncio
+async def test_oauth_protected_resource_oauth_delegate_returns_upstream_metadata_verbatim():
+    """oauth_delegate discovery must return the upstream metadata verbatim,
+    resource included. The caller's token is forwarded to and validated by the
+    upstream, so its audience must be the upstream; rewriting resource to the
+    gateway would make a strict IdP refuse to mint it or the upstream reject it.
+    A regression that dropped oauth_delegate from the pass-through predicate would
+    fall through to the gateway-AS branch and advertise LiteLLM as the AS."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    delegate_server = MCPServer(
+        server_id="delegate-1",
+        name="sample_docs",
+        server_name="sample_docs",
+        alias="sample_docs",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth_delegate,
+    )
+    global_mcp_server_manager.registry[delegate_server.server_id] = delegate_server
+
+    upstream_payload, mock_client = _make_upstream_metadata_client()
+    try:
+        with patch.object(discoverable_endpoints, "get_async_httpx_client", return_value=mock_client):
+            result = await _build_oauth_protected_resource_response(
+                request=_make_request(),
+                mcp_server_name="sample_docs",
+                use_standard_pattern=True,
+            )
+
+        assert result == upstream_payload
+        assert result["authorization_servers"] == ["https://okta.example.com/oauth2/default"]
+        assert result["resource"] == "https://upstream.example.com/mcp"
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_oauth_protected_resource_true_passthrough_returns_upstream_metadata_verbatim():
+    """true_passthrough discovery must return the upstream metadata verbatim,
+    resource included, so the client treats the upstream as the resource and
+    authorizes directly against it. A regression that rewrote resource (the
+    gateway-proxied behavior) would break the transparent-proxy contract."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    true_passthrough_server = MCPServer(
+        server_id="tp-1",
+        name="sample_docs",
+        server_name="sample_docs",
+        alias="sample_docs",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.true_passthrough,
+    )
+    global_mcp_server_manager.registry[true_passthrough_server.server_id] = true_passthrough_server
+
+    upstream_payload, mock_client = _make_upstream_metadata_client()
+    try:
+        with patch.object(discoverable_endpoints, "get_async_httpx_client", return_value=mock_client):
+            result = await _build_oauth_protected_resource_response(
+                request=_make_request(),
+                mcp_server_name="sample_docs",
+                use_standard_pattern=True,
+            )
+
+        assert result == upstream_payload
+        assert result["resource"] == "https://upstream.example.com/mcp"
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+@pytest.mark.parametrize("use_standard_pattern", [True, False])
+async def test_oauth_protected_resource_dcr_bridge_returns_gateway_facade(auth_type, use_standard_pattern):
+    """With dcr_bridge on, discovery flips from the upstream-verbatim contract to the gateway
+    facade: resource is the gateway URL the client dialed and authorization_servers names the
+    gateway's per-server AS, so DCR-only clients (which enforce the RFC 9728 resource match)
+    can register and sign in through the gateway. No upstream metadata fetch happens."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    bridge_server = MCPServer(
+        server_id="bridge-1",
+        name="sample_docs",
+        server_name="sample_docs",
+        alias="sample_docs",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        dcr_bridge=True,
+        scopes=["read"],
+        registration_url="https://okta.example.com/register",
+    )
+    global_mcp_server_manager.registry[bridge_server.server_id] = bridge_server
+
+    try:
+        with patch.object(discoverable_endpoints, "get_async_httpx_client") as mock_client_factory:
+            result = await _build_oauth_protected_resource_response(
+                request=_make_request(),
+                mcp_server_name="sample_docs",
+                use_standard_pattern=use_standard_pattern,
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    expected_resource = (
+        "https://gateway.example.com/mcp/sample_docs"
+        if use_standard_pattern
+        else "https://gateway.example.com/sample_docs/mcp"
+    )
+    assert result == {
+        "authorization_servers": ["https://gateway.example.com/sample_docs"],
+        "resource": expected_resource,
+        "scopes_supported": ["read"],
+    }
+    mock_client_factory.assert_not_called()

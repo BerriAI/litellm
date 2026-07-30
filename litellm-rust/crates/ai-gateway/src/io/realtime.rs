@@ -15,16 +15,16 @@ use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use litellm_core::CoreResult;
 use litellm_core::error::CoreError;
 use litellm_core::realtime::transformation::RealtimeProviderConfig;
 use litellm_core::realtime::types::RealtimeEvent;
-use litellm_core::CoreResult;
 use tokio::net::TcpStream;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
-use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 use litellm_core::providers::openai::realtime::transformation::OPENAI_REALTIME_CONFIG;
 
@@ -113,7 +113,7 @@ pub(crate) async fn read_event(upstream_rx: &mut UpstreamRx) -> CoreResult<Realt
             Message::Close(_) => {
                 return Err(CoreError::Network(
                     "upstream closed before first event".to_string(),
-                ))
+                ));
             }
             _ => continue,
         }

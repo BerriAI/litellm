@@ -17,6 +17,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import CallTypes
 from litellm.utils import ProviderConfigManager, client
 
 if TYPE_CHECKING:
@@ -37,6 +38,11 @@ else:
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
+
+
+def _mark_async_entrypoint(logging_obj: LiteLLMLoggingObj | None, marker: str, is_async: bool) -> None:
+    if logging_obj is not None:
+        logging_obj.model_call_details.setdefault("litellm_params", {})[marker] = is_async
 
 
 class GenerateContentSetupResult(BaseModel):
@@ -315,6 +321,8 @@ def generate_content(
     try:
         _is_async = kwargs.pop("agenerate_content", False)
 
+        _mark_async_entrypoint(kwargs.get("litellm_logging_obj"), CallTypes.agenerate_content.value, _is_async)
+
         # Handle generationConfig parameter from kwargs for backward compatibility
         if "generationConfig" in kwargs and config is None:
             config = kwargs.pop("generationConfig")
@@ -402,6 +410,8 @@ async def agenerate_content_stream(
     local_vars = locals()
     try:
         kwargs["agenerate_content_stream"] = True
+
+        _mark_async_entrypoint(kwargs.get("litellm_logging_obj"), CallTypes.agenerate_content_stream.value, True)
 
         # Handle generationConfig parameter from kwargs for backward compatibility
         if "generationConfig" in kwargs and config is None:
@@ -496,6 +506,8 @@ def generate_content_stream(
     try:
         # Remove any async-related flags since this is the sync function
         _is_async = kwargs.pop("agenerate_content_stream", False)
+
+        _mark_async_entrypoint(kwargs.get("litellm_logging_obj"), CallTypes.agenerate_content_stream.value, _is_async)
 
         # Handle generationConfig parameter from kwargs for backward compatibility
         if "generationConfig" in kwargs and config is None:

@@ -760,7 +760,11 @@ def _select_model_name_for_cost_calc(
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
             entry = litellm.model_cost[router_model_id]
-            if entry.get("input_cost_per_token") is not None or entry.get("input_cost_per_second") is not None:
+            if (
+                entry.get("input_cost_per_token") is not None
+                or entry.get("input_cost_per_second") is not None
+                or entry.get("tiered_pricing") is not None
+            ):
                 return_model = router_model_id
             else:
                 return_model = model
@@ -2155,17 +2159,23 @@ def batch_cost_calculator(
     if input_cost_per_token_batches:
         total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
     elif input_cost_per_token:
+        details = _parse_prompt_tokens_details(usage)
+        cache_read_tokens = details["cache_hit_tokens"]
+        cache_creation_tokens = details["cache_creation_tokens"]
+
         # Subtract cached tokens from prompt_tokens before calculating cost
         # Fixes issue where cached tokens are being charged again
+        base_input_tokens = get_billable_input_tokens(usage) - cache_creation_tokens
         total_prompt_cost = (
-            get_billable_input_tokens(usage) * (input_cost_per_token) / 2
+            base_input_tokens * (input_cost_per_token) / 2
         )  # batch cost is usually half of the regular token cost
 
         # Add cache read cost if applicable
-        details = _parse_prompt_tokens_details(usage)
-        cache_read_tokens = details["cache_hit_tokens"]
         cache_read_cost_key = _get_service_tier_cost_key("cache_read_input_token_cost", None)
         total_prompt_cost += calculate_cost_component(model_info, cache_read_cost_key, cache_read_tokens) / 2
+
+        cache_creation_cost = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
+        total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
     if output_cost_per_token_batches:
         total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
     elif output_cost_per_token:
@@ -2179,6 +2189,13 @@ def batch_cost_calculator(
         total_completion_cost *= uplift
 
     return total_prompt_cost, total_completion_cost
+
+
+def _summable_prompt_token_fields(prompt_tokens_details: BaseModel) -> List[str]:
+    field_names = list(type(prompt_tokens_details).model_fields)
+    if getattr(prompt_tokens_details, "cache_write_tokens", None) is None:
+        return field_names
+    return [attr for attr in field_names if attr != "cache_creation_tokens"]
 
 
 class BaseTokenUsageProcessor:
@@ -2215,7 +2232,7 @@ class BaseTokenUsageProcessor:
 
                 # Check what keys exist in the model's prompt_tokens_details
                 # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-                for attr in type(usage.prompt_tokens_details).model_fields:
+                for attr in _summable_prompt_token_fields(usage.prompt_tokens_details):
                     if (
                         hasattr(usage.prompt_tokens_details, attr)
                         and not attr.startswith("_")

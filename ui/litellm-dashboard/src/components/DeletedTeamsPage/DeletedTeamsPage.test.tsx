@@ -32,9 +32,8 @@ beforeEach(() => {
 
   mockUseDeletedTeams.mockReturnValue({
     data: [mockDeletedTeam],
-    isPending: false,
-    isFetching: false,
-  } as any);
+    isLoading: false,
+  } as unknown as ReturnType<typeof useDeletedTeams>);
 });
 
 it("should render DeletedTeamsPage component", () => {
@@ -43,14 +42,13 @@ it("should render DeletedTeamsPage component", () => {
   expect(screen.getByText("Test Team")).toBeInTheDocument();
 });
 
-it("should handle loading state", () => {
+it("should show skeleton rows while the initial load is pending", () => {
   mockUseDeletedTeams.mockReturnValue({
     data: undefined,
-    isPending: true,
-    isFetching: false,
-  } as any);
+    isLoading: true,
+  } as unknown as ReturnType<typeof useDeletedTeams>);
 
   renderWithProviders(<DeletedTeamsPage />);
 
-  expect(screen.getByText("🚅 Loading teams...")).toBeInTheDocument();
+  expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
 });

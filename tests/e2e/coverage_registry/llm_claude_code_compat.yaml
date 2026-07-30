@@ -1,0 +1,110 @@
+# Claude Code compatibility matrix: /v1/messages coverage across the five provider surfaces
+# claude-code drives (anthropic direct, azure ai foundry, bedrock invoke, bedrock converse,
+# vertex ai). Each row is one (feature x provider) cell in the matrix. The seven anthropic-direct
+# rows already declared in llm_conversational.yaml are NOT duplicated here; the four other
+# provider surfaces plus every feature not already listed for anthropic direct are declared below.
+#
+# Grammar: llm.messages.<route>.<capability>.<streaming>.works
+#   route      : anthropic | azure_foundry | bedrock_converse | bedrock_invoke | vertex
+#   capability : basic | tool_use | vision | thinking | prompt_cache_5m | prompt_cache_1h
+#              | structured_output | pdf_input | long_context_1m
+#              | thinking_with_tool_use | tool_search | count_tokens | web_search
+#   streaming  : stream | nonstream
+
+# ---- basic / non-streaming ----
+- {id: llm.messages.azure_foundry.basic.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: azure_foundry, capability: basic, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Basic messaging over Azure AI Foundry Anthropic deployments"}
+- {id: llm.messages.bedrock_converse.basic.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: basic, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Basic messaging over Bedrock Converse Anthropic"}
+- {id: llm.messages.bedrock_invoke.basic.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: basic, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Basic messaging over Bedrock Invoke Anthropic"}
+- {id: llm.messages.vertex.basic.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: basic, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Basic messaging over Vertex AI Anthropic"}
+
+# ---- basic / streaming ----
+- {id: llm.messages.azure_foundry.basic.stream.works, module: llm, tier: P1, subject_endpoint: messages, route: azure_foundry, capability: basic, streaming: stream, assertions: [works], source: "claude_code compat matrix", rationale: "Basic streaming over Azure AI Foundry"}
+- {id: llm.messages.bedrock_converse.basic.stream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: basic, streaming: stream, assertions: [works], source: "claude_code compat matrix", rationale: "Basic streaming over Bedrock Converse"}
+- {id: llm.messages.bedrock_invoke.basic.stream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: basic, streaming: stream, assertions: [works], source: "claude_code compat matrix", rationale: "Basic streaming over Bedrock Invoke"}
+- {id: llm.messages.vertex.basic.stream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: basic, streaming: stream, assertions: [works], source: "claude_code compat matrix", rationale: "Basic streaming over Vertex AI"}
+
+# ---- tool_use / non-streaming ----
+- {id: llm.messages.azure_foundry.tool_use.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: azure_foundry, capability: tool_use, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Tool use over Azure AI Foundry"}
+- {id: llm.messages.bedrock_converse.tool_use.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: tool_use, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Tool use over Bedrock Converse"}
+- {id: llm.messages.bedrock_invoke.tool_use.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: tool_use, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Tool use over Bedrock Invoke"}
+- {id: llm.messages.vertex.tool_use.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: tool_use, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Tool use over Vertex AI"}
+
+# ---- tool_use / streaming ----
+- {id: llm.messages.azure_foundry.tool_use.stream.works, module: llm, tier: P1, subject_endpoint: messages, route: azure_foundry, capability: tool_use, streaming: stream, assertions: [works], source: "claude_code compat matrix", rationale: "Streaming tool use over Azure AI Foundry"}
+- {id: llm.messages.bedrock_converse.tool_use.stream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: tool_use, streaming: stream, assertions: [works], source: "claude_code compat matrix", rationale: "Streaming tool use over Bedrock Converse"}
+- {id: llm.messages.bedrock_invoke.tool_use.stream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: tool_use, streaming: stream, assertions: [works], source: "claude_code compat matrix", rationale: "Streaming tool use over Bedrock Invoke"}
+- {id: llm.messages.vertex.tool_use.stream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: tool_use, streaming: stream, assertions: [works], source: "claude_code compat matrix", rationale: "Streaming tool use over Vertex AI"}
+
+# ---- vision ----
+- {id: llm.messages.azure_foundry.vision.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: azure_foundry, capability: vision, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Vision over Azure AI Foundry"}
+- {id: llm.messages.bedrock_converse.vision.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: vision, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Vision over Bedrock Converse"}
+- {id: llm.messages.bedrock_invoke.vision.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: vision, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Vision over Bedrock Invoke"}
+- {id: llm.messages.vertex.vision.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: vision, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Vision over Vertex AI"}
+
+# ---- thinking ----
+- {id: llm.messages.azure_foundry.thinking.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: azure_foundry, capability: thinking, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Extended thinking over Azure AI Foundry"}
+- {id: llm.messages.bedrock_converse.thinking.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: thinking, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Extended thinking over Bedrock Converse"}
+- {id: llm.messages.bedrock_invoke.thinking.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: thinking, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Extended thinking over Bedrock Invoke"}
+- {id: llm.messages.vertex.thinking.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: thinking, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Extended thinking over Vertex AI"}
+
+# ---- prompt_cache_5m ----
+- {id: llm.messages.azure_foundry.prompt_cache_5m.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: azure_foundry, capability: prompt_cache_5m, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "5m prompt cache over Azure AI Foundry"}
+- {id: llm.messages.bedrock_converse.prompt_cache_5m.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: prompt_cache_5m, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "5m prompt cache over Bedrock Converse"}
+- {id: llm.messages.bedrock_invoke.prompt_cache_5m.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: prompt_cache_5m, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "5m prompt cache over Bedrock Invoke"}
+- {id: llm.messages.vertex.prompt_cache_5m.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: prompt_cache_5m, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "5m prompt cache over Vertex AI"}
+
+# ---- prompt_cache_1h ----
+- {id: llm.messages.anthropic.prompt_cache_1h.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: anthropic, capability: prompt_cache_1h, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "1h prompt cache over Anthropic direct"}
+- {id: llm.messages.azure_foundry.prompt_cache_1h.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: azure_foundry, capability: prompt_cache_1h, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "1h prompt cache over Azure AI Foundry"}
+- {id: llm.messages.bedrock_converse.prompt_cache_1h.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: prompt_cache_1h, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "1h prompt cache over Bedrock Converse"}
+- {id: llm.messages.bedrock_invoke.prompt_cache_1h.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: prompt_cache_1h, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "1h prompt cache over Bedrock Invoke"}
+- {id: llm.messages.vertex.prompt_cache_1h.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: prompt_cache_1h, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "1h prompt cache over Vertex AI"}
+
+# ---- structured_output ----
+- {id: llm.messages.anthropic.structured_output.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: anthropic, capability: structured_output, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Structured outputs (--json-schema) over Anthropic direct"}
+- {id: llm.messages.azure_foundry.structured_output.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: azure_foundry, capability: structured_output, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Structured outputs over Azure AI Foundry"}
+- {id: llm.messages.bedrock_converse.structured_output.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: structured_output, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Structured outputs over Bedrock Converse"}
+- {id: llm.messages.bedrock_invoke.structured_output.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: structured_output, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Structured outputs over Bedrock Invoke"}
+- {id: llm.messages.vertex.structured_output.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: structured_output, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Structured outputs over Vertex AI"}
+
+# ---- pdf_input ----
+- {id: llm.messages.anthropic.pdf_input.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: anthropic, capability: pdf_input, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "PDF document input over Anthropic direct"}
+- {id: llm.messages.azure_foundry.pdf_input.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: azure_foundry, capability: pdf_input, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "PDF document input over Azure AI Foundry"}
+- {id: llm.messages.bedrock_converse.pdf_input.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: pdf_input, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "PDF document input over Bedrock Converse"}
+- {id: llm.messages.bedrock_invoke.pdf_input.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: pdf_input, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "PDF document input over Bedrock Invoke"}
+- {id: llm.messages.vertex.pdf_input.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: pdf_input, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "PDF document input over Vertex AI"}
+
+# ---- long_context_1m ----
+- {id: llm.messages.anthropic.long_context_1m.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: anthropic, capability: long_context_1m, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "1M context beta over Anthropic direct"}
+- {id: llm.messages.azure_foundry.long_context_1m.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: azure_foundry, capability: long_context_1m, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "1M context beta over Azure AI Foundry"}
+- {id: llm.messages.bedrock_converse.long_context_1m.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: long_context_1m, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "1M context beta over Bedrock Converse"}
+- {id: llm.messages.bedrock_invoke.long_context_1m.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: long_context_1m, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "1M context beta over Bedrock Invoke"}
+- {id: llm.messages.vertex.long_context_1m.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: long_context_1m, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "1M context beta over Vertex AI"}
+
+# ---- thinking_with_tool_use ----
+- {id: llm.messages.anthropic.thinking_with_tool_use.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: anthropic, capability: thinking_with_tool_use, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Thinking + tool_use interleaved over Anthropic direct"}
+- {id: llm.messages.azure_foundry.thinking_with_tool_use.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: azure_foundry, capability: thinking_with_tool_use, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Thinking + tool_use interleaved over Azure AI Foundry"}
+- {id: llm.messages.bedrock_converse.thinking_with_tool_use.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: thinking_with_tool_use, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Thinking + tool_use interleaved over Bedrock Converse"}
+- {id: llm.messages.bedrock_invoke.thinking_with_tool_use.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: thinking_with_tool_use, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Thinking + tool_use interleaved over Bedrock Invoke"}
+- {id: llm.messages.vertex.thinking_with_tool_use.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: thinking_with_tool_use, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Thinking + tool_use interleaved over Vertex AI"}
+
+# ---- tool_search ----
+- {id: llm.messages.anthropic.tool_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: anthropic, capability: tool_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "tool_search_tool_regex_20251119 discovery tool over Anthropic direct"}
+- {id: llm.messages.azure_foundry.tool_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: azure_foundry, capability: tool_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "tool_search discovery tool over Azure AI Foundry"}
+- {id: llm.messages.bedrock_converse.tool_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: tool_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "tool_search discovery tool over Bedrock Converse"}
+- {id: llm.messages.bedrock_invoke.tool_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: tool_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "tool_search discovery tool over Bedrock Invoke"}
+- {id: llm.messages.vertex.tool_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: tool_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "tool_search discovery tool over Vertex AI"}
+
+# ---- count_tokens ----
+- {id: llm.messages.anthropic.count_tokens.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: anthropic, capability: count_tokens, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "/v1/messages/count_tokens over Anthropic direct"}
+- {id: llm.messages.azure_foundry.count_tokens.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: azure_foundry, capability: count_tokens, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "/v1/messages/count_tokens over Azure AI Foundry"}
+- {id: llm.messages.bedrock_converse.count_tokens.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: count_tokens, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "/v1/messages/count_tokens over Bedrock Converse"}
+- {id: llm.messages.bedrock_invoke.count_tokens.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: count_tokens, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "/v1/messages/count_tokens over Bedrock Invoke"}
+- {id: llm.messages.vertex.count_tokens.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: count_tokens, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "/v1/messages/count_tokens over Vertex AI"}
+
+# ---- web_search ----
+- {id: llm.messages.anthropic.web_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: anthropic, capability: web_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Web search server tool over Anthropic direct"}
+- {id: llm.messages.azure_foundry.web_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: azure_foundry, capability: web_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Web search server tool over Azure AI Foundry"}
+- {id: llm.messages.bedrock_converse.web_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: web_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Web search server tool over Bedrock Converse"}
+- {id: llm.messages.bedrock_invoke.web_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: web_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Web search server tool over Bedrock Invoke"}
+- {id: llm.messages.vertex.web_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: web_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Web search server tool over Vertex AI"}

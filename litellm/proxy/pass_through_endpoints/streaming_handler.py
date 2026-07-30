@@ -26,6 +26,11 @@ from .success_handler import PassThroughEndpointLogging
 
 class PassThroughStreamingHandler:
     @staticmethod
+    def _stamp_first_chunk_if_needed(litellm_logging_obj: LiteLLMLoggingObj) -> None:
+        if litellm_logging_obj.completion_start_time is None:
+            litellm_logging_obj._update_completion_start_time(completion_start_time=datetime.now())
+
+    @staticmethod
     async def chunk_processor(
         response: httpx.Response,
         request_body: Optional[dict],
@@ -58,6 +63,7 @@ class PassThroughStreamingHandler:
                 # Hot path: just buffer for end-of-stream logging and forward.
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
+                    PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
                     yield chunk
             else:
                 # ``cost_injection_active`` already requires ``model_name`` to
@@ -67,6 +73,7 @@ class PassThroughStreamingHandler:
                 resolved_model_name: str = model_name
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
+                    PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
                     if endpoint_type == EndpointType.VERTEX_AI:
                         if "streamRawPredict" in url_route or "rawPredict" in url_route:
                             modified_chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
