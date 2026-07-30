@@ -50,7 +50,11 @@ import replicateLogo from "../../public/assets/logos/replicate.svg";
 import runwayLogo from "../../public/assets/logos/runway.png";
 import sambanovaLogo from "../../public/assets/logos/sambanova.svg";
 import sapLogo from "../../public/assets/logos/sap.png";
+<<<<<<< HEAD
 import scxAiLogo from "../../public/assets/logos/scx_ai.svg";
+=======
+import scalatticeLogo from "../../public/assets/logos/scalattice.svg";
+>>>>>>> fff29afb9b (feat: add Scalattice logo, UI provider, and model pricing)
 import snowflakeLogo from "../../public/assets/logos/snowflake.svg";
 import sonioxLogo from "../../public/assets/logos/soniox.svg";
 import togetheraiLogo from "../../public/assets/logos/togetherai.svg";
@@ -154,7 +158,11 @@ export enum Providers {
   SAGEMAKER_LEGACY = "Sagemaker",
   Sambanova = "Sambanova",
   SAP = "SAP Generative AI Hub",
+<<<<<<< HEAD
   SCX_AI = "SCX.ai",
+=======
+  SCALATTICE = "Scalattice",
+>>>>>>> fff29afb9b (feat: add Scalattice logo, UI provider, and model pricing)
   Snowflake = "Snowflake",
   Soniox = "Soniox",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
@@ -266,7 +274,11 @@ export const provider_map: Record<string, string> = {
   SageMaker: "sagemaker_chat",
   Sambanova: "sambanova",
   SAP: "sap",
+<<<<<<< HEAD
   SCX_AI: "scx-ai",
+=======
+  SCALATTICE: "scalattice",
+>>>>>>> fff29afb9b (feat: add Scalattice logo, UI provider, and model pricing)
   Snowflake: "snowflake",
   Soniox: "soniox",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
@@ -359,7 +371,11 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.SAGEMAKER_LEGACY]: bedrockLogo.src,
   [Providers.Sambanova]: sambanovaLogo.src,
   [Providers.SAP]: sapLogo.src,
+<<<<<<< HEAD
   [Providers.SCX_AI]: scxAiLogo.src,
+=======
+  [Providers.SCALATTICE]: scalatticeLogo.src,
+>>>>>>> fff29afb9b (feat: add Scalattice logo, UI provider, and model pricing)
   [Providers.Snowflake]: snowflakeLogo.src,
   [Providers.Soniox]: sonioxLogo.src,
   [Providers.TEXT_COMPLETION_CODESTRAL]: mistralLogo.src,
