@@ -900,6 +900,166 @@ def test_generic_cost_per_token_anthropic_prompt_caching_with_cache_creation():
     assert round(prompt_cost, 3) == 0.029
 
 
+def test_generic_cost_per_token_prices_openai_cache_write_tokens():
+    """Regression for LIT-4725 / #33772: OpenAI-style models (e.g. GPT-5.6 on Bedrock)
+    report cache-write tokens under prompt_tokens_details.cache_write_tokens, not the
+    Anthropic-style cache_creation_tokens. Those tokens must be billed at
+    cache_creation_input_token_cost, not silently dropped to the plain input rate."""
+    model = "litellm-test-openai-cache-write"
+    custom_llm_provider = "bedrock"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 4e-6,
+                "cache_read_input_token_cost": 1e-7,
+                "cache_creation_input_token_cost": 1.25e-6,
+            }
+        }
+    )
+
+    plain_tokens, cache_read, cache_write = 1_000, 5_000, 10_000
+    prompt_tokens_details = PromptTokensDetailsWrapper(cached_tokens=cache_read)
+    prompt_tokens_details.cache_write_tokens = cache_write
+    usage = Usage(
+        prompt_tokens=plain_tokens + cache_read + cache_write,
+        completion_tokens=100,
+        total_tokens=plain_tokens + cache_read + cache_write + 100,
+        prompt_tokens_details=prompt_tokens_details,
+    )
+
+    try:
+        prompt_cost, _ = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+    finally:
+        litellm.model_cost.pop(model, None)
+
+    expected_prompt_cost = plain_tokens * 1e-6 + cache_read * 1e-7 + cache_write * 1.25e-6
+    assert prompt_cost == pytest.approx(expected_prompt_cost, rel=1e-9)
+
+
+def test_get_model_info_registers_tiered_cache_creation_keys():
+    """Regression for LIT-4725 / #33772: get_model_info must copy the tiered
+    cache-creation cost keys (_flex, _priority, _above_272k_tokens) onto ModelInfo,
+    so cache-write cost can vary by service/context tier instead of being discarded."""
+    model = "litellm-test-tiered-cache-creation"
+    custom_llm_provider = "openai"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 4e-6,
+                "cache_creation_input_token_cost": 1.25e-6,
+                "cache_creation_input_token_cost_flex": 6e-7,
+                "cache_creation_input_token_cost_priority": 2.5e-6,
+                "cache_creation_input_token_cost_above_272k_tokens": 2.5e-6,
+            }
+        }
+    )
+
+    try:
+        model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        assert model_info["cache_creation_input_token_cost_flex"] == 6e-7
+        assert model_info["cache_creation_input_token_cost_priority"] == 2.5e-6
+        assert model_info["cache_creation_input_token_cost_above_272k_tokens"] == 2.5e-6
+    finally:
+        litellm.model_cost.pop(model, None)
+
+
+def test_generic_cost_per_token_prices_cache_write_at_above_272k_tier():
+    """Regression for LIT-4725 / #33772: past the 272k threshold, OpenAI cache-write
+    tokens must bill at cache_creation_input_token_cost_above_272k_tokens once that key
+    is registered on ModelInfo, rather than the base cache-creation rate."""
+    model = "litellm-test-cache-write-272k"
+    custom_llm_provider = "openai"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 4e-6,
+                "input_cost_per_token_above_272k_tokens": 2e-6,
+                "cache_creation_input_token_cost": 1.25e-6,
+                "cache_creation_input_token_cost_above_272k_tokens": 2.5e-6,
+            }
+        }
+    )
+
+    plain_tokens, cache_write = 200_000, 100_000
+    prompt_tokens_details = PromptTokensDetailsWrapper()
+    prompt_tokens_details.cache_write_tokens = cache_write
+    usage = Usage(
+        prompt_tokens=plain_tokens + cache_write,
+        completion_tokens=100,
+        total_tokens=plain_tokens + cache_write + 100,
+        prompt_tokens_details=prompt_tokens_details,
+    )
+
+    try:
+        prompt_cost, _ = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+    finally:
+        litellm.model_cost.pop(model, None)
+
+    expected_prompt_cost = plain_tokens * 2e-6 + cache_write * 2.5e-6
+    assert prompt_cost == pytest.approx(expected_prompt_cost, rel=1e-9)
+
+
+def test_generic_cost_per_token_activates_cache_creation_tier_without_input_tier():
+    """Regression for LIT-4725 / #33772: a long-context cache-creation tier must
+    activate on its own. When only cache_creation_input_token_cost_above_272k_tokens
+    is configured (no matching input_cost_per_token_above_272k_tokens), threshold
+    discovery must still find the tier so cache-write tokens past 272k bill at the
+    tiered rate while plain input stays at the base rate."""
+    model = "litellm-test-cache-write-272k-cache-only"
+    custom_llm_provider = "openai"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 4e-6,
+                "cache_creation_input_token_cost": 1.25e-6,
+                "cache_creation_input_token_cost_above_272k_tokens": 2.5e-6,
+            }
+        }
+    )
+
+    plain_tokens, cache_write = 200_000, 100_000
+    prompt_tokens_details = PromptTokensDetailsWrapper()
+    prompt_tokens_details.cache_write_tokens = cache_write
+    usage = Usage(
+        prompt_tokens=plain_tokens + cache_write,
+        completion_tokens=100,
+        total_tokens=plain_tokens + cache_write + 100,
+        prompt_tokens_details=prompt_tokens_details,
+    )
+
+    try:
+        prompt_cost, _ = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+    finally:
+        litellm.model_cost.pop(model, None)
+
+    expected_prompt_cost = plain_tokens * 1e-6 + cache_write * 2.5e-6
+    assert prompt_cost == pytest.approx(expected_prompt_cost, rel=1e-9)
+
+
 def test_string_cost_values():
     """Test that cost values defined as strings are properly converted to floats."""
     from unittest.mock import patch
