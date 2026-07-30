@@ -14,6 +14,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+    JSON_OBJECT_SYSTEM_INSTRUCTION,
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import (
@@ -1054,12 +1055,18 @@ class AmazonConverseConfig(BaseConfig):
                 )
             if non_default_params.get("stream", False) is True:
                 optional_params["fake_stream"] = True
-        # else: response_format=json_object with no schema.
-        # Don't inject the synthetic json_tool_call tool here. When no
-        # schema is given, _create_json_tool_call_for_response_format
-        # produces an empty schema (properties: {}), and the model
-        # returns {} instead of the requested JSON. The model already
-        # returns JSON when the prompt asks for it.
+        else:
+            # response_format=json_object with no schema.
+            # Don't inject the synthetic json_tool_call tool here. When no
+            # schema is given, _create_json_tool_call_for_response_format
+            # produces an empty schema (properties: {}), and the model
+            # returns {} instead of the requested JSON.
+            #
+            # Bedrock Converse has no schema-less JSON mode, so there is nothing
+            # to translate the param into. Flag it for _transform_request_helper,
+            # which appends a system instruction instead (gated on modify_params)
+            # rather than dropping the caller's request on the floor.
+            optional_params["_json_object_without_schema"] = True
 
         optional_params["json_mode"] = True
         return optional_params
@@ -1528,6 +1535,22 @@ class AmazonConverseConfig(BaseConfig):
                     message="Bedrock doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
                     model="",
                     llm_provider="bedrock",
+                )
+
+        """
+        Bedrock Converse has no schema-less JSON mode, so
+        `response_format={"type": "json_object"}` has nothing to translate into.
+        Append a system instruction so the request is honoured instead of being
+        silently ignored.
+        """
+        if optional_params.pop("_json_object_without_schema", False):
+            if litellm.modify_params:
+                system_content_blocks.append(SystemContentBlock(text=JSON_OBJECT_SYSTEM_INSTRUCTION))
+            else:
+                litellm.verbose_logger.warning(
+                    "Bedrock has no equivalent for `response_format={'type': 'json_object'}` and is ignoring it. "
+                    "Pass a `json_schema` response_format, or set `litellm.modify_params = True` // "
+                    "`litellm_settings::modify_params: True` to append a JSON-only system instruction."
                 )
 
         # Drop thinking param if thinking is enabled but thinking_blocks are missing

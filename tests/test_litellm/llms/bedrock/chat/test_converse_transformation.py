@@ -5862,3 +5862,118 @@ def test_adaptive_thinking_dropped_when_max_tokens_too_small_converse():
     )
 
     assert "thinking" not in optional_params
+
+
+def test_json_object_without_schema_flags_for_system_instruction():
+    """response_format=json_object has no schema, so it is flagged, not dropped."""
+    config = AmazonConverseConfig()
+
+    response_format = {"type": "json_object"}
+    optional_params: dict = {}
+    result = config._translate_response_format_param(
+        value=response_format,
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        optional_params=optional_params,
+        non_default_params={"response_format": response_format},
+        is_thinking_enabled=False,
+    )
+
+    # No schema means neither structured-output API can be used
+    assert "outputConfig" not in result
+    assert "tools" not in result
+    assert result["json_mode"] is True
+    assert result["_json_object_without_schema"] is True
+
+
+def test_json_schema_response_format_is_not_flagged():
+    """A schema-bearing response_format is translated, so it must not be flagged."""
+    config = AmazonConverseConfig()
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "WeatherResult",
+            "schema": {
+                "type": "object",
+                "properties": {"temp": {"type": "number"}},
+                "required": ["temp"],
+            },
+        },
+    }
+    optional_params: dict = {}
+    result = config._translate_response_format_param(
+        value=response_format,
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        optional_params=optional_params,
+        non_default_params={"response_format": response_format},
+        is_thinking_enabled=False,
+    )
+
+    assert "_json_object_without_schema" not in result
+
+
+def test_json_object_appends_system_instruction_when_modify_params_enabled():
+    """With modify_params on, the flag becomes a JSON-only system instruction."""
+    from litellm.constants import JSON_OBJECT_SYSTEM_INSTRUCTION
+
+    config = AmazonConverseConfig()
+    system_content_blocks: list = []
+    optional_params = {"_json_object_without_schema": True, "json_mode": True}
+
+    with patch.object(litellm, "modify_params", True):
+        data = config._transform_request_helper(
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            system_content_blocks=system_content_blocks,
+            optional_params=optional_params,
+            messages=[{"role": "user", "content": "Who are you?"}],
+        )
+
+    assert system_content_blocks == [{"text": JSON_OBJECT_SYSTEM_INSTRUCTION}]
+    assert data["system"] == [{"text": JSON_OBJECT_SYSTEM_INSTRUCTION}]
+    # The internal marker must never reach the provider payload
+    assert "_json_object_without_schema" not in optional_params
+    assert "_json_object_without_schema" not in json.dumps(data)
+
+
+def test_json_object_warns_when_modify_params_disabled():
+    """With modify_params off, behaviour is unchanged but the no-op is logged."""
+    config = AmazonConverseConfig()
+    system_content_blocks: list = []
+    optional_params = {"_json_object_without_schema": True, "json_mode": True}
+
+    with patch.object(litellm, "modify_params", False):
+        with patch.object(litellm.verbose_logger, "warning") as mock_warning:
+            data = config._transform_request_helper(
+                model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+                system_content_blocks=system_content_blocks,
+                optional_params=optional_params,
+                messages=[{"role": "user", "content": "Who are you?"}],
+            )
+
+    assert system_content_blocks == []
+    assert "system" not in data
+    assert "_json_object_without_schema" not in optional_params
+    mock_warning.assert_called_once()
+    assert "json_object" in mock_warning.call_args[0][0]
+
+
+def test_json_object_preserves_existing_system_prompt():
+    """The instruction is appended, not substituted for the caller's system prompt."""
+    from litellm.constants import JSON_OBJECT_SYSTEM_INSTRUCTION
+
+    config = AmazonConverseConfig()
+    system_content_blocks: list = [{"text": "You are a helpful assistant"}]
+    optional_params = {"_json_object_without_schema": True, "json_mode": True}
+
+    with patch.object(litellm, "modify_params", True):
+        config._transform_request_helper(
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            system_content_blocks=system_content_blocks,
+            optional_params=optional_params,
+            messages=[{"role": "user", "content": "Who are you?"}],
+        )
+
+    assert system_content_blocks == [
+        {"text": "You are a helpful assistant"},
+        {"text": JSON_OBJECT_SYSTEM_INSTRUCTION},
+    ]
