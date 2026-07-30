@@ -36,6 +36,17 @@ def needs_rewarming(warmed_at: float, now: float, refresh_interval_seconds: int)
     )
 
 
+class WarmthStamp(BaseModel):
+    """When a model group was last replayed for a session, and whether that replay actually landed. A failed
+    replay leaves the provider cache cold, so ``warmed`` keeps the pick from preferring it while ``at`` still
+    paces the next attempt."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    at: float
+    warmed: bool
+
+
 class CacheWarmingPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

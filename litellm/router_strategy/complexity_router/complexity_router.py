@@ -671,7 +671,7 @@ class ComplexityRouter(CustomLogger):
             return None
         warmth = await store.get_warmth(record_key, tuple(pool))
         now = time.time()
-        warmed = frozenset(model for model, warmed_at in warmth.items() if is_cache_fresh(warmed_at, now))
+        warmed = frozenset(model for model, stamp in warmth.items() if stamp.warmed and is_cache_fresh(stamp.at, now))
         served = frozenset((record.served_model,)) if is_cache_fresh(record.last_activity, now) else frozenset[str]()
         candidates = tuple(model for model in pool if model in warmed | served)
         if not candidates:

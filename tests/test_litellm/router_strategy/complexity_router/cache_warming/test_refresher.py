@@ -219,7 +219,42 @@ async def test_a_due_session_is_replayed_on_its_own_surface_and_stamped_warm(sur
     if surface == "anthropic_messages":
         assert call["system"] == "You are a policy assistant"
     stamp = warmth_stamp(redis, record_key, "smart-claude")
-    assert stamp is not None and stamp > 0
+    assert stamp is not None and stamp.at > 0 and stamp.warmed is True
+
+
+@pytest.mark.asyncio
+async def test_a_replay_the_provider_rejected_is_stamped_cold_and_still_paced():
+    """A stamp is the claim that the provider holds this session's prefix on that model, so a replay that
+    failed must not write a warm one: the pick would then send real traffic to a cold model for the provider's
+    whole cache TTL, which is the outcome warming exists to avoid. The attempt is still recorded, so a model
+    failing every replay is retried on the refresh interval rather than on every tick."""
+    llm_router, redis = warming_rig(redis=FakeRedisCache())
+    llm_router.failing_message_marker = "deployment policy"
+    record_key = seed_session(redis, warmth={"fast-claude": time.time()})
+    await tick(llm_router)
+    assert llm_router.completion_calls == [] and len(llm_router.failed_calls) == 1
+    stamp = warmth_stamp(redis, record_key, "smart-claude")
+    assert stamp is not None and stamp.at > 0 and stamp.warmed is False
+
+    await tick(llm_router)
+    assert len(llm_router.failed_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_replay_refused_by_admission_is_stamped_cold_rather_than_warm():
+    """Same claim, for the replay that never reached the provider at all: a refusal from the request path's
+    own ceilings leaves the cache exactly as cold as a provider failure does."""
+    limiter, counters = real_limiter()
+    llm_router, redis = warming_rig(redis=FakeRedisCache())
+    record_key = seed_session(redis, user_api_key="k", warmth={"fast-claude": time.time()})
+    keys = FakeKeyDirectory({"k": key_state(token="k", rpm_limit=1)})
+    await counters.async_set_cache(key="{api_key:k}:window", value=str(int(time.time())))
+    await counters.async_set_cache(key="{api_key:k}:requests", value=1)
+    with registered_callbacks(limiter):
+        await tick(llm_router, active=refresher(keys=keys, limiter=limiter))
+    assert llm_router.completion_calls == []
+    stamp = warmth_stamp(redis, record_key, "smart-claude")
+    assert stamp is not None and stamp.warmed is False
 
 
 @pytest.mark.asyncio

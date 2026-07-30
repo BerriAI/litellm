@@ -13,6 +13,7 @@ from litellm.router_strategy.complexity_router.cache_warming.capture import (
 from litellm.router_strategy.complexity_router.cache_warming.store import CacheWarmingStore
 from litellm.router_strategy.complexity_router.cache_warming.types import (
     CACHE_WARMING_REPLAY_MARKER_KEY,
+    WarmthStamp,
     decompress_payload,
 )
 from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
@@ -100,13 +101,15 @@ async def test_second_turn_overwrites_payload_and_preserves_other_model_warmth()
     await router._capture_session(_kwargs(), MESSAGES, "claude-sonnet-4-5")
     key = CacheWarmingStore.record_key("smart-router", "hash-1", "sess-1")
     first = json.loads(redis.hashes[SESSIONS_KEY][key])
-    redis.data[CacheWarmingStore.warmth_key(key, "gpt-5-mini")] = json.dumps(123.0)
+    other_stamp = WarmthStamp(at=123.0, warmed=True).model_dump()
+    redis.data[CacheWarmingStore.warmth_key(key, "gpt-5-mini")] = json.dumps(other_stamp)
     await router._capture_session(
         _kwargs(), MESSAGES + [{"role": "user", "content": "and rule 8?"}], "claude-sonnet-4-5"
     )
     second = json.loads(redis.hashes[SESSIONS_KEY][key])
-    assert json.loads(redis.data[CacheWarmingStore.warmth_key(key, "gpt-5-mini")]) == 123.0
-    assert json.loads(redis.data[CacheWarmingStore.warmth_key(key, "claude-sonnet-4-5")]) > 0
+    assert json.loads(redis.data[CacheWarmingStore.warmth_key(key, "gpt-5-mini")]) == other_stamp
+    served_stamp = WarmthStamp.model_validate_json(redis.data[CacheWarmingStore.warmth_key(key, "claude-sonnet-4-5")])
+    assert served_stamp.at > 0 and served_stamp.warmed is True
     assert second["payload_sha256"] != first["payload_sha256"]
 
 
