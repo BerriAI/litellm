@@ -1,15 +1,87 @@
 #### Analytics Endpoints #####
 import os
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter
 from pydantic import ValidationError
 
+from litellm._logging import verbose_proxy_logger
 from litellm.types.proxy.discovery_endpoints.ui_discovery_endpoints import (
     NativeOIDCConfig,
     UiDiscoveryEndpoints,
 )
 
 router = APIRouter()
+
+NATIVE_OIDC_SETTING_KEYS = (
+    "native_oidc_issuer",
+    "native_oidc_client_id",
+    "native_oidc_scopes",
+)
+
+# Constant on purpose: this is reachable from an unauthenticated public route,
+# so it must never echo the configured issuer, client id, scopes, or the raw
+# Pydantic error (which would embed the rejected input values).
+NATIVE_OIDC_INVALID_MESSAGE = (
+    "native OIDC metadata was invalid or incomplete and was omitted from "
+    "/.well-known/litellm-ui-config. Check general_settings.litellm_jwtauth "
+    "native_oidc_issuer / native_oidc_client_id / native_oidc_scopes."
+)
+
+_native_oidc_warning_emitted = False
+
+
+def _warn_native_oidc_invalid_once() -> None:
+    """Emit the sanitized diagnostic at most once per process.
+
+    Deduplicated so that a public discovery request cannot be used to flood the
+    proxy logs.
+    """
+    global _native_oidc_warning_emitted
+    if _native_oidc_warning_emitted:
+        return
+    _native_oidc_warning_emitted = True
+    verbose_proxy_logger.warning(NATIVE_OIDC_INVALID_MESSAGE)
+
+
+def _reset_native_oidc_warning_state() -> None:
+    """Test hook: allow the once-only diagnostic to fire again."""
+    global _native_oidc_warning_emitted
+    _native_oidc_warning_emitted = False
+
+
+def _build_native_oidc_config(general_settings: Dict[str, Any]) -> Optional[NativeOIDCConfig]:
+    """Build the public native OIDC object, or return None and fail closed.
+
+    Published only when JWT auth is exactly enabled and every required field
+    validates. Absent configuration is silent; present-but-broken configuration
+    warns once.
+    """
+    if general_settings.get("enable_jwt_auth") is not True:
+        return None
+
+    jwt_auth_settings = general_settings.get("litellm_jwtauth")
+    if not isinstance(jwt_auth_settings, dict):
+        return None
+
+    if not any(jwt_auth_settings.get(key) is not None for key in NATIVE_OIDC_SETTING_KEYS):
+        # Not configured at all -- nothing to warn about.
+        return None
+
+    try:
+        # Validated rather than constructed: the settings are untyped YAML, and
+        # the model is the single place that decides what a publishable issuer,
+        # client_id and scope list look like.
+        return NativeOIDCConfig.model_validate(
+            {
+                "issuer": jwt_auth_settings.get("native_oidc_issuer"),
+                "client_id": jwt_auth_settings.get("native_oidc_client_id"),
+                "scopes": jwt_auth_settings.get("native_oidc_scopes"),
+            }
+        )
+    except ValidationError:
+        _warn_native_oidc_invalid_once()
+        return None
 
 
 @router.get("/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)
@@ -19,17 +91,7 @@ async def get_ui_config():
     from litellm.proxy.proxy_server import general_settings
     from litellm.proxy.utils import get_proxy_base_url, get_server_root_path
 
-    native_oidc = None
-    jwt_auth_settings = general_settings.get("litellm_jwtauth")
-    if general_settings.get("enable_jwt_auth") is True and isinstance(jwt_auth_settings, dict):
-        try:
-            native_oidc = NativeOIDCConfig(
-                discovery_url=jwt_auth_settings.get("native_oidc_discovery_url"),
-                client_id=jwt_auth_settings.get("native_oidc_client_id"),
-                scopes=jwt_auth_settings.get("native_oidc_scopes"),
-            )
-        except ValidationError:
-            pass
+    native_oidc = _build_native_oidc_config(general_settings)
 
     auto_redirect_ui_login_to_sso = (
         os.getenv("AUTO_REDIRECT_UI_LOGIN_TO_SSO", "false").lower() == "true"

@@ -28013,12 +28013,19 @@ export interface components {
              */
             type: "mutualTLS";
         };
-        /** NativeOIDCConfig */
+        /**
+         * NativeOIDCConfig
+         * @description Public native OIDC bootstrap metadata.
+         *
+         *     Only the issuer trust anchor, the public native client id, and the scopes to
+         *     request. No client secret, signing material, claim mapping or team policy is
+         *     ever published here.
+         */
         NativeOIDCConfig: {
             /** Client Id */
             client_id: string;
-            /** Discovery Url */
-            discovery_url: string;
+            /** Issuer */
+            issuer: string;
             /** Scopes */
             scopes: string[];
         };

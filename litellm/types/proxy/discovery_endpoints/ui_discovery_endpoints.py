@@ -1,65 +1,58 @@
-import ipaddress
-from typing import List, Optional
-from urllib.parse import urlsplit
+from typing import Any, List, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
 
+from litellm.litellm_core_utils.native_oidc_validation import (
+    has_control_characters,
+    validate_issuer,
+    validate_scope_tokens,
+)
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 
 
-def _has_control_characters(value: str) -> bool:
-    return any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
-
-
 class NativeOIDCConfig(BaseModel):
-    discovery_url: str
+    """Public native OIDC bootstrap metadata.
+
+    Only the issuer trust anchor, the public native client id, and the scopes to
+    request. No client secret, signing material, claim mapping or team policy is
+    ever published here.
+    """
+
+    issuer: str
     client_id: str
-    scopes: tuple[str, ...]
+    scopes: Tuple[str, ...]
 
     model_config = ConfigDict(extra="forbid")
 
-    @field_validator("discovery_url")
+    @field_validator("issuer")
     @classmethod
-    def validate_discovery_url(cls, value: str) -> str:
-        try:
-            parsed = urlsplit(value)
-            _ = parsed.port
-        except ValueError as error:
-            raise ValueError("must contain a valid port") from error
-        if (
-            not value.strip()
-            or _has_control_characters(value)
-            or any(character.isspace() for character in value)
-            or parsed.scheme not in {"http", "https"}
-            or not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.query
-            or parsed.fragment
-        ):
-            raise ValueError("must be an absolute OIDC discovery URL without credentials, query, or fragment")
-        if parsed.scheme == "http":
-            try:
-                is_loopback = ipaddress.ip_address(parsed.hostname).is_loopback
-            except ValueError:
-                is_loopback = False
-            if not is_loopback:
-                raise ValueError("must use HTTPS unless the host is a loopback IP address")
-        return value
+    def validate_issuer_value(cls, value: str) -> str:
+        # Returned unchanged on purpose: the issuer is compared byte-for-byte
+        # against the provider document, so normalizing it here would break the
+        # trust anchor.
+        return validate_issuer(value)
 
     @field_validator("client_id")
     @classmethod
     def validate_client_id(cls, value: str) -> str:
-        if not value.strip() or _has_control_characters(value):
-            raise ValueError("must not be blank")
+        if not value.strip() or value != value.strip():
+            raise ValueError("must be a non-blank client id without surrounding whitespace")
+        if any(character.isspace() for character in value):
+            raise ValueError("must not contain whitespace")
+        if has_control_characters(value):
+            raise ValueError("must not contain control characters")
         return value
 
     @field_validator("scopes")
     @classmethod
-    def validate_scopes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if not value or any(not scope.strip() or _has_control_characters(scope) for scope in value):
-            raise ValueError("must contain only non-blank scopes")
-        return value
+    def validate_scopes(cls, value: Tuple[str, ...]) -> Tuple[str, ...]:
+        return validate_scope_tokens(value)
 
 
 class UiDiscoveryEndpoints(BaseModel):
@@ -71,7 +64,19 @@ class UiDiscoveryEndpoints(BaseModel):
     hide_default_credentials_hint: bool = False
     is_control_plane: bool = False
     workers: List[WorkerRegistryEntry] = []
-    native_oidc: Optional[NativeOIDCConfig] = Field(
-        default=None,
-        exclude_if=lambda value: value is None,
-    )
+    native_oidc: Optional[NativeOIDCConfig] = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_native_oidc(self, handler: SerializerFunctionWrapHandler):
+        """Drop `native_oidc` entirely when it is unset.
+
+        Deliberately narrower than `exclude_none` / `response_model_exclude_none`:
+        unrelated optional fields such as `proxy_base_url` must keep serializing
+        as explicit nulls. Uses a model-level wrap serializer rather than
+        `Field(exclude_if=...)` so the model stays compatible with the declared
+        `pydantic>=2.10` floor.
+        """
+        serialized: Any = handler(self)
+        if isinstance(serialized, dict) and serialized.get("native_oidc") is None:
+            serialized.pop("native_oidc", None)
+        return serialized
