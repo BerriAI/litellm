@@ -583,6 +583,11 @@ class CacheWarmingRefresher:
         proxy_logging_obj: "ProxyLogging",
         lease_lost: asyncio.Event,
     ) -> None:
+        """The semaphore is held across the session's whole due set, and decompression happens inside it, so
+        the concurrency bound also bounds decompressed residency. Every session is started at once, so
+        inflating above the semaphore let the tick hold one decompressed payload per active session rather
+        than per replay in flight, which the cap sizes at max_sessions times the uncompressed ceiling. The
+        replay ceiling is unchanged, since a session's models are replayed in sequence inside the slot."""
         warmth = await store.get_warmth(session_key, warm_models)
         now = time.time()
         due_models = tuple(
@@ -592,9 +597,9 @@ class CacheWarmingRefresher:
         )
         if not due_models:
             return
-        payload = decompress_payload(record.payload_compressed)
-        for model_group in due_models:
-            async with semaphore:
+        async with semaphore:
+            payload = decompress_payload(record.payload_compressed)
+            for model_group in due_models:
                 if lease_lost.is_set():
                     return
                 attempted_at = time.time()
