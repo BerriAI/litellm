@@ -631,14 +631,29 @@ def convert_to_model_response_object(
             if not response_object.get("choices") or not isinstance(response_object["choices"], Iterable):
                 from litellm.exceptions import APIError
 
-                raise APIError(
-                    status_code=500,
-                    message=(
+                response_status = response_object.get("status")
+                error_status = (
+                    response_status
+                    if isinstance(response_status, int)
+                    and not isinstance(response_status, bool)
+                    and 400 <= response_status <= 599
+                    else 500
+                )
+                response_message = response_object.get("response")
+                error_message = (
+                    response_message
+                    if isinstance(response_message, str) and response_message
+                    else (
                         "LiteLLM: provider returned a response with no 'choices'. "
                         f"Raw keys: {list(response_object.keys())}"
-                    ),
+                    )
+                )
+                raise APIError(
+                    status_code=error_status,
+                    message=error_message,
                     llm_provider="",
                     model="",
+                    body=response_object,
                 )
 
             for idx, choice in enumerate(response_object["choices"]):
