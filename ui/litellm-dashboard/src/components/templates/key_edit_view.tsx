@@ -84,9 +84,8 @@ const getExactKeyTypePreset = (allowedRoutes: string[] | null | undefined): stri
 };
 
 // Helper function to determine key_type display value from allowed_routes
-const getKeyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string => {
-  return getExactKeyTypePreset(allowedRoutes) ?? "default";
-};
+const getKeyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string =>
+  getExactKeyTypePreset(allowedRoutes) ?? "default";
 
 export function KeyEditView({
   keyData,
