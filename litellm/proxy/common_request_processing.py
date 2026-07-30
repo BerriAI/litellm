@@ -1181,15 +1181,21 @@ class ProxyBaseLLMRequestProcessing:
             processing_start_time = time.time()
             queue_time_seconds = processing_start_time - arrival_time
 
-        # Store queue time in metadata after add_litellm_data_to_request to ensure it's preserved
-        if queue_time_seconds is not None:
-            from litellm.proxy.litellm_pre_call_utils import _get_metadata_variable_name
+        # Initialize litellm_metadata for routes that use it (Responses, batches, files, etc.).
+        # This ensures rate limiters and other hooks stash proxy-internal state in the
+        # correct bucket instead of creating a provider-visible 'metadata' field.
+        # This must happen BEFORE pre-call processing (rate limits, guardrails, etc.)
+        # that may stash values into metadata.
+        from litellm.proxy.litellm_pre_call_utils import _get_metadata_variable_name
 
-            _metadata_variable_name = _get_metadata_variable_name(request)
-            if _metadata_variable_name not in self.data:
-                self.data[_metadata_variable_name] = {}
-            if not isinstance(self.data[_metadata_variable_name], dict):
-                self.data[_metadata_variable_name] = {}
+        _metadata_variable_name = _get_metadata_variable_name(request)
+        if _metadata_variable_name not in self.data:
+            self.data[_metadata_variable_name] = {}
+        if not isinstance(self.data[_metadata_variable_name], dict):
+            self.data[_metadata_variable_name] = {}
+
+        # Store queue time in metadata if available
+        if queue_time_seconds is not None:
             self.data[_metadata_variable_name]["queue_time_seconds"] = queue_time_seconds
 
         self.data["model"] = (
