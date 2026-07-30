@@ -3650,15 +3650,13 @@ async def _virtual_key_multi_budget_check(
 
     from litellm.proxy.auth.user_api_key_auth import _get_temp_budget_increase
     from litellm.proxy.proxy_server import get_current_spend
+    from litellm.proxy.spend_tracking.budget_reservation import apply_temp_budget_increase
 
     temp_budget_increase = _get_temp_budget_increase(valid_token) or 0.0
 
     for window in valid_token.budget_limits:
         w: dict = window if isinstance(window, dict) else window.model_dump()
-        # A boost only makes sense for a finite limit; +boost on inf is still inf.
-        effective_max_budget = w["max_budget"]
-        if math.isfinite(effective_max_budget):
-            effective_max_budget += temp_budget_increase
+        effective_max_budget = apply_temp_budget_increase(w["max_budget"], temp_budget_increase)
         counter_key = f"spend:key:{valid_token.token}:window:{w['budget_duration']}"
         window_spend = await get_current_spend(
             counter_key=counter_key,
