@@ -54,7 +54,7 @@ export function IdCell({
   const classes = cn(
     VARIANT_CLASS[variant].base,
     clickable && VARIANT_CLASS[variant].clickable,
-    truncate && "inline-block max-w-full truncate",
+    truncate && "block max-w-[15ch] truncate",
     disabled && "opacity-50",
     className,
   );
