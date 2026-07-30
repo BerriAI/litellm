@@ -3242,7 +3242,7 @@ async def test_pre_call_hook_does_not_touch_provider_metadata_on_litellm_metadat
 
     for key in _LITELLM_STASH_KEYS:
         assert handler._lookup_stashed_value(
-            kwargs={"litellm_params": {"metadata": litellm_metadata}},
+            kwargs={"litellm_params": {"litellm_metadata": litellm_metadata}},
             standard_logging_metadata=None,
             key=key,
         ) == litellm_metadata.get(key)
