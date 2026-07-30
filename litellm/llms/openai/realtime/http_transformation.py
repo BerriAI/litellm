@@ -36,10 +36,10 @@ class OpenAIRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         api_key: Optional[str] = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         return {
             **headers,
             "Authorization": f"Bearer {api_key or ''}",

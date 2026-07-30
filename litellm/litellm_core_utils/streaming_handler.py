@@ -105,7 +105,7 @@ class _ProviderChunkParsed:
 
 @dataclass(frozen=True, slots=True)
 class _ProviderChunkEarlyReturn:
-    value: Any
+    value: ModelResponseStream | None
 
 
 _ProviderChunkResult = Union[_ProviderChunkParsed, _ProviderChunkEarlyReturn]
