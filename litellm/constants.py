@@ -1282,12 +1282,13 @@ OPENAI_FINISH_REASONS = [
 ]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = int(os.getenv("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60))  # 1 minute
 RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when converting response format to tool call
-# Appended as a system instruction for providers that have no schema-less JSON
-# mode (e.g. Bedrock Converse), so `response_format={"type": "json_object"}` is
-# not silently ignored. Only used when `litellm.modify_params` is True.
-JSON_OBJECT_SYSTEM_INSTRUCTION = (
-    "You must respond with a single valid JSON object. Do not include any prose, explanation, or markdown code fences."
-)
+# Assistant prefill used to honour `response_format={"type": "json_object"}` on
+# providers that have no schema-less JSON mode (Anthropic on Bedrock Converse).
+# Opening the assistant turn with a brace forces the model to continue a JSON
+# object. A system instruction alone is not reliable here - the model still
+# wraps the object in a markdown fence. The brace is prepended back onto the
+# completion. Only used when `litellm.modify_params` is True.
+JSON_OBJECT_ASSISTANT_PREFILL = "{"
 
 ########################### Logging Callback Constants ###########################
 AZURE_STORAGE_MSFT_VERSION = "2019-07-07"

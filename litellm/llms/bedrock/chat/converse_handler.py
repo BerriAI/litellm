@@ -31,6 +31,7 @@ def make_sync_call(
     messages: list,
     logging_obj: LiteLLMLoggingObject,
     json_mode: Optional[bool] = False,
+    json_object_prefill: bool = False,
     fake_stream: bool = False,
     stream_chunk_size: Optional[int] = None,
 ):
@@ -55,7 +56,7 @@ def make_sync_call(
             model_response=litellm.ModelResponse(),
             stream=True,
             logging_obj=logging_obj,
-            optional_params={},
+            optional_params={"json_object_prefill": json_object_prefill},
             api_key="",
             data=data,
             messages=messages,
@@ -99,6 +100,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         client: Optional[AsyncHTTPHandler] = None,
         fake_stream: bool = False,
         json_mode: Optional[bool] = False,
+        json_object_prefill: bool = False,
         api_key: Optional[str] = None,
         stream_chunk_size: Optional[int] = None,
     ) -> CustomStreamWrapper:
@@ -142,6 +144,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             logging_obj=logging_obj,
             fake_stream=fake_stream,
             json_mode=json_mode,
+            json_object_prefill=json_object_prefill,
             stream_chunk_size=stream_chunk_size,
         )
         streaming_response = CustomStreamWrapper(
@@ -262,6 +265,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         unencoded_model_id = optional_params.pop("model_id", None)
         fake_stream = optional_params.pop("fake_stream", False)
         json_mode = optional_params.get("json_mode", False)
+        json_object_prefill = bool(optional_params.get("json_object_prefill", False))
         if unencoded_model_id is not None:
             modelId = self.encode_model_id(model_id=unencoded_model_id)
         else:
@@ -374,6 +378,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                     timeout=timeout,
                     client=client,
                     json_mode=json_mode,
+                    json_object_prefill=json_object_prefill,
                     fake_stream=fake_stream,
                     credentials=credentials,
                     api_key=api_key,
@@ -449,6 +454,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 messages=messages,
                 logging_obj=logging_obj,
                 json_mode=json_mode,
+                json_object_prefill=json_object_prefill,
                 fake_stream=fake_stream,
                 stream_chunk_size=stream_chunk_size,
             )

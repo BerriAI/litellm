@@ -14,7 +14,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
-    JSON_OBJECT_SYSTEM_INSTRUCTION,
+    JSON_OBJECT_ASSISTANT_PREFILL,
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import (
@@ -1059,17 +1059,98 @@ class AmazonConverseConfig(BaseConfig):
             # response_format=json_object with no schema.
             # Don't inject the synthetic json_tool_call tool here. When no
             # schema is given, _create_json_tool_call_for_response_format
-            # produces an empty schema (properties: {}), and the model
-            # returns {} instead of the requested JSON.
+            # produces an empty schema (properties: {}), and the model returns
+            # {} instead of the requested JSON. A permissive schema is not a way
+            # out either: Bedrock rejects `additionalProperties` on outputConfig,
+            # and a bare {"type": "object"} also yields {}.
             #
-            # Bedrock Converse has no schema-less JSON mode, so there is nothing
-            # to translate the param into. Flag it for _transform_request_helper,
-            # which appends a system instruction instead (gated on modify_params)
-            # rather than dropping the caller's request on the floor.
-            optional_params["_json_object_without_schema"] = True
+            # Anthropic models accept an assistant prefill, which forces the
+            # completion to continue a JSON object. Flag it for transform_request;
+            # the brace is prepended back in _transform_response.
+            #
+            # Prefill is not compatible with tool calling: it commits the turn
+            # to text starting with "{", so the model can no longer emit a
+            # toolUse block. Requests carrying tools keep the previous no-op.
+            has_tools = bool(non_default_params.get("tools") or optional_params.get("tools"))
+            if litellm.modify_params and self._supports_assistant_prefill(model) and not has_tools:
+                optional_params["json_object_prefill"] = True
+                if non_default_params.get("stream", False) is True:
+                    # Reuse the fake_stream path so the prefilled brace can be
+                    # prepended to the completed message, as the branch above does.
+                    optional_params["fake_stream"] = True
+            elif has_tools:
+                verbose_logger.warning(
+                    "Ignoring `response_format={'type': 'json_object'}`: it cannot be honoured on Bedrock "
+                    "alongside `tools`, because the assistant prefill used to force JSON would prevent the "
+                    "model from making a tool call. Pass a `json_schema` response_format instead."
+                )
+            else:
+                verbose_logger.warning(
+                    "Bedrock has no equivalent for `response_format={'type': 'json_object'}` and is ignoring it. "
+                    "Pass a `json_schema` response_format, or (Anthropic models only) set "
+                    "`litellm.modify_params = True` // `litellm_settings::modify_params: True` "
+                    "to prefill the assistant turn with a JSON object."
+                )
 
         optional_params["json_mode"] = True
         return optional_params
+
+    @staticmethod
+    def _add_json_object_prefill(
+        messages: list[AllMessageValues],  # mutable-ok: matches call sites' List[AllMessageValues]
+    ) -> list[AllMessageValues]:  # mutable-ok: see above
+        """Open the assistant turn with a brace so the model continues a JSON object.
+
+        ``prefix: True`` marks this as a prefill so ``_initial_message_setup``
+        does not append a "Please continue." user turn after it. Without that
+        flag the conversation ends on a user message and the prefill is wasted.
+
+        If the caller already ends on an assistant turn, the brace is merged into
+        it, since Converse rejects two consecutive assistant messages.
+        """
+        messages = list(messages)
+        if messages and messages[-1].get("role") == "assistant":
+            # Extract `content` from the still-TypedDict-typed message before it is
+            # spread into a plain dict below, so the isinstance check narrows it to
+            # a concrete str/list instead of the object type a plain dict.get() gives.
+            last_message = messages[-1]
+            content = last_message.get("content")
+            if isinstance(content, str):
+                merged_content = content + JSON_OBJECT_ASSISTANT_PREFILL
+            elif content:
+                merged_content = list(content) + [{"type": "text", "text": JSON_OBJECT_ASSISTANT_PREFILL}]
+            else:
+                merged_content = JSON_OBJECT_ASSISTANT_PREFILL
+            messages[-1] = (
+                cast(  # cast-ok: constructing a TypedDict message literal via spread, matching the dict(message)->cast(AllMessageValues, ...) pattern in factory.py
+                    AllMessageValues,
+                    {**last_message, "content": merged_content, "prefix": True},
+                )
+            )
+        else:
+            messages.append(
+                cast(  # cast-ok: constructing a fresh assistant TypedDict message literal
+                    AllMessageValues,
+                    {
+                        "role": "assistant",
+                        "content": JSON_OBJECT_ASSISTANT_PREFILL,
+                        "prefix": True,
+                    },
+                )
+            )
+        return messages
+
+    @staticmethod
+    def _supports_assistant_prefill(model: str) -> bool:
+        """Whether the model accepts a partial assistant turn to continue from.
+
+        Anthropic documents prefill as the way to shape output without a schema.
+        Other Converse families (Llama, DeepSeek, Nova) do not support it, so
+        they keep the previous no-op behaviour rather than getting a request
+        they will reject.
+        """
+        base_model = BedrockModelInfo.get_base_model(model).lower()
+        return "anthropic" in base_model or "claude" in base_model
 
     def update_optional_params_with_thinking_tokens(self, non_default_params: dict, optional_params: dict):
         """
@@ -1247,6 +1328,7 @@ class AmazonConverseConfig(BaseConfig):
         supported_config_params = list(self.get_config_blocks().keys())
         total_supported_params = supported_converse_params + supported_tool_call_params + supported_config_params
         inference_params.pop("json_mode", None)  # used for handling json_schema
+        inference_params.pop("json_object_prefill", None)  # consumed in transform_request/_transform_response
 
         # Anthropic-only ``output_config`` (snake_case) — re-attached to
         # ``additionalModelRequestFields`` for Anthropic models below. The
@@ -1537,22 +1619,6 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock",
                 )
 
-        """
-        Bedrock Converse has no schema-less JSON mode, so
-        `response_format={"type": "json_object"}` has nothing to translate into.
-        Append a system instruction so the request is honoured instead of being
-        silently ignored.
-        """
-        if optional_params.pop("_json_object_without_schema", False):
-            if litellm.modify_params:
-                system_content_blocks.append(SystemContentBlock(text=JSON_OBJECT_SYSTEM_INSTRUCTION))
-            else:
-                litellm.verbose_logger.warning(
-                    "Bedrock has no equivalent for `response_format={'type': 'json_object'}` and is ignoring it. "
-                    "Pass a `json_schema` response_format, or set `litellm.modify_params = True` // "
-                    "`litellm_settings::modify_params: True` to append a JSON-only system instruction."
-                )
-
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
         # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
         #
@@ -1644,6 +1710,9 @@ class AmazonConverseConfig(BaseConfig):
 
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+
+        if optional_params.get("json_object_prefill"):
+            messages = self._add_json_object_prefill(messages)
         ## TRANSFORMATION ##
 
         _data: CommonRequestObject = self._transform_request_helper(
@@ -1697,6 +1766,9 @@ class AmazonConverseConfig(BaseConfig):
 
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+
+        if optional_params.get("json_object_prefill"):
+            messages = self._add_json_object_prefill(messages)
 
         _data: CommonRequestObject = self._transform_request_helper(
             model=model,
@@ -2193,6 +2265,10 @@ class AmazonConverseConfig(BaseConfig):
         if reasoningContentBlocks is not None:
             chat_completion_message["reasoning_content"] = self._transform_reasoning_content(reasoningContentBlocks)
             chat_completion_message["thinking_blocks"] = self._transform_thinking_blocks(reasoningContentBlocks)
+        if optional_params.get("json_object_prefill") and content_str is not None:
+            # The brace was sent as the start of the assistant turn, so the
+            # model's completion continues from it and omits it.
+            content_str = JSON_OBJECT_ASSISTANT_PREFILL + content_str
         chat_completion_message["content"] = content_str
         filtered_tools = self._filter_json_mode_tools(
             json_mode=json_mode,
