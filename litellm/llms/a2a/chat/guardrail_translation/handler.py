@@ -429,8 +429,18 @@ class A2AGuardrailHandler(BaseTranslation):
         path: Tuple[str, ...],
         texts_to_check: List[str],
         task_mappings: List[Tuple[Tuple[str, ...], int, str]],
+        depth: int = 0,
+        max_depth: int = 10,
     ) -> None:
-        """Extract text from message parts, and serialized data from data parts."""
+        """
+        Extract text from message parts, serialized data from data parts, and
+        recurse into any part that itself carries a nested "parts" list.
+
+        Mirrors `extract_text_from_a2a_message`'s handling (including the
+        recursion depth guard) so the two stay in sync.
+        """
+        if depth >= max_depth:
+            return
         for part_idx, part in enumerate(parts):
             kind = part.get("kind")
             if kind == "text":
@@ -439,10 +449,19 @@ class A2AGuardrailHandler(BaseTranslation):
                     texts_to_check.append(text)
                     task_mappings.append((path, part_idx, "text"))
             elif kind == "data":
-                data = part.get("data")
-                if data is not None:
-                    texts_to_check.append(serialize_a2a_data_part(data))
+                part_data = part.get("data")
+                if part_data is not None:
+                    texts_to_check.append(serialize_a2a_data_part(part_data))
                     task_mappings.append((path, part_idx, "data"))
+            elif "parts" in part:
+                self._extract_texts_from_parts(
+                    parts=part["parts"],
+                    path=path + (str(part_idx), "parts"),
+                    texts_to_check=texts_to_check,
+                    task_mappings=task_mappings,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                )
 
     def _apply_text_to_path(
         self,
