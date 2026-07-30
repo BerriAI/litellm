@@ -11368,6 +11368,49 @@ def _make_regenerate_existing_key():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_type",
+    [
+        LiteLLMKeyType.DEFAULT,
+        LiteLLMKeyType.LLM_API,
+        LiteLLMKeyType.READ_ONLY,
+    ],
+)
+async def test_execute_virtual_key_regeneration_rejects_preset_over_custom_routes(
+    key_type,
+):
+    """A non-admin regeneration preset must preserve a custom route allowlist."""
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    existing_key = _make_regenerate_existing_key()
+    existing_key.allowed_routes = ["/custom/admin-defined-route"]
+    mock_prisma_client = _make_regenerate_mock_prisma()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=existing_key,
+            hashed_api_key="abc123",
+            key="abc123",
+            data=RegenerateKeyRequest(key_type=key_type),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                user_id="user-1",
+            ),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "allowed_routes" in str(exc_info.value.detail)
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_execute_virtual_key_regeneration_rejects_over_limit_duration():
     """Regenerate must reject durations exceeding upperbound_key_generate_params.duration."""
     from litellm.proxy._types import RegenerateKeyRequest

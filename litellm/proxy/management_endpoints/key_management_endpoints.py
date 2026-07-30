@@ -577,6 +577,37 @@ def _check_allowed_routes_caller_permission(
     )
 
 
+def _check_key_type_transition_against_existing_routes(
+    data: Optional[BaseModel],
+    existing_key_row: Any,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Keep non-admin key-type presets from replacing custom route restrictions."""
+    if (
+        data is None
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        or "key_type" not in data.model_fields_set
+        or data.key_type
+        not in {
+            LiteLLMKeyType.DEFAULT,
+            LiteLLMKeyType.LLM_API,
+            LiteLLMKeyType.READ_ONLY,
+        }
+    ):
+        return
+    existing_allowed_routes = getattr(existing_key_row, "allowed_routes", None) or []
+    if existing_allowed_routes not in (
+        [],
+        ["llm_api_routes"],
+        ["info_routes"],
+    ):
+        _check_allowed_routes_caller_permission(
+            allowed_routes=existing_allowed_routes,
+            user_api_key_dict=user_api_key_dict,
+            allowed_routes_was_provided=True,
+        )
+
+
 def _check_permissions_caller_permission(
     data: GenerateRequestBase,
     user_api_key_dict: UserAPIKeyAuth,
@@ -4570,6 +4601,11 @@ async def _execute_virtual_key_regeneration(
 
     # Mirror the /key/update ownership rebind guard. See helper docstring.
     _validate_caller_can_change_key_ownership(
+        data=data,
+        existing_key_row=key_in_db,
+        user_api_key_dict=user_api_key_dict,
+    )
+    _check_key_type_transition_against_existing_routes(
         data=data,
         existing_key_row=key_in_db,
         user_api_key_dict=user_api_key_dict,
