@@ -105,6 +105,44 @@ async def test_process_output_response_data_only_still_scanned():
 
 
 @pytest.mark.asyncio
+async def test_process_output_response_scans_nested_parts():
+    """A part that itself carries a nested "parts" list (grouping sub-parts)
+    must be recursed into, matching extract_text_from_a2a_message's own
+    recursion, instead of being silently skipped as neither text nor data."""
+    handler = A2AGuardrailHandler()
+    guardrail = MockGuardrail()
+
+    response = {
+        "result": {
+            "kind": "message",
+            "parts": [
+                {
+                    "kind": "group",
+                    "parts": [
+                        {"kind": "text", "text": "hello"},
+                        {"kind": "data", "data": {"secret": "leak-me"}},
+                    ],
+                },
+            ],
+        }
+    }
+
+    result = await handler.process_output_response(
+        response=response,
+        guardrail_to_apply=guardrail,
+    )
+
+    assert guardrail.last_inputs is not None
+    scanned_texts = guardrail.last_inputs["texts"]
+    assert "hello" in scanned_texts
+    assert any("leak-me" in t for t in scanned_texts)
+
+    nested_parts = result["result"]["parts"][0]["parts"]
+    assert nested_parts[0]["text"] == "HELLO"
+    assert "LEAK-ME" in nested_parts[1]["data"]
+
+
+@pytest.mark.asyncio
 async def test_process_input_messages_scans_data_parts():
     """The same bypass existed on the request/input side of the handler."""
     handler = A2AGuardrailHandler()
