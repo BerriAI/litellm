@@ -105,6 +105,9 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
+from litellm.litellm_core_utils.api_route_to_call_types import (
+    route_streams_openai_format_chunks,
+)
 from litellm.litellm_core_utils.core_helpers import coerce_token_limit
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -2669,6 +2672,8 @@ class ProxyLogging:
 
         current_response = response
 
+        streams_openai_chunks = route_streams_openai_format_chunks(user_api_key_dict.request_route)
+
         for resolved_callback, kind in caps.iterator_overrides:
             if isinstance(resolved_callback, CustomGuardrail):
                 if (
@@ -2676,7 +2681,13 @@ class ProxyLogging:
                     is not True
                 ):
                     continue
-            if kind == "override":
+            effective_kind = ProxyLogging._resolve_iterator_override_kind(
+                resolved_callback=resolved_callback,
+                kind=kind,
+                streams_openai_chunks=streams_openai_chunks,
+                request_route=user_api_key_dict.request_route,
+            )
+            if effective_kind == "override":
                 current_response = self._wrap_streaming_iterator_with_enrichment(
                     resolved_callback,
                     resolved_callback.async_post_call_streaming_iterator_hook(
@@ -2686,7 +2697,7 @@ class ProxyLogging:
                     ),
                 )
             else:
-                # kind == "apply_guardrail": route through unified_guardrail
+                # effective_kind == "apply_guardrail": route through unified_guardrail
                 request_data["guardrail_to_apply"] = resolved_callback
                 current_response = self._wrap_streaming_iterator_with_enrichment(
                     resolved_callback,
@@ -2694,6 +2705,10 @@ class ProxyLogging:
                         user_api_key_dict=user_api_key_dict,
                         request_data=request_data,
                         response=current_response,
+                        # A guardrail that ships its own iterator hook scans
+                        # every chunk there, so keep that cadence when we
+                        # reroute it: sampling would forward unscanned content.
+                        streaming_flag_defaults=({"streaming_sampling_rate": 1} if effective_kind != kind else None),
                     ),
                 )
 
@@ -2706,6 +2721,35 @@ class ProxyLogging:
         # its end-of-stream block (inside current_response), so by the time
         # we reach this point the metadata is fully populated.
         ProxyLogging._fire_deferred_stream_logging(request_data)
+
+    @staticmethod
+    def _resolve_iterator_override_kind(
+        resolved_callback: Any,
+        kind: str,
+        streams_openai_chunks: bool,
+        request_route: Optional[str],
+    ) -> str:
+        """
+        Pick how a callback participates in the streaming post-call chain.
+
+        A callback's own ``async_post_call_streaming_iterator_hook`` is written
+        against OpenAI-format ``ModelResponseStream`` chunks, so it cannot scan
+        the provider-native payloads relayed by routes like ``/v1/messages``
+        (raw Anthropic SSE bytes). On those routes prefer the translation-aware
+        ``apply_guardrail`` path when the callback provides one; otherwise warn,
+        since the guardrail will not see the response.
+        """
+        if kind != "override" or streams_openai_chunks:
+            return kind
+        if "apply_guardrail" in type(resolved_callback).__dict__:
+            return "apply_guardrail"
+        verbose_proxy_logger.warning(
+            "Guardrail %s only implements async_post_call_streaming_iterator_hook, which expects "
+            "OpenAI-format chunks; it cannot scan the streaming response on %s",
+            getattr(resolved_callback, "guardrail_name", None) or type(resolved_callback).__name__,
+            request_route,
+        )
+        return kind
 
     @staticmethod
     def _fire_deferred_stream_logging(request_data: dict) -> None:

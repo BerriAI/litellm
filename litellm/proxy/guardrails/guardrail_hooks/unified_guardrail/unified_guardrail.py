@@ -8,7 +8,7 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 
 import copy
 import json
-from typing import TYPE_CHECKING, Any, AsyncGenerator, List, Union
+from typing import TYPE_CHECKING, Any, AsyncGenerator, List, Mapping, Optional, Union
 
 from fastapi import HTTPException
 
@@ -804,6 +804,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_data: dict,
+        streaming_flag_defaults: Optional[Mapping[str, Any]] = None,
     ) -> AsyncGenerator[Any, None]:
         """
         Passes the entire stream to the guardrail
@@ -827,10 +828,10 @@ class UnifiedLLMGuardrails(CustomLogger):
         guardrail_to_apply: CustomGuardrail = request_data.pop("guardrail_to_apply", None)
 
         # Get streaming configuration. Resolution order (later wins): default
-        # < guardrail attribute < guardrail_config dict < this callback's
-        # optional_params.
+        # < caller-supplied default < guardrail attribute < guardrail_config
+        # dict < this callback's optional_params.
         def _streaming_flag(name: str, default: Any) -> Any:
-            value = default
+            value = default if streaming_flag_defaults is None else streaming_flag_defaults.get(name, default)
             if guardrail_to_apply is not None:
                 value = getattr(guardrail_to_apply, name, value)
                 config = getattr(guardrail_to_apply, "guardrail_config", {})

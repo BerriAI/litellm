@@ -430,3 +430,145 @@ async def test_post_call_response_headers_hook_swallows_callback_error(proxy_log
         data={}, user_api_key_dict=make_user_api_key_auth(), response=response
     )
     assert out == {}
+
+# ---------------------------------------------------------------------------
+# non-OpenAI streaming surfaces (/v1/messages) -- issue #35257
+# ---------------------------------------------------------------------------
+
+
+def _anthropic_sse(event_type: str, data: Dict[str, Any]) -> bytes:
+    import json
+
+    return f"event: {event_type}\ndata: {json.dumps(data)}\n\n".encode()
+
+
+async def _anthropic_stream(text: str):
+    yield _anthropic_sse(
+        "message_start",
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [],
+                "stop_reason": None,
+                "usage": {"input_tokens": 1, "output_tokens": 0},
+            },
+        },
+    )
+    yield _anthropic_sse(
+        "content_block_start",
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+    )
+    yield _anthropic_sse(
+        "content_block_delta",
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+    )
+    yield _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+    yield _anthropic_sse(
+        "message_delta",
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}},
+    )
+    yield _anthropic_sse("message_stop", {"type": "message_stop"})
+
+
+def _content_filter_guardrail():
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+
+    guardrail = ContentFilterGuardrail(
+        guardrail_name="output-filter",
+        event_hook="post_call",
+        blocked_words=[{"keyword": "zebra", "action": "BLOCK"}],
+        default_on=True,
+    )
+    return guardrail
+
+
+async def _run_v1_messages_stream(proxy_logging, make_user_api_key_auth, text: str):
+    request_data: Dict[str, Any] = {
+        "metadata": {"guardrails": ["output-filter"]},
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    collected: List[Any] = []
+    blocked = False
+    try:
+        async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=_anthropic_stream(text),
+            user_api_key_dict=make_user_api_key_auth(request_route="/v1/messages"),
+            request_data=request_data,
+        ):
+            collected.append(chunk)
+    except HTTPException:
+        blocked = True
+    raw = b"".join(c if isinstance(c, bytes) else str(c).encode() for c in collected).decode()
+    statuses = [
+        entry.get("guardrail_status")
+        for entry in request_data.get("litellm_metadata", {}).get("standard_logging_guardrail_information", [])
+    ]
+    return raw, blocked, statuses
+
+
+@pytest.mark.asyncio
+async def test_v1_messages_streaming_guardrail_blocks_instead_of_leaking(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """A guardrail with its own ModelResponseStream-shaped iterator hook must not
+    be handed raw Anthropic SSE bytes: on /v1/messages the translation-aware
+    apply_guardrail path runs, so blocked content is withheld and the violation
+    is recorded rather than silently logged as a successful scan."""
+    monkeypatch.setattr(litellm, "callbacks", [_content_filter_guardrail()])
+
+    raw, blocked, statuses = await _run_v1_messages_stream(proxy_logging, make_user_api_key_auth, "the zebra runs")
+
+    assert "zebra" not in raw
+    assert blocked is True
+    assert "guardrail_intervened" in statuses
+
+
+@pytest.mark.asyncio
+async def test_v1_messages_streaming_guardrail_passes_clean_content(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [_content_filter_guardrail()])
+
+    raw, blocked, statuses = await _run_v1_messages_stream(proxy_logging, make_user_api_key_auth, "the horse runs")
+
+    assert "the horse runs" in raw
+    assert blocked is False
+    assert "guardrail_intervened" not in statuses
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_streaming_still_uses_callback_iterator_hook(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """The reroute is scoped to routes that stream provider-native chunks; the
+    OpenAI chat path must keep using the callback's own iterator hook."""
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    class _Guardrail(CustomGuardrail):
+        async def async_post_call_streaming_iterator_hook(self, **kwargs):  # type: ignore[override]
+            async for chunk in kwargs["response"]:
+                yield f"{chunk}*"
+
+        async def apply_guardrail(self, **kwargs):  # type: ignore[override]
+            raise AssertionError("apply_guardrail should not run on /chat/completions")
+
+    monkeypatch.setattr(litellm, "callbacks", [_Guardrail(guardrail_name="g", event_hook="post_call", default_on=True)])
+
+    async def gen():
+        for ch in ("a", "b"):
+            yield ch
+
+    out: List[str] = []
+    async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+        response=gen(),
+        user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+        request_data={"metadata": {"guardrails": ["g"]}},
+    ):
+        out.append(chunk)
+    assert out == ["a*", "b*"]
