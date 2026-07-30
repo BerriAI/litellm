@@ -1,6 +1,7 @@
 """Tests for the aggregate gateway DCR flow (register, authorize, complete, token)."""
 
 import hashlib
+import html
 import json
 from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
@@ -16,7 +17,10 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     GATEWAY_AUTH_CODE_PREFIX,
     GATEWAY_AUTH_CODE_TTL_SECONDS,
     GATEWAY_DCR_CLIENT_ID_PREFIX,
+    MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS,
+    _AUTH_CODE_DEBUG_KEY,
     _GatewayAuthCode,
+    _open_sealed,
     _seal,
     aggregate_authorize,
     aggregate_token,
@@ -588,3 +592,206 @@ async def test_single_use_guard_fails_closed_when_redis_errors():
 
     guard = _SingleUseGuard(cache)
     assert await guard.claim("jti-fault", 60) is False  # fail closed, not a fallback count of 1
+
+
+LOOPBACK_REDIRECT_URI = "http://localhost:3118/callback"
+
+
+async def _complete(redirect_uri: str, delivery, cookies=None, handle=None, session_user_id="u1"):
+    client_id = (await _register([redirect_uri]))["client_id"]
+    if cookies is None:
+        handle, cookies = _flow_cookie_from(_authorize(client_id, session_user_id="u1", redirect_uri=redirect_uri))
+    response = await complete_connect_flow(
+        request=_request("/authorize/complete", cookies=cookies, method="POST"),
+        flow_handle=handle,
+        session_user_id=session_user_id,
+        cache=DualCache(),
+        delivery=delivery,
+    )
+    return client_id, response
+
+
+def _callback_url_from_page(response) -> str:
+    import html as html_lib
+    import re
+
+    match = re.search(r'value="([^"]+)"', response.body.decode())
+    assert match is not None
+    return html_lib.unescape(match.group(1))
+
+
+@pytest.mark.asyncio
+async def test_manual_delivery_renders_pasteable_callback_url_for_loopback_client():
+    """The LIT-4863 headless path: a loopback client on another machine gets the callback
+    URL on a page instead of a dead 303, and the code on that page is a full-fidelity
+    authorization code (PKCE-bound, single-use, redeemable at /token)."""
+    client_id, response = await _complete(LOOPBACK_REDIRECT_URI, delivery="manual")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["cache-control"] == "no-store"
+    assert f"{CONNECT_FLOW_COOKIE_PREFIX}" in response.headers["set-cookie"]
+
+    callback_url = _callback_url_from_page(response)
+    parsed = urlparse(callback_url)
+    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == LOOPBACK_REDIRECT_URI
+    params = parse_qs(parsed.query)
+    assert params["state"] == ["client-state-123"]
+    code = params["code"][0]
+    assert code.startswith(GATEWAY_AUTH_CODE_PREFIX)
+
+    cache = DualCache()
+    token_response = await aggregate_token(
+        request=_request("/token", method="POST"),
+        grant_type="authorization_code",
+        code=code,
+        redirect_uri=LOOPBACK_REDIRECT_URI,
+        client_id=client_id,
+        code_verifier=CODE_VERIFIER,
+        refresh_token=None,
+        master_key=MASTER_KEY,
+        reload_user=_reload_user_active,
+        cache=cache,
+    )
+    assert token_response.status_code == 200
+
+    replay = await aggregate_token(
+        request=_request("/token", method="POST"),
+        grant_type="authorization_code",
+        code=code,
+        redirect_uri=LOOPBACK_REDIRECT_URI,
+        client_id=client_id,
+        code_verifier=CODE_VERIFIER,
+        refresh_token=None,
+        master_key=MASTER_KEY,
+        reload_user=_reload_user_active,
+        cache=cache,
+    )
+    assert json.loads(replay.body)["error"] == "invalid_grant"
+
+
+@pytest.mark.asyncio
+async def test_manual_delivery_code_gets_the_longer_ttl_and_redirect_code_does_not():
+    _, manual = await _complete(LOOPBACK_REDIRECT_URI, delivery="manual")
+    manual_code = parse_qs(urlparse(_callback_url_from_page(manual)).query)["code"][0]
+    opened_manual = _open_sealed(manual_code, GATEWAY_AUTH_CODE_PREFIX, _GatewayAuthCode, _AUTH_CODE_DEBUG_KEY)
+    assert opened_manual is not None
+    assert opened_manual.exp - opened_manual.iat == MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS
+
+    _, redirected = await _complete(LOOPBACK_REDIRECT_URI, delivery=None)
+    redirect_code = parse_qs(urlparse(redirected.headers["location"]).query)["code"][0]
+    opened_redirect = _open_sealed(redirect_code, GATEWAY_AUTH_CODE_PREFIX, _GatewayAuthCode, _AUTH_CODE_DEBUG_KEY)
+    assert opened_redirect is not None
+    assert opened_redirect.exp - opened_redirect.iat == GATEWAY_AUTH_CODE_TTL_SECONDS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivery", [None, "redirect"])
+async def test_loopback_client_still_redirects_when_manual_not_requested(delivery):
+    _, response = await _complete(LOOPBACK_REDIRECT_URI, delivery=delivery)
+    assert response.status_code == 303
+    assert response.headers["location"].startswith(LOOPBACK_REDIRECT_URI)
+
+
+@pytest.mark.asyncio
+async def test_manual_delivery_is_ignored_for_routable_redirect_uri():
+    """A routable redirect URI works from any browser by construction, so manual is a
+    no-op there and the flow keeps its normal shape."""
+    _, response = await _complete(REDIRECT_URI, delivery="manual")
+    assert response.status_code == 303
+    assert response.headers["location"].startswith(REDIRECT_URI)
+
+
+@pytest.mark.asyncio
+async def test_unknown_delivery_value_is_rejected_before_the_flow_is_consumed():
+    """A typo'd delivery must not burn the single-use flow: the user fixes the form and
+    finishes normally."""
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    handle, cookies = _flow_cookie_from(_authorize(client_id, session_user_id="u1", redirect_uri=LOOPBACK_REDIRECT_URI))
+
+    rejected = await complete_connect_flow(
+        request=_request("/authorize/complete", cookies=cookies, method="POST"),
+        flow_handle=handle,
+        session_user_id="u1",
+        cache=DualCache(),
+        delivery="carrier-pigeon",
+    )
+    assert rejected.status_code == 400
+    assert json.loads(rejected.body)["error"] == "invalid_request"
+
+    retried = await complete_connect_flow(
+        request=_request("/authorize/complete", cookies=cookies, method="POST"),
+        flow_handle=handle,
+        session_user_id="u1",
+        cache=DualCache(),
+        delivery="manual",
+    )
+    assert retried.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_manual_delivery_page_escapes_client_influenced_values():
+    """redirect_uri (and everything else on the page) is client-registered input; a quote
+    or tag in its path must render inert."""
+    hostile_uri = 'http://127.0.0.1:9/cb"><script>alert(1)</script>'
+    _, response = await _complete(hostile_uri, delivery="manual")
+    assert response.status_code == 200
+    body = response.body.decode()
+    assert "<script>alert(1)</script>" not in body
+    assert "&lt;script&gt;" in body
+
+
+class _TtlRecordingCache(DualCache):
+    """Captures the TTL of every single-use claim recorded through the in-memory arm."""
+
+    def __init__(self):
+        super().__init__()
+        self.claim_ttls: dict = {}
+
+    async def async_increment_cache(self, key, value, ttl=None, **kwargs):
+        self.claim_ttls[key] = ttl
+        return await super().async_increment_cache(key, value, ttl=ttl, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_used_code_marker_outlives_the_manually_delivered_code():
+    """Veria review finding on the LIT-4863 change: a manual code lives 300s, but the
+    used-code marker was retained for the 120s redirect lifetime plus buffer, so a client
+    could redeem, wait out the marker, and redeem the still-valid code again. The marker's
+    TTL must cover the code's own remaining lifetime plus the claim buffer."""
+    client_id, response = await _complete(LOOPBACK_REDIRECT_URI, delivery="manual")
+    code = parse_qs(urlparse(_callback_url_from_page(response)).query)["code"][0]
+
+    cache = _TtlRecordingCache()
+    token_response = await aggregate_token(
+        request=_request("/token", method="POST"),
+        grant_type="authorization_code",
+        code=code,
+        redirect_uri=LOOPBACK_REDIRECT_URI,
+        client_id=client_id,
+        code_verifier=CODE_VERIFIER,
+        refresh_token=None,
+        master_key=MASTER_KEY,
+        reload_user=_reload_user_active,
+        cache=cache,
+    )
+    assert token_response.status_code == 200
+
+    marker_ttls = [ttl for key, ttl in cache.claim_ttls.items() if key.startswith("mcp_gateway_dcr_code_used:")]
+    assert len(marker_ttls) == 1
+    assert marker_ttls[0] >= MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redirect_uri", [LOOPBACK_REDIRECT_URI, "http://127.0.0.1:9/cb$(whoami)&calc& rem x"])
+async def test_manual_delivery_page_renders_the_url_as_data_never_as_a_shell_command(redirect_uri):
+    """Two review rounds proved no single command string is safe across POSIX shells,
+    cmd.exe, and PowerShell (single quotes are not quoting in cmd.exe; percent expands
+    there even inside double quotes), so the page must render the callback URL as data
+    only and never as a ready-to-paste command."""
+    _, response = await _complete(redirect_uri, delivery="manual")
+    assert response.status_code == 200
+    body = response.body.decode()
+    assert "<code>" not in body
+    assert 'curl "' not in body
+    assert "curl '" not in body
+    assert 'value="' in body
