@@ -156,11 +156,14 @@ def cached_messages_end_on_supported_turn(cached_messages: Sequence[AllMessageVa
     """
     The cachedContents API rejects contents ending on a model turn, which is how it
     classifies both assistant messages and tool results, with HTTP 400
-    "Requests ending with a model turn are not supported".
+    "Requests ending with a model turn are not supported". System messages are
+    extracted into system_instruction before contents are built, so the terminal
+    turn is the last non-system message.
     """
-    if not cached_messages:
-        return False
-    return cached_messages[-1].get("role") not in ("assistant", "tool", "function")
+    non_system_messages = tuple(message for message in cached_messages if message.get("role") != "system")
+    if not non_system_messages:
+        return bool(cached_messages)
+    return non_system_messages[-1].get("role") not in ("assistant", "tool", "function")
 
 
 def transform_openai_messages_to_gemini_context_caching(

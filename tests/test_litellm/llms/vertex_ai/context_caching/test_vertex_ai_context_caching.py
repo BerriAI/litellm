@@ -1458,18 +1458,24 @@ class TestContextCachingEndpoints:
             "type": "function",
             "function": {"name": "get_weather", "arguments": '{"location": "Boston"}'},
         }
-        cached_tail = (
-            [
+        cached_tail = {
+            "assistant": [],
+            "tool": [
                 {
                     "role": "tool",
                     "tool_call_id": "call_abc123",
                     "content": "72F and sunny",
                     "cache_control": {"type": "ephemeral"},
                 }
-            ]
-            if final_cached_role == "tool"
-            else []
-        )
+            ],
+            "system": [
+                {
+                    "role": "system",
+                    "content": "Tool results are authoritative.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }[final_cached_role]
         return [
             {
                 "role": "user",
@@ -1491,7 +1497,7 @@ class TestContextCachingEndpoints:
             {"role": "user", "content": "What is the weather in Boston?"},
         ]
 
-    @pytest.mark.parametrize("final_cached_role", ["assistant", "tool"])
+    @pytest.mark.parametrize("final_cached_role", ["assistant", "tool", "system"])
     def test_check_and_create_cache_skips_when_cached_block_ends_on_model_turn(
         self, final_cached_role
     ):
@@ -1525,7 +1531,7 @@ class TestContextCachingEndpoints:
         self.mock_client.get.assert_not_called()
         self.mock_client.post.assert_not_called()
 
-    @pytest.mark.parametrize("final_cached_role", ["assistant", "tool"])
+    @pytest.mark.parametrize("final_cached_role", ["assistant", "tool", "system"])
     @pytest.mark.asyncio
     async def test_async_check_and_create_cache_skips_when_cached_block_ends_on_model_turn(
         self, final_cached_role
@@ -1571,6 +1577,22 @@ def test_cached_messages_end_on_supported_turn():
     )
     assert cached_messages_end_on_supported_turn([{"role": "system", "content": "be brief"}]) is True
     assert cached_messages_end_on_supported_turn([{"role": "assistant", "content": "hi"}]) is False
+    assert (
+        cached_messages_end_on_supported_turn(
+            [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi"},
+                {"role": "system", "content": "be brief"},
+            ]
+        )
+        is False
+    )
+    assert (
+        cached_messages_end_on_supported_turn(
+            [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hello"}]
+        )
+        is True
+    )
     assert (
         cached_messages_end_on_supported_turn([{"role": "tool", "tool_call_id": "x", "content": "y"}])
         is False

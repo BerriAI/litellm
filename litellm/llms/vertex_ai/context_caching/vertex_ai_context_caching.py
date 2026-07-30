@@ -311,8 +311,9 @@ class ContextCachingEndpoints(VertexBase):
 
         if not cached_messages_end_on_supported_turn(cached_messages):
             verbose_logger.debug(
-                "Vertex AI context caching: cached message block ends on an assistant or "
-                "tool turn, which the cachedContents API rejects. Skipping context caching."
+                "Vertex AI context caching: cached message block ends on a model turn once "
+                "system messages are extracted, which the cachedContents API rejects. "
+                "Skipping context caching."
             )
             return messages, optional_params, None
 
@@ -469,8 +470,9 @@ class ContextCachingEndpoints(VertexBase):
 
         if not cached_messages_end_on_supported_turn(cached_messages):
             verbose_logger.debug(
-                "Vertex AI context caching: cached message block ends on an assistant or "
-                "tool turn, which the cachedContents API rejects. Skipping context caching."
+                "Vertex AI context caching: cached message block ends on a model turn once "
+                "system messages are extracted, which the cachedContents API rejects. "
+                "Skipping context caching."
             )
             return messages, optional_params, None
 
