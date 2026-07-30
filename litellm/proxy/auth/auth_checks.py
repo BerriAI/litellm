@@ -274,6 +274,22 @@ def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
     return False
 
 
+def model_has_no_cost_mapping(model: Optional[str], llm_router: Optional[Router]) -> bool:
+    if not model or llm_router is None:
+        return False
+
+    model_group_info = llm_router.get_model_group_info(model_group=model)
+    if model_group_info is None:
+        return False
+
+    input_cost = model_group_info.input_cost_per_token or 0
+    output_cost = model_group_info.output_cost_per_token or 0
+    if input_cost > 0 or output_cost > 0:
+        return False
+
+    return not _is_cost_explicitly_configured(model, llm_router)
+
+
 async def _run_project_checks(
     project_object: Optional[LiteLLM_ProjectTableCachedObj],
     _model: Optional[Union[str, List[str]]],
@@ -533,6 +549,23 @@ async def common_checks(
 
     if route in MODEL_DISCOVERY_ROUTES:
         skip_budget_checks = True
+
+    if (
+        litellm.block_requests_for_models_without_pricing
+        and isinstance(_model, str)
+        and RouteChecks.is_llm_api_route(route=route)
+        and model_has_no_cost_mapping(model=_model, llm_router=llm_router)
+    ):
+        raise ProxyException(
+            message=(
+                f"Model '{_model}' has no pricing in the cost map, so its spend would be tracked as $0. "
+                "Requests for unpriced models are blocked because 'block_requests_for_models_without_pricing' "
+                "is enabled. Add pricing for this model (input_cost_per_token/output_cost_per_token) to allow it."
+            ),
+            type=ProxyErrorTypes.model_cost_map_missing,
+            param="model",
+            code=status.HTTP_403_FORBIDDEN,
+        )
 
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
