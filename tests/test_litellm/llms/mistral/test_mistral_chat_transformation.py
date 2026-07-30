@@ -906,7 +906,7 @@ class TestMistralMultiCompletionResponse:
                         "index": 0,
                         "finish_reason": "tool_calls",
                         "messages": [
-                            {"role": "assistant", "content": "", "tool_calls": [answered, unanswered]},
+                            {"role": "assistant", "content": None, "tool_calls": [answered, unanswered]},
                             {"role": "tool", "tool_call_id": "answered-1", "content": '{"url": "https://x"}'},
                         ],
                     }
