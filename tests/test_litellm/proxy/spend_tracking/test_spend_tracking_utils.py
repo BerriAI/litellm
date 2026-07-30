@@ -2902,3 +2902,53 @@ async def test_compression_savings_survive_to_spend_log_payload_metadata(monkeyp
         "tokens_saved": 7000,
         "source": "compression_interception",
     }
+
+
+def test_add_missing_spend_metadata_preserves_model_group():
+    """Regression test for #34905.
+
+    When both litellm_metadata and metadata are present (e.g. a unified
+    pre_call guardrail creates litellm_metadata), the Router-set model_group
+    in metadata must be copied into litellm_metadata so SpendLogsPayload
+    does not lose it.
+    """
+    from litellm.litellm_core_utils.core_helpers import (
+        add_missing_spend_metadata_to_litellm_metadata,
+        get_litellm_metadata_from_kwargs,
+    )
+
+    litellm_metadata = {"user_api_key_user_id": "test-user"}
+    metadata = {
+        "model_group": "router-model-group",
+        "model_id": "deployment-123",
+        "deployment": "openai/gpt-4o",
+        "user_api_key": "sk-test",
+    }
+
+    result = add_missing_spend_metadata_to_litellm_metadata(
+        litellm_metadata.copy(), metadata
+    )
+
+    assert result["model_group"] == "router-model-group"
+    assert result["model_id"] == "deployment-123"
+    assert result["deployment"] == "openai/gpt-4o"
+    assert result["user_api_key"] == "sk-test"
+    assert result["user_api_key_user_id"] == "test-user"
+
+
+def test_get_litellm_metadata_from_kwargs_preserves_model_group():
+    """End-to-end: get_litellm_metadata_from_kwargs must surface model_group
+    when both metadata dicts are present (#34905)."""
+    from litellm.litellm_core_utils.core_helpers import (
+        get_litellm_metadata_from_kwargs,
+    )
+
+    kwargs = {
+        "litellm_params": {
+            "metadata": {"model_group": "router-model-group"},
+            "litellm_metadata": {"user_api_key_user_id": "test-user"},
+        }
+    }
+
+    metadata = get_litellm_metadata_from_kwargs(kwargs)
+    assert metadata.get("model_group") == "router-model-group"

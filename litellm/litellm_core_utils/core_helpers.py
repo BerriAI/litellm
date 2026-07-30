@@ -170,10 +170,17 @@ def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metad
 
     PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
     and user_api_key values are in 'metadata'.
+
+    Also copies Router-set keys (model_group, model_id, deployment) that the
+    spend log needs for aggregation but that live in `metadata` rather than
+    `litellm_metadata` (#34905).
     """
     potential_spend_tracking_metadata_substring = "user_api_key"
+    router_spend_keys = ("model_group", "model_id", "deployment")
     for key, value in metadata.items():
         if potential_spend_tracking_metadata_substring in key:
+            litellm_metadata[key] = value
+        elif key in router_spend_keys and key not in litellm_metadata:
             litellm_metadata[key] = value
     return litellm_metadata
 
