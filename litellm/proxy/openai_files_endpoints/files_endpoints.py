@@ -1320,7 +1320,7 @@ async def list_files(
             version=version,
             proxy_logging_obj=proxy_logging_obj,
             proxy_config=proxy_config,
-            route_type=CallTypes.alist_fine_tuning_jobs.value,
+            route_type=CallTypes.afile_list.value,
         )
 
         response: Optional[Any] = None
