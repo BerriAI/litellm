@@ -15,6 +15,8 @@ from rich.table import Table
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 
+from .private_json import write_private_json
+
 
 # Token storage utilities
 def get_token_file_path() -> str:
@@ -27,11 +29,7 @@ def get_token_file_path() -> str:
 
 def save_token(token_data: Dict[str, Any]) -> None:
     """Save token data to file"""
-    token_file = get_token_file_path()
-    with open(token_file, "w") as f:
-        json.dump(token_data, f, indent=2)
-    # Set file permissions to be readable only by owner
-    os.chmod(token_file, 0o600)
+    write_private_json(get_token_file_path(), token_data)
 
 
 def load_token() -> Optional[Dict[str, Any]]:
