@@ -3981,15 +3981,14 @@ def test_failure_handler_zeroes_spend_without_recovered_usage(logging_obj):
     assert payload["total_tokens"] == 0
 
 
-def test_admin_owned_destination_uses_otel_v2_without_global_flag(monkeypatch):
-    # An admin-owned logging destination (a "logging" credential, created from the
-    # UI) must make the backend resolve to the OTEL v2 logger even when
-    # LITELLM_OTEL_V2 is off, so the per-destination credentials drive the export.
-    # Otherwise activation falls back to the legacy global logger, which ignores
-    # the destination's credentials and exports with absent global env creds.
+def test_admin_owned_destination_does_not_activate_v2_without_flag(monkeypatch):
+    # LITELLM_OTEL_V2 is the sole activation gate: registering an admin-owned logging
+    # destination must NOT flip a v1 deployment onto v2. With the flag off,
+    # _maybe_construct_otel_v2 returns None whether or not a destination exists, so an
+    # existing v1 deployment is unaffected by merely registering a credential (and the
+    # flag-off + destination "orphaned tree" configuration can't arise).
     from types import SimpleNamespace
 
-    from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
 
@@ -4001,7 +4000,7 @@ def test_admin_owned_destination_uses_otel_v2_without_global_flag(monkeypatch):
     monkeypatch.setattr(litellm, "credential_list", [])
     assert _maybe_construct_otel_v2("arize", []) is None
 
-    # A logging destination registered for the backend -> v2 owns it.
+    # A logging destination registered for the backend, flag still off -> still None.
     monkeypatch.setattr(
         litellm,
         "credential_list",
@@ -4015,10 +4014,9 @@ def test_admin_owned_destination_uses_otel_v2_without_global_flag(monkeypatch):
             )
         ],
     )
-    logger = _maybe_construct_otel_v2("arize", [])
+    result = _maybe_construct_otel_v2("arize", [])
     is_otel_v2_enabled.cache_clear()
-    assert isinstance(logger, OpenTelemetryV2)
-    assert logger.callback_name == "arize"
+    assert result is None
 
 
 def test_credential_mandatory_backend_global_misconfig_stays_loud(monkeypatch):
@@ -4065,36 +4063,33 @@ def test_credential_mandatory_backend_global_misconfig_stays_loud(monkeypatch):
     assert logger.callback_name == "weave_otel"
 
 
-def test_generic_admin_destination_builds_otel_v2_logger(monkeypatch):
-    # The Generic OTLP passthrough ('generic') must build an OpenTelemetryV2 logger when
-    # an admin-owned generic destination is registered (even with LITELLM_OTEL_V2 off),
-    # so the gen-AI span routes to the destination's otel_endpoint. Without a generic
-    # destination and without the global flag, it stays None (no generic logger).
+def test_generic_admin_destination_needs_flag_to_build_otel_v2_logger(monkeypatch):
+    # The Generic OTLP passthrough ('generic') builds an OpenTelemetryV2 logger only
+    # when LITELLM_OTEL_V2 is on. Registering an admin-owned generic destination with
+    # the flag off must NOT construct a v2 logger (the flag is the sole activation
+    # gate); with the flag on it does.
     from types import SimpleNamespace
 
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
 
+    generic_dest = [
+        SimpleNamespace(
+            credential_name="ui-generic",
+            credential_info={"credential_type": "logging", "description": "generic"},
+        )
+    ]
+
+    # Flag off + destination registered -> still None (no v2, no flip onto v2).
     monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
     is_otel_v2_enabled.cache_clear()
-
-    monkeypatch.setattr(litellm, "credential_list", [])
+    monkeypatch.setattr(litellm, "credential_list", generic_dest)
     assert _maybe_construct_otel_v2("generic", []) is None
 
-    monkeypatch.setattr(
-        litellm,
-        "credential_list",
-        [
-            SimpleNamespace(
-                credential_name="ui-generic",
-                credential_info={
-                    "credential_type": "logging",
-                    "description": "generic",
-                },
-            )
-        ],
-    )
+    # Flag on + destination registered -> builds the v2 generic logger.
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
     logger = _maybe_construct_otel_v2("generic", [])
     is_otel_v2_enabled.cache_clear()
     assert isinstance(logger, OpenTelemetryV2)

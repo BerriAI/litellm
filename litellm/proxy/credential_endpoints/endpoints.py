@@ -389,11 +389,12 @@ def _sync_in_memory_credential(
     """Mirror the DB write into ``litellm.credential_list``.
 
     Skips when the credential isn't resident in memory (e.g. created on
-    another scaled instance, restored from DB on the next reload). For a
-    logging destination the in-memory ``credential_info`` is merged
-    subfield-by-subfield via ``_merge_credential_info`` so a partial patch
-    can't clobber stored ``access`` subfields it didn't touch; a provider
-    credential keeps the base replace semantics.
+    another scaled instance, restored from DB on the next reload). The
+    in-memory ``credential_info`` is merged subfield-by-subfield via
+    ``_merge_credential_info`` for every credential, matching the pre-PR
+    in-memory semantics: a partial patch can't clobber stored keys it didn't
+    touch (``custom_llm_provider`` on a provider credential, ``access``
+    subfields on a logging destination).
     """
     existing_in_memory: CredentialItem | None = None
     for cred in litellm.credential_list:
@@ -408,10 +409,7 @@ def _sync_in_memory_credential(
         in_memory_values.update(patch.credential_values)
     in_memory_info = dict(existing_in_memory.credential_info or {})
     if patch.credential_info:
-        if is_logging_credential(existing_in_memory.credential_info):
-            _merge_credential_info(in_memory_info, patch.credential_info)
-        else:
-            in_memory_info = dict(patch.credential_info)
+        _merge_credential_info(in_memory_info, patch.credential_info)
     updated_in_memory = CredentialItem(
         credential_name=merged.credential_name,
         credential_values=in_memory_values,

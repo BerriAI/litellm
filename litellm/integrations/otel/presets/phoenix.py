@@ -1,7 +1,5 @@
 """Arize-Phoenix preset."""
 
-import os
-
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -25,33 +23,23 @@ class _PhoenixSettings(BaseSettings):
     )
 
 
-_PHOENIX_ENV_VARS = (
-    "PHOENIX_API_KEY",
-    "PHOENIX_COLLECTOR_ENDPOINT",
-    "PHOENIX_COLLECTOR_HTTP_ENDPOINT",
-)
-
-
 def phoenix_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
     allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
+    cfg = _V1Phoenix.get_arize_phoenix_config()
+    headers = cfg.otlp_auth_headers if hasattr(cfg, "otlp_auth_headers") else None
     project_name = _PhoenixSettings().project_name
     base = config_overrides or OpenTelemetryV2Config()
-    if any(os.environ.get(v) for v in _PHOENIX_ENV_VARS):
-        cfg = _V1Phoenix.get_arize_phoenix_config()
-        headers = cfg.otlp_auth_headers if hasattr(cfg, "otlp_auth_headers") else None
-        global_exporter = (
-            ExporterSpec(
-                kind=cfg.protocol if hasattr(cfg, "protocol") else "otlp_http",
-                endpoint=cfg.endpoint,
-                headers=headers,
-                owner=ExporterOwner.ARIZE_PHOENIX,
-            ),
-        )
-    else:
-        global_exporter = ()
+    global_exporter = (
+        ExporterSpec(
+            kind=cfg.protocol if hasattr(cfg, "protocol") else "otlp_http",
+            endpoint=cfg.endpoint,
+            headers=headers,
+            owner=ExporterOwner.ARIZE_PHOENIX,
+        ),
+    )
     return base.model_copy(
         update={
             "exporters": [*base.exporters, *global_exporter],

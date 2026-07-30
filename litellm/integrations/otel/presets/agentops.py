@@ -51,16 +51,12 @@ def agentops_preset(
     settings = _AgentOpsSettings()
     base = config_overrides or OpenTelemetryV2Config()
     global_exporter = (
-        (
-            ExporterSpec(
-                kind=_AGENTOPS_EXPORTER_KIND,
-                endpoint=_AGENTOPS_ENDPOINT,
-                options={"api_key": settings.api_key},
-                owner=ExporterOwner.AGENTOPS,
-            ),
-        )
-        if settings.api_key
-        else ()
+        ExporterSpec(
+            kind=_AGENTOPS_EXPORTER_KIND,
+            endpoint=_AGENTOPS_ENDPOINT,
+            options=({"api_key": settings.api_key} if settings.api_key else None),
+            owner=ExporterOwner.AGENTOPS,
+        ),
     )
     return base.model_copy(
         update={

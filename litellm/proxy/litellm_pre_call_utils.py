@@ -634,12 +634,19 @@ async def _resolve_logging_exporters(
     (endpoint, headers, resource attributes). Returns ([], []) when nothing is selected
     (default-deny).
     """
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.integrations.otel.presets.destinations import build_destination
     from litellm.proxy.management_endpoints.logging_exporter_access import (
         access_grants,
         identity_scope,
         parse_credential_info,
     )
+
+    # Admin-owned destinations are an OTEL v2 feature; the LITELLM_OTEL_V2 flag is the
+    # sole activation gate. With the flag off, registering a destination resolves to
+    # nothing (no backend is activated for the request) until the admin sets the flag.
+    if not is_otel_v2_enabled():
+        return (), ()
 
     if not any(
         (info := parse_credential_info(credential.credential_info)) is not None and info.credential_type == "logging"

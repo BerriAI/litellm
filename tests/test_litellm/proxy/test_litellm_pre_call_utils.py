@@ -4946,10 +4946,22 @@ def _seeded_logging_credentials():
             credential_info={"custom_llm_provider": "openai"},
         ),
     ]
+    # Admin-owned destinations are gated on LITELLM_OTEL_V2; the resolver no-ops when
+    # the flag is off, so exercise these tests with the feature actually enabled.
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    prev_flag = os.environ.get("LITELLM_OTEL_V2")
+    os.environ["LITELLM_OTEL_V2"] = "true"
+    is_otel_v2_enabled.cache_clear()
     try:
         yield
     finally:
         litellm.credential_list = original
+        if prev_flag is None:
+            os.environ.pop("LITELLM_OTEL_V2", None)
+        else:
+            os.environ["LITELLM_OTEL_V2"] = prev_flag
+        is_otel_v2_enabled.cache_clear()
 
 
 def _auth(token="hashed-key", org_id=None, team_id="team-x"):
@@ -5661,7 +5673,11 @@ async def test_resolve_logging_exporters_short_circuits_without_destinations(mon
 async def test_resolve_logging_exporters_runs_lookup_when_a_destination_exists(monkeypatch):
     """The short-circuit must not skip resolution when a destination exists: a global
     destination is still resolved for a team-scoped key, and the org lookup runs."""
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.proxy import litellm_pre_call_utils as pcu
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
 
     monkeypatch.setattr(
         litellm,
@@ -5687,3 +5703,39 @@ async def test_resolve_logging_exporters_runs_lookup_when_a_destination_exists(m
 
     assert lookups["org"] == 1  # a destination exists, so the resolver runs the lookup
     assert "generic" in backends  # global access grants the team key
+
+
+@pytest.mark.asyncio
+async def test_resolve_logging_exporters_noop_when_flag_off(monkeypatch):
+    """LITELLM_OTEL_V2 is the sole activation gate: with the flag off, the resolver
+    returns nothing even when a global destination is registered, so no backend is
+    activated for the request and an existing v1 deployment is unaffected."""
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.proxy import litellm_pre_call_utils as pcu
+
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="d-global",
+                credential_values={"otel_endpoint": "https://collector/v1/traces"},
+                credential_info={"credential_type": "logging", "description": "generic", "access": {"global": True}},
+            )
+        ],
+    )
+
+    async def _boom_org(user_api_key_dict):
+        raise AssertionError("resolver must short-circuit before any DB lookup when the flag is off")
+
+    monkeypatch.setattr(pcu, "_effective_org_id", _boom_org)
+
+    key = UserAPIKeyAuth(api_key="k", team_id="t1")
+    destinations, backends = await pcu._resolve_logging_exporters(key)
+    is_otel_v2_enabled.cache_clear()
+
+    assert destinations == ()
+    assert backends == ()

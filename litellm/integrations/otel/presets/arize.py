@@ -29,16 +29,12 @@ def arize_preset(
     headers = _arize_headers(arize_cfg)
     base = config_overrides or OpenTelemetryV2Config()
     global_exporter = (
-        (
-            ExporterSpec(
-                kind=arize_cfg.protocol or "otlp_grpc",
-                endpoint=arize_cfg.endpoint or "https://otlp.arize.com/v1",
-                headers=headers,
-                owner=ExporterOwner.ARIZE_AX,
-            ),
-        )
-        if headers
-        else ()
+        ExporterSpec(
+            kind=arize_cfg.protocol or "otlp_grpc",
+            endpoint=arize_cfg.endpoint or "https://otlp.arize.com/v1",
+            headers=headers,
+            owner=ExporterOwner.ARIZE_AX,
+        ),
     )
     return base.model_copy(
         update={

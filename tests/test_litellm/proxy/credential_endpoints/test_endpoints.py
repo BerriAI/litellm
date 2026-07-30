@@ -122,6 +122,37 @@ def test_update_db_credential_replaces_info_for_provider_credential():
     assert merged.credential_info == {"custom_llm_provider": "azure"}
 
 
+def test_sync_in_memory_credential_merges_provider_info(monkeypatch):
+    """The in-memory mirror merges credential_info for every credential (pre-PR
+    parity). A partial provider PATCH (e.g. only description) must not drop
+    custom_llm_provider from litellm.credential_list; a wholesale replace made the
+    credential unresolvable (401) until the next scheduled DB reload."""
+    from litellm.proxy.credential_endpoints.endpoints import _sync_in_memory_credential
+    from litellm.types.utils import UpdateCredentialItem
+
+    existing = CredentialItem(
+        credential_name="openai-prod",
+        credential_values={"api_key": "enc"},
+        credential_info={"custom_llm_provider": "openai", "keepme": "important"},
+    )
+    monkeypatch.setattr(litellm, "credential_list", [existing])
+    patch = UpdateCredentialItem(credential_info={"description": "just a label"})
+    merged = CredentialItem(
+        credential_name="openai-prod",
+        credential_values={"api_key": "enc"},
+        credential_info={"description": "just a label"},
+    )
+
+    _sync_in_memory_credential(old_name="openai-prod", merged=merged, patch=patch)
+
+    in_memory = next(c for c in litellm.credential_list if c.credential_name == "openai-prod")
+    assert in_memory.credential_info == {
+        "custom_llm_provider": "openai",
+        "keepme": "important",
+        "description": "just a label",
+    }
+
+
 # --- access-shape validation is scoped to logging destinations ---------------
 
 @pytest.mark.asyncio

@@ -4187,12 +4187,10 @@ def _has_admin_owned_logging_destination(callback_name: str) -> bool:
     """Whether an admin has registered a logging destination for this backend.
 
     Admin-owned trace destinations (``logging`` credentials, created from the UI)
-    are an OTEL v2 feature: the v2 logger fans a request's spans out to each
-    destination using that destination's own credentials. So when one exists for
-    ``callback_name`` the v2 logger must own the backend even if the global
-    ``LITELLM_OTEL_V2`` flag is off, otherwise activation falls back to the legacy
-    global logger, which ignores the per-destination credentials and exports with
-    whatever (often absent) global env credentials are set.
+    are an OTEL v2 feature, gated on the ``LITELLM_OTEL_V2`` flag like the rest of
+    v2. When the flag is on and one exists for ``callback_name``, the preset's
+    missing-global-credentials check is relaxed: the destination carries its own
+    credentials, so the v2 logger need not find global env credentials to build.
     """
     import litellm
 
@@ -4207,16 +4205,18 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Op
     """Build (or reuse) a single ``OpenTelemetryV2`` instance configured via the
     preset for ``callback_name`` when V2 owns this backend.
 
-    V2 owns the backend when the global ``LITELLM_OTEL_V2`` flag is on, or when an
-    admin-owned logging destination is registered for it (which is itself a V2-only
-    feature). Returns ``None`` otherwise, or when there's no preset registered for
-    ``callback_name`` — callers should then fall through to the legacy path.
+    The global ``LITELLM_OTEL_V2`` flag is the sole activation gate: V2 owns the
+    backend only when the flag is on. Returns ``None`` otherwise, or when there's no
+    preset registered for ``callback_name`` — callers should then fall through to the
+    legacy path. A registered admin-owned destination does not by itself activate V2;
+    it only relaxes the preset's missing-global-credentials check (the destination
+    carries its own credentials).
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
-    has_admin_dest = _has_admin_owned_logging_destination(callback_name)
-    if not is_otel_v2_enabled() and not has_admin_dest:
+    if not is_otel_v2_enabled():
         return None
+    has_admin_dest = _has_admin_owned_logging_destination(callback_name)
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
 

@@ -33,19 +33,21 @@ def test_agentops_preset_does_no_network_io(monkeypatch):
     assert spec.options == {"api_key": "ak-123"}  # carried to the lazy exporter
 
 
-def test_agentops_preset_without_key_omits_exporter(monkeypatch):
-    # With no API key the lazy-auth exporter has nothing to mint a JWT from, so
-    # the preset must not contribute a global exporter at all (it would otherwise
-    # fail every export). Admin-owned destinations carry their own credentials.
+def test_agentops_preset_without_key_still_appends_exporter(monkeypatch):
+    # Additive parity with the pre-PR preset: a global agentops callback always
+    # contributes its exporter, with no api_key carried when none is configured.
+    # The JWT-minting exporter simply has nothing to mint until a key is set.
     monkeypatch.delenv("AGENTOPS_API_KEY", raising=False)
     cfg = agentops_preset()
-    assert [e for e in cfg.exporters if e.kind == _AGENTOPS_EXPORTER_KIND] == []
+    specs = [e for e in cfg.exporters if e.kind == _AGENTOPS_EXPORTER_KIND]
+    assert len(specs) == 1
+    assert specs[0].options is None
 
 
-def test_arize_preset_without_credentials_omits_exporter(monkeypatch):
-    # Arize's OTLP ingestion rejects unauthenticated exports (PERMISSION_DENIED),
-    # so with no Arize credentials the preset must not contribute a credential-less
-    # global exporter pointed at the Arize cloud.
+def test_arize_preset_without_credentials_still_appends_exporter(monkeypatch):
+    # Additive parity: a global arize callback always contributes its exporter at
+    # the configured (or default) endpoint, so a no-auth self-hosted collector
+    # reached via ARIZE_ENDPOINT keeps exporting exactly as before the PR.
     from litellm.integrations.otel.model.config import ExporterOwner
     from litellm.integrations.otel.presets.arize import arize_preset
 
@@ -57,32 +59,22 @@ def test_arize_preset_without_credentials_omits_exporter(monkeypatch):
     ):
         monkeypatch.delenv(var, raising=False)
     cfg = arize_preset()
-    assert [e for e in cfg.exporters if e.owner == ExporterOwner.ARIZE_AX] == []
-
-    monkeypatch.setenv("ARIZE_SPACE_ID", "S")
-    monkeypatch.setenv("ARIZE_API_KEY", "K")
-    cfg = arize_preset()
     assert [e for e in cfg.exporters if e.owner == ExporterOwner.ARIZE_AX] != []
 
 
-def test_phoenix_preset_without_config_omits_exporter(monkeypatch):
-    # Unconfigured Phoenix defaults to http://localhost:6006; the preset must not
-    # contribute that exporter unless Phoenix is actually configured (cloud key or
-    # collector endpoint), so admin-owned-only setups don't export to localhost.
+def test_phoenix_preset_without_config_appends_localhost_exporter(monkeypatch):
+    # Additive parity: unconfigured Phoenix defaults to http://localhost:6006 and
+    # the preset always contributes that exporter, so a local self-hosted Phoenix
+    # deployment with no env vars keeps receiving traces exactly as before the PR.
     from litellm.integrations.otel.model.config import ExporterOwner
-    from litellm.integrations.otel.presets.phoenix import (
-        _PHOENIX_ENV_VARS,
-        phoenix_preset,
-    )
+    from litellm.integrations.otel.presets.phoenix import phoenix_preset
 
-    for var in _PHOENIX_ENV_VARS:
+    for var in ("PHOENIX_API_KEY", "PHOENIX_COLLECTOR_ENDPOINT", "PHOENIX_COLLECTOR_HTTP_ENDPOINT"):
         monkeypatch.delenv(var, raising=False)
     cfg = phoenix_preset()
-    assert [e for e in cfg.exporters if e.owner == ExporterOwner.ARIZE_PHOENIX] == []
-
-    monkeypatch.setenv("PHOENIX_API_KEY", "px-key")
-    cfg = phoenix_preset()
-    assert [e for e in cfg.exporters if e.owner == ExporterOwner.ARIZE_PHOENIX] != []
+    phoenix_exporters = [e for e in cfg.exporters if e.owner == ExporterOwner.ARIZE_PHOENIX]
+    assert len(phoenix_exporters) == 1
+    assert phoenix_exporters[0].endpoint == "http://localhost:6006/v1/traces"
 
 
 def test_agentops_exporter_factory_is_registered():
