@@ -202,6 +202,20 @@ class TestGetModelGroupCustomLlmProvider:
 
         assert _get_model_group_custom_llm_provider(router, "unregistered-model") is None
 
+    def test_returns_none_when_deployment_has_no_model_to_infer_from(self):
+        router = RecordingRouter(deployments_by_model_group={"broken-model": [{"litellm_params": {}}]})
+
+        assert _get_model_group_custom_llm_provider(router, "broken-model") is None
+
+    def test_returns_none_when_provider_cannot_be_inferred_from_model_string(self):
+        router = RecordingRouter(
+            deployments_by_model_group={
+                "unrecognized-model": [{"litellm_params": {"model": "totally-unknown-nonexistent-model-xyz-123"}}]
+            }
+        )
+
+        assert _get_model_group_custom_llm_provider(router, "unrecognized-model") is None
+
 
 class TestCrossesGeminiEndpointBoundary:
     def test_true_between_vertex_ai_and_gemini(self):

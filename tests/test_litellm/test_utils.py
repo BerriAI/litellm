@@ -14,8 +14,10 @@ import litellm
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
     CallTypes,
+    ChatCompletionMessageToolCall,
     Delta,
     LlmProviders,
+    Message,
     ModelResponseStream,
     StreamingChoices,
 )
@@ -4972,3 +4974,58 @@ class TestRemoveForeignThoughtSignaturesFromMessages:
         result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
 
         assert result[0]["tool_call_id"] == "call_abc123"
+
+    def test_strips_signature_from_a_pydantic_message_object(self):
+        """Real SDK responses hand back Message objects, not plain dicts, so
+        the model_dump() branch needs its own coverage."""
+        message = Message(
+            role="assistant",
+            content=None,
+            tool_calls=[
+                {
+                    "id": "call_abc123__thought__VERTEX_SIG",
+                    "type": "function",
+                    "provider_specific_fields": {"thought_signature": "VERTEX_SIG"},
+                    "function": {"name": "get_weather", "arguments": "{}"},
+                }
+            ],
+        )
+
+        result = _remove_foreign_thought_signatures_from_messages([message], "__thought__")
+
+        tool_call = result[0]["tool_calls"][0]
+        assert tool_call["id"] == "call_abc123"
+        assert "thought_signature" not in tool_call["provider_specific_fields"]
+
+    def test_passes_through_a_message_that_is_neither_dict_nor_pydantic(self):
+        messages = ["not-a-message", {"role": "user", "content": "hello"}]
+
+        result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        assert result[0] == "not-a-message"
+        assert result[1] == {"role": "user", "content": "hello"}
+
+    def test_strips_signature_from_a_pydantic_tool_call_object_inside_a_dict_message(self):
+        """Some internal call sites build a dict message whose tool_calls
+        list holds real ChatCompletionMessageToolCall objects rather than
+        dicts, so that branch needs its own coverage too."""
+        tool_call = ChatCompletionMessageToolCall(
+            id="call_abc123__thought__VERTEX_SIG",
+            type="function",
+            function={"name": "get_weather", "arguments": "{}"},
+        )
+        tool_call.provider_specific_fields = {"thought_signature": "VERTEX_SIG"}
+        messages = [{"role": "assistant", "content": None, "tool_calls": [tool_call]}]
+
+        result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        stripped_tool_call = result[0]["tool_calls"][0]
+        assert stripped_tool_call["id"] == "call_abc123"
+        assert "thought_signature" not in stripped_tool_call["provider_specific_fields"]
+
+    def test_passes_through_a_tool_call_that_is_neither_dict_nor_pydantic(self):
+        messages = [{"role": "assistant", "content": None, "tool_calls": ["not-a-tool-call"]}]
+
+        result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        assert result[0]["tool_calls"] == ["not-a-tool-call"]
