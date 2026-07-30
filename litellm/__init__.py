@@ -1313,6 +1313,7 @@ from .exceptions import (
     RateLimitError,
     RateLimitErrorCategory,
     RateLimitType,
+    InsufficientQuotaError,
     ServiceUnavailableError,
     BadGatewayError,
     OpenAIError,
