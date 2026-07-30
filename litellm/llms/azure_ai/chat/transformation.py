@@ -1,3 +1,4 @@
+import copy
 import enum
 import re
 from typing import Any, Final, cast
@@ -182,9 +183,13 @@ class AzureAIStudioConfig(OpenAIConfig):
                Anthropic-format clients that echo thinking blocks back as history.
             2. Transforms list content to a string.
             3. If message contains an image or audio, send as is (user-intended)
+
+        Operates on a deep copy so the caller's messages keep their thinking blocks
+        and provider metadata, which a fallback to another provider still needs.
         """
+        messages = copy.deepcopy(messages)
         for message in messages:
-            message_dict = cast(dict, message)  # cast-ok: TypedDict is a runtime dict stripped in place
+            message_dict = cast(dict, message)  # cast-ok: TypedDict is a runtime dict stripped on our copy
             for field in NON_OPENAI_SPEC_MESSAGE_FIELDS:
                 filter_value_from_dict(message_dict, field)
 
