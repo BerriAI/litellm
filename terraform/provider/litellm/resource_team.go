@@ -26,6 +26,9 @@ func ResourceLiteLLMTeam() *schema.Resource {
 		Read:   resourceLiteLLMTeamRead,
 		Update: resourceLiteLLMTeamUpdate,
 		Delete: resourceLiteLLMTeamDelete,
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 
 		Schema: map[string]*schema.Schema{
 			"team_alias": {
