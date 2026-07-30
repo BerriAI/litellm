@@ -485,9 +485,6 @@ def _content_filter_guardrail():
         blocked_words=[{"keyword": "zebra", "action": "BLOCK"}],
         default_on=True,
     )
-    # scan every chunk so the block decision lands before the offending delta
-    # is forwarded, matching the /chat/completions withholding behavior
-    guardrail.streaming_sampling_rate = 1
     return guardrail
 
 

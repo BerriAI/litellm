@@ -2705,6 +2705,10 @@ class ProxyLogging:
                         user_api_key_dict=user_api_key_dict,
                         request_data=request_data,
                         response=current_response,
+                        # A guardrail that ships its own iterator hook scans
+                        # every chunk there, so keep that cadence when we
+                        # reroute it: sampling would forward unscanned content.
+                        streaming_flag_defaults=({"streaming_sampling_rate": 1} if effective_kind != kind else None),
                     ),
                 )
 
