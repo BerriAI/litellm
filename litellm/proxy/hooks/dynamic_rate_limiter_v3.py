@@ -23,6 +23,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitDescriptorRateLimitObject,
     RateLimitResponse,
     _PROXY_MaxParallelRequestsHandler_v3,
+    claim_request_stash_for_data,
     get_or_create_request_stash,
 )
 from litellm.proxy.hooks.rate_limiter_utils import (
@@ -601,6 +602,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if "model" not in data:
             return None
 
+        claim_request_stash_for_data(data)
         model = data["model"]
         priority = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
 
