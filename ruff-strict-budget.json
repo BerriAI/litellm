@@ -135,7 +135,7 @@
     "limit": 30
   },
   "PERF401": {
-    "limit": 144
+    "limit": 142
   },
   "PERF402": {
     "limit": 9
@@ -315,16 +315,16 @@
     "limit": 98
   },
   "TRY201": {
-    "limit": 424
+    "limit": 420
   },
   "TRY203": {
-    "limit": 123
+    "limit": 121
   },
   "TRY300": {
-    "limit": 883
+    "limit": 879
   },
   "UP006": {
-    "limit": 12142
+    "limit": 12138
   },
   "UP007": {
     "limit": 2526
@@ -363,6 +363,6 @@
     "limit": 105
   },
   "UP045": {
-    "limit": 17806
+    "limit": 17805
   }
 }
