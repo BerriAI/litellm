@@ -214,6 +214,21 @@ def get_guardrail_class_from_hooks():
     return discovered_classes
 
 
+CONFIG_GUARDRAIL_ID_NAMESPACE = uuid.UUID("a7c9f1e2-3b4d-5e6f-8a9b-0c1d2e3f4a5b")
+
+
+def get_stable_config_guardrail_id(guardrail_name: str) -> str:
+    """
+    Derive a deterministic guardrail_id for a config.yaml-defined guardrail.
+
+    Config guardrails have no persisted id, so deriving it from the guardrail
+    name keeps it stable across restarts and identical across replicas. That way
+    the UI list and info lookups resolve to the same id no matter which pod booted
+    when.
+    """
+    return str(uuid.uuid5(CONFIG_GUARDRAIL_ID_NAMESPACE, guardrail_name.encode("utf-8")))
+
+
 guardrail_class_registry.update(get_guardrail_class_from_hooks())
 
 
@@ -419,7 +434,13 @@ class InMemoryGuardrailHandler:
 
         Returns a Guardrail object if the guardrail is initialized successfully
         """
-        guardrail_id = guardrail.get("guardrail_id") or str(uuid.uuid4())
+        provided_id = guardrail.get("guardrail_id")
+        if provided_id:
+            guardrail_id = provided_id
+        elif source == "config":
+            guardrail_id = get_stable_config_guardrail_id(guardrail["guardrail_name"])
+        else:
+            guardrail_id = str(uuid.uuid4())
         guardrail["guardrail_id"] = guardrail_id
         if guardrail_id in self.IN_MEMORY_GUARDRAILS:
             verbose_proxy_logger.debug("guardrail_id already exists in IN_MEMORY_GUARDRAILS")
