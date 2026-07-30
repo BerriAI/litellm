@@ -226,7 +226,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     return unfurlWildcardModelsInList(selected, userModels);
   }, [selectedModelsInForm, teamData, userModels]);
 
-  const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam;
+  const isTeamAdminFromTeamData = useMemo(
+    () =>
+      teamData?.team_info?.members_with_roles?.some(
+        (member) => member.user_id != null && member.user_id === userId && member.role === "admin",
+      ) ?? false,
+    [teamData, userId],
+  );
+
+  const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam || isTeamAdminFromTeamData;
 
   // Destinations that will receive this team's traces, resolved server-side by
   // /team/info from credential_info.access. Names only, visible to every team viewer.
