@@ -105,12 +105,13 @@ def test_destination_set_is_order_independent():
     assert len(cache._providers) == 1
 
 
-def test_provider_cache_evicts_lru_without_shutdown(monkeypatch):
-    """The provider cache stays bounded, and eviction drops the LRU provider WITHOUT
-    a synchronous ``shutdown``. Eviction runs on the request-serving path, and
-    ``TracerProvider.shutdown`` force-flushes/blocks and can drop a concurrent
-    request's in-flight spans, so it mirrors ``TenantFanOutSpanProcessor`` and lets the
-    evicted worker drain on its own. Restoring a shutdown-on-eviction fails this."""
+def test_provider_cache_evicts_lru_and_shuts_it_down_off_hot_path(monkeypatch):
+    """The provider cache stays bounded, and eviction shuts the LRU provider down so its
+    ``BatchSpanProcessor`` worker thread is reclaimed instead of leaked for the process
+    lifetime. ``shutdown`` force-flushes/can block, so it runs on a background daemon
+    thread rather than the request path: the evicted provider is shut down, the survivors
+    are not. Dropping the shutdown (the old leak) fails this."""
+    import time
     from unittest.mock import MagicMock
 
     from litellm.integrations.otel.plumbing import routing as routing_mod
@@ -129,14 +130,19 @@ def test_provider_cache_evicts_lru_without_shutdown(monkeypatch):
 
     cache = _cache("langfuse_otel")
     default = NoOpTracer()
-    cache.tracer_for(default, (_dest("https://1/v1"),))
-    cache.tracer_for(default, (_dest("https://2/v1"),))
+    cache.tracer_for(default, (_dest("https://1/v1"),))  # created[0]
+    cache.tracer_for(default, (_dest("https://2/v1"),))  # created[1]
     cache.tracer_for(default, (_dest("https://1/v1"),))  # touch "1" -> "2" is LRU
-    cache.tracer_for(default, (_dest("https://3/v1"),))  # overflow -> evict "2"
+    cache.tracer_for(default, (_dest("https://3/v1"),))  # created[2]: overflow -> evict "2"
 
     assert len(cache._providers) == 2
-    for provider in created:
-        provider.shutdown.assert_not_called()
+    # eviction shuts down off the hot path, so wait for the background daemon thread
+    deadline = time.time() + 5
+    while not created[1].shutdown.called and time.time() < deadline:
+        time.sleep(0.02)
+    created[1].shutdown.assert_called()  # the evicted LRU ("2") is reclaimed
+    created[0].shutdown.assert_not_called()  # survivor
+    created[2].shutdown.assert_not_called()  # survivor
 
 
 # --- fan-out: keep the configured exporters, append one per destination ----- #

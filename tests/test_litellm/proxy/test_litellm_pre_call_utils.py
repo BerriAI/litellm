@@ -5622,3 +5622,68 @@ def test_warn_stale_team_alias_once_evicts_oldest_key_beyond_cap(monkeypatch):
         pre_call_utils._warn_stale_team_alias_once("key-3", "stale alias")
 
     assert list(pre_call_utils._STALE_TEAM_ALIAS_WARNING_KEYS) == ["key-2", "key-3"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_logging_exporters_short_circuits_without_destinations(monkeypatch):
+    """With no logging destination in the registry, the resolver returns empty and does NOT
+    run the per-request org/team lookup, so a proxy not using admin-owned destinations pays
+    nothing on the auth path for team-scoped keys."""
+    from litellm.proxy import litellm_pre_call_utils as pcu
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="openai",
+                credential_values={"api_key": "sk"},
+                credential_info={"custom_llm_provider": "openai"},
+            )
+        ],
+    )
+    lookups = {"org": 0}
+
+    async def _spy_effective_org_id(user_api_key_dict):
+        lookups["org"] += 1
+        return None
+
+    monkeypatch.setattr(pcu, "_effective_org_id", _spy_effective_org_id)
+
+    key = UserAPIKeyAuth(api_key="k", team_id="t1")
+    destinations, backends = await pcu._resolve_logging_exporters(key)
+
+    assert destinations == () and backends == ()
+    assert lookups["org"] == 0  # the org/team lookup was skipped entirely
+
+
+@pytest.mark.asyncio
+async def test_resolve_logging_exporters_runs_lookup_when_a_destination_exists(monkeypatch):
+    """The short-circuit must not skip resolution when a destination exists: a global
+    destination is still resolved for a team-scoped key, and the org lookup runs."""
+    from litellm.proxy import litellm_pre_call_utils as pcu
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="d-global",
+                credential_values={"otel_endpoint": "https://collector/v1/traces"},
+                credential_info={"credential_type": "logging", "description": "generic", "access": {"global": True}},
+            )
+        ],
+    )
+    lookups = {"org": 0}
+
+    async def _spy_effective_org_id(user_api_key_dict):
+        lookups["org"] += 1
+        return None
+
+    monkeypatch.setattr(pcu, "_effective_org_id", _spy_effective_org_id)
+
+    key = UserAPIKeyAuth(api_key="k", team_id="t1")
+    destinations, backends = await pcu._resolve_logging_exporters(key)
+
+    assert lookups["org"] == 1  # a destination exists, so the resolver runs the lookup
+    assert "generic" in backends  # global access grants the team key

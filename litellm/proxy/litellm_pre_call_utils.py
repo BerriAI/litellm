@@ -641,6 +641,12 @@ async def _resolve_logging_exporters(
         parse_credential_info,
     )
 
+    if not any(
+        (info := parse_credential_info(credential.credential_info)) is not None and info.credential_type == "logging"
+        for credential in litellm.credential_list
+    ):
+        return (), ()
+
     team_id = user_api_key_dict.team_id
     org_id = await _effective_org_id(user_api_key_dict)
     team_ids, org_ids = identity_scope(team_id, org_id)

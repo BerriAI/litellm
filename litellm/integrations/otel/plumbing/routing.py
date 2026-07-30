@@ -13,6 +13,7 @@ a backend like Arize selects its project FROM it, so two Arize projects each get
 tagged span instead of a last-wins merge. Empty destinations -> the logger's default (global only).
 """
 
+import threading
 from collections import OrderedDict
 
 from opentelemetry.context import Context
@@ -34,6 +35,24 @@ _NON_OTLP_KINDS = ("console", "in_memory", "inmemory", "memory")
 _MAX_CACHED_PROVIDERS = 256
 
 
+def _shutdown_in_background(evicted: "TracerProvider | SpanProcessor") -> None:
+    """Reclaim an evicted provider/processor's ``BatchSpanProcessor`` worker thread.
+
+    Dropping it from the cache without ``shutdown`` leaves that daemon thread running for
+    the life of the process (it does not "drain on its own"). ``shutdown`` force-flushes
+    and can do network I/O, so it runs fire-and-forget on a daemon thread rather than on
+    the request path; the evicted object is otherwise unreferenced.
+    """
+
+    def _run() -> None:
+        try:
+            evicted.shutdown()
+        except Exception as exc:  # noqa: BLE001  # a failed shutdown must not surface on the hot path
+            verbose_logger.debug("OTel V2: background shutdown of evicted %s failed: %s", type(evicted).__name__, exc)
+
+    threading.Thread(target=_run, name="litellm-otel-evict-shutdown", daemon=True).start()
+
+
 class TenantTracerCache:
     """Destination-scoped ``TracerProvider`` cache keyed by endpoint + headers."""
 
@@ -51,10 +70,12 @@ class TenantTracerCache:
         )  # mutable-ok: bounded LRU tracer-provider cache
 
     def _evict_if_full(self) -> None:
-        """Drop the least-recently-used provider when over capacity (no synchronous
-        ``shutdown``; the evicted worker drains on its own and is reclaimed at process exit)."""
+        """Drop the least-recently-used provider when over capacity, shutting it down off
+        the hot path so its ``BatchSpanProcessor`` worker thread is reclaimed rather than
+        leaked for the life of the process."""
         if len(self._providers) > _MAX_CACHED_PROVIDERS:
-            self._providers.popitem(last=False)
+            _, evicted = self._providers.popitem(last=False)
+            _shutdown_in_background(evicted)
 
     def tracers_for(self, default: Tracer, destinations: "tuple[OtelDestination, ...]") -> "tuple[Tracer, ...]":
         """The tracers for this request's gen-AI span, one per distinct Resource group.
@@ -320,5 +341,6 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             return None
         self._processors[key] = processor
         if len(self._processors) > _MAX_CACHED_PROCESSORS:
-            self._processors.popitem(last=False)
+            _, evicted = self._processors.popitem(last=False)
+            _shutdown_in_background(evicted)
         return processor
