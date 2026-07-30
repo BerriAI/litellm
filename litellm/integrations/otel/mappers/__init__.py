@@ -21,9 +21,7 @@ from litellm.integrations.otel.mappers.openinference import OpenInferenceMapper
 from litellm.integrations.otel.mappers.weave import WeaveMapper
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 
-# Registry keyed by ``config.mapper_names`` entries. Every factory takes the
-# config so a vocabulary that has operator-configurable behaviour (the Langfuse
-# metadata allowlist) reads it from the same source of truth as the rest.
+# Registry keyed by ``config.mapper_names`` entries.
 _MAPPER_BY_NAME: dict[str, Callable[[OpenTelemetryV2Config | None], AttributeMapper]] = {
     "genai": lambda _config: GenAIMapper(),
     "legacy": lambda _config: LegacyMapper(),

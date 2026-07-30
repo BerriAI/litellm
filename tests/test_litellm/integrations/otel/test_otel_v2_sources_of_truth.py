@@ -570,7 +570,6 @@ def test_request_annotations_parse_caller_trace_controls():
     assert annotations.session_id == "session-1"
     assert annotations.trace_name == "chat-request"
     assert annotations.tags == ("test", "user_agent:curl")
-    # scalars only: the ``tags`` list is not a span-safe value here
     assert annotations.requester_metadata == {
         "trace_user_id": "user-1",
         "session_id": "session-1",
