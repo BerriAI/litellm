@@ -2843,6 +2843,8 @@ async def test_user_info_v2_response_shape(mocker):
         "user_role": "internal_user",
         "spend": 5.0,
         "max_budget": 50.0,
+        "tpm_limit": 120000,
+        "rpm_limit": 600,
         "models": ["gpt-3.5-turbo"],
         "budget_duration": "7d",
         "budget_reset_at": datetime(2024, 7, 1, tzinfo=timezone.utc),
@@ -2885,6 +2887,8 @@ async def test_user_info_v2_response_shape(mocker):
         "user_role",
         "spend",
         "max_budget",
+        "tpm_limit",
+        "rpm_limit",
         "models",
         "budget_duration",
         "budget_reset_at",
@@ -2904,6 +2908,10 @@ async def test_user_info_v2_response_shape(mocker):
     # Verify models is a list of strings
     assert isinstance(response.models, list)
     assert response.models == ["gpt-3.5-turbo"]
+
+    # Verify user-level rate limits are returned by the lightweight endpoint
+    assert response.tpm_limit == 120000
+    assert response.rpm_limit == 600
 
 
 @pytest.mark.asyncio
