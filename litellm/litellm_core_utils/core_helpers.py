@@ -168,14 +168,17 @@ def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metad
     """
     Helper to get litellm metadata for spend tracking
 
-    PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
-    and user_api_key values are in 'metadata'.
+    Both `litellm_metadata` and `metadata` can be present in the kwargs (e.g. a pre-call
+    guardrail creates `litellm_metadata` while the router populated `metadata`). Spend
+    tracking reads a single bucket, so fill in every key `litellm_metadata` is missing
+    (`model_group`, `model_info`, ...) from `metadata`, and let `metadata` win for the
+    `user_api_key*` keys, which are always the authoritative auth values.
     """
     potential_spend_tracking_metadata_substring = "user_api_key"
-    for key, value in metadata.items():
-        if potential_spend_tracking_metadata_substring in key:
-            litellm_metadata[key] = value
-    return litellm_metadata
+    auth_metadata = {
+        key: value for key, value in metadata.items() if potential_spend_tracking_metadata_substring in key
+    }
+    return {**metadata, **litellm_metadata, **auth_metadata}
 
 
 def get_metadata_variable_name_from_kwargs(
