@@ -1,18 +1,31 @@
 """Diff the registry (denominator) against the @pytest.mark.covers markers on the
 live tests (numerator) and report coverage per module.
 
-Coverage here is static: it reads the markers via a collect-only pass, so it runs
-no test and needs no live proxy. Whether a covered cell currently passes or fails
-(covered_pass vs covered_fail) is a separate, live concern layered on top later.
+Coverage here is static: a cell is covered when a test declaring it exists in the
+source tree. Whether that test is deselected on this run, skipped for a missing
+optional dependency, or currently passing is a runtime concern and must not move
+the number, so the markers are read straight off the source with `ast` rather
+than off whatever pytest happened to keep after collection. A collect-only pytest
+pass still runs alongside it, for two things the source text cannot give: markers
+built at import time (`pytest.mark.covers(*fn(...))` inside `pytest.param`) and
+the nodeids that failed to import, whose cells are genuinely unknowable.
+
+The TypeScript Playwright suite under `tests/e2e/ui/` emits no pytest markers, so
+it declares the cells it covers in `tests/e2e/ui/coverage.yaml` instead. Each row
+names the spec and the test title that prove it, and both are resolved against
+the tree, so deleting or renaming that Playwright test drops the cell out of the
+numerator and fails `--strict` the same way an unknown cell id does.
 
     cd tests/e2e && PYTHONPATH=. python -m coverage_registry.collector
 """
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import io
 import json
+import re
 import sys
 from argparse import ArgumentParser
 from dataclasses import dataclass
@@ -20,12 +33,204 @@ from pathlib import Path
 from typing import Literal
 
 import pytest
-from pydantic import BaseModel
+import yaml
+from pydantic import BaseModel, ConfigDict
 
 from .registry import load_registry
 from .schema import MODULE_ORDER, Cell, Tier, dashboard_module, loki_module_label
 
 E2E_DIR = Path(__file__).resolve().parent.parent
+UI_DECLARATION_FILE = E2E_DIR / "ui" / "coverage.yaml"
+
+_UNSCANNED_DIRS: frozenset[str] = frozenset(
+    {"__pycache__", ".git", ".venv", "node_modules", "site-packages", "venv"}
+)
+
+
+def _is_covers_call(func: ast.expr) -> bool:
+    """True for `<anything>.mark.covers` and the `from pytest import mark` spelling."""
+    if not isinstance(func, ast.Attribute) or func.attr != "covers":
+        return False
+    owner = func.value
+    if isinstance(owner, ast.Attribute):
+        return owner.attr == "mark"
+    return isinstance(owner, ast.Name) and owner.id == "mark"
+
+
+def _covers_ids_in_source(source: str) -> frozenset[str]:
+    tree = ast.parse(source)
+    return frozenset(
+        arg.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and _is_covers_call(node.func)
+        for arg in node.args
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+    )
+
+
+def _scannable(path: Path) -> bool:
+    return not _UNSCANNED_DIRS.intersection(path.parts)
+
+
+def _read_covers_ids(path: Path) -> frozenset[str] | None:
+    """The file's declared cell ids, or None when it cannot be parsed."""
+    try:
+        return _covers_ids_in_source(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return None
+
+
+def scan_covers_markers(
+    e2e_dir: Path = E2E_DIR,
+) -> tuple[frozenset[str], tuple[str, ...]]:
+    """Return (cell ids declared by a `covers` marker anywhere in the source tree,
+    paths that could not be parsed). Independent of deselection, of env-gated
+    opt-ins, and of optional dependencies, because nothing is imported."""
+    parsed = tuple(
+        (path, _read_covers_ids(path))
+        for path in sorted(e2e_dir.rglob("*.py"))
+        if _scannable(path)
+    )
+    return (
+        frozenset(
+            cell_id for _, ids in parsed if ids is not None for cell_id in ids
+        ),
+        tuple(str(path) for path, ids in parsed if ids is None),
+    )
+
+
+class _UiCoveredCell(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str
+    spec: str
+    test: str
+
+
+class _UiDeclaration(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    covers: tuple[_UiCoveredCell, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class UiDeclarations:
+    """Cells the Playwright suite claims, split by whether the claim still holds."""
+
+    ids: frozenset[str]
+    unresolved: tuple[str, ...]
+
+
+_TITLED_CALL = re.compile(
+    r"\btest(?:\.(?:describe|only|skip|fixme|serial|parallel|step))*\s*\(\s*"
+)
+_TITLE_LITERAL = re.compile(r"(['\"`])((?:\\.|(?!\1).)*?)\1\s*[,)]", re.DOTALL)
+_INTERPOLATION = re.compile(r"\$\{[^{}]*\}")
+
+_STRING_OR_COMMENT = re.compile(
+    r"""
+      (?P<string> '(?:\\.|[^'\\\n])*'
+                | "(?:\\.|[^"\\\n])*"
+                | `(?:\\.|[^`\\])*` )
+    | (?P<comment> //[^\n]* | /\*.*?\*/ )
+    """,
+    re.VERBOSE | re.DOTALL,
+)
+
+
+def _without_comments(source: str) -> str:
+    """The source with its comments blanked out, so a commented-out test cannot
+    back a declaration. String literals are matched by the same pass and kept
+    intact, so a `//` inside a title (a URL, say) is never mistaken for a comment
+    opener; a false negative there would be worse than the staleness this catches."""
+    return _STRING_OR_COMMENT.sub(
+        lambda match: match.group("string") or " ", source
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _SpecTitles:
+    """What a spec's test titles can be matched against: the ones written out in
+    full, and a pattern per interpolated title covering the titles it can produce."""
+
+    literal: frozenset[str]
+    patterns: tuple[re.Pattern[str], ...]
+
+    def covers(self, title: str) -> bool:
+        return title in self.literal or any(
+            pattern.fullmatch(title) for pattern in self.patterns
+        )
+
+
+def _title_pattern(template: str) -> re.Pattern[str] | None:
+    """A pattern for the titles an interpolated title can produce, or None when it
+    is all interpolation and would therefore match anything."""
+    segments = tuple(_INTERPOLATION.split(template))
+    if not any(segment.strip() for segment in segments):
+        return None
+    return re.compile(".*".join(re.escape(segment) for segment in segments), re.DOTALL)
+
+
+def _spec_titles(spec_source: str) -> _SpecTitles:
+    """Every test title the spec can produce, read from the whole `test` family.
+
+    A first argument that is not a string literal contributes nothing: that covers
+    `test.skip(condition, reason)`, which shares its name with the titled form, and
+    a title assembled from variables, which cannot be matched by text at all. A
+    declaration naming one of those fails loudly rather than being waved through."""
+    source = _without_comments(spec_source)
+    titles = tuple(
+        (literal.group(1), literal.group(2))
+        for call in _TITLED_CALL.finditer(source)
+        if (literal := _TITLE_LITERAL.match(source, call.end())) is not None
+    )
+    return _SpecTitles(
+        literal=frozenset(
+            text for quote, text in titles if not (quote == "`" and "${" in text)
+        ),
+        patterns=tuple(
+            pattern
+            for quote, text in titles
+            if quote == "`" and "${" in text
+            if (pattern := _title_pattern(text)) is not None
+        ),
+    )
+
+
+def _unresolved_reason(cell: _UiCoveredCell, ui_dir: Path) -> str | None:
+    """Why this row no longer resolves against the suite, or None when it holds.
+
+    The check is per declaration, never per file: an interpolated title elsewhere
+    in the spec is irrelevant unless it could itself have produced this title, so
+    renaming a literal test still fails even when a dynamic sibling sits beside
+    it."""
+    spec = ui_dir / cell.spec
+    if not spec.is_file():
+        return f"{cell.id}: spec {cell.spec} does not exist"
+    if _spec_titles(spec.read_text(encoding="utf-8")).covers(cell.test):
+        return None
+    return f"{cell.id}: {cell.spec} has no test titled {cell.test!r}"
+
+
+def load_ui_declarations(path: Path = UI_DECLARATION_FILE) -> UiDeclarations:
+    """Cells the TypeScript Playwright suite declares it covers, each checked
+    against the spec and test title it names. A row whose spec or title no longer
+    exists is dropped from the numerator and reported, so renaming or deleting a
+    UI test cannot leave a cell counted forever. An id that resolves but is not in
+    the registry lands in the covered set and surfaces as an orphan marker,
+    exactly like a typo in a pytest marker."""
+    if not path.is_file():
+        return UiDeclarations(frozenset(), ())
+    declaration = _UiDeclaration.model_validate(yaml.safe_load(path.read_text()) or {})
+    checked = tuple(
+        (cell, _unresolved_reason(cell, path.parent)) for cell in declaration.covers
+    )
+    return UiDeclarations(
+        ids=frozenset(cell.id for cell, reason in checked if reason is None),
+        unresolved=tuple(
+            reason for _, reason in checked if reason is not None
+        ),
+    )
 
 
 class _CoversSink:
@@ -72,6 +277,31 @@ def collect_covered_ids(
 
 
 @dataclass(frozen=True, slots=True)
+class CoveredIds:
+    ids: frozenset[str]
+    collection_errors: tuple[str, ...]
+    stale_ui_declarations: tuple[str, ...]
+
+
+def covered_ids(
+    e2e_dir: Path = E2E_DIR,
+    ui_declaration: Path = UI_DECLARATION_FILE,
+) -> CoveredIds:
+    """The numerator and everything that undermines it: every cell id declared in
+    the source, plus the ones only a live import can resolve, plus the TypeScript
+    suite's still-resolving declarations; every node that failed to parse or to
+    import; and every UI declaration that no longer points at a real test."""
+    scanned, unparseable = scan_covers_markers(e2e_dir)
+    collected, import_errors = collect_covered_ids(e2e_dir)
+    ui = load_ui_declarations(ui_declaration)
+    return CoveredIds(
+        ids=scanned | collected | ui.ids,
+        collection_errors=(*unparseable, *import_errors),
+        stale_ui_declarations=ui.unresolved,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class ModuleCoverage:
     module: str
     total: int
@@ -94,6 +324,7 @@ class CoverageReport:
     p0_gaps: tuple[str, ...]
     orphan_markers: tuple[str, ...]
     collection_errors: tuple[str, ...]
+    stale_ui_declarations: tuple[str, ...] = ()
 
     @property
     def coverage_percent(self) -> float:
@@ -122,6 +353,7 @@ def compute_coverage(
     cells: tuple[Cell, ...],
     covered: frozenset[str],
     collection_errors: tuple[str, ...] = (),
+    stale_ui_declarations: tuple[str, ...] = (),
 ) -> CoverageReport:
     p0_cells = tuple(c for c in cells if c.tier is Tier.P0)
     registry_ids = frozenset(c.id for c in cells)
@@ -134,6 +366,7 @@ def compute_coverage(
         p0_gaps=tuple(sorted(c.id for c in p0_cells if c.id not in covered)),
         orphan_markers=tuple(sorted(covered - registry_ids)),
         collection_errors=collection_errors,
+        stale_ui_declarations=stale_ui_declarations,
     )
 
 
@@ -161,16 +394,25 @@ def render(report: CoverageReport) -> str:
         if report.orphan_markers
         else ()
     )
+    stale = (
+        (
+            f"\n{len(report.stale_ui_declarations)} UI declaration(s) no longer point at a "
+            f"real test and are not counted (reconcile tests/e2e/ui/coverage.yaml):\n  "
+            + "\n  ".join(report.stale_ui_declarations),
+        )
+        if report.stale_ui_declarations
+        else ()
+    )
     warning = (
         (
-            f"\nWARNING: {len(report.collection_errors)} node(s) failed to import during "
-            f"collection, so coverage may undercount:\n  "
+            f"\nWARNING: {len(report.collection_errors)} node(s) failed to parse or import, "
+            f"so coverage may undercount:\n  "
             + "\n  ".join(report.collection_errors),
         )
         if report.collection_errors
         else ()
     )
-    return "\n".join((*lines, *orphans, *warning))
+    return "\n".join((*lines, *orphans, *stale, *warning))
 
 
 def _report_dict(report: CoverageReport) -> dict[str, object]:
@@ -191,6 +433,7 @@ def _report_dict(report: CoverageReport) -> dict[str, object]:
         ],
         "orphan_markers": list(report.orphan_markers),
         "collection_errors": list(report.collection_errors),
+        "stale_ui_declarations": list(report.stale_ui_declarations),
     }
 
 
@@ -237,6 +480,9 @@ def render_prometheus(report: CoverageReport) -> str:
             "# HELP litellm_e2e_coverage_collection_errors Pytest nodes that failed during collection.",
             "# TYPE litellm_e2e_coverage_collection_errors gauge",
             f"litellm_e2e_coverage_collection_errors {len(report.collection_errors)}",
+            "# HELP litellm_e2e_coverage_stale_ui_declarations UI coverage declarations whose spec or test title no longer exists.",
+            "# TYPE litellm_e2e_coverage_stale_ui_declarations gauge",
+            f"litellm_e2e_coverage_stale_ui_declarations {len(report.stale_ui_declarations)}",
         ]
     )
     return "\n".join(lines)
@@ -260,10 +506,22 @@ def render_loki(report: CoverageReport) -> str:
     return "\n".join(lines)
 
 
-class _CliArgs(BaseModel):
+class CliArgs(BaseModel):
     format: Literal["text", "json", "prometheus", "loki"]
     strict: bool
     fail_on_collection_errors: bool
+
+
+def exit_code(report: CoverageReport, args: CliArgs) -> int:
+    """Non-zero when the run found something the operator asked to fail on: a claim
+    the tree does not support (an unknown cell id or a dead UI declaration) under
+    --strict, or a node whose cells could not be read under
+    --fail-on-collection-errors."""
+    if args.strict and (report.orphan_markers or report.stale_ui_declarations):
+        return 1
+    if args.fail_on_collection_errors and report.collection_errors:
+        return 1
+    return 0
 
 
 def main() -> int:
@@ -277,17 +535,22 @@ def main() -> int:
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="Exit non-zero if markers outside the registry are found.",
+        help=(
+            "Exit non-zero if markers outside the registry are found, or if a UI "
+            "coverage declaration no longer points at a real Playwright test."
+        ),
     )
     parser.add_argument(
         "--fail-on-collection-errors",
         action="store_true",
         help="Exit non-zero if pytest collection errors are found.",
     )
-    args = _CliArgs.model_validate(vars(parser.parse_args()))
+    args = CliArgs.model_validate(vars(parser.parse_args()))
     cells = load_registry()
-    covered, errors = collect_covered_ids()
-    report = compute_coverage(cells, covered, errors)
+    covered = covered_ids()
+    report = compute_coverage(
+        cells, covered.ids, covered.collection_errors, covered.stale_ui_declarations
+    )
     output = {
         "text": render,
         "json": render_json,
@@ -295,11 +558,7 @@ def main() -> int:
         "loki": render_loki,
     }[args.format](report)
     print(output)  # noqa: T201  # CLI entrypoint output
-    if args.strict and report.orphan_markers:
-        return 1
-    if args.fail_on_collection_errors and report.collection_errors:
-        return 1
-    return 0
+    return exit_code(report, args)
 
 
 if __name__ == "__main__":
