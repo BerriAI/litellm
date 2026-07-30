@@ -947,3 +947,63 @@ class TestSendEmailStartTls:
         assert isinstance(context, ssl.SSLContext)
         assert context.verify_mode == ssl.CERT_REQUIRED
         assert context.check_hostname is True
+
+
+def test_register_email_logger_callback_registers_sending_logger():
+    """
+    Key created / rotated emails are dispatched by looking up BaseEmailLogger instances in
+    logging_callback_manager. Configuring email via `general_settings.alerting: ["email"]`
+    (what the Admin UI writes) has to register one, or those emails are silently dropped.
+    """
+    import litellm
+    from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+        BaseEmailLogger,
+    )
+    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
+        SMTPEmailLogger,
+    )
+
+    from litellm.proxy.utils import register_email_logger_callback
+
+    original_callbacks = list(litellm.callbacks)
+    try:
+        smtp_logger = SMTPEmailLogger()
+        assert register_email_logger_callback(smtp_logger) is True
+        assert (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=BaseEmailLogger
+            )
+            == [smtp_logger]
+        )
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.parametrize("email_logger", [None, "not-a-logger"])
+def test_register_email_logger_callback_ignores_non_senders(email_logger):
+    import litellm
+    from litellm.proxy.utils import register_email_logger_callback
+
+    original_callbacks = list(litellm.callbacks)
+    try:
+        assert register_email_logger_callback(email_logger) is False
+        assert litellm.callbacks == original_callbacks
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+def test_register_email_logger_callback_ignores_base_logger_without_transport():
+    """BaseEmailLogger has no transport; registering it would only produce send failures."""
+    import litellm
+    from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+        BaseEmailLogger,
+    )
+
+    from litellm.proxy.utils import register_email_logger_callback
+
+    original_callbacks = list(litellm.callbacks)
+    try:
+        assert register_email_logger_callback(BaseEmailLogger()) is False
+        assert litellm.callbacks == original_callbacks
+    finally:
+        litellm.callbacks = original_callbacks
