@@ -345,7 +345,7 @@ def _accepts_litellm_call_info(cb: CustomLogger) -> bool:
     return _CALLBACK_ACCEPTS_CALL_INFO[key]
 
 
-def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: Any) -> None:
+def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: CustomLogger) -> None:
     """
     If `exc` is an HTTPException with a dict `detail`, mutate it in place to
     add `guardrail_name` and `guardrail_mode` taken from the callback instance.
@@ -394,11 +394,11 @@ class _CallbackCapabilities:
     # Tuple[(resolved_callback, "override" | "apply_guardrail"), ...]
     # Ordered the same as ``litellm.callbacks``; used to build the streaming
     # iterator chain without re-scanning per request.
-    iterator_overrides: Tuple[Tuple[Any, str], ...] = field(default_factory=tuple)
+    iterator_overrides: tuple[tuple[CustomLogger, str], ...] = field(default_factory=tuple)
     # Resolved CustomLogger callbacks in original order. Pre-resolving once
     # avoids the per-request ``get_custom_logger_compatible_class`` walk for
     # every string entry in ``litellm.callbacks``.
-    resolved_callbacks: Tuple[Any, ...] = field(default_factory=tuple)
+    resolved_callbacks: tuple[CustomLogger, ...] = field(default_factory=tuple)
 
 
 class ProxyLogging:
@@ -676,7 +676,7 @@ class ProxyLogging:
 
         return synthetic_data
 
-    def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> Optional[Any]:
+    def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> MCPPreCallResponseObject | None:
         """
         Convert LLM guardrail result back to MCP response format.
         """
@@ -802,7 +802,9 @@ class ProxyLogging:
             verbose_proxy_logger.error(f"Error in manual argument parsing: {e}")
             return None
 
-    def _convert_llm_result_to_mcp_during_response(self, llm_result, request_obj) -> Optional[Any]:
+    def _convert_llm_result_to_mcp_during_response(
+        self, llm_result, request_obj
+    ) -> MCPDuringCallResponseObject | None:
         """
         Convert LLM guardrail result back to MCP during call response format.
         """
@@ -1142,8 +1144,8 @@ class ProxyLogging:
         self,
         data: dict,
         litellm_logging_obj: Any,
-        prompt_id: Any,
-        prompt_version: Any,
+        prompt_id: str,
+        prompt_version: int | None,
         call_type: CallTypesLiteral,
     ) -> None:
         """Process prompt template if applicable."""
@@ -1438,9 +1440,7 @@ class ProxyLogging:
                         data = result
 
                     elif (
-                        _callback is not None
-                        and isinstance(_callback, CustomLogger)
-                        and "async_pre_call_hook" in vars(_callback.__class__)
+                        "async_pre_call_hook" in vars(_callback.__class__)
                         and _callback.__class__.async_pre_call_hook != CustomLogger.async_pre_call_hook
                     ):
                         if call_type == "call_mcp_tool" and user_api_key_dict is None:
@@ -1614,7 +1614,7 @@ class ProxyLogging:
                 break
 
     @staticmethod
-    async def _run_guardrail_with_metrics(callback: Any, coro: Awaitable[Any], hook_type: str) -> Any:
+    async def _run_guardrail_with_metrics(callback: CustomLogger, coro: Awaitable[Any], hook_type: str) -> Any:
         """
         Await `coro`, recording its latency and status to the
         `litellm_guardrail_latency_seconds` metric under `hook_type`, and
@@ -1646,7 +1646,7 @@ class ProxyLogging:
 
     @staticmethod
     async def _wrap_streaming_iterator_with_enrichment(
-        callback: Any, gen: AsyncGenerator[Any, None]
+        callback: CustomLogger, gen: AsyncGenerator[Any, None]
     ) -> AsyncGenerator[Any, None]:
         """
         Yield from `gen`; if iteration raises an HTTPException with dict detail,
@@ -1691,8 +1691,11 @@ class ProxyLogging:
         has_streaming_chunk_override = False
         has_guardrail = False
         has_pre_call_override = False
-        iterator_overrides: List[Tuple[Any, str]] = []  # (callback, kind)
-        resolved_callbacks: List[Any] = []
+        # (callback, kind) pairs; built alongside the 4 flags above and the
+        # resolved_callbacks list below in one pass over callbacks, since a
+        # functional per-field rewrite would re-walk this perf-sensitive scan.
+        iterator_overrides: list[tuple[CustomLogger, str]] = []  # mutable-ok: see comment above
+        resolved_callbacks: list[CustomLogger] = []  # mutable-ok: see comment above
 
         for callback in callbacks:
             if isinstance(callback, str):
@@ -2795,7 +2798,7 @@ _DEPRECATED_KEY_CACHE_TTL_SECONDS = 60
 
 
 async def _lookup_deprecated_key(
-    db: Any,
+    db: Union[PrismaWrapper, RoutingPrismaWrapper],
     hashed_token: str,
 ) -> Optional[str]:
     """
@@ -2875,7 +2878,7 @@ def _unpack_config_row(cached: Any) -> Optional[_ConfigRow]:
     return None
 
 
-async def get_config_param(prisma_client: Any, param_name: str) -> Optional[Any]:
+async def get_config_param(prisma_client: "PrismaClient", param_name: str) -> Any | None:
     """Cached read of a LiteLLM_Config row; returns row, _ConfigRow shim, or None."""
     cache_key = _config_cache_key(param_name)
     cached = await litellm_config_cache.async_get_cache(cache_key)
@@ -2893,7 +2896,7 @@ async def invalidate_config_param(param_name: str) -> None:
     await litellm_config_cache.async_delete_cache(_config_cache_key(param_name))
 
 
-async def prefetch_config_params(prisma_client: Any, param_names: List[str]) -> None:
+async def prefetch_config_params(prisma_client: "PrismaClient", param_names: Sequence[str]) -> None:
     """Batch-load LiteLLM_Config rows into the cache with one find_many."""
     if not param_names:
         return
@@ -5932,7 +5935,10 @@ def _check_and_merge_model_level_guardrails(
     return _merge_guardrails_with_existing(data, model_level_guardrails)
 
 
-def _merge_guardrails_with_existing(data: dict, model_level_guardrails: Any) -> dict:
+def _merge_guardrails_with_existing(
+    data: dict,  # mutable-ok: request payload dict, needs .copy()/.setdefault()
+    model_level_guardrails: Sequence[str] | str | None,
+) -> dict:  # mutable-ok: returns a merged copy of the request dict, not a read-only view
     """
     Merge model-level guardrails with any existing guardrails in the request data.
 
@@ -5952,11 +5958,13 @@ def _merge_guardrails_with_existing(data: dict, model_level_guardrails: Any) -> 
         existing_guardrails = [existing_guardrails] if existing_guardrails else []
 
     # Ensure model_level_guardrails is a list
-    if not isinstance(model_level_guardrails, list):
-        model_level_guardrails = [model_level_guardrails] if model_level_guardrails else []
+    if isinstance(model_level_guardrails, list):
+        normalized_model_level_guardrails = model_level_guardrails
+    else:
+        normalized_model_level_guardrails = [model_level_guardrails] if model_level_guardrails else []
 
     # Combine existing and model-level guardrails
-    metadata["guardrails"] = list(set(existing_guardrails + model_level_guardrails))
+    metadata["guardrails"] = list(set(existing_guardrails + normalized_model_level_guardrails))
     return modified_data
 
 

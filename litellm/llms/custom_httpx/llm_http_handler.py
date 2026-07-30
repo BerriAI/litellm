@@ -160,8 +160,10 @@ def _rust_responses_websocket_enabled(
 from .http_handler import get_shared_realtime_ssl_context
 
 if TYPE_CHECKING:
+    import tiktoken
     from aiohttp import ClientSession
 
+    from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
         AnthropicMessagesStreamingResponse,
@@ -210,7 +212,7 @@ def _responses_api_optional_request_param_names() -> frozenset[str]:
     return frozenset(get_type_hints(ResponsesAPIOptionalRequestParams).keys())
 
 
-def _custom_logger_callbacks(logging_obj: Any) -> list[Any]:
+def _custom_logger_callbacks(logging_obj: LiteLLMLoggingObj) -> tuple["CustomLogger", ...]:
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import (
         get_custom_logger_compatible_class,
@@ -221,7 +223,7 @@ def _custom_logger_callbacks(logging_obj: Any) -> list[Any]:
     if isinstance(dynamic_success_callbacks, (list, tuple)):
         callbacks.extend(dynamic_success_callbacks)
 
-    custom_loggers: list[Any] = []
+    custom_loggers = []
     for cb in callbacks:
         if isinstance(cb, str):
             resolved = get_custom_logger_compatible_class(cb)  # type: ignore[arg-type]
@@ -230,10 +232,10 @@ def _custom_logger_callbacks(logging_obj: Any) -> list[Any]:
             cb = resolved
         if isinstance(cb, CustomLogger):
             custom_loggers.append(cb)
-    return custom_loggers
+    return tuple(custom_loggers)
 
 
-def _has_pre_call_deployment_hook(logging_obj: Any) -> bool:
+def _has_pre_call_deployment_hook(logging_obj: LiteLLMLoggingObj) -> bool:
     from litellm.integrations.custom_logger import CustomLogger
 
     base_func = CustomLogger.async_pre_call_deployment_hook
@@ -359,7 +361,7 @@ class BaseLLMHTTPHandler:
         messages: list,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: Optional["tiktoken.Encoding"],
         api_key: Optional[str] = None,
         client: Optional[AsyncHTTPHandler] = None,
         json_mode: bool = False,
@@ -425,7 +427,7 @@ class BaseLLMHTTPHandler:
         api_base: Optional[str],
         custom_llm_provider: str,
         model_response: ModelResponse,
-        encoding,
+        encoding: Optional["tiktoken.Encoding"],
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         timeout: Union[float, httpx.Timeout],
@@ -5008,7 +5010,7 @@ class BaseLLMHTTPHandler:
         return depth, max(max_loops, 1), fingerprints
 
     @staticmethod
-    def _has_agentic_completion_hook(logging_obj: Any) -> bool:
+    def _has_agentic_completion_hook(logging_obj: LiteLLMLoggingObj) -> bool:
         """
         True if any registered callback actually overrides
         ``async_should_run_agentic_loop`` (the gate every agentic hook goes
@@ -5248,7 +5250,7 @@ class BaseLLMHTTPHandler:
         self,
         result: Any,
         model: str,
-        responses_api_provider_config: Any,
+        responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str,
     ) -> Any:
@@ -5769,7 +5771,7 @@ class BaseLLMHTTPHandler:
         websockets_module: Any,
         url: str,
         headers: dict,
-        ssl_context: Any,
+        ssl_context: bool | str | ssl.SSLContext | None,
         *,
         open_timeout: float = 8.0,
         max_attempts: int = 3,

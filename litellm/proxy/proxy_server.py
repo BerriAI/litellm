@@ -26,6 +26,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Sequence,
     Set,
     Tuple,
     TypedDict,
@@ -128,7 +129,7 @@ from litellm.utils import (
 )
 
 if TYPE_CHECKING:
-    from aiohttp import ClientSession
+    from aiohttp import ClientSession, SocketFactoryType
     from opentelemetry.trace import Span as _Span
 
     from litellm.integrations.opentelemetry import OpenTelemetry
@@ -648,7 +649,7 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
 )
-from fastapi.routing import APIRouter
+from fastapi.routing import APIRoute, APIRouter
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
@@ -830,6 +831,15 @@ async def proxy_shutdown_event():
     cleanup_router_config_variables()
 
 
+class _AiohttpConnectorKwargs(TypedDict, total=False):
+    keepalive_timeout: int
+    ttl_dns_cache: int
+    enable_cleanup_closed: bool
+    limit: int
+    limit_per_host: int
+    socket_factory: "SocketFactoryType"
+
+
 async def _initialize_shared_aiohttp_session():
     """Initialize shared aiohttp session for connection reuse with connection limits."""
     try:
@@ -839,7 +849,7 @@ async def _initialize_shared_aiohttp_session():
             _build_aiohttp_keepalive_socket_factory,
         )
 
-        connector_kwargs: Dict[str, Any] = {
+        connector_kwargs: _AiohttpConnectorKwargs = {
             "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
             "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
         }
@@ -1153,7 +1163,7 @@ async def proxy_startup_event(app: FastAPI):
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
 
-def _generate_stable_operation_id(route: Any) -> str:
+def _generate_stable_operation_id(route: APIRoute) -> str:
     operation_id = re.sub(r"\W", "_", f"{route.name}{route.path_format}")
     route_methods = sorted(route.methods or [])
     if len(route_methods) == 1:
@@ -1267,7 +1277,10 @@ vertex_live_passthrough_vertex_base = VertexBase()
 from fastapi.routing import APIWebSocketRoute
 
 
-def _inject_websocket_stubs_into_openapi_schema(openapi_schema: dict, websocket_routes: list) -> dict:
+def _inject_websocket_stubs_into_openapi_schema(
+    openapi_schema: dict,  # mutable-ok: mutated in place and returned to the caller
+    websocket_routes: Sequence[APIWebSocketRoute],
+) -> dict:  # mutable-ok: same object as the openapi_schema argument, mutated in place
     """
     Add a synthetic GET stub for each WebSocket route so it appears in Swagger UI.
 
@@ -1281,7 +1294,7 @@ def _inject_websocket_stubs_into_openapi_schema(openapi_schema: dict, websocket_
 
         parameters = []
         try:
-            if hasattr(route, "dependant") and route.dependant is not None:
+            if hasattr(route, "dependant"):
                 # Handle both FastAPI <0.120 and >=0.120
                 query_params = getattr(route.dependant, "query_params", [])
                 if query_params:
@@ -3518,7 +3531,7 @@ _DB_OVERLAY_REMOTE_MODULE_LIST_FIELDS: Dict[str, Tuple[str, ...]] = {
 }
 
 
-def _is_remote_module_url(value: Any) -> bool:
+def _is_remote_module_url(value: object) -> bool:
     return isinstance(value, str) and (value.startswith("s3://") or value.startswith("gcs://"))
 
 
@@ -5398,7 +5411,7 @@ class ProxyConfig:
                 # decrypt values
                 for k, v in _litellm_params.items():
                     _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
-                _litellm_params = LiteLLM_Params(**_litellm_params)
+                _litellm_params = LiteLLM_Params.model_validate(_litellm_params)
 
             else:
                 verbose_proxy_logger.error(
@@ -5429,7 +5442,7 @@ class ProxyConfig:
                 # decrypt values
                 for k, v in _litellm_params.items():
                     _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
-                _litellm_params = LiteLLM_Params(**_litellm_params)
+                _litellm_params = LiteLLM_Params.model_validate(_litellm_params)
             else:
                 verbose_proxy_logger.error(
                     f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
@@ -6897,7 +6910,7 @@ class ProxyConfig:
         if isinstance(credential, dict):
             credential_object = CredentialItem(**credential)
         elif isinstance(credential, BaseModel):
-            credential_object = CredentialItem(**credential.model_dump())
+            credential_object = CredentialItem.model_validate(credential.model_dump())
 
         decrypted_credential_values = {}
         for k, v in credential_object.credential_values.items():
@@ -13063,7 +13076,7 @@ def _get_model_group_info(
         _model_group_info = llm_router.get_model_group_info(model_group=model)
 
         if _model_group_info is not None:
-            model_groups.append(ModelGroupInfoProxy(**_model_group_info.model_dump()))
+            model_groups.append(ModelGroupInfoProxy.model_validate(_model_group_info.model_dump()))
         else:
             model_group_info = ModelGroupInfoProxy(
                 model_group=model,
@@ -14782,7 +14795,7 @@ async def update_config_general_settings(
         )
 
     try:
-        ConfigGeneralSettings(**{data.field_name: data.field_value})
+        ConfigGeneralSettings.model_validate({data.field_name: data.field_value})
     except Exception:
         raise HTTPException(
             status_code=400,

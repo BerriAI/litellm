@@ -490,7 +490,7 @@ _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS = frozenset({"llm_api_routes", "info_rout
 
 def _validate_caller_can_change_key_ownership(
     data: Optional[BaseModel],
-    existing_key_row: Any,
+    existing_key_row: LiteLLM_VerificationToken,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """
@@ -523,7 +523,7 @@ def _validate_caller_can_change_key_ownership(
             status_code=403,
             detail="Non-admin users cannot remove the user_id from a key.",
         )
-    existing_user_id = getattr(existing_key_row, "user_id", None)
+    existing_user_id = existing_key_row.user_id
     if incoming_user_id != existing_user_id:
         raise HTTPException(
             status_code=403,
@@ -2112,7 +2112,7 @@ async def _process_single_key_update(
     litellm_changed_by: Optional[str],
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: UserApiKeyCache,
-    proxy_logging_obj: Any,
+    proxy_logging_obj: ProxyLogging,
     llm_router: Optional[Router],
     user_custom_key_update: Optional[Callable] = None,
     existing_key_row: Optional[LiteLLM_VerificationToken] = None,
@@ -2265,9 +2265,9 @@ async def _process_single_key_update(
 async def _validate_mcp_servers_for_key_update(
     data: "UpdateKeyRequest",
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
-    existing_key_row: Any,
-    prisma_client: Any,
-    user_api_key_cache: Any,
+    existing_key_row: LiteLLM_VerificationToken,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
     is_proxy_admin: bool,
 ) -> Optional[ObjectPermissionDict]:
     """Validate MCP servers in object_permission against the effective team."""
@@ -2302,14 +2302,20 @@ async def _validate_mcp_servers_for_key_update(
 
 async def _validate_update_key_data(
     data: UpdateKeyRequest,
-    existing_key_row: Any,
+    existing_key_row: LiteLLM_VerificationToken,
     user_api_key_dict: UserAPIKeyAuth,
-    llm_router: Any,
+    llm_router: Router | None,
     premium_user: bool,
-    prisma_client: Any,
-    user_api_key_cache: Any,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
 ) -> None:
     """Validate permissions and constraints for key update."""
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected"},
+        )
+
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(data.spend)
 
@@ -2414,11 +2420,12 @@ async def _validate_update_key_data(
     # _check_key_admin_access that would otherwise require team/org admin status.
     _key_is_team_key = getattr(existing_key_row, "team_id", None) is not None
     can_skip_admin_check = (caller_is_creator or _key_is_team_key) and not _is_budget_change
-    if (not _is_proxy_admin) and prisma_client is not None and not can_skip_admin_check:
-        hashed_key = existing_key_row.token
+    if (not _is_proxy_admin) and not can_skip_admin_check:
+        if existing_key_row.token is None:
+            raise HTTPException(status_code=500, detail={"error": "Existing key is missing its token"})
         await _check_key_admin_access(
             user_api_key_dict=user_api_key_dict,
-            hashed_token=hashed_key,
+            hashed_token=existing_key_row.token,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             route=("/key/update (max_budget/spend)" if _is_budget_change else "/key/update"),
@@ -5421,7 +5428,7 @@ async def list_keys(
 
 async def _apply_non_admin_alias_scope(
     user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: Any,
+    prisma_client: PrismaClient | None,
     query_params: List[Any],
     where_parts: List[str],
 ) -> None:
@@ -5852,9 +5859,7 @@ async def _list_key_helper(
             where=where  # type: ignore
         )
     else:
-        total_count = await VerificationTokenRepository(prisma_client).table.count(
-            where=where  # type: ignore
-        )
+        total_count = await VerificationTokenRepository(prisma_client).count(where=where)
 
     verbose_proxy_logger.debug(f"Total count of keys: {total_count}")
 
@@ -5932,7 +5937,7 @@ def _get_condition_to_filter_out_ui_session_tokens() -> Dict[str, Any]:
 async def _check_key_admin_access(
     user_api_key_dict: UserAPIKeyAuth,
     hashed_token: str,
-    prisma_client: Any,
+    prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     route: str,
 ) -> None:
@@ -6443,7 +6448,7 @@ def _validate_key_alias_format(key_alias: Optional[str]) -> None:
 
 async def _enforce_unique_key_alias(
     key_alias: Optional[str],
-    prisma_client: Any,
+    prisma_client: PrismaClient | None,
     existing_key_token: Optional[str] = None,
 ) -> None:
     """
@@ -6451,7 +6456,7 @@ async def _enforce_unique_key_alias(
 
     Args:
         key_alias (Optional[str]): The key alias to check
-        prisma_client (Any): Prisma client instance
+        prisma_client (Optional[PrismaClient]): Prisma client instance
         existing_key_token (Optional[str]): ID of existing key being updated, to exclude from uniqueness check
             (The Admin UI passes key_alias, in all Edit key requests. So we need to be sure that if we find a key with the same alias, it's not the same key we're updating)
 
