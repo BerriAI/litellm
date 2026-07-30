@@ -161,7 +161,7 @@ class PassThroughStreamingHandler:
                 result=standard_logging_response_object,
                 start_time=start_time,
                 end_time=end_time,
-                cache_hit=False,
+                cache_hit=litellm_logging_obj.model_call_details.get("cache_hit") is True,
                 prefer_async_handlers=True,
                 **kwargs,
             )

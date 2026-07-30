@@ -18,6 +18,7 @@ import asyncio
 import datetime
 import inspect
 import time
+from collections.abc import AsyncIterator
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -116,7 +117,8 @@ def _should_defer_streaming_cache_hit_callbacks(*, kwargs: Dict[str, Any]) -> bo
     When stream=True, do not run success callbacks at cache-hit time.
 
     Cached chat/text completion replay uses CustomStreamWrapper; cached Responses
-    replay uses CachedResponsesAPIStreamingIterator. Both invoke logging success
+    replay uses CachedResponsesAPIStreamingIterator; cached Anthropic Messages
+    replay uses CachedAnthropicMessagesStreamIterator. All invoke logging success
     handlers when the stream finishes; firing them here too would double-count
     spend and callback records.
     """
@@ -848,6 +850,18 @@ class LLMCachingHandler:
                 response_type="audio_transcription",
                 hidden_params=hidden_params,
             )
+        elif (
+            call_type == CallTypes.anthropic_messages.value or call_type == CallTypes.aanthropic_messages.value
+        ) and isinstance(cached_result, dict):
+            from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+                convert_cached_anthropic_messages_result,
+            )
+
+            cached_result = convert_cached_anthropic_messages_result(
+                cached_result=cached_result,
+                logging_obj=logging_obj,
+                kwargs=kwargs,
+            )
         elif (call_type == "aresponses" or call_type == "responses") and isinstance(cached_result, dict):
             use_chat_completion_cache = _is_chat_completion_cached_dict(cached_result)
             if use_chat_completion_cache:
@@ -1043,6 +1057,24 @@ class LLMCachingHandler:
             and (str(original_function.__name__) in litellm.cache.supported_call_types)
             and (kwargs.get("cache", {}).get("no-store", False) is not True)
         )
+
+    def wrap_streaming_result_for_cache(self, result: Any, call_type: str) -> Any:
+        if call_type not in (
+            CallTypes.anthropic_messages.value,
+            CallTypes.aanthropic_messages.value,
+        ):
+            return result
+        if litellm.cache is None or not self._should_store_result_in_cache(
+            original_function=self.original_function, kwargs=self.request_kwargs
+        ):
+            return result
+        if not isinstance(result, AsyncIterator):
+            return result
+        from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+            AnthropicMessagesStreamCacheWriter,
+        )
+
+        return AnthropicMessagesStreamCacheWriter(stream=result, caching_handler=self)
 
     def _is_call_type_supported_by_cache(
         self,
