@@ -1169,7 +1169,6 @@ class GenerateKeyResponse(KeyRequestBase):
 class UpdateKeyRequest(KeyRequestBase):
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
-    key: str  # type: ignore
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
@@ -1184,6 +1183,12 @@ class UpdateKeyRequest(KeyRequestBase):
         if self.temp_budget_increase is not None or self.temp_budget_expiry is not None:
             if self.temp_budget_increase is None or self.temp_budget_expiry is None:
                 raise ValueError("temp_budget_increase and temp_budget_expiry must be set together")
+        return self
+
+    @model_validator(mode="after")
+    def validate_key_identifier(self) -> "UpdateKeyRequest":
+        if self.key is None and self.key_alias is None:
+            raise ValueError("either key or key_alias must be provided")
         return self
 
 

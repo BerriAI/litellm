@@ -18,6 +18,9 @@ SCIM_ENTERPRISE_METADATA_KEY = "scim_enterprise"
 SCIM_ENTITLEMENTS_METADATA_KEY = "scim_entitlements"
 SCIM_ROLES_METADATA_KEY = "scim_roles"
 
+SCIM_MANAGED_TEAM_METADATA_KEY = "scim_managed"
+SCIM_TEAM_DATA_METADATA_KEY = "scim_data"
+
 
 class LiteLLM_UserScimMetadata(BaseModel):
     """
@@ -131,6 +134,15 @@ class SCIMUser(SCIMResource):
 class SCIMMember(BaseModel):
     value: str  # User ID
     display: Optional[str] = None  # Username or email
+    type: str | None = None
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, v: object) -> str | None:
+        """Anything that is not a string carries no canonical type, and rejecting the
+        request over it would be a regression: before this field existed the value was
+        parsed away silently."""
+        return v if isinstance(v, str) else None
 
 
 class SCIMGroup(SCIMResource):

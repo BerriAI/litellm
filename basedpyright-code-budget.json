@@ -1,12 +1,12 @@
 {
   "reportAny": {
-    "limit": 34906
+    "limit": 33171
   },
   "reportArgumentType": {
-    "limit": 2701
+    "limit": 2645
   },
   "reportAssignmentType": {
-    "limit": 330
+    "limit": 329
   },
   "reportAttributeAccessIssue": {
     "limit": 516
@@ -18,13 +18,13 @@
     "limit": 59
   },
   "reportDeprecated": {
-    "limit": 326
+    "limit": 325
   },
   "reportDuplicateImport": {
     "limit": 42
   },
   "reportExplicitAny": {
-    "limit": 10230
+    "limit": 10228
   },
   "reportFunctionMemberAccess": {
     "limit": 11
@@ -54,10 +54,10 @@
     "limit": 0
   },
   "reportMissingParameterType": {
-    "limit": 5893
+    "limit": 5869
   },
   "reportMissingTypeArgument": {
-    "limit": 15886
+    "limit": 15864
   },
   "reportMissingTypeStubs": {
     "limit": 41
@@ -72,7 +72,7 @@
     "limit": 0
   },
   "reportOptionalMemberAccess": {
-    "limit": 1085
+    "limit": 1079
   },
   "reportOptionalOperand": {
     "limit": 0
@@ -84,13 +84,13 @@
     "limit": 77
   },
   "reportPrivateUsage": {
-    "limit": 2438
+    "limit": 2437
   },
   "reportRedeclaration": {
     "limit": 12
   },
   "reportReturnType": {
-    "limit": 225
+    "limit": 221
   },
   "reportTypedDictNotRequiredAccess": {
     "limit": 27
@@ -99,19 +99,19 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 45870
+    "limit": 45522
   },
   "reportUnknownLambdaType": {
     "limit": 113
   },
   "reportUnknownMemberType": {
-    "limit": 40525
+    "limit": 40479
   },
   "reportUnknownParameterType": {
-    "limit": 20384
+    "limit": 20341
   },
   "reportUnknownVariableType": {
-    "limit": 32099
+    "limit": 32052
   },
   "reportUnnecessaryCast": {
     "limit": 177
@@ -123,7 +123,7 @@
     "limit": 7
   },
   "reportUnnecessaryIsInstance": {
-    "limit": 1206
+    "limit": 1205
   },
   "reportUntypedBaseClass": {
     "limit": 165
@@ -138,7 +138,7 @@
     "limit": 206
   },
   "reportUnusedImport": {
-    "limit": 1005
+    "limit": 1003
   },
   "reportUnusedVariable": {
     "limit": 1297
