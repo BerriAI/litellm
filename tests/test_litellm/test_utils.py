@@ -5007,3 +5007,46 @@ async def test_builtin_string_callback_registers_when_subclass_already_active(
     )
 
     assert any(type(cb) is S3Logger for cb in litellm._async_success_callback)
+
+
+def test_install_model_cost_map_preserves_custom_registrations():
+    """Regression: the proxy's model cost map reload replaced litellm.model_cost
+    wholesale, discarding every entry added via register_model (router deployment
+    model_info, user pricing overrides). install_model_cost_map must re-apply
+    those registrations on top of the freshly fetched map."""
+    import uuid
+
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+    from litellm.utils import (
+        _custom_model_cost_registrations,
+        _invalidate_model_cost_lowercase_map,
+        install_model_cost_map,
+    )
+
+    test_model = f"dashscope/install-map-test-{uuid.uuid4().hex[:12]}"
+    original_model_cost = litellm.model_cost
+    try:
+        litellm.register_model(
+            {
+                test_model: {
+                    "max_input_tokens": 1048576,
+                    "max_output_tokens": 8192,
+                    "litellm_provider": "dashscope",
+                    "mode": "chat",
+                }
+            }
+        )
+        assert litellm.model_cost[test_model]["max_input_tokens"] == 1048576
+
+        install_model_cost_map(GetModelCostMap.load_local_model_cost_map())
+
+        assert litellm.model_cost[test_model]["max_input_tokens"] == 1048576
+        model_info = litellm.get_model_info(test_model)
+        assert model_info["max_input_tokens"] == 1048576
+        assert model_info["max_output_tokens"] == 8192
+        assert model_info["litellm_provider"] == "dashscope"
+    finally:
+        _custom_model_cost_registrations.pop(test_model, None)
+        original_model_cost.pop(test_model, None)
+        litellm.model_cost = original_model_cost
+        _invalidate_model_cost_lowercase_map()
