@@ -3166,6 +3166,89 @@ async def test_pre_call_hook_does_not_leak_internal_stash_to_request_body():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("caller_metadata", [None, {"user_tag": "abc"}])
+async def test_pre_call_hook_does_not_touch_provider_metadata_on_litellm_metadata_routes(
+    caller_metadata,
+):
+    """Regression for #35197: routes that own ``litellm_metadata`` (Responses,
+    /v1/messages, batches, files) send ``metadata`` to the provider, so the
+    limiter must never create it or write stash keys into it."""
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _LITELLM_STASH_KEYS,
+        RATE_LIMIT_DESCRIPTORS_KEY,
+        RATE_LIMIT_RESPONSE_KEY,
+        TPM_RESERVED_TOKENS_KEY,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-responses-metadata"),
+        tpm_limit=1000,
+        rpm_limit=5,
+    )
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        return {
+            "overall_code": "OK",
+            "statuses": [
+                {
+                    "code": "OK",
+                    "current_limit": 5,
+                    "limit_remaining": 4,
+                    "descriptor_key": d["key"],
+                    "descriptor_value": d["value"],
+                    "rate_limit_type": "requests",
+                }
+                for d in descriptors
+            ],
+        }
+
+    async def mock_reserve_tpm_tokens(descriptors, estimated_tokens, **kwargs):
+        return {"overall_code": "OK", "statuses": []}
+
+    handler.should_rate_limit = mock_should_rate_limit
+    handler.reserve_tpm_tokens = mock_reserve_tpm_tokens
+
+    data: Dict[str, Any] = {
+        "model": "responses-model",
+        "input": "hello",
+        "litellm_metadata": {},
+    }
+    if caller_metadata is not None:
+        data["metadata"] = dict(caller_metadata)
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="aresponses",
+    )
+
+    if caller_metadata is None:
+        assert "metadata" not in data, f"limiter created provider metadata: {data.get('metadata')!r}"
+    else:
+        assert data["metadata"] == caller_metadata
+
+    litellm_metadata = data["litellm_metadata"]
+    assert litellm_metadata.get(TPM_RESERVED_TOKENS_KEY)
+    assert isinstance(litellm_metadata.get(RATE_LIMIT_DESCRIPTORS_KEY), list)
+    assert litellm_metadata.get(RATE_LIMIT_RESPONSE_KEY)
+
+    leaked = [k for k in _LITELLM_STASH_KEYS if k in data]
+    assert not leaked, f"stash keys leaked to top level: {leaked}"
+
+    for key in _LITELLM_STASH_KEYS:
+        assert handler._lookup_stashed_value(
+            kwargs={"litellm_params": {"metadata": litellm_metadata}},
+            standard_logging_metadata=None,
+            key=key,
+        ) == litellm_metadata.get(key)
+
+
+@pytest.mark.asyncio
 async def test_pre_call_hook_rejects_caller_supplied_stash_values():
     """Caller cannot pre-populate stash keys in body metadata to drive a
     later TPM refund against an arbitrary scope."""
