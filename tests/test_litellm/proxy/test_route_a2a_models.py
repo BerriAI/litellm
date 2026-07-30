@@ -104,3 +104,103 @@ async def test_route_non_a2a_model_raises_error_if_not_in_router():
             user_model=None,
             route_type="acompletion",
         )
+
+
+def _router_without_a2a_models():
+    """A router that knows nothing about the agent, so routing falls to the A2A branch."""
+    router = Mock()
+    router.model_names = ["gpt-4"]
+    router.deployment_names = []
+    router.has_model_id = Mock(return_value=False)
+    router.model_group_alias = None
+    router.router_general_settings = Mock(pass_through_all_models=False)
+    router.default_deployment = None
+    router.pattern_router = Mock(patterns=[])
+    router.map_team_model = Mock(return_value=None)
+    return router
+
+
+def _registry_with_agent(**agent_kwargs):
+    from litellm.types.agents import AgentResponse
+
+    agent = AgentResponse(
+        agent_id="test-agent-id",
+        agent_name="test-agent",
+        agent_card_params={"url": "http://agent.example.com"},
+        litellm_params=None,
+        **agent_kwargs,
+    )
+    registry = Mock()
+    registry.get_agent_by_name = Mock(return_value=agent)
+    return registry
+
+
+async def _route(data, registry):
+    mock_acompletion = AsyncMock(return_value={"id": "test-response"})
+    with patch("litellm.acompletion", mock_acompletion):
+        with patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            registry,
+        ):
+            await route_request(
+                data=data,
+                llm_router=_router_without_a2a_models(),
+                user_model=None,
+                route_type="acompletion",
+            )
+    mock_acompletion.assert_called_once()
+    return mock_acompletion.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_static_headers_are_sent_to_the_agent():
+    """
+    Regression: an agent whose upstream authenticates its callers answered fine
+    over ``POST /a2a/{agent_id}`` but rejected every request routed through the
+    ``a2a/<agent-name>`` chat model with a 401, because this path injected only
+    ``api_base`` and dropped the agent's ``static_headers``.
+    """
+    registry = _registry_with_agent(static_headers={"Authorization": "Bearer upstream-secret"})
+
+    call_kwargs = await _route(
+        {"model": "a2a/test-agent", "messages": [{"role": "user", "content": "Hello"}]},
+        registry,
+    )
+
+    assert call_kwargs["headers"] == {"Authorization": "Bearer upstream-secret"}
+
+
+@pytest.mark.asyncio
+async def test_static_headers_win_over_caller_supplied_headers():
+    """
+    The admin-configured credential wins on a case-insensitive collision, and
+    unrelated caller headers survive — the same precedence ``merge_agent_headers``
+    applies for ``POST /a2a/{agent_id}``.
+    """
+    registry = _registry_with_agent(static_headers={"Authorization": "Bearer upstream-secret"})
+
+    call_kwargs = await _route(
+        {
+            "model": "a2a/test-agent",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "headers": {"authorization": "Bearer caller-supplied", "X-Trace": "keep-me"},
+        },
+        registry,
+    )
+
+    assert call_kwargs["headers"]["Authorization"] == "Bearer upstream-secret"
+    assert call_kwargs["headers"]["X-Trace"] == "keep-me"
+    assert "authorization" not in call_kwargs["headers"]
+
+
+@pytest.mark.asyncio
+async def test_agent_without_static_headers_sends_no_headers():
+    """An agent with nothing configured must not gain a headers kwarg it never had."""
+    registry = _registry_with_agent()
+
+    call_kwargs = await _route(
+        {"model": "a2a/test-agent", "messages": [{"role": "user", "content": "Hello"}]},
+        registry,
+    )
+
+    assert not call_kwargs.get("headers")
