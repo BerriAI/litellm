@@ -35,6 +35,7 @@ from litellm.router_strategy.complexity_router.config import (
 from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
+    PreRoutingHookResponse,
     TaggedPreRoutingStrategy,
 )
 
@@ -4081,21 +4082,60 @@ class TestRecordRoutingDecision:
     the request's metadata must describe the current attempt and nothing else."""
 
     DECISION = {"router_model_name": "smart-router", "router_type": "complexity", "routed_model": "gpt-4o-mini"}
+    STALE_METADATA_KEYS = ("routing_decision", "auto_router_savings_baseline_model")
 
     def test_none_clears_a_previous_decision_from_both_buckets(self):
         request_kwargs: Dict = {
             "metadata": {"routing_decision": self.DECISION, "keep": 1},
             "litellm_metadata": {"routing_decision": self.DECISION},
         }
-        Router._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
+        Router._record_routing_decision(request_kwargs=request_kwargs, pre_routing_hook_response=None)
         assert "routing_decision" not in request_kwargs["metadata"]
         assert "routing_decision" not in request_kwargs["litellm_metadata"]
         assert request_kwargs["metadata"]["keep"] == 1
 
     def test_none_creates_no_bucket_on_a_request_that_had_none(self):
         request_kwargs: Dict = {}
-        Router._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
+        Router._record_routing_decision(request_kwargs=request_kwargs, pre_routing_hook_response=None)
         assert request_kwargs == {}
+
+    @pytest.mark.parametrize("stale_key", STALE_METADATA_KEYS)
+    def test_an_attempt_without_a_strategy_clears_every_stale_fact(self, stale_key):
+        """A fallback to a plain model group re-enters the hook with the same
+        `request_kwargs`. Anything the auto-router attempt left behind would be
+        attributed to the deployment that actually served the request, letting a
+        caller who forces a router failure inflate the recorded savings."""
+        request_kwargs: Dict = {
+            "metadata": {stale_key: "stale", "keep": 1},
+            "litellm_metadata": {stale_key: "stale"},
+        }
+        Router._record_routing_decision(request_kwargs=request_kwargs, pre_routing_hook_response=None)
+        assert stale_key not in request_kwargs["metadata"]
+        assert stale_key not in request_kwargs["litellm_metadata"]
+        assert request_kwargs["metadata"]["keep"] == 1
+
+    def test_a_response_without_a_baseline_clears_a_previous_one(self):
+        """Not every pre-routing strategy sets a savings baseline; one that does not
+        must not inherit the previous attempt's."""
+        request_kwargs: Dict = {"litellm_metadata": {"auto_router_savings_baseline_model": "claude-opus-5"}}
+        Router._record_routing_decision(
+            request_kwargs=request_kwargs,
+            pre_routing_hook_response=PreRoutingHookResponse(model="gpt-4o-mini", messages=[]),
+        )
+        assert "auto_router_savings_baseline_model" not in request_kwargs["litellm_metadata"]
+
+    def test_baseline_is_recorded_on_the_internal_bucket(self):
+        """The baseline must land in `litellm_metadata`, never the `metadata` dict that
+        surfaces like /v1/messages forward verbatim to the provider."""
+        request_kwargs: Dict = {"litellm_metadata": {}, "metadata": {}}
+        Router._record_routing_decision(
+            request_kwargs=request_kwargs,
+            pre_routing_hook_response=PreRoutingHookResponse(
+                model="claude-haiku-4-5", messages=[], savings_baseline_model="claude-opus-5"
+            ),
+        )
+        assert request_kwargs["litellm_metadata"]["auto_router_savings_baseline_model"] == "claude-opus-5"
+        assert "auto_router_savings_baseline_model" not in request_kwargs["metadata"]
 
 
 class TestEscalationIsRecordedConsistently:

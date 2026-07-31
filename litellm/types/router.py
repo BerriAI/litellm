@@ -272,8 +272,6 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     auto_router_config: Optional[str] = None
     auto_router_default_model: Optional[str] = None
     auto_router_embedding_model: Optional[str] = None
-    # counterfactual model the auto-router's savings are measured against on the
-    # cost-optimization dashboard; unset falls back to AutoRouter.DEFAULT_SAVINGS_BASELINE_MODEL
     auto_router_savings_baseline_model: Optional[str] = None
 
     # complexity-router params
@@ -843,9 +841,6 @@ class PreRoutingHookResponse(BaseModel):
     model: str
     messages: Optional[List[Dict[str, Any]]]
     routing_decision: StandardLoggingRoutingDecision | None = None
-    # counterfactual model for the cost-optimization dashboard's auto-router savings
-    # card; only auto-router populates this today, so it is None for every other
-    # pre-routing strategy
     savings_baseline_model: Optional[str] = None
 
 

@@ -20,9 +20,6 @@ else:
 
 class AutoRouter(CustomLogger):
     DEFAULT_AUTO_SYNC_VALUE = "local"
-    # Flagship the auto-router's savings are measured against when the deployment
-    # does not configure `auto_router_savings_baseline_model`. Bare key (no
-    # provider prefix) to match the pricing map's canonical entry.
     DEFAULT_SAVINGS_BASELINE_MODEL = "claude-opus-5"
 
     def __init__(

@@ -11162,7 +11162,7 @@ class Router:
 
         router_strategy = self._select_pre_routing_strategy(model=model, request_kwargs=request_kwargs)
         if router_strategy is None:
-            self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
+            self._record_routing_decision(request_kwargs=request_kwargs, pre_routing_hook_response=None)
             return None
 
         pre_routing_hook_response = await router_strategy.async_pre_routing_hook(
@@ -11174,11 +11174,7 @@ class Router:
         )
         self._record_routing_decision(
             request_kwargs=request_kwargs,
-            routing_decision=(pre_routing_hook_response.routing_decision if pre_routing_hook_response else None),
-        )
-        self._record_savings_baseline_model(
-            request_kwargs=request_kwargs,
-            baseline_model=(pre_routing_hook_response.savings_baseline_model if pre_routing_hook_response else None),
+            pre_routing_hook_response=pre_routing_hook_response,
         )
 
         # `model` (the alias, e.g. "smart-router") is never the deployment actually
@@ -11201,51 +11197,45 @@ class Router:
     @staticmethod
     def _record_routing_decision(
         request_kwargs: dict,
-        routing_decision: StandardLoggingRoutingDecision | None,
+        pre_routing_hook_response: Optional[PreRoutingHookResponse],
     ) -> None:
         """Make the request's metadata describe THIS routing attempt, and only this one.
 
         Fallbacks re-enter the hook with the same `request_kwargs`, so an attempt that
         picks a plain model group after an auto-router group failed must clear the
         earlier decision; leaving it would attribute the first router's tier and cause
-        to the deployment that actually served the request. Every attempt therefore
-        writes or clears, never just writes.
-        """
-        if routing_decision is None:
-            for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata")):
-                if isinstance(bucket, dict):
-                    bucket.pop("routing_decision", None)
-            return
+        to the deployment that actually served the request, and would price savings
+        against a baseline this attempt never routed against. Every fact the hook
+        records is therefore written or cleared here together, from one response, so
+        no exit path can clear one and leave the other behind.
 
-        # `get_or_create_metadata_bucket` is the single owner of "which dict holds
-        # proxy-internal metadata": it picks `litellm_metadata` when present (so the
-        # decision never lands in the `metadata` dict that routes like /v1/messages
-        # forward to the provider) and replaces a non-dict value rather than silently
-        # skipping the write.
-        _, metadata_bucket = get_or_create_metadata_bucket(request_kwargs)
-        metadata_bucket["routing_decision"] = Router._redact_prompt_text_if_needed(
-            request_kwargs=request_kwargs, routing_decision=routing_decision
-        )
-
-    @staticmethod
-    def _record_savings_baseline_model(
-        request_kwargs: dict,
-        baseline_model: str | None,
-    ) -> None:
-        """Stash the auto-router's savings baseline for this attempt, same write-or-clear
-        discipline as `_record_routing_decision`: a fallback that re-enters this hook
-        without an auto-router strategy must clear a prior attempt's baseline, or the
-        spend writer would price savings against a model this attempt never routed
-        against.
+        `get_or_create_metadata_bucket` is the single owner of "which dict holds
+        proxy-internal metadata": it picks `litellm_metadata` when present (so nothing
+        lands in the `metadata` dict that routes like /v1/messages forward to the
+        provider) and replaces a non-dict value rather than silently skipping the write.
         """
-        if baseline_model is None:
-            for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata")):
-                if isinstance(bucket, dict):
-                    bucket.pop("auto_router_savings_baseline_model", None)
+        routing_decision = pre_routing_hook_response.routing_decision if pre_routing_hook_response else None
+        baseline_model = pre_routing_hook_response.savings_baseline_model if pre_routing_hook_response else None
+
+        recorded: dict[str, Any] = {}
+        if routing_decision is not None:
+            recorded["routing_decision"] = Router._redact_prompt_text_if_needed(
+                request_kwargs=request_kwargs, routing_decision=routing_decision
+            )
+        if baseline_model is not None:
+            recorded["auto_router_savings_baseline_model"] = baseline_model
+
+        cleared = {"routing_decision", "auto_router_savings_baseline_model"} - recorded.keys()
+        for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata")):
+            if isinstance(bucket, dict):
+                for key in cleared:
+                    bucket.pop(key, None)
+
+        if not recorded:
             return
 
         _, metadata_bucket = get_or_create_metadata_bucket(request_kwargs)
-        metadata_bucket["auto_router_savings_baseline_model"] = baseline_model
+        metadata_bucket.update(recorded)
 
     @staticmethod
     def _redact_prompt_text_if_needed(

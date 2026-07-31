@@ -1556,6 +1556,30 @@ class DBSpendUpdateWriter:
                                     # Get the table dynamically
                                     table = getattr(batcher, table_name)
 
+                                    # Additive metrics that older queued rows may omit; one
+                                    # enumeration feeds both the create and the increment below
+                                    optional_metrics = {
+                                        field: value
+                                        for field, value in (
+                                            ("cache_read_input_tokens", transaction.get("cache_read_input_tokens")),
+                                            (
+                                                "cache_creation_input_tokens",
+                                                transaction.get("cache_creation_input_tokens"),
+                                            ),
+                                            ("compression_saved_tokens", transaction.get("compression_saved_tokens")),
+                                            (
+                                                "compression_savings_spend",
+                                                transaction.get("compression_savings_spend"),
+                                            ),
+                                            (
+                                                "prompt_caching_savings_spend",
+                                                transaction.get("prompt_caching_savings_spend"),
+                                            ),
+                                            ("autorouter_savings_spend", transaction.get("autorouter_savings_spend")),
+                                        )
+                                        if value is not None
+                                    }
+
                                     # Common data structure for both create and update
                                     common_data = {
                                         entity_id_field: entity_id,
@@ -1572,33 +1596,8 @@ class DBSpendUpdateWriter:
                                         "api_requests": transaction["api_requests"],
                                         "successful_requests": transaction["successful_requests"],
                                         "failed_requests": transaction["failed_requests"],
+                                        **optional_metrics,
                                     }
-
-                                    # Add cache-related fields if they exist
-                                    if "cache_read_input_tokens" in transaction:
-                                        common_data["cache_read_input_tokens"] = transaction.get(
-                                            "cache_read_input_tokens", 0
-                                        )
-                                    if "cache_creation_input_tokens" in transaction:
-                                        common_data["cache_creation_input_tokens"] = transaction.get(
-                                            "cache_creation_input_tokens", 0
-                                        )
-                                    if "compression_saved_tokens" in transaction:
-                                        common_data["compression_saved_tokens"] = transaction.get(
-                                            "compression_saved_tokens", 0
-                                        )
-                                    if "compression_savings_spend" in transaction:
-                                        common_data["compression_savings_spend"] = transaction.get(
-                                            "compression_savings_spend", 0
-                                        )
-                                    if "prompt_caching_savings_spend" in transaction:
-                                        common_data["prompt_caching_savings_spend"] = transaction.get(
-                                            "prompt_caching_savings_spend", 0
-                                        )
-                                    if "autorouter_savings_spend" in transaction:
-                                        common_data["autorouter_savings_spend"] = transaction.get(
-                                            "autorouter_savings_spend", 0
-                                        )
 
                                     if entity_type == "tag" and "request_id" in transaction:
                                         common_data["request_id"] = transaction.get("request_id")
@@ -1611,35 +1610,8 @@ class DBSpendUpdateWriter:
                                         "api_requests": {"increment": transaction["api_requests"]},
                                         "successful_requests": {"increment": transaction["successful_requests"]},
                                         "failed_requests": {"increment": transaction["failed_requests"]},
+                                        **{field: {"increment": value} for field, value in optional_metrics.items()},
                                     }
-
-                                    # Add cache-related fields to update if they exist
-                                    if "cache_read_input_tokens" in transaction:
-                                        update_data["cache_read_input_tokens"] = {
-                                            "increment": transaction.get("cache_read_input_tokens", 0)
-                                        }
-                                    if "cache_creation_input_tokens" in transaction:
-                                        update_data["cache_creation_input_tokens"] = {
-                                            "increment": transaction.get("cache_creation_input_tokens", 0)
-                                        }
-                                    if "compression_saved_tokens" in transaction:
-                                        update_data["compression_saved_tokens"] = {
-                                            "increment": transaction.get("compression_saved_tokens", 0)
-                                        }
-                                    if "compression_savings_spend" in transaction:
-                                        update_data["compression_savings_spend"] = {
-                                            "increment": transaction.get("compression_savings_spend", 0)
-                                        }
-                                    if "prompt_caching_savings_spend" in transaction:
-                                        update_data["prompt_caching_savings_spend"] = {
-                                            "increment": transaction.get("prompt_caching_savings_spend", 0)
-                                        }
-                                    if "autorouter_savings_spend" in transaction:
-                                        update_data[
-                                            "autorouter_savings_spend"
-                                        ] = {  # mutable-ok: extends preset dict following compression_savings_spend pattern
-                                            "increment": transaction.get("autorouter_savings_spend", 0)
-                                        }
 
                                     if entity_type == "tag" and "request_id" in transaction:
                                         update_data["request_id"] = transaction.get("request_id")
@@ -1891,17 +1863,13 @@ class DBSpendUpdateWriter:
 
             cache_read_input_tokens = _extract_cache_read_tokens(usage_obj)
             compression_saved_tokens = extract_compression_saved_tokens(_metadata)
-            cache_creation_input_tokens = _extract_cache_creation_tokens(usage_obj)
-
             savings_spend = compute_savings_spend(
                 model=payload.get("model", None),
                 custom_llm_provider=payload.get("custom_llm_provider", None),
                 compression_saved_tokens=compression_saved_tokens,
                 cache_read_input_tokens=cache_read_input_tokens,
                 baseline_model=_metadata.get("auto_router_savings_baseline_model"),
-                prompt_tokens=payload.get("prompt_tokens", 0),
-                completion_tokens=payload.get("completion_tokens", 0),
-                cache_creation_input_tokens=cache_creation_input_tokens,
+                usage_object=usage_obj,
             )
 
             daily_transaction = BaseDailySpendTransaction(
@@ -1919,7 +1887,7 @@ class DBSpendUpdateWriter:
                 successful_requests=1 if request_status == "success" else 0,
                 failed_requests=1 if request_status != "success" else 0,
                 cache_read_input_tokens=cache_read_input_tokens,
-                cache_creation_input_tokens=cache_creation_input_tokens,
+                cache_creation_input_tokens=_extract_cache_creation_tokens(usage_obj),
                 compression_saved_tokens=compression_saved_tokens,
                 compression_savings_spend=savings_spend.compression,
                 prompt_caching_savings_spend=savings_spend.prompt_caching,

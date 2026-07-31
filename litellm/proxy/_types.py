@@ -4560,6 +4560,7 @@ class BaseDailySpendTransaction(TypedDict):
     # cost-savings metrics (dollars, priced per request before aggregation)
     compression_savings_spend: float
     prompt_caching_savings_spend: float
+    autorouter_savings_spend: float
 
     # request level metrics
     spend: float
