@@ -152,6 +152,7 @@ def _replay_body(
     data[get_metadata_variable_name_from_kwargs(data)] = {  # mutable-ok: request metadata, never retained
         CACHE_WARMING_REPLAY_MARKER_KEY: True,
         **({"session_id": record.session_id} if record.session_id is not None else {}),
+        **({"tags": list(record.tags)} if record.tags else {}),
         "spend_logs_metadata": {CACHE_WARMING_REPLAY_TAG: "true"},  # mutable-ok: request metadata, never retained
     }
     return data

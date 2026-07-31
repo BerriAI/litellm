@@ -518,3 +518,21 @@ async def test_a_session_is_dropped_once_its_key_leaves_the_tenant_it_was_captur
     keys = FakeKeyDirectory({"k": key_state(token="k", team_id=current_team)})
     await tick(llm_router, active=refresher(keys=keys))
     assert llm_router.completion_calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_replay_presents_the_callers_own_tags_to_the_gates_that_read_them():
+    """Tag budgets, tag budget reservation and the limiter's tag descriptors all resolve tags through one
+    owner, get_tags_from_request_body, which reads them off the request body. Warming already enters through
+    all three, so a replay that drops the caller's tags is not refused by those ceilings, it is invisible to
+    them, and its spend lands outside the tag it belongs to. The marker stays out of this channel because
+    tags feed deployment selection."""
+    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
+
+    llm_router, redis = warming_rig(redis=FakeRedisCache())
+    seed_session(redis, tags=("cost-center-7",), touched=_VISITED_BOTH_TIERS)
+    await tick(llm_router)
+    assert llm_router.completion_calls, "expected a replay"
+    for call in llm_router.completion_calls:
+        assert get_tags_from_request_body(call) == ["cost-center-7"]
+        assert CACHE_WARMING_REPLAY_TAG not in get_tags_from_request_body(call)

@@ -109,6 +109,7 @@ def _record_json(**overrides: object) -> str:
         token_estimate=2048,
         last_activity=1000.0,
         served_model="sonnet",
+        tags=(),
         attribution=CacheWarmingAttribution(user_api_key="hashed"),
         auto_router_model_name="smart-router",
     ).model_dump()
@@ -127,6 +128,7 @@ async def _upsert(store: CacheWarmingStore, session_id: str = "s1", max_sessions
         payload_sha256="sha2",
         token_estimate=4096,
         served_model="sonnet",
+        tags=(),
         attribution=CacheWarmingAttribution(),
         ttl_seconds=1800,
         max_sessions=max_sessions,
@@ -138,7 +140,6 @@ def test_key_shapes_are_scoped_and_hash_tagged():
     so two warming auto-routers on one Redis cannot read each other's warmth and a session's record, index
     entry and warmth stamps stay on one node."""
     record = CacheWarmingStore.record_key("smart-router", "keyhash", "session-1")
-    assert record == "smart-router:keyhash:session-1"
     other_router = CacheWarmingStore.record_key("other-router", "keyhash", "session-1")
     assert CacheWarmingStore.warmth_key(record, "opus") != CacheWarmingStore.warmth_key(other_router, "opus")
     store = _store(None)
@@ -146,6 +147,12 @@ def test_key_shapes_are_scoped_and_hash_tagged():
     assert store.sessions_key() == f"{slot}:sessions"
     assert store.index_key() == f"{slot}:index"
     assert CacheWarmingStore.warmth_key(record, "opus").startswith(f"{slot}:")
+
+    # the session id is caller-controlled and reaches this key, the index member, the touched key and every
+    # warmth key, none of which max_payload_bytes bounds, so it is hashed rather than embedded
+    huge = CacheWarmingStore.record_key("smart-router", "keyhash", "s" * 10_000)
+    assert len(huge) == len(record) and "s" * 100 not in huge
+    assert record != CacheWarmingStore.record_key("smart-router", "keyhash", "session-2")
 
 
 @pytest.mark.asyncio

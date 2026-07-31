@@ -28,11 +28,23 @@ if TYPE_CHECKING:
     from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
 
 _MAX_UNCOMPRESSED_RATIO = 8
+# A session id rides in the record body and in every derived Redis key; the payload bound does not cover it
+MAX_SESSION_ID_CHARS = 256
 # The partition a record is stored under and the identity it is attributed to must cover the same
 # dimensions, or two principals differing only in an omitted one share a record. Both are derived from
 # proxy_identity_fields() for that reason; user_api_key is the key-state lookup handle rather than a
 # tenant dimension, so it rides along here and not in the partition.
 _ATTRIBUTION_KEYS = ("user_api_key", *proxy_identity_fields())
+
+
+@lru_cache(maxsize=64)
+def _warn_session_id_too_long(auto_router_model_name: str) -> None:
+    verbose_router_logger.warning(
+        "cache_warming: auto-router %s saw a session_id longer than %s characters; it is caller-controlled "
+        "and is retained on the record, so such sessions are not captured",
+        auto_router_model_name,
+        MAX_SESSION_ID_CHARS,
+    )
 
 
 @lru_cache(maxsize=64)
@@ -87,6 +99,18 @@ def _capture_allowed(kwargs: Mapping[str, object]) -> bool:
     except ImportError:
         return True
     return _should_store_prompts_and_responses_in_spend_logs()
+
+
+def _caller_tags(metadata_dicts: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
+    """The caller's own request tags, kept so a replay presents the same body the gates read them from.
+    Tag budgets, tag budget reservation and the limiter's tag descriptors all resolve tags through
+    get_tags_from_request_body, so a replay that drops them is not refused by those ceilings, it is simply
+    invisible to them."""
+    for metadata in metadata_dicts:
+        tags = metadata.get("tags")
+        if isinstance(tags, list):
+            return tuple(tag for tag in tags if isinstance(tag, str))
+    return ()
 
 
 def _is_replay(metadata_dicts: Sequence[Mapping[str, object]]) -> bool:
@@ -204,6 +228,9 @@ async def capture_session(
     session_id = get_request_metadata_field(request_kwargs, "session_id")
     if session_id is None:
         return
+    if len(session_id) > MAX_SESSION_ID_CHARS:
+        _warn_session_id_too_long(strategy.model_name)
+        return
     payload = _build_payload(request_kwargs, messages, _call_surface(request_kwargs), routed_model)
     if payload is None:
         return
@@ -227,6 +254,7 @@ async def capture_session(
     await store.upsert_session(
         caller_scope=caller_scope,
         session_id=session_id,
+        tags=_caller_tags(metadata_dicts),
         payload_compressed=blob,
         payload_sha256=sha,
         token_estimate=token_estimate,

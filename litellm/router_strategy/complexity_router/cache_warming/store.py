@@ -1,3 +1,4 @@
+import hashlib
 import time
 from collections.abc import Awaitable, Mapping
 from functools import lru_cache
@@ -123,8 +124,16 @@ class CacheWarmingStore:
     def record_key(auto_router_model_name: str, caller_scope: str, session_id: str) -> str:
         """Scoped by auto-router as well as caller and session. The record hash is already per-router through
         its hash-tagged container, but warmth keys are derived from this identity and live at the top level,
-        so without the router in it two warming auto-routers sharing one Redis read each other's warmth."""
-        return f"{auto_router_model_name}:{caller_scope}:{session_id}"
+        so without the router in it two warming auto-routers sharing one Redis read each other's warmth.
+
+        The session id is caller-controlled and would otherwise be embedded verbatim in this key, the index
+        member, the touched key and every warmth key, none of which the payload bound covers, so a caller
+        could hold far more Redis memory than max_payload_bytes implies. Hashing it here rather than at the
+        call sites is what keeps capture and the warm-aware pick agreeing on the same key; the record body
+        keeps the real value, which is what a replay carries so deployment affinity pins it alongside the
+        caller's own traffic."""
+        session_digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:32]
+        return f"{auto_router_model_name}:{caller_scope}:{session_digest}"
 
     @staticmethod
     def touched_key(record_key: str) -> str:
@@ -180,6 +189,7 @@ class CacheWarmingStore:
         payload_sha256: str,
         token_estimate: int,
         served_model: str,
+        tags: tuple[str, ...],
         attribution: CacheWarmingAttribution,
         ttl_seconds: int,
         max_sessions: int,
@@ -197,6 +207,7 @@ class CacheWarmingStore:
             last_activity=now,
             served_model=served_model,
             session_id=session_id,
+            tags=tags,
             attribution=attribution,
             auto_router_model_name=self.auto_router_model_name,
         )
