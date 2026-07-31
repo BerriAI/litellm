@@ -1108,12 +1108,7 @@ def test_tiered_pricing_only_deployment_completion_cost_is_nonzero():
 
 
 def test_region_name_applied_with_custom_pricing():
-    """region_name from _hidden_params must be embedded in the cost-calc key
-    even when custom_pricing selects the router_model_id. This covers the
-    branch that the standalone region_name `if` now reaches into.
-
-    Regression test for Greptile review on #32518.
-    """
+    """region_name must not rewrite a custom-priced router model ID."""
     from litellm.cost_calculator import _select_model_name_for_cost_calc
     from types import SimpleNamespace
 
@@ -1137,7 +1132,7 @@ def test_region_name_applied_with_custom_pricing():
         custom_llm_provider="anthropic",
         router_model_id=custom_model_id,
     )
-    assert selected == f"anthropic/us-east-1/{custom_model_id}"
+    assert selected == f"anthropic/{custom_model_id}"
 
 
 def test_region_name_applied_with_base_model():

@@ -757,6 +757,7 @@ def _select_model_name_for_cost_calc(
             completion_response_model = completion_response.get("model", None)
     hidden_params: Optional[dict] = getattr(completion_response, "_hidden_params", None)
 
+    from_router_model_id = False
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
             entry = litellm.model_cost[router_model_id]
@@ -766,6 +767,7 @@ def _select_model_name_for_cost_calc(
                 or entry.get("tiered_pricing") is not None
             ):
                 return_model = router_model_id
+                from_router_model_id = True
             else:
                 return_model = model
         else:
@@ -792,7 +794,7 @@ def _select_model_name_for_cost_calc(
         and custom_llm_provider is not None
         and not _model_contains_known_llm_provider(return_model)
     ):  # add provider prefix if not already present, to match model_cost
-        if region_name is not None:
+        if region_name is not None and not from_router_model_id:
             return_model = f"{custom_llm_provider}/{region_name}/{return_model}"
         else:
             return_model = f"{custom_llm_provider}/{return_model}"

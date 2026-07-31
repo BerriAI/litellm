@@ -969,7 +969,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       for (let i = 0; i < cap.length; i++) {
                         hash = ((hash << 5) - hash + cap.charCodeAt(i)) | 0;
                       }
-                      return colors[Math.abs(hash) % colors.length];
+                      return colors[(hash >>> 0) % colors.length];
                     };
 
                     if (capabilities.length === 0) {

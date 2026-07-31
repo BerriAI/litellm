@@ -680,11 +680,18 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                     return <Text className="text-gray-500">No special capabilities listed</Text>;
                   }
 
-                  return capabilities.map((capability, index) => (
-                    <Badge key={capability} color={colors[index % colors.length]}>
-                      {formatCapabilityName(capability)}
-                    </Badge>
-                  ));
+                  return capabilities.map((capability) => {
+                    let hash = 0;
+                    for (let i = 0; i < capability.length; i++) {
+                      hash = ((hash << 5) - hash + capability.charCodeAt(i)) | 0;
+                    }
+                    const color = colors[(hash >>> 0) % colors.length];
+                    return (
+                      <Badge key={capability} color={color}>
+                        {formatCapabilityName(capability)}
+                      </Badge>
+                    );
+                  });
                 })()}
               </div>
             </div>
