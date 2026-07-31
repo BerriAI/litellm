@@ -3029,22 +3029,28 @@ class MCPServerManager:
         failure surfaces as a failure instead of the session continuing into an empty tool list.
         A successful exchange is cached by the exchanger, so the session's list/call reuses it.
 
-        Both modes pre-flight with the caller's inbound bearer, the same subject egress hands the
-        resolver, so the pre-flight can never reject a request the session would have served. What
-        differs is what an absent bearer means. ``oauth2_token_exchange`` can only mint from one, so
-        without it there is nothing to exchange and the missing-subject case stays the preemptive
-        challenge's job. ``oauth2_id_jag`` falls back to the identity assertion captured for this
-        user at SSO login, so an absent bearer is its normal path rather than a reason to skip;
-        gating it the way OBO is gated would skip the pre-flight on exactly the store-sourced flow
-        whose missing-assertion 412 and store-outage 503 the session cannot report. Only OBO has a
-        discovery challenge to raise; ID-JAG's failures are plain statuses whose body already names
-        what the user has to do, so they map through ``raise_public`` as they do at egress.
+        Each mode pre-flights only where it would resolve the subject the session goes on to use,
+        which is what keeps the pre-flight from reaching a verdict the session would contradict.
+        ``oauth2_token_exchange`` mints from the caller's inbound bearer, so without one there is
+        nothing to exchange and the missing-subject case stays the preemptive challenge's job.
+        ``oauth2_id_jag`` is the mirror image: tool listing resolves it from the identity assertion
+        captured for this user at SSO login and never from the inbound bearer, so the pre-flight is
+        faithful exactly when no bearer was sent, and a caller that did send one is passed through
+        untouched rather than judged against a subject the listing will not use. That store-sourced
+        case is the one whose missing-assertion 412 and store-outage 503 the session cannot report.
+        Only OBO has a discovery challenge to raise; ID-JAG's failures are plain statuses whose body
+        already names what the user has to do, so they map through ``raise_public`` as at egress.
         """
-        if server.auth_type not in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag):
-            return
         subject_token = self._extract_bearer_token(oauth2_headers, None)
-        if not subject_token and server.auth_type == MCPAuth.oauth2_token_exchange:
-            return
+        match server.auth_type:
+            case MCPAuth.oauth2_token_exchange:
+                if not subject_token:
+                    return
+            case MCPAuth.oauth2_id_jag:
+                if subject_token:
+                    return
+            case _:
+                return
         spec = _to_server_spec_fail_closed(server)
         if spec is None or not isinstance(spec.config, (TokenExchangeConfig, IdJagConfig)):
             return

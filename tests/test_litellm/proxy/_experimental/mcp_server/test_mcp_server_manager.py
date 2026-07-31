@@ -1980,14 +1980,14 @@ class TestMCPServerManager:
         assert exc_info.value.status_code == 503
 
     @pytest.mark.asyncio
-    async def test_preflight_id_jag_hands_the_resolver_the_same_subject_egress_does(self):
-        """The ID-JAG preflight must never reject a request the session would have served, so it
-        resolves with whatever egress resolves with. A caller presenting its own IdP identity token
-        wins there, so the preflight has to forward that bearer too; sourcing only from the store
-        would 412 a caller whose inbound token the tool call would have accepted. With no bearer the
-        subject comes from the assertion stored for the user, and that case must still pre-flight:
-        copying the OBO no-bearer early return here would skip the store-sourced flow entirely, which
-        is the one flow whose failure the session cannot report."""
+    async def test_preflight_id_jag_only_judges_the_subject_the_listing_will_use(self):
+        """Tool listing resolves ID-JAG from the assertion stored for the user and never from the
+        inbound bearer, so the preflight is faithful only when no bearer was sent. A caller that did
+        send one must reach the session untouched: judging it against the store would 412 a request
+        the tool call would have served off that bearer, and judging it against the bearer would
+        settle a subject the listing then ignores. Either way the preflight would be answering a
+        question the session does not ask. With no bearer both resolve the same stored subject, and
+        that case must still pre-flight; it is the one whose failure the session cannot report."""
         from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
             StaticHeaderAuth,
         )
@@ -2016,13 +2016,14 @@ class TestMCPServerManager:
             )
             is None
         )
+        assert subjects == []
+
         await manager.preflight_token_exchange(
             server=self._id_jag_server("id-jag-preflight-stored"),
             oauth2_headers=None,
             user_api_key_auth=caller,
         )
-
-        assert subjects == [("u-1", "caller-idp-id-token"), ("u-1", None)]
+        assert subjects == [("u-1", None)]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
