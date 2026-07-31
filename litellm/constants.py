@@ -1379,9 +1379,9 @@ BATCH_STATUS_POLL_MAX_ATTEMPTS = int(os.getenv("BATCH_STATUS_POLL_MAX_ATTEMPTS",
 # Deadline for the batch rate limiter's input-file read. The read happens inline
 # in POST /v1/batches, so it must resolve well within a client's read timeout;
 # unbounded, the OpenAI SDK default (600s, max_retries=2) applies and a stalled
-# Files API holds the request open indefinitely. Override per-deployment with
+# Files API holds the request open indefinitely. Override with
 # general_settings.batch_input_file_read_timeout.
-DEFAULT_BATCH_INPUT_FILE_READ_TIMEOUT_SECONDS = float(os.getenv("BATCH_INPUT_FILE_READ_TIMEOUT_SECONDS", 10))
+DEFAULT_BATCH_INPUT_FILE_READ_TIMEOUT_SECONDS = 10.0
 
 HEALTH_CHECK_TIMEOUT_SECONDS = int(os.getenv("HEALTH_CHECK_TIMEOUT_SECONDS", 60))  # 60 seconds
 _background_health_check_max_tokens_env = os.getenv("BACKGROUND_HEALTH_CHECK_MAX_TOKENS")
