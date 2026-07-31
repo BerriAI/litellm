@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import os
+from functools import lru_cache
 from typing import Any, Callable, Dict, Literal, NamedTuple, Optional, Union, cast
 
 import httpx
@@ -57,6 +58,24 @@ def process_azure_headers(headers: Union[httpx.Headers, dict]) -> dict:
     return {**llm_response_headers, **openai_headers}
 
 
+@lru_cache(maxsize=128)
+def _cached_entra_id_token_provider(
+    tenant_id: str,
+    client_id: str,
+    client_secret: str,
+    scope: str,
+) -> Callable[[], str]:
+    """Build (once per credential set) a bearer token provider backed by a `ClientSecretCredential`.
+
+    The credential caches the access token internally and only talks to Entra ID when it is close
+    to expiry, so reusing the provider keeps one AAD round trip per token lifetime instead of one
+    per request.
+    """
+    from azure.identity import ClientSecretCredential, get_bearer_token_provider
+
+    return get_bearer_token_provider(ClientSecretCredential(tenant_id, client_id, client_secret), scope)
+
+
 def get_azure_ad_token_from_entra_id(
     tenant_id: str,
     client_id: str,
@@ -75,8 +94,6 @@ def get_azure_ad_token_from_entra_id(
     Returns:
         callable that returns a bearer token.
     """
-    from azure.identity import ClientSecretCredential, get_bearer_token_provider
-
     verbose_logger.debug("Getting Azure AD Token from Entra ID")
 
     if tenant_id.startswith("os.environ/"):
@@ -102,9 +119,13 @@ def get_azure_ad_token_from_entra_id(
     )
     if _tenant_id is None or _client_id is None or _client_secret is None:
         raise ValueError("tenant_id, client_id, and client_secret must be provided")
-    credential = ClientSecretCredential(_tenant_id, _client_id, _client_secret)
 
-    token_provider = get_bearer_token_provider(credential, scope)
+    token_provider = _cached_entra_id_token_provider(
+        tenant_id=_tenant_id,
+        client_id=_client_id,
+        client_secret=_client_secret,
+        scope=scope,
+    )
 
     verbose_logger.debug("token_provider %s", token_provider)
 

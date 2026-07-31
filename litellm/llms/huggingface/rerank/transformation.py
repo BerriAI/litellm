@@ -1,4 +1,5 @@
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union
 
 import httpx
@@ -125,6 +126,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         api_key: str | None = None,
         optional_params: dict | None = None,
         api_base: str | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         # Get API credentials
         api_key, api_base = self.get_api_credentials(api_key=api_key, api_base=api_base)
