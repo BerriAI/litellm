@@ -240,7 +240,3 @@ class LoopbackCallbackListener:
 
     def __exit__(self, *exc_info) -> None:
         self.close()
-
-
-def bound_address(listener: LoopbackCallbackListener) -> tuple[str, int]:
-    return listener.host, listener.port

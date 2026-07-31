@@ -1,7 +1,6 @@
 #### Analytics Endpoints #####
 import os
 from functools import lru_cache
-from typing import Any  # noqa: TID251  # unvalidated JSON payload
 
 from fastapi import APIRouter
 from pydantic import ValidationError
@@ -40,12 +39,7 @@ def _warn_native_oidc_invalid_once() -> None:
     verbose_proxy_logger.warning(NATIVE_OIDC_INVALID_MESSAGE)
 
 
-def _reset_native_oidc_warning_state() -> None:
-    """Test hook: allow the once-only diagnostic to fire again."""
-    _warn_native_oidc_invalid_once.cache_clear()
-
-
-def _build_native_oidc_config(general_settings: dict[str, Any]) -> NativeOIDCConfig | None:
+def _build_native_oidc_config(general_settings: dict[str, object]) -> NativeOIDCConfig | None:
     """Build the public native OIDC object, or return None and fail closed.
 
     Published only when JWT auth is exactly enabled and every required field
