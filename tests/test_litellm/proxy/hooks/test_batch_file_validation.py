@@ -1906,3 +1906,57 @@ async def test_read_deadline_is_passed_to_the_upstream_file_fetch():
         )
 
     assert captured.get("timeout") == 3.5, "read deadline never reached the upstream fetch"
+
+
+@pytest.mark.asyncio
+async def test_read_deadline_overrides_a_deployment_configured_timeout():
+    """`timeout` is one of _extract_file_access_credentials' credential keys, so a
+    deployment's litellm_params can already put it in fetch_kwargs. Passing the
+    limiter's deadline as a separate keyword alongside **fetch_kwargs then raises
+    TypeError for a duplicate kwarg, turning the hang into a 500. The limiter's
+    budget must win: a deployment timeout is sized for serving traffic, not for an
+    inline pre-call hook."""
+    captured: dict = {}
+
+    async def _capture(*args, **kwargs):
+        captured.update(kwargs)
+        return MagicMock(content=b'{"body": {"model": "gpt-4o-mini", "messages": []}}\n')
+
+    rate_limiter = _make_rate_limiter()
+    user = UserAPIKeyAuth(api_key="sk", models=["*"])
+
+    # A deployment whose credentials carry their own `timeout`, which is what
+    # _extract_file_access_credentials merges into fetch_kwargs. Driven through the
+    # real resolver so the merge itself is under test, not a stubbed return value.
+    router = MagicMock(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_key": "sk-deployment",
+                    "timeout": 600,
+                    "custom_llm_provider": "openai",
+                },
+            }
+        ]
+    )
+
+    with (
+        patch("litellm.afile_content", new=_capture),
+        patch(
+            "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
+            return_value={"api_key": "sk-deployment", "timeout": 600, "custom_llm_provider": "openai"},
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch("litellm.proxy.proxy_server.general_settings", {"batch_input_file_read_timeout": 4.0}),
+    ):
+        usage = await rate_limiter.count_input_file_usage(
+            file_id="file-plain",
+            custom_llm_provider="openai",
+            user_api_key_dict=user,
+            data={"model": "gpt-4o-mini"},
+        )
+
+    assert usage.request_count == 1
+    assert captured.get("timeout") == 4.0, "deployment timeout must not override the limiter's deadline"

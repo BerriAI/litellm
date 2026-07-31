@@ -376,6 +376,12 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         Model-embedded IDs (``file-<base64>``) are not unified managed-file IDs;
         without decoding them, ``afile_content`` is called with the encoded ID
         and the upstream provider returns 404.
+
+        The returned kwargs may carry a ``timeout`` from the deployment's
+        credentials (one of ``_extract_file_access_credentials``' keys). Callers
+        that need their own deadline must set it on the result rather than passing
+        it alongside ``**fetch_kwargs``, which would raise TypeError for a
+        duplicate kwarg.
         """
         from litellm.proxy.openai_files_endpoints.common_utils import (
             decode_model_from_file_id,
@@ -574,7 +580,12 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     custom_llm_provider=custom_llm_provider,
                     data=data or {},
                 )
-                # For non-managed files, use the standard litellm.afile_content.
+                # Set on the resolved kwargs, not passed as a separate keyword:
+                # they may already carry the deployment's own `timeout`, and
+                # passing both raises TypeError for a duplicate kwarg. This
+                # read's budget wins on purpose; a deployment timeout is sized
+                # for serving traffic, not for a read that blocks POST /v1/batches.
+                fetch_kwargs["timeout"] = timeout_seconds
                 # `timeout` reaches file_content's TIMEOUT LOGIC via
                 # GenericLiteLLMParams, capping the upstream HTTP request itself
                 # rather than only the await, so an abandoned read stops
@@ -582,7 +593,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 fetch = litellm.afile_content(
                     file_id=provider_file_id,
                     user_api_key_dict=user_api_key_dict,
-                    timeout=timeout_seconds,
                     **fetch_kwargs,
                 )
 
