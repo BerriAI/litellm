@@ -172,33 +172,31 @@ class S3Logger:
             pass
 
 
+def _validated_sse_value(name: str, value: str | None) -> str | None:
+    if value is None or isinstance(value, str):
+        return value
+    verbose_logger.warning(
+        f"s3 logging: ignoring {name} because it has invalid type {type(value).__name__}; expected a string"
+    )
+    return None
+
+
 def resolve_sse_params(
     server_side_encryption: str | None,
     sse_kms_key_id: str | None,
 ) -> tuple[str | None, str | None]:
-    for name, value in (
-        ("s3_server_side_encryption", server_side_encryption),
-        ("s3_sse_kms_key_id", sse_kms_key_id),
-    ):
-        if value is not None and not isinstance(value, str):
-            verbose_logger.warning(
-                f"s3 logging: ignoring {name} because it has invalid type "
-                f"{type(value).__name__}; expected a string"
-            )
-            if name == "s3_server_side_encryption":
-                server_side_encryption = None
-            else:
-                sse_kms_key_id = None
-    algorithm = server_side_encryption or ("aws:kms" if sse_kms_key_id else None)
+    valid_sse = _validated_sse_value("s3_server_side_encryption", server_side_encryption)
+    valid_key_id = _validated_sse_value("s3_sse_kms_key_id", sse_kms_key_id)
+    algorithm = valid_sse or ("aws:kms" if valid_key_id else None)
     if algorithm is None:
         return None, None
-    if sse_kms_key_id and not algorithm.startswith("aws:kms"):
+    if valid_key_id and not algorithm.startswith("aws:kms"):
         verbose_logger.warning(
             f"s3 logging: ignoring s3_sse_kms_key_id because s3_server_side_encryption is {algorithm}; "
             "set it to aws:kms to encrypt with the KMS key"
         )
         return algorithm, None
-    return algorithm, sse_kms_key_id
+    return algorithm, valid_key_id
 
 
 def get_s3_object_key(

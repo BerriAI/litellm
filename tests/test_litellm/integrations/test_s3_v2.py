@@ -1601,8 +1601,11 @@ def test_kms_key_id_dropped_when_algorithm_is_not_kms():
         litellm.s3_callback_params = original
 
 
-def test_non_string_sse_config_is_ignored_not_crashing():
-    """YAML booleans or other non-strings in SSE config must not crash logger init."""
+def test_non_string_algorithm_is_dropped_and_valid_key_id_is_rescued():
+    """
+    A YAML boolean in s3_server_side_encryption must not crash logger init and
+    must not discard the valid key id; aws:kms is inferred from the key id.
+    """
     import litellm
 
     original = litellm.s3_callback_params
@@ -1613,7 +1616,25 @@ def test_non_string_sse_config_is_ignored_not_crashing():
     }
     try:
         logger = S3Logger()
-        assert logger.s3_server_side_encryption is None
+        assert logger.s3_server_side_encryption == "aws:kms"
+        assert logger.s3_sse_kms_key_id == ("arn:aws:kms:us-east-1:111122223333:key/test-key-id")
+    finally:
+        litellm.s3_callback_params = original
+
+
+def test_non_string_key_id_is_dropped_and_valid_algorithm_is_kept():
+    """A mistyped key id (unquoted YAML number) must not disable the valid algorithm."""
+    import litellm
+
+    original = litellm.s3_callback_params
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "from-global",
+        "s3_server_side_encryption": "aws:kms",
+        "s3_sse_kms_key_id": 12345,
+    }
+    try:
+        logger = S3Logger()
+        assert logger.s3_server_side_encryption == "aws:kms"
         assert logger.s3_sse_kms_key_id is None
     finally:
         litellm.s3_callback_params = original
