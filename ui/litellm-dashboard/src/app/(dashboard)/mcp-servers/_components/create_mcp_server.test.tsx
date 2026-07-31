@@ -1058,6 +1058,127 @@ describe("CreateMCPServer", () => {
       });
     });
 
+    it("shows the ID-JAG fields only for the ID-JAG auth type", async () => {
+      await selectHttpTransport();
+
+      // The sibling OBO mode must not render the ID-JAG section.
+      await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
+      await waitFor(() => {
+        expect(screen.queryByText("Org Token Endpoint (leg 1)")).not.toBeInTheDocument();
+      });
+      expect(screen.queryByText("Resource Token Endpoint (leg 2)")).not.toBeInTheDocument();
+
+      await selectAntOption("Authentication", "ID-JAG (Okta Cross App Access)");
+      await waitFor(() => {
+        expect(screen.getByText("Org Token Endpoint (leg 1)")).toBeInTheDocument();
+      });
+      expect(screen.getByText("Resource Token Endpoint (leg 2)")).toBeInTheDocument();
+      expect(screen.getByText("Client Private Key (PEM)")).toBeInTheDocument();
+
+      await selectAntOption("Authentication", "API Key");
+      await waitFor(() => {
+        expect(screen.queryByText("Org Token Endpoint (leg 1)")).not.toBeInTheDocument();
+      });
+      expect(screen.queryByText("Resource Token Endpoint (leg 2)")).not.toBeInTheDocument();
+    });
+
+    it("routes ID-JAG config to the backend payload with both legs and the private key", async () => {
+      await selectHttpTransport();
+
+      fireEvent.change(getServerNameInput(), { target: { value: "IdJag_Server" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://upstream.example.com/mcp" },
+      });
+
+      await selectAntOption("Authentication", "ID-JAG (Okta Cross App Access)");
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://your-org.okta.com/oauth2/v1/token")).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByPlaceholderText("https://your-org.okta.com/oauth2/v1/token"), {
+        target: { value: "https://acme.okta.com/oauth2/v1/token" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("https://upstream.example.com/oauth2/token"), {
+        target: { value: "https://jira.example.com/oauth2/token" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client ID"), {
+        target: { value: "id-jag-client" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("-----BEGIN PRIVATE KEY-----"), {
+        target: { value: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("my-signing-key-1"), {
+        target: { value: "kid-1" },
+      });
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-id-jag",
+        server_name: "IdJag_Server",
+        alias: "IdJag_Server",
+        url: "https://upstream.example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2_id_jag",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.auth_type).toBe("oauth2_id_jag");
+      // Leg 1 rides the shared token_exchange_endpoint column; leg 2 is ID-JAG specific.
+      expect(payload.token_exchange_endpoint).toBe("https://acme.okta.com/oauth2/v1/token");
+      expect(payload.credentials).toMatchObject({
+        client_id: "id-jag-client",
+        id_jag_resource_token_endpoint: "https://jira.example.com/oauth2/token",
+        client_private_key: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+        client_private_key_id: "kid-1",
+      });
+    });
+
+    it("blocks an ID-JAG submit that provides neither a client secret nor a private key", async () => {
+      await selectHttpTransport();
+
+      fireEvent.change(getServerNameInput(), { target: { value: "IdJag_NoCreds" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://upstream.example.com/mcp" },
+      });
+
+      await selectAntOption("Authentication", "ID-JAG (Okta Cross App Access)");
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://your-org.okta.com/oauth2/v1/token")).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByPlaceholderText("https://your-org.okta.com/oauth2/v1/token"), {
+        target: { value: "https://acme.okta.com/oauth2/v1/token" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("https://upstream.example.com/oauth2/token"), {
+        target: { value: "https://jira.example.com/oauth2/token" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client ID"), {
+        target: { value: "id-jag-client" },
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("Provide either a client secret or a client private key")).toBeInTheDocument();
+      });
+      expect(networking.createMCPServer).not.toHaveBeenCalled();
+    });
+
     it("makes scope required when the Entra OBO profile is selected", async () => {
       await selectHttpTransport();
 
