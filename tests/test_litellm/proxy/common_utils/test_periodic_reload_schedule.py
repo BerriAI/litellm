@@ -13,8 +13,6 @@ from litellm.proxy.common_utils.periodic_reload_schedule import (
     record_manual_reload,
     record_reload_run,
     reload_schedule_status,
-    to_db_precision,
-    utc_now,
     write_reload_interval,
 )
 
@@ -22,37 +20,39 @@ LAST_RUN = datetime(2024, 1, 1, 6, 0, 0, tzinfo=timezone.utc)
 NOW = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)
 
 
-def _row(param_value=None, reload_requested_at=None, last_run_at=None):
+def _row(param_value=None, reload_revision=0, last_run_at=None):
     return SimpleNamespace(
         param_name="model_cost_map_reload_config",
         param_value=param_value,
-        reload_requested_at=reload_requested_at,
+        reload_revision=reload_revision,
         last_run_at=last_run_at,
     )
 
 
-def _mock_prisma(row=None):
+def _mock_prisma(row=None, upserted_revision=1):
     prisma_client = MagicMock()
     prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=row)
-    prisma_client.db.litellm_config.upsert = AsyncMock(return_value=None)
+    prisma_client.db.litellm_config.upsert = AsyncMock(return_value=_row(reload_revision=upserted_revision))
     prisma_client.db.litellm_config.update_many = AsyncMock(return_value=1)
     return prisma_client
 
 
 def test_parse_reads_interval_from_json_and_state_from_columns():
-    schedule = parse_reload_schedule(
-        _row(param_value={"interval_hours": 6}, reload_requested_at=NOW, last_run_at=LAST_RUN)
-    )
+    schedule = parse_reload_schedule(_row(param_value={"interval_hours": 6}, reload_revision=7, last_run_at=LAST_RUN))
 
-    assert schedule == ReloadSchedule(interval_hours=6, reload_requested_at=NOW, last_run_at=LAST_RUN)
+    assert schedule == ReloadSchedule(interval_hours=6, reload_revision=7, last_run_at=LAST_RUN)
 
 
 def test_parse_treats_naive_column_timestamps_as_utc():
-    schedule = parse_reload_schedule(
-        _row(reload_requested_at=NOW.replace(tzinfo=None), last_run_at=LAST_RUN.replace(tzinfo=None))
-    )
+    schedule = parse_reload_schedule(_row(last_run_at=LAST_RUN.replace(tzinfo=None)))
 
-    assert (schedule.reload_requested_at, schedule.last_run_at) == (NOW, LAST_RUN)
+    assert schedule.last_run_at == LAST_RUN
+
+
+def test_parse_defaults_revision_when_the_column_is_null():
+    """Rows written before the column existed read back as NULL and must not crash the
+    comparison; nobody has applied revision 0, so treating it as 0 is a no-op"""
+    assert parse_reload_schedule(_row(reload_revision=None)).reload_revision == 0
 
 
 @pytest.mark.parametrize(
@@ -68,7 +68,7 @@ def test_parse_ignores_legacy_json_force_reload():
     would re-trigger a reload every poll because nothing clears the JSON copy"""
     schedule = parse_reload_schedule(_row(param_value={"interval_hours": 6, "force_reload": True}))
 
-    assert schedule == ReloadSchedule(interval_hours=6, reload_requested_at=None, last_run_at=None)
+    assert schedule == ReloadSchedule(interval_hours=6, reload_revision=0, last_run_at=None)
 
 
 def test_status_reports_persisted_last_run_and_next_run():
@@ -98,36 +98,29 @@ def test_next_run_needs_both_interval_and_last_run():
 
 
 @pytest.mark.parametrize(
-    "schedule, pod_data_loaded_at, expected",
+    "schedule, pod_applied_revision, pod_data_loaded_at, expected",
     [
-        (ReloadSchedule(reload_requested_at=datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc)), LAST_RUN, True),
-        (
-            ReloadSchedule(
-                interval_hours=6,
-                reload_requested_at=datetime(2024, 1, 1, 11, 30, tzinfo=timezone.utc),
-                last_run_at=datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc),
-            ),
-            datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc),
-            True,
-        ),
-        (ReloadSchedule(reload_requested_at=LAST_RUN), LAST_RUN, False),
-        (ReloadSchedule(reload_requested_at=datetime(2024, 1, 1, 5, 0, tzinfo=timezone.utc)), LAST_RUN, False),
-        (ReloadSchedule(reload_requested_at=LAST_RUN), datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc), False),
-        (ReloadSchedule(interval_hours=6, reload_requested_at=LAST_RUN, last_run_at=LAST_RUN), LAST_RUN, True),
-        (ReloadSchedule(), LAST_RUN, False),
-        (ReloadSchedule(interval_hours=6), datetime(2024, 1, 1, 11, 59, tzinfo=timezone.utc), True),
+        (ReloadSchedule(reload_revision=4), 3, NOW, True),
+        (ReloadSchedule(interval_hours=6, reload_revision=4, last_run_at=LAST_RUN), 3, NOW, True),
+        (ReloadSchedule(reload_revision=3), 3, LAST_RUN, False),
+        (ReloadSchedule(reload_revision=4), None, LAST_RUN, False),
+        (ReloadSchedule(interval_hours=6, reload_revision=4), None, NOW, True),
+        (ReloadSchedule(), 0, LAST_RUN, False),
+        (ReloadSchedule(interval_hours=6), 0, datetime(2024, 1, 1, 11, 59, tzinfo=timezone.utc), True),
         (
             ReloadSchedule(interval_hours=6, last_run_at=datetime(2024, 1, 1, 6, 30, tzinfo=timezone.utc)),
+            0,
             datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc),
             False,
         ),
-        (ReloadSchedule(interval_hours=6, last_run_at=LAST_RUN), LAST_RUN, True),
+        (ReloadSchedule(interval_hours=6, last_run_at=LAST_RUN), 0, LAST_RUN, True),
     ],
 )
-def test_pod_reload_is_due(schedule, pod_data_loaded_at, expected):
+def test_pod_reload_is_due(schedule, pod_applied_revision, pod_data_loaded_at, expected):
     assert (
         pod_reload_is_due(
             schedule=schedule,
+            pod_applied_revision=pod_applied_revision,
             pod_data_loaded_at=pod_data_loaded_at,
             current_time=NOW,
             description="test",
@@ -136,44 +129,35 @@ def test_pod_reload_is_due(schedule, pod_data_loaded_at, expected):
     )
 
 
-def test_stamps_match_the_precision_they_are_stored_at():
-    """Postgres stores TIMESTAMP(3), so a microsecond-precision pod clock would read as
-    newer than its own persisted copy and skip the request it just recorded"""
-    assert utc_now().microsecond % 1000 == 0
-    assert to_db_precision(datetime(2024, 1, 1, 6, 0, 0, 123456, tzinfo=timezone.utc)) == datetime(
-        2024, 1, 1, 6, 0, 0, 123000, tzinfo=timezone.utc
+def test_manual_request_is_identified_not_ordered():
+    """Comparing revisions for inequality rather than ordering timestamps: a pod applies a
+    request once and is not due again, no matter how the clocks or precisions line up"""
+    unapplied = pod_reload_is_due(
+        schedule=ReloadSchedule(reload_revision=9),
+        pod_applied_revision=8,
+        pod_data_loaded_at=NOW,
+        current_time=NOW,
+        description="test",
+    )
+    applied = pod_reload_is_due(
+        schedule=ReloadSchedule(reload_revision=9),
+        pod_applied_revision=9,
+        pod_data_loaded_at=NOW,
+        current_time=NOW,
+        description="test",
     )
 
+    assert (unapplied, applied) == (True, False)
 
-def test_request_in_the_same_millisecond_is_not_lost_to_truncation():
-    """A pod whose data loaded microseconds before a request must still see it: both sides
-    are floored to the stored resolution, so the request never reads as older than it is"""
-    loaded_at = to_db_precision(datetime(2024, 1, 1, 6, 0, 0, 123400, tzinfo=timezone.utc))
-    requested_at = datetime(2024, 1, 1, 6, 0, 0, 124000, tzinfo=timezone.utc)
 
+def test_fresh_pod_adopts_the_revision_without_reloading():
+    """A pod that just booted holds data newer than any earlier request, so its first poll
+    must not re-serve one; the interval is the only thing that can make it due"""
     assert (
         pod_reload_is_due(
-            schedule=ReloadSchedule(reload_requested_at=requested_at),
-            pod_data_loaded_at=loaded_at,
-            current_time=NOW,
-            description="test",
-        )
-        is True
-    )
-
-
-def test_manual_request_reaches_every_pod_with_older_data():
-    """Nothing clears reload_requested_at, so each pod reloads exactly once per request:
-    due while its data predates the request, not due once refreshed or booted after it"""
-    schedule = ReloadSchedule(reload_requested_at=datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc))
-
-    assert (
-        pod_reload_is_due(schedule=schedule, pod_data_loaded_at=LAST_RUN, current_time=NOW, description="test") is True
-    )
-    assert (
-        pod_reload_is_due(
-            schedule=schedule,
-            pod_data_loaded_at=datetime(2024, 1, 1, 11, 0, 1, tzinfo=timezone.utc),
+            schedule=ReloadSchedule(reload_revision=12),
+            pod_applied_revision=None,
+            pod_data_loaded_at=NOW,
             current_time=NOW,
             description="test",
         )
@@ -187,6 +171,7 @@ def test_pod_reload_decision_ignores_persisted_last_run():
     assert (
         pod_reload_is_due(
             schedule=ReloadSchedule(interval_hours=6, last_run_at=datetime(2024, 1, 1, 11, 59, tzinfo=timezone.utc)),
+            pod_applied_revision=0,
             pod_data_loaded_at=LAST_RUN,
             current_time=NOW,
             description="test",
@@ -201,6 +186,7 @@ def test_schedule_that_never_ran_fires_immediately():
     assert (
         pod_reload_is_due(
             schedule=ReloadSchedule(interval_hours=6, last_run_at=None),
+            pod_applied_revision=0,
             pod_data_loaded_at=datetime(2024, 1, 1, 11, 59, tzinfo=timezone.utc),
             current_time=NOW,
             description="test",
@@ -215,14 +201,14 @@ async def test_read_reload_schedule_returns_none_for_missing_row():
 
 
 @pytest.mark.asyncio
-async def test_read_reload_schedule_surfaces_request_on_interval_less_row():
+async def test_read_reload_schedule_surfaces_revision_on_interval_less_row():
     """A manual reload on a proxy with no schedule creates a row with only the columns
-    set; the request must still reach other pods"""
-    prisma_client = _mock_prisma(row=_row(param_value=None, reload_requested_at=NOW))
+    set; the revision must still reach other pods"""
+    prisma_client = _mock_prisma(row=_row(param_value=None, reload_revision=3))
 
     schedule = await read_reload_schedule(prisma_client, "model_cost_map_reload_config")
 
-    assert schedule == ReloadSchedule(interval_hours=None, reload_requested_at=NOW, last_run_at=None)
+    assert schedule == ReloadSchedule(interval_hours=None, reload_revision=3, last_run_at=None)
 
 
 @pytest.mark.asyncio
@@ -237,9 +223,9 @@ async def test_write_reload_interval_touches_only_param_value():
 
 
 @pytest.mark.asyncio
-async def test_record_reload_run_updates_last_run_without_creating_or_clearing():
-    """update_many so a schedule deleted mid-poll stays deleted, and the untouched
-    reload_requested_at keeps fanning the request out to pods that have not seen it"""
+async def test_record_reload_run_updates_last_run_without_creating_or_bumping():
+    """update_many so a schedule deleted mid-poll stays deleted, and the untouched revision
+    keeps fanning the request out to pods that have not applied it"""
     prisma_client = _mock_prisma()
 
     await record_reload_run(prisma_client, "model_cost_map_reload_config", LAST_RUN)
@@ -250,15 +236,18 @@ async def test_record_reload_run_updates_last_run_without_creating_or_clearing()
 
 
 @pytest.mark.asyncio
-async def test_record_manual_reload_stamps_request_and_last_run():
-    prisma_client = _mock_prisma()
+async def test_record_manual_reload_bumps_the_revision_atomically():
+    """The increment must be delegated to the database: two concurrent requests that both
+    read then wrote a computed value would publish the same revision and one would be lost"""
+    prisma_client = _mock_prisma(upserted_revision=5)
 
-    await record_manual_reload(prisma_client, "model_cost_map_reload_config", LAST_RUN)
+    published = await record_manual_reload(prisma_client, "model_cost_map_reload_config", LAST_RUN)
 
     data = prisma_client.db.litellm_config.upsert.await_args.kwargs["data"]
-    assert data["update"] == {"last_run_at": LAST_RUN, "reload_requested_at": LAST_RUN}
+    assert data["update"] == {"last_run_at": LAST_RUN, "reload_revision": {"increment": 1}}
     assert data["create"] == {
         "param_name": "model_cost_map_reload_config",
         "last_run_at": LAST_RUN,
-        "reload_requested_at": LAST_RUN,
+        "reload_revision": 1,
     }
+    assert published == 5

@@ -333,7 +333,6 @@ from litellm.proxy.common_utils.periodic_reload_schedule import (
     record_manual_reload,
     record_reload_run,
     reload_schedule_status,
-    to_db_precision,
     utc_now,
     write_reload_interval,
 )
@@ -3863,10 +3862,10 @@ class ProxyConfig:
             get_model_cost_map_loaded_at,
         )
 
-        cost_map_loaded_at = get_model_cost_map_loaded_at()
-        self.model_cost_map_loaded_at: datetime = (
-            to_db_precision(cost_map_loaded_at) if cost_map_loaded_at is not None else utc_now()
-        )
+        self.model_cost_map_loaded_at: datetime = get_model_cost_map_loaded_at() or utc_now()
+        # None until the first poll adopts whatever revision the row carries; this pod's
+        # data is boot-fresh, so a request published before it started is already satisfied
+        self.model_cost_map_applied_revision: int | None = None
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -6451,12 +6450,17 @@ class ProxyConfig:
                 return
 
             current_time = utc_now()
-            if not pod_reload_is_due(
+            is_due = pod_reload_is_due(
                 schedule=schedule,
+                pod_applied_revision=self.model_cost_map_applied_revision,
                 pod_data_loaded_at=self.model_cost_map_loaded_at,
                 current_time=current_time,
                 description="Model cost map",
-            ):
+            )
+            # Adopt the revision we just compared against, whether or not it was the reason
+            # to reload; a request published after this read keeps a higher one for next tick
+            self.model_cost_map_applied_revision = schedule.reload_revision
+            if not is_due:
                 return
 
             models_count = await asyncio.to_thread(_reload_model_cost_map_in_process)
@@ -15643,8 +15647,11 @@ async def reload_model_cost_map(
         current_time = utc_now()
         proxy_config.model_cost_map_loaded_at = current_time
 
-        # Stamp the shared last run and the reload request so other pods reload too
-        await record_manual_reload(prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME, current_time)
+        # Publish a new revision so every other pod reloads on its next poll; this pod has
+        # already served it, so adopt it here rather than reloading again a tick later
+        proxy_config.model_cost_map_applied_revision = await record_manual_reload(
+            prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME, current_time
+        )
 
         verbose_proxy_logger.info(f"Model cost map reloaded successfully in current pod. Models count: {models_count}")
 

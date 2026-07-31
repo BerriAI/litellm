@@ -5,12 +5,12 @@ Persistence for the admin-configured periodic model cost map reload schedule sto
 Field ownership is split by writer so concurrent writers never overwrite each other:
 the schedule endpoints own the ``param_value`` JSON (``interval_hours``), while the
 reload job and the manual reload endpoints own the dedicated ``last_run_at`` /
-``reload_requested_at`` columns. ``last_run_at`` lives in the row rather than process
-memory so the Admin UI still reports the last execution after a restart and across pods.
-``reload_requested_at`` fans a manual reload out to every pod without any pod having to
-write the flag back down, so no pod can starve another of the request. Each pod tracks
-only when its own in-memory copy was loaded (seeded at boot) and reloads whenever that
-copy is older than the request or the configured interval.
+``reload_revision`` columns. ``last_run_at`` lives in the row rather than process memory
+so the Admin UI still reports the last execution after a restart and across pods.
+``reload_revision`` is a monotonic counter a manual reload increments; each pod records
+the revision it last applied and reloads whenever the row's differs, so a request reaches
+every pod exactly once without any pod clearing it and without comparing clocks. Interval
+reloads stay per-pod, driven by when that pod's own copy of the data was loaded.
 """
 
 from collections.abc import Mapping
@@ -36,11 +36,15 @@ if TYPE_CHECKING:
 MODEL_COST_MAP_RELOAD_PARAM_NAME = "model_cost_map_reload_config"
 
 
+class _RevisionIncrement(TypedDict):
+    increment: int
+
+
 class _ConfigRowWrite(TypedDict, total=False):
     param_name: str
     param_value: str
     last_run_at: datetime
-    reload_requested_at: datetime
+    reload_revision: int | _RevisionIncrement
 
 
 class _ConfigUpsertData(TypedDict):
@@ -63,7 +67,7 @@ def _config_table(prisma_client: PrismaClient) -> _ConfigTable:
 @dataclass(frozen=True, slots=True)
 class ReloadSchedule:
     interval_hours: int | None = None
-    reload_requested_at: datetime | None = None
+    reload_revision: int = 0
     last_run_at: datetime | None = None
 
 
@@ -80,17 +84,8 @@ class _IntervalConfig(BaseModel):
     interval_hours: int | None = None
 
 
-def to_db_precision(value: datetime) -> datetime:
-    """
-    Drop sub-millisecond digits, matching the TIMESTAMP(3) columns these values round-trip
-    through. Comparing a microsecond-precision stamp against its own truncated copy would
-    read as newer and skip the request it recorded
-    """
-    return value.replace(microsecond=(value.microsecond // 1000) * 1000)
-
-
 def utc_now() -> datetime:
-    return to_db_precision(datetime.now(timezone.utc))
+    return datetime.now(timezone.utc)
 
 
 def _parse_interval_hours(param_value: object) -> int | None:
@@ -109,7 +104,7 @@ def _as_utc(value: datetime | None) -> datetime | None:
 def parse_reload_schedule(row: "LiteLLM_Config") -> ReloadSchedule:
     return ReloadSchedule(
         interval_hours=_parse_interval_hours(row.param_value),
-        reload_requested_at=_as_utc(row.reload_requested_at),
+        reload_revision=int(row.reload_revision or 0),
         last_run_at=_as_utc(row.last_run_at),
     )
 
@@ -135,16 +130,19 @@ def reload_schedule_status(schedule: ReloadSchedule | None) -> ReloadScheduleSta
 def pod_reload_is_due(
     *,
     schedule: ReloadSchedule,
+    pod_applied_revision: int | None,
     pod_data_loaded_at: datetime,
     current_time: datetime,
     description: str,
 ) -> bool:
     """
-    Whether this pod should reload now: when its in-memory data (loaded at boot or at its
-    last reload) is older than a manual request or the configured interval. A schedule that
-    has never run anywhere fires immediately so the first run is not one interval away
+    Whether this pod should reload now. A revision it has not applied means a manual reload
+    it has not served; ``pod_applied_revision`` is None only until the pod's first poll, when
+    its data is boot-fresh and it simply adopts whatever revision it finds. Interval reloads
+    compare against this pod's own data, and a schedule that has never run anywhere fires
+    immediately rather than one interval later
     """
-    if schedule.reload_requested_at is not None and schedule.reload_requested_at > pod_data_loaded_at:
+    if pod_applied_revision is not None and schedule.reload_revision != pod_applied_revision:
         verbose_proxy_logger.info("%s reload triggered by manual reload request", description)
         return True
     if schedule.interval_hours is None:
@@ -194,14 +192,19 @@ async def record_reload_run(prisma_client: PrismaClient, param_name: str, ran_at
     await invalidate_config_param(param_name)
 
 
-async def record_manual_reload(prisma_client: PrismaClient, param_name: str, ran_at: datetime) -> None:
-    """After a manual in-pod reload: stamps the shared last run and the request every other
-    pod compares against on its next poll"""
-    await _config_table(prisma_client).upsert(
+async def record_manual_reload(prisma_client: PrismaClient, param_name: str, ran_at: datetime) -> int:
+    """
+    After a manual in-pod reload: stamp the shared last run and bump the revision every other
+    pod compares against. The increment is atomic, so concurrent requests each publish a
+    distinct revision instead of overwriting one another. Returns the published revision so
+    the serving pod can adopt it rather than reloading again on its next poll
+    """
+    row = await _config_table(prisma_client).upsert(
         where={"param_name": param_name},
         data={
-            "create": {"param_name": param_name, "last_run_at": ran_at, "reload_requested_at": ran_at},
-            "update": {"last_run_at": ran_at, "reload_requested_at": ran_at},
+            "create": {"param_name": param_name, "last_run_at": ran_at, "reload_revision": 1},
+            "update": {"last_run_at": ran_at, "reload_revision": {"increment": 1}},
         },
     )
     await invalidate_config_param(param_name)
+    return int(row.reload_revision)

@@ -83,8 +83,8 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
     }
     assert table.upsert.await_count == 1
     update_payload = table.upsert.await_args.kwargs["data"]["update"]
-    assert set(update_payload) == {"last_run_at", "reload_requested_at"}
-    assert update_payload["reload_requested_at"] == update_payload["last_run_at"]
+    assert set(update_payload) == {"last_run_at", "reload_revision"}
+    assert update_payload["reload_revision"] == {"increment": 1}
 
 
 def test_reload_model_cost_map_not_admin_forbidden(client, auth_as):
@@ -255,7 +255,7 @@ def test_get_model_cost_map_reload_status_scheduled(
     table = _attach_litellm_config(mock_prisma)
     config_row = MagicMock()
     config_row.param_value = {"interval_hours": 12}
-    config_row.reload_requested_at = None
+    config_row.reload_revision = 0
     config_row.last_run_at = None
     table.find_unique = AsyncMock(return_value=config_row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
@@ -283,7 +283,7 @@ def test_get_model_cost_map_reload_status_reports_persisted_last_run(
     table = _attach_litellm_config(mock_prisma)
     config_row = MagicMock()
     config_row.param_value = {"interval_hours": 6}
-    config_row.reload_requested_at = None
+    config_row.reload_revision = 0
     config_row.last_run_at = datetime(2024, 1, 1, 6, 0, 0, tzinfo=timezone.utc)
     table.find_unique = AsyncMock(return_value=config_row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
@@ -311,7 +311,7 @@ def test_get_model_cost_map_reload_status_no_config_not_scheduled(
     table = _attach_litellm_config(mock_prisma)
     config_row = MagicMock()
     config_row.param_value = {"interval_hours": None}
-    config_row.reload_requested_at = datetime(2024, 1, 1, 6, 0, 0, tzinfo=timezone.utc)
+    config_row.reload_revision = 3
     config_row.last_run_at = None
     table.find_unique = AsyncMock(return_value=config_row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
