@@ -3,7 +3,14 @@
 from urllib.parse import urlencode
 
 from fastapi import Request
-from fastapi.dependencies.utils import get_flat_dependant
+
+# from fastapi.dependencies.utils import get_flat_dependant
+try:
+    from fastapi.dependencies.utils import get_flat_dependant
+except ImportError:
+    # FastAPI >= 0.115.0 support fallback
+    from fastapi.dependencies.utils import get_dependant as get_flat_dependant
+
 from fastapi.responses import JSONResponse
 
 from litellm.types.proxy.management_endpoints.management_v1 import (
