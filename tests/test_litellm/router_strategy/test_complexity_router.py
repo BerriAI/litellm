@@ -4898,6 +4898,20 @@ class TestTierFallbackLadder:
         assert seen == [["complex-model"]]
 
     @pytest.mark.asyncio
+    async def test_default_model_does_not_rescue_an_exhausted_ladder_under_plugins(self):
+        """default_model is not vetted by the plugins, so it cannot serve when they are
+        configured. With nothing live on the ladder the request fails rather than routing
+        around the policy, and the error says which condition it hit."""
+
+        class NoOpPlugin:
+            async def run(self, context):
+                return context
+
+        router = _ladder_router(live=set(), default_model="fallback-model", plugins=[NoOpPlugin()])
+        with pytest.raises(ValueError, match="with routing plugins configured"):
+            await _route(router, "What is 2+2?")
+
+    @pytest.mark.asyncio
     async def test_a_plugin_narrowing_to_zero_still_fails_closed(self):
         """Unchanged policy: a plugin refusing every candidate is a decision, so the ladder
         must not climb past it and serve what the plugin just refused."""
