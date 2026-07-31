@@ -944,7 +944,7 @@ async def test_convert_to_bedrock_format_input_source():
     ]
 
     # Call the method
-    result = guardrail.convert_to_bedrock_format(source="INPUT", messages=mock_messages)
+    result = await guardrail.convert_to_bedrock_format(source="INPUT", messages=mock_messages)
 
     # Verify the result structure
     assert isinstance(result, dict)
@@ -1006,7 +1006,7 @@ async def test_convert_to_bedrock_format_output_source():
     )
 
     # Call the method
-    result = guardrail.convert_to_bedrock_format(
+    result = await guardrail.convert_to_bedrock_format(
         source="OUTPUT", response=mock_response
     )
 

@@ -2,6 +2,7 @@
 Unit tests for Bedrock Guardrails
 """
 
+import asyncio
 import json
 import os
 import sys
@@ -2567,15 +2568,19 @@ _GUARD_BLOCK = {
 
 def _input_request(messages: list) -> dict:
     """Arrange a guardrail and act: build the Bedrock INPUT payload."""
-    return _grounding_guardrail().convert_to_bedrock_format(
-        source="INPUT", messages=messages
+    return asyncio.run(
+        _grounding_guardrail().convert_to_bedrock_format(
+            source="INPUT", messages=messages
+        )
     )
 
 
 def _output_request(messages: list, response=None) -> dict:
     """Arrange a guardrail and act: build the Bedrock OUTPUT payload."""
-    return _grounding_guardrail().convert_to_bedrock_format(
-        source="OUTPUT", response=response, messages=messages
+    return asyncio.run(
+        _grounding_guardrail().convert_to_bedrock_format(
+            source="OUTPUT", response=response, messages=messages
+        )
     )
 
 
@@ -3614,3 +3619,107 @@ class TestBedrockIncrementalFlagInteractions:
             )
             scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
             assert scanned == ["q1"], "latest-role selection must exclude the system prompt"
+
+
+class TestBedrockGuardrailImageInput:
+    """Image parts must reach ApplyGuardrail, not just the text sitting next to them."""
+
+    _PNG_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+
+    def _guardrail(self) -> BedrockGuardrail:
+        return BedrockGuardrail(
+            guardrail_name="bedrock-image",
+            guardrailIdentifier="gr-image",
+            guardrailVersion="DRAFT",
+        )
+
+    @pytest.mark.asyncio
+    async def test_inline_image_is_sent_for_scanning(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what does this say?"},
+                    {"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}},
+                ],
+            }
+        ]
+
+        request = await self._guardrail().convert_to_bedrock_format(
+            source="INPUT", messages=messages
+        )
+
+        assert request["content"] == [
+            {"text": {"text": "what does this say?"}},
+            {
+                "image": {
+                    "format": "png",
+                    "source": {"bytes": self._PNG_DATA_URI.split(",")[1]},
+                }
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_unscannable_image_is_skipped_without_failing_the_scan(self):
+        """ApplyGuardrail takes png/jpeg only; a gif is dropped instead of 400ing the call."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hello"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/gif;base64,R0lGODlhAQABAAAAACw="},
+                    },
+                    {"type": "image_url", "image_url": {"url": "not-an-image"}},
+                ],
+            }
+        ]
+
+        request = await self._guardrail().convert_to_bedrock_format(
+            source="INPUT", messages=messages
+        )
+
+        assert request["content"] == [{"text": {"text": "hello"}}]
+
+    @pytest.mark.asyncio
+    async def test_remote_image_is_fetched_and_scanned(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "https://example.com/a.jpg"}}
+                ],
+            }
+        ]
+
+        with patch(
+            "litellm.litellm_core_utils.prompt_templates.factory.BedrockImageProcessor.get_image_details_async",
+            new=AsyncMock(return_value=("Zm9v", "image/jpeg")),
+        ):
+            request = await self._guardrail().convert_to_bedrock_format(
+                source="INPUT", messages=messages
+            )
+
+        assert request["content"] == [
+            {"image": {"format": "jpeg", "source": {"bytes": "Zm9v"}}}
+        ]
+
+    def test_masking_keeps_image_parts_in_the_request(self):
+        """Masking rewrites text in place; the image must survive to reach the model."""
+        image_part = {"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}}
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "my ssn is 123-45-6789"}, image_part],
+            }
+        ]
+
+        updated = self._guardrail()._apply_masking_to_messages(
+            messages=messages, masked_texts=["my ssn is {SSN}"]
+        )
+
+        assert updated[0]["content"] == [
+            {"type": "text", "text": "my ssn is {SSN}"},
+            image_part,
+        ]
