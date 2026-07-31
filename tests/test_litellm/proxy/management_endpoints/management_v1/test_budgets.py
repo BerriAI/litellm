@@ -371,13 +371,26 @@ def test_in_filter_binds_each_requested_duration(query_raw, as_proxy_admin):
 
 
 def test_created_at_range_is_bound_as_a_timestamp(query_raw, as_proxy_admin):
+    """The bind crosses into the query engine as JSON, so an uncast placeholder reaches
+    Postgres as text and `timestamp >= text` is a hard error, not a wrong answer."""
     _serve(query_raw, [])
 
     _get("filter[created_at][gte]=2026-07-01T00:00:00Z")
 
     sql, *params = _select_call(query_raw)
-    assert '"created_at" >= $1' in sql
+    assert "\"created_at\" >= $1::timestamptz AT TIME ZONE 'UTC'" in sql
     assert params[0] == datetime(2026, 7, 1, tzinfo=timezone.utc)
+
+
+def test_a_non_datetime_bind_is_not_cast(query_raw, as_proxy_admin):
+    """Guards the cast above from being applied to every placeholder."""
+    _serve(query_raw, [])
+
+    _get("filter[max_budget][gte]=5")
+
+    sql = _select_call(query_raw)[0]
+    assert '"max_budget" >= $1' in sql
+    assert "timestamptz" not in sql
 
 
 def test_an_offsetless_created_at_bound_is_read_as_utc(query_raw, as_proxy_admin):

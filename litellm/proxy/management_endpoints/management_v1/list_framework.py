@@ -213,12 +213,23 @@ def _sql_operator(op: ComparisonOp) -> str:
             assert_never(op)
 
 
+def _placeholder(index: int, value: FilterValue) -> str:
+    """`$n`, cast when the bind is a datetime.
+
+    Binds cross into the query engine as JSON, so a datetime arrives as text and
+    Postgres refuses `timestamp >= text` outright. Prisma stores DateTime as a naive
+    `TIMESTAMP(3)` holding UTC, so the bind is read as an instant and then dropped to
+    naive UTC to match the column, the same cast `/spend/logs/ui` applies.
+    """
+    return f"${index}::timestamptz AT TIME ZONE 'UTC'" if isinstance(value, datetime) else f"${index}"
+
+
 def _render(predicate: Predicate, index: int) -> tuple[str, tuple[object, ...]]:
     match predicate:
         case IsNull(field=field, negated=negated):
             return f'"{field}" IS {"NOT NULL" if negated else "NULL"}', ()
         case Within(field=field, values=values):
-            placeholders = ", ".join(f"${index + offset}" for offset in range(len(values)))
+            placeholders = ", ".join(_placeholder(index + offset, value) for offset, value in enumerate(values))
             return f'"{field}" IN ({placeholders})', values
         case AnyOf(clauses=clauses):
             rendered, params = _render_all(clauses, index)
@@ -226,7 +237,7 @@ def _render(predicate: Predicate, index: int) -> tuple[str, tuple[object, ...]]:
         case Compare(field=field, op="contains", value=value):
             return f"\"{field}\" ILIKE ${index} ESCAPE '\\'", (f"%{escape_like(str(value))}%",)
         case Compare(field=field, op=op, value=value):
-            return f'"{field}" {_sql_operator(op)} ${index}', (value,)
+            return f'"{field}" {_sql_operator(op)} {_placeholder(index, value)}', (value,)
         case _:
             assert_never(predicate)
 

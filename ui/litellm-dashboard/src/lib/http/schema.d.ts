@@ -7187,10 +7187,11 @@ export interface paths {
          *
          *     `sort` takes a comma-separated list of `budget_id`, `max_budget`, `tpm_limit`,
          *     `rpm_limit` or `created_at`, each optionally prefixed with `-` for descending,
-         *     and defaults to `-created_at,budget_id`. `q` is a case-insensitive substring
-         *     match on `budget_id`. `page_size` defaults to 50 and is capped at 100.
-         *     Filters are `filter[budget_duration][in|is_null]`,
-         *     `filter[max_budget][gte|lte|is_null]` and `filter[created_at][gte|lte]`.
+         *     and defaults to `-created_at`. `budget_id` is appended to every sort as the
+         *     tiebreaker. `q` is a case-insensitive substring match on `budget_id`.
+         *     `page_size` defaults to 50 and is capped at 100. Filters are
+         *     `filter[budget_duration][in|is_null]`, `filter[max_budget][gte|lte|is_null]`
+         *     and `filter[created_at][gte|lte]`.
          *
          *     Example curl:
          *     ```
@@ -21570,6 +21571,40 @@ export interface components {
             /** Reset At */
             reset_at?: string | null;
         };
+        /**
+         * BudgetListItem
+         * @description One budget as the Budgets page reads it, and as it comes back off the table.
+         *
+         *     Validating the raw row through here is what makes `tpm_limit` / `rpm_limit`
+         *     numbers: they are `BigInt?` in the schema, which the query engine hands back as
+         *     decimal strings, and a quoted "60000" breaks arithmetic in the dashboard.
+         */
+        BudgetListItem: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Id */
+            budget_id: string;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** BudgetNewRequest */
         BudgetNewRequest: {
             /**
@@ -24814,7 +24849,6 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
-        JsonValue: unknown;
         /** KeyHealthResponse */
         KeyHealthResponse: {
             /**
@@ -24968,7 +25002,7 @@ export interface components {
         };
         /**
          * ListLinks
-         * @description Hypermedia for an entity list. `first`/`last` exist here because `total_pages` is known.
+         * @description Page-mode counterpart to `PageLinks`. `first`/`last` are knowable here because the total count is.
          */
         ListLinks: {
             /** First */
@@ -24984,7 +25018,7 @@ export interface components {
         };
         /**
          * ListMeta
-         * @description An entity list can afford the COUNT(*) a facet cannot, so it reports a real total.
+         * @description Page-mode counterpart to `PageMeta`: an entity list pays for the COUNT(*) so the table can show a page count.
          */
         ListMeta: {
             /** Page */
@@ -25011,15 +25045,10 @@ export interface components {
             /** Prompts */
             prompts: components["schemas"]["PromptSpec"][];
         };
-        /**
-         * ListResponse
-         * @description One page of an entity collection. Rows are flat: no `{type, id, attributes}` wrapper.
-         */
-        ListResponse: {
+        /** ListResponse[BudgetListItem] */
+        ListResponse_BudgetListItem_: {
             /** Data */
-            data: {
-                [key: string]: components["schemas"]["JsonValue"];
-            }[];
+            data: components["schemas"]["BudgetListItem"][];
             links: components["schemas"]["ListLinks"];
             meta: components["schemas"]["ListMeta"];
         };
@@ -43574,7 +43603,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ListResponse"];
+                    "application/json": components["schemas"]["ListResponse_BudgetListItem_"];
                 };
             };
         };
