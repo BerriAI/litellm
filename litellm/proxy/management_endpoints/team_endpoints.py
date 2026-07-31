@@ -3996,7 +3996,7 @@ async def _build_team_list_where_conditions(
 
     if search:
         where_conditions["OR"] = [
-            {"team_id": search},
+            {"team_id": {"contains": search, "mode": "insensitive"}},
             {"team_alias": {"contains": search, "mode": "insensitive"}},
         ]
 
@@ -4230,7 +4230,7 @@ async def list_team_v2(
     ),
     search: Optional[str] = fastapi.Query(
         default=None,
-        description="Combined search: matches teams whose 'team_id' equals the value OR whose 'team_alias' contains it (case-insensitive).",
+        description="Combined search: matches teams whose 'team_id' or 'team_alias' contains the value (case-insensitive).",
     ),
     page: int = fastapi.Query(default=1, description="Page number for pagination", ge=1),
     page_size: int = fastapi.Query(default=10, description="Number of teams per page", ge=1, le=100),
