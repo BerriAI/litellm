@@ -2675,6 +2675,73 @@ class StandardLoggingPromptManagementMetadata(TypedDict):
     prompt_integration: str
 
 
+class StandardLoggingRoutingDecisionTierBoundaries(TypedDict):
+    """Snapshot of the complexity scorer's tier boundaries at decision time, so a
+    historical spend log row stays explainable after the router config changes."""
+
+    simple_medium: float
+    medium_complex: float
+    complex_reasoning: float
+
+
+RoutingDecisionCause = Literal[
+    "heuristic_scorer",
+    # The scorer found 2+ reasoning markers and forced REASONING regardless of score.
+    # A distinct cause rather than a marker inside `signals`, because it is the fact
+    # that tells a reader the score did NOT choose the tier; encoding it as free text
+    # meant anything that filtered `signals` silently changed what the row claimed.
+    "reasoning_override",
+    "llm_classifier",
+    "literal_keyword_match",
+    "semantic_keyword_match",
+    "session_affinity_pin",
+    "session_affinity_escalation",
+    "default_fallback",
+    "keyword",
+    "quality_tier",
+    "bandit",
+]
+
+
+class StandardLoggingRoutingDecision(TypedDict, total=False):
+    """Per-request provenance for a pre-routing strategy (auto-router) decision."""
+
+    router_model_name: str
+    router_type: Literal["complexity", "adaptive", "quality"]
+    routed_model: str
+    cause: RoutingDecisionCause
+    tier: str
+    request_type: str
+    score: float
+    signals: Sequence[str]
+    matched_keyword: str
+    escalation_keyword: str
+    classifier_model: str
+    escalated: bool
+    tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
+
+
+# Fields whose values quote the caller's prompt. Dropped when an operator turns message
+# logging off. Every other field aggregates the prompt without reproducing it and is kept,
+# so a redacted row stays explainable. `test_every_routing_decision_field_is_classified`
+# fails if a field is added to the record without being placed in one set or the other.
+PROMPT_QUOTING_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset({"signals", "matched_keyword", "escalation_keyword"})
+DERIVED_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset(
+    {
+        "router_model_name",
+        "router_type",
+        "routed_model",
+        "cause",
+        "tier",
+        "request_type",
+        "score",
+        "classifier_model",
+        "escalated",
+        "tier_boundaries",
+    }
+)
+
+
 class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     """
     Specific metadata k,v pairs logged to integration for easier cost tracking and prompt management
@@ -2688,6 +2755,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
+    routing_decision: StandardLoggingRoutingDecision | None
     applied_guardrails: Optional[List[str]]
     usage_object: Optional[dict]
     cold_storage_object_key: Optional[str]  # S3/GCS object key for cold storage retrieval

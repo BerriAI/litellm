@@ -4,22 +4,18 @@ import { Text, TextInput } from "@tremor/react";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
+import { normalizeTierModels } from "../add_model/complexity_router_tiers";
+import { isComplexityRouter } from "../add_model/auto_router_strategies";
+import { getSemanticConfigError } from "../add_model/build_complexity_router_config";
+import { KeywordTierRule } from "../add_model/KeywordTierRules";
+import { DEFAULT_MATCH_THRESHOLD } from "../add_model/SemanticKeywordMatching";
+import { hydrateKeywordTierRules, serializeKeywordTierRules } from "../add_model/complexity_router_keywords";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_TIER_DISTANCE_PENALTY,
 } from "../add_model/ComplexityRouterConfig";
 import NotificationsManager from "../molecules/notifications_manager";
-
-const isComplexityRouterModel = (modelData: any): boolean =>
-  modelData?.litellm_params?.model?.startsWith("auto_router/complexity_router") ||
-  modelData?.litellm_params?.complexity_router_config != null;
-
-const normalizeTierModels = (value: unknown): string[] => {
-  if (Array.isArray(value)) return value;
-  if (typeof value === "string" && value) return [value];
-  return [];
-};
 
 interface EditAutoRouterModalProps {
   isVisible: boolean;
@@ -30,6 +26,9 @@ interface EditAutoRouterModalProps {
   userRole: string;
 }
 
+// Keys this modal rewrites from its own form state on save. Anything absent from this set is
+// carried through untouched from the stored config, so a key only belongs here once the modal
+// actually renders a control that can set it.
 const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tiers",
   "classifier_type",
@@ -41,6 +40,16 @@ const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "return_raw_model_name",
 ]);
 
+// Managed only when the caller passes the corresponding state. A caller that does not render
+// these controls must carry the stored values through untouched instead of dropping them.
+const KEYWORD_MATCHING_KEYS = new Set([
+  "keyword_tier_rules",
+  "escalation_keywords",
+  "semantic_keyword_matching",
+  "embedding_model",
+  "match_threshold",
+]);
+
 const toRecord = (value: unknown): Record<string, unknown> => {
   const parsed: unknown = typeof value === "string" ? JSON.parse(value) : value;
   return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
@@ -48,19 +57,29 @@ const toRecord = (value: unknown): Record<string, unknown> => {
     : {};
 };
 
+export interface KeywordMatchingState {
+  keywordTierRules: KeywordTierRule[];
+  escalationKeywords: string[];
+  semanticMatchingEnabled: boolean;
+  embeddingModel: string | undefined;
+  matchThreshold: number;
+}
+
 export const buildUpdatedComplexityRouterConfig = (
   storedConfig: unknown,
   value: ComplexityRouterConfigValue,
   customTechnicalKeywords?: string[],
+  keywordMatching?: KeywordMatchingState,
 ): Record<string, unknown> => {
-  const preservedConfig = Object.fromEntries(
-    Object.entries(toRecord(storedConfig)).filter(
-      ([key]) =>
-        !MANAGED_COMPLEXITY_ROUTER_KEYS.has(key) &&
-        (customTechnicalKeywords === undefined || key !== "custom_technical_keywords"),
-    ),
-  );
+  const isManaged = (key: string): boolean => {
+    if (MANAGED_COMPLEXITY_ROUTER_KEYS.has(key)) return true;
+    if (keywordMatching !== undefined && KEYWORD_MATCHING_KEYS.has(key)) return true;
+    return customTechnicalKeywords !== undefined && key === "custom_technical_keywords";
+  };
+
+  const preservedConfig = Object.fromEntries(Object.entries(toRecord(storedConfig)).filter(([key]) => !isManaged(key)));
   const adaptiveEligible = value.adaptive_eligible ?? "all";
+  const storedKeywordRules = keywordMatching ? serializeKeywordTierRules(keywordMatching.keywordTierRules) : [];
 
   return {
     ...preservedConfig,
@@ -80,6 +99,17 @@ export const buildUpdatedComplexityRouterConfig = (
       adaptive_eligible: adaptiveEligible,
     }),
     ...(value.return_raw_model_name && { return_raw_model_name: true }),
+    ...(keywordMatching && {
+      // Mirrors buildComplexityRouterConfig: rules only when non-empty (the backend rejects
+      // an empty rule with a 400), escalation keywords always, semantic trio only when on.
+      ...(storedKeywordRules.length > 0 && { keyword_tier_rules: storedKeywordRules }),
+      escalation_keywords: keywordMatching.escalationKeywords.map((k) => k.trim()).filter(Boolean),
+      ...(keywordMatching.semanticMatchingEnabled && {
+        semantic_keyword_matching: true,
+        embedding_model: keywordMatching.embeddingModel,
+        match_threshold: keywordMatching.matchThreshold,
+      }),
+    }),
   };
 };
 
@@ -99,11 +129,16 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   const [showCustomEmbeddingModel, setShowCustomEmbeddingModel] = useState<boolean>(false);
   const [routerConfig, setRouterConfig] = useState<any>(null);
   const [customTechnicalKeywords, setCustomTechnicalKeywords] = useState<string[]>([]);
+  const [keywordTierRules, setKeywordTierRules] = useState<KeywordTierRule[]>([]);
+  const [escalationKeywords, setEscalationKeywords] = useState<string[]>([]);
+  const [semanticMatchingEnabled, setSemanticMatchingEnabled] = useState<boolean>(false);
+  const [embeddingModel, setEmbeddingModel] = useState<string | undefined>(undefined);
+  const [matchThreshold, setMatchThreshold] = useState<number>(DEFAULT_MATCH_THRESHOLD);
   const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
     tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
     classifier_type: "heuristic",
   });
-  const isComplexityRouter = isComplexityRouterModel(modelData);
+  const isComplexityRouterModel = isComplexityRouter(modelData?.litellm_params);
 
   useEffect(() => {
     if (isVisible && modelData) {
@@ -140,7 +175,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
   const initializeForm = () => {
     try {
-      if (isComplexityRouterModel(modelData)) {
+      if (isComplexityRouterModel) {
         // Parse the complexity_router_config if it exists and is a string
         let parsedConfig = modelData.litellm_params?.complexity_router_config || {};
         if (typeof parsedConfig === "string") {
@@ -164,6 +199,20 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         });
         setCustomTechnicalKeywords(
           Array.isArray(parsedConfig.custom_technical_keywords) ? parsedConfig.custom_technical_keywords : [],
+        );
+        // Hydrated from the stored config, never from create-form defaults: these keys are now
+        // rewritten on save, so seeding a default here would inject it into a config that never
+        // had it.
+        setKeywordTierRules(hydrateKeywordTierRules(parsedConfig.keyword_tier_rules));
+        setEscalationKeywords(
+          Array.isArray(parsedConfig.escalation_keywords)
+            ? parsedConfig.escalation_keywords.filter((k: unknown): k is string => typeof k === "string")
+            : [],
+        );
+        setSemanticMatchingEnabled(parsedConfig.semantic_keyword_matching === true);
+        setEmbeddingModel(typeof parsedConfig.embedding_model === "string" ? parsedConfig.embedding_model : undefined);
+        setMatchThreshold(
+          typeof parsedConfig.match_threshold === "number" ? parsedConfig.match_threshold : DEFAULT_MATCH_THRESHOLD,
         );
 
         form.setFieldsValue({
@@ -208,7 +257,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       setLoading(true);
       const values = await form.validateFields();
 
-      if (isComplexityRouter) {
+      if (isComplexityRouterModel) {
         const { tiers, classifier_type, classifier_llm_config } = complexityRouterConfig;
         if (Object.values(tiers).every((models) => models.length === 0)) {
           NotificationsManager.fromBackend("Please select at least one model for a complexity tier");
@@ -216,6 +265,20 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         }
         if (classifier_type === "llm" && !classifier_llm_config?.model) {
           NotificationsManager.fromBackend("Please select a classifier model, or switch back to Heuristic");
+          return;
+        }
+        // Same guard the create form applies (add_auto_router_tab.tsx). The backend rejects
+        // semantic_keyword_matching without an embedding model or keyword rules
+        // (complexity_router/config.py), so without this a save fails as a raw 400 instead of
+        // an inline message.
+
+        // Same guard the create form applies (add_auto_router_tab.tsx). The backend rejects
+        // semantic_keyword_matching without an embedding model or keyword rules
+        // (complexity_router/config.py), so without this a save fails as a raw 400 instead of
+        // an inline message.
+        const semanticError = getSemanticConfigError({ semanticMatchingEnabled, embeddingModel, keywordTierRules });
+        if (semanticError) {
+          NotificationsManager.fromBackend(semanticError);
           return;
         }
 
@@ -226,6 +289,13 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             modelData.litellm_params?.complexity_router_config,
             complexityRouterConfig,
             customTechnicalKeywords,
+            {
+              keywordTierRules,
+              escalationKeywords,
+              semanticMatchingEnabled,
+              embeddingModel,
+              matchThreshold,
+            },
           ),
           complexity_router_default_model: defaultModel,
         };
@@ -327,7 +397,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             <TextInput placeholder="e.g., auto_router_1, smart_routing" />
           </Form.Item>
 
-          {isComplexityRouter ? (
+          {isComplexityRouterModel ? (
             /* Complexity Router Configuration */
             <div className="w-full">
               <ComplexityRouterConfig
@@ -338,6 +408,16 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                 }}
                 customTechnicalKeywords={customTechnicalKeywords}
                 onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
+                keywordTierRules={keywordTierRules}
+                onKeywordTierRulesChange={setKeywordTierRules}
+                semanticMatchingEnabled={semanticMatchingEnabled}
+                onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
+                embeddingModel={embeddingModel}
+                onEmbeddingModelChange={setEmbeddingModel}
+                matchThreshold={matchThreshold}
+                onMatchThresholdChange={setMatchThreshold}
+                escalationKeywords={escalationKeywords}
+                onEscalationKeywordsChange={setEscalationKeywords}
               />
             </div>
           ) : (

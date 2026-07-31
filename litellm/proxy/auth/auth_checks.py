@@ -74,6 +74,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
+    object_permission_cache_key,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
@@ -485,6 +486,14 @@ MODEL_DISCOVERY_ROUTES = frozenset(
     }
 )
 
+BUDGET_ENFORCED_SIDE_EFFECT_ROUTES = frozenset(
+    {
+        "/health",
+        "/health/services",
+        "/health/test_connection",
+    }
+)
+
 
 async def common_checks(
     request_body: dict,
@@ -531,8 +540,10 @@ async def common_checks(
         request=request,
     )
 
-    if route in MODEL_DISCOVERY_ROUTES:
-        skip_budget_checks = True
+    skip_all_budget_checks = skip_budget_checks or (
+        route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES
+        and (route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route))
+    )
 
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
@@ -606,7 +617,7 @@ async def common_checks(
             project_object=project_object,
             _model=_model,
             llm_router=llm_router,
-            skip_budget_checks=skip_budget_checks,
+            skip_budget_checks=skip_all_budget_checks,
             valid_token=valid_token,
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -615,7 +626,7 @@ async def common_checks(
     _reject_clientside_metadata_tags_check(general_settings, request_body, route)
 
     # If this is a free model, skip all budget checks
-    if not skip_budget_checks:
+    if not skip_all_budget_checks:
         # Key metadata.tags are injected into request_body here so the tag budget
         # check can read them; this mutation must run before the gathered checks.
         if valid_token is not None:
@@ -632,31 +643,28 @@ async def common_checks(
             )
 
         async def _user_max_budget_check() -> None:
-            if user_object is None or user_object.max_budget is None:
-                return
-            skip_for_team = (
-                general_settings.get("skip_user_budget_on_team_key") is True
-                and team_object is not None
-                and team_object.team_id is not None
-            )
-            if skip_for_team:
-                return
-            from litellm.proxy.proxy_server import get_current_spend
+            # 4.1 personal budget, if personal key
+            if (
+                (team_object is None or team_object.team_id is None)
+                and user_object is not None
+                and user_object.max_budget is not None
+            ):
+                from litellm.proxy.proxy_server import get_current_spend
 
-            user_budget = user_object.max_budget
-            user_spend = await get_current_spend(
-                counter_key=f"spend:user:{user_object.user_id}",
-                fallback_spend=user_object.spend or 0.0,
-                max_budget=user_budget,
-            )
-            if math.isfinite(user_budget) and user_spend >= user_budget:
-                raise litellm.BudgetExceededError(
-                    current_cost=user_spend,
+                user_budget = user_object.max_budget
+                user_spend = await get_current_spend(
+                    counter_key=f"spend:user:{user_object.user_id}",
+                    fallback_spend=user_object.spend or 0.0,
                     max_budget=user_budget,
-                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
-                    entity_type=Litellm_EntityType.USER.value,
-                    entity_id=user_object.user_id,
                 )
+                if math.isfinite(user_budget) and user_spend >= user_budget:
+                    raise litellm.BudgetExceededError(
+                        current_cost=user_spend,
+                        max_budget=user_budget,
+                        message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
+                        entity_type=Litellm_EntityType.USER.value,
+                        entity_id=user_object.user_id,
+                    )
 
         # Each scope reads a distinct counter key with no cross-scope ordering
         # dependency, so the per-scope Redis-first reads run concurrently instead
@@ -715,7 +723,7 @@ async def common_checks(
             raise budget_error
 
     _enforce_user_param_check(general_settings, request, request_body, route)
-    _global_proxy_budget_check(global_proxy_spend, skip_budget_checks, route)
+    _global_proxy_budget_check(global_proxy_spend, skip_all_budget_checks, route)
     _guardrail_modification_check(request_body, team_object)
 
     # 10 [OPTIONAL] Organization RBAC checks
@@ -2434,7 +2442,7 @@ class ExperimentalUIJWTToken:
         if decrypted_token is None:
             return None
         try:
-            return UserAPIKeyAuth(**json.loads(decrypted_token))
+            return UserAPIKeyAuth.model_validate(json.loads(decrypted_token))
         except Exception as e:
             raise Exception(f"Invalid hash key. Hash key={hashed_token}. Decrypted token={decrypted_token}. Error: {e}")
 
@@ -2553,7 +2561,7 @@ async def get_key_object(
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    _response = UserAPIKeyAuth(**_valid_token.model_dump(exclude_none=True))
+    _response = UserAPIKeyAuth.model_validate(_valid_token.model_dump(exclude_none=True))
 
     # Load object_permission if object_permission_id exists but object_permission is not loaded
     if _response.object_permission_id and not _response.object_permission:
@@ -2609,7 +2617,7 @@ async def get_object_permission(
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
     # check if in cache
-    key = "object_permission_id:{}".format(object_permission_id)
+    key = object_permission_cache_key(object_permission_id)
     deserialized_perm = await user_api_key_cache.async_get_cache(
         key=key,
         model_type=LiteLLM_ObjectPermissionTable,

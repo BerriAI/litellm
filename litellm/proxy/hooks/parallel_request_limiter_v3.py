@@ -28,6 +28,7 @@ from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -2447,13 +2448,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 data["litellm_proxy_rate_limit_response"] = response
                 # Mirror into metadata so streaming success logging can find
                 # it via ``kwargs["litellm_params"]["metadata"]``.
-                self._stash_value_in_metadata_channels(
+                self._stash_value_in_internal_metadata(
                     data=data,
                     key=RATE_LIMIT_RESPONSE_KEY,
                     value=response,
                 )
                 if parallel_slot_id is not None:
-                    self._stash_value_in_metadata_channels(
+                    self._stash_value_in_internal_metadata(
                         data=data,
                         key=MAX_PARALLEL_SLOT_ACQUIRED_KEY,
                         value={
@@ -2533,7 +2534,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         requested_model=requested_model,
                     )
                 else:
-                    self._stash_value_in_metadata_channels(
+                    self._stash_value_in_internal_metadata(
                         data=data,
                         key=RATE_LIMIT_DESCRIPTORS_KEY,
                         value=descriptors,
@@ -2566,7 +2567,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         data["litellm_proxy_rate_limit_response"] = tpm_response
                         # Keep the metadata stash in sync when this is the
                         # first snapshot written.
-                        self._stash_value_in_metadata_channels(
+                        self._stash_value_in_internal_metadata(
                             data=data,
                             key=RATE_LIMIT_RESPONSE_KEY,
                             value=tpm_response,
@@ -2803,19 +2804,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return merged
 
     @staticmethod
-    def _stash_value_in_metadata_channels(
+    def _stash_value_in_internal_metadata(
         data: Dict[str, Any],
         key: str,
         value: Any,
     ) -> None:
-        for channel in ("metadata", "litellm_metadata"):
-            existing = data.get(channel)
-            if isinstance(existing, dict):
-                existing[key] = value
-            elif channel == "metadata":
-                # ``litellm_metadata`` is owned by the router; don't conjure
-                # it here.
-                data[channel] = {key: value}
+        # Writes only the proxy-internal bucket. Routes that own
+        # ``litellm_metadata`` (Responses, /v1/messages, batches, files) expose
+        # ``metadata`` as a provider request parameter, so creating or adding to
+        # it here would forward internal state upstream.
+        _, metadata_bucket = get_or_create_metadata_bucket(data)
+        metadata_bucket[key] = value
 
     @classmethod
     def _stash_reservation_in_data(
@@ -2831,11 +2830,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         scopes_payload: Optional[List[List[str]]] = [[k, v] for k, v in reserved_scopes] if reserved_scopes else None
 
-        cls._stash_value_in_metadata_channels(data=data, key=TPM_RESERVED_TOKENS_KEY, value=estimated_tokens)
+        cls._stash_value_in_internal_metadata(data=data, key=TPM_RESERVED_TOKENS_KEY, value=estimated_tokens)
         if reserved_model:
-            cls._stash_value_in_metadata_channels(data=data, key=TPM_RESERVED_MODEL_KEY, value=reserved_model)
+            cls._stash_value_in_internal_metadata(data=data, key=TPM_RESERVED_MODEL_KEY, value=reserved_model)
         if scopes_payload is not None:
-            cls._stash_value_in_metadata_channels(data=data, key=TPM_RESERVED_SCOPES_KEY, value=scopes_payload)
+            cls._stash_value_in_internal_metadata(data=data, key=TPM_RESERVED_SCOPES_KEY, value=scopes_payload)
 
     @staticmethod
     def _lookup_stashed_value(
@@ -2858,9 +2857,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         return candidate
             litellm_params = kwargs.get("litellm_params")
             if isinstance(litellm_params, dict):
-                lp_metadata = litellm_params.get("metadata")
-                if isinstance(lp_metadata, dict):
-                    candidate = lp_metadata.get(key)
+                for channel in ("litellm_metadata", "metadata"):
+                    lp_metadata = litellm_params.get(channel)
+                    if isinstance(lp_metadata, dict) and lp_metadata.get(key) is not None:
+                        return lp_metadata[key]
         if candidate is None and isinstance(standard_logging_metadata, dict):
             candidate = standard_logging_metadata.get(key)
         return candidate

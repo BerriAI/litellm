@@ -2411,6 +2411,11 @@ class MCPServerManager:
                 and not is_admitted_subject
                 and _user_has_admin_view(user_api_key_auth)
                 and not has_explicit_object_permission
+                # An entitlement attached to the HUMAN binds them whatever their role: it is the
+                # person's scope, not the credential's, so an admin role is not a waiver of it. An
+                # UNRESOLVED entitlement also skips the shortcut, so the resolver denies rather than
+                # handing over the whole registry on a transient fault.
+                and not await MCPRequestHandler._user_places_mcp_ceiling(user_api_key_auth)
             ):
                 verbose_logger.debug("Admin user without explicit object_permission - returning all servers")
                 return list(self.get_registry().keys())
@@ -5322,7 +5327,7 @@ class MCPServerManager:
                 ]
             }
         )
-        db_mcp_servers = [LiteLLM_MCPServerTable(**r.model_dump()) for r in raw_rows]
+        db_mcp_servers = [LiteLLM_MCPServerTable.model_validate(r.model_dump()) for r in raw_rows]
         verbose_logger.info(f"Found {len(db_mcp_servers)} MCP servers in database")
 
         previous_registry = self.registry
