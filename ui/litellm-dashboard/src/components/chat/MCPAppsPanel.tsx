@@ -135,13 +135,19 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
     [connectMode],
   );
 
-  const fetchLoadCancelledRef = useRef(false);
+  const connectableNow = useCallback(
+    (serverId: string): MCPServer | undefined => {
+      const current = serversRef.current.find((s) => s.server_id === serverId);
+      return current !== undefined && connectUnavailabilityLabel(current) === null ? current : undefined;
+    },
+    [connectUnavailabilityLabel],
+  );
 
   const fetchToolCount = useCallback(
-    async (server: MCPServer) => {
+    async (server: MCPServer, isCurrentLoad: () => boolean) => {
       try {
         const toolsData = await listMCPTools(accessToken, server.server_id);
-        if (fetchLoadCancelledRef.current) return;
+        if (!isCurrentLoad()) return;
         const tools: MCPTool[] = Array.isArray(toolsData?.tools) ? toolsData.tools : [];
         setToolCounts((prev) => ({ ...prev, [nameOf(server)]: tools.length }));
       } catch {
@@ -152,17 +158,17 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
   );
 
   const checkOauthCredential = useCallback(
-    async (server: MCPServer) => {
+    async (server: MCPServer, isCurrentLoad: () => boolean) => {
       try {
         const status = await getMCPOAuthUserCredentialStatus(accessToken, server.server_id);
-        if (fetchLoadCancelledRef.current) return;
+        if (!isCurrentLoad()) return;
         if (status.has_credential && !status.is_expired) {
           setOauthConnected((prev) => new Set(prev).add(server.server_id));
         }
       } catch {
         // ignore
       } finally {
-        if (!fetchLoadCancelledRef.current) {
+        if (isCurrentLoad()) {
           setOauthChecking((prev) => {
             const next = new Set(prev);
             next.delete(server.server_id);
@@ -175,11 +181,12 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
   );
 
   useEffect(() => {
-    fetchLoadCancelledRef.current = false;
+    let current = true;
+    const isCurrentLoad = () => current;
 
     fetchMCPServers(accessToken, undefined, connectMode)
       .then(async (serverData) => {
-        if (fetchLoadCancelledRef.current) return;
+        if (!isCurrentLoad()) return;
         const list: MCPServer[] = Array.isArray(serverData) ? serverData : serverData?.data ?? [];
         const reachable = connectMode ? list.filter((s) => s.connected_app_reachable !== false) : list;
         const oauthServers = reachable.filter((s) => s.auth_type === AUTH_TYPE.OAUTH2);
@@ -187,26 +194,26 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         setOauthChecking(new Set(oauthServers.map((s) => s.server_id)));
         setLoading(false);
 
-        oauthServers.forEach((s) => checkOauthCredential(s));
+        oauthServers.forEach((s) => checkOauthCredential(s, isCurrentLoad));
 
         setLoadingCounts(true);
         const chunks = Array.from({ length: Math.ceil(reachable.length / TOOLS_FETCH_CONCURRENCY) }, (_, i) =>
           reachable.slice(i * TOOLS_FETCH_CONCURRENCY, (i + 1) * TOOLS_FETCH_CONCURRENCY),
         );
         for (const chunk of chunks) {
-          if (fetchLoadCancelledRef.current) return;
-          await Promise.allSettled(chunk.map((s) => fetchToolCount(s)));
+          if (!isCurrentLoad()) return;
+          await Promise.allSettled(chunk.map((s) => fetchToolCount(s, isCurrentLoad)));
         }
-        if (!fetchLoadCancelledRef.current) setLoadingCounts(false);
+        if (isCurrentLoad()) setLoadingCounts(false);
       })
       .catch(() => {
-        if (!fetchLoadCancelledRef.current) {
+        if (isCurrentLoad()) {
           setServers([]);
           setLoading(false);
         }
       });
     return () => {
-      fetchLoadCancelledRef.current = true;
+      current = false;
     };
   }, [accessToken, connectMode, fetchToolCount, checkOauthCredential]);
 
@@ -236,7 +243,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
       });
       return;
     }
-    if (connectUnavailabilityLabel(server) !== null) return;
+    if (connectableNow(server.server_id) === undefined) return;
     setTogglingOn((prev) => new Set(prev).add(serverName));
     try {
       const result = await listMCPTools(accessToken, server.server_id);
@@ -244,6 +251,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         MessageManager.warning(`Could not load tools for ${serverName}`);
         return;
       }
+      if (connectableNow(server.server_id) === undefined) return;
       if (!selectedServersRef.current.includes(serverName)) {
         onChange([...selectedServersRef.current, serverName]);
       }
