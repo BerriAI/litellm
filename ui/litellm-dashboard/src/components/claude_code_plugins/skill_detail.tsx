@@ -29,7 +29,9 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
     }
     return sourceLink;
   })();
-  const sourceText = skill.source.url ?? sourceUrl;
+  const sourceText = skill.source.url
+    ? `${skill.source.url}${skill.source.path ? ` @ ${skill.source.path}` : ""}`
+    : sourceUrl;
 
   const installCommand = formatInstallCommand(skill);
 
