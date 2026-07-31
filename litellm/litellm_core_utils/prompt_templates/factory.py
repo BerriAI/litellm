@@ -6,7 +6,7 @@ import mimetypes
 import re
 import xml.etree.ElementTree as ET
 from enum import Enum
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Union, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
@@ -2208,6 +2208,49 @@ def _is_orphaned_tool_result(
         return True
 
     return False
+
+
+def _declared_tool_call_ids(message: Mapping[str, Any]) -> frozenset[str]:
+    tool_calls = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return frozenset()
+    return frozenset(
+        str(tool_call["id"]) for tool_call in tool_calls if isinstance(tool_call, Mapping) and tool_call.get("id")
+    )
+
+
+def group_tool_exchanges(messages: Sequence[Mapping[str, Any]]) -> tuple[tuple[int, ...], ...]:
+    """Group message indices into tool exchanges: an assistant row that made
+    tool calls, together with the tool rows answering the ids it declared.
+
+    Membership is by ``tool_call_id`` ownership rather than adjacency, so a tool
+    row belonging to some other call opens its own group instead of being swept
+    into the exchange it happens to sit next to. Every other row is its own
+    group. Groups stay contiguous and in order, so a caller can convert or
+    protect them without reordering the conversation.
+
+    Callers need this because an assistant row and the tool rows answering it
+    are only well-formed together: ``sanitize_messages_for_tool_calling`` reads
+    an assistant row whose results are missing as an orphaned tool call, and
+    a tool row whose call is missing as an orphaned result.
+    """
+    return tuple(_iter_tool_exchange_groups(messages))
+
+
+def _iter_tool_exchange_groups(messages: Sequence[Mapping[str, Any]]) -> Iterator[tuple[int, ...]]:
+    index = 0
+    while index < len(messages):
+        declared = _declared_tool_call_ids(messages[index])
+        end = index + 1
+        while (
+            declared
+            and end < len(messages)
+            and messages[end].get("role") in ("tool", "function")
+            and str(messages[end].get("tool_call_id")) in declared
+        ):
+            end += 1
+        yield tuple(range(index, end))
+        index = end
 
 
 def sanitize_messages_for_tool_calling(
