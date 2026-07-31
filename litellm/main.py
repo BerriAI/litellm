@@ -5172,8 +5172,8 @@ def completion(  # type: ignore
         if model_response is not None and hasattr(model_response, "_hidden_params"):
             model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
             model_response._hidden_params["region_name"] = kwargs.get(
-                "aws_region_name", None
-            )  # support region-based pricing for bedrock
+                "aws_region_name"
+            ) or kwargs.get("vertex_location")
 
         ### TIMEOUT LOGIC ###
         timeout = CompletionTimeout.resolve(
