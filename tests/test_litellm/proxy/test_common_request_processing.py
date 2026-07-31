@@ -2948,6 +2948,47 @@ class TestHandleLLMApiExceptionRetryAfter:
         assert proxy_exc.headers["x-custom"] == "1"
 
 
+class TestHandleLLMApiExceptionModelIdHeader:
+    """post_call_failure_hook pops litellm_logging_obj off request_data, so the
+    error handler must resolve model_id before invoking it or x-litellm-model-id
+    is dropped from error responses (the reported embeddings 429 bug)."""
+
+    class _FakeLoggingObj:
+        def __init__(self, model_id: str):
+            self.litellm_params = {"model_info": {"id": model_id}}
+            self.litellm_call_id = "call-123"
+            self.kwargs: dict = {}
+
+    async def test_model_id_survives_failure_hook_that_pops_logging_obj(self):
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        data = {
+            "model": "text-embedding-ada-002",
+            "litellm_call_id": "call-123",
+            "litellm_logging_obj": self._FakeLoggingObj("deployment-xyz"),
+        }
+        processor = ProxyBaseLLMRequestProcessing(data=data)
+
+        async def _popping_failure_hook(request_data, **kwargs):
+            request_data.pop("litellm_logging_obj", None)
+            return None
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(
+            side_effect=_popping_failure_hook
+        )
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        with pytest.raises(ProxyException) as exc_info:
+            await processor._handle_llm_api_exception(
+                e=ValueError("429 rate limit"),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+        assert exc_info.value.headers["x-litellm-model-id"] == "deployment-xyz"
+
+
 class TestAsyncStreamingDataGeneratorFastPath:
     """Fast/slow path branching in async_streaming_data_generator."""
 

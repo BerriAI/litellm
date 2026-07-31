@@ -2605,6 +2605,13 @@ class ProxyBaseLLMRequestProcessing:
     ):
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
         _log_llm_api_exception(e)
+        _litellm_logging_obj: Optional[LiteLLMLoggingObj] = self.data.get("litellm_logging_obj", None)
+
+        # Attempt to get model_id from logging object
+        #
+        # Note: We check the direct model_info path first (not nested in metadata) because that's where the router sets it.
+        # The nested metadata path is only a fallback for cases where model_info wasn't set at the top level.
+        model_id = self.maybe_get_model_id(_litellm_logging_obj)
         # Allow callbacks to transform the error response
         transformed_exception = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -2624,13 +2631,6 @@ class ProxyBaseLLMRequestProcessing:
         timeout = getattr(
             e, "timeout", None
         )  # returns the timeout set by the wrapper. Used for testing if model-specific timeout are set correctly
-        _litellm_logging_obj: Optional[LiteLLMLoggingObj] = self.data.get("litellm_logging_obj", None)
-
-        # Attempt to get model_id from logging object
-        #
-        # Note: We check the direct model_info path first (not nested in metadata) because that's where the router sets it.
-        # The nested metadata path is only a fallback for cases where model_info wasn't set at the top level.
-        model_id = self.maybe_get_model_id(_litellm_logging_obj)
 
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
