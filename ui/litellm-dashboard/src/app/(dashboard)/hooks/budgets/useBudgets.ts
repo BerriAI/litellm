@@ -6,27 +6,15 @@ import { useCallback } from "react";
 
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { apiClient, budgetCreateCall, budgetUpdateCall, budgetDeleteCall } from "@/components/networking";
+import type { components } from "@/lib/http/schema";
 
 import { createQueryKeys } from "../common/queryKeysFactory";
-import {
-  useResourceList,
-  type ResourceListPage,
-  type ResourceListQuery,
-  type ResourceListResult,
-} from "../common/useResourceList";
+import { useResourceList, type ResourceListQuery, type ResourceListResult } from "../common/useResourceList";
 import { serializeBudgetFilters } from "./budgetFilters";
 
-export interface budgetItem {
-  budget_id: string;
-  max_budget: number | null;
-  soft_budget: number | null;
-  rpm_limit: number | null;
-  tpm_limit: number | null;
-  budget_duration: string | null;
-  budget_reset_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
+export type budgetItem = components["schemas"]["BudgetListItem"];
+
+type BudgetListResponse = components["schemas"]["ListResponse_BudgetListItem_"];
 
 export const BUDGET_LIST_PATH = "/management/v1/budgets";
 
@@ -39,8 +27,8 @@ export const useBudgetList = (): ResourceListResult<budgetItem> => {
   const { accessToken } = useAuthorized();
 
   const fetchPage = useCallback(
-    (query: ResourceListQuery, signal: AbortSignal): Promise<ResourceListPage<budgetItem>> =>
-      apiClient.get<ResourceListPage<budgetItem>>(BUDGET_LIST_PATH, { accessToken, query, signal }),
+    (query: ResourceListQuery, signal: AbortSignal): Promise<BudgetListResponse> =>
+      apiClient.get<BudgetListResponse>(BUDGET_LIST_PATH, { accessToken, query, signal }),
     [accessToken],
   );
 

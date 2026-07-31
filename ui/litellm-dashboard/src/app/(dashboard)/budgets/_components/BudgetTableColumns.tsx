@@ -26,14 +26,14 @@ import { cn } from "@/lib/cva.config";
 const serverFilter: FilterFn<budgetItem> = () => true;
 serverFilter.autoRemove = () => false;
 
-function RateLimitCell({ value }: { value: number | null }) {
+function RateLimitCell({ value }: { value: number | null | undefined }) {
   if (value == null) {
     return <span className="text-muted-foreground">n/a</span>;
   }
   return <span className="tabular-nums">{value}</span>;
 }
 
-function BudgetDurationCell({ value }: { value: string | null }) {
+function BudgetDurationCell({ value }: { value: string | null | undefined }) {
   if (!value) {
     return <span className="text-muted-foreground">Not set</span>;
   }
