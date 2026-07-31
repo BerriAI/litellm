@@ -218,6 +218,98 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text
     )
 
 
+def test_convert_chat_completion_messages_to_responses_api_tool_result_with_none_content():
+    """
+    A tool message with ``content=None`` should produce an empty-string output.
+
+    Regression test for issue #34978: ``function_call_output.output`` must be a
+    string per the Responses API spec, so a null tool result normalizes to "".
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_none",
+                    "type": "function",
+                    "function": {"name": "noop", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_none",
+            "content": None,
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    function_call_output = next(
+        (item for item in response if item.get("type") == "function_call_output"),
+        None,
+    )
+    assert function_call_output is not None, "function_call_output not found"
+    assert function_call_output["call_id"] == "call_none"
+
+    output = function_call_output["output"]
+    assert isinstance(output, str), "None content should normalize to a string"
+    assert output == "", f"Expected empty string, got '{output}'"
+
+
+def test_convert_chat_completion_messages_to_responses_api_tool_result_with_non_string_content():
+    """
+    A tool message with a non-str/non-list content should be coerced to a string.
+
+    Regression test for issue #34978: unexpected scalar types must still yield a
+    string ``output`` rather than a list wrapper.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_num",
+                    "type": "function",
+                    "function": {"name": "count", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_num",
+            "content": 42,
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    function_call_output = next(
+        (item for item in response if item.get("type") == "function_call_output"),
+        None,
+    )
+    assert function_call_output is not None, "function_call_output not found"
+    assert function_call_output["call_id"] == "call_num"
+
+    output = function_call_output["output"]
+    assert isinstance(output, str), "non-string content should be coerced to a string"
+    assert output == "42", f"Expected '42', got '{output}'"
+
+
 def test_openai_responses_chunk_parser_reasoning_summary():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
