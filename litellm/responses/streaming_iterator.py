@@ -135,8 +135,12 @@ class BaseResponsesAPIStreamingIterator:
         self.finished = False
         self.responses_api_provider_config = responses_api_provider_config
         self.completed_response: Any | None = None
-        self._streamed_output_items: dict[int, BaseLiteLLMOpenAIResponseObject] = {}  # mutable-ok: keyed accumulator reset per stream; no immutable equivalent for incremental index-keyed updates
-        self._streamed_text_only_items: dict[int, BaseLiteLLMOpenAIResponseObject] = {}  # mutable-ok: keyed fallback accumulator reset per stream; no immutable equivalent for incremental index-keyed updates
+        self._streamed_output_items: dict[  # mutable-ok: SSE accumulator
+            int, BaseLiteLLMOpenAIResponseObject
+        ] = {}
+        self._streamed_text_only_items: dict[  # mutable-ok: SSE fallback accumulator
+            int, BaseLiteLLMOpenAIResponseObject
+        ] = {}
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
         self._yielded_first_chunk = False
@@ -312,13 +316,16 @@ class BaseResponsesAPIStreamingIterator:
                             and (self._streamed_output_items or self._streamed_text_only_items)
                         ):
                             try:
-                                _merged_items = {**self._streamed_text_only_items, **self._streamed_output_items}
-                                _backfill = [
+                                _merged_items = {  # mutable-ok: transient merge for backfill sort; not retained
+                                    **self._streamed_text_only_items,
+                                    **self._streamed_output_items,
+                                }
+                                _backfill = [  # mutable-ok: assigned to response obj output field which expects list
                                     item.model_dump() if hasattr(item, "model_dump") else item
                                     for _, item in sorted(_merged_items.items())
                                 ]
                                 _response_obj.output = _backfill  # mutable-ok: patching response obj from provider before it's stored; no immutable path here
-                            except Exception:
+                            except Exception:  # noqa: BLE001  # best-effort backfill; any failure must not crash the stream
                                 verbose_logger.warning(
                                     "streaming_iterator: failed to backfill %s output",
                                     _chunk_type,
@@ -587,21 +594,33 @@ class BaseResponsesAPIStreamingIterator:
                 if 0 <= _content_index <= _MAX_CONTENT_INDEX:
                     _item_id = getattr(chunk, "item_id", None) or f"msg_{_output_index}"
                     _existing = self._streamed_text_only_items.get(_output_index)
-                    _existing_content = list(getattr(_existing, "content", None) or [])
+                    _existing_content = list(  # mutable-ok: copy existing content for slot replacement
+                        getattr(_existing, "content", None) or []  # mutable-ok: empty fallback for missing content
+                    )
                     _annotations = getattr(chunk, "annotations", None)
-                    _slot = {"type": "output_text", "text": _text, "annotations": _annotations or []}
+                    _slot = {  # mutable-ok: content dict matches provider schema
+                        "type": "output_text",
+                        "text": _text,
+                        "annotations": _annotations or [],  # mutable-ok: empty fallback for missing annotations
+                    }
                     if _content_index < len(_existing_content):
                         _content = (
-                            _existing_content[:_content_index] + [_slot] + _existing_content[_content_index + 1 :]
+                            _existing_content[:_content_index]
+                            + [_slot]  # mutable-ok: list concat for slot replacement
+                            + _existing_content[_content_index + 1 :]
                         )
                     else:
                         _content = (
                             _existing_content
-                            + [
-                                {"type": "output_text", "text": "", "annotations": []}
+                            + [  # mutable-ok: list concat for gap padding
+                                {  # mutable-ok: placeholder content dict for gap padding
+                                    "type": "output_text",
+                                    "text": "",
+                                    "annotations": [],  # mutable-ok: empty annotations placeholder
+                                }
                                 for _ in range(_content_index - len(_existing_content))
                             ]
-                            + [_slot]
+                            + [_slot]  # mutable-ok: list concat appending final slot
                         )
                     self._streamed_text_only_items[_output_index] = (
                         BaseLiteLLMOpenAIResponseObject(  # mutable-ok: incremental index-keyed fallback accumulation; no immutable equivalent
@@ -1357,8 +1376,6 @@ def _build_synthetic_response_events(
 # ---------------------------------------------------------------------------
 # WebSocket mode streaming (bidirectional forwarding)
 # ---------------------------------------------------------------------------
-
-from litellm._logging import verbose_logger
 
 RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
     "response.created",
