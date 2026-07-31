@@ -11,6 +11,8 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { FormField } from "@/components/shared/form/FormField";
 import { FieldGroup } from "@/components/shared/form/field";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
+import { migratedHref } from "@/utils/migratedPages";
+import { getProxyBaseUrl } from "@/components/networking";
 
 const resetPasswordSchema = z
   .object({
@@ -51,7 +53,7 @@ export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
               This link is invalid or has expired.
             </div>
             <div className="mt-4">
-              <a href="/ui/forgot-password" className="text-sm text-primary underline-offset-4 hover:underline">
+              <a href={migratedHref("forgot-password")} className="text-sm text-primary underline-offset-4 hover:underline">
                 Request a new link
               </a>
             </div>
@@ -86,7 +88,7 @@ export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
               Password reset successfully.
             </div>
             <div className="mt-4">
-              <a href={getLoginUrl()} className="text-sm text-primary underline-offset-4 hover:underline">
+              <a href={getLoginUrl(getProxyBaseUrl())} className="text-sm text-primary underline-offset-4 hover:underline">
                 Back to Login
               </a>
             </div>

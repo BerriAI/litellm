@@ -20,15 +20,17 @@ describe("forgot/reset password networking calls", () => {
     expect(JSON.parse(options.body as string)).toEqual({ email: "alice@example.com" });
   });
 
-  it("validateResetTokenCall issues a GET with the token as a query param", async () => {
+  it("validateResetTokenCall posts the token as JSON, not a query param", async () => {
     (fetch as any).mockResolvedValueOnce({
       ok: true,
       text: async () => JSON.stringify({ user_email: "alice@example.com" }),
     });
     await validateResetTokenCall("tok-123");
     const [url, options] = (fetch as any).mock.calls[0];
-    expect(url).toContain("/user/reset_password/validate?token=tok-123");
-    expect(options.method).toBe("GET");
+    expect(url).toContain("/user/reset_password/validate");
+    expect(url).not.toContain("tok-123");
+    expect(options.method).toBe("POST");
+    expect(JSON.parse(options.body as string)).toEqual({ token: "tok-123" });
   });
 
   it("resetPasswordCall posts token and new_password as JSON", async () => {

@@ -1537,7 +1537,9 @@ export const forgotPasswordCall = async (email: string): Promise<{ message: stri
 
 export const validateResetTokenCall = async (token: string): Promise<{ user_email: string }> => {
   try {
-    return await apiClient.get(`/user/reset_password/validate`, { query: { token } });
+    // POST (not GET query param) so the token never lands in a URL that gets written to
+    // server access logs.
+    return await apiClient.post(`/user/reset_password/validate`, { body: { token } });
   } catch (error) {
     console.error("Failed to validate reset token:", error);
     throw error;

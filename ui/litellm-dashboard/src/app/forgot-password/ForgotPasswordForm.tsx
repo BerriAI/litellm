@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useForgotPassword } from "@/app/(dashboard)/hooks/passwordReset/usePasswordReset";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
+import { getProxyBaseUrl } from "@/components/networking";
 
 export function ForgotPasswordForm() {
   const [email, setEmail] = useState("");
@@ -56,7 +57,7 @@ export function ForgotPasswordForm() {
           )}
 
           <div className="mt-4">
-            <a href={getLoginUrl()} className="text-sm text-primary underline-offset-4 hover:underline">
+            <a href={getLoginUrl(getProxyBaseUrl())} className="text-sm text-primary underline-offset-4 hover:underline">
               Back to Login
             </a>
           </div>
