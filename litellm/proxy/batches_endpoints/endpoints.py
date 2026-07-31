@@ -263,8 +263,7 @@ async def create_batch(
                 )
 
             response = await llm_router.acreate_batch(
-                **_create_batch_data,
-                disable_fallbacks=True,
+                **{**_create_batch_data, "disable_fallbacks": True},
             )
             response.input_file_id = input_file_id
             response._hidden_params["unified_file_id"] = unified_file_id
