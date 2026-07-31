@@ -24,6 +24,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     _process_group_patch_operations,
     _recompute_scim_member_roles,
     _resolve_group_member_ids,
+    _to_domain_user,
     create_group,
     create_user,
     delete_group,
@@ -627,7 +628,7 @@ async def test_handle_existing_user_by_email_existing_user_updated(mocker):
         raise_on_error=True,
     )
 
-    mock_transform.assert_called_once_with(updated_user)
+    mock_transform.assert_called_once_with(_to_domain_user(updated_user))
 
 
 @pytest.mark.asyncio
