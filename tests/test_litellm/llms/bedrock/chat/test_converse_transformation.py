@@ -6119,3 +6119,203 @@ def test_transform_response_unwraps_json_object_wrapper():
     message = result.choices[0].message
     assert message.tool_calls is None
     assert json.loads(message.content) == {"name": "Claude", "maker": "Anthropic"}
+
+
+def test_json_object_keeps_caller_tools_in_outbound_payload():
+    """The synthetic tool must be added to the caller's tools, never replace them.
+
+    Goes through `map_openai_params` and `_transform_request` rather than the
+    translation helper alone, because `tools` and `response_format` are mapped in
+    separate branches and either can land first.
+    """
+    config = AmazonConverseConfig()
+    caller_tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather for a city",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+        },
+    }
+    non_default_params = {"tools": [caller_tool], "response_format": JSON_OBJECT}
+
+    optional_params = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params={},
+        model=SONNET_45,
+        drop_params=False,
+    )
+    data = config._transform_request(
+        model=SONNET_45,
+        messages=[{"role": "user", "content": "What is the weather in Tokyo?"}],
+        optional_params=dict(optional_params),
+        litellm_params={},
+    )
+
+    sent = [t["toolSpec"]["name"] for t in data["toolConfig"]["tools"]]
+    assert "get_weather" in sent
+    assert RESPONSE_FORMAT_TOOL_NAME in sent
+    assert data["toolConfig"]["toolChoice"] == {"any": {}}
+
+
+def test_json_object_with_caller_tool_choice_survives_full_param_mapping():
+    """An explicit tool_choice must win no matter which param is mapped first."""
+    config = AmazonConverseConfig()
+    caller_tool = {"type": "function", "function": {"name": "get_weather"}}
+
+    optional_params = config.map_openai_params(
+        non_default_params={"tools": [caller_tool], "tool_choice": "auto", "response_format": JSON_OBJECT},
+        optional_params={},
+        model=SONNET_45,
+        drop_params=False,
+    )
+
+    assert optional_params["tool_choice"] == {"auto": {}}
+
+
+def test_json_object_with_tools_and_streaming_uses_fake_stream():
+    result = _translate_json_object(
+        non_default_params={"tools": [{"type": "function", "function": {"name": "get_weather"}}], "stream": True},
+    )
+    assert result["fake_stream"] is True
+    assert result["tool_choice"] == {"any": {}}
+
+
+def test_json_object_no_tool_choice_when_model_does_not_support_it():
+    """The tool still goes out; only the choice is left to the model."""
+    with patch.object(litellm.utils, "supports_tool_choice", return_value=False):
+        result = _translate_json_object()
+
+    assert "tool_choice" not in result
+    assert result["tools"][0]["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME
+    assert result["json_object_unwrap_key"] == RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY
+
+
+def test_response_schema_form_is_treated_as_schema_bearing():
+    """`response_schema` is the other way a schema arrives, so it must not unwrap."""
+    config = AmazonConverseConfig()
+    response_format = {"type": "json_object", "response_schema": {"type": "object", "properties": {"a": {"type": "string"}}}}
+
+    result = config._translate_response_format_param(
+        value=response_format,
+        model=SONNET_45,
+        optional_params={},
+        non_default_params={"response_format": response_format},
+        is_thinking_enabled=False,
+    )
+
+    assert "json_object_unwrap_key" not in result
+
+
+@pytest.mark.asyncio
+async def test_async_transform_request_does_not_leak_unwrap_key():
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={"response_format": JSON_OBJECT},
+        optional_params={},
+        model=SONNET_45,
+        drop_params=False,
+    )
+
+    data = await config._async_transform_request(
+        model=SONNET_45,
+        messages=[{"role": "user", "content": "Who are you?"}],
+        optional_params=dict(optional_params),
+        litellm_params={},
+    )
+
+    assert "json_object_unwrap_key" not in json.dumps(data)
+    sent = [t["toolSpec"]["name"] for t in data["toolConfig"]["tools"]]
+    assert sent == [RESPONSE_FORMAT_TOOL_NAME]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        "not json at all",
+        '["result"]',  # top-level array
+        '{"result": null}',
+        '{"result": []}',
+    ],
+)
+def test_unwrap_json_object_result_passes_through_unusable_payloads(arguments):
+    """Anything that is not `{wrapper: {...}}` is returned untouched, not dropped."""
+    assert (
+        AmazonConverseConfig._unwrap_json_object_result(arguments, RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY) == arguments
+    )
+
+
+def test_unwrap_json_object_result_preserves_nested_structure():
+    nested = {"result": {"a": {"b": [1, 2, {"c": True}]}}}
+    out = AmazonConverseConfig._unwrap_json_object_result(
+        json.dumps(nested), RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY
+    )
+    assert json.loads(out) == {"a": {"b": [1, 2, {"c": True}]}}
+
+
+def test_unwrap_json_object_result_unwraps_empty_object():
+    out = AmazonConverseConfig._unwrap_json_object_result(
+        '{"result": {}}', RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY
+    )
+    assert json.loads(out) == {}
+
+
+def test_filter_json_mode_tools_leaves_tools_alone_without_json_mode():
+    """Without json_mode the synthetic tool is not converted or unwrapped."""
+    message: dict = {"role": "assistant"}
+    tools = [
+        {
+            "id": "1",
+            "type": "function",
+            "function": {"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": '{"result": {"a": 1}}'},
+        }
+    ]
+
+    remaining = AmazonConverseConfig._filter_json_mode_tools(
+        json_mode=False,
+        tools=tools,
+        chat_completion_message=message,
+        json_object_unwrap_key=RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY,
+    )
+
+    assert remaining == tools
+    assert "content" not in message
+
+
+def test_json_object_transforms_an_agent_loop_turn():
+    """A tool result already in history must still transform with json_object set."""
+    config = AmazonConverseConfig()
+    caller_tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+        },
+    }
+    messages = [
+        {"role": "user", "content": "What is the weather in Tokyo?"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "18C and clear"},
+    ]
+
+    optional_params = config.map_openai_params(
+        non_default_params={"tools": [caller_tool], "response_format": JSON_OBJECT},
+        optional_params={},
+        model=SONNET_45,
+        drop_params=False,
+    )
+    data = config._transform_request(
+        model=SONNET_45,
+        messages=messages,
+        optional_params=dict(optional_params),
+        litellm_params={},
+    )
+
+    assert RESPONSE_FORMAT_TOOL_NAME in [t["toolSpec"]["name"] for t in data["toolConfig"]["tools"]]
+    assert data["messages"][-1]["role"] == "user"  # the tool result turn
+    assert "json_object_unwrap_key" not in json.dumps(data)
