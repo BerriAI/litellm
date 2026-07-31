@@ -1583,6 +1583,47 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ui_view_session_spend_logs_rehydrates_metadata_jsonb_text(client, monkeypatch):
+    """The session sidebar reads metadata fields as object properties, so this endpoint
+    must re-hydrate the JSONB column that query_raw hands back as a string, exactly as
+    /spend/logs/ui does (#29674). Property access on a string is silently undefined,
+    so a row's origin, status and error information all read as absent without this.
+    """
+    raw_row = {
+        "request_id": "req-classifier-1",
+        "session_id": "session-123",
+        "startTime": "2024-01-01T00:00:00Z",
+        "metadata": json.dumps({"internal_call_origin": "autorouter_classifier", "status": "success"}),
+    }
+
+    class MockDB:
+        async def count(self, *args, **kwargs):
+            return 1
+
+        async def query_raw(self, sql_query, session_id, page_size, skip, *scope_params):
+            return [dict(raw_row)]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+            self.db.litellm_spendlogs = self.db
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.get("/spend/logs/session/ui", params={"session_id": "session-123"})
+        assert response.status_code == 200
+        row = response.json()["data"][0]
+        assert isinstance(row["metadata"], dict)
+        assert row["metadata"]["internal_call_origin"] == "autorouter_classifier"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_session_spend_logs_scopes_non_admin_to_own_logs(client, monkeypatch):
     own_log = {
         "id": "log1",
