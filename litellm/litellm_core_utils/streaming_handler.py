@@ -1977,6 +1977,7 @@ class CustomStreamWrapper:
 
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
+                    response.choices = []
                     return response
                 raise  # Re-raise StopIteration
             else:
@@ -2186,6 +2187,7 @@ class CustomStreamWrapper:
 
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
+                    response.choices = []
                     return response
 
                 _deferred_cb = getattr(
