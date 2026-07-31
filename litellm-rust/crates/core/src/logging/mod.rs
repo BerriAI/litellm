@@ -1,3 +1,8 @@
+//! Provider debug events are enabled by `litellm._turn_on_debug()` in Python
+//! or `LITELLM_LOG=DEBUG` in the standalone gateway. `JSON_LOGS` selects compact
+//! output and `NO_COLOR` disables terminal colors. Prompt and response content
+//! remains visible and may contain sensitive application data.
+
 mod redaction;
 
 pub mod console;

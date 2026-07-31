@@ -45,14 +45,6 @@ The folder shape follows the Python provider tree:
 `core/src/providers/<provider>/<route>/transformation.rs`. The bridge exposes one
 function per top-level route, mirroring the core entrypoints.
 
-## Provider debug logging
-
-The typed provider debug contract, `CallLogger`, and console renderer live in
-`crates/core/src/logging/`. The gateway and Python bridge own activation:
-Python enables the injected sink with `litellm._turn_on_debug()`, while the standalone gateway uses
-`LITELLM_LOG=DEBUG`. `JSON_LOGS=true` selects compact JSON; terminal pretty
-output honors `NO_COLOR`.
-
 ## Checks
 
 Run these before pushing Rust changes. GitHub Actions runs the same checks for

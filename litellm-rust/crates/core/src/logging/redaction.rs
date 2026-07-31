@@ -33,16 +33,7 @@ pub fn redact_headers(headers: &[(String, String)]) -> BTreeMap<String, String> 
     headers
         .iter()
         .map(|(name, value)| {
-            let value = if matches!(
-                name.to_ascii_lowercase().as_str(),
-                "authorization"
-                    | "proxy-authorization"
-                    | "x-api-key"
-                    | "api-key"
-                    | "x-amz-security-token"
-                    | "cookie"
-                    | "set-cookie"
-            ) {
+            let value = if is_credential_name(name) {
                 "[REDACTED]".to_string()
             } else {
                 value.clone()
@@ -56,22 +47,19 @@ pub fn redact_url(url: &str) -> String {
     let Ok(mut parsed) = url::Url::parse(url) else {
         return url.to_string();
     };
+    if !parsed.username().is_empty() {
+        let _ = parsed.set_username("[REDACTED]");
+    }
+    if parsed.password().is_some() {
+        let _ = parsed.set_password(Some("[REDACTED]"));
+    }
     let Some(_) = parsed.query() else {
         return parsed.to_string();
     };
     let pairs = parsed
         .query_pairs()
         .map(|(key, value)| {
-            let value = if matches!(
-                key.to_ascii_lowercase().as_str(),
-                "x-amz-signature"
-                    | "x-amz-credential"
-                    | "x-amz-security-token"
-                    | "api-key"
-                    | "key"
-                    | "access_token"
-                    | "signature"
-            ) {
+            let value = if is_credential_name(&key) {
                 "[REDACTED]"
             } else {
                 value.as_ref()
@@ -102,20 +90,47 @@ fn redact_value(value: Value) -> Value {
 }
 
 fn is_secret_key(key: &str) -> bool {
+    is_credential_name(key)
+}
+
+fn is_credential_name(name: &str) -> bool {
+    let normalized = name
+        .chars()
+        .filter(|character| *character != '-' && *character != '_')
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
     matches!(
-        key.to_ascii_lowercase().as_str(),
-        "api_key"
+        normalized.as_str(),
+        "authorization"
+            | "proxyauthorization"
+            | "xapikey"
             | "apikey"
+            | "xamzsecuritytoken"
+            | "cookie"
+            | "setcookie"
+            | "xamzsignature"
+            | "xamzcredential"
+            | "key"
+            | "accesstoken"
+            | "signature"
             | "secret"
             | "password"
             | "token"
-            | "access_token"
-            | "client_secret"
-            | "aws_secret_access_key"
-            | "aws_access_key_id"
-            | "aws_session_token"
-            | "x-amz-security-token"
-    )
+            | "clientsecret"
+            | "awssecretaccesskey"
+            | "awsaccesskeyid"
+            | "awssessiontoken"
+    ) || [
+        "apikey",
+        "secret",
+        "token",
+        "password",
+        "credential",
+        "signature",
+        "authorization",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
 }
 
 #[cfg(test)]
@@ -125,24 +140,46 @@ mod tests {
     use super::{PROVIDER_DEBUG_BODY_MAX_BYTES, redact_headers, redact_url, snapshot_json};
 
     #[test]
-    fn redacts_sensitive_headers() {
+    fn redacts_explicit_sensitive_headers() {
         let headers = redact_headers(&[
             ("authorization".to_string(), "Bearer secret".to_string()),
+            ("cookie".to_string(), "session-secret".to_string()),
             ("content-type".to_string(), "application/json".to_string()),
         ]);
         assert_eq!(headers["authorization"], "[REDACTED]");
+        assert_eq!(headers["cookie"], "[REDACTED]");
         assert_eq!(headers["content-type"], "application/json");
     }
 
     #[test]
-    fn redacts_sensitive_query_parameters() {
+    fn redacts_credential_marker_headers_and_preserves_ordinary_headers() {
+        let headers = redact_headers(&[
+            ("x-goog-api-key".to_string(), "google-secret".to_string()),
+            ("X_Custom_Token".to_string(), "custom-secret".to_string()),
+            ("content-type".to_string(), "application/json".to_string()),
+        ]);
+        assert_eq!(headers["x-goog-api-key"], "[REDACTED]");
+        assert_eq!(headers["X_Custom_Token"], "[REDACTED]");
+        assert_eq!(headers["content-type"], "application/json");
+    }
+
+    #[test]
+    fn redacts_credential_marker_query_parameters_and_userinfo() {
         let url = redact_url(
-            "https://example.test/v1%3A0/invoke?X-Amz-Signature=secret&keep=value&key=hidden",
+            "https://user:password@example.test/invoke?token=secret&client_secret=hidden&keep=value",
         );
-        assert!(url.contains("X-Amz-Signature=%5BREDACTED%5D"));
-        assert!(url.contains("key=%5BREDACTED%5D"));
+        assert!(url.contains("%5BREDACTED%5D:%5BREDACTED%5D@example.test"));
+        assert!(url.contains("token=%5BREDACTED%5D"));
+        assert!(url.contains("client_secret=%5BREDACTED%5D"));
         assert!(url.contains("keep=value"));
-        assert!(url.contains("/v1%3A0/invoke"));
+    }
+
+    #[test]
+    fn redact_url_preserves_queryless_urls_without_trailing_question_mark() {
+        assert_eq!(
+            redact_url("https://example.test/v1%3A0/invoke"),
+            "https://example.test/v1%3A0/invoke"
+        );
     }
 
     #[test]

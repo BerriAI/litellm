@@ -535,6 +535,42 @@ async fn messages_debug_logs_transformed_request_and_redacted_response() {
 }
 
 #[tokio::test]
+async fn messages_debug_wrong_shape_emits_response_then_failure() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let _ = read_http_request(&mut socket).await;
+        socket
+            .write_all(write_response(r#"{"id":"wrong-shape"}"#).as_bytes())
+            .await
+            .expect("writes response");
+    });
+    let sink = RecordingSink::default();
+    let err = messages(MessagesRequest {
+        model: "claude",
+        body: json!({"model": "claude", "max_tokens": 8, "messages": []}),
+        api_key: Some("request-secret"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("anthropic"),
+        extra_headers: None,
+        timeout: Some(Duration::from_secs(5)),
+        litellm_call_id: Some("wrong-shape"),
+        logging_sink: Some(Arc::new(sink.clone())),
+    })
+    .await
+    .expect_err("wrong response shape errors");
+    assert!(matches!(err, CoreError::InvalidResponse(_)));
+
+    server.await.expect("server task");
+    let events = sink.0.lock().expect("recording lock");
+    assert!(matches!(events[0], LogEvent::Request(_)));
+    assert!(matches!(events[1], LogEvent::Response(_)));
+    assert!(matches!(events[2], LogEvent::Error(_)));
+    assert_eq!(events.len(), 3);
+}
+
+#[tokio::test]
 async fn messages_debug_http_failure_emits_one_error_and_none_emits_nothing() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
     let addr = listener.local_addr().expect("addr");
