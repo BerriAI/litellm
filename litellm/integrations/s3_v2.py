@@ -8,13 +8,14 @@ NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to uplo
 
 import asyncio
 import time
+from collections.abc import Mapping
 from datetime import datetime
 from typing import List, Optional, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import DEFAULT_S3_BATCH_SIZE, DEFAULT_S3_FLUSH_INTERVAL_SECONDS
-from litellm.integrations.s3 import get_s3_object_key
+from litellm.integrations.s3 import get_s3_object_key, resolve_sse_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -55,6 +56,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_use_key_prefix: bool = False,
         s3_use_virtual_hosted_style: bool = False,
         s3_server_side_encryption: Optional[str] = None,
+        s3_sse_kms_key_id: str | None = None,
         s3_callback_params_override: Optional[dict] = None,
         **kwargs,
     ):
@@ -94,6 +96,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_use_key_prefix=s3_use_key_prefix,
                 s3_use_virtual_hosted_style=s3_use_virtual_hosted_style,
                 s3_server_side_encryption=s3_server_side_encryption,
+                s3_sse_kms_key_id=s3_sse_kms_key_id,
             )
             verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
 
@@ -148,6 +151,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_use_key_prefix: bool = False,
         s3_use_virtual_hosted_style: bool = False,
         s3_server_side_encryption: Optional[str] = None,
+        s3_sse_kms_key_id: str | None = None,
         params_source: Optional[dict] = None,
     ):
         """
@@ -197,9 +201,19 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             bool(params.get("s3_use_virtual_hosted_style", False)) or s3_use_virtual_hosted_style
         )
 
-        self.s3_server_side_encryption = params.get("s3_server_side_encryption") or s3_server_side_encryption
+        self.s3_server_side_encryption, self.s3_sse_kms_key_id = resolve_sse_params(
+            params.get("s3_server_side_encryption") or s3_server_side_encryption,
+            params.get("s3_sse_kms_key_id") or s3_sse_kms_key_id,
+        )
 
         return
+
+    def _sse_headers(self) -> Mapping[str, str]:
+        candidates = {
+            "x-amz-server-side-encryption": self.s3_server_side_encryption,
+            "x-amz-server-side-encryption-aws-kms-key-id": self.s3_sse_kms_key_id,
+        }
+        return {key: value for key, value in candidates.items() if value}
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         await self._async_log_event_base(
@@ -335,11 +349,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 "Content-Language": "en",
                 "Content-Disposition": f'inline; filename="{batch_logging_element.s3_object_download_filename}"',
                 "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
-                **(
-                    {"x-amz-server-side-encryption": self.s3_server_side_encryption}
-                    if self.s3_server_side_encryption
-                    else {}
-                ),
+                **self._sse_headers(),
             }
             req = requests.Request("PUT", url, data=json_string, headers=headers)
             prepped = req.prepare()
@@ -510,11 +520,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 "Content-Language": "en",
                 "Content-Disposition": f'inline; filename="{batch_logging_element.s3_object_download_filename}"',
                 "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
-                **(
-                    {"x-amz-server-side-encryption": self.s3_server_side_encryption}
-                    if self.s3_server_side_encryption
-                    else {}
-                ),
+                **self._sse_headers(),
             }
             req = requests.Request("PUT", url, data=json_string, headers=headers)
             prepped = req.prepare()

@@ -5,6 +5,13 @@ Coverage here is static: it reads the markers via a collect-only pass, so it run
 no test and needs no live proxy. Whether a covered cell currently passes or fails
 (covered_pass vs covered_fail) is a separate, live concern layered on top later.
 
+A skipped test asserts nothing, so its markers do not count: a cell is covered
+only when at least one test that pytest would actually run declares it. Skip
+state is read with pytest's own evaluator, so `skip` and `skipif` are resolved
+exactly as the e2e run resolves them in this environment. The one skip the
+collector cannot see is `pytest.skip()` called from inside a test body, which
+does not exist until the test runs.
+
     cd tests/e2e && PYTHONPATH=. python -m coverage_registry.collector
 """
 
@@ -20,6 +27,7 @@ from pathlib import Path
 from typing import Literal
 
 import pytest
+from _pytest.skipping import evaluate_skip_marks
 from pydantic import BaseModel
 
 from .registry import load_registry
@@ -28,22 +36,57 @@ from .schema import MODULE_ORDER, Cell, Tier, dashboard_module, loki_module_labe
 E2E_DIR = Path(__file__).resolve().parent.parent
 
 
+@dataclass(frozen=True, slots=True)
+class CollectedMarkers:
+    """What a collect-only pass saw: cell ids declared by tests that would run,
+    cell ids only ever declared by skipped tests, and nodes that failed to import."""
+
+    covered: frozenset[str]
+    skipped_only: frozenset[str]
+    collection_errors: tuple[str, ...]
+
+
+def _is_skipped(item: pytest.Item) -> bool:
+    """True when pytest would skip this test instead of running it.
+
+    A marker pytest cannot evaluate (for example a bare boolean `skipif` with no
+    reason) turns into a setup failure at run time, so the test asserts nothing
+    either way and is treated the same as a skip.
+    """
+    try:
+        return evaluate_skip_marks(item) is not None
+    except (pytest.fail.Exception, TypeError):
+        return True
+
+
 class _CoversSink:
     """Pytest plugin: after collection, capture every cell id declared via
-    @pytest.mark.covers(...), plus any nodes that failed to import."""
+    @pytest.mark.covers(...) split by whether its test would run, plus any nodes
+    that failed to import."""
 
     def __init__(self) -> None:
         self.covered_ids: frozenset[str] = frozenset()
+        self.skipped_only_ids: frozenset[str] = frozenset()
         self.collection_errors: tuple[str, ...] = ()
 
     def pytest_collection_finish(self, session: pytest.Session) -> None:
-        marker_args: tuple[tuple[object, ...], ...] = tuple(
-            marker.args
-            for item in session.items
+        marker_args: tuple[tuple[bool, tuple[object, ...]], ...] = tuple(
+            (skipped, marker.args)
+            for item, skipped in ((i, _is_skipped(i)) for i in session.items)
             for marker in item.iter_markers(name="covers")
         )
+        declared = tuple(
+            (skipped, arg)
+            for skipped, args in marker_args
+            for arg in args
+            if isinstance(arg, str)
+        )
         self.covered_ids = frozenset(
-            arg for args in marker_args for arg in args if isinstance(arg, str)
+            cell_id for skipped, cell_id in declared if not skipped
+        )
+        self.skipped_only_ids = (
+            frozenset(cell_id for skipped, cell_id in declared if skipped)
+            - self.covered_ids
         )
 
     def pytest_collectreport(self, report: pytest.CollectReport) -> None:
@@ -51,10 +94,8 @@ class _CoversSink:
             self.collection_errors = (*self.collection_errors, report.nodeid)
 
 
-def collect_covered_ids(
-    e2e_dir: Path = E2E_DIR,
-) -> tuple[frozenset[str], tuple[str, ...]]:
-    """Return (covered cell ids, nodeids that failed to import)."""
+def collect_markers(e2e_dir: Path = E2E_DIR) -> CollectedMarkers:
+    """Read every @pytest.mark.covers marker in `e2e_dir` via a collect-only pass."""
     sink = _CoversSink()
     with contextlib.redirect_stdout(io.StringIO()):
         pytest.main(
@@ -68,7 +109,11 @@ def collect_covered_ids(
             ],
             plugins=[sink],
         )
-    return sink.covered_ids, sink.collection_errors
+    return CollectedMarkers(
+        covered=sink.covered_ids,
+        skipped_only=sink.skipped_only_ids,
+        collection_errors=sink.collection_errors,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +138,7 @@ class CoverageReport:
     p0_covered: int
     p0_gaps: tuple[str, ...]
     orphan_markers: tuple[str, ...]
+    skipped_markers: tuple[str, ...]
     collection_errors: tuple[str, ...]
 
     @property
@@ -122,6 +168,7 @@ def compute_coverage(
     cells: tuple[Cell, ...],
     covered: frozenset[str],
     collection_errors: tuple[str, ...] = (),
+    skipped_only: frozenset[str] = frozenset(),
 ) -> CoverageReport:
     p0_cells = tuple(c for c in cells if c.tier is Tier.P0)
     registry_ids = frozenset(c.id for c in cells)
@@ -132,7 +179,8 @@ def compute_coverage(
         p0_total=len(p0_cells),
         p0_covered=sum(1 for c in p0_cells if c.id in covered),
         p0_gaps=tuple(sorted(c.id for c in p0_cells if c.id not in covered)),
-        orphan_markers=tuple(sorted(covered - registry_ids)),
+        orphan_markers=tuple(sorted((covered | skipped_only) - registry_ids)),
+        skipped_markers=tuple(sorted(skipped_only & registry_ids)),
         collection_errors=collection_errors,
     )
 
@@ -161,6 +209,15 @@ def render(report: CoverageReport) -> str:
         if report.orphan_markers
         else ()
     )
+    skipped = (
+        (
+            f"\n{len(report.skipped_markers)} cell(s) are claimed only by skipped tests, "
+            f"so they count as uncovered (unskip the test or drop the marker):\n  "
+            + "\n  ".join(report.skipped_markers),
+        )
+        if report.skipped_markers
+        else ()
+    )
     warning = (
         (
             f"\nWARNING: {len(report.collection_errors)} node(s) failed to import during "
@@ -170,7 +227,7 @@ def render(report: CoverageReport) -> str:
         if report.collection_errors
         else ()
     )
-    return "\n".join((*lines, *orphans, *warning))
+    return "\n".join((*lines, *orphans, *skipped, *warning))
 
 
 def _report_dict(report: CoverageReport) -> dict[str, object]:
@@ -190,6 +247,7 @@ def _report_dict(report: CoverageReport) -> dict[str, object]:
             for m in report.modules
         ],
         "orphan_markers": list(report.orphan_markers),
+        "skipped_markers": list(report.skipped_markers),
         "collection_errors": list(report.collection_errors),
     }
 
@@ -234,6 +292,9 @@ def render_prometheus(report: CoverageReport) -> str:
             "# HELP litellm_e2e_coverage_orphan_markers Coverage markers not found in the registry.",
             "# TYPE litellm_e2e_coverage_orphan_markers gauge",
             f"litellm_e2e_coverage_orphan_markers {len(report.orphan_markers)}",
+            "# HELP litellm_e2e_coverage_skipped_markers Registry cells claimed only by skipped tests.",
+            "# TYPE litellm_e2e_coverage_skipped_markers gauge",
+            f"litellm_e2e_coverage_skipped_markers {len(report.skipped_markers)}",
             "# HELP litellm_e2e_coverage_collection_errors Pytest nodes that failed during collection.",
             "# TYPE litellm_e2e_coverage_collection_errors gauge",
             f"litellm_e2e_coverage_collection_errors {len(report.collection_errors)}",
@@ -286,8 +347,13 @@ def main() -> int:
     )
     args = _CliArgs.model_validate(vars(parser.parse_args()))
     cells = load_registry()
-    covered, errors = collect_covered_ids()
-    report = compute_coverage(cells, covered, errors)
+    markers = collect_markers()
+    report = compute_coverage(
+        cells,
+        markers.covered,
+        markers.collection_errors,
+        markers.skipped_only,
+    )
     output = {
         "text": render,
         "json": render_json,

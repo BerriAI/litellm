@@ -2,6 +2,7 @@ import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProvider
 import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
 import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
 import { all_admin_roles, isUserTeamAdminForAnyTeam } from "@/utils/roles";
+import { modelCreationScope } from "@/utils/modelPermissions";
 import { Switch, Text } from "@tremor/react";
 import type { FormInstance } from "antd";
 import { Select as AntdSelect, Button, Card, Col, Form, Modal, Row, Tooltip, Typography, Alert } from "antd";
@@ -101,6 +102,10 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
 
   const isAdmin = all_admin_roles.includes(userRole);
   const isTeamAdmin = isUserTeamAdminForAnyTeam(teams, userId);
+  // Same owner the Auto-Routers tab uses, so the two creation forms cannot disagree about
+  // who has to name a team. This form is only reachable when creation is allowed at all.
+  const createScope = modelCreationScope({ userRole, userID: userId }, { teams, disabledForInternalUsers: false });
+  const requiresTeamScope = createScope === "team-required";
 
   return (
     <>
@@ -120,7 +125,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
           labelAlign="left"
         >
           <>
-            {isTeamAdmin && !isAdmin && (
+            {requiresTeamScope && (
               <>
                 <Form.Item
                   label="Select Team"
@@ -307,7 +312,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                 )}
 
                 {/* Conditional Team Selection */}
-                {isTeamOnly && (isAdmin || !isTeamAdmin) && (
+                {isTeamOnly && !requiresTeamScope && (
                   <Form.Item
                     label="Select Team"
                     name="team_id"

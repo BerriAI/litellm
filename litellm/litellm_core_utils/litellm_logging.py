@@ -4680,6 +4680,7 @@ class StandardLoggingPayloadSetup:
             applied_guardrails=applied_guardrails,
             mcp_tool_call_metadata=mcp_tool_call_metadata,
             vector_store_request_metadata=vector_store_request_metadata,
+            routing_decision=None,
             usage_object=usage_object,
             requester_custom_headers=None,
             cold_storage_object_key=None,
@@ -5519,6 +5520,7 @@ def get_standard_logging_metadata(
         applied_guardrails=None,
         mcp_tool_call_metadata=None,
         vector_store_request_metadata=None,
+        routing_decision=None,
         usage_object=None,
         requester_custom_headers=None,
         user_api_key_request_route=None,
@@ -5552,18 +5554,6 @@ def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):
         masking_fn = metadata.pop("langfuse_masking_function", None)
         if callable(masking_fn):
             litellm_params["_langfuse_masking_function"] = masking_fn
-        litellm_params["metadata"] = metadata
-
-    ## check user_api_key_metadata for sensitive logging keys
-    cleaned_user_api_key_metadata = {}
-    if "user_api_key_metadata" in metadata and isinstance(metadata["user_api_key_metadata"], dict):
-        for k, v in metadata["user_api_key_metadata"].items():
-            if k == "logging":  # prevent logging user logging keys
-                cleaned_user_api_key_metadata[k] = "scrubbed_by_litellm_for_sensitive_keys"
-            else:
-                cleaned_user_api_key_metadata[k] = v
-
-        metadata["user_api_key_metadata"] = cleaned_user_api_key_metadata
         litellm_params["metadata"] = metadata
 
     return litellm_params

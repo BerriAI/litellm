@@ -19,11 +19,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
-from litellm.proxy.management_endpoints.tool_management_endpoints import (
-    _build_tool_spend_response,
-    _ToolSpendRow,
-    router,
-)
+from litellm.proxy.management_endpoints.tool_management_endpoints import router
 from litellm.types.tool_management import LiteLLM_ToolTableRow
 
 # --- helpers ---
@@ -62,6 +58,30 @@ def _override_auth():
 
 # A real (non-None) prisma stub for truthiness checks.
 _MOCK_PRISMA = MagicMock()
+
+
+def _rollup_row(date: str, tool_name: str, spend: float, request_count: int, total_tokens: int) -> MagicMock:
+    row = MagicMock()
+    row.date = date
+    row.tool_name = tool_name
+    row.spend = spend
+    row.request_count = request_count
+    row.total_tokens = total_tokens
+    return row
+
+
+def _group_row(tool_name: str, spend: float, request_count: int, total_tokens: int) -> dict:
+    return {"tool_name": tool_name, "_sum": {"spend": spend, "total_tokens": total_tokens, "request_count": request_count}}
+
+
+def _rollup_prisma(group_rows: list, daily_rows: list | None = None) -> MagicMock:
+    prisma = MagicMock()
+    prisma.db.query_raw = AsyncMock(return_value=[])
+    prisma.db.litellm_spendlogs.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_spendlogtoolindex.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_dailytoolspend.group_by = AsyncMock(return_value=group_rows)
+    prisma.db.litellm_dailytoolspend.find_many = AsyncMock(return_value=daily_rows or [])
+    return prisma
 
 
 # --- test class ---
@@ -154,21 +174,23 @@ class TestToolManagementEndpoints:
         assert resp.status_code == 422
 
     def test_tool_spend_route_not_shadowed_by_get_tool(self):
-        prisma = MagicMock()
-        prisma.db.query_raw = AsyncMock(return_value=[])
+        prisma = _rollup_prisma([])
         with patch("litellm.proxy.proxy_server.prisma_client", prisma):
             resp = self.client.get("/v1/tool/spend")
         assert resp.status_code == 200
         assert resp.json()["by_tool"] == []
 
-    def test_tool_spend_aggregates_and_sorts(self):
-        rows = [
-            {"date": "2026-07-01", "tool_name": "search", "call_count": 2, "spend": 1.0, "total_tokens": 100},
-            {"date": "2026-07-02", "tool_name": "search", "call_count": 1, "spend": 4.0, "total_tokens": 50},
-            {"date": "2026-07-01", "tool_name": "read_file", "call_count": 3, "spend": 2.0, "total_tokens": 300},
+    def test_tool_spend_serves_sql_aggregates_and_daily_series(self):
+        group_rows = [
+            _group_row("search", spend=5.0, request_count=3, total_tokens=150),
+            _group_row("read_file", spend=2.0, request_count=3, total_tokens=300),
         ]
-        prisma = MagicMock()
-        prisma.db.query_raw = AsyncMock(side_effect=[rows, [{"total_spend": 5.5}]])
+        daily_rows = [
+            _rollup_row("2026-07-01", "search", spend=1.0, request_count=2, total_tokens=100),
+            _rollup_row("2026-07-01", "read_file", spend=2.0, request_count=3, total_tokens=300),
+            _rollup_row("2026-07-02", "search", spend=4.0, request_count=1, total_tokens=50),
+        ]
+        prisma = _rollup_prisma(group_rows, daily_rows)
         with patch("litellm.proxy.proxy_server.prisma_client", prisma):
             resp = self.client.get("/v1/tool/spend?start_date=2026-07-01&end_date=2026-07-02")
         assert resp.status_code == 200
@@ -179,94 +201,89 @@ class TestToolManagementEndpoints:
         assert search["call_count"] == 3
         assert search["total_tokens"] == 150
         assert len(body["daily"]) == 3
+        assert body["daily"][0]["call_count"] == 2
         assert body["start_date"] == "2026-07-01"
         assert body["end_date"] == "2026-07-02"
-        assert body["total_spend"] == 5.5
+
+    def test_tool_spend_coerces_bigint_string_sums(self):
+        # prisma group_by returns BigInt sums as strings ("808"); the response
+        # must coerce them to ints rather than 500 on validation.
+        group_rows = [{"tool_name": "search", "_sum": {"spend": 0.5, "total_tokens": "808", "request_count": "3"}}]
+        prisma = _rollup_prisma(group_rows)
+        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+            resp = self.client.get("/v1/tool/spend?start_date=2026-07-01&end_date=2026-07-02")
+        assert resp.status_code == 200
+        assert resp.json()["by_tool"][0]["total_tokens"] == 808
+        assert resp.json()["by_tool"][0]["call_count"] == 3
+
+    def test_tool_spend_daily_restricted_to_top_tools_and_capped(self):
+        from litellm.constants import TOOL_SPEND_TOP_TOOLS
+
+        group_rows = [_group_row("search", spend=5.0, request_count=1, total_tokens=10)]
+        prisma = _rollup_prisma(group_rows)
+        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+            resp = self.client.get("/v1/tool/spend?start_date=2026-07-01&end_date=2026-07-02")
+        assert resp.status_code == 200
+        group_kwargs = prisma.db.litellm_dailytoolspend.group_by.await_args.kwargs
+        assert group_kwargs["take"] == TOOL_SPEND_TOP_TOOLS
+        assert group_kwargs["order"] == {"_sum": {"spend": "desc"}}
+        daily_where = prisma.db.litellm_dailytoolspend.find_many.await_args.kwargs["where"]
+        assert daily_where["tool_name"] == {"in": ["search"]}
+
+    def test_tool_spend_skips_daily_query_when_no_tools(self):
+        prisma = _rollup_prisma([])
+        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+            resp = self.client.get("/v1/tool/spend?start_date=2026-07-01&end_date=2026-07-02")
+        assert resp.status_code == 200
+        prisma.db.litellm_dailytoolspend.find_many.assert_not_awaited()
 
     @patch("litellm.proxy.proxy_server.prisma_client", None)
     def test_tool_spend_no_db_returns_500(self):
         resp = self.client.get("/v1/tool/spend")
         assert resp.status_code == 500
 
-    def test_tool_spend_end_date_is_inclusive_via_exclusive_next_day_bound(self):
-        prisma = MagicMock()
-        prisma.db.query_raw = AsyncMock(return_value=[])
+    def test_tool_spend_reads_rollup_only_never_spendlogs(self):
+        # Regression for the GA blocker: the dashboard aggregate must be served
+        # entirely from LiteLLM_DailyToolSpend; any query_raw or SpendLogs table
+        # access on this path reintroduces the per-request scan.
+        prisma = _rollup_prisma([])
         with patch("litellm.proxy.proxy_server.prisma_client", prisma):
             resp = self.client.get("/v1/tool/spend?start_date=2026-07-01&end_date=2026-07-02")
         assert resp.status_code == 200
-        expected_binds = (
-            datetime(2026, 7, 1, tzinfo=timezone.utc).isoformat(),
-            datetime(2026, 7, 3, tzinfo=timezone.utc).isoformat(),
-        )
-        assert prisma.db.query_raw.await_count == 2
-        for call in prisma.db.query_raw.await_args_list:
-            assert tuple(call.args[1:]) == expected_binds
+        prisma.db.query_raw.assert_not_awaited()
+        prisma.db.litellm_spendlogs.find_many.assert_not_awaited()
+        prisma.db.litellm_spendlogtoolindex.find_many.assert_not_awaited()
+        prisma.db.litellm_dailytoolspend.group_by.assert_awaited_once()
+
+    def test_tool_spend_windows_rollup_by_inclusive_date_strings(self):
+        prisma = _rollup_prisma([])
+        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+            resp = self.client.get("/v1/tool/spend?start_date=2026-07-01&end_date=2026-07-02")
+        assert resp.status_code == 200
+        where = prisma.db.litellm_dailytoolspend.group_by.await_args.kwargs["where"]
+        assert where == {"date": {"gte": "2026-07-01", "lte": "2026-07-02"}}
         assert resp.json()["end_date"] == "2026-07-02"
 
-    def test_tool_spend_start_clamped_to_30_days_before_end(self):
-        # Clamped floor is end_date minus 30 days, serving up to 31 calendar dates
-        # inclusive: deliberately the same width as the endpoint's default window,
-        # so the dashboard's default range never triggers the clamp.
-        prisma = MagicMock()
-        prisma.db.query_raw = AsyncMock(return_value=[])
+    def test_tool_spend_wide_range_served_fully(self):
+        # Regression: the 30-day clamp is gone; a 182-day request is served as
+        # requested because the rollup read is O(tools x dates).
+        prisma = _rollup_prisma([])
         with patch("litellm.proxy.proxy_server.prisma_client", prisma):
             resp = self.client.get("/v1/tool/spend?start_date=2026-01-01&end_date=2026-07-01")
         assert resp.status_code == 200
-        expected_binds = (
-            datetime(2026, 6, 1, tzinfo=timezone.utc).isoformat(),
-            datetime(2026, 7, 2, tzinfo=timezone.utc).isoformat(),
-        )
-        assert prisma.db.query_raw.await_count == 2
-        for call in prisma.db.query_raw.await_args_list:
-            assert tuple(call.args[1:]) == expected_binds
-        assert resp.json()["start_date"] == "2026-06-01"
+        where = prisma.db.litellm_dailytoolspend.group_by.await_args.kwargs["where"]
+        assert where == {"date": {"gte": "2026-01-01", "lte": "2026-07-01"}}
+        assert resp.json()["start_date"] == "2026-01-01"
         assert resp.json()["end_date"] == "2026-07-01"
 
-    def test_tool_spend_range_within_cap_is_not_clamped(self):
-        prisma = MagicMock()
-        prisma.db.query_raw = AsyncMock(return_value=[])
+    def test_tool_spend_defaults_to_trailing_30_days(self):
+        prisma = _rollup_prisma([])
         with patch("litellm.proxy.proxy_server.prisma_client", prisma):
-            resp = self.client.get("/v1/tool/spend?start_date=2026-06-25&end_date=2026-07-01")
+            resp = self.client.get("/v1/tool/spend")
         assert resp.status_code == 200
-        for call in prisma.db.query_raw.await_args_list:
-            assert call.args[1] == datetime(2026, 6, 25, tzinfo=timezone.utc).isoformat()
-        assert resp.json()["start_date"] == "2026-06-25"
-
-    def test_tool_spend_start_honored_when_end_date_omitted(self):
-        # Regression: with end_date omitted the floor anchors to today's UTC
-        # midnight, not now's time-of-day, so an explicit start_date exactly 30
-        # days back is served from midnight rather than truncated to mid-day.
-        prisma = MagicMock()
-        prisma.db.query_raw = AsyncMock(return_value=[])
-        floor_day = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=30)
-        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
-            resp = self.client.get(f"/v1/tool/spend?start_date={floor_day.strftime('%Y-%m-%d')}")
-        assert resp.status_code == 200
-        for call in prisma.db.query_raw.await_args_list:
-            assert call.args[1] == floor_day.isoformat()
-        assert resp.json()["start_date"] == floor_day.strftime("%Y-%m-%d")
-
-    def test_tool_spend_clamp_without_end_date_lands_on_midnight(self):
-        prisma = MagicMock()
-        prisma.db.query_raw = AsyncMock(return_value=[])
-        floor_day = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=30)
-        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
-            resp = self.client.get("/v1/tool/spend?start_date=2020-01-01")
-        assert resp.status_code == 200
-        for call in prisma.db.query_raw.await_args_list:
-            assert call.args[1] == floor_day.isoformat()
-        assert resp.json()["start_date"] == floor_day.strftime("%Y-%m-%d")
-
-    def test_tool_spend_total_query_bounds_outer_spendlogs_scan(self):
-        prisma = MagicMock()
-        prisma.db.query_raw = AsyncMock(return_value=[])
-        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
-            resp = self.client.get("/v1/tool/spend?start_date=2026-07-01&end_date=2026-07-02")
-        assert resp.status_code == 200
-        for call in prisma.db.query_raw.await_args_list:
-            sql = call.args[0]
-            assert 'sl."startTime" >=' in sql
-            assert 'sl."startTime" <' in sql
+        today = datetime.now(timezone.utc)
+        assert resp.json()["end_date"] == today.strftime("%Y-%m-%d")
+        assert resp.json()["start_date"] == (today - timedelta(days=30)).strftime("%Y-%m-%d")
 
     @pytest.mark.parametrize(
         "query",
@@ -279,13 +296,12 @@ class TestToolManagementEndpoints:
         ],
     )
     def test_tool_spend_malformed_date_returns_400(self, query: str):
-        prisma = MagicMock()
-        prisma.db.query_raw = AsyncMock(return_value=[])
+        prisma = _rollup_prisma([])
         with patch("litellm.proxy.proxy_server.prisma_client", prisma):
             resp = self.client.get(f"/v1/tool/spend?{query}")
         assert resp.status_code == 400
         assert "Invalid date format" in resp.json()["detail"]
-        prisma.db.query_raw.assert_not_awaited()
+        prisma.db.litellm_dailytoolspend.group_by.assert_not_awaited()
 
     def test_tool_spend_non_admin_returns_403(self):
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -296,38 +312,8 @@ class TestToolManagementEndpoints:
             api_key="sk-user", user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER
         )
         client = TestClient(app, raise_server_exceptions=True)
-        prisma = MagicMock()
-        prisma.db.query_raw = AsyncMock(return_value=[])
+        prisma = _rollup_prisma([])
         with patch("litellm.proxy.proxy_server.prisma_client", prisma):
             resp = client.get("/v1/tool/spend")
         assert resp.status_code == 403
-        prisma.db.query_raw.assert_not_awaited()
-
-
-def _spend_row(date: str, tool_name: str, spend: float, call_count: int = 1, total_tokens: int = 10) -> _ToolSpendRow:
-    return _ToolSpendRow(date=date, tool_name=tool_name, call_count=call_count, spend=spend, total_tokens=total_tokens)
-
-
-class TestBuildToolSpendResponse:
-    def test_multi_tool_attribution_double_counts_per_tool_but_not_total(self):
-        rows = [
-            _spend_row("2026-07-01", "a", spend=3.0),
-            _spend_row("2026-07-01", "b", spend=3.0),
-        ]
-        resp = _build_tool_spend_response(rows, total_spend=3.0, start_date="2026-07-01", end_date="2026-07-01")
-        by_tool = {t.tool_name: t.spend for t in resp.by_tool}
-        assert by_tool == {"a": 3.0, "b": 3.0}
-        assert resp.total_spend == 3.0
-
-    def test_groups_across_days_and_sorts_by_spend(self):
-        rows = [
-            _spend_row("2026-07-01", "b", spend=1.0, call_count=2, total_tokens=100),
-            _spend_row("2026-07-02", "b", spend=4.0, call_count=1, total_tokens=50),
-            _spend_row("2026-07-01", "a", spend=2.0, call_count=3, total_tokens=300),
-        ]
-        resp = _build_tool_spend_response(rows, total_spend=7.0, start_date="2026-07-01", end_date="2026-07-02")
-        assert [(t.tool_name, t.spend, t.call_count, t.total_tokens) for t in resp.by_tool] == [
-            ("b", 5.0, 3, 150),
-            ("a", 2.0, 3, 300),
-        ]
-        assert len(resp.daily) == 3
+        prisma.db.litellm_dailytoolspend.group_by.assert_not_awaited()

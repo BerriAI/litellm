@@ -109,6 +109,7 @@ from litellm.proxy.common_utils.callback_utils import (
     is_sensitive_callback_key,
     normalize_callback_names,
     process_callback,
+    strip_callback_config,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.router_utils.add_retry_fallback_headers import (
@@ -118,6 +119,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
+    StreamingChoices,
     TextCompletionResponse,
     TokenCountResponse,
 )
@@ -5397,7 +5399,7 @@ class ProxyConfig:
                 # decrypt values
                 for k, v in _litellm_params.items():
                     _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
-                _litellm_params = LiteLLM_Params(**_litellm_params)
+                _litellm_params = LiteLLM_Params.model_validate(_litellm_params)
 
             else:
                 verbose_proxy_logger.error(
@@ -5428,7 +5430,7 @@ class ProxyConfig:
                 # decrypt values
                 for k, v in _litellm_params.items():
                     _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
-                _litellm_params = LiteLLM_Params(**_litellm_params)
+                _litellm_params = LiteLLM_Params.model_validate(_litellm_params)
             else:
                 verbose_proxy_logger.error(
                     f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
@@ -6757,6 +6759,9 @@ class ProxyConfig:
         from litellm.proxy._experimental.mcp_server.oauth2_flow_backfill import (
             backfill_null_oauth2_flows,
         )
+        from litellm.proxy._experimental.mcp_server.oauth_issuer_stamp_backfill import (
+            backfill_discovery_stamped_issuers,
+        )
 
         try:
             if prisma_client is not None:
@@ -6764,6 +6769,16 @@ class ProxyConfig:
         except Exception as e:  # noqa: BLE001
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db backfill - {}".format(str(e))
+            )
+
+        try:
+            if prisma_client is not None:
+                await backfill_discovery_stamped_issuers(prisma_client)
+        except Exception as e:  # noqa: BLE001
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db issuer stamp backfill - {}".format(
+                    str(e)
+                )
             )
 
         try:
@@ -6776,6 +6791,31 @@ class ProxyConfig:
     async def init_mcp_servers_from_db(self) -> None:
         if self._should_load_db_object(object_type="mcp"):
             await self._init_mcp_servers_in_db()
+
+    async def reload_mcp_servers_from_db(self) -> None:
+        """Registry refresh only, for the periodic job in store_model_in_db-off deployments.
+
+        Deliberately narrower than ``init_mcp_servers_from_db``: the oauth2_flow backfill is a write
+        path that only needs to run once at startup, so the cadence here is purely the read-side
+        reload whose fast-path exemption retries failed OAuth discovery. Gated the same way, so an
+        admin who excluded mcp from supported_db_objects opts out of this too.
+        """
+        if not self._should_load_db_object(object_type="mcp"):
+            return
+        from litellm.proxy._experimental.mcp_server.utils import is_mcp_available
+
+        if not is_mcp_available():
+            return
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        try:
+            await global_mcp_server_manager.reload_servers_from_database()
+        except Exception as e:  # noqa: BLE001  # scheduled job: a reload failure must not kill the recurring retry
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:reload_mcp_servers_from_db - {}".format(str(e))
+            )
 
     async def _init_agents_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.agent_endpoints.agent_registry import (
@@ -7329,6 +7369,25 @@ def _serialize_streaming_chunk(chunk: BaseModel) -> Union[str, bytes]:
     return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
 
 
+def _is_injected_stream_usage_artifact(chunk: object) -> bool:
+    if not isinstance(chunk, ModelResponseStream):
+        return False
+    if chunk.provider_specific_fields is not None:
+        return False
+    return all(_is_empty_streaming_choice(choice) for choice in chunk.choices or [])
+
+
+def _is_empty_streaming_choice(choice: StreamingChoices) -> bool:
+    if choice.finish_reason is not None:
+        return False
+    if getattr(choice, "logprobs", None) is not None:
+        return False
+    delta = getattr(choice, "delta", None)
+    if delta is None:
+        return True
+    return all(value is None for value in delta.model_dump().values())
+
+
 async def _apply_streaming_chunk_hooks(
     *,
     chunk: Any,
@@ -7408,6 +7467,7 @@ async def async_data_generator(
         needs_iterator_wrap = proxy_logging_obj.needs_iterator_wrap()
         needs_per_chunk_hook = proxy_logging_obj.needs_per_chunk_streaming_hook()
         is_raw_sse_stream = bool(request_data.get("_litellm_raw_sse_stream"))
+        strip_stream_usage = bool(request_data.get("_litellm_strip_stream_usage"))
         raw_sse_buffer = ""
 
         if needs_iterator_wrap:
@@ -7458,6 +7518,15 @@ async def async_data_generator(
                 fallback_was_attempted=fallback_was_attempted,
                 fallback_model_from_metadata=fallback_model_from_metadata,
             )
+
+            if strip_stream_usage and _is_injected_stream_usage_artifact(chunk):
+                if pending_fallback_event:
+                    yield _format_fallback_metadata_sse_event(
+                        fallback_model=fallback_model_from_metadata,
+                        fallback_errors=fallback_errors,
+                    )
+                    fallback_metadata_event_sent = True
+                continue
 
             raw_passthrough = False
             if isinstance(chunk, BaseModel):
@@ -8098,6 +8167,22 @@ class ProxyStartupEvent:
 
         if store_model_in_db is not True:
             await proxy_config.init_mcp_servers_from_db()
+            if prisma_client is not None:
+                # DB-backed MCP servers are live objects in every mode, so the registry refresh that
+                # store_model_in_db=True deployments get via the add_deployment job must run here
+                # too; without it, a server whose OAuth discovery failed at startup is rebuilt only
+                # by a management write, since the reload fast path is the retry's only driver.
+                mcp_reload_interval_seconds = proxy_config_reload_interval_seconds
+                if not isinstance(mcp_reload_interval_seconds, int) or mcp_reload_interval_seconds <= 0:
+                    mcp_reload_interval_seconds = 30
+                scheduler.add_job(
+                    proxy_config.reload_mcp_servers_from_db,
+                    "interval",
+                    seconds=mcp_reload_interval_seconds,
+                    id="reload_mcp_servers_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
 
         await cls._initialize_slack_alerting_jobs(
             scheduler=scheduler,
@@ -11213,11 +11298,15 @@ async def get_all_team_models(
 
     if user_teams == "*":
         team_db_objects = await TeamRepository(prisma_client).table.find_many()
-        team_db_objects_typed = [LiteLLM_TeamTable(**team_db_object.model_dump()) for team_db_object in team_db_objects]
+        team_db_objects_typed = [
+            LiteLLM_TeamTable.model_validate(team_db_object.model_dump()) for team_db_object in team_db_objects
+        ]
     else:
         team_db_objects = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": user_teams}})
 
-        team_db_objects_typed = [LiteLLM_TeamTable(**team_db_object.model_dump()) for team_db_object in team_db_objects]
+        team_db_objects_typed = [
+            LiteLLM_TeamTable.model_validate(team_db_object.model_dump()) for team_db_object in team_db_objects
+        ]
 
     team_models = _add_team_models_to_all_models(
         team_db_objects_typed=team_db_objects_typed,
@@ -11291,7 +11380,7 @@ async def _populate_team_access_on_models(
             where={"user_id": user_api_key_dict.user_id}
         )
         if user_db_object is not None:
-            user_object = LiteLLM_UserTable(**user_db_object.model_dump())
+            user_object = LiteLLM_UserTable.model_validate(user_db_object.model_dump())
             user_teams = user_object.teams or []
             direct_access_models = get_direct_access_models(
                 user_db_object=user_object,
@@ -11768,6 +11857,22 @@ def _sort_models(
         return all_models
 
 
+def _is_auto_router_model(model: Mapping[str, object]) -> bool:
+    """
+    True for any auto-router deployment, i.e. every `auto_router/*` strategy
+    (semantic, complexity, adaptive, quality).
+
+    Router._is_auto_router_deployment is deliberately narrower; it answers "is this the
+    *semantic* auto-router strategy" and returns False for the complexity and adaptive
+    prefixes, so it is not reusable here.
+    """
+    litellm_params = model.get("litellm_params")
+    if not isinstance(litellm_params, Mapping):
+        return False
+    litellm_model = litellm_params.get("model")
+    return isinstance(litellm_model, str) and litellm_model.startswith("auto_router/")
+
+
 def _paginate_models_response(
     all_models: List[Dict[str, Any]],
     page: int,
@@ -11826,7 +11931,7 @@ async def _load_team_object_for_model_filter(team_id: str, prisma_client: Prisma
         if team_db_object is None:
             verbose_proxy_logger.warning(f"Team {team_id} not found in database")
             return None
-        return LiteLLM_TeamTable(**team_db_object.model_dump())
+        return LiteLLM_TeamTable.model_validate(team_db_object.model_dump())
     except Exception as e:
         verbose_proxy_logger.exception(f"Error fetching team {team_id}: {str(e)}")
         return None
@@ -12062,6 +12167,15 @@ async def model_info_v2(
         "asc",
         description="Sort order. Options: asc, desc",
     ),
+    exclude_auto_routers: bool | None = fastapi.Query(
+        False,
+        description=(
+            "Omit auto-router deployments (litellm model prefixed `auto_router/`). "
+            "They select among deployments rather than being deployments themselves, so a "
+            "caller rendering a deployment list can leave them out. Defaults to false, so "
+            "existing callers are unaffected"
+        ),
+    ),
 ):
     """
     Paginated model metadata for proxy deployments (pricing, provider, team access).
@@ -12228,6 +12342,11 @@ async def model_info_v2(
         models=all_models,
         user_api_key_dict=user_api_key_dict,
     )
+
+    # `is True` because direct-call tests bypass FastAPI, so the Query default arrives as a
+    # truthy sentinel object rather than False.
+    if exclude_auto_routers is True:
+        all_models = [m for m in all_models if not _is_auto_router_model(m)]
 
     # Update total count to include agents
     search_total_count = len(all_models)
@@ -13004,7 +13123,7 @@ def _get_model_group_info(
         _model_group_info = llm_router.get_model_group_info(model_group=model)
 
         if _model_group_info is not None:
-            model_groups.append(ModelGroupInfoProxy(**_model_group_info.model_dump()))
+            model_groups.append(ModelGroupInfoProxy.model_validate(_model_group_info.model_dump()))
         else:
             model_group_info = ModelGroupInfoProxy(
                 model_group=model,
@@ -13381,6 +13500,7 @@ async def async_queue_request(
     data = {}
     try:
         data = await request.json()  # type: ignore
+        data.pop("_litellm_strip_stream_usage", None)
 
         # Include original request and headers in the data
         data["proxy_server_request"] = {
@@ -13408,7 +13528,7 @@ async def async_queue_request(
             # extra_body); see above for the same guard upstream.
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
+        data["metadata"]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
         _headers = _safe_get_request_headers(request).copy()
         _headers.pop("authorization", None)  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
@@ -14723,7 +14843,7 @@ async def update_config_general_settings(
         )
 
     try:
-        ConfigGeneralSettings(**{data.field_name: data.field_value})
+        ConfigGeneralSettings.model_validate({data.field_name: data.field_value})
     except Exception:
         raise HTTPException(
             status_code=400,
@@ -15169,7 +15289,6 @@ async def get_config_list(
         "forward_client_headers_to_llm_api": {"type": "Boolean"},
         "mcp_required_fields": {"type": "List"},
         "cancel_on_disconnect": {"type": "Boolean"},
-        "skip_user_budget_on_team_key": {"type": "Boolean"},
         "disable_auto_add_proxy_admin_to_teams": {"type": "Boolean"},
     }
 
