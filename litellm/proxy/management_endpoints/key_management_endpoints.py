@@ -90,6 +90,7 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.model_list_cache import refresh_model_list_cache
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     get_ui_settings_cached,
@@ -4240,6 +4241,7 @@ async def _rotate_master_key(
             await tx.litellm_proxymodeltable.create_many(
                 data=new_models,
             )
+        await refresh_model_list_cache(prisma_client=prisma_client)
     # 3. process config table
     try:
         config = await ConfigRepository(prisma_client).table.find_many()

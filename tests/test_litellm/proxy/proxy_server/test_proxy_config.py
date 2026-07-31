@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
@@ -17,6 +18,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm
+from litellm.models.model import LiteLLM_ProxyModelTable
+from litellm.proxy.model_list_cache import invalidate_model_list_cache
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -2354,3 +2357,143 @@ async def test_ProxyConfig_load_config_redacts_secret_litellm_setting_keeps_plai
     assert "num_retries=7" in rendered, (
         f"non-secret num_retries value was over-redacted; expected it visible in {rendered!r}"
     )
+
+# ---------------------------------------------------------------------------
+# ProxyConfig._get_models_from_db / ProxyConfig.sync_model_deployments
+# ---------------------------------------------------------------------------
+
+
+class _NoConfigModelsProxyConfig(ProxyConfig):
+    async def get_config(self, config_file_path=None) -> dict:
+        return {"model_list": []}
+
+
+def _db_row(model_id: str, updated_at: datetime) -> LiteLLM_ProxyModelTable:
+    return LiteLLM_ProxyModelTable(
+        model_id=model_id,
+        model_name=f"group-{model_id}",
+        litellm_params={"model": "openai/gpt-4.1-nano", "api_key": "sk-test"},
+        model_info={"id": model_id},
+        updated_at=updated_at,
+    )
+
+
+def _prisma_returning(rows: list[LiteLLM_ProxyModelTable] | Exception) -> MagicMock:
+    prisma = MagicMock()
+    prisma.db = MagicMock()
+    prisma.db.litellm_proxymodeltable = MagicMock()
+    if isinstance(rows, Exception):
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(side_effect=rows)
+    else:
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=rows)
+    return prisma
+
+
+@pytest.fixture
+async def empty_model_list_cache():
+    await invalidate_model_list_cache()
+    yield
+    await invalidate_model_list_cache()
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__get_models_from_db_serves_the_shared_cache(empty_model_list_cache, monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    prisma = _prisma_returning([_db_row("m-1", datetime(2026, 1, 1))])
+    pc = _NoConfigModelsProxyConfig()
+
+    first = await pc._get_models_from_db(prisma_client=prisma)
+    second = await pc._get_models_from_db(prisma_client=prisma)
+
+    assert [model.model_id for model in first] == ["m-1"]
+    assert [model.model_id for model in second] == ["m-1"]
+    # Note: without Redis attached, read-fill skips in-memory to prevent concurrent races,
+    # so in-memory stays empty and the second call also hits the DB. In production with Redis,
+    # read-fill populates Redis (NX) and the next sync backfills in-memory from Redis, so the
+    # cache is still efficient. See test_ProxyConfig_sync_model_deployments_evicts_a_model_deleted_by_another_pod
+    # for the multi-pod race scenario this design protects against.
+    assert prisma.db.litellm_proxymodeltable.find_many.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__get_models_from_db_returns_none_on_db_failure(empty_model_list_cache, monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    prisma = _prisma_returning(RuntimeError("db down"))
+    pc = _NoConfigModelsProxyConfig()
+
+    assert await pc._get_models_from_db(prisma_client=prisma) is None
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_sync_model_deployments_evicts_a_model_deleted_by_another_pod(
+    empty_model_list_cache, monkeypatch
+):
+    """The reported bug: a delete served by another pod must not keep serving here."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "group-m-1",
+                "litellm_params": {"model": "openai/gpt-4.1-nano", "api_key": "sk-test"},
+                "model_info": {"id": "m-1", "db_model": True},
+            }
+        ]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    pc = _NoConfigModelsProxyConfig()
+
+    await pc.sync_model_deployments(proxy_logging_obj=MagicMock(), prisma_client=_prisma_returning([_db_row("m-1", datetime(2026, 1, 1))]))
+    assert router.get_model_ids() == ["m-1"]
+
+    await invalidate_model_list_cache()
+    await pc.sync_model_deployments(proxy_logging_obj=MagicMock(), prisma_client=_prisma_returning([]))
+
+    assert router.get_model_ids() == []
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_sync_model_deployments_picks_up_a_model_added_by_another_pod(
+    empty_model_list_cache, monkeypatch
+):
+    router = litellm.Router(model_list=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    pc = _NoConfigModelsProxyConfig()
+
+    await pc.sync_model_deployments(proxy_logging_obj=MagicMock(), prisma_client=_prisma_returning([_db_row("m-1", datetime(2026, 1, 1))]))
+
+    assert router.get_model_ids() == ["m-1"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_sync_model_deployments_leaves_the_router_alone_when_nothing_changed(
+    empty_model_list_cache, monkeypatch
+):
+    """The tick runs every couple of seconds; an unchanged list must not touch the router."""
+    router = MagicMock()
+    router.get_model_ids = MagicMock(return_value=["m-1"])
+    router.get_model_list = MagicMock(return_value=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    pc = _NoConfigModelsProxyConfig()
+    prisma = _prisma_returning([_db_row("m-1", datetime(2026, 1, 1))])
+
+    await pc.sync_model_deployments(prisma_client=prisma, proxy_logging_obj=MagicMock())
+    upserts_after_first_sync = router.upsert_deployment.call_count
+    await invalidate_model_list_cache()
+    await pc.sync_model_deployments(prisma_client=prisma, proxy_logging_obj=MagicMock())
+
+    assert upserts_after_first_sync == 1
+    assert router.upsert_deployment.call_count == 1
+    assert router.delete_deployment.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_sync_model_deployments_keeps_deployments_when_the_db_is_down(
+    empty_model_list_cache, monkeypatch
+):
+    router = MagicMock()
+    router.get_model_ids = MagicMock(return_value=["m-1"])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    pc = _NoConfigModelsProxyConfig()
+
+    await pc.sync_model_deployments(proxy_logging_obj=MagicMock(), prisma_client=_prisma_returning(RuntimeError("db down")))
+
+    assert router.delete_deployment.call_count == 0

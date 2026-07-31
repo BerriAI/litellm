@@ -1938,6 +1938,89 @@ class TestAddAndDeleteModelLifecycle:
             assert str(exc_info.value.code) == "400"
 
 
+class TestModelWritesInvalidateTheSharedModelList:
+    """Sibling pods read the model list from the shared cache.
+
+    A write that leaves the pre-write list cached is invisible to every other pod until
+    the entry expires, which is the reported "deleted model still shows up" bug.
+    """
+
+    @staticmethod
+    def _cached_row(model_id: str) -> LiteLLM_ProxyModelTable:
+        return LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="lifecycle-model",
+            litellm_params={"model": "openai/gpt-4.1-nano"},
+            model_info={"id": model_id},
+            created_by="test-admin",
+            updated_by="test-admin",
+        )
+
+    @pytest.mark.asyncio
+    async def test_delete_model_evicts_the_shared_model_list(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_model as delete_model_endpoint,
+        )
+        from litellm.proxy.model_list_cache import (
+            get_cached_model_rows,
+            set_cached_model_rows,
+        )
+
+        model_id = "cache-invalidation-model"
+        db_row = self._cached_row(model_id)
+        await set_cached_model_rows([db_row])
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])  # Post-delete, no models exist
+
+        _PS = "litellm.proxy.proxy_server"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_config", MagicMock(add_deployment=AsyncMock())),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.general_settings", {}),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", MagicMock()),
+        ):
+            await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN
+                ),
+            )
+
+        assert await get_cached_model_rows() == ()  # Empty tuple, not None
+
+    @pytest.mark.asyncio
+    async def test_clear_cache_evicts_the_shared_model_list(self):
+        """Every update path (patch, block, access groups) reloads through clear_cache."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            clear_cache,
+        )
+        from litellm.proxy.model_list_cache import (
+            get_cached_model_rows,
+            set_cached_model_rows,
+        )
+
+        await set_cached_model_rows([self._cached_row("cache-clear-model")])
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", None),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+        ):
+            await clear_cache()
+
+        assert await get_cached_model_rows() is None
+
+
 class TestDeleteTeamBYOKModelGhost:
     """Regression for issue #22594.
 

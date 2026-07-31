@@ -22,6 +22,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     reload_serving_verdict,
     clear_cache,
 )
+from litellm.proxy.model_list_cache import refresh_model_list_cache
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.model_repository import ModelRepository
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -121,6 +122,7 @@ async def _tag_deployment_with_access_group(
         where={"model_id": model_id},
         data={"model_info": json.dumps(updated_model_info)},
     )
+    await refresh_model_list_cache(prisma_client=prisma_client)
     verbose_proxy_logger.debug(f"Updated deployment {model_id} with access group: {access_group}")
     return (model_id, updated_model_info)
 
@@ -154,6 +156,7 @@ async def _strip_access_group_from_deployment(
         where={"model_id": model_id},
         data={"model_info": json.dumps(updated_model_info)},
     )
+    await refresh_model_list_cache(prisma_client=prisma_client)
     return (model_id, updated_model_info)
 
 

@@ -26,6 +26,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Sequence,
     Set,
     Tuple,
     TypedDict,
@@ -235,6 +236,7 @@ from litellm.constants import (
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_ADMIN_NAME,
     LITELLM_PROXY_BUDGET_NAME,
+    MODEL_LIST_SYNC_INTERVAL_SECONDS,
     PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
     PROXY_BATCH_POLLING_ENABLED,
     PROXY_BATCH_POLLING_INTERVAL,
@@ -259,6 +261,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.proxy._lazy_features import attach_lazy_features
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
@@ -498,6 +501,13 @@ from litellm.proxy.middleware.request_size_limit_middleware import (
 )
 from litellm.proxy.middleware.security_headers_middleware import (
     SecurityHeadersMiddleware,
+)
+from litellm.proxy.model_list_cache import (
+    get_cached_model_rows,
+    model_list_cache,
+    model_rows_fingerprint,
+    parse_model_rows,
+    set_cached_model_rows,
 )
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
@@ -3767,6 +3777,7 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
             "the auth cache across workers and reduce DB load."
         )
     litellm_config_cache.redis_cache = redis_cache
+    model_list_cache.redis_cache = redis_cache
 
 
 def resolve_routing_plugins(
@@ -3837,6 +3848,7 @@ class ProxyConfig:
         self._last_semantic_filter_config: Optional[Dict[str, Any]] = None
         self._last_hashicorp_vault_config: Optional[Dict[str, Any]] = None
         self.worker_registry: List["WorkerRegistryEntry"] = []
+        self._synced_model_list_fingerprint: Optional[str] = None
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -5300,7 +5312,7 @@ class ProxyConfig:
             _model_info = RouterModelInfo(id=model.model_id, db_model=db_model)
         return _model_info
 
-    async def _delete_deployment(self, db_models: list) -> frozenset[str] | None:
+    async def _delete_deployment(self, db_models: Sequence[LiteLLM_ProxyModelTable]) -> frozenset[str] | None:
         """
         (Helper function of add deployment) -> combined to reduce prisma db calls
 
@@ -5377,7 +5389,7 @@ class ProxyConfig:
             return get_secret(decrypted_value)
         return decrypted_value
 
-    def _add_deployment(self, db_models: list) -> int:
+    def _add_deployment(self, db_models: Sequence[LiteLLM_ProxyModelTable]) -> int:
         """
         Iterate through db models
 
@@ -5419,7 +5431,7 @@ class ProxyConfig:
                 added_models += 1
         return added_models
 
-    def decrypt_model_list_from_db(self, new_models: list) -> list:
+    def decrypt_model_list_from_db(self, new_models: Sequence[LiteLLM_ProxyModelTable]) -> list:
         _model_list: list = []
         for m in new_models:
             _litellm_params = m.litellm_params
@@ -5449,7 +5461,7 @@ class ProxyConfig:
 
     async def _update_llm_router(
         self,
-        new_models: Optional[Json],
+        new_models: Optional[Sequence[LiteLLM_ProxyModelTable]],
         proxy_logging_obj: ProxyLogging,
     ) -> frozenset[str] | None:
         global llm_router, llm_model_list, master_key, general_settings
@@ -5479,7 +5491,7 @@ class ProxyConfig:
                 )
                 return
 
-            models_list: list = new_models if isinstance(new_models, list) else []
+            models_list: Sequence[LiteLLM_ProxyModelTable] = new_models
             if llm_router is None and master_key is not None:
                 verbose_proxy_logger.debug(f"len new_models: {len(models_list)}")
 
@@ -6140,23 +6152,52 @@ class ProxyConfig:
         # Check if the object type is in the list (supports both str and enum values)
         return any(str(obj) == object_type_str for obj in supported_db_objects)
 
-    async def _get_models_from_db(self, prisma_client: PrismaClient) -> Optional[list]:
+    async def _get_models_from_db(self, prisma_client: PrismaClient) -> Optional[Sequence[LiteLLM_ProxyModelTable]]:
         """
-        Fetch all model deployments from the DB.
+        Fetch all model deployments, from the shared cache when it is warm and from the
+        DB otherwise. Every write path refreshes the cache with fresh rows, so the write
+        is visible to other pods once their in-memory copy lapses; a miss falls back to the DB
+        and fills the shared copy with `NX` so it cannot overwrite a racing write's snapshot.
 
         Returns:
         - list: the rows (may be empty if no models exist)
         - None: signals a DB fetch *failure* — callers must not treat this
           as "all models deleted" and must not evict existing router deployments.
         """
+        cached_models = await get_cached_model_rows()
+        if cached_models is not None:
+            return cached_models
+
         try:
             new_models = await ModelRepository(prisma_client).table.find_many()
-            return new_models
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy_server.py::add_deployment() - Error getting new models from DB - {}".format(str(e))
             )
             return None
+
+        models = parse_model_rows(new_models)
+        await set_cached_model_rows(models, overwrite=False)
+        return models
+
+    async def sync_model_deployments(self, prisma_client: PrismaClient, proxy_logging_obj: ProxyLogging) -> None:
+        """
+        Reconcile this pod's router with the shared model list.
+
+        Runs far more often than the full config reload, so it reads the shared cache and
+        stops at the fingerprint unless the model table actually changed; the router work
+        is reached only for a write this pod has not applied yet.
+        """
+        db_models = await self._get_models_from_db(prisma_client=prisma_client)
+        if db_models is None:
+            return
+
+        fingerprint = model_rows_fingerprint(db_models)
+        if fingerprint == self._synced_model_list_fingerprint:
+            return
+
+        await self._update_llm_router(new_models=db_models, proxy_logging_obj=proxy_logging_obj)
+        self._synced_model_list_fingerprint = fingerprint
 
     async def add_deployment(
         self,
@@ -6198,6 +6239,8 @@ class ProxyConfig:
                 still_desired_ids = await self._update_llm_router(
                     new_models=new_models, proxy_logging_obj=proxy_logging_obj
                 )
+                if new_models is not None:
+                    self._synced_model_list_fingerprint = model_rows_fingerprint(new_models)
 
             db_general_settings = await get_config_param(prisma_client, "general_settings")
 
@@ -8164,6 +8207,17 @@ class ProxyStartupEvent:
 
             # this will load all existing models on proxy startup
             await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+
+            if model_list_cache.redis_cache is not None:
+                scheduler.add_job(
+                    proxy_config.sync_model_deployments,
+                    "interval",
+                    seconds=MODEL_LIST_SYNC_INTERVAL_SECONDS,
+                    args=(prisma_client, proxy_logging_obj),
+                    id="sync_model_deployments_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
 
             ### GET STORED CREDENTIALS ###
             scheduler.add_job(

@@ -49,6 +49,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     update_team as _legacy_update_team,
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
+from litellm.proxy.model_list_cache import refresh_model_list_cache
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import ModelTableRepository
@@ -811,6 +812,8 @@ async def delete_team_models(
                 await tx.litellm_proxymodeltable.delete_many(where={"model_id": {"in": model_ids}})
                 deleted_model_ids.extend(model_ids)
 
+    await refresh_model_list_cache(prisma_client=prisma_client)
+
     if llm_router is not None:
         for model_id in deleted_model_ids:
             llm_router.delete_deployment(id=model_id)
@@ -1198,6 +1201,8 @@ async def delete_model(
                     llm_router=llm_router,
                 )
 
+            await refresh_model_list_cache(prisma_client=prisma_client)
+
             ## CREATE AUDIT LOG ##
             asyncio.create_task(
                 create_object_audit_log(
@@ -1372,6 +1377,7 @@ async def add_new_model(
                         user_api_key_dict=user_api_key_dict,
                         prisma_client=prisma_client,
                     )
+                await refresh_model_list_cache(prisma_client=prisma_client)
                 still_desired_ids = await proxy_config.add_deployment(
                     prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
                 )
@@ -1915,6 +1921,8 @@ async def clear_cache() -> frozenset[str] | None:
         proxy_logging_obj,
         verbose_proxy_logger,
     )
+
+    await refresh_model_list_cache(prisma_client=prisma_client)
 
     if llm_router is None or prisma_client is None:
         verbose_proxy_logger.debug("llm_router or prisma_client is None, skipping cache clear")
