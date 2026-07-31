@@ -20402,6 +20402,16 @@
               "description": "Who created the attachment.",
               "title": "Created By"
             },
+            "definition_location": {
+              "default": "db",
+              "description": "Where this attachment is defined: 'db' (database) or 'config' (config.yaml).",
+              "enum": [
+                "db",
+                "config"
+              ],
+              "title": "Definition Location",
+              "type": "string"
+            },
             "keys": {
               "description": "Key patterns.",
               "items": {
@@ -20657,6 +20667,16 @@
               ],
               "description": "Who created the policy.",
               "title": "Created By"
+            },
+            "definition_location": {
+              "default": "db",
+              "description": "Where this policy is defined: 'db' (database) or 'config' (config.yaml).",
+              "enum": [
+                "db",
+                "config"
+              ],
+              "title": "Definition Location",
+              "type": "string"
             },
             "description": {
               "anyOf": [
@@ -21129,12 +21149,45 @@
           "title": "PolicyVersionStatusUpdateRequest",
           "type": "object"
         },
+        "UsageChartPoint": {
+          "properties": {
+            "blocked": {
+              "title": "Blocked",
+              "type": "integer"
+            },
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "passed": {
+              "title": "Passed",
+              "type": "integer"
+            },
+            "score": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Score"
+            }
+          },
+          "required": [
+            "date",
+            "passed",
+            "blocked"
+          ],
+          "title": "UsageChartPoint",
+          "type": "object"
+        },
         "UsageOverviewResponse": {
           "properties": {
             "chart": {
               "items": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/UsageChartPoint"
               },
               "title": "Chart",
               "type": "array"
@@ -21243,6 +21296,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -21420,7 +21480,7 @@
       },
       "/policies/attachments/list": {
         "get": {
-          "description": "List all policy attachments from the database.\n\nExample Request:\n```bash\ncurl -X GET \"http://localhost:4000/policies/attachments/list\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\n```\n\nExample Response:\n```json\n{\n    \"attachments\": [\n        {\n            \"attachment_id\": \"123e4567-e89b-12d3-a456-426614174000\",\n            \"policy_name\": \"global-baseline\",\n            \"scope\": \"*\",\n            \"teams\": [],\n            \"keys\": [],\n            \"models\": [],\n            \"created_at\": \"2024-01-01T00:00:00Z\",\n            \"updated_at\": \"2024-01-01T00:00:00Z\"\n        }\n    ],\n    \"total_count\": 1\n}\n```",
+          "description": "List all policy attachments from the database and config.yaml.\n\nConfig-defined attachments are returned with definition_location \"config\" and a\nsynthetic attachment_id (\"config-<index>\").\n\nExample Request:\n```bash\ncurl -X GET \"http://localhost:4000/policies/attachments/list\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\n```\n\nExample Response:\n```json\n{\n    \"attachments\": [\n        {\n            \"attachment_id\": \"123e4567-e89b-12d3-a456-426614174000\",\n            \"policy_name\": \"global-baseline\",\n            \"scope\": \"*\",\n            \"teams\": [],\n            \"keys\": [],\n            \"models\": [],\n            \"created_at\": \"2024-01-01T00:00:00Z\",\n            \"updated_at\": \"2024-01-01T00:00:00Z\"\n        }\n    ],\n    \"total_count\": 1\n}\n```",
           "operationId": "list_policy_attachments_policies_attachments_list_get",
           "responses": {
             "200": {
@@ -21596,7 +21656,7 @@
       },
       "/policies/list": {
         "get": {
-          "description": "List all policies from the database. Optionally filter by version_status.\n\nQuery params:\n- version_status: Optional. One of \"draft\", \"published\", \"production\".\n  If omitted, all versions are returned.\n\nExample Request:\n```bash\ncurl -X GET \"http://localhost:4000/policies/list\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\ncurl -X GET \"http://localhost:4000/policies/list?version_status=production\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\n```\n\nExample Response:\n```json\n{\n    \"policies\": [\n        {\n            \"policy_id\": \"123e4567-e89b-12d3-a456-426614174000\",\n            \"policy_name\": \"global-baseline\",\n            \"version_number\": 1,\n            \"version_status\": \"production\",\n            \"inherit\": null,\n            \"description\": \"Base guardrails for all requests\",\n            \"guardrails_add\": [\"pii_masking\"],\n            \"guardrails_remove\": [],\n            \"condition\": null,\n            \"created_at\": \"2024-01-01T00:00:00Z\",\n            \"updated_at\": \"2024-01-01T00:00:00Z\"\n        }\n    ],\n    \"total_count\": 1\n}\n```",
+          "description": "List all policies from the database and config.yaml. Optionally filter by version_status.\n\nConfig-defined policies are returned with definition_location \"config\" and are treated\nas production versions. On a name conflict with a DB policy, only the DB policy is returned.\n\nQuery params:\n- version_status: Optional. One of \"draft\", \"published\", \"production\".\n  If omitted, all versions are returned.\n\nExample Request:\n```bash\ncurl -X GET \"http://localhost:4000/policies/list\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\ncurl -X GET \"http://localhost:4000/policies/list?version_status=production\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\n```\n\nExample Response:\n```json\n{\n    \"policies\": [\n        {\n            \"policy_id\": \"123e4567-e89b-12d3-a456-426614174000\",\n            \"policy_name\": \"global-baseline\",\n            \"version_number\": 1,\n            \"version_status\": \"production\",\n            \"inherit\": null,\n            \"description\": \"Base guardrails for all requests\",\n            \"guardrails_add\": [\"pii_masking\"],\n            \"guardrails_remove\": [],\n            \"condition\": null,\n            \"created_at\": \"2024-01-01T00:00:00Z\",\n            \"updated_at\": \"2024-01-01T00:00:00Z\"\n        }\n    ],\n    \"total_count\": 1\n}\n```",
           "operationId": "list_policies_policies_list_get",
           "parameters": [
             {

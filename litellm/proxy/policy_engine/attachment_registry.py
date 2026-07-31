@@ -42,6 +42,7 @@ class AttachmentRegistry:
 
     def __init__(self):
         self._attachments: List[PolicyAttachment] = []
+        self._config_attachments: tuple[PolicyAttachment, ...] = ()
         self._initialized: bool = False
 
     def load_attachments(self, attachments_config: List[Dict[str, Any]]) -> None:
@@ -62,6 +63,7 @@ class AttachmentRegistry:
                 verbose_proxy_logger.error(f"Error loading attachment: {str(e)}")
                 raise ValueError(f"Invalid attachment: {str(e)}") from e
 
+        self._config_attachments = tuple(self._attachments)
         self._initialized = True
         verbose_proxy_logger.info(f"Loaded {len(self._attachments)} policy attachments")
 
@@ -173,6 +175,15 @@ class AttachmentRegistry:
         """
         return self._attachments.copy()
 
+    def get_config_attachments(self) -> tuple[PolicyAttachment, ...]:
+        """
+        Get the attachments loaded from config.yaml.
+
+        Returns:
+            Tuple of config-defined PolicyAttachment objects
+        """
+        return self._config_attachments
+
     def get_attachments_for_policy(self, policy_name: str) -> List[PolicyAttachment]:
         """
         Get all attachments for a specific policy.
@@ -199,6 +210,7 @@ class AttachmentRegistry:
         Clear all attachments from the registry.
         """
         self._attachments = []
+        self._config_attachments = ()
         self._initialized = False
 
     def add_attachment(self, attachment: PolicyAttachment) -> None:
@@ -428,6 +440,7 @@ class AttachmentRegistry:
     ) -> None:
         """
         Sync policy attachments from the database to in-memory registry.
+        Config-loaded attachments are preserved.
 
         Args:
             prisma_client: The Prisma client instance
@@ -435,11 +448,8 @@ class AttachmentRegistry:
         try:
             attachments = await self.get_all_attachments_from_db(prisma_client)
 
-            # Clear existing attachments and reload from DB
-            self._attachments = []
-
-            for attachment_response in attachments:
-                attachment = PolicyAttachment(
+            db_attachments = [
+                PolicyAttachment(
                     policy=attachment_response.policy_name,
                     scope=attachment_response.scope,
                     teams=(attachment_response.teams if attachment_response.teams else None),
@@ -447,10 +457,15 @@ class AttachmentRegistry:
                     models=(attachment_response.models if attachment_response.models else None),
                     tags=attachment_response.tags if attachment_response.tags else None,
                 )
-                self._attachments.append(attachment)
+                for attachment_response in attachments
+            ]
+            self._attachments = [*self._config_attachments, *db_attachments]
 
             self._initialized = True
-            verbose_proxy_logger.info(f"Synced {len(attachments)} attachments from DB to in-memory registry")
+            verbose_proxy_logger.info(
+                f"Synced {len(attachments)} attachments from DB to in-memory registry "
+                f"({len(self._config_attachments)} config-defined attachments preserved)"
+            )
         except Exception as e:
             verbose_proxy_logger.exception(f"Error syncing attachments from DB: {e}")
             raise Exception(f"Error syncing attachments from DB: {str(e)}")
