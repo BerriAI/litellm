@@ -40,6 +40,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _oauth_endpoints_unresolved,
     _deserialize_json_list,
     _normalize_mcp_server_cost_info,
+    _obo_retry_applies,
     _should_strip_caller_authorization,
     _without_authorization,
 )
@@ -50,7 +51,7 @@ from litellm.proxy._types import (
     MCPEnvVarScope,
     MCPTransport,
 )
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import MCPAuth, MCPAuthType
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
 
 
@@ -8230,6 +8231,35 @@ def test_should_strip_caller_authorization_for_token_exchange():
         client_secret="csec",
     )
     assert _should_strip_caller_authorization(mcp_server=server, raw_headers=None, user_api_key_auth=None) is True
+
+
+def _retry_gate_server(auth_type: MCPAuthType) -> MCPServer:
+    return MCPServer(
+        server_id="retry-gate",
+        name="retry-gate-server",
+        url="https://up.example.com",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+    )
+
+
+def test_obo_retry_applies_to_id_jag_without_an_inbound_subject_token():
+    """ID-JAG can source its subject from the user's stored SSO assertion, so the upstream-401
+    invalidate-and-retry path must engage even when the caller presented no token of its own;
+    otherwise a store-sourced bearer is replayed until its TTL after being rejected."""
+    assert _obo_retry_applies(_retry_gate_server(MCPAuth.oauth2_id_jag), None) is True
+    assert _obo_retry_applies(_retry_gate_server(MCPAuth.oauth2_id_jag), "inbound-id-token") is True
+
+
+def test_obo_retry_still_requires_a_subject_token_for_token_exchange():
+    """token_exchange can only mint from an inbound token, so with none there is nothing to re-mint."""
+    assert _obo_retry_applies(_retry_gate_server(MCPAuth.oauth2_token_exchange), None) is False
+    assert _obo_retry_applies(_retry_gate_server(MCPAuth.oauth2_token_exchange), "inbound-token") is True
+
+
+def test_obo_retry_does_not_apply_to_other_auth_modes():
+    for auth_type in (MCPAuth.none, MCPAuth.api_key, MCPAuth.oauth2, MCPAuth.true_passthrough):
+        assert _obo_retry_applies(_retry_gate_server(auth_type), "some-token") is False
 
 
 class _UpstreamAuthError(Exception):

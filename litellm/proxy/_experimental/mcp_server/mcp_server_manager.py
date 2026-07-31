@@ -906,6 +906,20 @@ def _extract_upstream_auth_failure(
     return upstream_auth_challenge(exc)
 
 
+def _obo_retry_applies(server: MCPServer, subject_token: str | None) -> bool:
+    """Whether an upstream 401/403 should invalidate the minted credential and retry once.
+
+    ``oauth2_token_exchange`` can only mint from an inbound subject token, so with no token there is
+    nothing to re-mint and the plain single call is correct. ``oauth2_id_jag`` also sources its
+    subject from the identity assertion stored for the user at SSO login, so it qualifies whether or
+    not the caller presented a token of its own; gating it on the inbound token would leave a
+    store-sourced bearer un-invalidated and replayed until its TTL.
+    """
+    if server.auth_type == MCPAuth.oauth2_id_jag:
+        return True
+    return server.auth_type == MCPAuth.oauth2_token_exchange and bool(subject_token)
+
+
 def _warn_on_server_name_fields(
     *,
     server_id: str,
@@ -4778,7 +4792,7 @@ class MCPServerManager:
             arguments=arguments,
         )
 
-        if mcp_server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag) and subject_token:
+        if _obo_retry_applies(mcp_server, subject_token):
             # OBO / ID-JAG: the exchanged token may have been revoked/rotated upstream since it was
             # cached, so an upstream 401 gets one invalidate + re-mint + retry. Gated to these modes;
             # all others keep the plain single call below.
