@@ -24,6 +24,7 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.login_lockout import LoginBlock, LoginLockout
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -40,6 +41,26 @@ from litellm.proxy.utils import (
 from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
+
+
+_login_lockout = LoginLockout()
+
+
+def _raise_login_block(block: LoginBlock) -> None:
+    if block.kind == "lockout":
+        wait = max(1, (block.remaining_seconds + 59) // 60)
+        message = f"Account temporarily locked due to too many failed login attempts. Try again in {wait} minutes."
+    else:
+        message = (
+            "Login temporarily paused due to too many failed login attempts. "
+            f"Try again in {block.remaining_seconds} seconds."
+        )
+    raise ProxyException(
+        message=message,
+        type=ProxyErrorTypes.auth_error,
+        param="invalid_credentials",
+        code=401,
+    )
 
 
 async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
@@ -111,6 +132,8 @@ async def authenticate_user(
     password: str,
     master_key: Optional[str],
     prisma_client: Optional[PrismaClient],
+    *,
+    login_lockout: LoginLockout = _login_lockout,
 ) -> LoginResult:
     """
     Authenticate a user and generate an API key for UI access.
@@ -140,6 +163,9 @@ async def authenticate_user(
         )
 
     ui_username, ui_password = get_ui_credentials(master_key)
+    block = login_lockout.check(username)
+    if block is not None:
+        _raise_login_block(block)
 
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email
     _user_row: Optional[LiteLLM_UserTable] = None
@@ -239,6 +265,7 @@ async def authenticate_user(
 
             key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(user_info)
 
+        login_lockout.clear(username)
         return LoginResult(
             user_id=user_id,
             key=key,
@@ -293,6 +320,7 @@ async def authenticate_user(
 
             key = response["token"]  # type: ignore
 
+            login_lockout.clear(username)
             return LoginResult(
                 user_id=user_id,
                 key=key,
@@ -301,6 +329,7 @@ async def authenticate_user(
                 login_method="username_password",
             )
         else:
+            login_lockout.record_failure(username)
             raise ProxyException(
                 message=f"Invalid credentials used to access UI.\nNot valid credentials for {username}",
                 type=ProxyErrorTypes.auth_error,
@@ -308,6 +337,7 @@ async def authenticate_user(
                 code=401,
             )
     else:
+        login_lockout.record_failure(username)
         raise ProxyException(
             message="Invalid credentials used to access UI.\nCheck 'UI_USERNAME', 'UI_PASSWORD' in .env file",
             type=ProxyErrorTypes.auth_error,

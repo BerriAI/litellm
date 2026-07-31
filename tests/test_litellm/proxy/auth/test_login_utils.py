@@ -23,6 +23,192 @@ from litellm.proxy.auth.login_utils import (
     authenticate_user,
     get_ui_credentials,
 )
+from litellm.proxy.auth.login_lockout import LoginLockout, _MAX_TRACKED_IDENTITIES
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += seconds
+
+
+async def _authenticate_admin(
+    *,
+    password: str,
+    login_lockout: LoginLockout,
+    prisma_client: None,
+) -> LoginResult:
+    with patch.dict(
+        os.environ,
+        {
+            "UI_USERNAME": "admin",
+            "UI_PASSWORD": "correct-password",
+            "DATABASE_URL": "postgresql://test:test@localhost/test",
+        },
+    ):
+        with patch(
+            "litellm.proxy.auth.login_utils.generate_key_helper_fn",
+            new_callable=AsyncMock,
+        ) as mock_generate_key:
+            mock_generate_key.return_value = {"token": "test-token"}
+            with patch(
+                "litellm.proxy.auth.login_utils.user_update",
+                new_callable=AsyncMock,
+                return_value=None,
+            ):
+                with patch("litellm.proxy.auth.login_utils.get_secret_bool", return_value=False):
+                    return await authenticate_user(
+                        username="admin",
+                        password=password,
+                        master_key="master-key",
+                        prisma_client=prisma_client,
+                        login_lockout=login_lockout,
+                    )
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_cooldown_blocks_correct_password_until_expiry():
+    clock = FakeClock()
+    login_lockout = LoginLockout(time_fn=clock)
+    prisma_client = None
+
+    for _ in range(3):
+        with pytest.raises(ProxyException) as exc_info:
+            await _authenticate_admin(
+                password="wrong-password",
+                login_lockout=login_lockout,
+                prisma_client=prisma_client,
+            )
+        assert exc_info.value.param == "invalid_credentials"
+
+    with pytest.raises(ProxyException) as blocked:
+        await _authenticate_admin(
+            password="correct-password",
+            login_lockout=login_lockout,
+            prisma_client=prisma_client,
+        )
+
+    assert blocked.value.code == "401"
+    assert "Try again in 60 seconds" in blocked.value.message
+
+    clock.advance(60)
+    result = await _authenticate_admin(
+        password="correct-password",
+        login_lockout=login_lockout,
+        prisma_client=prisma_client,
+    )
+    assert result.user_id == LITELLM_PROXY_ADMIN_NAME
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_lockout_blocks_correct_password_until_expiry():
+    clock = FakeClock()
+    login_lockout = LoginLockout(time_fn=clock)
+    prisma_client = None
+
+    for _ in range(3):
+        with pytest.raises(ProxyException):
+            await _authenticate_admin(
+                password="wrong-password",
+                login_lockout=login_lockout,
+                prisma_client=prisma_client,
+            )
+    clock.advance(60)
+    with pytest.raises(ProxyException):
+        await _authenticate_admin(
+            password="wrong-password",
+            login_lockout=login_lockout,
+            prisma_client=prisma_client,
+        )
+    clock.advance(60)
+    with pytest.raises(ProxyException):
+        await _authenticate_admin(
+            password="wrong-password",
+            login_lockout=login_lockout,
+            prisma_client=prisma_client,
+        )
+    with pytest.raises(ProxyException) as lockout:
+        await _authenticate_admin(
+            password="correct-password",
+            login_lockout=login_lockout,
+            prisma_client=prisma_client,
+        )
+
+    assert "Account temporarily locked" in lockout.value.message
+    assert "Try again in 15 minutes" in lockout.value.message
+
+    clock.advance(900)
+    result = await _authenticate_admin(
+        password="correct-password",
+        login_lockout=login_lockout,
+        prisma_client=prisma_client,
+    )
+    assert result.user_id == LITELLM_PROXY_ADMIN_NAME
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_success_clears_failed_attempts():
+    clock = FakeClock()
+    login_lockout = LoginLockout(time_fn=clock)
+    prisma_client = None
+
+    for _ in range(3):
+        with pytest.raises(ProxyException):
+            await _authenticate_admin(
+                password="wrong-password",
+                login_lockout=login_lockout,
+                prisma_client=prisma_client,
+            )
+
+    clock.advance(60)
+    await _authenticate_admin(
+        password="correct-password",
+        login_lockout=login_lockout,
+        prisma_client=prisma_client,
+    )
+
+    with pytest.raises(ProxyException) as invalid:
+        await _authenticate_admin(
+            password="wrong-password",
+            login_lockout=login_lockout,
+            prisma_client=prisma_client,
+        )
+    assert invalid.value.param == "invalid_credentials"
+    assert "temporarily" not in invalid.value.message
+
+
+def test_login_lockout_prunes_old_failures_and_tracks_usernames_independently():
+    clock = FakeClock()
+    login_lockout = LoginLockout(time_fn=clock)
+
+    for _ in range(3):
+        login_lockout.record_failure(" Admin@Example.com ")
+    login_lockout.record_failure("other@example.com")
+    assert login_lockout.check("admin@example.com") is not None
+    assert login_lockout.check("OTHER@example.com") is None
+
+    clock.advance(901)
+    assert login_lockout.check("admin@example.com") is None
+    assert login_lockout.check("other@example.com") is None
+
+
+def test_login_lockout_caps_identities_with_oldest_entry_eviction():
+    login_lockout = LoginLockout()
+
+    for _ in range(3):
+        login_lockout.record_failure("oldest@example.com")
+
+    for index in range(_MAX_TRACKED_IDENTITIES):
+        login_lockout.record_failure(f"user-{index}@example.com")
+
+    assert len(login_lockout._failures) == _MAX_TRACKED_IDENTITIES
+    assert login_lockout.check("oldest@example.com") is None
+    assert login_lockout.check(f"user-{_MAX_TRACKED_IDENTITIES - 1}@example.com") is None
 
 
 def test_get_ui_credentials_prefers_explicit_password():
@@ -88,7 +274,7 @@ async def test_authenticate_user_admin_login_with_ui_credentials():
                 "litellm.proxy.auth.login_utils.user_update",
                 new_callable=AsyncMock,
                 return_value=None,
-            ) as mock_user_update:
+            ):
                 with patch(
                     "litellm.proxy.auth.login_utils.get_secret_bool",
                     return_value=False,
@@ -146,7 +332,7 @@ async def test_authenticate_user_admin_login_with_master_key_as_password():
                     "litellm.proxy.auth.login_utils.user_update",
                     new_callable=AsyncMock,
                     return_value=None,
-                ) as mock_user_update:
+                ):
                     with patch(
                         "litellm.proxy.auth.login_utils.get_secret_bool",
                         return_value=False,
@@ -387,7 +573,7 @@ async def test_authenticate_user_admin_login_with_non_ascii_characters():
                 "litellm.proxy.auth.login_utils.user_update",
                 new_callable=AsyncMock,
                 return_value=None,
-            ) as mock_user_update:
+            ):
                 with patch(
                     "litellm.proxy.auth.login_utils.get_secret_bool",
                     return_value=False,
