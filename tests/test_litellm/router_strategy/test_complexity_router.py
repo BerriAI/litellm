@@ -4914,6 +4914,33 @@ class TestNoSignalDefaultTier:
                 },
             )
 
+    @pytest.mark.asyncio
+    async def test_an_unconfigured_default_tier_under_plugins_names_the_real_gap(self, mock_router_instance):
+        """The implicit MEDIUM default is deliberately not validated at load, so a partial
+        tiers map keeps loading. With plugins configured it has no fallback, so the request
+        fails; the error has to name the missing tier rather than blaming the plugins for a
+        filter they never applied."""
+
+        class NoOpPlugin:
+            async def run(self, context):
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "simple-model", "COMPLEX": "complex-model"},
+                "plugins": [NoOpPlugin()],
+                "session_affinity": False,
+            },
+        )
+        with pytest.raises(ValueError, match="Tier MEDIUM has no models configured"):
+            await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={},
+                messages=[{"role": "user", "content": RIVER_CROSSING}],
+            )
+
     def test_default_tier_outside_tiers_is_allowed_with_default_model(self, mock_router_instance):
         router = ComplexityRouter(
             model_name="test-router",

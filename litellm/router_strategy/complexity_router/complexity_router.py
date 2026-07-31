@@ -871,11 +871,20 @@ class ComplexityRouter(CustomLogger):
         from litellm.types.router import RoutingContext
 
         tier_key = tier.value
+        candidates = list(self._tier_pools().get(tier_key, []))
+        if not candidates:
+            # Distinct from the plugin denial below: nothing was filtered out, the tier was
+            # never given models. Saying "after routing-plugin filtering" would send an
+            # operator to read plugin code for what is a gap in `tiers`.
+            raise ValueError(
+                f"Tier {tier_key} has no models configured. Routing plugins are configured, so "
+                f"default_model is not consulted: a model the plugins never vetted must not serve"
+            )
         metadata_key = "litellm_metadata" if "litellm_metadata" in request_kwargs else "metadata"
         context = RoutingContext(
             raw_messages=raw_messages or [],
             structured_messages=resolved_messages or [],
-            candidate_models=list(self._tier_pools().get(tier_key, [])),
+            candidate_models=candidates,
             metadata=request_kwargs.get(metadata_key) or {},
         )
         for plugin in self.config.plugins:
