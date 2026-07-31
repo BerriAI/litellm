@@ -23,7 +23,6 @@ from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_last_user_message,
 )
-from litellm.types.utils import StandardLoggingRoutingDecision
 from litellm.router_strategy.adaptive_router.bandit import (
     BanditCell,
     apply_delta,
@@ -51,6 +50,7 @@ from litellm.router_strategy.adaptive_router.signals import (
 from litellm.router_strategy.adaptive_router.update_queue import (
     AdaptiveRouterUpdateQueue,
 )
+from litellm.types.utils import StandardLoggingRoutingDecision
 
 # Sweep session-state cache when it exceeds this many live entries. Expired
 # entries are dropped in bulk; amortizes to O(1) per insert.

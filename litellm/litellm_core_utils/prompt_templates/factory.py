@@ -5,8 +5,8 @@ import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
-from enum import Enum
 from collections.abc import Iterator, Mapping, Sequence
+from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Union, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
@@ -3397,14 +3397,14 @@ import httpx
 from litellm.types.llms.bedrock import (
     BedrockConverseReasoningContentBlock,
     BedrockConverseReasoningTextBlock,
+    BedrockToolSpec,
+    SearchResultBlock,
 )
 from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
 from litellm.types.llms.bedrock import DocumentBlock as BedrockDocumentBlock
 from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
 from litellm.types.llms.bedrock import SourceBlock as BedrockSourceBlock
-from litellm.types.llms.bedrock import BedrockToolSpec
 from litellm.types.llms.bedrock import ToolBlock as BedrockToolBlock
-from litellm.types.llms.bedrock import SearchResultBlock
 from litellm.types.llms.bedrock import ToolResultBlock as BedrockToolResultBlock
 from litellm.types.llms.bedrock import (
     ToolResultContentBlock as BedrockToolResultContentBlock,
@@ -5093,11 +5093,11 @@ def _bedrock_tools_pt(tools: List, model: Optional[str] = None) -> List[BedrockT
         }
     ]
     """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
     from litellm.llms.bedrock.common_utils import (
         bedrock_converse_supports_strict_tools,
         normalize_json_schema_custom_types_to_object,
     )
-    from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 
     _valid_json_schema_root_types = frozenset(("array", "boolean", "integer", "null", "number", "object", "string"))
     # Only Claude on Bedrock honours strict tool schemas; other families

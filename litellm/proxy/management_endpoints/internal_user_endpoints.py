@@ -28,6 +28,10 @@ from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import (
+    object_permission_cache_key,
+    user_object_permission_id_cache_key,
+)
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.management_endpoints.common_daily_activity import (
     DailySpendRecord,
@@ -44,10 +48,6 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_permissions_caller_permission,
     generate_key_helper_fn,
     prepare_metadata_fields,
-)
-from litellm.proxy.common_utils.user_api_key_cache import (
-    object_permission_cache_key,
-    user_object_permission_id_cache_key,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
