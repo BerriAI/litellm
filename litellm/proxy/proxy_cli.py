@@ -45,6 +45,7 @@ def _build_db_connection_url_params(
     connect_timeout: Optional[Union[int, float]] = None,
     socket_timeout: Optional[Union[int, float]] = None,
     extra_params: Optional[dict] = None,
+    existing_url: Optional[str] = None,
 ) -> dict:
     """Build the Prisma DATABASE_URL query params controlling connection pool behavior.
 
@@ -53,10 +54,39 @@ def _build_db_connection_url_params(
     omitted when None so Prisma's defaults apply. `extra_params` is an
     untyped passthrough — keys it provides win over the named arguments above,
     so it can be used to override any default we set here.
+
+    The four `keepalives*` defaults are libpq query-string params that get
+    forwarded to the underlying Postgres driver. Without them, dead TCP
+    sessions from killed Prisma engine subprocesses sit on the DB side for
+    the OS keepalive default (~7200s) and accumulate toward max_connections
+    under worker churn. The defaults here cause the kernel to detect dead
+    peers in ~90s instead. See BerriAI/litellm#26619.
+
+    `existing_url` is the DATABASE_URL these params will be appended to. Any
+    keepalive key already present in that URL's query string is left as-is,
+    so operators who have set explicit values (e.g. `keepalives=0`) keep
+    them. `extra_params` still wins last for both keepalives and
+    everything else.
     """
-    params: dict = {
-        "connection_limit": connection_limit,
+    keepalive_defaults: dict = {
+        "keepalives": "1",
+        "keepalives_idle": "60",
+        "keepalives_interval": "10",
+        "keepalives_count": "3",
     }
+    existing_keys: set = set()
+    if existing_url:
+        try:
+            existing_keys = set(
+                urlparse.parse_qs(urlparse.urlparse(existing_url).query).keys()
+            )
+        except Exception:
+            existing_keys = set()
+
+    params: dict = {"connection_limit": connection_limit}
+    for k, v in keepalive_defaults.items():
+        if k not in existing_keys:
+            params[k] = v
     if pool_timeout is not None:
         params["pool_timeout"] = pool_timeout
     if connect_timeout is not None:
@@ -1087,24 +1117,33 @@ def run_server(  # noqa: PLR0915
             try:
                 from litellm.secret_managers.main import get_secret
 
-                connection_url_params = _build_db_connection_url_params(
-                    connection_limit=db_connection_pool_limit,
-                    pool_timeout=db_connection_timeout,
-                    connect_timeout=db_connect_timeout,
-                    socket_timeout=db_socket_timeout,
-                    extra_params=db_extra_connection_params,
-                )
                 if os.getenv("DATABASE_URL", None) is not None:
                     database_url = get_secret("DATABASE_URL", default_value=None)
+                    url_str = str(database_url) if database_url else None
                     modified_url = append_query_params(
-                        str(database_url) if database_url else None,
-                        connection_url_params,
+                        url_str,
+                        _build_db_connection_url_params(
+                            connection_limit=db_connection_pool_limit,
+                            pool_timeout=db_connection_timeout,
+                            connect_timeout=db_connect_timeout,
+                            socket_timeout=db_socket_timeout,
+                            extra_params=db_extra_connection_params,
+                            existing_url=url_str,
+                        ),
                     )
                     os.environ["DATABASE_URL"] = modified_url
                 if os.getenv("DIRECT_URL", None) is not None:
-                    database_url = os.getenv("DIRECT_URL")
+                    direct_url = os.getenv("DIRECT_URL")
                     modified_url = append_query_params(
-                        database_url, connection_url_params
+                        direct_url,
+                        _build_db_connection_url_params(
+                            connection_limit=db_connection_pool_limit,
+                            pool_timeout=db_connection_timeout,
+                            connect_timeout=db_connect_timeout,
+                            socket_timeout=db_socket_timeout,
+                            extra_params=db_extra_connection_params,
+                            existing_url=direct_url,
+                        ),
                     )
                     os.environ["DIRECT_URL"] = modified_url
                 subprocess.run(["prisma"], capture_output=True)

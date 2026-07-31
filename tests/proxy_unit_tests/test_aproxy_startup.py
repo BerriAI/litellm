@@ -13,6 +13,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest, logging, asyncio
+from unittest.mock import AsyncMock
 import litellm
 from litellm.proxy.proxy_server import (
     router,
@@ -94,3 +95,50 @@ async def test_proxy_gunicorn_startup_config_dict():
 
 
 # test_proxy_gunicorn_startup()
+
+
+@pytest.mark.asyncio
+async def test_proxy_lifespan_swallows_shutdown_event_exception(monkeypatch, caplog):
+    """
+    Regression test for BerriAI/litellm#26619.
+
+    `proxy_shutdown_event()` is invoked inside the uvicorn lifespan
+    `proxy_startup_event` context manager. If it raises and the call site
+    has no try/except, the lifespan exits with an exception, uvicorn skips
+    the Python-level `atexit`/SIGTERM cleanup, and the Prisma query-engine
+    subprocess is left as an orphan whose Postgres connections sit on the
+    DB side for ~2h. This test pins the wrapped-in-try/except behavior.
+    """
+    from litellm._logging import verbose_proxy_logger
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    database_url = os.environ.pop("DATABASE_URL", None)
+
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+    os.environ["WORKER_CONFIG"] = config_fp
+
+    raising_shutdown = AsyncMock(
+        side_effect=RuntimeError("simulated disconnect failure")
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_shutdown_event", raising_shutdown
+    )
+
+    try:
+        verbose_proxy_logger.setLevel(logging.DEBUG)
+        caplog.set_level(logging.ERROR, logger=verbose_proxy_logger.name)
+
+        # Driving the full lifespan: if the patch is missing, RuntimeError
+        # propagates out of the __aexit__ here and the test fails.
+        async with proxy_startup_event(app=None) as _:
+            pass
+
+        raising_shutdown.assert_awaited_once()
+        # The exception should have been logged, not swallowed silently.
+        assert any(
+            "proxy_shutdown_event failed" in rec.getMessage() for rec in caplog.records
+        ), "expected proxy_shutdown_event failure to be logged"
+    finally:
+        if database_url is not None:
+            os.environ["DATABASE_URL"] = database_url
