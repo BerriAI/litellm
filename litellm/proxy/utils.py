@@ -26,8 +26,11 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Protocol,
     Sequence,
     Tuple,
+    TypedDict,
+    TypeVar,
     Union,
     cast,
     overload,
@@ -164,6 +167,7 @@ from litellm.repositories.verification_token_repository import (
 )
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
+from litellm.types.llms.base import HiddenParams
 from litellm.types.mcp import (
     MCPDuringCallResponseObject,
     MCPPreCallRequestObject,
@@ -186,6 +190,8 @@ else:
 
 
 unified_guardrail = UnifiedLLMGuardrails()
+
+_GuardrailResultT = TypeVar("_GuardrailResultT")
 
 NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES: "frozenset[CallTypes]" = frozenset({CallTypes.anthropic_messages})
 
@@ -242,7 +248,7 @@ class InternalUsageCache:
         litellm_parent_otel_span: Union[Span, None],
         local_only: bool = False,
         **kwargs,
-    ) -> Any:
+    ) -> Any:  # any-ok: thin passthrough over DualCache.async_get_cache, whose value type varies per caller
         return await self.dual_cache.async_get_cache(
             key=key,
             local_only=local_only,
@@ -327,7 +333,7 @@ class InternalUsageCache:
         key,
         local_only: bool = False,
         **kwargs,
-    ) -> Any:
+    ) -> Any:  # any-ok: thin passthrough over DualCache.get_cache, whose value type varies per caller
         return self.dual_cache.get_cache(
             key=key,
             local_only=local_only,
@@ -349,7 +355,7 @@ def _accepts_litellm_call_info(cb: CustomLogger) -> bool:
     return _CALLBACK_ACCEPTS_CALL_INFO[key]
 
 
-def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: Any) -> None:
+def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: object) -> None:
     """
     If `exc` is an HTTPException with a dict `detail`, mutate it in place to
     add `guardrail_name` and `guardrail_mode` taken from the callback instance.
@@ -363,10 +369,10 @@ def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: 
     detail = getattr(exc, "detail", None)
     if not isinstance(detail, dict):
         return
-    guardrail_name = getattr(callback, "guardrail_name", None)
+    guardrail_name: object = getattr(callback, "guardrail_name", None)
     if guardrail_name:
         detail.setdefault("guardrail_name", guardrail_name)
-    event_hook = getattr(callback, "event_hook", None)
+    event_hook: object = getattr(callback, "event_hook", None)
     if event_hook:
         detail.setdefault("guardrail_mode", event_hook)
 
@@ -398,11 +404,18 @@ class _CallbackCapabilities:
     # Tuple[(resolved_callback, "override" | "apply_guardrail"), ...]
     # Ordered the same as ``litellm.callbacks``; used to build the streaming
     # iterator chain without re-scanning per request.
-    iterator_overrides: Tuple[Tuple[Any, str], ...] = field(default_factory=tuple)
+    iterator_overrides: Tuple[Tuple[CustomLogger, str], ...] = field(default_factory=tuple)
     # Resolved CustomLogger callbacks in original order. Pre-resolving once
     # avoids the per-request ``get_custom_logger_compatible_class`` walk for
     # every string entry in ``litellm.callbacks``.
-    resolved_callbacks: Tuple[Any, ...] = field(default_factory=tuple)
+    resolved_callbacks: Tuple[CustomLogger, ...] = field(default_factory=tuple)
+
+
+class _McpPreCallHookResult(TypedDict):
+    should_proceed: bool
+    modified_arguments: Mapping[str, Any]  # any-ok: mirrors MCPPreCallResponseObject.modified_arguments
+    error_message: Optional[str]
+    hidden_params: HiddenParams
 
 
 class ProxyLogging:
@@ -437,7 +450,7 @@ class ProxyLogging:
             alerting=self.alerting,
             internal_usage_cache=self.internal_usage_cache.dual_cache,
         )
-        self.email_logging_instance: Optional[Any] = None
+        self.email_logging_instance: Optional[Any] = None  # any-ok: BaseEmailLogger's budget_alerts Literal is narrower
         if BaseEmailLogger is not None:
             email_logger_class = _get_email_logger_class()
             if email_logger_class is not None:
@@ -555,11 +568,12 @@ class ProxyLogging:
         for hook in PROXY_HOOKS:
             proxy_hook = get_proxy_hook(hook)
             expected_args = inspect.getfullargspec(proxy_hook).args
-            passed_in_args: Dict[str, Any] = {}
-            if "internal_usage_cache" in expected_args:
-                passed_in_args["internal_usage_cache"] = self.internal_usage_cache
-            if "prisma_client" in expected_args:
-                passed_in_args["prisma_client"] = prisma_client
+            wants_cache = "internal_usage_cache" in expected_args
+            wants_prisma = "prisma_client" in expected_args
+            passed_in_args: Mapping[str, Any] = {  # any-ok: fans out into heterogeneous dynamic hook constructors
+                **({"internal_usage_cache": self.internal_usage_cache} if wants_cache else {}),
+                **({"prisma_client": prisma_client} if wants_prisma else {}),
+            }
             proxy_hook_obj = cast(CustomLogger, proxy_hook(**passed_in_args))
             litellm.logging_callback_manager.add_litellm_callback(proxy_hook_obj)
 
@@ -680,7 +694,7 @@ class ProxyLogging:
 
         return synthetic_data
 
-    def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> Optional[Any]:
+    def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> Optional[MCPPreCallResponseObject]:
         """
         Convert LLM guardrail result back to MCP response format.
         """
@@ -806,7 +820,9 @@ class ProxyLogging:
             verbose_proxy_logger.error(f"Error in manual argument parsing: {e}")
             return None
 
-    def _convert_llm_result_to_mcp_during_response(self, llm_result, request_obj) -> Optional[Any]:
+    def _convert_llm_result_to_mcp_during_response(
+        self, llm_result, request_obj
+    ) -> Optional[MCPDuringCallResponseObject]:
         """
         Convert LLM guardrail result back to MCP during call response format.
         """
@@ -852,7 +868,7 @@ class ProxyLogging:
         self,
         response: MCPPreCallResponseObject,
         original_request: MCPPreCallRequestObject,
-    ) -> Dict[str, Any]:
+    ) -> _McpPreCallHookResult:
         """
         Parse the response from the pre_mcp_tool_call_hook
 
@@ -860,13 +876,12 @@ class ProxyLogging:
         2. Apply any argument modifications
         3. Handle validation errors
         """
-        result = {
+        return {
             "should_proceed": response.should_proceed,
             "modified_arguments": response.modified_arguments or original_request.arguments,
             "error_message": response.error_message,
             "hidden_params": response.hidden_params,
         }
-        return result
 
     def _create_mcp_request_object_from_kwargs(self, kwargs: dict) -> "MCPPreCallRequestObject":
         """
@@ -955,8 +970,8 @@ class ProxyLogging:
         data: dict,
         user_api_key_dict: Optional[UserAPIKeyAuth],
         call_type: CallTypesLiteral,
-        response: Optional[Any] = None,
-    ) -> Any:
+        response: Optional[Any] = None,  # any-ok: LLMResponseTypes on post_call, None otherwise
+    ) -> Any:  # any-ok: return shape depends on hook_type (dict, moderation result, or response)
         """
         Execute a single guardrail's hook.
 
@@ -1010,8 +1025,8 @@ class ProxyLogging:
         data: dict,
         user_api_key_dict: Optional[UserAPIKeyAuth],
         call_type: CallTypesLiteral,
-        response: Optional[Any] = None,
-    ) -> Any:
+        response: Optional[Any] = None,  # any-ok: LLMResponseTypes on post_call, None otherwise
+    ) -> Any:  # any-ok: passthrough of _execute_guardrail_hook's hook_type-dependent return
         """
         Execute a guardrail using the router's load balancing.
 
@@ -1145,7 +1160,7 @@ class ProxyLogging:
     async def _process_prompt_template(
         self,
         data: dict,
-        litellm_logging_obj: Any,
+        litellm_logging_obj: Any,  # any-ok: `data` is an untyped `dict`, so typing this surfaces Unknown-argument noise
         prompt_id: Any,
         prompt_version: Any,
         call_type: CallTypesLiteral,
@@ -1442,8 +1457,8 @@ class ProxyLogging:
                         data = result
 
                     elif (
-                        _callback is not None
-                        and isinstance(_callback, CustomLogger)
+                        _callback is not None  # pyright: ignore[reportUnnecessaryComparison]  # defense-in-depth
+                        and isinstance(_callback, CustomLogger)  # pyright: ignore[reportUnnecessaryIsInstance]  # ditto
                         and "async_pre_call_hook" in vars(_callback.__class__)
                         and _callback.__class__.async_pre_call_hook != CustomLogger.async_pre_call_hook
                     ):
@@ -1618,7 +1633,9 @@ class ProxyLogging:
                 break
 
     @staticmethod
-    async def _run_guardrail_with_metrics(callback: Any, coro: Awaitable[Any], hook_type: str) -> Any:
+    async def _run_guardrail_with_metrics(
+        callback: object, coro: Awaitable[_GuardrailResultT], hook_type: str
+    ) -> _GuardrailResultT:
         """
         Await `coro`, recording its latency and status to the
         `litellm_guardrail_latency_seconds` metric under `hook_type`, and
@@ -1650,8 +1667,8 @@ class ProxyLogging:
 
     @staticmethod
     async def _wrap_streaming_iterator_with_enrichment(
-        callback: Any, gen: AsyncGenerator[Any, None]
-    ) -> AsyncGenerator[Any, None]:
+        callback: object, gen: AsyncGenerator[_GuardrailResultT, None]
+    ) -> AsyncGenerator[_GuardrailResultT, None]:
         """
         Yield from `gen`; if iteration raises an HTTPException with dict detail,
         enrich the detail with the originating callback's `guardrail_name` and
@@ -1695,12 +1712,12 @@ class ProxyLogging:
         has_streaming_chunk_override = False
         has_guardrail = False
         has_pre_call_override = False
-        iterator_overrides: List[Tuple[Any, str]] = []  # (callback, kind)
-        resolved_callbacks: List[Any] = []
+        iterator_overrides: List[Tuple[CustomLogger, str]] = []  # (callback, kind)
+        resolved_callbacks: List[CustomLogger] = []
 
         for callback in callbacks:
             if isinstance(callback, str):
-                resolved: Any = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                resolved = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
                     cast(_custom_logger_compatible_callbacks_literal, callback)
                 )
             else:
@@ -2098,7 +2115,7 @@ class ProxyLogging:
 
             Related issue - https://github.com/BerriAI/litellm/issues/3395
             """
-            litellm_debug_info = getattr(original_exception, "litellm_debug_info", None)
+            litellm_debug_info: Optional[str] = getattr(original_exception, "litellm_debug_info", None)
             exception_str = str(original_exception)
             if litellm_debug_info is not None:
                 exception_str += litellm_debug_info
@@ -2380,7 +2397,9 @@ class ProxyLogging:
                 ):
                     continue
 
-                guardrail_response: Optional[Any] = None
+                guardrail_response: Optional[Any] = (
+                    None  # any-ok: CustomLogger.async_post_call_success_hook returns Any
+                )
 
                 if "apply_guardrail" in type(callback).__dict__:
                     data["guardrail_to_apply"] = callback
@@ -2776,7 +2795,7 @@ class ProxyLogging:
                         user_api_key_dict=user_api_key_dict,
                         request_data=request_data,
                         response=current_response,
-                        guardrail_to_apply=resolved_callback,
+                        guardrail_to_apply=resolved_callback,  # pyright: ignore[reportArgumentType]  # is a guardrail
                         buffer_until_moderated_default=(kind == "override"),
                     ),
                 )
@@ -2878,7 +2897,7 @@ _DEPRECATED_KEY_CACHE_TTL_SECONDS = 60
 
 
 async def _lookup_deprecated_key(
-    db: Any,
+    db: Union[PrismaWrapper, RoutingPrismaWrapper],
     hashed_token: str,
 ) -> Optional[str]:
     """
@@ -2937,20 +2956,29 @@ class _ConfigRow:
 
     __slots__ = ("param_name", "param_value")
 
-    def __init__(self, param_name: str, param_value: Any) -> None:
+    def __init__(self, param_name: str, param_value: Any) -> None:  # any-ok: constructed from an untyped dict/row
         self.param_name = param_name
         self.param_value = param_value
+
+
+class _ConfigRowLike(Protocol):
+    """Structural shape of a LiteLLM_Config row: a Prisma model, `_ConfigRow`, or a test double."""
+
+    param_name: str
+    param_value: object
 
 
 def _config_cache_key(param_name: str) -> str:
     return f"litellm_config:param:{param_name}"
 
 
-def _pack_config_row(row: Any) -> Dict[str, Any]:
+def _pack_config_row(row: _ConfigRowLike) -> Mapping[str, object]:
     return {"param_name": row.param_name, "param_value": row.param_value}
 
 
-def _unpack_config_row(cached: Any) -> Optional[_ConfigRow]:
+def _unpack_config_row(
+    cached: Any,
+) -> Optional[_ConfigRow]:  # any-ok: fed by DualCache.async_get_cache, whose return type is unannotated
     if cached is None or cached == _CONFIG_CACHE_MISS:
         return None
     if isinstance(cached, dict):
@@ -2958,7 +2986,9 @@ def _unpack_config_row(cached: Any) -> Optional[_ConfigRow]:
     return None
 
 
-async def get_config_param(prisma_client: Any, param_name: str) -> Optional[Any]:
+async def get_config_param(
+    prisma_client: "PrismaClient", param_name: str
+) -> Optional[Any]:  # any-ok: cache hit returns a _ConfigRow shim, cache miss returns the raw row verbatim
     """Cached read of a LiteLLM_Config row; returns row, _ConfigRow shim, or None."""
     cache_key = _config_cache_key(param_name)
     cached = await litellm_config_cache.async_get_cache(cache_key)
@@ -2966,7 +2996,7 @@ async def get_config_param(prisma_client: Any, param_name: str) -> Optional[Any]
         return _unpack_config_row(cached)
 
     row = await prisma_client.get_generic_data(key="param_name", value=param_name, table_name="config")
-    cache_value: Any = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
+    cache_value: Union[Mapping[str, object], str] = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
     await litellm_config_cache.async_set_cache(cache_key, cache_value, ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS)
     return row
 
@@ -2976,7 +3006,7 @@ async def invalidate_config_param(param_name: str) -> None:
     await litellm_config_cache.async_delete_cache(_config_cache_key(param_name))
 
 
-async def prefetch_config_params(prisma_client: Any, param_names: List[str]) -> None:
+async def prefetch_config_params(prisma_client: "PrismaClient", param_names: List[str]) -> None:
     """Batch-load LiteLLM_Config rows into the cache with one find_many."""
     if not param_names:
         return
@@ -2993,7 +3023,7 @@ async def prefetch_config_params(prisma_client: Any, param_names: List[str]) -> 
     by_name = {row.param_name: row for row in rows}
     for name in param_names:
         row = by_name.get(name)
-        cache_value: Any = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
+        cache_value: Union[Mapping[str, object], str] = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
         await litellm_config_cache.async_set_cache(
             _config_cache_key(name), cache_value, ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS
         )
@@ -3009,7 +3039,7 @@ class PrismaClient:
         self,
         database_url: str,
         proxy_logging_obj: ProxyLogging,
-        http_client: Optional[Any] = None,
+        http_client: Optional[Any] = None,  # any-ok: passed through to prisma's Prisma(http=...) HttpConfig
     ):
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
@@ -3017,6 +3047,7 @@ class PrismaClient:
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma  # type: ignore
+            from prisma.types import DatasourceOverride
         except Exception as e:
             verbose_proxy_logger.error(f"Failed to import Prisma client: {e}")
             verbose_proxy_logger.error("This usually means 'prisma generate' hasn't been run yet.")
@@ -3074,11 +3105,11 @@ class PrismaClient:
                     )
                     read_replica_url = reader_iam_endpoint.build_url(reader_token)
                     os.environ["DATABASE_URL_READ_REPLICA"] = read_replica_url
-                reader_kwargs: Dict[str, Any] = {"datasource": {"url": read_replica_url}}
+                datasource_override = DatasourceOverride(url=read_replica_url)
                 if http_client is not None:
-                    reader_prisma = Prisma(http=http_client, **reader_kwargs)
+                    reader_prisma = Prisma(http=http_client, datasource=datasource_override)
                 else:
-                    reader_prisma = Prisma(**reader_kwargs)
+                    reader_prisma = Prisma(datasource=datasource_override)
                 reader_wrapper = PrismaWrapper(
                     original_prisma=reader_prisma,
                     iam_token_db_auth=iam_flag,
@@ -3302,9 +3333,9 @@ class PrismaClient:
     async def get_generic_data(
         self,
         key: str,
-        value: Any,
+        value: str,
         table_name: Literal["users", "keys", "config", "spend"],
-    ):
+    ) -> Any:  # any-ok: raw prisma find_first result, shape varies by table_name and by test mocking
         """
         Generic implementation of get data.
 
@@ -3448,7 +3479,7 @@ class PrismaClient:
         start_time = time.time()
         hashed_token: Optional[str] = None
         try:
-            response: Any = None
+            response: Any = None  # any-ok: shape depends on table_name/query_type, resolved across ~15 branches below
             if (token is not None and table_name is None) or (table_name is not None and table_name == "key"):
                 # check if plain text or hash
                 if token is not None:
@@ -4371,9 +4402,9 @@ class PrismaClient:
             if prisma_obj.is_connected() is not True:
                 return 0
             engine = prisma_obj._engine
-            process = getattr(engine, "process", None) if engine is not None else None
+            process: object = getattr(engine, "process", None) if engine is not None else None
             if process is not None:
-                pid = process.pid
+                pid: object = getattr(process, "pid", None)
                 if isinstance(pid, int):
                     return pid
         except (AttributeError, TypeError):
@@ -6015,7 +6046,9 @@ def _check_and_merge_model_level_guardrails(
     return _merge_guardrails_with_existing(data, model_level_guardrails)
 
 
-def _merge_guardrails_with_existing(data: dict, model_level_guardrails: Any) -> dict:
+def _merge_guardrails_with_existing(
+    data: dict, model_level_guardrails: Any
+) -> dict:  # any-ok: guardrail entries may be bare strings or config dicts
     """
     Merge model-level guardrails with any existing guardrails in the request data.
 
@@ -6539,10 +6572,10 @@ _PRESERVED_NONE_FIELDS: List[tuple[str, str]] = [
 
 
 def model_dump_with_preserved_fields(
-    obj: Any,
+    obj: Any,  # any-ok: accepts any Pydantic model via duck-typed model_dump()/choices access
     preserve_fields: Optional[List[str]] = None,
     exclude_unset: bool = True,
-) -> Dict[str, Any]:
+) -> Mapping[str, Any]:
     """
     Serialize a Pydantic model to a dictionary while preserving specific fields
     even if they are None.
