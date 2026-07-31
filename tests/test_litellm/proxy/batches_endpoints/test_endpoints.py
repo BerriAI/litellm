@@ -476,6 +476,7 @@ async def test_create__unified_file_id_single_model_disables_cross_model_fallbac
             "input_file_id": "litellm_proxy_unified_id",
             "endpoint": "/v1/chat/completions",
             "completion_window": "24h",
+            "disable_fallbacks": False,
         },
     )
     with (
