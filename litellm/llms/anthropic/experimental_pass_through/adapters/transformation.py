@@ -585,12 +585,26 @@ class LiteLLMAnthropicMessagesAdapter:
                 assistant_message = ChatCompletionAssistantMessage(
                     role="assistant",
                     content=assistant_content,
-                    thinking_blocks=(thinking_blocks if len(thinking_blocks) > 0 else None),
                 )
                 if len(tool_calls) > 0:
                     assistant_message["tool_calls"] = tool_calls  # type: ignore
                 if len(thinking_blocks) > 0:
-                    assistant_message["thinking_blocks"] = thinking_blocks  # type: ignore
+                    if model is None or LiteLLMAnthropicMessagesAdapter.is_anthropic_claude_model(model):
+                        # Claude/Anthropic backends (or an unknown target) need thinking_blocks
+                        # for multi-turn extended thinking round-trips.
+                        assistant_message["thinking_blocks"] = thinking_blocks  # type: ignore
+                    else:
+                        # Non-Claude backends (vLLM, SGLang, etc.) do not understand thinking_blocks;
+                        # forwarding them causes phrase-repetition loops on long tool chains, because the
+                        # rendered reasoning re-enters the prompt on top of any reasoning_content the
+                        # backend already produced. Replay only the text via reasoning_content instead.
+                        reasoning_content = "\n".join(
+                            str(part)
+                            for block in thinking_blocks
+                            if (part := block.get("thinking", "") or block.get("data", ""))
+                        )
+                        if reasoning_content and reasoning_content.strip():
+                            assistant_message["reasoning_content"] = reasoning_content  # type: ignore
                 new_messages.append(assistant_message)
 
         return new_messages

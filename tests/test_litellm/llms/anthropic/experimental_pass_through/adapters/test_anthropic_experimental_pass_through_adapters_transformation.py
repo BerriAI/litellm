@@ -345,6 +345,169 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert result[1]["tool_calls"][0]["id"] == "toolu_01234"
 
 
+def test_translate_anthropic_messages_to_openai_thinking_blocks_claude_explicit():
+    """thinking_blocks must be forwarded when target is an explicit Anthropic Claude model."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Think step by step."}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "thinking",
+                    "thinking": "My reasoning here.",
+                    "signature": "sig123",
+                },
+                {"type": "text", "text": "Answer text."},
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages,
+        model="claude-3-7-sonnet-20250219",
+    )
+
+    assert "thinking_blocks" in result[1]
+    assert len(result[1]["thinking_blocks"]) == 1
+    assert result[1]["thinking_blocks"][0]["thinking"] == "My reasoning here."
+    assert "reasoning_content" not in result[1]
+
+
+def test_translate_anthropic_messages_to_openai_thinking_blocks_non_claude():
+    """thinking_blocks must NOT be forwarded to non-Claude backends; use reasoning_content instead.
+
+    Forwarding thinking_blocks to OpenAI-compatible reasoning backends (vLLM/SGLang)
+    causes phrase-repetition loops on long multi-turn tool chains (issue #31279).
+    """
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Think step by step."}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "thinking",
+                    "thinking": "My reasoning here.",
+                    "signature": "sig123",
+                },
+                {"type": "text", "text": "Answer text."},
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages,
+        model="openai/deepseek-thinking",
+    )
+
+    assert "thinking_blocks" not in result[1], (
+        "thinking_blocks must not reach non-Claude backends; "
+        "it causes repetition loops on vLLM/SGLang reasoning models"
+    )
+    assert result[1].get("reasoning_content") == "My reasoning here."
+
+
+def test_translate_anthropic_messages_to_openai_thinking_blocks_redacted_non_claude():
+    """Redacted thinking blocks on a non-Claude backend use data field as reasoning_content."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Do the thing."}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "redacted_thinking",
+                    "data": "REDACTED_BLOB",
+                },
+                {"type": "text", "text": "Done."},
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages,
+        model="openai/my-vllm-model",
+    )
+
+    assert "thinking_blocks" not in result[1]
+    assert result[1].get("reasoning_content") == "REDACTED_BLOB"
+
+
+def test_translate_anthropic_messages_to_openai_thinking_blocks_empty_non_claude():
+    """Empty/redacted thinking blocks (thinking='') must not produce whitespace reasoning_content.
+
+    Regression for P2: "\n".join(["", ""]) == "\n" which is truthy, so an all-empty
+    block list would produce a whitespace-only reasoning_content that bypasses the
+    ``if reasoning_content:`` guard and inserts a spurious "\n" into the prompt.
+    """
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Do the thing."}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {"type": "thinking", "thinking": "", "signature": ""},
+                {"type": "redacted_thinking", "data": ""},
+                {"type": "text", "text": "Done."},
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages,
+        model="openai/my-vllm-model",
+    )
+
+    assert "thinking_blocks" not in result[1]
+    assert "reasoning_content" not in result[1], (
+        "All-empty thinking blocks must not produce a whitespace-only reasoning_content"
+    )
+
+
+def test_translate_anthropic_messages_to_openai_thinking_blocks_mixed_empty_non_claude():
+    """A mix of empty and non-empty thinking blocks should only include non-empty content."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Reason about this."}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {"type": "thinking", "thinking": "", "signature": ""},
+                {"type": "thinking", "thinking": "Step 1: analyze.", "signature": "sig1"},
+                {"type": "redacted_thinking", "data": ""},
+                {"type": "text", "text": "Answer."},
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages,
+        model="openai/my-vllm-model",
+    )
+
+    assert "thinking_blocks" not in result[1]
+    rc = result[1].get("reasoning_content", "")
+    assert rc == "Step 1: analyze.", (
+        f"Only non-empty parts should be joined; got {rc!r}"
+    )
+
+
 def test_translate_anthropic_messages_to_openai_tool_message_placement():
     """Test that tool result messages are placed before user messages in the conversation order."""
 
