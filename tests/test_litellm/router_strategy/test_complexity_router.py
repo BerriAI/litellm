@@ -1422,7 +1422,7 @@ class TestLLMClassifier:
         request_metadata = {"user_api_key": "sk-abc", "user_api_key_team_id": "team-1"}
         await llm_complexity_router.aclassify("hi", request_kwargs={"litellm_metadata": request_metadata})
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
-        assert call_kwargs["metadata"] == request_metadata
+        assert call_kwargs["metadata"] == {**request_metadata, "internal_call_origin": "autorouter_classifier"}
 
     @pytest.mark.asyncio
     async def test_aclassify_forwards_metadata_key_used_by_chat_completions(
@@ -1440,7 +1440,7 @@ class TestLLMClassifier:
         request_metadata = {"user_api_key": "sk-abc", "user_api_key_team_id": "team-1"}
         await llm_complexity_router.aclassify("hi", request_kwargs={"metadata": request_metadata})
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
-        assert call_kwargs["metadata"] == request_metadata
+        assert call_kwargs["metadata"] == {**request_metadata, "internal_call_origin": "autorouter_classifier"}
 
     @pytest.mark.asyncio
     async def test_aclassify_captures_request_body_in_proxy_server_request(
@@ -1555,11 +1555,37 @@ class TestLLMClassifier:
             "user_api_key": "sk-abc",
             "user_api_key_team_id": "team-1",
             "user_api_key_auth": {"models": ["gpt-4o"]},
+            "internal_call_origin": "autorouter_classifier",
         }
         assert request_metadata["user_api_key_auth"] == {
             "models": ["gpt-4o"],
             "budget_reservation": {"reserved_cost": 1.0},
         }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "parent_kwargs, expected",
+        [
+            ({"litellm_trace_id": "trace-1"}, {"litellm_trace_id": "trace-1"}),
+            ({"litellm_session_id": "sess-1"}, {"litellm_session_id": "sess-1"}),
+            (
+                {"litellm_session_id": "sess-1", "litellm_trace_id": "trace-1"},
+                {"litellm_session_id": "sess-1", "litellm_trace_id": "trace-1"},
+            ),
+            ({}, {}),
+        ],
+    )
+    async def test_aclassify_chains_classifier_call_into_parent_session(
+        self, llm_complexity_router, mock_router_instance, parent_kwargs, expected
+    ):
+        """Without the parent's session identity the router mints a fresh trace id for the
+        sub-call, so the classifier's spend row lands in a session of its own and never
+        appears in the trace of the request that triggered it."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        await llm_complexity_router.aclassify("hi", request_kwargs={"metadata": {}, **parent_kwargs})
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        for key in ("litellm_session_id", "litellm_trace_id"):
+            assert call_kwargs.get(key) == expected.get(key)
 
     @pytest.mark.asyncio
     async def test_aclassify_falls_back_to_heuristic_on_llm_exception(
@@ -1608,7 +1634,7 @@ class TestLLMClassifier:
         assert result is not None
         assert result.model == "o1-preview"  # REASONING tier model
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
-        assert call_kwargs["metadata"] == request_metadata
+        assert call_kwargs["metadata"] == {**request_metadata, "internal_call_origin": "autorouter_classifier"}
 
 
 class TestRouterPreRoutingAliasOverrides:
@@ -2285,8 +2311,9 @@ class TestSemanticKeywordTierRules:
         )
         assert result is not None
         assert fake_router.async_embedding_kwargs, "expected an embedding call for the prompt"
-        assert fake_router.async_embedding_kwargs[0]["metadata"] == caller_metadata
-        assert fake_router.async_embedding_kwargs[0]["litellm_metadata"] == caller_litellm_metadata
+        origin = {"internal_call_origin": "autorouter_classifier"}
+        assert fake_router.async_embedding_kwargs[0]["metadata"] == {**caller_metadata, **origin}
+        assert fake_router.async_embedding_kwargs[0]["litellm_metadata"] == {**caller_litellm_metadata, **origin}
 
     @pytest.mark.asyncio
     async def test_semantic_embedding_call_captures_request_body_in_proxy_server_request(self, basic_config):
@@ -2395,6 +2422,7 @@ class TestSemanticKeywordTierRules:
             "user_api_key_hash": "hash-abc",
             "user_api_key_team_id": "team-1",
             "user_api_key_auth": {"models": ["voyage-3-5"]},
+            "internal_call_origin": "autorouter_classifier",
         }
         assert fake_router.async_embedding_kwargs[0]["metadata"] == expected
         assert fake_router.async_embedding_kwargs[0]["litellm_metadata"] == expected
@@ -2730,15 +2758,46 @@ class TestSubCallMetadataSanitization:
             assert sanitized["user_api_key_auth"] is not None
             assert _get_budget_reservation_from_metadata(sanitized) is None
 
-    def test_returns_empty_dict_for_missing_metadata(self):
+    def test_absent_parent_bucket_stays_empty(self):
+        """An absent bucket must not be materialized just to carry the origin.
+
+        The embedding path passes both buckets, and get_litellm_metadata_from_kwargs
+        prefers litellm_metadata whenever it is truthy, backfilling only user_api_key*
+        keys from metadata. Returning an origin-only dict here would make a chat
+        completions parent's empty litellm_metadata win and silently drop
+        requester_ip_address, tags and spend_logs_metadata from the classifier's row."""
         from litellm.router_strategy.complexity_router.complexity_router import (
             _classifier_call_metadata,
         )
 
         for absent in (None, {}):
-            result = _classifier_call_metadata(absent)
-            assert result == {}
-            assert isinstance(result, dict)
+            assert _classifier_call_metadata(absent) == {}
+
+    def test_classifier_buckets_keep_non_spend_fields_on_a_chat_completions_parent(self):
+        """Drives the real resolver over the buckets the embedding classifier builds."""
+        from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            _classifier_call_metadata,
+        )
+
+        parent = {
+            "user_api_key": "sk-abc",
+            "requester_ip_address": "10.0.0.1",
+            "spend_logs_metadata": {"team_note": "keep me"},
+            "tags": ["prod"],
+        }
+        resolved = get_litellm_metadata_from_kwargs(
+            {
+                "litellm_params": {
+                    "metadata": _classifier_call_metadata(parent),
+                    "litellm_metadata": _classifier_call_metadata(None),
+                }
+            }
+        )
+        assert resolved["internal_call_origin"] == "autorouter_classifier"
+        assert resolved["requester_ip_address"] == "10.0.0.1"
+        assert resolved["spend_logs_metadata"] == {"team_note": "keep me"}
+        assert resolved["tags"] == ["prod"]
 
     def test_sanitized_auth_keeps_access_group_fields_and_leaves_original_untouched(self):
         from litellm.proxy._types import UserAPIKeyAuth

@@ -2703,6 +2703,13 @@ RoutingDecisionCause = Literal[
 ]
 
 
+InternalCallOrigin = Literal["autorouter_classifier"]
+"""Which internal litellm feature originated a billed sub-call, so a spend log row
+records that it is not traffic the caller sent."""
+
+AUTOROUTER_CLASSIFIER_CALL_ORIGIN: InternalCallOrigin = "autorouter_classifier"
+
+
 class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
