@@ -16,6 +16,17 @@ pytestmark = [pytest.mark.e2e, pytest.mark.load]
 
 
 class TestChatCompletionsThroughput:
+    @pytest.mark.skip(
+        reason=(
+            "LIT-5054: the SLO measures how many gateway replicas happen to be warm, not the "
+            "request path. Clearing the floor needs roughly 5-7 replicas at ~10-14 RPS each, "
+            "stage idles at one, and reactive HPA scale-up lands minutes into a ~3 minute "
+            "test. It has failed both assertions on consecutive days: 93.3% errors at an "
+            "inflated 264 RPS (closed-loop RPS rises when requests fail fast, and those "
+            "requests never reached a pod), then 16.7 RPS with zero failures. Unskip once the "
+            "assertion is independent of fleet size."
+        )
+    )
     @pytest.mark.covers("reliability.perf.throughput.under_slo")
     def test_sustains_throughput_slo_under_load(self, client: LoadClient, load_key: str) -> None:
         result = run_chat_load(

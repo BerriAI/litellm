@@ -17,6 +17,8 @@ from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.types.proxy.policy_engine import (
     GuardrailPipeline,
     PipelineTestRequest,
+    Policy,
+    PolicyAttachment,
     PolicyAttachmentCreateRequest,
     PolicyAttachmentDBResponse,
     PolicyAttachmentListResponse,
@@ -33,6 +35,35 @@ from litellm.types.proxy.policy_engine import (
 router = APIRouter()
 
 
+def _config_policy_to_db_response(policy_name: str, policy: Policy) -> PolicyDBResponse:
+    return PolicyDBResponse(
+        policy_id=policy_name,
+        policy_name=policy_name,
+        version_number=1,
+        version_status="production",
+        inherit=policy.inherit,
+        description=policy.description,
+        guardrails_add=policy.guardrails.get_add(),
+        guardrails_remove=policy.guardrails.get_remove(),
+        condition=policy.condition.model_dump() if policy.condition else None,
+        pipeline=policy.pipeline.model_dump() if policy.pipeline else None,
+        definition_location="config",
+    )
+
+
+def _config_attachment_to_db_response(index: int, attachment: PolicyAttachment) -> PolicyAttachmentDBResponse:
+    return PolicyAttachmentDBResponse(
+        attachment_id=f"config-{index}",
+        policy_name=attachment.policy,
+        scope=attachment.scope,
+        teams=attachment.teams or [],
+        keys=attachment.keys or [],
+        models=attachment.models or [],
+        tags=attachment.tags or [],
+        definition_location="config",
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Policy CRUD Endpoints
 # ─────────────────────────────────────────────────────────────────────────────
@@ -46,7 +77,13 @@ router = APIRouter()
 )
 async def list_policies(version_status: Optional[str] = None):
     """
-    List all policies from the database. Optionally filter by version_status.
+    List all policies from the database and config.yaml. Optionally filter by version_status.
+
+    Config-defined policies are returned with definition_location "config" and are treated
+    as production versions. On a name conflict with a production DB policy, only the DB policy
+    is returned, mirroring runtime resolution where only production DB versions override config.
+    A draft or published DB version does not hide the config policy, since the config version
+    is still the one being enforced.
 
     Query params:
     - version_status: Optional. One of "draft", "published", "production".
@@ -84,11 +121,27 @@ async def list_policies(version_status: Optional[str] = None):
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Database not connected")
-
     try:
-        policies = await get_policy_registry().get_all_policies_from_db(prisma_client, version_status=version_status)
+        registry = get_policy_registry()
+        db_policies = (
+            await registry.get_all_policies_from_db(prisma_client, version_status=version_status)
+            if prisma_client is not None
+            else []
+        )
+        db_policy_names = {
+            db_policy.policy_name for db_policy in db_policies if db_policy.version_status == "production"
+        }
+        include_config = version_status in (None, "production")
+        config_policies = (
+            [
+                _config_policy_to_db_response(policy_name, policy)
+                for policy_name, policy in registry.list_config_policies().items()
+                if policy_name not in db_policy_names
+            ]
+            if include_config
+            else []
+        )
+        policies = db_policies + config_policies
         return PolicyListDBResponse(policies=policies, total_count=len(policies))
     except Exception as e:
         verbose_proxy_logger.exception(f"Error listing policies: {e}")
@@ -606,7 +659,10 @@ async def test_pipeline(
 )
 async def list_policy_attachments():
     """
-    List all policy attachments from the database.
+    List all policy attachments from the database and config.yaml.
+
+    Config-defined attachments are returned with definition_location "config" and a
+    synthetic attachment_id ("config-<index>").
 
     Example Request:
     ```bash
@@ -635,11 +691,14 @@ async def list_policy_attachments():
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Database not connected")
-
     try:
-        attachments = await get_attachment_registry().get_all_attachments_from_db(prisma_client)
+        registry = get_attachment_registry()
+        db_attachments = await registry.get_all_attachments_from_db(prisma_client) if prisma_client is not None else []
+        config_attachments = [
+            _config_attachment_to_db_response(index, attachment)
+            for index, attachment in enumerate(registry.get_config_attachments())
+        ]
+        attachments = db_attachments + config_attachments
         return PolicyAttachmentListResponse(attachments=attachments, total_count=len(attachments))
     except Exception as e:
         verbose_proxy_logger.exception(f"Error listing policy attachments: {e}")

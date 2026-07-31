@@ -24,6 +24,8 @@ class S3Logger:
         s3_aws_secret_access_key=None,
         s3_aws_session_token=None,
         s3_config=None,
+        s3_server_side_encryption: str | None = None,
+        s3_sse_kms_key_id: str | None = None,
         **kwargs,
     ):
         import boto3
@@ -50,11 +52,16 @@ class S3Logger:
                 s3_aws_session_token = litellm.s3_callback_params.get("s3_aws_session_token")
                 s3_config = litellm.s3_callback_params.get("s3_config")
                 s3_path = litellm.s3_callback_params.get("s3_path")
+                s3_server_side_encryption = litellm.s3_callback_params.get("s3_server_side_encryption")
+                s3_sse_kms_key_id = litellm.s3_callback_params.get("s3_sse_kms_key_id")
                 # done reading litellm.s3_callback_params
                 s3_use_team_prefix = bool(litellm.s3_callback_params.get("s3_use_team_prefix", False))
             self.s3_use_team_prefix = s3_use_team_prefix
             self.bucket_name = s3_bucket_name
             self.s3_path = s3_path
+            self.s3_server_side_encryption, self.s3_sse_kms_key_id = resolve_sse_params(
+                s3_server_side_encryption, s3_sse_kms_key_id
+            )
             verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
             # Create an S3 client with custom endpoint URL
             self.s3_client = boto3.client(
@@ -136,6 +143,15 @@ class S3Logger:
 
             print_verbose(f"\ns3 Logger - Logging payload = {payload_str}")
 
+            sse_params = {
+                key: value
+                for key, value in {
+                    "ServerSideEncryption": self.s3_server_side_encryption,
+                    "SSEKMSKeyId": self.s3_sse_kms_key_id,
+                }.items()
+                if value
+            }
+
             response = self.s3_client.put_object(
                 Bucket=self.bucket_name,
                 Key=s3_object_key,
@@ -144,6 +160,7 @@ class S3Logger:
                 ContentLanguage="en",
                 ContentDisposition=f'inline; filename="{s3_object_download_filename}"',
                 CacheControl="private, immutable, max-age=31536000, s-maxage=0",
+                **sse_params,
             )
 
             print_verbose(f"Response from s3:{str(response)}")
@@ -153,6 +170,33 @@ class S3Logger:
         except Exception as e:
             verbose_logger.exception(f"s3 Layer Error - {str(e)}")
             pass
+
+
+def _validated_sse_value(name: str, value: str | None) -> str | None:
+    if value is None or isinstance(value, str):
+        return value
+    verbose_logger.warning(
+        f"s3 logging: ignoring {name} because it has invalid type {type(value).__name__}; expected a string"
+    )
+    return None
+
+
+def resolve_sse_params(
+    server_side_encryption: str | None,
+    sse_kms_key_id: str | None,
+) -> tuple[str | None, str | None]:
+    valid_sse = _validated_sse_value("s3_server_side_encryption", server_side_encryption)
+    valid_key_id = _validated_sse_value("s3_sse_kms_key_id", sse_kms_key_id)
+    algorithm = valid_sse or ("aws:kms" if valid_key_id else None)
+    if algorithm is None:
+        return None, None
+    if valid_key_id and not algorithm.startswith("aws:kms"):
+        verbose_logger.warning(
+            f"s3 logging: ignoring s3_sse_kms_key_id because s3_server_side_encryption is {algorithm}; "
+            "set it to aws:kms to encrypt with the KMS key"
+        )
+        return algorithm, None
+    return algorithm, valid_key_id
 
 
 def get_s3_object_key(

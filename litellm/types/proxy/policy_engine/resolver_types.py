@@ -6,7 +6,7 @@ the final guardrails list.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -220,6 +220,10 @@ class PolicyDBResponse(BaseModel):
     updated_at: Optional[datetime] = Field(default=None, description="When the policy was last updated.")
     created_by: Optional[str] = Field(default=None, description="Who created the policy.")
     updated_by: Optional[str] = Field(default=None, description="Who last updated the policy.")
+    definition_location: Literal["db", "config"] = Field(
+        default="db",
+        description="Where this policy is defined: 'db' (database) or 'config' (config.yaml).",
+    )
 
 
 class PolicyListDBResponse(BaseModel):
@@ -317,6 +321,10 @@ class PolicyAttachmentDBResponse(BaseModel):
     updated_at: Optional[datetime] = Field(default=None, description="When the attachment was last updated.")
     created_by: Optional[str] = Field(default=None, description="Who created the attachment.")
     updated_by: Optional[str] = Field(default=None, description="Who last updated the attachment.")
+    definition_location: Literal["db", "config"] = Field(
+        default="db",
+        description="Where this attachment is defined: 'db' (database) or 'config' (config.yaml).",
+    )
 
 
 class PolicyAttachmentListResponse(BaseModel):
