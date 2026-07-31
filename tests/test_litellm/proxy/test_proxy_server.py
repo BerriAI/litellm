@@ -2483,10 +2483,11 @@ async def test_delete_deployment_type_mismatch():
         "12345679" not in deleted_ids
     ), f"Model 12345679 should NOT be deleted. Deleted IDs: {deleted_ids}"
 
-    # The ids the config still wants come back as strings, so a caller judging its own
-    # reload sees the int-keyed config models as desired rather than as evictions.
     assert still_desired is not None
-    assert {"12345678", "12345679"} <= still_desired
+    assert {"12345678", "12345679"} <= still_desired, (
+        "the int-keyed config models must come back as strings in the desired set, so a "
+        f"caller judging its own reload reads them as wanted rather than evicted; got {still_desired}"
+    )
 
 
 @pytest.mark.asyncio
@@ -9125,9 +9126,10 @@ class TestDeleteDeploymentSync:
                 still_desired = await proxy_config._delete_deployment(db_models=[])
 
         mock_router.delete_deployment.assert_called_once_with(id="model-id-to-evict")
-        # An empty db and an empty config want nothing, which is distinct from the
-        # None returned when no reconcile ran at all.
-        assert still_desired == frozenset()
+        assert still_desired == frozenset(), (
+            "an empty db and an empty config want nothing, which must stay distinct from "
+            f"the None returned when no reconcile ran at all; got {still_desired}"
+        )
 
     @pytest.mark.asyncio
     async def test_update_llm_router_skips_update_on_db_fetch_failure(self):

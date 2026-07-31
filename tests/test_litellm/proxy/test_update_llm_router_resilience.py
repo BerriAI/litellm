@@ -178,6 +178,7 @@ class TestDeleteDeploymentResilience:
 
             # "stale-id" should have been deleted (not in db_models or config)
             mock_router.delete_deployment.assert_called_once_with(id="stale-id")
-            # and the returned set is what the db + config still want, so a caller can
-            # tell that eviction apart from a deployment that went missing on its own
-            assert result == frozenset({"db-id-1", "config-id-1"})
+            assert result == frozenset({"db-id-1", "config-id-1"}), (
+                "the returned set must be what the db + config still want, so a caller can "
+                f"tell that eviction apart from a deployment that went missing; got {result}"
+            )

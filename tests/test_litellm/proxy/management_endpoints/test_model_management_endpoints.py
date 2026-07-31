@@ -3322,6 +3322,11 @@ class TestWriteSurfacesReloadDrop:
         longer has it. That eviction is the reconcile working, so it must not fail the
         write. `still_desired` is the db + config set the reload reconciled against, so
         an id missing from it drops out of the collateral diff.
+
+        The cases below, in order: an id the db no longer wants is not collateral and the
+        write succeeds; an id the db still wants that stopped serving is real degradation
+        and still raises, so a genuinely broken reload is caught; and with no reconcile at
+        all the desired set is unknown, so every drop is reported.
         """
         import litellm
         from litellm.proxy._types import ProxyException
@@ -3341,7 +3346,6 @@ class TestWriteSurfacesReloadDrop:
         )
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", live_router)
 
-        # "m-deleted-elsewhere" was dropped by the reload and the db does not want it.
         _, collateral = reload_serving_verdict(
             before=frozenset({"m-live", "m-deleted-elsewhere"}),
             written_models=[("m-live", None)],
@@ -3360,8 +3364,6 @@ class TestWriteSurfacesReloadDrop:
             is None
         )
 
-        # A model the db still wants that stopped serving is real degradation and must
-        # still raise, so the guard keeps catching a genuinely broken reload.
         with pytest.raises(ProxyException, match="m-should-be-serving"):
             raise_if_reload_degraded_serving(
                 before=frozenset({"m-live", "m-should-be-serving"}),
@@ -3370,7 +3372,6 @@ class TestWriteSurfacesReloadDrop:
                 still_desired=frozenset({"m-live", "m-should-be-serving"}),
             )
 
-        # No reconcile ran, so the desired set is unknown and every drop is reported.
         with pytest.raises(ProxyException, match="m-deleted-elsewhere"):
             raise_if_reload_degraded_serving(
                 before=frozenset({"m-live", "m-deleted-elsewhere"}),
