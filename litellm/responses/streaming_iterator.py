@@ -7,7 +7,8 @@ import traceback
 import uuid
 from datetime import datetime
 from functools import lru_cache
-from typing import Any, Dict, List, Literal, Optional
+from types import MappingProxyType
+from typing import Any, Dict, List, Literal, Mapping, Optional
 
 import httpx
 from openai._streaming import SSEDecoder
@@ -48,13 +49,32 @@ def _log_background_task_failure(task: "asyncio.Task[Any]", *, task_name: str) -
         verbose_logger.error("%s failed: %s", task_name, exception)
 
 
-_CLIENT_ERROR_CODES: frozenset[str] = frozenset(
-    (
-        "invalid_request_error",
-        "context_length_exceeded",
-        "content_policy_violation",
-        "model_not_found",
-    )
+_ERROR_CODE_HTTP_STATUS: Mapping[str, int] = MappingProxyType(
+    {  # mutable-ok: immediately frozen by MappingProxyType
+        "server_error": 500,
+        "rate_limit_exceeded": 429,
+        "insufficient_quota": 429,
+        "vector_store_timeout": 504,
+        "invalid_prompt": 400,
+        "invalid_image": 400,
+        "invalid_image_format": 400,
+        "invalid_base64_image": 400,
+        "invalid_image_url": 400,
+        "image_too_large": 400,
+        "image_too_small": 400,
+        "image_parse_error": 400,
+        "image_content_policy_violation": 400,
+        "invalid_image_mode": 400,
+        "image_file_too_large": 400,
+        "unsupported_image_media_type": 400,
+        "empty_image_file": 400,
+        "failed_to_download_image": 400,
+        "image_file_not_found": 400,
+        "invalid_request_error": 400,
+        "context_length_exceeded": 400,
+        "content_policy_violation": 400,
+        "model_not_found": 400,
+    }
 )
 
 
@@ -78,12 +98,13 @@ def _error_event_fields(error_obj: object) -> tuple[str, Optional[str], Optional
 
 
 def _status_code_for_error_fields(error_type: Optional[str], error_code: Optional[str]) -> int:
-    fields = tuple(field for field in (error_type, error_code) if field is not None)
+    fields = tuple(field for field in (error_code, error_type) if field is not None)
     if any(field.startswith("rate_limit") or field == "insufficient_quota" for field in fields):
         return 429
-    if any(field in _CLIENT_ERROR_CODES for field in fields):
-        return 400
-    return 500
+    return next(
+        (_ERROR_CODE_HTTP_STATUS[field] for field in fields if field in _ERROR_CODE_HTTP_STATUS),
+        500,
+    )
 
 
 class BaseResponsesAPIStreamingIterator:
