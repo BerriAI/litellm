@@ -13,6 +13,8 @@ import requests
 
 from litellm.proxy.client.cli.native_oidc import (
     http_client,
+)
+from litellm.proxy.client.cli.native_oidc import (
     metadata as metadata_module,
 )
 from litellm.proxy.client.cli.native_oidc.errors import (
@@ -38,9 +40,7 @@ DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 class FakeResponse:
     """Minimal stand-in for a streamed `requests.Response`."""
 
-    def __init__(
-        self, status_code=200, body=b"", content_type="application/json", headers=None
-    ):
+    def __init__(self, status_code=200, body=b"", content_type="application/json", headers=None):
         self.status_code = status_code
         self._body = body
         self.headers = {"content-type": content_type, **(headers or {})}
@@ -126,9 +126,7 @@ class TestJsonDecoding:
         assert http_client.get_json_response(f"{BASE_URL}/x").payload == {"a": 1}
 
     @pytest.mark.parametrize("content_type", ["text/html", "application/xml", ""])
-    def test_non_json_content_type_yields_no_payload(
-        self, capture_request, content_type
-    ):
+    def test_non_json_content_type_yields_no_payload(self, capture_request, content_type):
         capture_request(json_response({"a": 1}, content_type=content_type))
         assert http_client.get_json_response(f"{BASE_URL}/x").payload is None
 
@@ -136,9 +134,7 @@ class TestJsonDecoding:
         "body",
         [b'{"a":1} {"b":2}', b"[1,2,3]", b'"a string"', b"not json", b"\xff\xfe"],
     )
-    def test_non_object_or_malformed_bodies_yield_no_payload(
-        self, capture_request, body
-    ):
+    def test_non_object_or_malformed_bodies_yield_no_payload(self, capture_request, body):
         capture_request(FakeResponse(body=body))
         assert http_client.get_json_response(f"{BASE_URL}/x").payload is None
 
@@ -174,18 +170,12 @@ class TestGetJsonAndPostForm:
         with pytest.raises(NativeOIDCError, match="did not return a JSON object"):
             http_client.get_json(f"{BASE_URL}/x")
 
-    def test_post_form_sends_form_encoding_and_returns_error_bodies(
-        self, capture_request
-    ):
-        calls = capture_request(
-            json_response({"error": "invalid_grant"}, status_code=400)
-        )
+    def test_post_form_sends_form_encoding_and_returns_error_bodies(self, capture_request):
+        calls = capture_request(json_response({"error": "invalid_grant"}, status_code=400))
         response = http_client.post_form(f"{ISSUER}/token", {"grant_type": "x"})
         assert calls[0]["method"] == "POST"
         assert calls[0]["data"] == {"grant_type": "x"}
-        assert (
-            calls[0]["headers"]["Content-Type"] == "application/x-www-form-urlencoded"
-        )
+        assert calls[0]["headers"]["Content-Type"] == "application/x-www-form-urlencoded"
         # A 4xx OAuth error body is data for the caller, not an exception.
         assert response.status_code == 400
         assert response.payload == {"error": "invalid_grant"}
@@ -193,17 +183,11 @@ class TestGetJsonAndPostForm:
 
 class TestParseNativeOIDCMetadata:
     def test_valid_document(self):
-        parsed = parse_native_oidc_metadata(
-            {"issuer": ISSUER, "client_id": CLIENT_ID, "scopes": ["openid", "profile"]}
-        )
-        assert parsed == NativeOIDCMetadata(
-            issuer=ISSUER, client_id=CLIENT_ID, scopes=("openid", "profile")
-        )
+        parsed = parse_native_oidc_metadata({"issuer": ISSUER, "client_id": CLIENT_ID, "scopes": ["openid", "profile"]})
+        assert parsed == NativeOIDCMetadata(issuer=ISSUER, client_id=CLIENT_ID, scopes=("openid", "profile"))
 
     def test_unknown_fields_are_rejected(self):
-        with pytest.raises(
-            NativeOIDCError, match="unsupported field\\(s\\): client_secret"
-        ):
+        with pytest.raises(NativeOIDCError, match="unsupported field\\(s\\): client_secret"):
             parse_native_oidc_metadata(
                 {
                     "issuer": ISSUER,
@@ -316,9 +300,7 @@ class TestFetchNativeOIDCMetadata:
 
     def test_non_json_body_is_a_hard_failure(self, capture_request):
         capture_request(FakeResponse(body=b"<html/>", content_type="text/html"))
-        with pytest.raises(
-            NativeOIDCError, match="did not return a JSON object"
-        ) as excinfo:
+        with pytest.raises(NativeOIDCError, match="did not return a JSON object") as excinfo:
             fetch_native_oidc_metadata(BASE_URL)
         assert not isinstance(excinfo.value, NativeOIDCUnavailable)
 
@@ -359,9 +341,7 @@ def provider_document(**overrides):
 class TestParseProviderMetadata:
     def test_issuer_must_match_exactly(self):
         with pytest.raises(NativeOIDCError, match="does not exactly match"):
-            parse_provider_metadata(
-                provider_document(issuer=f"{ISSUER}/"), expected_issuer=ISSUER
-            )
+            parse_provider_metadata(provider_document(issuer=f"{ISSUER}/"), expected_issuer=ISSUER)
 
     def test_case_differences_are_not_normalized_away(self):
         with pytest.raises(NativeOIDCError, match="does not exactly match"):
@@ -379,18 +359,14 @@ class TestParseProviderMetadata:
 
     def test_missing_issuer(self):
         with pytest.raises(NativeOIDCError, match="issuer is missing"):
-            parse_provider_metadata(
-                {"token_endpoint": f"{ISSUER}/token"}, expected_issuer=ISSUER
-            )
+            parse_provider_metadata({"token_endpoint": f"{ISSUER}/token"}, expected_issuer=ISSUER)
 
     def test_non_object(self):
         with pytest.raises(NativeOIDCError, match="not a JSON object"):
             parse_provider_metadata("nope", expected_issuer=ISSUER)
 
     def test_malformed_list_fields(self):
-        with pytest.raises(
-            NativeOIDCError, match="grant_types_supported is not a list of strings"
-        ):
+        with pytest.raises(NativeOIDCError, match="grant_types_supported is not a list of strings"):
             parse_provider_metadata(
                 provider_document(grant_types_supported=["code", 7]),
                 expected_issuer=ISSUER,
@@ -398,22 +374,16 @@ class TestParseProviderMetadata:
 
     def test_malformed_endpoint_type(self):
         with pytest.raises(NativeOIDCError, match="token_endpoint is not a string"):
-            parse_provider_metadata(
-                provider_document(token_endpoint=7), expected_issuer=ISSUER
-            )
+            parse_provider_metadata(provider_document(token_endpoint=7), expected_issuer=ISSUER)
 
     def test_endpoints_are_validated_lazily(self):
         # An unusable device endpoint must not break a browser login.
         parsed = parse_provider_metadata(
-            provider_document(
-                device_authorization_endpoint="http://evil.example.com/device"
-            ),
+            provider_document(device_authorization_endpoint="http://evil.example.com/device"),
             expected_issuer=ISSUER,
         )
         assert parsed.require_authorization_endpoint() == f"{ISSUER}/authorize"
-        with pytest.raises(
-            NativeOIDCError, match="device_authorization_endpoint must use HTTPS"
-        ):
+        with pytest.raises(NativeOIDCError, match="device_authorization_endpoint must use HTTPS"):
             parsed.require_device_authorization_endpoint()
 
     def test_require_endpoint_reports_absence(self):
@@ -421,9 +391,7 @@ class TestParseProviderMetadata:
             {"issuer": ISSUER, "token_endpoint": f"{ISSUER}/token"},
             expected_issuer=ISSUER,
         )
-        with pytest.raises(
-            NativeOIDCError, match="does not advertise a authorization_endpoint"
-        ):
+        with pytest.raises(NativeOIDCError, match="does not advertise a authorization_endpoint"):
             parsed.require_authorization_endpoint()
 
 
@@ -520,9 +488,7 @@ class TestFetchProviderMetadata:
         assert parsed.issuer == ISSUER
 
     def test_issuer_mismatch_is_rejected(self, capture_request):
-        capture_request(
-            json_response(provider_document(issuer="https://evil.example.com"))
-        )
+        capture_request(json_response(provider_document(issuer="https://evil.example.com")))
         with pytest.raises(NativeOIDCError, match="does not exactly match"):
             fetch_provider_metadata(ISSUER)
 

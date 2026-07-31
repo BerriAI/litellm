@@ -53,9 +53,7 @@ class TestNumericLoopbackHost:
 
 
 class TestScopeTokens:
-    @pytest.mark.parametrize(
-        "scope", ["openid", "profile", "api://resource/.default", "a!b#c[d]e~"]
-    )
+    @pytest.mark.parametrize("scope", ["openid", "profile", "api://resource/.default", "a!b#c[d]e~"])
     def test_valid_scope_tokens(self, scope):
         assert is_valid_scope_token(scope) is True
 
@@ -198,9 +196,9 @@ class TestDeriveProviderConfigurationUrl:
         assert derive_provider_configuration_url(issuer) == expected
 
     def test_case_and_port_are_not_normalized(self):
-        assert derive_provider_configuration_url(
-            "https://IdP.Example.com:8443"
-        ).startswith("https://IdP.Example.com:8443/")
+        assert derive_provider_configuration_url("https://IdP.Example.com:8443").startswith(
+            "https://IdP.Example.com:8443/"
+        )
 
 
 class TestIsTrustedMetadataOrigin:

@@ -213,11 +213,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _models(self):
         authorization = self.headers.get("Authorization", "")
-        token = (
-            authorization[len("Bearer ") :]
-            if authorization.startswith("Bearer ")
-            else None
-        )
+        token = authorization[len("Bearer ") :] if authorization.startswith("Bearer ") else None
         if self.idp.reject_at_litellm or token not in self.idp.issued_access_tokens:
             return self._send(401, {"error": "unauthorized"})
         return self._send(200, {"data": []})
@@ -282,9 +278,7 @@ class TestBrowserLoginEndToEnd:
         visited = fake_browser(monkeypatch)
         lines = []
 
-        credential = run_native_login(
-            idp.base_url, flow=FLOW_BROWSER, echo=lines.append
-        )
+        credential = run_native_login(idp.base_url, flow=FLOW_BROWSER, echo=lines.append)
 
         assert visited == [302]
         assert credential["auth_type"] == AUTH_TYPE_NATIVE_OIDC
@@ -308,9 +302,7 @@ class TestBrowserLoginEndToEnd:
         # The proxy is asked whether it accepts the token before anything is stored.
         assert ("GET", "/v1/models") in idp.requests
 
-    def test_credential_file_is_owner_only_and_holds_no_id_token(
-        self, idp, monkeypatch, tmp_path
-    ):
+    def test_credential_file_is_owner_only_and_holds_no_id_token(self, idp, monkeypatch, tmp_path):
         fake_browser(monkeypatch)
         run_native_login(idp.base_url, flow=FLOW_BROWSER, echo=lambda _: None)
 
@@ -325,9 +317,7 @@ class TestBrowserLoginEndToEnd:
         # If the CLI ever sent the challenge instead of the verifier, or reused a
         # verifier from another exchange, the mock provider rejects the grant.
         fake_browser(monkeypatch)
-        credential = run_native_login(
-            idp.base_url, flow=FLOW_BROWSER, echo=lambda _: None
-        )
+        credential = run_native_login(idp.base_url, flow=FLOW_BROWSER, echo=lambda _: None)
         assert credential["key"] in idp.issued_access_tokens
         assert idp.authorization_codes == {}  # the code was consumed exactly once
 
@@ -335,14 +325,10 @@ class TestBrowserLoginEndToEnd:
         idp.reject_at_litellm = True
         fake_browser(monkeypatch)
 
-        with pytest.raises(
-            NativeOIDCAuthRejected, match="rejected the identity provider"
-        ):
+        with pytest.raises(NativeOIDCAuthRejected, match="rejected the identity provider"):
             run_native_login(idp.base_url, flow=FLOW_BROWSER, echo=lambda _: None)
 
-    def test_nothing_is_written_when_verification_fails(
-        self, idp, monkeypatch, tmp_path
-    ):
+    def test_nothing_is_written_when_verification_fails(self, idp, monkeypatch, tmp_path):
         idp.reject_at_litellm = True
         fake_browser(monkeypatch)
 
@@ -372,9 +358,7 @@ class TestDeviceLoginEndToEnd:
         )
         lines = []
 
-        credential = run_native_login(
-            idp.base_url, flow=FLOW_DEVICE, open_browser=False, echo=lines.append
-        )
+        credential = run_native_login(idp.base_url, flow=FLOW_DEVICE, open_browser=False, echo=lines.append)
 
         assert idp.device_polls == 3
         assert credential["key"] in idp.issued_access_tokens
@@ -411,9 +395,7 @@ class TestRefreshEndToEnd:
         assert refreshed["issuer"] == original["issuer"]
         assert not needs_refresh(refreshed)
 
-    def test_refresh_retains_the_previous_token_when_none_is_reissued(
-        self, idp, monkeypatch
-    ):
+    def test_refresh_retains_the_previous_token_when_none_is_reissued(self, idp, monkeypatch):
         original = self.login_then_expire(idp, monkeypatch)
         idp.omit_refresh_token = True
 
@@ -431,18 +413,14 @@ class TestRefreshEndToEnd:
         with pytest.raises(NativeOIDCError, match="different OIDC issuer or client id"):
             refresh_native_credential(original)
 
-    def test_refresh_fails_when_litellm_stops_accepting_the_token(
-        self, idp, monkeypatch
-    ):
+    def test_refresh_fails_when_litellm_stops_accepting_the_token(self, idp, monkeypatch):
         original = self.login_then_expire(idp, monkeypatch)
         idp.reject_at_litellm = True
 
         with pytest.raises(NativeOIDCAuthRejected):
             refresh_native_credential(original)
 
-    def test_a_still_fresh_credential_on_disk_short_circuits_the_refresh(
-        self, idp, monkeypatch
-    ):
+    def test_a_still_fresh_credential_on_disk_short_circuits_the_refresh(self, idp, monkeypatch):
         original = self.login(idp, monkeypatch)
         polls_before = len(idp.requests)
 

@@ -1,7 +1,6 @@
 """Authorization Code with PKCE S256 for native applications (RFC 8252)."""
 
 import webbrowser
-from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import click
@@ -113,7 +112,7 @@ def run_browser_flow(
         )
 
 
-def _try_open_browser(url: str, *, echo=click.echo) -> Optional[bool]:
+def _try_open_browser(url: str, *, echo=click.echo) -> bool | None:
     """Best-effort browser launch; failure is never fatal.
 
     The URL has already been printed, so the user can always continue manually.

@@ -4,7 +4,7 @@ import sys
 import time
 import webbrowser
 from pathlib import Path
-from typing import Any
+from typing import Any  # noqa: TID251  # unvalidated JSON payload
 from urllib.parse import urlencode
 
 import click
@@ -587,7 +587,7 @@ def _render_and_prompt_for_team_selection(teams: list[dict[str, Any]]) -> str | 
             return None
 
 
-def _report_native_login(credential: Dict[str, Any]) -> None:
+def _report_native_login(credential: dict[str, Any]) -> None:
     """Summarise a native login without echoing any part of the token."""
     from litellm.proxy.client.cli.interface import show_commands
 

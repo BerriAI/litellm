@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 from pydantic import (
     BaseModel,
@@ -26,7 +26,7 @@ class NativeOIDCConfig(BaseModel):
 
     issuer: str
     client_id: str
-    scopes: Tuple[str, ...]
+    scopes: tuple[str, ...]
 
     model_config = ConfigDict(extra="forbid")
 
@@ -51,20 +51,20 @@ class NativeOIDCConfig(BaseModel):
 
     @field_validator("scopes")
     @classmethod
-    def validate_scopes(cls, value: Tuple[str, ...]) -> Tuple[str, ...]:
+    def validate_scopes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         return validate_scope_tokens(value)
 
 
 class UiDiscoveryEndpoints(BaseModel):
     server_root_path: str
-    proxy_base_url: Optional[str]
+    proxy_base_url: str | None
     auto_redirect_to_sso: bool
     admin_ui_disabled: bool
     sso_configured: bool
     hide_default_credentials_hint: bool = False
     is_control_plane: bool = False
-    workers: List[WorkerRegistryEntry] = []
-    native_oidc: Optional[NativeOIDCConfig] = None
+    workers: list[WorkerRegistryEntry] = []
+    native_oidc: NativeOIDCConfig | None = None
 
     @model_serializer(mode="wrap")
     def _omit_absent_native_oidc(self, handler: SerializerFunctionWrapHandler):
@@ -76,7 +76,7 @@ class UiDiscoveryEndpoints(BaseModel):
         `Field(exclude_if=...)` so the model stays compatible with the declared
         `pydantic>=2.10` floor.
         """
-        serialized: Any = handler(self)
+        serialized = handler(self)
         if isinstance(serialized, dict) and serialized.get("native_oidc") is None:
             serialized.pop("native_oidc", None)
         return serialized

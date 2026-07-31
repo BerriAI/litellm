@@ -62,9 +62,7 @@ ISSUER = "https://idp.example.com"
 CLIENT_ID = "litellm-cli"
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 
-METADATA = NativeOIDCMetadata(
-    issuer=ISSUER, client_id=CLIENT_ID, scopes=("openid", "profile")
-)
+METADATA = NativeOIDCMetadata(issuer=ISSUER, client_id=CLIENT_ID, scopes=("openid", "profile"))
 PROVIDER = ProviderMetadata(
     issuer=ISSUER,
     authorization_endpoint=f"{ISSUER}/authorize",
@@ -95,9 +93,7 @@ class TestPkce:
         assert CODE_VERIFIER_MIN_LENGTH <= len(verifier) <= CODE_VERIFIER_MAX_LENGTH
 
     def test_verifier_uses_only_unreserved_characters(self):
-        allowed = set(
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
-        )
+        allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
         assert set(generate_code_verifier()) <= allowed
 
     def test_verifiers_and_states_are_unique(self):
@@ -106,11 +102,7 @@ class TestPkce:
 
     def test_challenge_is_unpadded_base64url_sha256(self):
         verifier = "abc123"
-        expected = (
-            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
-            .decode()
-            .rstrip("=")
-        )
+        expected = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
         challenge = compute_code_challenge(verifier)
         assert challenge == expected
         assert "=" not in challenge
@@ -119,9 +111,7 @@ class TestPkce:
     def test_generated_pair_is_consistent_and_s256_only(self):
         challenge = generate_pkce_challenge()
         assert challenge.code_challenge_method == "S256"
-        assert challenge.code_challenge == compute_code_challenge(
-            challenge.code_verifier
-        )
+        assert challenge.code_challenge == compute_code_challenge(challenge.code_verifier)
         assert challenge.state and challenge.state != challenge.code_verifier
 
     @pytest.mark.parametrize(
@@ -182,9 +172,7 @@ class TestCallbackListener:
             thread = threading.Thread(target=waiter)
             thread.start()
             connection = HTTPConnection(listener.host, listener.port, timeout=5)
-            connection.request(
-                "GET", f"{DEFAULT_CALLBACK_PATH}?code=abc&state=state-value"
-            )
+            connection.request("GET", f"{DEFAULT_CALLBACK_PATH}?code=abc&state=state-value")
             assert connection.getresponse().status == 200
             connection.close()
             thread.join(5)
@@ -192,13 +180,8 @@ class TestCallbackListener:
 
     def test_state_mismatch_is_rejected_before_the_code_is_used(self):
         with LoopbackCallbackListener(expected_state="expected") as listener:
-            assert (
-                call_listener(listener, f"{DEFAULT_CALLBACK_PATH}?code=abc&state=wrong")
-                == 400
-            )
-            with pytest.raises(
-                NativeOIDCError, match="state was missing or did not match"
-            ):
+            assert call_listener(listener, f"{DEFAULT_CALLBACK_PATH}?code=abc&state=wrong") == 400
+            with pytest.raises(NativeOIDCError, match="state was missing or did not match"):
                 listener.wait_for_code(timeout=0.1)
 
     def test_missing_state_is_rejected(self):
@@ -209,12 +192,7 @@ class TestCallbackListener:
 
     def test_duplicate_parameters_are_rejected(self):
         with LoopbackCallbackListener(expected_state="s") as listener:
-            assert (
-                call_listener(
-                    listener, f"{DEFAULT_CALLBACK_PATH}?code=a&code=b&state=s"
-                )
-                == 400
-            )
+            assert call_listener(listener, f"{DEFAULT_CALLBACK_PATH}?code=a&code=b&state=s") == 400
             with pytest.raises(NativeOIDCError, match="multiple 'code' values"):
                 listener.wait_for_code(timeout=0.1)
 
@@ -223,8 +201,7 @@ class TestCallbackListener:
             assert (
                 call_listener(
                     listener,
-                    f"{DEFAULT_CALLBACK_PATH}?error=access_denied"
-                    "&error_description=user+said+no&state=s",
+                    f"{DEFAULT_CALLBACK_PATH}?error=access_denied&error_description=user+said+no&state=s",
                 )
                 == 400
             )
@@ -233,9 +210,7 @@ class TestCallbackListener:
 
     def test_missing_code_is_rejected(self):
         with LoopbackCallbackListener(expected_state="s") as listener:
-            assert (
-                call_listener(listener, f"{DEFAULT_CALLBACK_PATH}?code=&state=s") == 400
-            )
+            assert call_listener(listener, f"{DEFAULT_CALLBACK_PATH}?code=&state=s") == 400
             with pytest.raises(NativeOIDCError, match="did not contain a code"):
                 listener.wait_for_code(timeout=0.1)
 
@@ -256,14 +231,8 @@ class TestCallbackListener:
 
     def test_only_one_authorization_response_is_accepted(self):
         with LoopbackCallbackListener(expected_state="s") as listener:
-            assert (
-                call_listener(listener, f"{DEFAULT_CALLBACK_PATH}?code=first&state=s")
-                == 200
-            )
-            assert (
-                call_listener(listener, f"{DEFAULT_CALLBACK_PATH}?code=second&state=s")
-                == 400
-            )
+            assert call_listener(listener, f"{DEFAULT_CALLBACK_PATH}?code=first&state=s") == 200
+            assert call_listener(listener, f"{DEFAULT_CALLBACK_PATH}?code=second&state=s") == 400
             assert listener.wait_for_code(timeout=0.1) == "first"
 
     def test_timeout_raises(self):
@@ -423,10 +392,7 @@ class TestComputeExpiresAt:
         assert compute_expires_at("opaque", 120, now=1000.0) == 1120.0
 
     def test_falls_back_to_a_short_default(self):
-        assert (
-            compute_expires_at("opaque", None, now=1000.0)
-            == 1000.0 + FALLBACK_LIFETIME_SECONDS
-        )
+        assert compute_expires_at("opaque", None, now=1000.0) == 1000.0 + FALLBACK_LIFETIME_SECONDS
 
     def test_uses_the_untrusted_jwt_exp_when_expires_in_is_absent(self):
         token = make_jwt({"exp": 1500})
@@ -454,10 +420,7 @@ class TestComputeExpiresAt:
         ],
     )
     def test_unparsable_tokens_do_not_raise(self, token):
-        assert (
-            compute_expires_at(token, None, now=1000.0)
-            == 1000.0 + FALLBACK_LIFETIME_SECONDS
-        )
+        assert compute_expires_at(token, None, now=1000.0) == 1000.0 + FALLBACK_LIFETIME_SECONDS
 
 
 class TestTokenErrors:
@@ -499,9 +462,7 @@ def device_payload(**overrides):
 
 class TestParseDeviceAuthorization:
     def test_valid(self):
-        parsed = parse_device_authorization(
-            device_payload(verification_uri_complete=f"{ISSUER}/activate?code=WXYZ")
-        )
+        parsed = parse_device_authorization(device_payload(verification_uri_complete=f"{ISSUER}/activate?code=WXYZ"))
         assert parsed.device_code == "dc"
         assert parsed.user_code == "WXYZ-1234"
         assert parsed.verification_uri_complete == f"{ISSUER}/activate?code=WXYZ"
@@ -509,10 +470,7 @@ class TestParseDeviceAuthorization:
     def test_interval_defaults_to_five_seconds(self):
         payload = device_payload()
         del payload["interval"]
-        assert (
-            parse_device_authorization(payload).interval
-            == DEFAULT_POLL_INTERVAL_SECONDS
-        )
+        assert parse_device_authorization(payload).interval == DEFAULT_POLL_INTERVAL_SECONDS
 
     @pytest.mark.parametrize(
         "overrides,message",
@@ -569,9 +527,7 @@ def token_success(**overrides):
 
 
 def oauth_error(error, status_code=400, retry_after=None):
-    return JsonResponse(
-        status_code=status_code, payload={"error": error}, retry_after=retry_after
-    )
+    return JsonResponse(status_code=status_code, payload={"error": error}, retry_after=retry_after)
 
 
 class TestRequestDeviceAuthorization:
@@ -587,9 +543,7 @@ class TestRequestDeviceAuthorization:
 
     def test_error_response_is_reported_against_the_right_endpoint(self, monkeypatch):
         stub_post_form(monkeypatch, device_flow, [oauth_error("invalid_client")])
-        with pytest.raises(
-            NativeOIDCError, match="device authorization endpoint returned OAuth"
-        ):
+        with pytest.raises(NativeOIDCError, match="device authorization endpoint returned OAuth"):
             request_device_authorization(f"{ISSUER}/device", METADATA)
 
 
@@ -625,9 +579,7 @@ class TestPollForDeviceToken:
         return token, sleeps, calls
 
     def test_success_after_pending(self, monkeypatch):
-        token, sleeps, calls = self.poll(
-            monkeypatch, [oauth_error("authorization_pending"), token_success()]
-        )
+        token, sleeps, calls = self.poll(monkeypatch, [oauth_error("authorization_pending"), token_success()])
         assert token.access_token == "at"
         assert sleeps == [5, 5]
         assert calls[0]["data"] == {
@@ -671,9 +623,7 @@ class TestPollForDeviceToken:
         assert sleeps == [10, 10]
 
     def test_connection_errors_back_off_instead_of_busy_looping(self, monkeypatch):
-        _, sleeps, _ = self.poll(
-            monkeypatch, [NativeOIDCError("could not reach"), token_success()]
-        )
+        _, sleeps, _ = self.poll(monkeypatch, [NativeOIDCError("could not reach"), token_success()])
         assert sleeps == [5, 10]
 
     def test_access_denied_stops_polling(self, monkeypatch):
@@ -729,9 +679,7 @@ class TestRunDeviceFlow:
 
     def test_unsupported_provider_is_rejected_before_any_request(self, monkeypatch):
         stub_post_form(monkeypatch, device_flow, [])
-        provider = ProviderMetadata(
-            **{**PROVIDER.__dict__, "device_authorization_endpoint": None}
-        )
+        provider = ProviderMetadata(**{**PROVIDER.__dict__, "device_authorization_endpoint": None})
         with pytest.raises(NativeOIDCError, match="device_authorization_endpoint"):
             run_device_flow(METADATA, provider, open_browser=False, echo=lambda _: None)
 
@@ -859,17 +807,13 @@ class TestRunBrowserFlow:
             query = parse_qs(urlsplit(captured["url"]).query)
             redirect = urlsplit(query["redirect_uri"][0])
             connection = HTTPConnection(redirect.hostname, redirect.port, timeout=5)
-            connection.request(
-                "GET", f"{redirect.path}?code=auth-code&state={query['state'][0]}"
-            )
+            connection.request("GET", f"{redirect.path}?code=auth-code&state={query['state'][0]}")
             captured["status"] = connection.getresponse().status
             connection.close()
 
         thread = threading.Thread(target=redirect_back)
         thread.start()
-        token = run_browser_flow(
-            METADATA, PROVIDER, open_browser=False, timeout=10, echo=echo
-        )
+        token = run_browser_flow(METADATA, PROVIDER, open_browser=False, timeout=10, echo=echo)
         thread.join(5)
 
         assert captured["status"] == 200
@@ -877,19 +821,13 @@ class TestRunBrowserFlow:
         assert calls[0]["data"]["code"] == "auth-code"
         # The verifier matches the challenge that was sent to the authorization endpoint.
         sent_challenge = parse_qs(urlsplit(captured["url"]).query)["code_challenge"][0]
-        assert (
-            compute_code_challenge(calls[0]["data"]["code_verifier"]) == sent_challenge
-        )
+        assert compute_code_challenge(calls[0]["data"]["code_verifier"]) == sent_challenge
 
     def test_unsupported_provider_is_rejected_before_binding_a_port(self, monkeypatch):
         stub_post_form(monkeypatch, browser_flow, [])
-        provider = ProviderMetadata(
-            **{**PROVIDER.__dict__, "code_challenge_methods_supported": ("plain",)}
-        )
+        provider = ProviderMetadata(**{**PROVIDER.__dict__, "code_challenge_methods_supported": ("plain",)})
         with pytest.raises(NativeOIDCError, match="PKCE S256"):
-            run_browser_flow(
-                METADATA, provider, open_browser=False, echo=lambda _: None
-            )
+            run_browser_flow(METADATA, provider, open_browser=False, echo=lambda _: None)
 
     def test_browser_launch_failure_is_not_fatal(self, monkeypatch):
         monkeypatch.setattr(

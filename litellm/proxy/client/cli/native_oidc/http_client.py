@@ -15,8 +15,9 @@ Security properties enforced here:
 """
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any  # noqa: TID251  # unvalidated JSON payload
 
 import requests
 
@@ -27,7 +28,7 @@ from .errors import NativeOIDCError
 MAX_RESPONSE_BYTES = 256 * 1024
 
 # (connect, read) seconds.
-DEFAULT_TIMEOUT: Tuple[float, float] = (5.0, 15.0)
+DEFAULT_TIMEOUT: tuple[float, float] = (5.0, 15.0)
 
 MAX_RETRY_AFTER_SECONDS = 300
 
@@ -42,8 +43,8 @@ class JsonResponse:
     """
 
     status_code: int
-    payload: Optional[Dict[str, Any]]
-    retry_after: Optional[int]
+    payload: dict[str, Any] | None
+    retry_after: int | None
 
 
 def _is_json_content_type(content_type: str) -> bool:
@@ -51,7 +52,7 @@ def _is_json_content_type(content_type: str) -> bool:
     return media_type == "application/json" or media_type.endswith("+json")
 
 
-def _parse_retry_after(value: Optional[str]) -> Optional[int]:
+def _parse_retry_after(value: str | None) -> int | None:
     """Parse a bounded delta-seconds Retry-After. HTTP-date form is ignored."""
     if not value:
         return None
@@ -77,7 +78,7 @@ def _read_bounded_body(response: requests.Response) -> bytes:
     return b"".join(chunks)
 
 
-def _decode_json_object(body: bytes, content_type: str) -> Optional[Dict[str, Any]]:
+def _decode_json_object(body: bytes, content_type: str) -> dict[str, Any] | None:
     """Strictly decode a JSON object, or return None.
 
     `json.loads` rejects trailing data after the top-level value, so a response
@@ -96,9 +97,9 @@ def _request(
     method: str,
     url: str,
     *,
-    data: Optional[Mapping[str, str]] = None,
-    headers: Optional[Mapping[str, str]] = None,
-    timeout: Tuple[float, float] = DEFAULT_TIMEOUT,
+    data: Mapping[str, str] | None = None,
+    headers: Mapping[str, str] | None = None,
+    timeout: tuple[float, float] = DEFAULT_TIMEOUT,
 ) -> JsonResponse:
     request_headers = {"Accept": "application/json"}
     if headers:
@@ -128,7 +129,7 @@ def _request(
         raise NativeOIDCError(f"could not reach {url}: {type(error).__name__}") from error
 
 
-def get_json_response(url: str, *, timeout: Tuple[float, float] = DEFAULT_TIMEOUT) -> JsonResponse:
+def get_json_response(url: str, *, timeout: tuple[float, float] = DEFAULT_TIMEOUT) -> JsonResponse:
     """GET and return the bounded parsed response without asserting the status.
 
     Used where the status code itself is meaningful -- e.g. an older proxy
@@ -137,7 +138,7 @@ def get_json_response(url: str, *, timeout: Tuple[float, float] = DEFAULT_TIMEOU
     return _request("GET", url, timeout=timeout)
 
 
-def get_json(url: str, *, timeout: Tuple[float, float] = DEFAULT_TIMEOUT) -> Dict[str, Any]:
+def get_json(url: str, *, timeout: tuple[float, float] = DEFAULT_TIMEOUT) -> dict[str, Any]:
     """GET a JSON object, raising unless the response is 200 with a JSON object."""
     response = _request("GET", url, timeout=timeout)
     if response.status_code != 200:
@@ -151,7 +152,7 @@ def post_form(
     url: str,
     data: Mapping[str, str],
     *,
-    timeout: Tuple[float, float] = DEFAULT_TIMEOUT,
+    timeout: tuple[float, float] = DEFAULT_TIMEOUT,
 ) -> JsonResponse:
     """POST form-encoded parameters and return the bounded parsed response."""
     return _request(

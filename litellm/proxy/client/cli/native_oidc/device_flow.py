@@ -8,7 +8,7 @@ are shown.
 import time
 import webbrowser
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any  # noqa: TID251  # unvalidated JSON payload
 
 import click
 
@@ -44,19 +44,19 @@ class DeviceAuthorization:
     device_code: str
     user_code: str
     verification_uri: str
-    verification_uri_complete: Optional[str]
+    verification_uri_complete: str | None
     expires_in: int
     interval: int
 
 
-def _require_non_empty_string(raw: Dict[str, Any], key: str) -> str:
+def _require_non_empty_string(raw: dict[str, Any], key: str) -> str:
     value = raw.get(key)
     if not isinstance(value, str) or not value:
         raise NativeOIDCError(f"device authorization response is missing {key}")
     return value
 
 
-def _optional_safe_uri(raw: Dict[str, Any], key: str) -> Optional[str]:
+def _optional_safe_uri(raw: dict[str, Any], key: str) -> str | None:
     value = raw.get(key)
     if value is None:
         return None
@@ -68,7 +68,7 @@ def _optional_safe_uri(raw: Dict[str, Any], key: str) -> Optional[str]:
         raise NativeOIDCError(f"device authorization response {key} {error}") from error
 
 
-def _bounded_positive_int(raw: Dict[str, Any], key: str, maximum: int) -> Optional[int]:
+def _bounded_positive_int(raw: dict[str, Any], key: str, maximum: int) -> int | None:
     value = raw.get(key)
     if value is None:
         return None
@@ -79,7 +79,7 @@ def _bounded_positive_int(raw: Dict[str, Any], key: str, maximum: int) -> Option
     return value
 
 
-def parse_device_authorization(payload: Any) -> DeviceAuthorization:
+def parse_device_authorization(payload: object) -> DeviceAuthorization:
     if not isinstance(payload, dict):
         raise NativeOIDCError("device authorization endpoint did not return a JSON object")
 

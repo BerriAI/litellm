@@ -42,9 +42,7 @@ def home(tmp_path, monkeypatch):
 
 
 def make_metadata():
-    return NativeOIDCMetadata(
-        issuer=ISSUER, client_id=CLIENT_ID, scopes=("openid", "profile")
-    )
+    return NativeOIDCMetadata(issuer=ISSUER, client_id=CLIENT_ID, scopes=("openid", "profile"))
 
 
 def make_provider(
@@ -94,9 +92,7 @@ def test_auto_falls_back_to_device_when_the_browser_flow_is_unsupported():
 
 
 def test_auto_falls_back_to_browser_when_the_device_flow_is_unsupported():
-    provider = make_provider(
-        device_authorization_endpoint=None, grant_types=("authorization_code",)
-    )
+    provider = make_provider(device_authorization_endpoint=None, grant_types=("authorization_code",))
     assert select_flow(provider, "auto", open_browser=False) == FLOW_BROWSER
 
 
@@ -107,9 +103,7 @@ def test_explicit_browser_is_never_downgraded_to_device():
 
 
 def test_explicit_device_is_never_downgraded_to_browser():
-    provider = make_provider(
-        device_authorization_endpoint=None, grant_types=("authorization_code",)
-    )
+    provider = make_provider(device_authorization_endpoint=None, grant_types=("authorization_code",))
     with pytest.raises(NativeOIDCError):
         select_flow(provider, FLOW_DEVICE, open_browser=True)
 
@@ -133,12 +127,8 @@ def test_no_usable_flow_raises_a_specific_reason():
 def native_login_env(home, monkeypatch):
     calls = {"browser": 0, "device": 0, "verified": None, "saved": None}
 
-    monkeypatch.setattr(
-        login_module, "fetch_native_oidc_metadata", lambda base_url: make_metadata()
-    )
-    monkeypatch.setattr(
-        login_module, "fetch_provider_metadata", lambda issuer: make_provider()
-    )
+    monkeypatch.setattr(login_module, "fetch_native_oidc_metadata", lambda base_url: make_metadata())
+    monkeypatch.setattr(login_module, "fetch_provider_metadata", lambda issuer: make_provider())
 
     def fake_browser(metadata, provider, *, open_browser=True, echo=None):
         calls["browser"] += 1
@@ -173,9 +163,7 @@ def test_native_login_saves_a_verified_credential(native_login_env):
     assert load_cli_token()["key"] == "browser-token"
 
 
-def test_native_login_does_not_store_a_token_the_proxy_rejects(
-    native_login_env, monkeypatch, home
-):
+def test_native_login_does_not_store_a_token_the_proxy_rejects(native_login_env, monkeypatch, home):
     def reject(base_url, token):
         raise NativeOIDCError("rejected")
 
@@ -269,13 +257,9 @@ def test_an_explicit_native_flow_does_not_fall_back_when_unavailable(monkeypatch
 
 
 def test_login_reports_the_issuer_and_never_the_token(monkeypatch, home):
-    credential = build_native_credential(
-        base_url=BASE_URL, metadata=make_metadata(), token=make_token("super-secret")
-    )
+    credential = build_native_credential(base_url=BASE_URL, metadata=make_metadata(), token=make_token("super-secret"))
     monkeypatch.setattr(f"{AUTH_MODULE}.run_native_login", lambda *a, **k: credential)
-    monkeypatch.setattr(
-        "litellm.proxy.client.cli.interface.show_commands", lambda: None
-    )
+    monkeypatch.setattr("litellm.proxy.client.cli.interface.show_commands", lambda: None)
 
     result = invoke_login()
     assert result.exit_code == 0
@@ -340,9 +324,7 @@ def test_print_token_emits_a_fresh_native_token_without_refreshing(monkeypatch, 
 def test_print_token_refreshes_an_expired_native_token(monkeypatch, home):
     stored = store_native_credential(expires_in=-10, access_token="stale-token")
     refreshed = {**stored, "key": "renewed-token", "expires_at": time.time() + 3600}
-    monkeypatch.setattr(
-        f"{AUTH_MODULE}.refresh_native_credential", lambda token_data: refreshed
-    )
+    monkeypatch.setattr(f"{AUTH_MODULE}.refresh_native_credential", lambda token_data: refreshed)
 
     result = invoke_print_token()
     assert result.exit_code == 0

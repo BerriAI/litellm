@@ -4392,7 +4392,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         default=300,
         description="TTL (in seconds) for caching UserInfo responses. Default: 300s (5 minutes).",
     )
-    native_oidc_issuer: Optional[str] = Field(
+    native_oidc_issuer: str | None = Field(
         default=None,
         description=(
             "Public OIDC issuer identifier advertised to native clients (e.g. the "
@@ -4400,11 +4400,11 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "provider configuration URL from this and requires an exact issuer match."
         ),
     )
-    native_oidc_client_id: Optional[str] = Field(
+    native_oidc_client_id: str | None = Field(
         default=None,
         description="Public/native OAuth client id (no client secret) used by `lite login`.",
     )
-    native_oidc_scopes: Optional[tuple[str, ...]] = Field(
+    native_oidc_scopes: tuple[str, ...] | None = Field(
         default=None,
         description="Scopes the native client requests. Must be RFC 6749 scope-tokens.",
     )

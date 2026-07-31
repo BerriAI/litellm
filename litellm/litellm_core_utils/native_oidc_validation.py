@@ -8,7 +8,7 @@ runtime and the thin ``litellm[cli]`` installation.
 """
 
 import ipaddress
-from typing import Iterable, Sequence, Tuple
+from collections.abc import Iterable, Sequence
 from urllib.parse import urlsplit
 
 # RFC 6749 section 3.3: scope-token = 1*( %x21 / %x23-5B / %x5D-7E )
@@ -40,7 +40,7 @@ def is_valid_scope_token(value: str) -> bool:
     return bool(value) and all(character in SCOPE_TOKEN_ALLOWED_CHARACTERS for character in value)
 
 
-def validate_scope_tokens(scopes: Iterable[str]) -> Tuple[str, ...]:
+def validate_scope_tokens(scopes: Iterable[str]) -> tuple[str, ...]:
     """Validate each scope independently, rejecting duplicates and preserving order.
 
     Raises ValueError with a message that never echoes the offending value.

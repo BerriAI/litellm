@@ -49,9 +49,7 @@ def home(tmp_path, monkeypatch):
 
 
 def make_metadata(issuer=ISSUER, client_id=CLIENT_ID):
-    return NativeOIDCMetadata(
-        issuer=issuer, client_id=client_id, scopes=("openid", "profile")
-    )
+    return NativeOIDCMetadata(issuer=issuer, client_id=client_id, scopes=("openid", "profile"))
 
 
 def make_provider(issuer=ISSUER, token_endpoint=None):
@@ -114,9 +112,7 @@ def test_build_native_credential_stores_bearer_under_key():
 
 
 def test_build_native_credential_never_persists_flow_secrets():
-    credential = build_native_credential(
-        base_url=BASE_URL, metadata=make_metadata(), token=make_token()
-    )
+    credential = build_native_credential(base_url=BASE_URL, metadata=make_metadata(), token=make_token())
     forbidden = {
         "code",
         "code_verifier",
@@ -178,9 +174,7 @@ def test_fresh_credential_does_not_need_refresh():
 
 def test_credential_inside_the_buffer_needs_refresh():
     expires_at = 2000.0
-    assert needs_refresh(
-        {"expires_at": expires_at}, now=expires_at - REFRESH_BUFFER_SECONDS + 1
-    )
+    assert needs_refresh({"expires_at": expires_at}, now=expires_at - REFRESH_BUFFER_SECONDS + 1)
 
 
 def test_expired_credential_needs_refresh():
@@ -213,9 +207,7 @@ def test_verification_probes_the_user_accessible_models_route():
 @pytest.mark.parametrize("status", [401, 403])
 def test_rejected_token_raises_auth_rejected(status):
     with pytest.raises(NativeOIDCAuthRejected) as excinfo:
-        verify_token_with_litellm(
-            BASE_URL, "access-1", get=lambda *a, **k: FakeResponse(status)
-        )
+        verify_token_with_litellm(BASE_URL, "access-1", get=lambda *a, **k: FakeResponse(status))
     message = str(excinfo.value)
     assert "issuer" in message and "audience" in message
     # The token itself must never appear in an error surfaced to the user.
@@ -224,9 +216,7 @@ def test_rejected_token_raises_auth_rejected(status):
 
 @pytest.mark.parametrize("status", [200, 404, 500, 503])
 def test_non_auth_statuses_are_tolerated(status):
-    verify_token_with_litellm(
-        BASE_URL, "access-1", get=lambda *a, **k: FakeResponse(status)
-    )
+    verify_token_with_litellm(BASE_URL, "access-1", get=lambda *a, **k: FakeResponse(status))
 
 
 def test_unreachable_proxy_is_not_an_auth_rejection():
@@ -381,8 +371,9 @@ def test_refresh_uses_the_rediscovered_token_endpoint(stored, monkeypatch):
         {**stored, "token_endpoint": "https://attacker.example.com/token"},
         verify=lambda *a: None,
         fetch_metadata=lambda base_url: make_metadata(),
-        fetch_provider=lambda issuer: seen_issuers.append(issuer)
-        or make_provider(token_endpoint=f"{ISSUER}/rediscovered"),
+        fetch_provider=lambda issuer: (
+            seen_issuers.append(issuer) or make_provider(token_endpoint=f"{ISSUER}/rediscovered")
+        ),
     )
 
     assert seen_issuers == [ISSUER]
@@ -411,16 +402,12 @@ def test_refresh_rejects_a_changed_trust_anchor(stored, monkeypatch, metadata):
     assert load_cli_token()["key"] == "old-access"
 
 
-def test_refresh_defers_to_a_sibling_process_that_already_refreshed(
-    stored, monkeypatch
-):
+def test_refresh_defers_to_a_sibling_process_that_already_refreshed(stored, monkeypatch):
     def explode(*args, **kwargs):
         raise AssertionError("provider must not be contacted")
 
     monkeypatch.setattr(creds, "post_form", explode)
-    save_credential(
-        {**stored, "key": "sibling-access", "expires_at": time.time() + 3600}
-    )
+    save_credential({**stored, "key": "sibling-access", "expires_at": time.time() + 3600})
 
     result = refresh_native_credential(
         stored,
@@ -486,9 +473,7 @@ def test_refresh_surfaces_a_rejected_new_token(stored, monkeypatch):
 
 def test_refresh_surfaces_the_oauth_error_code(stored, monkeypatch):
     def fake_post_form(url, data, **kwargs):
-        return type(
-            "R", (), {"status_code": 400, "payload": {"error": "invalid_grant"}}
-        )()
+        return type("R", (), {"status_code": 400, "payload": {"error": "invalid_grant"}})()
 
     monkeypatch.setattr(creds, "post_form", fake_post_form)
 

@@ -15,7 +15,6 @@ import socket
 import socketserver
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Optional, Tuple
 from urllib.parse import parse_qs, urlsplit
 
 from litellm.litellm_core_utils.native_oidc_validation import is_numeric_loopback_host
@@ -42,7 +41,7 @@ _FAILURE_PAGE = (
 )
 
 
-def sanitize_provider_error(error: str, description: Optional[str]) -> str:
+def sanitize_provider_error(error: str, description: str | None) -> str:
     """Build a bounded, printable message from a provider error response."""
     safe_error = "".join(c for c in error if 0x20 <= ord(c) < 0x7F)[:MAX_ERROR_DESCRIPTION_LENGTH]
     message = safe_error or "unknown_error"
@@ -53,7 +52,7 @@ def sanitize_provider_error(error: str, description: Optional[str]) -> str:
     return message
 
 
-def _single_value(params: dict, name: str) -> Optional[str]:
+def _single_value(params: dict, name: str) -> str | None:
     """Return the sole value for `name`, or raise if it appears more than once."""
     values = params.get(name)
     if not values:
@@ -82,7 +81,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        server: "_CallbackServer" = self.server  # type: ignore[assignment]
+        server: _CallbackServer = self.server  # type: ignore[assignment]
 
         peer_host = self.client_address[0]
         if not is_numeric_loopback_host(peer_host):
@@ -139,7 +138,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
 class _CallbackResult:
     __slots__ = ("code", "error")
 
-    def __init__(self, code: Optional[str] = None, error: Optional[str] = None) -> None:
+    def __init__(self, code: str | None = None, error: str | None = None) -> None:
         self.code = code
         self.error = error
 
@@ -151,7 +150,7 @@ class _CallbackServer(HTTPServer):
     def __init__(self, server_address, handler, *, expected_state: str, callback_path: str):
         self.expected_state = expected_state
         self.callback_path = callback_path
-        self.result: Optional[_CallbackResult] = None
+        self.result: _CallbackResult | None = None
         self.expected_host_header = ""
         super().__init__(server_address, handler)
 
@@ -243,5 +242,5 @@ class LoopbackCallbackListener:
         self.close()
 
 
-def bound_address(listener: LoopbackCallbackListener) -> Tuple[str, int]:
+def bound_address(listener: LoopbackCallbackListener) -> tuple[str, int]:
     return listener.host, listener.port

@@ -9,8 +9,9 @@ Two different trust levels are handled here:
   actually needs are decoded.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any  # noqa: TID251  # unvalidated JSON payload
 
 from litellm.litellm_core_utils.native_oidc_validation import (
     derive_provider_configuration_url,
@@ -45,10 +46,10 @@ class NativeOIDCMetadata:
 
     issuer: str
     client_id: str
-    scopes: Tuple[str, ...]
+    scopes: tuple[str, ...]
 
 
-def parse_native_oidc_metadata(raw: Any) -> NativeOIDCMetadata:
+def parse_native_oidc_metadata(raw: object) -> NativeOIDCMetadata:
     """Strictly validate the LiteLLM-owned `native_oidc` object."""
     if not isinstance(raw, dict):
         raise NativeOIDCError("advertised native_oidc metadata is not an object")
@@ -115,7 +116,7 @@ def fetch_native_oidc_metadata(base_url: str) -> NativeOIDCMetadata:
     return parse_native_oidc_metadata(response.payload["native_oidc"])
 
 
-def _optional_string_tuple(raw: Dict[str, Any], key: str) -> Optional[Tuple[str, ...]]:
+def _optional_string_tuple(raw: dict[str, Any], key: str) -> tuple[str, ...] | None:
     value = raw.get(key)
     if value is None:
         return None
@@ -124,7 +125,7 @@ def _optional_string_tuple(raw: Dict[str, Any], key: str) -> Optional[Tuple[str,
     return tuple(value)
 
 
-def _optional_endpoint(raw: Dict[str, Any], key: str) -> Optional[str]:
+def _optional_endpoint(raw: dict[str, Any], key: str) -> str | None:
     value = raw.get(key)
     if value is None:
         return None
@@ -142,15 +143,15 @@ class ProviderMetadata:
     """
 
     issuer: str
-    authorization_endpoint: Optional[str]
-    token_endpoint: Optional[str]
-    device_authorization_endpoint: Optional[str]
-    response_types_supported: Optional[Tuple[str, ...]]
-    grant_types_supported: Optional[Tuple[str, ...]]
-    code_challenge_methods_supported: Optional[Tuple[str, ...]]
-    token_endpoint_auth_methods_supported: Optional[Tuple[str, ...]]
+    authorization_endpoint: str | None
+    token_endpoint: str | None
+    device_authorization_endpoint: str | None
+    response_types_supported: tuple[str, ...] | None
+    grant_types_supported: tuple[str, ...] | None
+    code_challenge_methods_supported: tuple[str, ...] | None
+    token_endpoint_auth_methods_supported: tuple[str, ...] | None
 
-    def _require_endpoint(self, value: Optional[str], name: str) -> str:
+    def _require_endpoint(self, value: str | None, name: str) -> str:
         if value is None:
             raise NativeOIDCError(f"provider does not advertise a {name}")
         try:
@@ -230,7 +231,7 @@ class ProviderMetadata:
             )
 
 
-def parse_provider_metadata(raw: Any, expected_issuer: str) -> ProviderMetadata:
+def parse_provider_metadata(raw: object, expected_issuer: str) -> ProviderMetadata:
     """Validate a provider configuration document against the advertised issuer.
 
     The issuer comparison is an exact string comparison against the value the

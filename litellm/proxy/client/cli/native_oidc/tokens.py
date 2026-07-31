@@ -11,7 +11,7 @@ import binascii
 import json
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any  # noqa: TID251  # unvalidated JSON payload
 
 from litellm.litellm_core_utils.native_oidc_validation import is_valid_scope_token
 
@@ -39,12 +39,12 @@ class TokenResponse:
 
     access_token: str
     token_type: str
-    expires_at: Optional[float]
-    refresh_token: Optional[str]
-    scopes: Optional[Tuple[str, ...]]
+    expires_at: float | None
+    refresh_token: str | None
+    scopes: tuple[str, ...] | None
 
 
-def _decode_unverified_jwt_exp(access_token: str) -> Optional[float]:
+def _decode_unverified_jwt_exp(access_token: str) -> float | None:
     """Read `exp` from a structurally-JWT access token as an untrusted hint.
 
     Used *only* to shorten a local cache deadline. Never for identity,
@@ -67,7 +67,7 @@ def _decode_unverified_jwt_exp(access_token: str) -> Optional[float]:
     return float(exp)
 
 
-def _parse_expires_in(raw: Any) -> Optional[int]:
+def _parse_expires_in(raw: object) -> int | None:
     """Validate `expires_in`, accepting the numeric-string form some IdPs send."""
     if raw is None:
         return None
@@ -86,7 +86,7 @@ def _parse_expires_in(raw: Any) -> Optional[int]:
     return value
 
 
-def _parse_scope(raw: Any) -> Optional[Tuple[str, ...]]:
+def _parse_scope(raw: object) -> tuple[str, ...] | None:
     if raw is None:
         return None
     if not isinstance(raw, str):
@@ -97,7 +97,7 @@ def _parse_scope(raw: Any) -> Optional[Tuple[str, ...]]:
     return scopes or None
 
 
-def compute_expires_at(access_token: str, expires_in: Optional[int], *, now: Optional[float] = None) -> float:
+def compute_expires_at(access_token: str, expires_in: int | None, *, now: float | None = None) -> float:
     """Derive the local cache deadline.
 
     Prefers a valid `expires_in`; falls back to an untrusted JWT `exp`; and when
@@ -116,7 +116,7 @@ def compute_expires_at(access_token: str, expires_in: Optional[int], *, now: Opt
     return min(candidates)
 
 
-def parse_token_response(payload: Any, *, now: Optional[float] = None) -> TokenResponse:
+def parse_token_response(payload: object, *, now: float | None = None) -> TokenResponse:
     """Validate a browser, device, or refresh token response."""
     if not isinstance(payload, dict):
         raise NativeOIDCError("token endpoint did not return a JSON object")
@@ -146,7 +146,7 @@ def parse_token_response(payload: Any, *, now: Optional[float] = None) -> TokenR
     )
 
 
-def extract_oauth_error(payload: Optional[Dict[str, Any]]) -> Optional[str]:
+def extract_oauth_error(payload: dict[str, Any] | None) -> str | None:
     """Return the OAuth `error` code from an error response, if present."""
     if not isinstance(payload, dict):
         return None
@@ -154,7 +154,7 @@ def extract_oauth_error(payload: Optional[Dict[str, Any]]) -> Optional[str]:
     return error if isinstance(error, str) and error else None
 
 
-def describe_token_error(status_code: int, payload: Optional[Dict[str, Any]]) -> str:
+def describe_token_error(status_code: int, payload: dict[str, Any] | None) -> str:
     """Build a safe message for a failed token request.
 
     Only the stable OAuth error code is surfaced -- never the raw body, which
