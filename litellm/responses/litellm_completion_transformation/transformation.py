@@ -93,6 +93,7 @@ from .custom_tools import (
     convert_custom_tool_to_function_tool,
     extract_custom_tool_names,
     is_custom_tool_call,
+    serialize_tool_call_arguments,
     unwrap_custom_tool_arguments,
     validated_allowed_callers,
 )
@@ -1010,7 +1011,7 @@ class LiteLLMCompletionResponsesConfig:
             type=cast(Literal["function"], tool_use_type),
             function=ChatCompletionToolCallFunctionChunk(
                 name=str(function.get("name", "")),
-                arguments=str(function.get("arguments", "{}")),
+                arguments=serialize_tool_call_arguments(function.get("arguments"), "{}"),
             ),
             index=index,
         )
@@ -1539,7 +1540,7 @@ class LiteLLMCompletionResponsesConfig:
                 type=cast(Literal["function"], _tool_use_definition.get("type") or "function"),
                 function=ChatCompletionToolCallFunctionChunk(
                     name=function.get("name") or "",
-                    arguments=str(function.get("arguments") or ""),
+                    arguments=serialize_tool_call_arguments(function.get("arguments")),
                 ),
                 index=0,
             )
@@ -1589,7 +1590,7 @@ class LiteLLMCompletionResponsesConfig:
             type="function",
             function=ChatCompletionToolCallFunctionChunk(
                 name=f"{namespace}__{raw_name}" if qualify else raw_name,
-                arguments=str(raw_arguments or ""),
+                arguments=serialize_tool_call_arguments(raw_arguments),
             ),
             index=0,
         )
@@ -2022,7 +2023,7 @@ class LiteLLMCompletionResponsesConfig:
                 function_definition = tool.function
                 tool_name = function_definition.name or ""
                 tool_id = tool.id or ""
-                tool_arguments = function_definition.get("arguments") or ""
+                tool_arguments = serialize_tool_call_arguments(function_definition.get("arguments"))
 
                 # Check if this is a custom tool
                 if is_custom_tool_call(tool_name, custom_tool_names):
@@ -2557,7 +2558,7 @@ class LiteLLMCompletionResponsesConfig:
             type="function",
             function=Function(
                 name=tool_call.get("name") or "",
-                arguments=tool_call.get("arguments") or "",
+                arguments=serialize_tool_call_arguments(tool_call.get("arguments")),
             ),
         )
 
