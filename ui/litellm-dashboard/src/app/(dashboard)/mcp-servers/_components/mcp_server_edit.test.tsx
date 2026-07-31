@@ -432,6 +432,86 @@ describe("MCPServerEdit (auth type switch)", () => {
     expect(payload.registration_url).toBeNull();
   });
 
+  it("preserves the shared leg-1 endpoint and audience when switching token exchange to ID-JAG", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "oauth2_id_jag",
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          auth_type: "oauth2_token_exchange",
+          token_exchange_endpoint: "https://idp.example.com/oauth2/token",
+          audience: "api://existing-resource",
+          subject_token_type: "urn:ietf:params:oauth:token-type:saml2",
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await selectAntOption("Authentication", "ID-JAG (Okta Cross App Access)");
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.auth_type).toBe("oauth2_id_jag");
+    expect(payload.token_exchange_endpoint).toBe("https://idp.example.com/oauth2/token");
+    expect(payload.audience).toBe("api://existing-resource");
+    expect(payload.subject_token_type).toBe("urn:ietf:params:oauth:token-type:saml2");
+  });
+
+  it("clears the shared leg-1 endpoint and audience when switching ID-JAG to an auth type that uses neither", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "none",
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          auth_type: "oauth2_id_jag",
+          token_exchange_endpoint: "https://idp.example.com/oauth2/token",
+          audience: "api://existing-resource",
+          subject_token_type: "urn:ietf:params:oauth:token-type:saml2",
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await selectAntOption("Authentication", "None");
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.auth_type).toBe("none");
+    expect(payload.token_exchange_endpoint).toBeNull();
+    expect(payload.audience).toBeNull();
+    expect(payload.subject_token_type).toBeNull();
+  });
+
   it("keeps oauth2 endpoint overrides when the auth type is unchanged", async () => {
     vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
 
