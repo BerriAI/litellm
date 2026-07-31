@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import MCPAppsPanel from "./MCPAppsPanel";
@@ -173,5 +173,38 @@ describe("MCPAppsPanel connected-app reachability (LIT-4861)", () => {
     expect(screen.getByText("Connected (2)")).toBeInTheDocument();
     const toolCountFetchedIds = vi.mocked(listMCPTools).mock.calls.map((call) => call[1]);
     expect(toolCountFetchedIds).toContain("s-unreach");
+  });
+
+  it("drops an open detail view when a refetch removes that server from the reachable set", async () => {
+    const revocable = (reachable: boolean) =>
+      [
+        { server_id: "s-reach", server_name: "reachable_srv", auth_type: "none", connected_app_reachable: true },
+        {
+          server_id: "s-drop",
+          server_name: "revoked_srv",
+          auth_type: "none",
+          connected_app_reachable: reachable,
+        },
+      ] as MCPServer[];
+    vi.mocked(fetchMCPServers).mockResolvedValueOnce(revocable(true)).mockResolvedValueOnce(revocable(false));
+    vi.mocked(listMCPTools).mockResolvedValue({ tools: [] });
+
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const panel = (token: string) => (
+      <QueryClientProvider client={client}>
+        <MCPAppsPanel accessToken={token} selectedServers={[]} onChange={vi.fn()} connectMode />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(panel("tok"));
+
+    fireEvent.click(await screen.findByText("revoked_srv"));
+    expect(await screen.findByRole("heading", { name: "revoked_srv" })).toBeInTheDocument();
+
+    rerender(panel("tok-refreshed"));
+
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "revoked_srv" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Connect" })).not.toBeInTheDocument();
+    expect(screen.queryByText("revoked_srv")).not.toBeInTheDocument();
+    expect(screen.getByText("reachable_srv")).toBeInTheDocument();
   });
 });

@@ -103,7 +103,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
   const [query, setQuery] = useState("");
   const [activeTab, setActiveTab] = useState<TabKey>("all");
   const [togglingOn, setTogglingOn] = useState<Set<string>>(new Set());
-  const [detailServer, setDetailServer] = useState<MCPServer | null>(null);
+  const [detailServerId, setDetailServerId] = useState<string | null>(null);
   const [toolCounts, setToolCounts] = useState<Record<string, number>>({});
   const [loadingCounts, setLoadingCounts] = useState(false);
   const [oauthConnected, setOauthConnected] = useState<Set<string>>(new Set());
@@ -123,6 +123,8 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
   }, [onChange]);
 
   const nameOf = (s: MCPServer) => s.server_name ?? s.alias ?? s.server_id;
+
+  const detailServer = servers.find((s) => s.server_id === detailServerId);
 
   const connectUnavailabilityLabel = useCallback(
     (s: MCPServer): string | null => {
@@ -223,24 +225,21 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
     }
   }, [oauthConnected, connectUnavailabilityLabel]);
 
-  const handleToggle = async (serverName: string, checked: boolean, serverId?: string) => {
+  const handleToggle = async (server: MCPServer, checked: boolean) => {
+    const serverName = nameOf(server);
     if (!checked) {
       onChange(selectedServers.filter((s) => s !== serverName));
-      if (serverId) {
-        setOauthConnected((prev) => {
-          const next = new Set(prev);
-          next.delete(serverId);
-          return next;
-        });
-      }
+      setOauthConnected((prev) => {
+        const next = new Set(prev);
+        next.delete(server.server_id);
+        return next;
+      });
       return;
     }
-    const target = serversRef.current.find((s) => s.server_id === serverId || nameOf(s) === serverName);
-    if (target && connectUnavailabilityLabel(target) !== null) return;
+    if (connectUnavailabilityLabel(server) !== null) return;
     setTogglingOn((prev) => new Set(prev).add(serverName));
     try {
-      const idToFetch = serverId ?? serverName;
-      const result = await listMCPTools(accessToken, idToFetch);
+      const result = await listMCPTools(accessToken, server.server_id);
       if (result?.error) {
         MessageManager.warning(`Could not load tools for ${serverName}`);
         return;
@@ -336,7 +335,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
           <Button
             variant={isConnected ? "outline" : "default"}
             disabled={isTogglingOn}
-            onClick={() => handleToggle(name, !isConnected, detailServer.server_id)}
+            onClick={() => handleToggle(detailServer, !isConnected)}
             className="font-semibold h-[38px] min-w-[110px]"
           >
             {isTogglingOn && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
@@ -384,7 +383,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => setDetailServer(null)}
+          onClick={() => setDetailServerId(null)}
           className="-ml-3 mb-5 gap-1.5 text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="h-3 w-3" />
@@ -547,7 +546,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
             return (
               <div
                 key={server.server_id}
-                onClick={() => setDetailServer(server)}
+                onClick={() => setDetailServerId(server.server_id)}
                 className={`flex items-center gap-3 p-4 bg-card cursor-pointer transition-colors hover:bg-accent/30 min-w-0 ${
                   isLeftCol ? "border-r" : ""
                 } ${Math.floor(idx / 2) < Math.floor((filtered.length - 1) / 2) ? "border-b" : ""} ${
