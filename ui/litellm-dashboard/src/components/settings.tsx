@@ -670,7 +670,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           <TabPanels>
             <TabPanel>
               <LoggingCallbacksTable
-                callbacks={[...callbacks.filter((c) => !LOGGING_BACKEND_IDS.has(c.name)), ...destinationRows]}
+                callbacks={[...callbacks, ...destinationRows]}
                 availableCallbacks={allCallbacks}
                 isLoading={isLoadingCallbacks}
                 readOnly={!isProxyAdmin}

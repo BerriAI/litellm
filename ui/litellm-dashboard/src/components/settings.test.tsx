@@ -137,10 +137,9 @@ describe("Settings", () => {
   });
 
   it("should display edit modal with fields when edit is clicked", async () => {
-    // Use a config callback that is NOT a logging-destination backend (arize,
-    // langfuse_otel, etc. are filtered from the table via LOGGING_BACKEND_IDS and
-    // edited through the destination flow instead). Datadog is a plain config
-    // callback, so it still renders a row with the legacy Test/Edit/Delete actions.
+    // Datadog is a plain config callback that renders a row with the legacy
+    // Test/Edit/Delete actions. Config-owned OTEL callbacks (arize, langfuse_otel,
+    // etc.) also render as their own rows now; see the regression test below.
     const mockCallback = {
       name: "datadog",
       variables: {
@@ -201,6 +200,35 @@ describe("Settings", () => {
     await waitFor(() => {
       expect(getByText("API Key")).toBeInTheDocument();
       expect(getByText("Site")).toBeInTheDocument();
+    });
+  });
+
+  it("should render a config-owned OTEL callback (langfuse_otel) as its own row", async () => {
+    // Regression: a proxy-wide langfuse_otel/arize/weave/generic callback configured
+    // via /config/update must stay visible and manageable in the table. It was being
+    // filtered out by backend id, removing config-owned rows (not just duplicates).
+    mockGetCallbacksCall.mockResolvedValue({
+      callbacks: [{ name: "langfuse_otel", variables: { LANGFUSE_PUBLIC_KEY: "pk", LANGFUSE_SECRET_KEY: "sk" } }],
+      available_callbacks: {
+        langfuse_otel: {
+          litellm_callback_name: "langfuse_otel",
+          litellm_callback_params: ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"],
+          ui_callback_name: "Langfuse OTEL",
+        },
+      },
+      alerts: [],
+    });
+    mockGetCallbackConfigsCall.mockResolvedValue([
+      { id: "langfuse_otel", displayName: "Langfuse OTEL", dynamic_params: {} },
+    ]);
+
+    const { getByText } = renderSettings(defaultProps);
+
+    await waitFor(() => {
+      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(getByText("Langfuse OTEL")).toBeInTheDocument();
     });
   });
 
