@@ -379,8 +379,16 @@ class TestShortCircuitEmitsNativeBlocks:
         assert tool_result["content"][0]["url"] == "https://docs.litellm.ai/"
 
     @pytest.mark.asyncio
-    async def test_litellm_standard_tool_short_circuit_stays_text_only(self):
-        """Non-native tool → existing text-only short-circuit, no regression."""
+    async def test_litellm_standard_tool_short_circuit_emits_blocks(self):
+        """Post-conversion ``litellm_web_search`` tool must emit native blocks.
+
+        This is the shape the short-circuit receives in production: the
+        pre-request hook rewrites every native ``web_search_*`` tool to
+        ``litellm_web_search`` *before* ``try_short_circuit_search`` runs, so
+        the standard-tool case is not a "non-native client" — it is the only
+        case real requests ever take. Emitting text-only here is what made
+        Claude Code report "Did 0 searches" and discard the results.
+        """
         logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
 
         with patch.object(
@@ -406,7 +414,10 @@ class TestShortCircuitEmitsNativeBlocks:
 
         assert result is not None
         block_types = [b["type"] for b in result["content"]]
-        assert block_types == ["text"]
+        assert block_types == ["server_tool_use", "web_search_tool_result", "text"]
+        server_use, tool_result, _ = result["content"]
+        assert server_use["input"] == {"query": "search query"}
+        assert tool_result["tool_use_id"] == server_use["id"]
 
     @pytest.mark.asyncio
     async def test_native_short_circuit_failure_still_emits_blocks(self):
