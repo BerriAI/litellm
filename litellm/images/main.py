@@ -440,7 +440,8 @@ def image_generation(
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
-            caller_set_auth = "api-key" in headers or "Authorization" in headers
+            caller_header_names = frozenset(name.lower() for name in headers)
+            caller_set_auth = "api-key" in caller_header_names or "authorization" in caller_header_names
             auth_headers = (
                 headers
                 if caller_set_auth
