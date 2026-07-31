@@ -14,7 +14,7 @@ import pytest
 
 from litellm.caching.dual_cache import DualCache
 from litellm.router_strategy.complexity_router.cache_warming.refresher import (
-    _unverifiable_keyless_tenancy,
+    _tenancy_no_longer_holds,
     filter_cache_warmable,
 )
 from litellm.router_strategy.complexity_router.cache_warming.store import CacheWarmingStore
@@ -382,15 +382,23 @@ async def test_a_keyless_callers_captured_tenancy_is_never_replayed_on():
 
 
 @pytest.mark.parametrize("field", ["user_id", "team_id", "org_id", "project_id"])
-def test_every_recorded_tenancy_field_makes_a_keyless_record_unverifiable(field):
-    """Each of the four ids selects tenant objects that carry their own budgets, rate limits and model grants,
-    so any one of them going stale is enough to make a replay spend under an association the caller may have
-    lost. A record with no tenancy at all keeps warming unattributed, which is the shape a direct SDK caller
-    has and nothing about it can go stale."""
-    keyless = CacheWarmingAttribution(**{f"user_api_key_{field}": "stale-tenant"})
-    assert _unverifiable_keyless_tenancy(keyless) is True
-    assert _unverifiable_keyless_tenancy(CacheWarmingAttribution()) is False
-    assert _unverifiable_keyless_tenancy(keyless.model_copy(update={"user_api_key": "hash-1"})) is False
+def test_a_captured_tenancy_is_warmed_only_while_it_is_confirmed_to_still_hold(field):
+    """Each of the four ids selects tenant objects carrying their own budgets, rate limits, model grants and
+    logging callbacks, so any one of them going stale is enough to make a replay spend and disclose under an
+    association that no longer applies. Only a confirmed match warms: an unreadable tenancy and a contradicted
+    one are both skipped, because keeping the captured tenant spends for a key that left it while adopting the
+    current one hands the old tenant's prompt to the new one. A record with no tenancy at all is untouched,
+    which is the direct-SDK shape where nothing can go stale."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    captured = CacheWarmingAttribution(user_api_key="hash-1", **{f"user_api_key_{field}": "tenant-a"})
+    keyless = captured.model_copy(update={"user_api_key": None})
+
+    assert _tenancy_no_longer_holds(keyless, None) == "unverifiable"
+    assert _tenancy_no_longer_holds(CacheWarmingAttribution(), None) is None
+    assert _tenancy_no_longer_holds(captured, UserAPIKeyAuth(**{field: "tenant-a"})) is None
+    assert _tenancy_no_longer_holds(captured, UserAPIKeyAuth(**{field: "tenant-b"})) == "reassigned"
+    assert _tenancy_no_longer_holds(captured, UserAPIKeyAuth()) == "reassigned"
 
 
 @pytest.mark.asyncio
@@ -497,15 +505,16 @@ async def test_a_pooled_tier_warms_the_model_the_session_was_actually_served():
 
 
 @pytest.mark.asyncio
-async def test_a_key_removed_from_its_team_does_not_keep_replaying_as_that_team():
-    """The capture stores the tenancy the key had at the time; the tick re-reads the key. When an admin takes
-    a still-valid key out of a team, the fresh row says team_id is None and that is the current truth, so
-    falling back to the captured team would let the replay spend that team's budget, consume its rate limits
-    and reach models it grants, on behalf of a key no longer in it. The request path never merges the two, it
-    reads the loaded row and skips the gate on None, so a loaded row has to win wholesale here too."""
+@pytest.mark.parametrize("current_team", [None, "team-B"])
+async def test_a_session_is_dropped_once_its_key_leaves_the_tenant_it_was_captured_under(current_team):
+    """Capture stores the tenancy the key had; the tick re-reads it. Once those disagree there is no correct
+    way to replay the record, which is why it is dropped rather than reconciled. Keeping the captured tenant
+    spends a budget, consumes rate limits and reaches models on behalf of a key no longer in it. Adopting the
+    current one attributes a payload captured under the old tenant to the new one and fans it out to the new
+    tenant's logging callbacks, so its members read prompts captured before the key ever reached them. Both
+    arms are covered: removed from a team, and moved to another one."""
     llm_router, redis = warming_rig(redis=FakeRedisCache())
     seed_session(redis, user_api_key="k", team_id="team-A", touched=_VISITED_BOTH_TIERS)
-    keys = FakeKeyDirectory({"k": key_state(token="k")})
+    keys = FakeKeyDirectory({"k": key_state(token="k", team_id=current_team)})
     await tick(llm_router, active=refresher(keys=keys))
-    assert llm_router.completion_calls, "expected a replay"
-    assert all(call["metadata"]["user_api_key_team_id"] is None for call in llm_router.completion_calls)
+    assert llm_router.completion_calls == []

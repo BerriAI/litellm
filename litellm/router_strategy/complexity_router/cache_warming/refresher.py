@@ -4,7 +4,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -46,6 +46,19 @@ CACHE_WARMING_LOCK_TTL_SECONDS = 60
 _RECONSTRUCTED_IDENTITY_FIELDS = ("user_id", "team_id", "org_id", "project_id")
 
 _REPLAY_MAX_OUTPUT_TOKENS = 1
+
+_STALE_TENANCY_WARNINGS = {
+    "unverifiable": (
+        "cache_warming: a keyless caller's tenancy is stamped once at capture and has no key row to "
+        "re-read, so it cannot be revalidated when a replay runs; sessions carrying it are skipped "
+        "rather than replayed on a tenant the caller may no longer belong to"
+    ),
+    "reassigned": (
+        "cache_warming: a key's tenancy changed after its sessions were captured, so those payloads belong "
+        "to a tenant the key has left; they are skipped rather than replayed under the new tenant, and "
+        "re-capture on the session's next real turn"
+    ),
+}
 
 
 def _replay_surface(payload: CacheWarmingPayload) -> "tuple[str, CallTypesLiteral]":
@@ -246,18 +259,34 @@ def _stamp_identity(data: "dict[str, object]", principal: "UserAPIKeyAuth") -> N
     )
 
 
-def _unverifiable_keyless_tenancy(attribution: CacheWarmingAttribution) -> bool:
-    """A keyless caller (JWT, and anything else the proxy authenticated without a virtual key) leaves no row
-    to re-read, so the tenancy the proxy stamped at capture is the only copy of it and no tick can tell
-    whether the caller still belongs to that team, organization, project or user. Replaying on it would
-    spend that tenant's budget, consume its rate limits and reach the models it grants for as long as the
-    record lives, with nothing able to notice the association was withdrawn. Authority that cannot be
-    resolved at use time is not authority warming may spend under, so those sessions are skipped. A caller
-    with no recorded tenancy at all is untouched: there is nothing to go stale and its replay stays
-    unattributed exactly as before."""
-    return attribution.user_api_key is None and any(
-        getattr(attribution, f"user_api_key_{field}") is not None for field in _RECONSTRUCTED_IDENTITY_FIELDS
-    )
+def _tenancy_no_longer_holds(
+    attribution: CacheWarmingAttribution, key_state: "UserAPIKeyAuth | None"
+) -> "Literal['unverifiable', 'reassigned'] | None":
+    """One question asked of every captured session: does the tenancy stamped at capture still hold?
+
+    A record binds a payload to a tenant, and a replay spends that tenant's budget, consumes its rate limits,
+    reaches the models it grants and fans out to its logging callbacks. Authority that cannot be confirmed at
+    use time is not authority warming may spend under, so anything but a confirmed match is skipped, and the
+    session re-captures under whatever is true on its next real turn.
+
+    ``unverifiable``: a keyless caller (JWT, and anything the proxy authenticated without a virtual key)
+    leaves no row to re-read, so the captured tenancy is the only copy and no tick can tell whether the
+    caller still belongs to it.
+
+    ``reassigned``: the row exists and disagrees. A key moved between teams keeps its sessions, and replaying
+    them attributes a payload captured under the old tenant to the new one, whose members then read those
+    prompts through their own logging callbacks. Neither answer is right on its own here: keeping the
+    captured tenant spends a tenant's budget for a key no longer in it, and adopting the current one hands
+    the old tenant's prompts to the new one. The record simply is not valid any more.
+
+    A caller with no recorded tenancy at all is untouched: there is nothing to go stale, and its replay stays
+    unattributed exactly as before. end_user is deliberately not compared, being request-scoped rather than a
+    property of the key; callers differing there already land on separate partitions."""
+    captured = tuple(getattr(attribution, f"user_api_key_{field}") for field in _RECONSTRUCTED_IDENTITY_FIELDS)
+    if key_state is None:
+        return "unverifiable" if any(value is not None for value in captured) else None
+    current = tuple(getattr(key_state, field) for field in _RECONSTRUCTED_IDENTITY_FIELDS)
+    return "reassigned" if captured != current else None
 
 
 def _excluded_from_warming(key_state: "UserAPIKeyAuth", now: "datetime", proxy_logging_obj: "ProxyLogging") -> bool:
@@ -577,15 +606,18 @@ class CacheWarmingRefresher:
             for key in attributed
             if (row := key_states.get(key)) is None or _excluded_from_warming(row, checked_at, proxy_logging_obj)
         )
-        keyless_sessions = frozenset(
-            key for key, record, _ in active if _unverifiable_keyless_tenancy(record.attribution)
-        )
-        if keyless_sessions:
-            warn_once(
-                "cache_warming: a keyless caller's tenancy is stamped once at capture and has no key row to "
-                "re-read, so it cannot be revalidated when a replay runs; sessions carrying it are skipped "
-                "rather than replayed on a tenant the caller may no longer belong to"
+        stale_tenancy = {
+            key: reason
+            for key, record, _ in active
+            if (
+                reason := _tenancy_no_longer_holds(
+                    record.attribution, key_states.get(record.attribution.user_api_key or "")
+                )
             )
+            is not None
+        }
+        for reason in frozenset(stale_tenancy.values()):
+            warn_once(_STALE_TENANCY_WARNINGS[reason])
         semaphore = asyncio.Semaphore(self.max_concurrent_replays)
         outcomes = await asyncio.gather(
             *(
@@ -607,7 +639,7 @@ class CacheWarmingRefresher:
                     lease_lost=lease_lost,
                 )
                 for key, record, touched in active
-                if record.attribution.user_api_key not in excluded_keys and key not in keyless_sessions
+                if record.attribution.user_api_key not in excluded_keys and key not in stale_tenancy
             ),
             return_exceptions=True,
         )
