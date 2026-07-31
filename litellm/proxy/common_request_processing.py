@@ -277,8 +277,7 @@ def _model_deployments_support_stream_options(
     deployment_models = tuple(
         litellm_model
         for deployment in deployments or ()
-        for litellm_model in (_deployment_litellm_model(deployment),)
-        if litellm_model is not None
+        if (litellm_model := _deployment_litellm_model(deployment)) is not None
     )
     candidate_models = deployment_models if deployment_models else (model,)
     return all(_litellm_model_supports_stream_options(m) for m in candidate_models)
