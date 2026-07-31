@@ -20,6 +20,7 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
 )
+from litellm.utils import supports_tool_choice
 
 
 @pytest.fixture(autouse=True)
@@ -465,6 +466,30 @@ def test_unmapped_model_fallback_function_calling():
     model = "fireworks_ai/unmapped-future-model"
     info = config.get_provider_info(model)
     assert info["supports_function_calling"] is True
+
+
+def test_unmapped_model_fallback_tool_choice(monkeypatch):
+    """A Fireworks model absent from the cost map must still advertise tool_choice, matching supports_function_calling. Regression for #35382 (Kimi K3)."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    config = FireworksAIConfig()
+    model = "accounts/fireworks/models/kimi-k3"
+
+    info = config.get_provider_info(model)
+    assert info["supports_tool_choice"] is True
+    assert supports_tool_choice(model=model, custom_llm_provider="fireworks_ai") is True
+    assert "tool_choice" in config.get_supported_openai_params(model)
+
+
+def test_provider_info_tool_choice_false_override(monkeypatch):
+    """An explicit supports_tool_choice=False in the cost map still wins over the Fireworks default."""
+    config = FireworksAIConfig()
+    model = "fireworks_ai/test-no-tool-choice"
+    monkeypatch.setitem(litellm.model_cost, model, {"supports_tool_choice": False})
+
+    info = config.get_provider_info(model)
+    assert info["supports_tool_choice"] is False
 
 
 def test_transform_messages_helper_strips_thinking_blocks():
