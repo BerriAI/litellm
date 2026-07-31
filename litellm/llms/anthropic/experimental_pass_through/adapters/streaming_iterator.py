@@ -28,7 +28,7 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
     UsageIteration,
 )
-from litellm.types.utils import AdapterCompletionStreamWrapper
+from litellm.types.utils import AdapterCompletionStreamWrapper, Delta
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelResponseStream
@@ -96,6 +96,90 @@ class _CombinedChunkSplitter:
             or getattr(delta, "thinking_blocks", None)
         )
 
+    _PAYLOAD_FIELD_GROUPS: "tuple[tuple[str, ...], ...]" = (
+        ("reasoning_content", "thinking_blocks"),
+        ("content",),
+        ("tool_calls",),
+    )
+
+    @staticmethod
+    def _clear_usage(chunk: "ModelResponseStream") -> None:
+        if hasattr(chunk, "usage"):
+            chunk.usage = None
+        hidden_params = getattr(chunk, "_hidden_params", None)
+        if isinstance(hidden_params, dict) and "usage" in hidden_params:
+            chunk._hidden_params = {key: value for key, value in hidden_params.items() if key != "usage"}
+
+    @staticmethod
+    def _split_by_payload_kind(chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        """Return ``(chunk,)``, or one piece per payload kind it carries.
+
+        Each piece's delta is rebuilt as a fresh ``Delta`` carrying exactly one
+        payload kind (reasoning, text, tool calls), in native Anthropic block
+        order: thinking, then text, then tool_use. Runs downstream of
+        ``_split``, which has already peeled ``finish_reason`` and usage onto
+        their own finish chunk.
+
+        Chunks that must not be split pass through unchanged: multi-choice
+        chunks (the translators read every choice, so slicing one would drop
+        or repeat payload) and tool-argument continuations (splitting one
+        would close the in-flight ``tool_use`` block mid-arguments). A
+        reasoning piece whose ``thinking_blocks`` carry no signature is
+        normalized to ``reasoning_content`` so the synthesized block start
+        stays empty and the thinking text is emitted exactly once.
+        """
+        choices = getattr(chunk, "choices", None)
+        if not choices or len(choices) != 1:
+            return (chunk,)
+        delta = getattr(choices[0], "delta", None)
+        if delta is None:
+            return (chunk,)
+        tool_calls = getattr(delta, "tool_calls", None)
+        if tool_calls and not any(
+            getattr(getattr(tool_call, "function", None), "name", None) for tool_call in tool_calls
+        ):
+            return (chunk,)
+        present_groups = tuple(
+            group
+            for group in _CombinedChunkSplitter._PAYLOAD_FIELD_GROUPS
+            if any(getattr(delta, field, None) for field in group)
+        )
+        if len(present_groups) <= 1:
+            return (chunk,)
+
+        pieces = tuple(copy.deepcopy(chunk) for _ in present_groups)
+        for index, (piece, group) in enumerate(zip(pieces, present_groups)):
+            copied_delta = piece.choices[0].delta
+            fields = {field: value for field in group if (value := getattr(copied_delta, field, None))}
+            fields = _CombinedChunkSplitter._normalize_reasoning_fields(fields)
+            role = getattr(copied_delta, "role", None) if index == 0 else None
+            piece.choices[0].delta = Delta(role=role, **fields)
+        return pieces
+
+    @staticmethod
+    def _normalize_reasoning_fields(fields: "dict[str, Any]") -> "dict[str, Any]":
+        """Collapse signature-less ``thinking_blocks`` into ``reasoning_content``.
+
+        The block opener seeds a ``thinking_blocks`` start body with the full
+        thinking text while the delta re-emits it, so SSE accumulators would
+        collect it twice; the ``reasoning_content`` branch opens an empty body.
+        Signature-carrying blocks are kept intact so ``signature_delta``
+        suppression of the full-text snapshot still applies.
+        """
+        thinking_blocks = fields.get("thinking_blocks")
+        if not thinking_blocks:
+            return fields
+        if any(block.get("signature") for block in thinking_blocks if isinstance(block, dict)):
+            return fields
+        thinking_text = "".join(
+            block.get("thinking") or ""
+            for block in thinking_blocks
+            if isinstance(block, dict) and block.get("type") == "thinking"
+        )
+        if not thinking_text:
+            return fields
+        return {"reasoning_content": thinking_text}
+
     @staticmethod
     def _split(chunk: Any) -> List[Any]:
         """Return ``[chunk]``, or ``[content_chunk, finish_chunk]`` if combined."""
@@ -105,6 +189,7 @@ class _CombinedChunkSplitter:
         # Content chunk: keep the delta payload, clear the finish_reason.
         content_chunk = copy.deepcopy(chunk)
         content_chunk.choices[0].finish_reason = None
+        _CombinedChunkSplitter._clear_usage(content_chunk)
 
         # Finish chunk: keep finish_reason (and usage), clear the delta payload.
         finish_chunk = copy.deepcopy(chunk)
@@ -127,7 +212,11 @@ class _CombinedChunkSplitter:
         if self._sync_iter is None:
             self._sync_iter = iter(self._stream)
         chunk = next(self._sync_iter)  # propagates StopIteration when exhausted
-        self._buffer.extend(self._split(chunk))
+        self._buffer.extend(
+            split_chunk
+            for combined_chunk in self._split(chunk)
+            for split_chunk in self._split_by_payload_kind(combined_chunk)
+        )
         return self._buffer.popleft()
 
     def __aiter__(self) -> "AsyncIterator[Any]":
@@ -139,7 +228,11 @@ class _CombinedChunkSplitter:
         if self._async_iter is None:
             self._async_iter = self._stream.__aiter__()
         chunk = await self._async_iter.__anext__()  # propagates StopAsyncIteration
-        self._buffer.extend(self._split(chunk))
+        self._buffer.extend(
+            split_chunk
+            for combined_chunk in self._split(chunk)
+            for split_chunk in self._split_by_payload_kind(combined_chunk)
+        )
         return self._buffer.popleft()
 
 
