@@ -20,6 +20,7 @@ use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
 use litellm_ai_gateway::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
 #[cfg(feature = "python-config")]
 use litellm_ai_gateway::python;
+use litellm_core::logging::console::hook;
 
 /// Bind to localhost by default so the gateway is not a public, unauthenticated
 /// provider proxy out of the box. Override with `HOST` (e.g. `0.0.0.0`).
@@ -67,11 +68,15 @@ async fn main() {
         );
     }
 
+    let debug_logging = std::env::var("LITELLM_LOG")
+        .ok()
+        .is_some_and(|value| value.eq_ignore_ascii_case("DEBUG"));
     let state = AppState {
         router,
         master_key,
         loggers: Arc::new(loggers),
         realtime_pool,
+        logging_sink: hook(debug_logging),
     };
 
     let host = std::env::var("HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());

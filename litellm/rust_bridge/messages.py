@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Awaitable, Final, Protocol, Union, cast
 
 import httpx
+import inspect
+from litellm._logging import _is_debugging_on
 
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
@@ -20,6 +22,7 @@ class RustMessages(Protocol):
         custom_llm_provider: str | None,
         extra_headers: dict[str, object] | None,
         timeout_seconds: float | None,
+        debug: bool,
     ) -> dict[str, object]:
         raise NotImplementedError
 
@@ -34,6 +37,7 @@ class RustAmessages(Protocol):
         custom_llm_provider: str | None,
         extra_headers: dict[str, object] | None,
         timeout_seconds: float | None,
+        debug: bool,
     ) -> Awaitable[dict[str, object]]:
         raise NotImplementedError
 
@@ -100,6 +104,17 @@ def messages(
     rust_messages = load_rust_messages()
     if rust_messages is None:
         return None
+    if "debug" in inspect.signature(rust_messages).parameters:
+        return rust_messages(
+            model=model,
+            body=body,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            timeout_seconds=timeout_to_seconds(timeout),
+            debug=_is_debugging_on(),
+        )
     return rust_messages(
         model=model,
         body=body,
@@ -124,6 +139,17 @@ async def amessages(
     rust_amessages = load_rust_amessages()
     if rust_amessages is None:
         return None
+    if "debug" in inspect.signature(rust_amessages).parameters:
+        return await rust_amessages(
+            model=model,
+            body=body,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            timeout_seconds=timeout_to_seconds(timeout),
+            debug=_is_debugging_on(),
+        )
     return await rust_amessages(
         model=model,
         body=body,

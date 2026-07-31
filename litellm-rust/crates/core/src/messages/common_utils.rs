@@ -1,19 +1,10 @@
 use serde_json::{Map, Value};
 
-use crate::constants::MESSAGES_ERROR_BODY_MAX_CHARS;
 use crate::error::{CoreError, CoreResult, json_type_name};
 use crate::providers::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG;
 use crate::providers::azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG;
 
 use super::transformation::AnthropicMessagesProviderConfig;
-
-pub(super) fn truncate_error_body(body: &str) -> String {
-    if body.chars().count() <= MESSAGES_ERROR_BODY_MAX_CHARS {
-        return body.to_string();
-    }
-    let truncated: String = body.chars().take(MESSAGES_ERROR_BODY_MAX_CHARS).collect();
-    format!("{truncated}... (truncated)")
-}
 
 pub(super) fn messages_provider_config(
     provider: &str,

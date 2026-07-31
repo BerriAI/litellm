@@ -7,6 +7,7 @@ use litellm_ai_gateway::io::audio_transcription::{
 use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use litellm_core::error::CoreError;
+use litellm_core::logging::console::hook;
 use litellm_core::messages::messages as run_messages;
 use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -204,6 +205,7 @@ fn ocr(
             guardrails: Vec::new(),
             request_metadata: Default::default(),
             litellm_call_id: None,
+            logging_sink: None,
         }))
     });
 
@@ -249,6 +251,7 @@ fn aocr(
             guardrails: Vec::new(),
             request_metadata: Default::default(),
             litellm_call_id: None,
+            logging_sink: None,
         })
         .await
         .map_err(core_error_to_pyerr)?;
@@ -364,7 +367,7 @@ fn marshal_messages_inputs(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+#[pyo3(signature = (model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None, debug=false))]
 #[allow(clippy::too_many_arguments)]
 fn messages(
     py: Python<'_>,
@@ -375,6 +378,7 @@ fn messages(
     custom_llm_provider: Option<String>,
     extra_headers: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
+    debug: bool,
 ) -> PyResult<Py<PyAny>> {
     let (body, extra_headers, timeout) =
         marshal_messages_inputs(py, body, extra_headers, timeout_seconds)?;
@@ -388,6 +392,8 @@ fn messages(
             custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
             timeout,
+            litellm_call_id: None,
+            logging_sink: hook(debug),
         }))
     });
 
@@ -398,7 +404,7 @@ fn messages(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+#[pyo3(signature = (model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None, debug=false))]
 #[allow(clippy::too_many_arguments)]
 fn amessages(
     py: Python<'_>,
@@ -409,6 +415,7 @@ fn amessages(
     custom_llm_provider: Option<String>,
     extra_headers: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
+    debug: bool,
 ) -> PyResult<Bound<'_, PyAny>> {
     let (body, extra_headers, timeout) =
         marshal_messages_inputs(py, body, extra_headers, timeout_seconds)?;
@@ -422,6 +429,8 @@ fn amessages(
             custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
             timeout,
+            litellm_call_id: None,
+            logging_sink: hook(debug),
         })
         .await
         .map_err(core_error_to_pyerr)?;

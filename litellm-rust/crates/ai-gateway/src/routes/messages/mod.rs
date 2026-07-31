@@ -14,6 +14,7 @@ use bytes::Bytes;
 use futures_util::StreamExt;
 use futures_util::stream::{self, BoxStream};
 use litellm_core::CoreError;
+use litellm_core::logging::stream::count_forwarded_stream;
 use serde_json::{Map, Value};
 
 use crate::auth::RequireMasterKey;
@@ -34,21 +35,23 @@ async fn handle(
     Json(body): Json<Value>,
 ) -> Result<Response, MessagesRouteError> {
     let extra_headers = forwarded_headers(&headers)?;
-    match service::run(&state.router, body, extra_headers)
+    match service::run(&state.router, body, extra_headers, state.logging_sink)
         .await
         .map_err(MessagesRouteError::from)?
     {
         service::MessagesResponse::Json(body) => Ok(Json(body).into_response()),
-        service::MessagesResponse::Stream { provider, response } => {
-            stream_response(provider, response)
-        }
+        service::MessagesResponse::Stream(response) => stream_response(response),
     }
 }
 
 fn stream_response(
-    provider: String,
-    upstream: reqwest::Response,
+    upstream: litellm_core::messages::types::MessagesStreamResponse,
 ) -> Result<Response, MessagesRouteError> {
+    let litellm_core::messages::types::MessagesStreamResponse {
+        provider,
+        response: upstream,
+        logger,
+    } = upstream;
     let is_bedrock = provider == BEDROCK_MESSAGES_PROVIDER;
     let content_type = if is_bedrock {
         HeaderValue::from_static("text/event-stream")
@@ -79,13 +82,12 @@ fn stream_response(
             .map(|result| result.map_err(|error| std::io::Error::other(error.to_string())))
             .boxed()
     };
-    response
-        .body(Body::from_stream(body_stream))
-        .map_err(|error| {
-            MessagesRouteError(CoreError::InvalidResponse(format!(
-                "failed to build streaming response: {error}"
-            )))
-        })
+    let content = count_forwarded_stream(body_stream, logger);
+    response.body(Body::from_stream(content)).map_err(|error| {
+        MessagesRouteError(CoreError::InvalidResponse(format!(
+            "failed to build streaming response: {error}"
+        )))
+    })
 }
 
 #[allow(dead_code)]
@@ -240,6 +242,7 @@ mod tests {
             master_key: master_key.map(Arc::from),
             loggers: Arc::new(Vec::new()),
             realtime_pool: RealtimePool::disabled(),
+            logging_sink: None,
         }
     }
 

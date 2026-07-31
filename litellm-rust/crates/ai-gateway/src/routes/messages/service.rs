@@ -1,3 +1,4 @@
+use litellm_core::logging::LogSink;
 use std::sync::Arc;
 
 use litellm_core::constants::ANTHROPIC_MESSAGES_PROVIDER;
@@ -9,13 +10,14 @@ use serde_json::{Map, Value};
 
 pub(crate) enum MessagesResponse {
     Json(Value),
-    Stream(reqwest::Response),
+    Stream(litellm_core::messages::types::MessagesStreamResponse),
 }
 
 pub async fn run(
     router: &Arc<Router>,
     body: Value,
     extra_headers: Option<Map<String, Value>>,
+    logging_sink: Option<Arc<dyn LogSink>>,
 ) -> CoreResult<MessagesResponse> {
     let model = body
         .get("model")
@@ -51,6 +53,8 @@ pub async fn run(
         custom_llm_provider,
         extra_headers,
         timeout: None,
+        litellm_call_id: None,
+        logging_sink,
     };
     if request.body.get("stream").and_then(Value::as_bool) == Some(true) {
         return messages_stream(request).await.map(MessagesResponse::Stream);

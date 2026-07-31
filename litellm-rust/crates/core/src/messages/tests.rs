@@ -1,16 +1,18 @@
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::logging::{LogEvent, LogSink};
+use futures_util::StreamExt;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::error::CoreError;
+use crate::utils::truncate_error_body;
 
-use super::common_utils::{
-    has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
-};
-use super::messages;
+use super::common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers};
 use super::types::MessagesRequest;
+use super::{messages, messages_stream};
 
 async fn read_http_request(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();
@@ -150,6 +152,8 @@ async fn messages_round_trip_builds_azure_request_and_passes_response_through() 
         custom_llm_provider: Some("azure_ai"),
         extra_headers: None,
         timeout: Some(Duration::from_secs(5)),
+        litellm_call_id: None,
+        logging_sink: None,
     })
     .await
     .expect("messages request succeeds");
@@ -206,6 +210,8 @@ async fn messages_round_trip_builds_native_anthropic_request() {
         custom_llm_provider: Some("anthropic"),
         extra_headers: None,
         timeout: Some(Duration::from_secs(5)),
+        litellm_call_id: None,
+        logging_sink: None,
     })
     .await
     .expect("messages request succeeds");
@@ -259,6 +265,8 @@ async fn messages_does_not_duplicate_auth_when_x_api_key_supplied() {
         custom_llm_provider: Some("azure_ai"),
         extra_headers: Some(headers),
         timeout: Some(Duration::from_secs(5)),
+        litellm_call_id: None,
+        logging_sink: None,
     })
     .await
     .expect("messages request succeeds");
@@ -313,6 +321,8 @@ async fn messages_forwards_entra_id_bearer_without_requiring_api_key() {
         custom_llm_provider: Some("azure_ai"),
         extra_headers: Some(headers),
         timeout: Some(Duration::from_secs(5)),
+        litellm_call_id: None,
+        logging_sink: None,
     })
     .await
     .expect("entra id request succeeds without api key");
@@ -337,6 +347,8 @@ async fn messages_requires_auth_when_no_key_and_no_header() {
         custom_llm_provider: Some("azure_ai"),
         extra_headers: None,
         timeout: Some(Duration::from_millis(50)),
+        litellm_call_id: None,
+        logging_sink: None,
     })
     .await
     .expect_err("missing auth errors");
@@ -375,6 +387,8 @@ async fn messages_ignores_malformed_authorization_and_uses_api_key() {
         custom_llm_provider: Some("azure_ai"),
         extra_headers: Some(headers),
         timeout: Some(Duration::from_secs(5)),
+        litellm_call_id: None,
+        logging_sink: None,
     })
     .await
     .expect("falls back to api key");
@@ -416,6 +430,8 @@ async fn messages_maps_provider_error_status_to_http_error() {
         custom_llm_provider: Some("azure_ai"),
         extra_headers: None,
         timeout: Some(Duration::from_secs(5)),
+        litellm_call_id: None,
+        logging_sink: None,
     })
     .await
     .expect_err("provider error propagates");
@@ -433,9 +449,290 @@ async fn messages_rejects_unsupported_provider() {
         custom_llm_provider: Some("openai"),
         extra_headers: None,
         timeout: Some(Duration::from_millis(50)),
+        litellm_call_id: None,
+        logging_sink: None,
     })
     .await
     .expect_err("unsupported provider errors");
 
     assert!(matches!(err, CoreError::InvalidProvider(provider) if provider == "openai"));
+}
+
+#[derive(Clone, Default)]
+struct RecordingSink(Arc<Mutex<Vec<LogEvent>>>);
+
+impl LogSink for RecordingSink {
+    fn emit(&self, event: &LogEvent) {
+        self.0.lock().expect("recording lock").push(event.clone());
+    }
+}
+
+#[tokio::test]
+async fn messages_debug_logs_transformed_request_and_redacted_response() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let request = read_http_request(&mut socket).await;
+        let response = r#"{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"visible"}],"model":"claude","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1},"token":"response-secret"}"#;
+        socket
+            .write_all(write_response(response).as_bytes())
+            .await
+            .expect("writes response");
+        request
+    });
+    let sink = RecordingSink::default();
+    let response = messages(MessagesRequest {
+        model: "claude",
+        body: json!({
+            "model": "claude",
+            "max_tokens": 8,
+            "messages": [{"role": "user", "content": "prompt visible", "token": "request-secret"}]
+        }),
+        api_key: Some("request-secret"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("anthropic"),
+        extra_headers: Some(
+            json!({
+                "Authorization": "Bearer bearer-secret",
+                "X-Amz-Security-Token": "session-secret"
+            })
+            .as_object()
+            .expect("headers")
+            .clone(),
+        ),
+        timeout: Some(Duration::from_secs(5)),
+        litellm_call_id: Some("debug-success"),
+        logging_sink: Some(Arc::new(sink.clone())),
+    })
+    .await
+    .expect("messages succeeds");
+    assert_eq!(response.content[0]["text"], "visible");
+    let request = server.await.expect("server task");
+    let events = sink.0.lock().expect("recording lock");
+    let serialized = serde_json::to_string(&*events).expect("events serialize");
+    assert!(serialized.contains("prompt visible"));
+    assert!(!serialized.contains("request-secret"));
+    assert!(!serialized.contains("bearer-secret"));
+    assert!(!serialized.contains("session-secret"));
+    assert!(!serialized.contains("response-secret"));
+    let LogEvent::Request(request_event) = &events[0] else {
+        panic!("request event first");
+    };
+    assert!(request_event.url.ends_with("/v1/messages"));
+    assert_eq!(request_event.headers["content-type"], "application/json");
+    let sent_body = request.split_once("\r\n\r\n").expect("request body").1;
+    assert!(sent_body.contains("prompt visible"));
+    let response_event = events
+        .iter()
+        .find_map(|event| match event {
+            LogEvent::Response(value) => Some(value),
+            _ => None,
+        })
+        .expect("response event");
+    assert_eq!(response_event.status, 200);
+    assert!(response_event.duration_ms < 10_000);
+}
+
+#[tokio::test]
+async fn messages_debug_wrong_shape_emits_response_then_failure() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let _ = read_http_request(&mut socket).await;
+        socket
+            .write_all(write_response(r#"{"id":"wrong-shape"}"#).as_bytes())
+            .await
+            .expect("writes response");
+    });
+    let sink = RecordingSink::default();
+    let err = messages(MessagesRequest {
+        model: "claude",
+        body: json!({"model": "claude", "max_tokens": 8, "messages": []}),
+        api_key: Some("request-secret"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("anthropic"),
+        extra_headers: None,
+        timeout: Some(Duration::from_secs(5)),
+        litellm_call_id: Some("wrong-shape"),
+        logging_sink: Some(Arc::new(sink.clone())),
+    })
+    .await
+    .expect_err("wrong response shape errors");
+    assert!(matches!(err, CoreError::InvalidResponse(_)));
+
+    server.await.expect("server task");
+    let events = sink.0.lock().expect("recording lock");
+    assert!(matches!(events[0], LogEvent::Request(_)));
+    assert!(matches!(events[1], LogEvent::Response(_)));
+    assert!(matches!(events[2], LogEvent::Error(_)));
+    assert_eq!(events.len(), 3);
+}
+
+#[tokio::test]
+async fn messages_debug_http_failure_emits_one_error_and_none_emits_nothing() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let _ = read_http_request(&mut socket).await;
+        let body = r#"{"token":"provider-secret","error":"no"}"#;
+        let response = format!(
+            "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("writes response");
+    });
+    let sink = RecordingSink::default();
+    let err = messages(MessagesRequest {
+        model: "claude",
+        body: json!({"model": "claude", "max_tokens": 8, "messages": []}),
+        api_key: Some("secret"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("anthropic"),
+        extra_headers: None,
+        timeout: Some(Duration::from_secs(5)),
+        litellm_call_id: Some("debug-error"),
+        logging_sink: Some(Arc::new(sink.clone())),
+    })
+    .await
+    .expect_err("request fails");
+    assert!(matches!(err, CoreError::Http { status: 401, .. }));
+    server.await.expect("server task");
+    {
+        let events = sink.0.lock().expect("recording lock");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, LogEvent::Error(_)))
+                .count(),
+            1
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, LogEvent::Response(_)))
+        );
+    }
+
+    let none_sink = messages(MessagesRequest {
+        model: "claude",
+        body: json!({"model": "claude", "max_tokens": 8, "messages": []}),
+        api_key: Some("secret"),
+        api_base: Some("http://127.0.0.1:1"),
+        custom_llm_provider: Some("anthropic"),
+        extra_headers: None,
+        timeout: Some(Duration::from_millis(20)),
+        litellm_call_id: Some("debug-disabled"),
+        logging_sink: None,
+    })
+    .await
+    .expect_err("disabled test endpoint fails");
+    assert!(matches!(none_sink, CoreError::Network(_)));
+}
+
+#[tokio::test]
+async fn messages_debug_stream_counts_clean_and_interrupted_streams() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let _ = read_http_request(&mut socket).await;
+        let body = b"data: one\n\ndata: two\n\n";
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("headers");
+        socket.write_all(body).await.expect("body");
+    });
+    let sink = RecordingSink::default();
+    let upstream = messages_stream(MessagesRequest {
+        model: "claude",
+        body: json!({"model": "claude", "max_tokens": 8, "stream": true, "messages": []}),
+        api_key: Some("secret"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("anthropic"),
+        extra_headers: None,
+        timeout: Some(Duration::from_secs(5)),
+        litellm_call_id: Some("debug-stream"),
+        logging_sink: Some(Arc::new(sink.clone())),
+    })
+    .await
+    .expect("stream starts");
+    let chunks = crate::logging::stream::count_forwarded_stream(
+        upstream.response.bytes_stream(),
+        upstream.logger,
+    );
+    let forwarded = futures_util::StreamExt::collect::<Vec<_>>(chunks).await;
+    assert!(!forwarded.is_empty());
+    assert!(forwarded.iter().all(Result::is_ok));
+    server.await.expect("server task");
+    let events = sink.0.lock().expect("recording lock");
+    let completed = events
+        .iter()
+        .find_map(|event| match event {
+            LogEvent::StreamCompleted(value) => Some(value),
+            _ => None,
+        })
+        .expect("completion");
+    assert!(completed.bytes_received > 0);
+    assert!(completed.frames_received > 0);
+    assert!(completed.events_decoded > 0);
+}
+
+#[tokio::test]
+async fn messages_debug_interrupted_stream_emits_error_without_completion() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let _ = read_http_request(&mut socket).await;
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: 100\r\nconnection: close\r\n\r\nshort",
+            )
+            .await
+            .expect("writes partial response");
+    });
+    let sink = RecordingSink::default();
+    let upstream = messages_stream(MessagesRequest {
+        model: "claude",
+        body: json!({"model": "claude", "max_tokens": 8, "stream": true, "messages": []}),
+        api_key: Some("secret"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("anthropic"),
+        extra_headers: None,
+        timeout: Some(Duration::from_secs(5)),
+        litellm_call_id: Some("debug-interrupted"),
+        logging_sink: Some(Arc::new(sink.clone())),
+    })
+    .await
+    .expect("stream starts");
+    let results = crate::logging::stream::count_forwarded_stream(
+        upstream.response.bytes_stream(),
+        upstream.logger,
+    )
+    .collect::<Vec<_>>()
+    .await;
+    assert!(results.iter().any(Result::is_err));
+    server.await.expect("server task");
+    let events = sink.0.lock().expect("recording lock");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        LogEvent::Error(value) if value.kind == "stream_error"
+    )));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, LogEvent::StreamCompleted(_)))
+    );
 }
