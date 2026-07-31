@@ -11206,13 +11206,12 @@ class Router:
         earlier decision; leaving it would attribute the first router's tier and cause
         to the deployment that actually served the request, and would price savings
         against a baseline this attempt never routed against. Every fact the hook
-        records is therefore written or cleared here together, from one response, so
-        no exit path can clear one and leave the other behind.
+        records is written or cleared here together, so no exit can clear one and
+        leave the other behind.
 
-        `get_or_create_metadata_bucket` is the single owner of "which dict holds
-        proxy-internal metadata": it picks `litellm_metadata` when present (so nothing
-        lands in the `metadata` dict that routes like /v1/messages forward to the
-        provider) and replaces a non-dict value rather than silently skipping the write.
+        `get_or_create_metadata_bucket` picks `litellm_metadata` when present, so
+        nothing lands in the `metadata` dict that routes like /v1/messages forward
+        to the provider.
         """
         routing_decision = pre_routing_hook_response.routing_decision if pre_routing_hook_response else None
         baseline_model = pre_routing_hook_response.savings_baseline_model if pre_routing_hook_response else None

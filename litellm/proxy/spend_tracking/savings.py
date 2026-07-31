@@ -48,15 +48,7 @@ def _input_and_cache_read_cost(model: str | None, custom_llm_provider: str | Non
 
 
 def _cost_of_usage(model: str, custom_llm_provider: str | None, usage: Usage) -> float | None:
-    """
-    What ``usage`` costs on ``model``, or ``None`` when the model has no pricing.
-
-    Delegates to litellm's own cost engine rather than re-deriving per-token
-    arithmetic, so cache-read and cache-creation tokens are split out of the
-    inclusive ``prompt_tokens`` total exactly once, and tiered rates, ephemeral
-    cache-write tiers and regional uplifts stay consistent with the spend the
-    request was actually billed.
-    """
+    """What ``usage`` costs on ``model``, or ``None`` when the model has no pricing."""
     try:
         prompt_cost, completion_cost = generic_cost_per_token(
             model=model, usage=usage, custom_llm_provider=custom_llm_provider or ""
@@ -76,21 +68,11 @@ def compute_autorouter_savings(
     selected_provider: str | None,
     usage: Usage,
 ) -> float:
-    """
-    Net dollars saved by serving this request on ``selected_model`` instead of the
-    counterfactual ``baseline_model``.
+    """Net dollars saved by serving this request on ``selected_model`` rather than ``baseline_model``.
 
-    Both arms price the same usage through litellm's cost engine, so the answer is
-    the honest difference between what the request cost and what it would have cost
-    on the baseline. Pricing the identical usage twice is what keeps the cache
-    dimensions right: ``prompt_tokens`` already includes cache-read and
-    cache-creation tokens, so charging them separately on top would count them
-    twice, and the cost of a cold cache on the selected deployment is already
-    inside its own arm at its own cache-creation rate.
-
-    Returns zero when routing did not change the model or when either model has no
-    pricing. Floored at zero so an escalation to a pricier model never reads as
-    negative savings on the dashboard.
+    Both arms price the same usage, so each token is charged once in its own
+    dimension; ``prompt_tokens`` already includes the cache tokens. Zero when the
+    model is unchanged or unpriced, and floored at zero on an escalation.
     """
     if not baseline_model or not selected_model or baseline_model == selected_model:
         return 0.0
@@ -102,10 +84,7 @@ def compute_autorouter_savings(
 
 
 def _usage_from_spend_log(usage_object: dict | None) -> Usage | None:
-    """
-    Rebuild the request's ``Usage`` from the copy the spend log recorded, or
-    ``None`` when there is nothing priceable to rebuild it from.
-    """
+    """Rebuild the request's ``Usage`` from the copy the spend log recorded."""
     if not usage_object:
         return None
     try:
