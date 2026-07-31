@@ -413,6 +413,224 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
     ), "Tool message should be placed before user message"
 
 
+@pytest.mark.parametrize(
+    ("system_content", "expected_content"),
+    [
+        ("Use the corrected result.", "Use the corrected result."),
+        (
+            [{"type": "text", "text": "Use the corrected result."}],
+            [{"type": "text", "text": "Use the corrected result."}],
+        ),
+        (
+            [
+                {
+                    "type": "image",
+                    "source": {"type": "url", "url": "https://example.com/a.png"},
+                },
+                {"type": "text", "text": "Use the corrected result."},
+            ],
+            [{"type": "text", "text": "Use the corrected result."}],
+        ),
+        (
+            [
+                {"type": "text", "text": "First correction."},
+                {"type": "text", "text": "Second correction."},
+            ],
+            [
+                {"type": "text", "text": "First correction."},
+                {"type": "text", "text": "Second correction."},
+            ],
+        ),
+    ],
+)
+def test_translate_anthropic_messages_to_openai_preserves_midturn_system_correction(
+    system_content: object,
+    expected_content: object,
+):
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01234",
+                    "name": "get_weather",
+                    "input": {"location": "Boston"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01234",
+                    "content": "Rainy, 55°F",
+                }
+            ],
+        },
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": "Continue."},
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=messages,
+        model="claude-3-5-sonnet-20240620",
+    )
+
+    assert result == [
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": None,
+            "tool_calls": [
+                {
+                    "id": "toolu_01234",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "Boston"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01234",
+            "content": "Rainy, 55°F",
+        },
+        {"role": "system", "content": expected_content},
+        {"role": "user", "content": "Continue."},
+    ]
+
+
+def test_translate_anthropic_messages_to_openai_preserves_midturn_system_cache_control():
+    """
+    `cache_control` on an in-sequence system text block survives, matching how the
+    hoisted top-level `system` prompt and user text blocks are already handled.
+    """
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Use the corrected result.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=messages,
+        model="claude-3-5-sonnet-20240620",
+    )
+
+    assert result == [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Use the corrected result.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+    ]
+
+
+def test_translate_anthropic_messages_to_openai_drops_midturn_system_cache_control_for_non_claude():
+    """
+    `cache_control` goes through the same `_add_cache_control_if_applicable` gate as the
+    hoisted top-level prompt and user text blocks, so a non-Claude *requested model name*
+    does not get it. That gate is a best-effort check of the requested name before routing
+    (behind the proxy it is often a public alias), not a guarantee about the backend that
+    ultimately serves the request.
+    """
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Use the corrected result.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=messages,
+        model="gpt-4o",
+    )
+
+    assert result == [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "Use the corrected result."}],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "system_content",
+    [
+        "",
+        [{"type": "text", "text": ""}],
+        [
+            {
+                "type": "image",
+                "source": {"type": "url", "url": "https://example.com/a.png"},
+            }
+        ],
+        None,
+    ],
+)
+def test_translate_anthropic_messages_to_openai_drops_empty_midturn_system(
+    system_content: object,
+):
+    messages = [{"role": "system", "content": system_content}]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=messages,
+        model="claude-3-5-sonnet-20240620",
+    )
+
+    assert result == []
+
+
+def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
+    """
+    Request level: the trusted top-level prompt is hoisted to index 0 exactly once and the
+    in-sequence correction keeps its own position and `role: "system"` -- no duplication of
+    either, and no reordering of the surrounding turns.
+    """
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "claude-3-5-sonnet-20240620",
+            "max_tokens": 100,
+            "system": "Trusted top-level prompt.",
+            "messages": [
+                {"role": "user", "content": "First question."},
+                {"role": "assistant", "content": "First answer."},
+                {"role": "system", "content": "Use the corrected result."},
+                {"role": "user", "content": "Continue."},
+            ],
+        }
+    )
+
+    assert openai_request["messages"] == [
+        {"role": "system", "content": "Trusted top-level prompt."},
+        {"role": "user", "content": "First question."},
+        {"role": "assistant", "content": "First answer.", "thinking_blocks": None},
+        {"role": "system", "content": "Use the corrected result."},
+        {"role": "user", "content": "Continue."},
+    ]
+
+
 def test_translate_openai_content_to_anthropic_empty_function_arguments():
     """Test that empty function arguments are handled safely and don't cause JSON parsing errors."""
 

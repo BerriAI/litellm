@@ -365,7 +365,19 @@ class AnthropicSystemMessageContent(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class AnthropicMessagesSystemMessageParam(TypedDict, total=False):
+    role: Required[Literal["system"]]
+    content: Required[Union[str, Iterable[AnthropicSystemMessageContent]]]
+
+
 AllAnthropicMessageValues = Union[AnthropicMessagesUserMessageParam, AnthopicMessagesAssistantMessageParam]
+
+# System is not a native Anthropic message role; only pass-through adapters use this union.
+AllAnthropicPassThroughMessageValues = Union[
+    AnthropicMessagesUserMessageParam,
+    AnthopicMessagesAssistantMessageParam,
+    AnthropicMessagesSystemMessageParam,
+]
 
 
 class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
