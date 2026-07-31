@@ -169,25 +169,30 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
             merged_deployment_dict["model_info"] = {}
         merged_deployment_dict["model_info"].update(updated_patch.model_info.model_dump(exclude_none=True))
 
-    # Honor explicit-null clears LAST, after both merges, so a model_info blob the UI
-    # passes through (which today re-sends the OLD pricing on every save) cannot
-    # silently undo a litellm_params clear via .update().
-    #
-    # Restricted to SPECIAL_MODEL_INFO_PARAMS (input/output cost per token/character
-    # and cache read/write costs) so this path cannot be used to null out privileged
-    # model_info fields like team_id or access groups. SPECIAL_MODEL_INFO_PARAMS are
-    # mirrored between litellm_params and model_info by Deployment.__init__, so the
-    # clear propagates to both blobs.
-    if updated_patch.litellm_params:
-        for field in updated_patch.litellm_params.model_fields_set:
-            if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.litellm_params, field) is None:
-                merged_deployment_dict["litellm_params"].pop(field, None)  # type: ignore
-                merged_deployment_dict.get("model_info", {}).pop(field, None)
-    if updated_patch.model_info:
-        for field in updated_patch.model_info.model_fields_set:
-            if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.model_info, field) is None:
-                merged_deployment_dict["model_info"].pop(field, None)  # type: ignore
-                merged_deployment_dict.get("litellm_params", {}).pop(field, None)  # type: ignore
+    # Resolved LAST, after both merges: litellm_params is the only source of truth for a
+    # deployment's custom pricing and model_info only mirrors it (Deployment.__init__).
+    # /model/info fills model_info pricing in from the model cost map when a deployment has
+    # no override, so clients that round-trip that response (the Admin UI does on every
+    # save) must not turn those prices into an override or resurrect a cleared one.
+    cleared_pricing_fields = frozenset(
+        field
+        for patch in (updated_patch.litellm_params, updated_patch.model_info)
+        if patch is not None
+        for field in patch.model_fields_set
+        if field in SPECIAL_MODEL_INFO_PARAMS and getattr(patch, field) is None
+    )
+    merged_params = merged_deployment_dict["litellm_params"]
+    for field in cleared_pricing_fields:
+        merged_params.pop(field, None)  # pyright: ignore[reportUnknownMemberType]  # dynamic key on a TypedDict
+    if "model_info" in merged_deployment_dict:
+        for field in SPECIAL_MODEL_INFO_PARAMS:
+            override = merged_params.get(field)  # pyright: ignore[reportUnknownMemberType]  # dynamic key on a TypedDict
+            if override is None:
+                merged_deployment_dict["model_info"].pop(  # pyright: ignore[reportUnknownMemberType]  # untyped model_info blob
+                    field, None
+                )
+            else:
+                merged_deployment_dict["model_info"][field] = override
 
     # convert to prisma compatible format
 

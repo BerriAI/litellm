@@ -67,6 +67,21 @@ interface ModelInfoViewProps {
   modelAccessGroups: string[] | null;
 }
 
+// Mirrors SPECIAL_MODEL_INFO_PARAMS in litellm/types/router.py. `/model/info` fills these
+// into model_info from the model cost map when a deployment has no override, so echoing
+// them back on save would freeze the deployment at whatever the price map said that day.
+const MIRRORED_PRICING_FIELDS = [
+  "input_cost_per_token",
+  "output_cost_per_token",
+  "input_cost_per_character",
+  "output_cost_per_character",
+  "cache_read_input_token_cost",
+  "cache_creation_input_token_cost",
+];
+
+const withoutMirroredPricing = (modelInfo: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(modelInfo).filter(([key]) => !MIRRORED_PRICING_FIELDS.includes(key)));
+
 interface ComplexityRouterTierConfig {
   tiers?: {
     SIMPLE?: unknown;
@@ -438,10 +453,17 @@ export default function ModelInfoView({
       // Credential rotation has its own dedicated path (UpdateModelCredentialsModal).
       const safeLitellmParams = stripMaskedSecrets(updatedLitellmParams);
 
+      const pricingOverrides = Object.fromEntries(
+        MIRRORED_PRICING_FIELDS.filter((field) => field in safeLitellmParams).map((field) => [
+          field,
+          safeLitellmParams[field],
+        ]),
+      );
+
       const updateData = {
         model_name: values.model_name,
         litellm_params: safeLitellmParams,
-        model_info: updatedModelInfo,
+        model_info: withoutMirroredPricing(updatedModelInfo),
       };
 
       await modelPatchUpdateCall(accessToken, updateData, modelId);
@@ -451,7 +473,7 @@ export default function ModelInfoView({
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
         litellm_params: safeLitellmParams,
-        model_info: updatedModelInfo,
+        model_info: { ...updatedModelInfo, ...pricingOverrides },
       };
 
       setLocalModelData(updatedModelData);

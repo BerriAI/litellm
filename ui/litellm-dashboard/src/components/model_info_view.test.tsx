@@ -636,6 +636,84 @@ describe("ModelInfoView", () => {
     expect(updatePayload.litellm_params).not.toHaveProperty("output_cost_per_token");
   });
 
+  it("should not send model cost map pricing back in model_info when user does not touch cost fields", async () => {
+    // Regression: /model/info fills model_info pricing in from the model cost map for
+    // deployments that have no override, and echoing it back froze the deployment at
+    // that price, so "Reload Price Data" could never move it again.
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.model_info).not.toHaveProperty("input_cost_per_token");
+    expect(updatePayload.model_info).not.toHaveProperty("output_cost_per_token");
+    expect(updatePayload.model_info.id).toBe("123");
+  });
+
+  it("should clear pricing with an explicit null and not re-send the old values in model_info", async () => {
+    const pricedModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        input_cost_per_token: 0.00009,
+        output_cost_per_token: 0.0009,
+      },
+      model_info: {
+        ...defaultModelData.model_info,
+        input_cost_per_token: 0.00009,
+        output_cost_per_token: 0.0009,
+      },
+    };
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [pricedModelData] },
+      isLoading: false,
+      error: null,
+    });
+    mockModelInfoV1Call.mockResolvedValue({ data: [pricedModelData] });
+
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    await user.clear(screen.getByPlaceholderText("Enter input cost"));
+    await user.clear(screen.getByPlaceholderText("Enter output cost"));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params.input_cost_per_token).toBeNull();
+    expect(updatePayload.litellm_params.output_cost_per_token).toBeNull();
+    expect(updatePayload.model_info).not.toHaveProperty("input_cost_per_token");
+    expect(updatePayload.model_info).not.toHaveProperty("output_cost_per_token");
+  });
+
   it("never re-sends a masked secret on save (regression: masked auth value must not overwrite the real secret)", async () => {
     // /model/info redacts secrets by masking (e.g. "azur****BBCC"), not removing them.
     // A plain save re-PATCHes the whole litellm_params blob; if the masked value were

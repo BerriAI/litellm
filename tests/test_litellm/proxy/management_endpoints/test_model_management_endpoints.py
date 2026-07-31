@@ -3112,6 +3112,129 @@ class TestUpdateDBModelClearPricing:
         assert info["cache_creation_input_token_cost"] == 0.000003
 
 
+_ENCRYPT_VALUE_HELPER = "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper"
+
+
+class TestUpdateDBModelModelInfoPricingIsMirrorOnly:
+    """`/model/info` fills `model_info` pricing in from the model cost map for
+    deployments that have no override, and the Admin UI sends that blob back on every
+    save. Those model-cost-map prices must not become a deployment override, otherwise
+    "Reload Price Data" can never move the deployment's price again.
+    """
+
+    def test_model_info_pricing_alone_does_not_create_an_override(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="gpt-5.6-sol",
+            litellm_params=LiteLLM_Params(model="bedrock_mantle/openai.gpt-5.6-sol"),
+            model_info=ModelInfo(id="dep-no-override-0"),
+        )
+
+        with patch(_ENCRYPT_VALUE_HELPER, side_effect=lambda value: value):
+            result = update_db_model(
+                db_model=db_model,
+                updated_patch=updateDeployment(
+                    litellm_params=updateLiteLLMParams(
+                        model="bedrock_mantle/openai.gpt-5.6-sol", tags=["prod"]
+                    ),
+                    model_info=ModelInfo(
+                        id="dep-no-override-0",
+                        input_cost_per_token=0.0000055,
+                        output_cost_per_token=0.000033,
+                    ),
+                ),
+            )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert params["tags"] == ["prod"]
+        assert "input_cost_per_token" not in params
+        assert "output_cost_per_token" not in params
+        assert "input_cost_per_token" not in info
+        assert "output_cost_per_token" not in info
+
+    def test_cleared_pricing_is_not_resurrected_by_a_later_save(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        cleared = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(
+                    input_cost_per_token=None, output_cost_per_token=None
+                ),
+                model_info=ModelInfo(
+                    id="dep-pricing-0",
+                    input_cost_per_token=0.000001,
+                    output_cost_per_token=0.000002,
+                ),
+            ),
+        )
+
+        cleared_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(**json.loads(cleared["litellm_params"])),
+            model_info=ModelInfo(**json.loads(cleared["model_info"])),
+        )
+
+        with patch(_ENCRYPT_VALUE_HELPER, side_effect=lambda value: value):
+            result = update_db_model(
+                db_model=cleared_model,
+                updated_patch=updateDeployment(
+                    litellm_params=updateLiteLLMParams(model="openai/*", tags=["prod"]),
+                    model_info=ModelInfo(
+                        id="dep-pricing-0",
+                        input_cost_per_token=0.000001,
+                        output_cost_per_token=0.000002,
+                    ),
+                ),
+            )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "input_cost_per_token" not in params
+        assert "output_cost_per_token" not in params
+        assert "input_cost_per_token" not in info
+        assert "output_cost_per_token" not in info
+
+    def test_litellm_params_pricing_overwrites_a_stale_model_info_mirror(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import ModelInfo, updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(input_cost_per_token=0.000009),
+                model_info=ModelInfo(
+                    id="dep-pricing-0", input_cost_per_token=0.000001
+                ),
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert params["input_cost_per_token"] == 0.000009
+        assert info["input_cost_per_token"] == 0.000009
+
+
 class TestGetModelInfoWithIdBlocked:
     """`ProxyConfig.get_model_info_with_id` must propagate the DB-level `blocked`
     column into the in-memory `model_info` dict so the router filter can read it."""
