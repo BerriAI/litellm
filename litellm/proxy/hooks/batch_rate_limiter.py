@@ -33,10 +33,12 @@ from typing import (
 from fastapi import HTTPException
 from pydantic import BaseModel
 
+import asyncio
 import json
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFAULT_BATCH_INPUT_FILE_READ_TIMEOUT_SECONDS
 from litellm.batches.batch_utils import (
     _count_entry_tokens,
     _estimate_batch_entry_tokens,
@@ -94,6 +96,24 @@ class BatchFileUsage(BaseModel):
 
     total_tokens: int
     request_count: int
+
+
+class BatchInputFileReadTimeout(Exception):
+    """The batch input-file read exceeded its deadline.
+
+    Distinct from a generic failure because the read serves two purposes and the
+    two have opposite safe defaults: it counts tokens for rate limiting (where
+    admitting the batch unmetered is tolerable) and it validates every
+    ``body.model`` in the JSONL against the caller's allowlist (where admitting
+    the batch unchecked is a privilege escalation). Carrying its own type lets
+    ``async_pre_call_hook`` fail closed only for keys that need the allowlist
+    check, instead of the blanket fail-open its generic handler applies.
+    """
+
+    def __init__(self, file_id: str, timeout_seconds: float) -> None:
+        self.file_id = file_id
+        self.timeout_seconds = timeout_seconds
+        super().__init__(f"Timed out after {timeout_seconds}s reading batch input file {file_id}")
 
 
 class _PROXY_BatchRateLimiter(CustomLogger):
@@ -291,6 +311,28 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 "skip_batch_input_file_rate_limiting_for_providers or "
                 "disable_batch_input_file_rate_limiting instead."
             )
+
+    @staticmethod
+    def _batch_input_file_read_timeout() -> float:
+        """Seconds the input-file read may take before it is abandoned.
+
+        Falls back to the default when the operator's value is missing or not a
+        positive number: a zero/negative deadline would make wait_for expire
+        immediately and reject every batch from a restricted key.
+        """
+        from litellm.proxy.proxy_server import general_settings
+
+        configured = general_settings.get("batch_input_file_read_timeout")
+        if isinstance(configured, bool) or not isinstance(configured, (int, float)):
+            return DEFAULT_BATCH_INPUT_FILE_READ_TIMEOUT_SECONDS
+        if configured <= 0:
+            verbose_proxy_logger.warning(
+                "Ignoring general_settings.batch_input_file_read_timeout=%s: must be > 0. Using %ss.",
+                configured,
+                DEFAULT_BATCH_INPUT_FILE_READ_TIMEOUT_SECONDS,
+            )
+            return DEFAULT_BATCH_INPUT_FILE_READ_TIMEOUT_SECONDS
+        return float(configured)
 
     @staticmethod
     def _key_requires_batch_model_access_check(
@@ -518,8 +560,11 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # For managed files the unified file id encodes the proxy model
             # alias(es) the file was uploaded for; auth validates against those.
             target_model_names = get_models_from_unified_file_id(is_managed_file) if is_managed_file else []
+            # Resolved before the coroutine is built so a failure here can never
+            # leave an un-awaited coroutine behind.
+            timeout_seconds = self._batch_input_file_read_timeout()
             if is_managed_file and user_api_key_dict is not None:
-                file_content = await self._fetch_managed_file_content(
+                fetch = self._fetch_managed_file_content(
                     file_id=file_id,
                     user_api_key_dict=user_api_key_dict,
                 )
@@ -529,12 +574,30 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     custom_llm_provider=custom_llm_provider,
                     data=data or {},
                 )
-                # For non-managed files, use the standard litellm.afile_content
-                file_content = await litellm.afile_content(
+                # For non-managed files, use the standard litellm.afile_content.
+                # `timeout` reaches file_content's TIMEOUT LOGIC via
+                # GenericLiteLLMParams, capping the upstream HTTP request itself
+                # rather than only the await, so an abandoned read stops
+                # occupying its executor thread too.
+                fetch = litellm.afile_content(
                     file_id=provider_file_id,
                     user_api_key_dict=user_api_key_dict,
+                    timeout=timeout_seconds,
                     **fetch_kwargs,
                 )
+
+            # Bound the read: it runs inline in POST /v1/batches, so unbounded the
+            # SDK default (600s x 3 attempts) outlives every client timeout and the
+            # request just hangs (LIT-5027).
+            #
+            # wait_for is what guarantees the handler stops waiting, and it is the
+            # only bound the managed-files path has (that hook takes no timeout
+            # argument), so an abandoned managed read may hold its executor thread
+            # until the SDK's own timeout fires.
+            try:
+                file_content = await asyncio.wait_for(fetch, timeout=timeout_seconds)
+            except asyncio.TimeoutError as exc:
+                raise BatchInputFileReadTimeout(file_id=file_id, timeout_seconds=timeout_seconds) from exc
 
             file_content_bytes = getattr(file_content, "content", None)
             if not isinstance(file_content_bytes, bytes):
@@ -603,6 +666,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 verbose_proxy_logger.error(
                     f"Batch input file rejected for {file_id}: status={e.status_code} detail={e.detail}"
                 )
+            raise
+        except BatchInputFileReadTimeout:
+            # The caller decides the policy (reject vs admit unmetered) and logs
+            # accordingly; a generic error line here would just duplicate it.
             raise
         except Exception as e:
             verbose_proxy_logger.error(f"Error counting input file usage for {file_id}: {str(e)}")
@@ -854,6 +921,38 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         except HTTPException:
             # Re-raise HTTP exceptions (rate limit exceeded)
             raise
+        except BatchInputFileReadTimeout as e:
+            # The read is both the token count and the JSONL model-allowlist
+            # check, so the two cases diverge. A key restricted to a subset of
+            # models cannot be admitted without validating the file: doing so
+            # would grant exactly the bypass _should_skip_batch_input_file_processing
+            # refuses to allow via operator config. An unrestricted key has only
+            # rate-limit accuracy at stake, so it is admitted unmetered, matching
+            # the generic fail-open below.
+            if self._key_requires_batch_model_access_check(user_api_key_dict):
+                verbose_proxy_logger.error(
+                    "Rejecting batch: could not read input file %s within %ss to validate "
+                    "the models it references against the key's allowlist.",
+                    e.file_id,
+                    e.timeout_seconds,
+                )
+                raise ProxyException(
+                    message=(
+                        f"Could not read the batch input file within {e.timeout_seconds}s to "
+                        "validate the models it references. Retry, or contact your proxy admin "
+                        "if the files API is degraded."
+                    ),
+                    type=ProxyErrorTypes.internal_server_error,
+                    param="input_file_id",
+                    code=504,
+                ) from e
+            verbose_proxy_logger.warning(
+                "Batch admitted without rate limiting: reading input file %s timed out after %ss. "
+                "Its tokens and requests are not counted against this key's limits.",
+                e.file_id,
+                e.timeout_seconds,
+            )
+            return data
         except Exception as e:
             verbose_proxy_logger.error(f"Error in batch rate limiting: {str(e)}", exc_info=True)
             # Don't block the request if rate limiting fails
