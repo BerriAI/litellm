@@ -1078,6 +1078,17 @@ async def new_team(
                     detail={"error": f"Team id = {data.team_id} already exists. Please use a different team id."},
                 )
 
+        # Apply the `models` default from litellm.default_team_params before
+        # the org-scoped validation runs, so the org allowlist is checked
+        # against the effective model list (user-provided OR default) and
+        # cannot be bypassed by an org admin omitting `models` and letting
+        # the post-validation default fill it in. Other defaults are applied
+        # below after the org check, where they always have been.
+        if not getattr(data, "models", None):
+            _models_default = _get_default_team_param("models")
+            if _models_default is not None:
+                data.models = _models_default
+
         # check org key limits - done here to handle inheriting org id from team
         if data.organization_id is not None and prisma_client is not None:
             org_table = await get_org_object(
