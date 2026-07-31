@@ -140,7 +140,7 @@ _ANTHROPIC_TOOL_NAME_MAX_LEN = 128
 ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY = "_anthropic_tool_name_map"
 
 
-def _reported_thinking_tokens(usage_object: Mapping[str, Any]) -> Optional[int]:
+def _reported_thinking_tokens(usage_object: Mapping[str, Any]) -> int | None:
     """Read the provider-reported reasoning token count from an Anthropic usage object.
 
     Anthropic (and Bedrock's Anthropic-compatible surface) reports extended-thinking
@@ -156,7 +156,7 @@ def _reported_thinking_tokens(usage_object: Mapping[str, Any]) -> Optional[int]:
     return thinking_tokens
 
 
-def _sum_reported_thinking_tokens(iterations: Sequence[Any]) -> Optional[int]:
+def _sum_reported_thinking_tokens(iterations: Sequence[Any]) -> int | None:
     reported = tuple(_reported_thinking_tokens(iteration) for iteration in iterations if isinstance(iteration, Mapping))
     present = tuple(tokens for tokens in reported if tokens is not None)
     return sum(present) if present else None

@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Sequence, Union, cast
 
@@ -669,7 +670,7 @@ class AnthropicPassthroughLoggingHandler:
         tool_search_requests: Optional[int] = None
         inference_geo: Optional[str] = None
         stop_reason: Optional[str] = None
-        thinking_tokens: Optional[int] = None
+        output_tokens_details: Mapping[str, Any] | None = None
         found_usage = False
         resolved_model = model
         for _chunk_str in all_chunks:
@@ -695,8 +696,8 @@ class AnthropicPassthroughLoggingHandler:
                     if usage.get("output_tokens") is not None:
                         output_tokens = usage.get("output_tokens")
                     _otd = usage.get("output_tokens_details")
-                    if isinstance(_otd, dict) and _otd.get("thinking_tokens") is not None:
-                        thinking_tokens = _otd.get("thinking_tokens")
+                    if isinstance(_otd, Mapping) and _otd.get("thinking_tokens") is not None:
+                        output_tokens_details = _otd
                     found_usage = True
                 elif event_type == "message_delta":
                     _delta_stop = (data.get("delta") or {}).get("stop_reason")
@@ -716,8 +717,8 @@ class AnthropicPassthroughLoggingHandler:
                     if usage.get("inference_geo") is not None:
                         inference_geo = usage.get("inference_geo")
                     _otd = usage.get("output_tokens_details")
-                    if isinstance(_otd, dict) and _otd.get("thinking_tokens") is not None:
-                        thinking_tokens = _otd.get("thinking_tokens")
+                    if isinstance(_otd, Mapping) and _otd.get("thinking_tokens") is not None:
+                        output_tokens_details = _otd
                     found_usage = True
         if not found_usage:
             return None
@@ -749,8 +750,8 @@ class AnthropicPassthroughLoggingHandler:
             usage_object["server_tool_use"] = _server_tool_use
         if inference_geo is not None:
             usage_object["inference_geo"] = inference_geo
-        if thinking_tokens is not None:
-            usage_object["output_tokens_details"] = {"thinking_tokens": thinking_tokens}
+        if output_tokens_details is not None:
+            usage_object["output_tokens_details"] = output_tokens_details
         usage_obj = AnthropicConfig().calculate_usage(usage_object=usage_object, reasoning_content=None)
         return ModelResponse(
             model=resolved_model,
