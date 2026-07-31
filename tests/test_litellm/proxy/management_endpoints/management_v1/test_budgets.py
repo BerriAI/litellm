@@ -382,6 +382,20 @@ def test_created_at_range_is_bound_as_a_timestamp(query_raw, as_proxy_admin):
     assert params[0] == datetime(2026, 7, 1, tzinfo=timezone.utc)
 
 
+def test_numbers_placeholders_continuously_across_predicates(query_raw, as_proxy_admin):
+    """Each predicate is numbered after the binds the ones before it consumed. Restart
+    the count and `$1` gets read as the duration while the search string goes unbound."""
+    _serve(query_raw, [])
+
+    _get("filter[budget_duration][in]=7d,30d&filter[max_budget][gte]=5&q=prod")
+
+    sql, *params = _select_call(query_raw)
+    assert '"budget_duration" IN ($1, $2)' in sql
+    assert '"max_budget" >= $3' in sql
+    assert '"budget_id" ILIKE $4' in sql
+    assert params[:4] == ["7d", "30d", 5.0, "%prod%"]
+
+
 def test_a_non_datetime_bind_is_not_cast(query_raw, as_proxy_admin):
     """Guards the cast above from being applied to every placeholder."""
     _serve(query_raw, [])
