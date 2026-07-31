@@ -8,7 +8,6 @@ are shown.
 import time
 import webbrowser
 from dataclasses import dataclass
-from typing import Any  # noqa: TID251  # unvalidated JSON payload
 
 import click
 
@@ -49,14 +48,14 @@ class DeviceAuthorization:
     interval: int
 
 
-def _require_non_empty_string(raw: dict[str, Any], key: str) -> str:
+def _require_non_empty_string(raw: dict[str, object], key: str) -> str:
     value = raw.get(key)
     if not isinstance(value, str) or not value:
         raise NativeOIDCError(f"device authorization response is missing {key}")
     return value
 
 
-def _optional_safe_uri(raw: dict[str, Any], key: str) -> str | None:
+def _optional_safe_uri(raw: dict[str, object], key: str) -> str | None:
     value = raw.get(key)
     if value is None:
         return None
@@ -68,7 +67,7 @@ def _optional_safe_uri(raw: dict[str, Any], key: str) -> str | None:
         raise NativeOIDCError(f"device authorization response {key} {error}") from error
 
 
-def _bounded_positive_int(raw: dict[str, Any], key: str, maximum: int) -> int | None:
+def _bounded_positive_int(raw: dict[str, object], key: str, maximum: int) -> int | None:
     value = raw.get(key)
     if value is None:
         return None

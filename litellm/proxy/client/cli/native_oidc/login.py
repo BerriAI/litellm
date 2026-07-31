@@ -5,8 +5,6 @@ proxy contributes only the trust anchor (issuer, client id, scopes); it never
 brokers the exchange and never sees the authorization code or refresh token.
 """
 
-from typing import Any  # noqa: TID251  # unvalidated JSON payload
-
 import click
 
 from .browser_flow import run_browser_flow
@@ -63,7 +61,7 @@ def run_native_login(
     flow: str = FLOW_AUTO,
     open_browser: bool = True,
     echo=click.echo,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Log in against the proxy's advertised identity provider.
 
     Raises NativeOIDCUnavailable when the proxy offers no native OIDC -- the

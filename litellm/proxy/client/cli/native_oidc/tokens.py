@@ -11,7 +11,6 @@ import binascii
 import json
 import time
 from dataclasses import dataclass
-from typing import Any  # noqa: TID251  # unvalidated JSON payload
 
 from litellm.litellm_core_utils.native_oidc_validation import is_valid_scope_token
 
@@ -146,7 +145,7 @@ def parse_token_response(payload: object, *, now: float | None = None) -> TokenR
     )
 
 
-def extract_oauth_error(payload: dict[str, Any] | None) -> str | None:
+def extract_oauth_error(payload: dict[str, object] | None) -> str | None:
     """Return the OAuth `error` code from an error response, if present."""
     if not isinstance(payload, dict):
         return None
@@ -154,7 +153,7 @@ def extract_oauth_error(payload: dict[str, Any] | None) -> str | None:
     return error if isinstance(error, str) and error else None
 
 
-def describe_token_error(status_code: int, payload: dict[str, Any] | None) -> str:
+def describe_token_error(status_code: int, payload: dict[str, object] | None) -> str:
     """Build a safe message for a failed token request.
 
     Only the stable OAuth error code is surfaced -- never the raw body, which

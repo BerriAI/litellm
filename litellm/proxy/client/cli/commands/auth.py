@@ -4,7 +4,7 @@ import sys
 import time
 import webbrowser
 from pathlib import Path
-from typing import Any  # noqa: TID251  # unvalidated JSON payload
+from typing import Any
 from urllib.parse import urlencode
 
 import click

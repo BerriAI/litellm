@@ -11,7 +11,6 @@ Two different trust levels are handled here:
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any  # noqa: TID251  # unvalidated JSON payload
 
 from litellm.litellm_core_utils.native_oidc_validation import (
     derive_provider_configuration_url,
@@ -116,7 +115,7 @@ def fetch_native_oidc_metadata(base_url: str) -> NativeOIDCMetadata:
     return parse_native_oidc_metadata(response.payload["native_oidc"])
 
 
-def _optional_string_tuple(raw: dict[str, Any], key: str) -> tuple[str, ...] | None:
+def _optional_string_tuple(raw: dict[str, object], key: str) -> tuple[str, ...] | None:
     value = raw.get(key)
     if value is None:
         return None
@@ -125,7 +124,7 @@ def _optional_string_tuple(raw: dict[str, Any], key: str) -> tuple[str, ...] | N
     return tuple(value)
 
 
-def _optional_endpoint(raw: dict[str, Any], key: str) -> str | None:
+def _optional_endpoint(raw: dict[str, object], key: str) -> str | None:
     value = raw.get(key)
     if value is None:
         return None

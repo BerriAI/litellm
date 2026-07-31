@@ -17,7 +17,6 @@ Security properties enforced here:
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any  # noqa: TID251  # unvalidated JSON payload
 
 import requests
 
@@ -43,7 +42,7 @@ class JsonResponse:
     """
 
     status_code: int
-    payload: dict[str, Any] | None
+    payload: dict[str, object] | None
     retry_after: int | None
 
 
@@ -78,7 +77,7 @@ def _read_bounded_body(response: requests.Response) -> bytes:
     return b"".join(chunks)
 
 
-def _decode_json_object(body: bytes, content_type: str) -> dict[str, Any] | None:
+def _decode_json_object(body: bytes, content_type: str) -> dict[str, object] | None:
     """Strictly decode a JSON object, or return None.
 
     `json.loads` rejects trailing data after the top-level value, so a response
@@ -138,7 +137,7 @@ def get_json_response(url: str, *, timeout: tuple[float, float] = DEFAULT_TIMEOU
     return _request("GET", url, timeout=timeout)
 
 
-def get_json(url: str, *, timeout: tuple[float, float] = DEFAULT_TIMEOUT) -> dict[str, Any]:
+def get_json(url: str, *, timeout: tuple[float, float] = DEFAULT_TIMEOUT) -> dict[str, object]:
     """GET a JSON object, raising unless the response is 200 with a JSON object."""
     response = _request("GET", url, timeout=timeout)
     if response.status_code != 200:
