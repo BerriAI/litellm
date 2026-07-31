@@ -4021,6 +4021,63 @@ async def test_user_api_key_auth_authenticates_before_raising_malformed_body_err
             setattr(_proxy_server_mod, k, v)
 
 
+@pytest.mark.asyncio
+async def test_user_api_key_auth_still_rejects_malformed_body_when_auth_error_is_recovered():
+    """``_handle_authentication_error`` can swallow an auth failure and return a
+    usable auth object (e.g. ``allow_requests_on_db_unavailable``). A request whose
+    body never parsed must still be rejected on that path, never let through."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [(b"content-type", b"application/json")],
+            "method": "POST",
+        }
+    )
+    request._url = URL(url="/chat/completions")
+    request._body = b'{}{"model": "gpt-4o"}'
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+                new_callable=AsyncMock,
+                return_value=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._run_centralized_common_checks",
+                new_callable=AsyncMock,
+                side_effect=Exception("db down"),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.RouteChecks.should_call_route",
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.UserAPIKeyAuthExceptionHandler._handle_authentication_error",
+                new_callable=AsyncMock,
+                return_value=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.seed_request_identity",
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await user_api_key_auth(request=request, api_key="Bearer sk-test")
+
+        assert "Invalid JSON payload" in str(exc_info.value.message)
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
 def _proxy_attrs_for_db_lookup():
     """Minimal proxy_server attributes for driving the real
     ``_user_api_key_auth_builder`` down to the DB key lookup."""
