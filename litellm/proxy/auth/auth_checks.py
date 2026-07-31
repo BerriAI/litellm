@@ -187,7 +187,8 @@ def _is_model_cost_zero(model: Optional[Union[str, List[str]]], llm_router: Opti
                 continue
         try:
             # Use router's get_model_group_info method directly for better reliability
-            model_group_info = llm_router.get_model_group_info(model_group=model_name)
+            resolved_name = _resolve_model_group_alias(model_name, llm_router)
+            model_group_info = llm_router.get_model_group_info(model_group=resolved_name)
 
             if model_group_info is None:
                 # Model not found or no pricing info available
@@ -224,7 +225,7 @@ def _is_model_cost_zero(model: Optional[Union[str, List[str]]], llm_router: Opti
             # not from defaulted sparse auto-registration entries.
             # See: https://github.com/BerriAI/litellm/issues/24770
             safe_name = str(model_name).replace("\n", "").replace("\r", "")
-            if not _is_cost_explicitly_configured(model_name, llm_router):
+            if not _is_cost_explicitly_configured(resolved_name, llm_router):
                 verbose_proxy_logger.debug(
                     "Model %s has zero cost but no explicit cost "
                     "configuration in model_cost entry — treating as unknown "
@@ -251,6 +252,20 @@ def _is_model_cost_zero(model: Optional[Union[str, List[str]]], llm_router: Opti
 
     # All models checked have zero cost
     return True
+
+
+def _resolve_model_group_alias(model: str, llm_router: "Router") -> str:
+    """
+    Map a user-facing ``model_group_alias`` name onto the model group it points at.
+
+    Returns ``model`` unchanged when it isn't an alias.
+    """
+    item = llm_router.model_group_alias.get(model)
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        return item.get("model", model)
+    return model
 
 
 def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
