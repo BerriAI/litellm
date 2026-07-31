@@ -13,7 +13,18 @@ import asyncio
 import math
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Type,
+    Union,
+    cast,
+)
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
@@ -274,17 +285,52 @@ def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
     return False
 
 
+def _has_positive_cost(value: object) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return value > 0
+    if isinstance(value, dict):
+        return any(_has_positive_cost(nested) for nested in value.values())
+    return False
+
+
+def _entry_has_priced_metric(entry: Mapping[str, object]) -> bool:
+    return any("cost_per" in key and _has_positive_cost(value) for key, value in entry.items())
+
+
+def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
+    """
+    Check every deployment behind a model group for a positive price on any billed
+    metric (tokens, characters, seconds, pages, images, queries, ...), so models that
+    are billed by a non-token metric are not treated as unpriced.
+    """
+    for deployment in llm_router.get_model_list(model_name=model) or []:
+        litellm_params = deployment.get("litellm_params") or {}
+        if _entry_has_priced_metric(litellm_params):
+            return True
+
+        model_id = (deployment.get("model_info") or {}).get("id")
+        if model_id is None:
+            continue
+
+        model_info = llm_router.get_deployment_model_info(
+            model_id=model_id, model_name=litellm_params.get("model") or ""
+        )
+        if model_info is not None and _entry_has_priced_metric(model_info):
+            return True
+
+    return False
+
+
 def model_has_no_cost_mapping(model: Optional[str], llm_router: Optional[Router]) -> bool:
     if not model or llm_router is None:
         return False
 
-    model_group_info = llm_router.get_model_group_info(model_group=model)
-    if model_group_info is None:
+    if llm_router.get_model_group_info(model_group=model) is None:
         return False
 
-    input_cost = model_group_info.input_cost_per_token or 0
-    output_cost = model_group_info.output_cost_per_token or 0
-    if input_cost > 0 or output_cost > 0:
+    if _model_group_has_pricing(model=model, llm_router=llm_router):
         return False
 
     return not _is_cost_explicitly_configured(model, llm_router)

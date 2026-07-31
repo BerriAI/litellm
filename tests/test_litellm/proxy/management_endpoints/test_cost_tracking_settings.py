@@ -541,6 +541,20 @@ class TestBlockRequestsForModelsWithoutPricing:
         saved_config = mock_proxy_config.save_config.call_args.kwargs["new_config"]
         assert saved_config["litellm_settings"]["block_requests_for_models_without_pricing"] is True
 
+    def test_peer_workers_pick_up_persisted_flag_on_config_reload(self):
+        """A PATCH only mutates the flag on the worker that served it; peer workers must pick the
+        persisted value up when they reload litellm_settings from the DB."""
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        with patch.object(litellm, "block_requests_for_models_without_pricing", False):
+            ProxyConfig()._update_config_fields(
+                current_config={},
+                param_name="litellm_settings",
+                db_param_value={"block_requests_for_models_without_pricing": True},
+            )
+
+            assert litellm.block_requests_for_models_without_pricing is True
+
     @pytest.mark.asyncio
     async def test_patch_requires_store_model_in_db(self):
         with (
