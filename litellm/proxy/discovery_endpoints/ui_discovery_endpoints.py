@@ -1,6 +1,7 @@
 #### Analytics Endpoints #####
 import os
-from typing import Any, Dict, Optional
+from functools import lru_cache
+from typing import Any  # noqa: TID251  # unvalidated JSON payload
 
 from fastapi import APIRouter
 from pydantic import ValidationError
@@ -28,29 +29,23 @@ NATIVE_OIDC_INVALID_MESSAGE = (
     "native_oidc_issuer / native_oidc_client_id / native_oidc_scopes."
 )
 
-_native_oidc_warning_emitted = False
 
-
+@lru_cache(maxsize=1)
 def _warn_native_oidc_invalid_once() -> None:
     """Emit the sanitized diagnostic at most once per process.
 
     Deduplicated so that a public discovery request cannot be used to flood the
-    proxy logs.
+    proxy logs. The cache is the dedupe: the body runs only on the first call.
     """
-    global _native_oidc_warning_emitted
-    if _native_oidc_warning_emitted:
-        return
-    _native_oidc_warning_emitted = True
     verbose_proxy_logger.warning(NATIVE_OIDC_INVALID_MESSAGE)
 
 
 def _reset_native_oidc_warning_state() -> None:
     """Test hook: allow the once-only diagnostic to fire again."""
-    global _native_oidc_warning_emitted
-    _native_oidc_warning_emitted = False
+    _warn_native_oidc_invalid_once.cache_clear()
 
 
-def _build_native_oidc_config(general_settings: Dict[str, Any]) -> Optional[NativeOIDCConfig]:
+def _build_native_oidc_config(general_settings: dict[str, Any]) -> NativeOIDCConfig | None:
     """Build the public native OIDC object, or return None and fail closed.
 
     Published only when JWT auth is exactly enabled and every required field
