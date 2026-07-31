@@ -1388,3 +1388,68 @@ def test_s3_server_side_encryption_read_from_callback_params():
         assert logger.s3_server_side_encryption == "aws:kms"
     finally:
         litellm.s3_callback_params = original
+
+
+def _s3_signature_for(url: str, body: str, headers: dict) -> str:
+    from botocore.auth import S3SigV4Auth
+    from botocore.awsrequest import AWSRequest
+    from botocore.credentials import Credentials
+
+    signed_header_names = headers["Authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
+    request = AWSRequest(
+        method="PUT",
+        url=url,
+        data=body,
+        headers={k: v for k, v in headers.items() if k.lower() in signed_header_names},
+    )
+    request.context["timestamp"] = headers["X-Amz-Date"]
+    S3SigV4Auth(Credentials("test-key", "test-secret"), "s3", "us-east-1").add_auth(request)
+    return request.headers["Authorization"].split("Signature=")[1]
+
+
+@pytest.mark.parametrize("upload_path", ["async", "sync"])
+def test_upload_signature_matches_s3_canonicalization_for_keys_with_spaces(upload_path):
+    """
+    S3 signs the object key single-encoded; generic SigV4Auth re-quotes the already
+    encoded path, so a team alias containing a space (key '.../AI Post_Chat/...' sent as
+    '%20') produced a signature over '%2520' and S3 answered 403 SignatureDoesNotMatch.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    test_element = s3BatchLoggingElement(
+        s3_object_key="LOGS/AI Post_Chat/2026-07-23/test.json",
+        payload={"test": "spaces"},
+        s3_object_download_filename="test.json",
+    )
+
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+
+    if upload_path == "async":
+        logger.async_httpx_client = AsyncMock()
+        logger.async_httpx_client.put.return_value = response
+        asyncio.run(logger.async_upload_data_to_s3(test_element))
+        call = logger.async_httpx_client.put.call_args
+    else:
+        mock_sync_client = MagicMock()
+        mock_sync_client.put.return_value = response
+        with patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client):
+            logger.upload_data_to_s3(test_element)
+        call = mock_sync_client.put.call_args
+
+    url = call.args[0]
+    headers = call.kwargs["headers"]
+    assert "AI%20Post_Chat" in url
+    assert headers["Authorization"].split("Signature=")[1] == _s3_signature_for(
+        url, call.kwargs["data"], headers
+    )
