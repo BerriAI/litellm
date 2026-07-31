@@ -1000,7 +1000,9 @@ class LiteLLMProxyRequestSetup:
             user_api_key_budget_reset_at=(
                 user_api_key_dict.budget_reset_at.isoformat() if user_api_key_dict.budget_reset_at else None
             ),
-            user_api_key_auth_metadata=user_api_key_dict.metadata,
+            user_api_key_auth_metadata=dict(user_api_key_dict.metadata)
+            if user_api_key_dict.metadata is not None
+            else None,
         )
         return user_api_key_logged_metadata
 
