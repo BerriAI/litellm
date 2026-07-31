@@ -292,6 +292,71 @@ def test_lock_serialises_concurrent_holders(home):
         assert order[index + 1] == order[index].replace("-in", "-out")
 
 
+def test_lock_open_failure_other_than_contention_is_reported(home, monkeypatch):
+    real_open = os.open
+
+    def refuse(path, *args, **kwargs):
+        if str(path).endswith(".lock"):
+            raise PermissionError("denied")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(creds.os, "open", refuse)
+    with pytest.raises(NativeOIDCError) as excinfo:
+        with refresh_lock():
+            pass
+    assert "could not acquire the token refresh lock" in str(excinfo.value)
+    # Only the exception class is surfaced, never the OS message or the path.
+    assert "denied" not in str(excinfo.value)
+
+
+def test_lock_handle_is_closed_when_the_pid_write_fails(home, monkeypatch):
+    lock_path = get_cli_token_file_path() + ".lock"
+    real_write = os.write
+    pid_bytes = str(os.getpid()).encode("ascii")
+
+    def refuse(handle, data):
+        if data == pid_bytes:
+            raise OSError("no space left on device")
+        return real_write(handle, data)
+
+    monkeypatch.setattr(creds.os, "write", refuse)
+    with pytest.raises(OSError):
+        with refresh_lock():
+            pass
+    # The lock is still released, so the failure cannot wedge later logins.
+    assert not os.path.exists(lock_path)
+
+
+def test_lock_release_tolerates_a_lock_file_that_is_already_gone(home, monkeypatch):
+    real_unlink = os.unlink
+
+    def refuse(path, *args, **kwargs):
+        if str(path).endswith(".lock"):
+            raise FileNotFoundError(path)
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(creds.os, "unlink", refuse)
+    with refresh_lock():
+        pass  # releasing a lock someone else removed must not raise
+
+
+def test_stale_check_tolerates_a_lock_file_that_vanishes(home, monkeypatch):
+    real_stat = os.stat
+
+    def refuse(path, *args, **kwargs):
+        if str(path).endswith(".lock"):
+            raise FileNotFoundError(path)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(creds.os, "stat", refuse)
+    with refresh_lock():
+        # The staleness probe races with the holder; an unreadable lock file
+        # falls through to the normal contention timeout.
+        with pytest.raises(NativeOIDCError, match="another process"):
+            with refresh_lock(timeout=0.0, sleep=lambda _: None):
+                pass
+
+
 # --------------------------------------------------------------------------
 # refresh
 # --------------------------------------------------------------------------

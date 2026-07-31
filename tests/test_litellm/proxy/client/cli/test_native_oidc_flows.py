@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from litellm.proxy.client.cli.native_oidc import browser_flow, device_flow
+from litellm.proxy.client.cli.native_oidc import browser_flow, callback, device_flow
 from litellm.proxy.client.cli.native_oidc.browser_flow import (
     build_authorization_url,
     exchange_code_for_token,
@@ -260,6 +260,58 @@ class TestCallbackListener:
             assert "code-secret" not in body["text"]
             assert "state-secret" not in body["text"]
 
+    def test_non_loopback_peers_are_rejected(self, monkeypatch):
+        # The peer check runs before the path, the state or the code is read.
+        monkeypatch.setattr(callback, "is_numeric_loopback_host", lambda host: False)
+        with LoopbackCallbackListener(expected_state="state-value") as listener:
+            status = call_listener(listener, f"{DEFAULT_CALLBACK_PATH}?code=abc&state=state-value")
+            assert status == 403
+            assert listener._server.result is None
+
+    def test_a_result_without_a_code_is_still_refused(self):
+        with LoopbackCallbackListener(expected_state="s") as listener:
+            listener._server.result = callback._CallbackResult()
+            with pytest.raises(NativeOIDCError, match="did not contain a code"):
+                listener.wait_for_code(timeout=5)
+
+
+class _FakeV6Server:
+    """Stands in for a real ::1 bind, which not every CI host provides."""
+
+    def __init__(self, server_address, handler, *, expected_state, callback_path):
+        self.server_address = ("::1", 54321)
+        self.expected_state = expected_state
+        self.callback_path = callback_path
+        self.expected_host_header = ""
+        self.result = None
+        self.closed = False
+
+    def server_close(self):
+        self.closed = True
+
+
+def _refuse_bind(*args, **kwargs):
+    raise OSError("cannot bind")
+
+
+class TestCallbackBinding:
+    def test_ipv6_loopback_is_used_when_ipv4_cannot_bind(self, monkeypatch):
+        monkeypatch.setattr(callback, "_CallbackServer", _refuse_bind)
+        monkeypatch.setattr(callback, "_CallbackServerV6", _FakeV6Server)
+        with LoopbackCallbackListener(expected_state="s") as listener:
+            # The IPv6 literal must be bracketed in both the URI and the
+            # Host header the handler compares against.
+            assert listener.host == "::1"
+            assert listener.redirect_uri == f"http://[::1]:54321{DEFAULT_CALLBACK_PATH}"
+            assert listener._server.expected_host_header == "[::1]:54321"
+        assert listener._server.closed
+
+    def test_no_loopback_port_available_is_reported(self, monkeypatch):
+        monkeypatch.setattr(callback, "_CallbackServer", _refuse_bind)
+        monkeypatch.setattr(callback, "_CallbackServerV6", _refuse_bind)
+        with pytest.raises(NativeOIDCError, match="could not bind a loopback port"):
+            LoopbackCallbackListener(expected_state="s")
+
 
 class TestSanitizeProviderError:
     def test_control_characters_stripped(self):
@@ -417,6 +469,7 @@ class TestComputeExpiresAt:
             "a.!!!.c",
             make_jwt({"exp": "soon"}),
             make_jwt({"exp": True}),
+            make_jwt([1, 2]),
         ],
     )
     def test_unparsable_tokens_do_not_raise(self, token):
@@ -682,6 +735,46 @@ class TestRunDeviceFlow:
         provider = ProviderMetadata(**{**PROVIDER.__dict__, "device_authorization_endpoint": None})
         with pytest.raises(NativeOIDCError, match="device_authorization_endpoint"):
             run_device_flow(METADATA, provider, open_browser=False, echo=lambda _: None)
+
+    def run(self, monkeypatch, payload, **kwargs):
+        stub_post_form(
+            monkeypatch,
+            device_flow,
+            [
+                JsonResponse(status_code=200, payload=payload, retry_after=None),
+                token_success(),
+            ],
+        )
+        return run_device_flow(
+            METADATA,
+            PROVIDER,
+            sleep=lambda _: None,
+            monotonic=lambda: 0.0,
+            **kwargs,
+        )
+
+    def test_the_complete_verification_uri_is_offered_and_opened(self, monkeypatch):
+        complete = f"{ISSUER}/activate?user_code=WXYZ-1234"
+        opened = []
+        monkeypatch.setattr(device_flow.webbrowser, "open", opened.append)
+        lines = []
+        self.run(monkeypatch, device_payload(verification_uri_complete=complete), echo=lines.append)
+        assert complete in "\n".join(lines)
+        assert opened == [complete]
+
+    def test_the_plain_verification_uri_is_opened_when_there_is_no_complete_one(self, monkeypatch):
+        opened = []
+        monkeypatch.setattr(device_flow.webbrowser, "open", opened.append)
+        self.run(monkeypatch, device_payload(), echo=lambda _: None)
+        assert opened == [f"{ISSUER}/activate"]
+
+    def test_browser_launch_failure_is_not_fatal(self, monkeypatch):
+        def boom(target):
+            raise RuntimeError("no display")
+
+        monkeypatch.setattr(device_flow.webbrowser, "open", boom)
+        # The code is already on screen, so a failed launch must not abort.
+        assert self.run(monkeypatch, device_payload(), echo=lambda _: None).access_token == "at"
 
 
 # --------------------------------------------------------------------------- #

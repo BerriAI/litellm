@@ -103,6 +103,17 @@ class TestRequestSafety:
         with pytest.raises(NativeOIDCError, match="byte limit"):
             http_client.get_json_response(f"{BASE_URL}/x")
 
+    def test_empty_chunks_do_not_corrupt_the_body(self, capture_request):
+        class ChunkedResponse(FakeResponse):
+            # A chunked/keep-alive response can yield empty chunks.
+            def iter_content(self, chunk_size=8192):
+                yield b'{"a":'
+                yield b""
+                yield b" 1}"
+
+        capture_request(ChunkedResponse())
+        assert http_client.get_json_response(f"{BASE_URL}/x").payload == {"a": 1}
+
     def test_body_at_the_limit_is_accepted(self, capture_request):
         padding = "y" * (http_client.MAX_RESPONSE_BYTES - 20)
         capture_request(json_response({"a": padding}))

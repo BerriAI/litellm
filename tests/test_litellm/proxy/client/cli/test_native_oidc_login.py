@@ -118,6 +118,24 @@ def test_no_usable_flow_raises_a_specific_reason():
         select_flow(provider, "auto", open_browser=True)
 
 
+def test_no_usable_flow_never_returns_a_flow_the_provider_cannot_run():
+    class SilentProvider(ProviderMetadata):
+        """A provider whose browser assertion passes but supports nothing."""
+
+        def assert_browser_flow_supported(self):
+            pass
+
+    provider = SilentProvider(
+        **{
+            **make_provider().__dict__,
+            "authorization_endpoint": None,
+            "device_authorization_endpoint": None,
+        }
+    )
+    with pytest.raises(NativeOIDCError, match="no usable login flow"):
+        select_flow(provider, "auto", open_browser=True)
+
+
 # --------------------------------------------------------------------------
 # run_native_login
 # --------------------------------------------------------------------------
