@@ -23,10 +23,11 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     id: "arize",
     displayName: "Arize",
     logo: arizeLogo.src,
-    // OTEL v2 destination: admin-owned and routed by credential_info.access,
-    // not configured as a per-team callback here.
-    supports_key_team_logging: false,
-    dynamic_params: {},
+    supports_key_team_logging: true,
+    dynamic_params: {
+      arize_api_key: "password",
+      arize_space_id: "password",
+    },
     description: "Arize Logging Integration",
   },
   {
@@ -103,10 +104,12 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     id: "langfuse_otel",
     displayName: "Langfuse OTEL",
     logo: langfuseLogo.src,
-    // OTEL v2 destination: admin-owned and routed by credential_info.access,
-    // not configured as a per-team callback here.
-    supports_key_team_logging: false,
-    dynamic_params: {},
+    supports_key_team_logging: true,
+    dynamic_params: {
+      langfuse_public_key: "text",
+      langfuse_secret_key: "password",
+      langfuse_host: "text",
+    },
     description: "Langfuse v3 OTEL Logging Integration",
   },
   {
