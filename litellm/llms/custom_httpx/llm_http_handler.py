@@ -5098,6 +5098,8 @@ class BaseLLMHTTPHandler:
         optional_params.update(patch.optional_params)
         if patch.tools is not None:
             optional_params["tools"] = patch.tools
+        if "tool_choice" not in patch.optional_params:
+            optional_params.pop("tool_choice", None)
 
         max_tokens = patch.max_tokens
         if max_tokens is None:
@@ -5170,10 +5172,13 @@ class BaseLLMHTTPHandler:
         optional_params.update(patch.optional_params)
         if patch.tools is not None:
             optional_params["tools"] = patch.tools
+        drop_tool_choice = "tool_choice" not in patch.optional_params
         optional_params = {
             k: v
             for k, v in optional_params.items()
-            if k != "stream" and k != "_code_interpreter_interception_converted_stream"
+            if k != "stream"
+            and k != "_code_interpreter_interception_converted_stream"
+            and not (drop_tool_choice and k == "tool_choice")
         }
 
         internal_keys = {"litellm_logging_obj"}
