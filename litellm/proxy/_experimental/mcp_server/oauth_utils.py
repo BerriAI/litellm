@@ -273,6 +273,37 @@ def get_passthrough_resource_metadata_url(scope: Scope, server_name: str) -> str
     return f"{base_url}{request_prefix}/.well-known/oauth-protected-resource{well_known_root_suffix()}{route_suffix}"
 
 
+def get_aggregate_resource_metadata_url(scope: Scope) -> str:
+    """The aggregate ``/mcp`` protected-resource metadata URL matching the spelling
+    the request arrived on, for the gateway's aggregate-endpoint 401 challenge.
+
+    Mirrors :func:`get_passthrough_resource_metadata_url` for the aggregate route:
+    when ``MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST`` is enabled the reverse-proxy-
+    injected path prefix (segments before the trailing ``/mcp``) is included, so an
+    anonymous client on ``/tenant-a/mcp`` is challenged to
+    ``/tenant-a/.well-known/oauth-protected-resource/mcp`` rather than the
+    unprefixed root; without the prefix the aggregate discovery builder would read
+    a request that has no prefix and return a resource that a strict RFC 9728 §3
+    client rejects against the original prefixed ``/mcp`` URL.
+    """
+    request = Request(scope)
+    base_url = get_request_base_url(request)
+    _path = scope.get("_original_path") or scope.get("path", "") or ""
+
+    aggregate_suffix = "/mcp"
+    request_prefix = ""
+    if (
+        _oauth_discovery_path_from_request_enabled()
+        and _path.endswith(aggregate_suffix)
+        and len(_path) > len(aggregate_suffix)
+    ):
+        request_prefix = _path[: -len(aggregate_suffix)]
+
+    return (
+        f"{base_url}{request_prefix}/.well-known/oauth-protected-resource{well_known_root_suffix()}{aggregate_suffix}"
+    )
+
+
 def get_passthrough_www_authenticate(
     scope: Scope,
     server_name: str,

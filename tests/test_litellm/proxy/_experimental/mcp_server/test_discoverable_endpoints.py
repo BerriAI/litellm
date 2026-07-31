@@ -3379,6 +3379,137 @@ def test_passthrough_challenge_invalid_token_flag_survives_prefix(monkeypatch):
     )
 
 
+def _aggregate_scope(*, original_path: str, rewritten_path: str | None = None) -> dict:
+    """ASGI scope for the aggregate ``/mcp`` route, matching how
+    ``dynamic_mcp_route`` records the client-visible path in
+    ``_original_path`` while the in-app ``path`` is the rewritten form.
+    """
+    return {
+        "type": "http",
+        "method": "POST",
+        "path": rewritten_path or original_path,
+        "_original_path": original_path,
+        "scheme": "https",
+        "query_string": b"",
+        "root_path": "",
+        "server": ("mcp.example.com", 443),
+        "headers": [(b"host", b"mcp.example.com")],
+    }
+
+
+def test_aggregate_challenge_uses_request_path_prefix_when_opt_in(monkeypatch):
+    """Greptile P1 regression: the aggregate ``/mcp`` endpoint's 401 must
+    advertise a well-known URL that retains the request prefix when
+    ``MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST`` is enabled. Otherwise the
+    client fetches an un-prefixed ``.well-known/.../mcp`` route, the
+    aggregate discovery builder derives no prefix, and the returned
+    ``resource`` fails the RFC 9728 §3 exact-match against the original
+    prefixed ``/mcp`` URL.
+    """
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        get_aggregate_resource_metadata_url,
+    )
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.setenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", "true")
+
+    scope = _aggregate_scope(original_path="/tenant-a/mcp", rewritten_path="/mcp")
+
+    assert get_aggregate_resource_metadata_url(scope) == (
+        "https://mcp.example.com/tenant-a/.well-known/oauth-protected-resource/mcp"
+    )
+
+
+def test_aggregate_challenge_default_ignores_request_path(monkeypatch):
+    """Backward-compat guard: without the opt-in env var the aggregate
+    challenge stays on ``PROXY_BASE_URL`` alone even when a prefix is
+    present in ``_original_path``.
+    """
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        get_aggregate_resource_metadata_url,
+    )
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.delenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", raising=False)
+
+    scope = _aggregate_scope(original_path="/tenant-a/mcp", rewritten_path="/mcp")
+
+    assert get_aggregate_resource_metadata_url(scope) == (
+        "https://mcp.example.com/.well-known/oauth-protected-resource/mcp"
+    )
+
+
+def test_aggregate_challenge_opt_in_with_root_mounted_request_is_noop(monkeypatch):
+    """When the client called the un-prefixed aggregate route (``/mcp``),
+    the opt-in must not fabricate a prefix; the emitted well-known URL
+    must equal the un-prefixed default.
+    """
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        get_aggregate_resource_metadata_url,
+    )
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.setenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", "true")
+
+    scope = _aggregate_scope(original_path="/mcp")
+
+    assert get_aggregate_resource_metadata_url(scope) == (
+        "https://mcp.example.com/.well-known/oauth-protected-resource/mcp"
+    )
+
+
+def test_gateway_dcr_challenge_aggregate_carries_request_prefix_when_opt_in(monkeypatch):
+    """End-to-end: the aggregate-fallback branch of ``_gateway_dcr_challenge``
+    must round-trip the request prefix into the ``WWW-Authenticate`` header.
+    Guards against a regression where the challenge builder and the aggregate
+    discovery document (which uses the prefix-aware ``resource_base``) drift
+    apart and leave prefixed aggregate ``/mcp`` clients stuck at discovery.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        _gateway_dcr_challenge,
+    )
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.setenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", "true")
+
+    scope = _aggregate_scope(original_path="/tenant-a/mcp", rewritten_path="/mcp")
+    request = Request(scope)
+
+    exc = _gateway_dcr_challenge(request, route="/mcp", mcp_servers=None, invalid_token=False)
+
+    assert exc.status_code == 401
+    assert exc.headers["WWW-Authenticate"] == (
+        'Bearer resource_metadata="https://mcp.example.com/tenant-a/.well-known/oauth-protected-resource/mcp"'
+    )
+
+
+def test_gateway_dcr_challenge_aggregate_default_stays_unprefixed(monkeypatch):
+    """Backward-compat guard: with the opt-in off, the aggregate challenge
+    URL stays on ``PROXY_BASE_URL`` alone even when the request carried a
+    reverse-proxy prefix.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        _gateway_dcr_challenge,
+    )
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.delenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", raising=False)
+
+    scope = _aggregate_scope(original_path="/tenant-a/mcp", rewritten_path="/mcp")
+    request = Request(scope)
+
+    exc = _gateway_dcr_challenge(request, route="/mcp", mcp_servers=None, invalid_token=False)
+
+    assert exc.status_code == 401
+    assert exc.headers["WWW-Authenticate"] == (
+        'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"'
+    )
+
+
 # -------------------------------------------------------------------
 # Tests for scopes_supported when mcp_server.scopes is None
 # -------------------------------------------------------------------
