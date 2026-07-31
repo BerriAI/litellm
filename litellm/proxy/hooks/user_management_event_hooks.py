@@ -6,8 +6,6 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel
-
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -16,7 +14,6 @@ from litellm.proxy._types import (
     CommonProxyErrors,
     LiteLLM_AuditLogs,
     Litellm_EntityType,
-    LiteLLM_UserTable,
     LitellmTableNames,
     NewUserRequest,
     NewUserResponse,
@@ -58,11 +55,11 @@ class UserManagementEventHooks:
         try:
             if prisma_client is None:
                 raise Exception(CommonProxyErrors.db_not_connected_error.value)
-            user_row: BaseModel = await UserRepository(prisma_client).table.find_first(
-                where={"user_id": response.user_id}
-            )
-
-            user_row_litellm_typed = LiteLLM_UserTable(**user_row.model_dump(exclude_none=True))
+            if response.user_id is None:
+                raise Exception("no user_id returned for the newly created user")
+            user_row_litellm_typed = await UserRepository(prisma_client).find_by_id(response.user_id)
+            if user_row_litellm_typed is None:
+                raise Exception(f"no user row found for user_id={response.user_id}")
             asyncio.create_task(
                 UserManagementEventHooks.create_internal_user_audit_log(
                     user_id=user_row_litellm_typed.user_id,

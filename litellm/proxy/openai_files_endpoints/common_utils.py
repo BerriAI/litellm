@@ -1035,7 +1035,7 @@ async def get_batch_from_database(
             if isinstance(db_batch_object.file_object, str)
             else db_batch_object.file_object
         )
-        response = LiteLLMBatch(**batch_data)
+        response = LiteLLMBatch.model_validate(batch_data)
         response.id = batch_id
 
         # The stored batch object has the raw provider input_file_id. Resolve to unified ID.
