@@ -388,7 +388,7 @@ export default function ModelInfoView({
       if (values.litellm_credential_name) {
         updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
       } else {
-        delete updatedLitellmParams.litellm_credential_name;
+        updatedLitellmParams.litellm_credential_name = null;
       }
       if (values.guardrails) {
         updatedLitellmParams.guardrails = values.guardrails;
@@ -1508,3 +1508,4 @@ export default function ModelInfoView({
     </div>
   );
 }
+
