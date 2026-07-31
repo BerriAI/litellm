@@ -272,7 +272,7 @@ class TenantTracerCache:
         )
 
         kind = self._owned_otlp_kind()
-        appended = [
+        appended = tuple(
             ExporterSpec(
                 kind=kind,
                 endpoint=d.endpoint,
@@ -280,8 +280,8 @@ class TenantTracerCache:
                 owner=None,
             )
             for d in destinations
-        ]
-        base_exporters = [*self._config.exporters] if include_base_exporters else []
+        )
+        base_exporters = (*self._config.exporters,) if include_base_exporters else ()
         merged_resource_attrs = {
             **self._config.resource_attributes,
             **{key: value for d in destinations for key, value in destination_resource_attrs(d).items()},
