@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import MCPToolPermissions from "./MCPToolPermissions";
 import * as networking from "../networking";
+import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 
 vi.mock("../networking");
 
@@ -14,6 +15,8 @@ describe("MCPToolPermissions", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    testQueryClient.clear();
+    vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
   });
 
   it("should update tool permissions when user selects a tool", async () => {
@@ -182,6 +185,367 @@ describe("MCPToolPermissions", () => {
     // Verify onChange was called with no tools selected
     expect(mockOnChange).toHaveBeenCalledWith({
       [mockServerId]: [],
+    });
+  });
+
+  describe("servers reached indirectly", () => {
+    const groupServer = {
+      server_id: "srv-group-1",
+      server_name: "Group Server",
+      alias: "Group Server",
+      mcp_access_groups: ["production-group"],
+    };
+    const groupTools = [
+      { name: "list_issues", description: "List issues" },
+      { name: "delete_issue", description: "Delete an issue" },
+    ];
+
+    it("renders the tool matrix for a server granted only through an access group", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([groupServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
+
+      const mockOnChange = vi.fn();
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[]}
+          selectedAccessGroups={["production-group"]}
+          toolPermissions={{}}
+          onChange={mockOnChange}
+        />,
+      );
+
+      expect(await screen.findByText("Group Server")).toBeInTheDocument();
+      expect(await screen.findByText("list_issues")).toBeInTheDocument();
+      expect(screen.getByText("delete_issue")).toBeInTheDocument();
+      expect(networking.listMCPTools).toHaveBeenCalledWith(mockAccessToken, groupServer.server_id);
+    });
+
+    it("marks an access-group server as inherited and leaves a directly selected one unmarked", async () => {
+      const directServer = { server_id: "srv-direct-1", server_name: "Direct Server", alias: "Direct Server" };
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([directServer, groupServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
+
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[directServer.server_id]}
+          selectedAccessGroups={["production-group"]}
+          toolPermissions={{ [directServer.server_id]: ["list_issues"], [groupServer.server_id]: ["list_issues"] }}
+          onChange={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByText("Direct Server")).toBeInTheDocument();
+      expect(await screen.findByText("Group Server")).toBeInTheDocument();
+      expect(screen.getByText("Via access group: production-group")).toBeInTheDocument();
+      expect(screen.queryAllByText(/^Via /)).toHaveLength(1);
+    });
+
+    it("renders a toolset server as inherited from that toolset", async () => {
+      const toolsetServer = { server_id: "srv-toolset-1", server_name: "Toolset Server", alias: "Toolset Server" };
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([toolsetServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([
+        {
+          toolset_id: "ts-1",
+          toolset_name: "Support Toolset",
+          tools: [{ server_id: toolsetServer.server_id, tool_name: "list_issues" }],
+        },
+      ]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
+
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[]}
+          selectedToolsets={["ts-1"]}
+          toolPermissions={{}}
+          onChange={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByText("Toolset Server")).toBeInTheDocument();
+      expect(screen.getByText("Via toolset: Support Toolset")).toBeInTheDocument();
+    });
+
+    it("does not write a default allowlist for an inherited server", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([groupServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
+
+      const mockOnChange = vi.fn();
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[]}
+          selectedAccessGroups={["production-group"]}
+          toolPermissions={{}}
+          onChange={mockOnChange}
+        />,
+      );
+
+      expect(await screen.findByText("list_issues")).toBeInTheDocument();
+      expect(mockOnChange).not.toHaveBeenCalled();
+    });
+
+    it("keeps blocking delete tools by default for a directly selected server", async () => {
+      const directServer = { server_id: "srv-direct-1", server_name: "Direct Server", alias: "Direct Server" };
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([directServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
+
+      const mockOnChange = vi.fn();
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[directServer.server_id]}
+          toolPermissions={{}}
+          onChange={mockOnChange}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(mockOnChange).toHaveBeenCalledWith({ [directServer.server_id]: ["list_issues"] });
+      });
+    });
+
+    it("shows a server that only a stale tool-permission entry still entitles", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([groupServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
+
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[]}
+          selectedAccessGroups={[]}
+          toolPermissions={{ [groupServer.server_id]: ["list_issues"] }}
+          onChange={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByText("Group Server")).toBeInTheDocument();
+      expect(screen.getByText("Via tool permissions")).toBeInTheDocument();
+    });
+
+    it("shows nothing for a principal blocked from every MCP server", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([groupServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
+
+      const { container } = renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[NO_MCP_SERVERS_SENTINEL]}
+          toolPermissions={{ [groupServer.server_id]: ["list_issues"] }}
+          onChange={vi.fn()}
+        />,
+      );
+
+      expect(container).toBeEmptyDOMElement();
+      expect(networking.listMCPTools).not.toHaveBeenCalled();
+    });
+
+    it("warns instead of showing no inherited servers when the server list cannot be loaded", async () => {
+      vi.mocked(networking.fetchMCPServers).mockRejectedValue(new Error("boom"));
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[]}
+          selectedAccessGroups={["production-group"]}
+          toolPermissions={{}}
+          onChange={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByText("Unable to load MCP servers")).toBeInTheDocument();
+    });
+
+    it("warns when the selected toolsets cannot be resolved to servers", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+      vi.mocked(networking.fetchMCPToolsets).mockRejectedValue(new Error("boom"));
+
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[]}
+          selectedToolsets={["ts-1"]}
+          toolPermissions={{}}
+          onChange={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByText("Unable to load toolsets")).toBeInTheDocument();
+    });
+  });
+
+  describe("grants keyed by server name", () => {
+    const namedServer = {
+      server_id: "1f4bd6c1-0000-4000-8000-000000000001",
+      server_name: "github_mcp",
+      alias: "GitHub",
+    };
+    const namedTools = [
+      { name: "list_issues", description: "List issues" },
+      { name: "delete_issue", description: "Delete an issue" },
+    ];
+
+    it("renders the tool matrix for a grant that names the server instead of its id", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([namedServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: namedTools, error: false });
+
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={["github_mcp"]}
+          toolPermissions={{ github_mcp: ["list_issues"] }}
+          onChange={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByText("github_mcp")).toBeInTheDocument();
+      expect(await screen.findByText("list_issues")).toBeInTheDocument();
+      expect(screen.getByText("delete_issue")).toBeInTheDocument();
+      expect(networking.listMCPTools).toHaveBeenCalledWith(mockAccessToken, namedServer.server_id);
+    });
+
+    it("writes an edit back to the name key instead of adding a second id-keyed entry", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([namedServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: namedTools, error: false });
+
+      const mockOnChange = vi.fn();
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={["github_mcp"]}
+          toolPermissions={{ github_mcp: ["list_issues"] }}
+          onChange={mockOnChange}
+        />,
+      );
+
+      expect(await screen.findByText("list_issues")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Deselect All" }));
+
+      expect(mockOnChange).toHaveBeenCalledWith({ github_mcp: [] });
+    });
+  });
+
+  describe("a server named by several equivalent keys", () => {
+    const namedServer = {
+      server_id: "1f4bd6c1-0000-4000-8000-000000000001",
+      server_name: "github_mcp",
+      alias: "GitHub",
+      mcp_access_groups: ["production-group"],
+    };
+    const namedTools = [
+      { name: "list_issues", description: "List issues" },
+      { name: "create_issue", description: "Open an issue" },
+      { name: "delete_issue", description: "Delete an issue" },
+    ];
+
+    const renderWithBothKeys = (onChange: () => void) =>
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[namedServer.server_id]}
+          toolPermissions={{ [namedServer.server_id]: ["list_issues"], github_mcp: ["create_issue"] }}
+          onChange={onChange}
+        />,
+      );
+
+    beforeEach(() => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([namedServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: namedTools, error: false });
+    });
+
+    it("renders one card showing the union both keys grant", async () => {
+      renderWithBothKeys(vi.fn());
+
+      expect(await screen.findByText("github_mcp")).toBeInTheDocument();
+      expect(screen.getAllByText("github_mcp")).toHaveLength(1);
+      expect(await screen.findByText("list_issues")).toBeInTheDocument();
+
+      // Flat view keeps checkbox order identical to the fetched tool order.
+      await userEvent.click(screen.getByText("Flat List"));
+      const [listIssues, createIssue, deleteIssue] = screen.getAllByRole("checkbox");
+      expect(listIssues).toBeChecked();
+      expect(createIssue).toBeChecked();
+      expect(deleteIssue).not.toBeChecked();
+    });
+
+    it("removes a deselected tool from every equivalent key, leaving one entry for the server", async () => {
+      const mockOnChange = vi.fn();
+      renderWithBothKeys(mockOnChange);
+
+      expect(await screen.findByText("list_issues")).toBeInTheDocument();
+      await userEvent.click(screen.getByText("Flat List"));
+      await userEvent.click(screen.getAllByRole("checkbox")[0]);
+
+      const written = mockOnChange.mock.calls.at(-1)?.[0] as Record<string, string[]>;
+      expect(Object.keys(written)).toEqual([namedServer.server_id]);
+      expect(written[namedServer.server_id]).not.toContain("list_issues");
+      expect(written[namedServer.server_id]).toContain("create_issue");
+    });
+
+    // Both catalog orders, because a name resolves to two servers here and a first-match
+    // implementation is only wrong in one of them.
+    it.each([
+      { label: "edited server first", editedFirst: true },
+      { label: "twin first", editedFirst: false },
+    ])(
+      "says on the card when a key names another server too, since its tools cannot be revoked here ($label)",
+      async ({ editedFirst }) => {
+        const twin = { server_id: "1f4bd6c1-0000-4000-8000-000000000002", server_name: "github_mcp", alias: "Twin" };
+        vi.mocked(networking.fetchMCPServers).mockResolvedValue(
+          editedFirst ? [namedServer, twin] : [twin, namedServer],
+        );
+
+        renderWithProviders(
+          <MCPToolPermissions
+            accessToken={mockAccessToken}
+            selectedServers={[namedServer.server_id]}
+            toolPermissions={{ [namedServer.server_id]: ["list_issues"], github_mcp: ["create_issue"] }}
+            onChange={vi.fn()}
+          />,
+        );
+
+        expect(
+          await screen.findByText(
+            'Also granted by "github_mcp", which names another server too. Those tools stay allowed here until the servers no longer share that name',
+          ),
+        ).toBeInTheDocument();
+      },
+    );
+
+    it("says nothing about shared names when every key names one server", async () => {
+      renderWithBothKeys(vi.fn());
+
+      expect(await screen.findByText("github_mcp")).toBeInTheDocument();
+      expect(screen.queryByText(/names another server too/)).not.toBeInTheDocument();
+    });
+
+    it("badges the server once, by its strongest grant, when a key and a group both name it", async () => {
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[]}
+          selectedAccessGroups={["production-group"]}
+          toolPermissions={{ github_mcp: ["list_issues"] }}
+          onChange={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByText("github_mcp")).toBeInTheDocument();
+      expect(screen.getByText("Via access group: production-group")).toBeInTheDocument();
+      expect(screen.queryByText("Via tool permissions")).not.toBeInTheDocument();
+      expect(screen.queryAllByText(/^Via /)).toHaveLength(1);
     });
   });
 });
