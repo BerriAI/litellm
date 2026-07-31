@@ -1,6 +1,8 @@
 """Shared response shapes for the `/management/v1` control-plane surface."""
 
-from pydantic import BaseModel, ConfigDict, Field
+from collections.abc import Mapping
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 
 class ProblemDetail(BaseModel):
@@ -37,3 +39,32 @@ class FacetListResponse(BaseModel):
     data: list[str]
     meta: PageMeta
     links: PageLinks
+
+
+class ListMeta(BaseModel):
+    """An entity list can afford the COUNT(*) a facet cannot, so it reports a real total."""
+
+    page: int
+    page_size: int
+    total_count: int
+    total_pages: int
+
+
+class ListLinks(BaseModel):
+    """Hypermedia for an entity list. `first`/`last` exist here because `total_pages` is known."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    self_link: str = Field(alias="self")
+    first: str
+    prev: str | None = None
+    next: str | None = None
+    last: str
+
+
+class ListResponse(BaseModel):
+    """One page of an entity collection. Rows are flat: no `{type, id, attributes}` wrapper."""
+
+    data: tuple[Mapping[str, JsonValue], ...]
+    meta: ListMeta
+    links: ListLinks
