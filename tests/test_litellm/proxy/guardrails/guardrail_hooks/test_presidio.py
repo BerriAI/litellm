@@ -1080,6 +1080,55 @@ async def test_analyze_text_invalid_response_raises_when_mask_configured():
 
 
 @pytest.mark.asyncio
+async def test_analyze_text_mask_only_fails_open_by_default():
+    """
+    Default mask-only config (no pii_entities_config / output / apply_to_output)
+    still fails open on analyzer error, preserving prior behaviour (issue #30728).
+    """
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://mock-presidio:5002/",
+        presidio_anonymizer_api_base="http://mock-presidio:5001/",
+        output_parse_pii=False,
+    )
+    assert presidio.mask_pii_fail_closed is False
+
+    with patch.object(
+        presidio,
+        "_get_session_iterator",
+        _make_mock_session_iterator("Internal Server Error", status=500),
+    ):
+        result = await presidio.analyze_text(
+            text="some text", presidio_config=None, request_data={}
+        )
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_raises_when_mask_pii_fail_closed_set():
+    """
+    With mask_pii_fail_closed=True, a mask-only guardrail blocks (fail closed)
+    on analyzer error instead of forwarding unmasked text (issue #30728).
+    """
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://mock-presidio:5002/",
+        presidio_anonymizer_api_base="http://mock-presidio:5001/",
+        output_parse_pii=False,
+        mask_pii_fail_closed=True,
+    )
+
+    with patch.object(
+        presidio,
+        "_get_session_iterator",
+        _make_mock_session_iterator("Internal Server Error", status=500),
+    ):
+        with pytest.raises(GuardrailRaisedException) as exc_info:
+            await presidio.analyze_text(
+                text="some text", presidio_config=None, request_data={}
+            )
+    assert "PII protection is configured" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_analyze_text_list_with_non_dict_items():
     """
     Test that analyze_text skips non-dict items in the result list.
