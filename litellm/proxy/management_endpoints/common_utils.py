@@ -423,6 +423,20 @@ def _has_meaningful_budget_limit(budget_values: Dict[str, Any]) -> bool:
     return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
 
 
+def _budget_patch_to_write_data(budget_patch: dict[str, Any]) -> dict[str, Any]:
+    """Turn an RFC 7396-style budget patch into the budget-table write payload:
+    setting budget_duration also recomputes budget_reset_at, clearing the
+    duration clears budget_reset_at, and a patch that never mentions the
+    duration leaves the reset timestamp alone."""
+    if "budget_duration" not in budget_patch:
+        return dict(budget_patch)
+    duration = budget_patch["budget_duration"]
+    return {
+        **budget_patch,
+        "budget_reset_at": get_budget_reset_time(budget_duration=duration) if duration is not None else None,
+    }
+
+
 async def _upsert_budget_and_membership(
     tx,
     *,
@@ -450,12 +464,7 @@ async def _upsert_budget_and_membership(
     if not budget_patch:
         return
 
-    write_data = dict(budget_patch)
-    if "budget_duration" in write_data:
-        duration = write_data["budget_duration"]
-        write_data["budget_reset_at"] = (
-            get_budget_reset_time(budget_duration=duration) if duration is not None else None
-        )
+    write_data = _budget_patch_to_write_data(budget_patch)
 
     is_shared_default = (
         existing_budget_id is not None

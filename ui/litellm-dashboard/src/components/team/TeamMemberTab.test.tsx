@@ -182,6 +182,25 @@ describe("TeamMembersComponent", () => {
     expect(screen.getByText("Add Member")).toBeInTheDocument();
   });
 
+  it("should show checkboxes after Select Members is clicked", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={createMockTeamData()}
+        canEditTeam={true}
+        handleMemberDelete={mockHandleMemberDelete}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Select Members" }));
+
+    expect(screen.getByRole("button", { name: "Bulk Edit (0 selected)" })).toBeDisabled();
+    expect(screen.getAllByRole("checkbox")).toHaveLength(3);
+  });
+
   it("should display dash when user email is null", () => {
     renderWithProviders(
       <TeamMembersComponent
