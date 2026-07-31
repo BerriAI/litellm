@@ -50,6 +50,7 @@ from litellm.proxy._types import (
     MCPEnvVar,
     MCPEnvVarScope,
     MCPTransport,
+    UserAPIKeyAuth,
 )
 from litellm.types.mcp import MCPAuth, MCPAuthType
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
@@ -1912,6 +1913,102 @@ class TestMCPServerManager:
 
         await manager.preflight_token_exchange(server=server, oauth2_headers=None, user_api_key_auth=None)
         assert resolved == ["good-subject"]
+
+    def _id_jag_server(self, server_id: str) -> "MCPServer":
+        return MCPServer(
+            server_id=server_id,
+            name=f"{server_id}-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_id_jag,
+            client_id="gateway-client",
+            client_secret="gateway-secret",
+            token_exchange_endpoint="https://org-idp.example/oauth2/token",
+            id_jag_resource_token_endpoint="https://resource-as.example/oauth2/token",
+        )
+
+    @pytest.mark.asyncio
+    async def test_preflight_id_jag_surfaces_missing_assertion_as_a_plain_412(self):
+        """ID-JAG's missing/expired-assertion precondition must reach the client as a 412 whose body
+        names the fix, at the transport edge. Without the preflight the session opens and the caller
+        gets a 200 with an empty tool list and then 'tool not found', which is not what happened.
+        412 is a precondition, not an RFC 9728 discovery challenge, so it carries no
+        WWW-Authenticate: there is nothing for the client to discover and retry against."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        summary = (
+            "ID-JAG requires an IdP identity assertion for this user and none is stored. "
+            "Sign in through LiteLLM SSO so the gateway captures one."
+        )
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(CredError.of_precondition_required(summary))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=self._id_jag_server("id-jag-preflight-412"),
+                oauth2_headers={"Authorization": "Bearer sk-litellm-virtual-key"},
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+            )
+        assert exc_info.value.status_code == 412
+        assert summary in exc_info.value.detail
+        assert not (exc_info.value.headers or {})
+
+    @pytest.mark.asyncio
+    async def test_preflight_id_jag_surfaces_assertion_store_outage_as_503(self):
+        """A store outage is the other failure the session would swallow, and it is a different
+        answer than 412: the user has nothing to fix by signing in again."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(CredError.of_upstream_unavailable("assertion store unreachable"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=self._id_jag_server("id-jag-preflight-503"),
+                oauth2_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+            )
+        assert exc_info.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_preflight_id_jag_runs_off_the_stored_subject_not_the_inbound_bearer(self):
+        """The ID-JAG preflight must resolve the same subject egress resolves: the identity assertion
+        stored for the authenticated user, never the inbound Authorization. That header is a LiteLLM
+        virtual key here, so feeding it in as an identity token would let the preflight pass while the
+        session still fails; and requiring one (the OBO arm's no-bearer early return) would skip the
+        preflight entirely on the store-sourced flow that is the whole point of the mode."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        subjects = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                subjects.append((subject.subject_id, subject.inbound_token))
+                return Ok(StaticHeaderAuth("Bearer minted-id-jag", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+
+        assert (
+            await manager.preflight_token_exchange(
+                server=self._id_jag_server("id-jag-preflight-ok"),
+                oauth2_headers={"Authorization": "Bearer sk-litellm-virtual-key"},
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+            )
+            is None
+        )
+        assert subjects == [("u-1", None)]
 
     @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_passthrough_strips_authorization_when_admission_consumed_litellm_key(
