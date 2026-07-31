@@ -840,6 +840,7 @@ class LiteLLMRoutes(enum.Enum):
             "/config/list",
             "/config/field/info",
             "/budget/list",
+            "/management/v1/budgets",
             "/budget/settings",
             # Invitation viewing (admin viewer cannot create/delete; can read).
             "/invitation/info",

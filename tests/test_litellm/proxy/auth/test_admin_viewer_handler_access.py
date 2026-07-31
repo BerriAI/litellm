@@ -51,6 +51,7 @@ def admin_viewer_client(monkeypatch):
     mock_budget_table = MagicMock()
     mock_budget_table.find_many = AsyncMock(return_value=[])
     mock_budget_table.find_first = AsyncMock(return_value=None)
+    mock_budget_table.count = AsyncMock(return_value=0)
 
     mock_invitation_table = MagicMock()
     mock_invitation_table.find_unique = AsyncMock(return_value=None)
@@ -102,6 +103,14 @@ def _assert_not_role_blocked(response) -> None:
 def test_budget_list_allows_admin_viewer(admin_viewer_client):
     """`/budget/list` is read-only and must be accessible to Admin Viewer."""
     resp = admin_viewer_client.get("/budget/list")
+    _assert_not_role_blocked(resp)
+    assert resp.status_code == 200, resp.text
+
+
+def test_management_v1_budgets_allows_admin_viewer(admin_viewer_client):
+    """`/management/v1/budgets` is the paged/sortable budget list; same read tier as
+    `/budget/list`, and it answers 403 rather than an empty page when it refuses."""
+    resp = admin_viewer_client.get("/management/v1/budgets")
     _assert_not_role_blocked(resp)
     assert resp.status_code == 200, resp.text
 
