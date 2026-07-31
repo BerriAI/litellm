@@ -119,3 +119,19 @@ def test_put_object_drops_key_id_when_algorithm_is_not_kms():
     put_object_kwargs = mock_s3_client.put_object.call_args.kwargs
     assert put_object_kwargs["ServerSideEncryption"] == "AES256"
     assert "SSEKMSKeyId" not in put_object_kwargs
+
+
+def test_non_string_sse_config_is_ignored_not_crashing():
+    """YAML booleans or other non-strings in SSE config must not crash logger init."""
+    mock_s3_client = _run_log_event(
+        {
+            "s3_bucket_name": "test-bucket",
+            "s3_region_name": "us-east-1",
+            "s3_server_side_encryption": True,
+            "s3_sse_kms_key_id": TEST_KMS_KEY_ARN,
+        }
+    )
+
+    put_object_kwargs = mock_s3_client.put_object.call_args.kwargs
+    assert "ServerSideEncryption" not in put_object_kwargs
+    assert "SSEKMSKeyId" not in put_object_kwargs
