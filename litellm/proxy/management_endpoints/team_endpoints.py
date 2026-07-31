@@ -498,7 +498,9 @@ def _get_default_team_param(field: str) -> _DefaultTeamParamValue | None:
     if raw_value is None:
         return None
     if isinstance(raw_value, list):
-        return tuple(v.value if hasattr(v, "value") else v for v in raw_value)
+        # mutable-ok: callers compare this against list literals (e.g. team_member_permissions
+        # equality checks), so it must stay a real list, not a tuple, to match prior behavior.
+        return [v.value if hasattr(v, "value") else v for v in raw_value]
     return _DEFAULT_TEAM_PARAM_ADAPTER.validate_python(raw_value)
 
 

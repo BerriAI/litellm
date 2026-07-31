@@ -1687,7 +1687,10 @@ class ResponsesWebSocketStreaming:
             for output_item in response_obj.get("output") or []:
                 if not isinstance(output_item, dict):
                     continue
-                for content_block in output_item.get("content") or []:
+                content = output_item.get("content") or []
+                if not isinstance(content, list):
+                    continue
+                for content_block in content:
                     if not isinstance(content_block, dict):
                         continue
                     text = content_block.get("text")
@@ -1750,21 +1753,26 @@ class ResponsesWebSocketStreaming:
                     if masked_args != arguments:
                         output_item["arguments"] = masked_args
                         modified = True
-                for summary_block in output_item.get("summary") or []:
-                    if not isinstance(summary_block, dict):
-                        continue
-                    summary_text = summary_block.get("text")
-                    if isinstance(summary_text, str):
-                        masked_summary = await cb.check_pii(
-                            text=summary_text,
-                            output_parse_pii=False,
-                            presidio_config=presidio_config,
-                            request_data=self.request_data,
-                        )
-                        if masked_summary != summary_text:
-                            summary_block["text"] = masked_summary
-                            modified = True
-                for content_block in output_item.get("content") or []:
+                summary = output_item.get("summary") or []
+                if isinstance(summary, list):
+                    for summary_block in summary:
+                        if not isinstance(summary_block, dict):
+                            continue
+                        summary_text = summary_block.get("text")
+                        if isinstance(summary_text, str):
+                            masked_summary = await cb.check_pii(
+                                text=summary_text,
+                                output_parse_pii=False,
+                                presidio_config=presidio_config,
+                                request_data=self.request_data,
+                            )
+                            if masked_summary != summary_text:
+                                summary_block["text"] = masked_summary
+                                modified = True
+                content = output_item.get("content") or []
+                if not isinstance(content, list):
+                    continue
+                for content_block in content:
                     if not isinstance(content_block, dict):
                         continue
                     text = content_block.get("text")

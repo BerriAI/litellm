@@ -2311,7 +2311,7 @@ async def _validate_mcp_servers_for_key_update(
     return normalized_object_permission
 
 
-async def _validate_update_key_data(
+async def _validate_update_key_data(  # noqa: C901  # prisma_client None-guard needed now that it's typed Optional
     data: UpdateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
     user_api_key_dict: UserAPIKeyAuth,
