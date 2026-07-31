@@ -13,6 +13,10 @@ from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm import ModelResponse, RateLimitError, completion
+from litellm.constants import (
+    RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY,
+    RESPONSE_FORMAT_TOOL_NAME,
+)
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.types.llms.bedrock import ConverseTokenUsageBlock
 
@@ -4057,14 +4061,15 @@ def test_add_additional_properties_definitions():
     )
 
 
-def test_json_object_no_schema_skips_tool_injection():
-    """response_format: {type: json_object} with no schema should NOT inject
-    the synthetic json_tool_call tool.
+def test_json_object_no_schema_uses_tool_with_required_wrapper():
+    """response_format: {type: json_object} with no schema goes through the tool.
 
-    When no schema is given, _create_json_tool_call_for_response_format builds
-    a tool with an empty schema (properties: {}). The model follows the schema
-    and returns {} instead of the requested JSON. Skipping tool injection lets
-    the model respond naturally with the JSON the caller asked for."""
+    Bedrock's strict structured-output API cannot express "any JSON object": it
+    rejects `additionalProperties: true`, and with it set to false an empty
+    `properties` admits only `{}`. The synthetic tool covers the case instead,
+    on a schema whose wrapper field is *required* so the model cannot answer
+    with `{}` (which it does on Claude Sonnet 4.5 and Amazon Nova when
+    `properties` is empty)."""
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -4082,11 +4087,12 @@ def test_json_object_no_schema_skips_tool_injection():
             is_thinking_enabled=False,
         )
 
-        # Should NOT use native outputConfig (no schema provided)
+        # No schema, so Bedrock's native outputConfig is not usable
         assert "outputConfig" not in result
-        # Should NOT inject tools - empty schema causes model to return {}
-        assert "tools" not in result
-        assert "tool_choice" not in result
+        schema = result["tools"][0]["function"]["parameters"]
+        assert schema["required"] == [RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY]
+        assert result["tool_choice"] == {"tool": {"name": RESPONSE_FORMAT_TOOL_NAME}}
+        assert result["json_object_unwrap_key"] == RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY
         assert result["json_mode"] is True
     finally:
         litellm.model_cost = old_cost
@@ -5864,317 +5870,228 @@ def test_adaptive_thinking_dropped_when_max_tokens_too_small_converse():
     assert "thinking" not in optional_params
 
 
-def test_json_object_sets_prefill_flag_for_anthropic():
-    """json_object carries no schema, so it is honoured via an assistant prefill."""
+# ---------------------------------------------------------------------------
+# response_format={"type": "json_object"} (no schema)
+# ---------------------------------------------------------------------------
+
+SONNET_45 = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+JSON_OBJECT = {"type": "json_object"}
+
+
+def _translate_json_object(model=SONNET_45, non_default_params=None, is_thinking_enabled=False):
     config = AmazonConverseConfig()
-    response_format = {"type": "json_object"}
-
-    with patch.object(litellm, "modify_params", True):
-        result = config._translate_response_format_param(
-            value=response_format,
-            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-            optional_params={},
-            non_default_params={"response_format": response_format},
-            is_thinking_enabled=False,
-        )
-
-    assert result["json_object_prefill"] is True
-    # Neither structured-output API can be used without a schema
-    assert "outputConfig" not in result
-    assert "tools" not in result
-    assert result["json_mode"] is True
+    ndp = {"response_format": JSON_OBJECT, **(non_default_params or {})}
+    return config._translate_response_format_param(
+        value=JSON_OBJECT,
+        model=model,
+        optional_params={},
+        non_default_params=ndp,
+        is_thinking_enabled=is_thinking_enabled,
+    )
 
 
-def test_json_object_no_prefill_when_modify_params_disabled():
-    """Default behaviour is unchanged; the no-op is logged instead."""
-    config = AmazonConverseConfig()
-    response_format = {"type": "json_object"}
+def test_json_object_injects_tool_with_required_wrapper_field():
+    """`json_object` is honoured through the synthetic tool, on a wrapper schema.
 
-    with patch.object(litellm, "modify_params", False):
-        with patch.object(
-            litellm.llms.bedrock.chat.converse_transformation, "verbose_logger"
-        ) as mock_logger:
-            result = config._translate_response_format_param(
-                value=response_format,
-                model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-                optional_params={},
-                non_default_params={"response_format": response_format},
-                is_thinking_enabled=False,
-            )
-
-    assert "json_object_prefill" not in result
-    mock_logger.warning.assert_called_once()
-    assert "json_object" in mock_logger.warning.call_args[0][0]
-
-
-def test_json_object_no_prefill_for_non_anthropic_model():
-    """Llama and friends do not support prefill, so they keep the old no-op."""
-    config = AmazonConverseConfig()
-    response_format = {"type": "json_object"}
-
-    with patch.object(litellm, "modify_params", True):
-        with patch.object(
-            litellm.llms.bedrock.chat.converse_transformation, "verbose_logger"
-        ) as mock_logger:
-            result = config._translate_response_format_param(
-                value=response_format,
-                model="meta.llama3-3-70b-instruct-v1:0",
-                optional_params={},
-                non_default_params={"response_format": response_format},
-                is_thinking_enabled=False,
-            )
-
-    assert "json_object_prefill" not in result
-    mock_logger.warning.assert_called_once()
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "us.anthropic.claude-opus-4-7",
-        "us.anthropic.claude-sonnet-5",
-    ],
-)
-def test_json_object_no_prefill_when_model_declares_prefill_unsupported(model):
-    """Newer Claude models reject a prefilled assistant turn.
-
-    They carry `supports_assistant_prefill: false` in model_prices_and_context_window.json,
-    so matching on "anthropic"/"claude" in the model name would send them a request the
-    provider refuses.
+    The wrapper field must be *required*: an open schema with empty `properties`
+    lets the model satisfy the call with `{}`, which it does on Claude Sonnet 4.5
+    and Amazon Nova. `json_object_unwrap_key` is what strips the wrapper back off
+    on the response side.
     """
-    config = AmazonConverseConfig()
-    response_format = {"type": "json_object"}
+    result = _translate_json_object()
 
-    with patch.object(litellm, "modify_params", True):
-        with patch.object(
-            litellm.llms.bedrock.chat.converse_transformation, "verbose_logger"
-        ) as mock_logger:
-            result = config._translate_response_format_param(
-                value=response_format,
-                model=model,
-                optional_params={},
-                non_default_params={"response_format": response_format},
-                is_thinking_enabled=False,
-            )
-
-    assert "json_object_prefill" not in result
-    mock_logger.warning.assert_called_once()
+    tools = result["tools"]
+    assert len(tools) == 1
+    fn = tools[0]["function"]
+    assert fn["name"] == RESPONSE_FORMAT_TOOL_NAME
+    schema = fn["parameters"]
+    assert schema["required"] == [RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY]
+    assert schema["properties"][RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY]["additionalProperties"] is True
+    assert fn["description"]
+    assert result["json_object_unwrap_key"] == RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY
+    assert result["json_mode"] is True
+    # no schema means Bedrock's strict structured-output API cannot be used
+    assert "outputConfig" not in result
 
 
-def test_json_object_prefill_resolved_through_inference_profile_arn():
-    """A named inference-profile ARN still resolves to its underlying model."""
-    config = AmazonConverseConfig()
-    response_format = {"type": "json_object"}
-    model = (
-        "bedrock/converse/arn:aws:bedrock:us-east-1:000000000000:inference-profile/"
-        "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+def test_json_object_forces_tool_choice_when_caller_sent_no_tools():
+    result = _translate_json_object()
+    assert result["tool_choice"] == {"tool": {"name": RESPONSE_FORMAT_TOOL_NAME}}
+
+
+def test_json_object_requires_any_tool_when_caller_sent_tools():
+    """Pinning the synthetic tool would make the caller's own tools unreachable.
+
+    Requiring *some* tool keeps both reachable: a real tool when the model needs
+    one, `json_tool_call` when it is answering. Leaving the choice fully open is
+    not enough, since Claude Sonnet 4.5 and Haiku 4.5 then answer in prose.
+    """
+    caller_tool = {"type": "function", "function": {"name": "get_weather"}}
+    result = _translate_json_object(non_default_params={"tools": [caller_tool]})
+
+    assert result["tool_choice"] == {"any": {}}
+    tool_names = [t["function"]["name"] for t in result["tools"]]
+    assert RESPONSE_FORMAT_TOOL_NAME in tool_names
+    assert result["json_object_unwrap_key"] == RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY
+
+
+def test_json_object_respects_caller_supplied_tool_choice():
+    """An explicit tool_choice from the caller must not be overridden."""
+    caller_tool = {"type": "function", "function": {"name": "get_weather"}}
+    result = _translate_json_object(
+        non_default_params={"tools": [caller_tool], "tool_choice": "auto"},
     )
 
-    with patch.object(litellm, "modify_params", True):
-        result = config._translate_response_format_param(
-            value=response_format,
-            model=model,
-            optional_params={},
-            non_default_params={"response_format": response_format},
-            is_thinking_enabled=False,
-        )
-
-    assert result["json_object_prefill"] is True
+    assert "tool_choice" not in result
 
 
-def test_json_object_no_prefill_for_opaque_application_inference_profile():
-    """An opaque profile ID carries no capability data, so stay with the no-op."""
-    config = AmazonConverseConfig()
-    response_format = {"type": "json_object"}
-    model = (
-        "bedrock/converse/arn:aws:bedrock:us-east-1:000000000000:"
-        "application-inference-profile/abc123opaque"
-    )
+def test_json_object_does_not_force_tool_choice_when_thinking_enabled():
+    """Forced tool use is incompatible with manual extended thinking."""
+    result = _translate_json_object(is_thinking_enabled=True)
 
-    with patch.object(litellm, "modify_params", True):
-        with patch.object(
-            litellm.llms.bedrock.chat.converse_transformation, "verbose_logger"
-        ) as mock_logger:
-            result = config._translate_response_format_param(
-                value=response_format,
-                model=model,
-                optional_params={},
-                non_default_params={"response_format": response_format},
-                is_thinking_enabled=False,
-            )
-
-    assert "json_object_prefill" not in result
-    mock_logger.warning.assert_called_once()
-
-
-def test_json_object_no_prefill_when_tools_are_present():
-    """Prefill commits the turn to text, so it would block tool calls."""
-    config = AmazonConverseConfig()
-    response_format = {"type": "json_object"}
-    tools = [{"type": "function", "function": {"name": "get_weather"}}]
-
-    with patch.object(litellm, "modify_params", True):
-        with patch.object(
-            litellm.llms.bedrock.chat.converse_transformation, "verbose_logger"
-        ) as mock_logger:
-            result = config._translate_response_format_param(
-                value=response_format,
-                model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-                optional_params={},
-                non_default_params={"response_format": response_format, "tools": tools},
-                is_thinking_enabled=False,
-            )
-
-    assert "json_object_prefill" not in result
-    assert "tools" in mock_logger.warning.call_args[0][0]
+    assert "tool_choice" not in result
+    assert result["json_object_unwrap_key"] == RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY
 
 
 def test_json_object_streaming_uses_fake_stream():
-    """Streaming falls back to fake_stream so the brace can be prepended."""
-    config = AmazonConverseConfig()
-    response_format = {"type": "json_object"}
-
-    with patch.object(litellm, "modify_params", True):
-        result = config._translate_response_format_param(
-            value=response_format,
-            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-            optional_params={},
-            non_default_params={"response_format": response_format, "stream": True},
-            is_thinking_enabled=False,
-        )
-
-    assert result["json_object_prefill"] is True
+    """The whole message is needed to turn the tool call back into content."""
+    result = _translate_json_object(non_default_params={"stream": True})
     assert result["fake_stream"] is True
 
 
-def test_json_schema_response_format_does_not_prefill():
-    """A schema-bearing response_format is translated, so no prefill is needed."""
+def test_json_object_warns_when_model_has_no_tool_support():
+    """Without tool use there is nothing left to translate `json_object` into."""
+    config = AmazonConverseConfig()
+    with patch.object(litellm.utils, "supports_function_calling", return_value=False):
+        with patch.object(litellm.llms.bedrock.chat.converse_transformation, "verbose_logger") as mock_logger:
+            result = config._translate_response_format_param(
+                value=JSON_OBJECT,
+                model="some.model-without-tools-v1:0",
+                optional_params={},
+                non_default_params={"response_format": JSON_OBJECT},
+                is_thinking_enabled=False,
+            )
+
+    assert "tools" not in result
+    assert "json_object_unwrap_key" not in result
+    assert result["json_mode"] is True
+    mock_logger.warning.assert_called_once()
+
+
+def test_json_schema_response_format_is_not_marked_for_unwrapping():
+    """A caller-supplied schema must never be unwrapped.
+
+    Its own top-level key would be indistinguishable from our wrapper, so
+    unwrapping would silently discard the caller's outer object.
+    """
     config = AmazonConverseConfig()
     response_format = {
         "type": "json_schema",
         "json_schema": {
-            "name": "WeatherResult",
-            "schema": {
-                "type": "object",
-                "properties": {"temp": {"type": "number"}},
-                "required": ["temp"],
-            },
+            "name": "identity",
+            "schema": {"type": "object", "properties": {"result": {"type": "object"}}},
         },
     }
+    result = config._translate_response_format_param(
+        value=response_format,
+        model=SONNET_45,
+        optional_params={},
+        non_default_params={"response_format": response_format},
+        is_thinking_enabled=False,
+    )
 
-    with patch.object(litellm, "modify_params", True):
-        result = config._translate_response_format_param(
-            value=response_format,
-            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-            optional_params={},
-            non_default_params={"response_format": response_format},
-            is_thinking_enabled=False,
-        )
-
-    assert "json_object_prefill" not in result
+    assert "json_object_unwrap_key" not in result
 
 
-def test_add_json_object_prefill_appends_assistant_turn():
-    messages = [{"role": "user", "content": "Who are you?"}]
-
-    result = AmazonConverseConfig._add_json_object_prefill(messages)
-
-    assert result[-1] == {"role": "assistant", "content": "{", "prefix": True}
-    # the caller's list is not mutated
-    assert len(messages) == 1
-
-
-def test_add_json_object_prefill_merges_trailing_assistant_turn():
-    """Converse rejects two consecutive assistant turns, so merge instead."""
-    messages = [
-        {"role": "user", "content": "Who are you?"},
-        {"role": "assistant", "content": "Sure:"},
-    ]
-
-    result = AmazonConverseConfig._add_json_object_prefill(messages)
-
-    assert len(result) == 2
-    assert result[-1] == {"role": "assistant", "content": "Sure:{", "prefix": True}
-
-
-def test_transform_request_keeps_prefill_as_final_turn():
-    """`prefix` must stop a 'Please continue.' user turn being appended."""
+def test_json_object_unwrap_key_does_not_reach_provider_payload():
     config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={"response_format": JSON_OBJECT},
+        optional_params={},
+        model=SONNET_45,
+        drop_params=False,
+    )
+    assert optional_params["json_object_unwrap_key"] == RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY
 
-    with patch.object(litellm, "modify_params", True):
-        data = config._transform_request(
-            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-            messages=[{"role": "user", "content": "Who are you?"}],
-            optional_params={"json_object_prefill": True, "json_mode": True},
-            litellm_params={},
-        )
-
-    assert data["messages"][-1]["role"] == "assistant"
-    assert data["messages"][-1]["content"] == [{"text": "{"}]
-    # internal marker must never reach the provider payload
-    assert "json_object_prefill" not in json.dumps(data)
-
-
-@pytest.mark.asyncio
-async def test_async_transform_request_keeps_prefill_as_final_turn():
-    """The async transform is the path acompletion takes, so it needs the prefill too."""
-    config = AmazonConverseConfig()
-
-    with patch.object(litellm, "modify_params", True):
-        data = await config._async_transform_request(
-            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-            messages=[{"role": "user", "content": "Who are you?"}],
-            optional_params={"json_object_prefill": True, "json_mode": True},
-            litellm_params={},
-        )
-
-    assert data["messages"][-1]["role"] == "assistant"
-    assert data["messages"][-1]["content"] == [{"text": "{"}]
-    assert "json_object_prefill" not in json.dumps(data)
+    data = config._transform_request(
+        model=SONNET_45,
+        messages=[{"role": "user", "content": "Who are you?"}],
+        optional_params=dict(optional_params),
+        litellm_params={},
+    )
+    assert "json_object_unwrap_key" not in json.dumps(data)
 
 
-def test_add_json_object_prefill_merges_into_list_content_assistant_turn():
-    """A trailing assistant turn holding content blocks gets the brace appended."""
-    messages = [
-        {"role": "user", "content": "Who are you?"},
-        {"role": "assistant", "content": [{"type": "text", "text": "Sure:"}]},
+@pytest.mark.parametrize(
+    "unwrap_key, arguments, expected",
+    [
+        # schema-less json_object: the wrapper is stripped
+        (RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY, '{"result": {"name": "Claude"}}', {"name": "Claude"}),
+        # caller-supplied schema: nothing is stripped, even with a matching key
+        (None, '{"result": {"name": "Claude"}}', {"result": {"name": "Claude"}}),
+        # wrapper absent: passed through untouched
+        (RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY, '{"name": "Claude"}', {"name": "Claude"}),
+        # wrapper holding a non-object: not a JSON object, so left alone
+        (RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY, '{"result": "Claude"}', {"result": "Claude"}),
+    ],
+)
+def test_filter_json_mode_tools_unwraps_only_our_wrapper(unwrap_key, arguments, expected):
+    message: dict = {"role": "assistant"}
+    tools = [{"id": "1", "type": "function", "function": {"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": arguments}}]
+
+    remaining = AmazonConverseConfig._filter_json_mode_tools(
+        json_mode=True,
+        tools=tools,
+        chat_completion_message=message,
+        json_object_unwrap_key=unwrap_key,
+    )
+
+    assert remaining is None
+    assert json.loads(message["content"]) == expected
+
+
+def test_filter_json_mode_tools_keeps_real_tool_calls_alongside_json_object():
+    """A real tool call must survive; only the synthetic one becomes content."""
+    message: dict = {"role": "assistant"}
+    tools = [
+        {"id": "1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'}},
+        {
+            "id": "2",
+            "type": "function",
+            "function": {"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": '{"result": {"name": "Claude"}}'},
+        },
     ]
 
-    result = AmazonConverseConfig._add_json_object_prefill(messages)
+    remaining = AmazonConverseConfig._filter_json_mode_tools(
+        json_mode=True,
+        tools=tools,
+        chat_completion_message=message,
+        json_object_unwrap_key=RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY,
+    )
 
-    assert len(result) == 2
-    assert result[-1]["content"] == [
-        {"type": "text", "text": "Sure:"},
-        {"type": "text", "text": "{"},
-    ]
-    assert result[-1]["prefix"] is True
-
-
-def test_add_json_object_prefill_handles_empty_assistant_turn():
-    """An assistant turn with no content becomes just the brace, not "None{"."""
-    messages = [
-        {"role": "user", "content": "Who are you?"},
-        {"role": "assistant", "content": None},
-    ]
-
-    result = AmazonConverseConfig._add_json_object_prefill(messages)
-
-    assert len(result) == 2
-    assert result[-1]["content"] == "{"
-    assert result[-1]["prefix"] is True
+    assert [t["function"]["name"] for t in remaining] == ["get_weather"]
+    assert json.loads(message["content"]) == {"name": "Claude"}
 
 
-def test_transform_response_prepends_prefilled_brace():
-    """The model continues from the brace, so it must be added back."""
+def test_transform_response_unwraps_json_object_wrapper():
+    """End-to-end on the response path: caller sees the bare JSON object."""
     response_json = {
         "metrics": {"latencyMs": 100.0},
         "output": {
             "message": {
                 "role": "assistant",
-                "content": [{"text": '\n  "name": "Claude"\n}'}],
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "t1",
+                            "name": RESPONSE_FORMAT_TOOL_NAME,
+                            "input": {"result": {"name": "Claude", "maker": "Anthropic"}},
+                        }
+                    }
+                ],
             }
         },
-        "stopReason": "end_turn",
+        "stopReason": "tool_use",
         "usage": {"inputTokens": 8, "outputTokens": 3, "totalTokens": 11},
     }
 
@@ -6187,18 +6104,18 @@ def test_transform_response_prepends_prefilled_brace():
             return json.dumps(response_json)
 
     result = AmazonConverseConfig()._transform_response(
-        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        model=SONNET_45,
         response=MockResponse(),
         model_response=ModelResponse(),
         stream=False,
         logging_obj=None,
-        optional_params={"json_mode": True, "json_object_prefill": True},
+        optional_params={"json_mode": True, "json_object_unwrap_key": RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY},
         api_key=None,
         data=None,
         messages=[],
         encoding=None,
     )
 
-    content = result.choices[0].message.content
-    assert content.startswith("{")
-    assert json.loads(content) == {"name": "Claude"}
+    message = result.choices[0].message
+    assert message.tool_calls is None
+    assert json.loads(message.content) == {"name": "Claude", "maker": "Anthropic"}

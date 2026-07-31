@@ -2513,17 +2513,6 @@ def supports_native_structured_output(model: str, custom_llm_provider: Optional[
     )
 
 
-def supports_assistant_prefill(model: str, custom_llm_provider: Optional[str] = None) -> bool:
-    """
-    Check if the given model supports prefilling the assistant turn and return a boolean value.
-    """
-    return _supports_factory(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        key="supports_assistant_prefill",
-    )
-
-
 def get_supported_regions(model: str, custom_llm_provider: Optional[str] = None) -> Optional[List[str]]:
     """
     Get a list of supported regions for a given model and provider.
