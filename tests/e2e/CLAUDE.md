@@ -85,6 +85,8 @@ The metric is coverage: the share of registry rows that have a passing covering 
 
 Tests do not declare a dashboard module directly. They only declare the registry cell id with `@pytest.mark.covers("...")`; the registry row decides the module, tier, endpoint, and dashboard rollup. Run `python -m coverage_registry.collector --strict` when you want CI to reject unknown marker ids. Add `--fail-on-collection-errors` when the job should also fail on pytest collection errors.
 
+Skipping a test gives its cell back to the gap list: the collector counts a cell as covered only when a test pytest would actually run declares it, and prints the cells left claimed only by skipped tests. So a `@pytest.mark.skip` on a red cell is honest bookkeeping, not a way to keep the number up.
+
 ### Naming grammar per module
 
 LLMs - endpoint features (subject = the route), seeded from the Claude Code compat matrix. `chat_completions`, `messages`, and `responses` roll up to `Core LLMs`. Other LLM endpoints, including `batches` and `realtime`, roll up to `Non-Core LLMs`.

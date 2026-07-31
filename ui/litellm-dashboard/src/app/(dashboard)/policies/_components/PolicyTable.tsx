@@ -9,16 +9,21 @@ import { Policy } from "@/components/policies/types";
 
 import { getPolicyTableColumns, PolicyRow } from "./PolicyTableColumns";
 
-/** One row per policy name; primaryPolicy is used for display and for Edit (FlowBuilder loads all versions) */
+/** One row per DB policy name plus one row per config policy, so a config policy never hides same-named DB versions; primaryPolicy is used for display and for Edit (FlowBuilder loads all versions) */
 function groupPoliciesByName(policies: Policy[]): PolicyRow[] {
-  const names = Array.from(new Set(policies.map((policy) => policy.policy_name || "(unnamed)")));
-  return names.map((policyName) => {
-    const versions = policies.filter((policy) => (policy.policy_name || "(unnamed)") === policyName);
+  const dbPolicies = policies.filter((policy) => policy.definition_location !== "config");
+  const names = Array.from(new Set(dbPolicies.map((policy) => policy.policy_name || "(unnamed)")));
+  const dbRows = names.map((policyName) => {
+    const versions = dbPolicies.filter((policy) => (policy.policy_name || "(unnamed)") === policyName);
     const primary =
       versions.find((version) => version.version_status === "production") ??
       [...versions].sort((a, b) => (b.version_number ?? 0) - (a.version_number ?? 0))[0];
     return { policy_name: policyName, primaryPolicy: primary, versionCount: versions.length };
   });
+  const configRows = policies
+    .filter((policy) => policy.definition_location === "config")
+    .map((policy) => ({ policy_name: policy.policy_name || "(unnamed)", primaryPolicy: policy, versionCount: 1 }));
+  return [...dbRows, ...configRows];
 }
 
 interface PolicyTableProps {
@@ -67,7 +72,7 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
     <DataTable
       data={rows}
       columns={columns}
-      getRowId={(row) => row.policy_name}
+      getRowId={(row) => `${row.primaryPolicy.definition_location ?? "db"}:${row.policy_name}`}
       sortingMode="client"
       sorting={sorting}
       onSortingChange={setSorting}

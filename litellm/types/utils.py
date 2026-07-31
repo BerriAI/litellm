@@ -200,7 +200,12 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost: Optional[float]
     cache_creation_input_token_cost_above_200k_tokens: Optional[float]
+    cache_creation_input_token_cost_above_272k_tokens: Optional[float]
+    cache_creation_input_token_cost_above_272k_tokens_priority: Optional[float]
+    cache_creation_input_token_cost_above_272k_tokens_flex: Optional[float]
     cache_creation_input_token_cost_above_1hr: Optional[float]
+    cache_creation_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
+    cache_creation_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_read_input_token_cost: Optional[float]
     cache_read_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
@@ -208,6 +213,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_200k_tokens_priority: Optional[float]
     cache_read_input_token_cost_above_272k_tokens: Optional[float]
     cache_read_input_token_cost_above_272k_tokens_priority: Optional[float]
+    cache_read_input_token_cost_above_272k_tokens_flex: Optional[float]
     cache_read_input_token_cost_above_512k_tokens: Optional[float]
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
@@ -219,6 +225,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_above_200k_tokens_priority: Optional[float]
     input_cost_per_token_above_272k_tokens: Optional[float]  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
     input_cost_per_token_above_272k_tokens_priority: Optional[float]
+    input_cost_per_token_above_272k_tokens_flex: Optional[float]
     input_cost_per_token_above_512k_tokens: Optional[float]  # MiniMax-M3: prompts >512K priced at 2x input
     input_cost_per_character_above_128k_tokens: Optional[float]  # only for vertex ai models
     input_cost_per_query: Optional[float]  # only for rerank models
@@ -246,6 +253,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_200k_tokens_priority: Optional[float]
     output_cost_per_token_above_272k_tokens: Optional[float]  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
     output_cost_per_token_above_272k_tokens_priority: Optional[float]
+    output_cost_per_token_above_272k_tokens_flex: Optional[float]
     output_cost_per_token_above_512k_tokens: Optional[float]  # MiniMax-M3: prompts >512K priced at 2x output
     output_cost_per_character_above_128k_tokens: Optional[float]  # only for vertex ai models
     output_cost_per_image: Optional[float]
@@ -3182,6 +3190,11 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_creation_input_token_cost: Optional[float] = None
     cache_creation_input_token_cost_above_1hr: Optional[float] = None
     cache_creation_input_token_cost_above_200k_tokens: Optional[float] = None
+    cache_creation_input_token_cost_above_272k_tokens: Optional[float] = None
+    cache_creation_input_token_cost_above_272k_tokens_priority: Optional[float] = None
+    cache_creation_input_token_cost_above_272k_tokens_flex: Optional[float] = None
+    cache_creation_input_token_cost_flex: Optional[float] = None
+    cache_creation_input_token_cost_priority: Optional[float] = None
     cache_creation_input_audio_token_cost: Optional[float] = None
     cache_read_input_token_cost: Optional[float] = None
     cache_read_input_token_cost_flex: Optional[float] = None
@@ -3189,6 +3202,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_read_input_token_cost_above_200k_tokens: Optional[float] = None
     cache_read_input_token_cost_above_200k_tokens_priority: Optional[float] = None
     cache_read_input_token_cost_above_272k_tokens_priority: Optional[float] = None
+    cache_read_input_token_cost_above_272k_tokens_flex: Optional[float] = None
     cache_read_input_audio_token_cost: Optional[float] = None
     input_cost_per_character: Optional[float] = None
     input_cost_per_character_above_128k_tokens: Optional[float] = None
@@ -3198,6 +3212,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     input_cost_per_token_above_200k_tokens: Optional[float] = None
     input_cost_per_token_above_200k_tokens_priority: Optional[float] = None
     input_cost_per_token_above_272k_tokens_priority: Optional[float] = None
+    input_cost_per_token_above_272k_tokens_flex: Optional[float] = None
     input_cost_per_query: Optional[float] = None
     input_cost_per_image: Optional[float] = None
     input_cost_per_image_above_128k_tokens: Optional[float] = None
@@ -3217,6 +3232,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_token_above_200k_tokens: Optional[float] = None
     output_cost_per_token_above_200k_tokens_priority: Optional[float] = None
     output_cost_per_token_above_272k_tokens_priority: Optional[float] = None
+    output_cost_per_token_above_272k_tokens_flex: Optional[float] = None
     output_cost_per_character_above_128k_tokens: Optional[float] = None
     output_cost_per_image: Optional[float] = None
     output_cost_per_image_token: Optional[float] = None
@@ -3851,6 +3867,7 @@ class ServiceTier(Enum):
     AUTO = "auto"
     FLEX = "flex"
     PRIORITY = "priority"
+    FAST = "fast"
 
 
 class DataResidency(Enum):

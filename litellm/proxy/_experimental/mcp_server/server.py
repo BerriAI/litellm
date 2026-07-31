@@ -65,6 +65,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     extract_mcp_tool_result_error_message,
     get_server_prefix,
     iter_known_server_prefixes,
+    match_known_tool_name,
 )
 from litellm.proxy._types import (
     ProxyException,
@@ -1416,34 +1417,17 @@ if MCP_AVAILABLE:
 
         return allowed_mcp_servers
 
-    def _tool_name_matches(tool_name: str, filter_list: list[str]) -> bool:
+    def _tool_name_matches(tool_name: str, filter_list: list[str], mcp_server: MCPServer) -> bool:
         """
         Check if a tool name matches any name in the filter list.
 
-        Checks both the full tool name and unprefixed version (without server prefix).
-        This allows users to configure simple tool names regardless of prefixing.
-        Comparison is case-insensitive to handle OpenAPI operationIds that may be in camelCase.
-
-        Args:
-            tool_name: The tool name to check (may be prefixed like "server-tool_name")
-            filter_list: List of tool names to match against
-
-        Returns:
-            True if the tool name (prefixed or unprefixed) is in the filter list
+        Reads the same owner the server-level permission checks use, so discovery hides
+        exactly what dispatch refuses. ``mcp_server`` is required: guessing the boundary
+        at the first separator mismatches every tool on a server whose prefix contains
+        the separator.
         """
-        from litellm.proxy._experimental.mcp_server.utils import (
-            split_server_prefix_from_name,
-        )
-
-        # Normalize filter list to lowercase for case-insensitive comparison
-        filter_list_lower = [f.lower() for f in filter_list]
-
-        if tool_name.lower() in filter_list_lower:
-            return True
-
-        # Check if the unprefixed name is in the list (case-insensitive)
-        unprefixed_name, _ = split_server_prefix_from_name(tool_name)
-        return unprefixed_name.lower() in filter_list_lower
+        bare_name = strip_known_server_prefix(tool_name, mcp_server)
+        return match_known_tool_name(bare_name, mcp_server, filter_list) is not None
 
     def filter_tools_by_allowed_tools(
         tools: list[MCPTool],
@@ -1473,12 +1457,16 @@ if MCP_AVAILABLE:
         if server_applies_tool_allowlist(mcp_server):
             if not mcp_server.allowed_tools:
                 return []
-            tools_to_return = [tool for tool in tools if _tool_name_matches(tool.name, mcp_server.allowed_tools)]
+            tools_to_return = [
+                tool for tool in tools if _tool_name_matches(tool.name, mcp_server.allowed_tools, mcp_server)
+            ]
 
         # Filter by disallowed_tools (blacklist)
         if mcp_server.disallowed_tools:
             tools_to_return = [
-                tool for tool in tools_to_return if not _tool_name_matches(tool.name, mcp_server.disallowed_tools)
+                tool
+                for tool in tools_to_return
+                if not _tool_name_matches(tool.name, mcp_server.disallowed_tools, mcp_server)
             ]
 
         return tools_to_return
@@ -1498,7 +1486,7 @@ if MCP_AVAILABLE:
             return tools
 
         for tool in tools:
-            unprefixed, _ = split_server_prefix_from_name(tool.name)
+            unprefixed = strip_known_server_prefix(tool.name, mcp_server)
             lookup_key = unprefixed or tool.name
             if lookup_key in display_name_map:
                 tool.name = display_name_map[lookup_key]
@@ -2317,14 +2305,16 @@ if MCP_AVAILABLE:
             server_id=server_id,
             user_api_key_auth=user_api_key_auth,
         )
-        if allowed_tool_names is None:
-            return tools
 
         # Tools arrive prefixed with the server's own prefix; strip exactly that
         # prefix (resolved from the server) rather than the first separator, so a
         # prefix containing the separator still reduces to the stored bare name.
         server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-        return [t for t in tools if strip_known_server_prefix(t.name, server) in allowed_tool_names]
+        return [
+            t
+            for t in tools
+            if MCPRequestHandler.tool_is_granted(strip_known_server_prefix(t.name, server), allowed_tool_names)
+        ]
 
     async def _list_mcp_tools(
         user_api_key_auth: UserAPIKeyAuth | None = None,
@@ -2699,6 +2689,7 @@ if MCP_AVAILABLE:
                         break
             if mcp_server is not None:
                 server_name = mcp_server.name
+                original_tool_name = strip_known_server_prefix(name, mcp_server)
 
             if requested_server is not None:
                 if mcp_server is not None and mcp_server.server_id != requested_server.server_id:
@@ -2716,6 +2707,7 @@ if MCP_AVAILABLE:
                 if mcp_server is None:
                     mcp_server = requested_server
                     server_name = requested_server.name
+                    original_tool_name = strip_known_server_prefix(name, requested_server)
 
         # Only enforce server-level permissions when we can resolve a server
         if server_name:
@@ -2887,13 +2879,14 @@ if MCP_AVAILABLE:
                 _request_resolved_auth_headers.reset(_resolved_token)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
-        # Try managed MCP server tool (pass the full prefixed name)
+        # Try managed MCP server tool (the name is bare; the prefix boundary was
+        # already resolved above against this server's registered prefixes)
         # Primary and recommended way to use external MCP servers
         #########################################################
         elif mcp_server:
             response = await _handle_managed_mcp_tool(
                 server_name=server_name,
-                name=original_tool_name,  # Pass the full name (potentially prefixed)
+                name=original_tool_name,
                 arguments=arguments,
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,

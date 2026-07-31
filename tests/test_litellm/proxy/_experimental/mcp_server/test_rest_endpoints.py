@@ -769,7 +769,178 @@ class TestListToolsRestAPI:
         assert captured["server"] is stub_server
         assert result["tools"] == ["tool-1"]
         assert result["error"] is None
+
+    async def test_non_admin_ui_session_resolves_as_admitted_subject(self, monkeypatch):
+        """LIT-4861: a non-admin dashboard session must act as the admitted subject on this
+        route, so server reachability AND tool ceilings bind to the user's grants exactly as
+        they do for a gateway session, never to the bare session key."""
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+        session_auth = UserAPIKeyAuth(
+            team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="grant-user", user_role="internal_user"
+        )
+        admitted_auth = UserAPIKeyAuth(user_id="grant-user", org_id="admitted-org")
+
+        async def fake_reload(user_id):
+            assert user_id == "grant-user"
+            return admitted_auth
+
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+            fake_reload,
+        )
+
+        seen_server_resolution_auths = []
+
+        async def fake_get_allowed_mcp_servers(user_api_key_auth=None, **kwargs):
+            seen_server_resolution_auths.append(user_api_key_auth)
+            return ["server-1"]
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+        captured = {}
+
+        async def fake_get_tools(
+            server,
+            server_auth_header,
+            raw_headers=None,
+            user_api_key_auth=None,
+            extra_headers=None,
+            apply_tool_filters=True,
+        ):
+            captured["user_api_key_auth"] = user_api_key_auth
+            return ["tool-1"]
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="server-1",
+            user_api_key_dict=session_auth,
+        )
+
+        resolved = [*seen_server_resolution_auths, captured["user_api_key_auth"]]
+        assert seen_server_resolution_auths
+        assert all(a.org_id == "admitted-org" and a.team_id is None for a in resolved)
+        assert result["tools"] == ["tool-1"]
         assert result["message"] == "Successfully retrieved tools"
+
+    async def test_toolset_scoped_request_keeps_the_caller_credential(self, monkeypatch):
+        """LIT-4861: the admitted subject resolves per grant source and a team source deliberately
+        carries none of the caller's own object_permission, so a toolset narrowing layered on top
+        would evaporate on every team-granted server. A toolset-scoped request therefore stays on
+        the caller's own credential, exactly as it did before the acting-as-user swap."""
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        session_auth = UserAPIKeyAuth(
+            team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="grant-user", user_role="internal_user"
+        )
+        scoped_auth = UserAPIKeyAuth(
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="toolset-scope",
+                mcp_servers=["toolset-server-1"],
+            )
+        )
+        reload_calls: list[str] = []
+        scope_inputs: list[UserAPIKeyAuth] = []
+
+        async def record_reload(user_id):
+            reload_calls.append(user_id)
+            return UserAPIKeyAuth(user_id=user_id)
+
+        class StubToolset:
+            toolset_id = "toolset-1"
+
+        class StubServer:
+            alias = "toolset-server-1"
+            server_name = "toolset-server-1"
+            name = "toolset-server-1"
+            allowed_tools = None
+            mcp_info = {"server_name": "toolset-server-1"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        async def fake_get_toolset_by_name_cached(prisma_client, toolset_name):
+            return StubToolset()
+
+        async def fake_apply_toolset_scope(user_api_key_auth, toolset_id):
+            scope_inputs.append(user_api_key_auth)
+            return scoped_auth
+
+        async def fake_get_allowed_mcp_servers(user_api_key_auth=None, **kwargs):
+            assert user_api_key_auth is scoped_auth
+            return ["toolset-server-1"]
+
+        async def fake_get_tools(server, server_auth_header, *args, **kwargs):
+            return ["toolset-tool-1"]
+
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+            record_reload,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            lambda *args, **kwargs: MagicMock(),
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_toolset_by_name_cached",
+            fake_get_toolset_by_name_cached,
+            raising=False,
+        )
+        monkeypatch.setattr(rest_endpoints, "_apply_toolset_scope", fake_apply_toolset_scope, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "toolset-server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(rest_endpoints, "_get_tools_for_single_server", fake_get_tools, raising=False)
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id=None,
+            toolset_name="research_tools",
+            user_api_key_dict=session_auth,
+        )
+
+        assert result["tools"] == ["toolset-tool-1"]
+        assert scope_inputs == [session_auth]
+        assert reload_calls == []
 
     async def test_include_disabled_tools_is_admin_only(self, monkeypatch):
         """include_disabled_tools skips the allowlist filter only for PROXY_ADMIN;
