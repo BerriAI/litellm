@@ -44,13 +44,18 @@ def _declared_query_params(request: Request) -> frozenset[str]:
     return frozenset(field.alias for field in get_flat_dependant(dependant, skip_repeats=True).query_params)
 
 
+def escape_like(value: str) -> str:
+    """Escape LIKE/ILIKE metacharacters. Ids routinely contain `_`, which is a wildcard unescaped."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def unknown_query_param_problem(unknown: tuple[str, ...], allowed: tuple[str, ...]) -> ProblemDetail:
     return ProblemDetail(
         type=f"{PROBLEM_TYPE_BASE}unknown-query-parameter",
         title="Unknown query parameter",
         status=400,
         detail=f"Unrecognized query parameter(s): {', '.join(unknown)}.",
-        allowed=list(allowed),
+        allowed=sorted(allowed),
     )
 
 

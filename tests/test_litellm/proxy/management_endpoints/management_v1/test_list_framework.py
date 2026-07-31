@@ -14,16 +14,21 @@ from litellm.proxy.management_endpoints.management_v1.common import (
     build_page_links,
 )
 from litellm.proxy.management_endpoints.management_v1.list_framework import (
+    AnyOf,
+    Compare,
     FilterSpec,
+    IsNull,
     ListSpec,
     QueryPlan,
     ScopeAll,
     ScopeDenied,
     ScopeWhere,
     SortKey,
+    Within,
     build_query_plan,
     handle_list,
     order_by_sql,
+    where_sql,
 )
 from litellm.types.proxy.management_endpoints.management_v1 import (
     PageLinks,
@@ -87,9 +92,9 @@ class RecordingExecutor:
         self.rows = rows
         self.total_count = len(rows) if total_count is None else total_count
         self.plan: QueryPlan | None = None
-        self.count_where: Mapping[str, object] | None = None
+        self.count_where: tuple[object, ...] | None = None
 
-    async def count(self, where: Mapping[str, object]) -> int:
+    async def count(self, where: tuple[object, ...]) -> int:
         self.count_where = where
         return self.total_count
 
@@ -124,10 +129,8 @@ def _problem(query_params: Mapping[str, str], spec: ListSpec[BudgetRow, BudgetOu
     return result
 
 
-def _conjuncts(plan: QueryPlan) -> tuple[Mapping[str, object], ...]:
-    conjuncts = plan.where["AND"]
-    assert isinstance(conjuncts, tuple)
-    return conjuncts
+def _conjuncts(plan: QueryPlan) -> tuple[object, ...]:
+    return plan.where
 
 
 # ---------------------------------------------------------------- invariant 1
@@ -173,44 +176,150 @@ def test_order_sql_covers_every_key_in_the_plan():
     assert sql == '"max_budget" DESC NULLS LAST, "created_at" ASC NULLS LAST, "budget_id" ASC NULLS LAST'
 
 
+# ------------------------------------------------------------ where rendering
+
+
+def test_every_caller_value_is_bound_not_interpolated():
+    """The one property that keeps a filter value from reaching the SQL text. A value that
+    looks like SQL has to come back as a parameter, never as part of the statement."""
+    sql, params = where_sql((Compare(field="budget_id", op="eq", value="'; DROP TABLE x --"),))
+
+    assert sql == '"budget_id" = $1'
+    assert params == ("'; DROP TABLE x --",)
+    assert "DROP" not in sql
+
+
+def test_placeholders_are_numbered_across_the_whole_plan():
+    """A predicate that binds several values has to advance the counter by that many, or
+    every later predicate reads the wrong parameter."""
+    sql, params = where_sql(
+        (
+            Compare(field="created_by", op="eq", value="alice"),
+            Within(field="budget_id", values=("a", "b", "c")),
+            Compare(field="max_budget", op="gte", value=5.0),
+        )
+    )
+
+    assert sql == '"created_by" = $1 AND "budget_id" IN ($2, $3, $4) AND "max_budget" >= $5'
+    assert params == ("alice", "a", "b", "c", 5.0)
+
+
+def test_placeholder_numbering_can_start_past_earlier_parameters():
+    sql, params = where_sql((Compare(field="created_by", op="eq", value="alice"),), first_index=4)
+
+    assert sql == '"created_by" = $4'
+    assert params == ("alice",)
+
+
+def test_is_null_binds_no_parameter_and_does_not_consume_a_placeholder():
+    sql, params = where_sql(
+        (IsNull(field="max_budget", negated=False), Compare(field="created_by", op="eq", value="alice"))
+    )
+
+    assert sql == '"max_budget" IS NULL AND "created_by" = $1'
+    assert params == ("alice",)
+
+
+def test_is_null_negated_renders_is_not_null():
+    assert where_sql((IsNull(field="max_budget", negated=True),))[0] == '"max_budget" IS NOT NULL'
+
+
+def test_a_search_renders_as_a_parenthesised_or():
+    """Without the parentheses the OR would bind looser than the surrounding ANDs and the
+    scope predicate would stop constraining the search branch."""
+    sql, params = where_sql(
+        (
+            Compare(field="created_by", op="eq", value="alice"),
+            AnyOf(
+                clauses=(
+                    Compare(field="budget_id", op="contains", value="prod"),
+                    Compare(field="created_by", op="contains", value="prod"),
+                )
+            ),
+        )
+    )
+
+    assert sql == (
+        '"created_by" = $1 AND ('
+        "\"budget_id\" ILIKE $2 ESCAPE '\\'"
+        " OR "
+        "\"created_by\" ILIKE $3 ESCAPE '\\'"
+        ")"
+    )
+    assert params == ("alice", "%prod%", "%prod%")
+
+
+def test_contains_escapes_like_metacharacters():
+    """Budget ids routinely contain '_', which is a single-character wildcard unescaped."""
+    _, params = where_sql((Compare(field="budget_id", op="contains", value="device_id%"),))
+
+    assert params == (r"%device\_id\%%",)
+
+
+@pytest.mark.parametrize(
+    ("op", "operator"),
+    [("eq", "="), ("not", "<>"), ("gte", ">="), ("lte", "<="), ("gt", ">"), ("lt", "<")],
+)
+def test_each_comparison_operator_renders_its_sql_spelling(op, operator):
+    assert where_sql((Compare(field="max_budget", op=op, value=1),))[0] == f'"max_budget" {operator} $1'
+
+
+def test_an_empty_plan_renders_no_where_body():
+    assert where_sql(()) == ("", ())
+
+
+def test_a_planned_filter_renders_end_to_end():
+    """Ties the parser to the renderer: what build_query_plan produces is what executes."""
+    sql, params = where_sql(_plan({"filter[max_budget][is_null]": "true", "q": "prod"}).where)
+
+    assert sql == (
+        '"max_budget" IS NULL AND ('
+        "\"budget_id\" ILIKE $1 ESCAPE '\\'"
+        " OR "
+        "\"created_by\" ILIKE $2 ESCAPE '\\'"
+        ")"
+    )
+    assert params == ("%prod%", "%prod%")
+
+
 # ---------------------------------------------------------------- invariant 3
 
 
 def test_the_scope_predicate_is_the_first_conjunct():
-    spec = _spec(scope=lambda caller: ScopeWhere(where={"created_by": caller.user_id}))
+    spec = _spec(scope=lambda caller: ScopeWhere(where=(Compare(field="created_by", op="eq", value=caller.user_id),)))
 
     conjuncts = _conjuncts(_plan({"filter[max_budget][gte]": "5"}, spec=spec))
 
-    assert conjuncts[0] == {"created_by": "caller-1"}
+    assert conjuncts[0] == Compare(field="created_by", op="eq", value="caller-1")
 
 
 def test_a_caller_filter_cannot_replace_the_scope_predicate():
     """The failure this guards is a `{**scope, **filters}` merge: a caller filtering on
     the scoped column would silently overwrite the scope and read another user's rows."""
-    spec = _spec(scope=lambda caller: ScopeWhere(where={"created_by": caller.user_id}))
+    spec = _spec(scope=lambda caller: ScopeWhere(where=(Compare(field="created_by", op="eq", value=caller.user_id),)))
 
     conjuncts = _conjuncts(_plan({"filter[created_by][eq]": "someone-else"}, spec=spec))
 
-    assert conjuncts[0] == {"created_by": "caller-1"}
-    assert {"created_by": "someone-else"} in conjuncts
+    assert conjuncts[0] == Compare(field="created_by", op="eq", value="caller-1")
+    assert Compare(field="created_by", op="eq", value="someone-else") in conjuncts
     assert len(conjuncts) == 2
 
 
 def test_the_scope_predicate_survives_a_search():
-    spec = _spec(scope=lambda caller: ScopeWhere(where={"created_by": caller.user_id}))
+    spec = _spec(scope=lambda caller: ScopeWhere(where=(Compare(field="created_by", op="eq", value=caller.user_id),)))
 
     conjuncts = _conjuncts(_plan({"q": "prod"}, spec=spec))
 
-    assert conjuncts[0] == {"created_by": "caller-1"}
-    assert any("OR" in conjunct for conjunct in conjuncts)
+    assert conjuncts[0] == Compare(field="created_by", op="eq", value="caller-1")
+    assert any(isinstance(conjunct, AnyOf) for conjunct in conjuncts)
 
 
 def test_an_unscoped_caller_gets_no_scope_conjunct():
-    assert _plan({"filter[max_budget][gte]": "5"}).where == {"AND": ({"max_budget": {"gte": 5.0}},)}
+    assert _plan({"filter[max_budget][gte]": "5"}).where == (Compare(field="max_budget", op="gte", value=5.0),)
 
 
 def test_an_unfiltered_unscoped_list_has_an_empty_where():
-    assert _plan({}).where == {}
+    assert _plan({}).where == ()
 
 
 # ---------------------------------------------------------------- invariant 4
@@ -361,7 +470,7 @@ def test_the_same_operator_is_accepted_on_a_field_that_declares_it():
     """Pins the rejection to the field's own operator set rather than a global denylist."""
     conjuncts = _conjuncts(_plan({"filter[created_by][contains]": "ops"}))
 
-    assert conjuncts == ({"created_by": {"contains": "ops", "mode": "insensitive"}},)
+    assert conjuncts == (Compare(field="created_by", op="contains", value="ops"),)
 
 
 def test_a_string_that_is_not_an_operator_at_all_is_an_unknown_parameter():
@@ -392,17 +501,17 @@ def test_search_is_a_case_insensitive_or_across_every_searchable_field():
     conjuncts = _conjuncts(_plan({"q": "Prod"}))
 
     assert conjuncts == (
-        {
-            "OR": (
-                {"budget_id": {"contains": "Prod", "mode": "insensitive"}},
-                {"created_by": {"contains": "Prod", "mode": "insensitive"}},
+        AnyOf(
+            clauses=(
+                Compare(field="budget_id", op="contains", value="Prod"),
+                Compare(field="created_by", op="contains", value="Prod"),
             )
-        },
+        ),
     )
 
 
 def test_an_empty_search_string_adds_no_filter():
-    assert _plan({"q": ""}).where == {}
+    assert _plan({"q": ""}).where == ()
 
 
 # --------------------------------------------------------------- invariant 10
@@ -431,17 +540,20 @@ def test_sort_segments_tolerate_surrounding_whitespace():
 def test_comparison_operators_become_prisma_range_fragments():
     conjuncts = _conjuncts(_plan({"filter[max_budget][gte]": "5", "filter[max_budget][lte]": "50"}))
 
-    assert conjuncts == ({"max_budget": {"gte": 5.0}}, {"max_budget": {"lte": 50.0}})
+    assert conjuncts == (
+        Compare(field="max_budget", op="gte", value=5.0),
+        Compare(field="max_budget", op="lte", value=50.0),
+    )
 
 
 def test_eq_is_a_bare_value_not_a_wrapped_one():
-    assert _conjuncts(_plan({"filter[tpm_limit][eq]": "100"})) == ({"tpm_limit": 100},)
+    assert _conjuncts(_plan({"filter[tpm_limit][eq]": "100"})) == (Compare(field="tpm_limit", op="eq", value=100),)
 
 
 def test_a_filter_with_no_operator_bracket_means_eq():
     """`filter[status]=active` is the design doc's canonical spelling for equality;
     only the non-eq operators carry a second bracket."""
-    assert _conjuncts(_plan({"filter[tpm_limit]": "100"})) == ({"tpm_limit": 100},)
+    assert _conjuncts(_plan({"filter[tpm_limit]": "100"})) == (Compare(field="tpm_limit", op="eq", value=100),)
 
 
 def test_the_bare_form_and_the_explicit_eq_form_agree():
@@ -483,17 +595,23 @@ def test_malformed_filter_keys_are_unknown_parameters_not_eq_filters(name):
 
 
 def test_in_splits_on_commas_and_coerces_every_member():
-    assert _conjuncts(_plan({"filter[created_by][in]": "alice, bob"})) == ({"created_by": {"in": ("alice", "bob")}},)
+    assert _conjuncts(_plan({"filter[created_by][in]": "alice, bob"})) == (
+        Within(field="created_by", values=("alice", "bob")),
+    )
 
 
 def test_is_null_true_matches_rows_with_no_budget():
     """Budgets renders a null max_budget as "Unlimited"; without is_null there is no way
     to ask for those rows."""
-    assert _conjuncts(_plan({"filter[max_budget][is_null]": "true"})) == ({"max_budget": None},)
+    assert _conjuncts(_plan({"filter[max_budget][is_null]": "true"})) == (
+        IsNull(field="max_budget", negated=False),
+    )
 
 
 def test_is_null_false_matches_rows_that_have_one():
-    assert _conjuncts(_plan({"filter[max_budget][is_null]": "false"})) == ({"max_budget": {"not": None}},)
+    assert _conjuncts(_plan({"filter[max_budget][is_null]": "false"})) == (
+        IsNull(field="max_budget", negated=True),
+    )
 
 
 def test_is_null_rejects_a_non_boolean():
@@ -523,7 +641,7 @@ def test_a_datetime_filter_is_normalised_to_utc():
     with_offset = _conjuncts(_plan({"filter[created_at][gte]": "2026-07-23T02:00:00+02:00"}))
     naive = _conjuncts(_plan({"filter[created_at][gte]": "2026-07-23 00:00:00"}))
 
-    assert with_offset == ({"created_at": {"gte": datetime(2026, 7, 23, tzinfo=timezone.utc)}},)
+    assert with_offset == (Compare(field="created_at", op="gte", value=datetime(2026, 7, 23, tzinfo=timezone.utc)),)
     assert naive == with_offset
 
 
@@ -616,7 +734,7 @@ async def test_the_executor_counts_the_same_predicate_it_reads():
     """Counting a wider predicate than the read inflates total_pages and hands the UI
     pages that are always empty."""
     executor = RecordingExecutor(rows=(), total_count=3)
-    spec = _spec(scope=lambda caller: ScopeWhere(where={"created_by": caller.user_id}))
+    spec = _spec(scope=lambda caller: ScopeWhere(where=(Compare(field="created_by", op="eq", value=caller.user_id),)))
 
     await handle_list(spec=spec, executor=executor, request=_request("filter[max_budget][gte]=5"), caller=CALLER)
 

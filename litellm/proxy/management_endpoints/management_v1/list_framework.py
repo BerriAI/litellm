@@ -5,9 +5,13 @@ A resource declares a `ListSpec`; `build_query_plan` turns query parameters into
 runs that plan through an injected `ListExecutor`. Keeping the planning pure is what
 lets a caller assert the plan as a value instead of asserting against a live Prisma
 client, and it keeps this module free of any database dependency.
+
+A plan's `where` is a tuple of frozen `Predicate`s rather than a backend-shaped
+mapping, so the framework never has to know which query builder executes it and a
+planned predicate cannot be rewritten afterwards. `where_sql` renders one for a
+raw-SQL executor with every caller-supplied value bound to a placeholder.
 """
 
-from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,6 +27,7 @@ from litellm.proxy.management_endpoints.management_v1.common import (
     PROBLEM_TYPE_BASE,
     ManagementProblem,
     build_list_links,
+    escape_like,
     unknown_query_param_problem,
 )
 from litellm.types.proxy.management_endpoints.management_v1 import (
@@ -53,6 +58,41 @@ _FILTER_OP_ADAPTER: TypeAdapter[FilterOp] = TypeAdapter(FilterOp)
 
 
 @dataclass(frozen=True, slots=True)
+class Compare:
+    """`field <op> value`."""
+
+    field: str
+    op: ComparisonOp
+    value: FilterValue
+
+
+@dataclass(frozen=True, slots=True)
+class Within:
+    """`field IN (values)`."""
+
+    field: str
+    values: tuple[FilterValue, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class IsNull:
+    """`field IS NULL`, or `IS NOT NULL` when negated."""
+
+    field: str
+    negated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class AnyOf:
+    """Disjunction of its clauses. `?q=` is the only producer today."""
+
+    clauses: tuple["Predicate", ...]
+
+
+Predicate = Compare | Within | IsNull | AnyOf
+
+
+@dataclass(frozen=True, slots=True)
 class FilterSpec:
     type: FilterType
     ops: frozenset[FilterOp]
@@ -71,9 +111,9 @@ class ScopeAll:
 
 @dataclass(frozen=True, slots=True)
 class ScopeWhere:
-    """The caller may read the rows matching `where`."""
+    """The caller may read the rows matching every predicate in `where`."""
 
-    where: Mapping[str, object]
+    where: tuple[Predicate, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,16 +150,24 @@ class ListSpec(Generic[TRow, TOut]):
             )
         if not self.tiebreaker:
             raise ValueError(f"{self.resource}: tiebreaker is required; it is the final sort key on every query.")
-        undeclared = tuple(sorted({key.field for key in self.default_sort} - self.sortable))
+        undeclared = tuple(sorted(frozenset(key.field for key in self.default_sort) - self.sortable))
         if undeclared:
             raise ValueError(f"{self.resource}: default_sort orders by non-sortable field(s): {', '.join(undeclared)}.")
+        non_text = tuple(
+            sorted(field for field, spec in self.filters.items() if "contains" in spec.ops and spec.type is not str)
+        )
+        if non_text:
+            raise ValueError(
+                f"{self.resource}: contains renders as ILIKE and is only meaningful on text columns, "
+                f"but is declared on: {', '.join(non_text)}."
+            )
 
 
 @dataclass(frozen=True, slots=True)
 class QueryPlan:
-    """`where` conjuncts are ordered scope-first; `order` always ends with the spec's tiebreaker."""
+    """`where` is an implicit AND, ordered scope-first; `order` always ends with the spec's tiebreaker."""
 
-    where: Mapping[str, object]
+    where: tuple[Predicate, ...]
     order: tuple[SortKey, ...]
     skip: int
     take: int
@@ -128,7 +176,7 @@ class QueryPlan:
 class ListExecutor(Protocol[TRow_co]):
     """The database half of a list, injected so this module never imports Prisma."""
 
-    async def count(self, where: Mapping[str, object]) -> int: ...
+    async def count(self, where: tuple[Predicate, ...]) -> int: ...
 
     async def find_many(self, plan: QueryPlan) -> Sequence[TRow_co]: ...
 
@@ -145,13 +193,70 @@ def order_by_sql(order: tuple[SortKey, ...]) -> str:
     return ", ".join(f'"{key.field}" {"DESC" if key.descending else "ASC"} NULLS LAST' for key in order)
 
 
-def _problem(slug: str, title: str, status: int, detail: str, allowed: list[str] | None = None) -> ProblemDetail:
+def _sql_operator(op: ComparisonOp) -> str:
+    match op:
+        case "eq":
+            return "="
+        case "not":
+            return "<>"
+        case "gte":
+            return ">="
+        case "lte":
+            return "<="
+        case "gt":
+            return ">"
+        case "lt":
+            return "<"
+        case "contains":
+            return "ILIKE"
+        case _:
+            assert_never(op)
+
+
+def _render(predicate: Predicate, index: int) -> tuple[str, tuple[object, ...]]:
+    match predicate:
+        case IsNull(field=field, negated=negated):
+            return f'"{field}" IS {"NOT NULL" if negated else "NULL"}', ()
+        case Within(field=field, values=values):
+            placeholders = ", ".join(f"${index + offset}" for offset in range(len(values)))
+            return f'"{field}" IN ({placeholders})', values
+        case AnyOf(clauses=clauses):
+            rendered, params = _render_all(clauses, index)
+            return f"({' OR '.join(rendered)})", params
+        case Compare(field=field, op="contains", value=value):
+            return f"\"{field}\" ILIKE ${index} ESCAPE '\\'", (f"%{escape_like(str(value))}%",)
+        case Compare(field=field, op=op, value=value):
+            return f'"{field}" {_sql_operator(op)} ${index}', (value,)
+        case _:
+            assert_never(predicate)
+
+
+def _render_all(predicates: tuple[Predicate, ...], index: int) -> tuple[tuple[str, ...], tuple[object, ...]]:
+    if not predicates:
+        return (), ()
+    head, head_params = _render(predicates[0], index)
+    tail, tail_params = _render_all(predicates[1:], index + len(head_params))
+    return (head, *tail), head_params + tail_params
+
+
+def where_sql(where: tuple[Predicate, ...], first_index: int = 1) -> tuple[str, tuple[object, ...]]:
+    """`WHERE` body and its bind parameters, numbered from `first_index`.
+
+    Returns `("", ())` when there is nothing to filter on. Every caller-supplied value
+    becomes a `$n` placeholder rather than being written into the SQL text; only column
+    names reach the text, and those come from the spec's own declarations.
+    """
+    clauses, params = _render_all(where, first_index)
+    return " AND ".join(clauses), params
+
+
+def _problem(slug: str, title: str, status: int, detail: str, allowed: tuple[str, ...] | None = None) -> ProblemDetail:
     return ProblemDetail(
         type=f"{PROBLEM_TYPE_BASE}{slug}",
         title=title,
         status=status,
         detail=detail,
-        allowed=allowed,
+        allowed=sorted(allowed) if allowed is not None else None,
     )
 
 
@@ -232,14 +337,14 @@ def _parse_sort(spec: ListSpec[TRow, TOut], params: Mapping[str, str]) -> tuple[
         SortKey(field=segment[1:] if segment.startswith("-") else segment, descending=segment.startswith("-"))
         for segment in segments
     )
-    rejected = tuple(sorted({key.field for key in keys} - spec.sortable))
+    rejected = tuple(sorted(frozenset(key.field for key in keys) - spec.sortable))
     if rejected:
         return _problem(
             "invalid-sort-field",
             "Invalid sort field",
             400,
             f"Cannot sort {spec.resource} by: {', '.join(repr(field) for field in rejected)}.",
-            sorted(spec.sortable),
+            tuple(spec.sortable),
         )
     return keys
 
@@ -261,85 +366,67 @@ def _coerce(field: str, op: FilterOp, raw: str, target: FilterType) -> FilterVal
         return _invalid(f"'filter[{field}][{op}]' is not a valid {target.__name__}: {raw!r}.")
 
 
-def _null_fragment(field: str, raw: str) -> Mapping[str, object] | ProblemDetail:
+def _null_predicate(field: str, raw: str) -> Predicate | ProblemDetail:
     if raw.lower() == "true":
-        return {field: None}
+        return IsNull(field=field, negated=False)
     if raw.lower() == "false":
-        return {field: {"not": None}}
+        return IsNull(field=field, negated=True)
     return _invalid(f"'filter[{field}][is_null]' must be 'true' or 'false'.")
 
 
-def _in_fragment(field: str, raw: str, target: FilterType) -> Mapping[str, object] | ProblemDetail:
+def _within_predicate(field: str, raw: str, target: FilterType) -> Predicate | ProblemDetail:
     coerced = tuple(_coerce(field, "in", item.strip(), target) for item in raw.split(","))
     problems = tuple(item for item in coerced if isinstance(item, ProblemDetail))
     if problems:
         return problems[0]
-    return {field: {"in": tuple(item for item in coerced if not isinstance(item, ProblemDetail))}}
+    return Within(field=field, values=tuple(item for item in coerced if not isinstance(item, ProblemDetail)))
 
 
-def _comparison_fragment(field: str, op: ComparisonOp, value: FilterValue) -> Mapping[str, object]:
-    match op:
-        case "eq":
-            return {field: value}
-        case "not":
-            return {field: {"not": value}}
-        case "contains":
-            return {field: {"contains": value, "mode": "insensitive"}}
-        case "gte" | "lte" | "gt" | "lt":
-            return {field: {op: value}}
-        case _:
-            assert_never(op)
-
-
-def _parse_filter(field: str, op: FilterOp, raw: str, filter_spec: FilterSpec) -> Mapping[str, object] | ProblemDetail:
+def _parse_filter(field: str, op: FilterOp, raw: str, filter_spec: FilterSpec) -> Predicate | ProblemDetail:
     if op not in filter_spec.ops:
         return _problem(
             "unsupported-filter-operator",
             "Unsupported filter operator",
             400,
             f"Operator '{op}' is not supported on '{field}'.",
-            sorted(filter_spec.ops),
+            tuple(filter_spec.ops),
         )
     if op == "is_null":
-        return _null_fragment(field, raw)
+        return _null_predicate(field, raw)
     if op == "in":
-        return _in_fragment(field, raw, filter_spec.type)
+        return _within_predicate(field, raw, filter_spec.type)
     value = _coerce(field, op, raw, filter_spec.type)
     if isinstance(value, ProblemDetail):
         return value
-    return _comparison_fragment(field, op, value)
+    return Compare(field=field, op=op, value=value)
 
 
-def _parse_filters(
-    spec: ListSpec[TRow, TOut], params: Mapping[str, str]
-) -> tuple[Mapping[str, object], ...] | ProblemDetail:
+def _parse_filters(spec: ListSpec[TRow, TOut], params: Mapping[str, str]) -> tuple[Predicate, ...] | ProblemDetail:
     keys = tuple(
         (name, parsed)
         for name in sorted(params)
         if (parsed := _parse_filter_key(name)) is not None and parsed[0] in spec.filters
     )
-    fragments = tuple(_parse_filter(field, op, params[name], spec.filters[field]) for name, (field, op) in keys)
-    problems = tuple(fragment for fragment in fragments if isinstance(fragment, ProblemDetail))
+    parsed = tuple(_parse_filter(field, op, params[name], spec.filters[field]) for name, (field, op) in keys)
+    problems = tuple(item for item in parsed if isinstance(item, ProblemDetail))
     if problems:
         return problems[0]
-    return tuple(fragment for fragment in fragments if not isinstance(fragment, ProblemDetail))
+    return tuple(item for item in parsed if not isinstance(item, ProblemDetail))
 
 
-def _search_fragment(spec: ListSpec[TRow, TOut], params: Mapping[str, str]) -> Mapping[str, object] | None:
+def _search_predicate(spec: ListSpec[TRow, TOut], params: Mapping[str, str]) -> Predicate | None:
     raw = params.get(SEARCH_PARAM)
     if not raw:
         return None
-    return {
-        "OR": tuple({field: {"contains": raw, "mode": "insensitive"}} for field in sorted(spec.searchable)),
-    }
+    return AnyOf(clauses=tuple(Compare(field=field, op="contains", value=raw) for field in sorted(spec.searchable)))
 
 
-def _scope_clauses(scope: Scope) -> tuple[Mapping[str, object], ...] | ProblemDetail:
+def _scope_predicates(scope: Scope) -> tuple[Predicate, ...] | ProblemDetail:
     match scope:
         case ScopeAll():
             return ()
         case ScopeWhere(where=where):
-            return (where,)
+            return where
         case ScopeDenied(reason=reason):
             return _problem("forbidden", "Forbidden", 403, reason)
         case _:
@@ -352,9 +439,9 @@ def build_query_plan(
     caller: UserAPIKeyAuth,
 ) -> QueryPlan | ProblemDetail:
     """Turn query parameters into a plan, or into the problem that explains why they are not one."""
-    scope_clauses = _scope_clauses(spec.scope(caller))
-    if isinstance(scope_clauses, ProblemDetail):
-        return scope_clauses
+    scope_predicates = _scope_predicates(spec.scope(caller))
+    if isinstance(scope_predicates, ProblemDetail):
+        return scope_predicates
 
     unknown = tuple(sorted(name for name in params if not _is_known_param(spec, name)))
     if unknown:
@@ -376,11 +463,10 @@ def build_query_plan(
     if isinstance(filters, ProblemDetail):
         return filters
 
-    search = _search_fragment(spec, params)
-    # Scope first: a conjunct a caller filter cannot reach, let alone replace.
-    clauses = scope_clauses + filters + ((search,) if search is not None else ())
+    search = _search_predicate(spec, params)
     return QueryPlan(
-        where={"AND": clauses} if clauses else {},
+        # Scope first: conjuncts a caller filter sits behind and cannot replace.
+        where=scope_predicates + filters + ((search,) if search is not None else ()),
         # Ordering by an all-null column without a unique final key lets Postgres return
         # the same row on two different pages.
         order=sort + (SortKey(field=spec.tiebreaker, descending=False),),
@@ -390,8 +476,8 @@ def build_query_plan(
 
 
 def _duplicate_params(request: Request) -> tuple[str, ...]:
-    counts = Counter(name for name, _ in request.query_params.multi_items())
-    return tuple(sorted(name for name, count in counts.items() if count > 1))
+    names = tuple(name for name, _ in request.query_params.multi_items())
+    return tuple(sorted(frozenset(name for name in names if names.count(name) > 1)))
 
 
 async def handle_list(
@@ -425,7 +511,7 @@ async def handle_list(
     total_pages = ceil(total_count / plan.take)
     page = plan.skip // plan.take + 1
     return ListResponse[TOut](
-        data=[spec.serialize(row) for row in rows],
+        data=tuple(spec.serialize(row) for row in rows),
         meta=ListMeta(
             total_count=total_count,
             page=page,
