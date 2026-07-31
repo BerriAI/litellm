@@ -340,7 +340,8 @@ class PolicyRegistry:
 
     def remove_policy(self, policy_name: str) -> bool:
         """
-        Remove a policy by name.
+        Remove a policy by name. If a config-defined policy shares the name,
+        it is restored immediately instead of waiting for the next DB sync.
 
         Args:
             policy_name: Name of the policy to remove
@@ -348,12 +349,18 @@ class PolicyRegistry:
         Returns:
             True if policy was removed, False if it didn't exist
         """
-        if policy_name in self._policies:
-            del self._policies[policy_name]
-            self._sources = {name: source for name, source in self._sources.items() if name != policy_name}
-            verbose_proxy_logger.debug(f"Removed policy: {policy_name}")
+        if policy_name not in self._policies:
+            return False
+        config_fallback = self._config_policies.get(policy_name)
+        if config_fallback is not None:
+            self._policies[policy_name] = config_fallback
+            self._sources = {**self._sources, policy_name: "config"}
+            verbose_proxy_logger.debug(f"Removed policy: {policy_name}; restored config-defined version")
             return True
-        return False
+        del self._policies[policy_name]
+        self._sources = {name: source for name, source in self._sources.items() if name != policy_name}
+        verbose_proxy_logger.debug(f"Removed policy: {policy_name}")
+        return True
 
     # ─────────────────────────────────────────────────────────────────────────
     # Database CRUD Methods
@@ -527,10 +534,15 @@ class PolicyRegistry:
             # Remove from in-memory registry only if this was the production version
             if version_status == "production":
                 self.remove_policy(policy_name)
-                result["warning"] = (
-                    "Production version was deleted. No other version was promoted. "
-                    "Promote another version to production if this policy should remain active."
-                )
+                if self.get_source(policy_name) == "config":
+                    result["warning"] = (
+                        "Production version was deleted. The config-defined policy with the same name is active again."
+                    )
+                else:
+                    result["warning"] = (
+                        "Production version was deleted. No other version was promoted. "
+                        "Promote another version to production if this policy should remain active."
+                    )
 
             return result
         except Exception as e:
