@@ -143,12 +143,12 @@ def _invalid(detail: str) -> ProblemDetail:
 
 
 def _parse_filter_key(name: str) -> tuple[str, FilterOp] | None:
-    """`filter[max_budget][gte]` -> `("max_budget", "gte")`; anything else -> `None`."""
+    """`filter[max_budget][gte]` -> `("max_budget", "gte")`; bare `filter[status]` -> `("status", "eq")`."""
     if not name.startswith("filter[") or not name.endswith("]"):
         return None
     field, separator, raw_op = name[len("filter[") : -1].partition("][")
-    if not (separator and field and raw_op) or any(bracket in field + raw_op for bracket in "[]"):
-        return None
+    if not separator:
+        return field, "eq"
     try:
         return field, _FILTER_OP_ADAPTER.validate_python(raw_op)
     except ValidationError:
@@ -172,7 +172,11 @@ def _allowed_params(spec: ListSpec[TRow, TOut]) -> tuple[str, ...]:
             (PAGE_PARAM, PAGE_SIZE_PARAM)
             + ((SORT_PARAM,) if spec.sortable else ())
             + ((SEARCH_PARAM,) if spec.searchable else ())
-            + tuple(f"filter[{field}][{op}]" for field, filter_spec in spec.filters.items() for op in filter_spec.ops)
+            + tuple(
+                f"filter[{field}]" if op == "eq" else f"filter[{field}][{op}]"
+                for field, filter_spec in spec.filters.items()
+                for op in filter_spec.ops
+            )
         )
     )
 

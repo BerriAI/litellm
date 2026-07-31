@@ -292,6 +292,7 @@ def test_the_allowed_set_enumerates_only_operators_the_field_declares():
     assert problem.allowed is not None
     assert "filter[max_budget][is_null]" in problem.allowed
     assert "filter[tpm_limit][gte]" not in problem.allowed
+    assert "filter[created_by][in]" in problem.allowed
 
 
 def test_a_filter_on_an_undeclared_field_is_an_unknown_parameter():
@@ -358,6 +359,16 @@ def test_the_same_operator_is_accepted_on_a_field_that_declares_it():
     assert conjuncts == ({"created_by": {"contains": "ops", "mode": "insensitive"}},)
 
 
+def test_a_string_that_is_not_an_operator_at_all_is_an_unknown_parameter():
+    """`gt3` is a typo, not an operator the field withheld, so the useful reply is the
+    parameter list rather than this field's operator set."""
+    problem = _problem({"filter[max_budget][gt3]": "5"})
+
+    assert problem.type == f"{PROBLEM_TYPE_BASE}unknown-query-parameter"
+    assert problem.allowed is not None
+    assert "filter[max_budget][gte]" in problem.allowed
+
+
 # ---------------------------------------------------------------- invariant 9
 
 
@@ -420,6 +431,50 @@ def test_comparison_operators_become_prisma_range_fragments():
 
 def test_eq_is_a_bare_value_not_a_wrapped_one():
     assert _conjuncts(_plan({"filter[tpm_limit][eq]": "100"})) == ({"tpm_limit": 100},)
+
+
+def test_a_filter_with_no_operator_bracket_means_eq():
+    """`filter[status]=active` is the design doc's canonical spelling for equality;
+    only the non-eq operators carry a second bracket."""
+    assert _conjuncts(_plan({"filter[tpm_limit]": "100"})) == ({"tpm_limit": 100},)
+
+
+def test_the_bare_form_and_the_explicit_eq_form_agree():
+    assert _plan({"filter[created_by]": "alice"}) == _plan({"filter[created_by][eq]": "alice"})
+
+
+def test_the_bare_form_still_coerces_to_the_declared_type():
+    assert _problem({"filter[tpm_limit]": "1.5"}).status == 400
+
+
+def test_the_bare_form_is_rejected_on_a_field_that_does_not_declare_eq():
+    """The shorthand is sugar for the eq operator, not a bypass around the operator set."""
+    problem = _problem({"filter[created_at]": "2026-07-23T00:00:00Z"})
+
+    assert problem.type == f"{PROBLEM_TYPE_BASE}unsupported-filter-operator"
+    assert problem.allowed == ["gte", "lte"]
+
+
+def test_the_allowed_set_advertises_the_bare_spelling_for_eq():
+    allowed = _problem({"nope": "1"}).allowed
+
+    assert allowed is not None
+    assert "filter[max_budget]" in allowed
+    assert "filter[max_budget][eq]" not in allowed
+    assert "filter[created_at][gte]" in allowed
+    assert "filter[created_at]" not in allowed
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["filter[]", "filter[a][b][c]", "filter[a][", "filter", "filter[a][gte", "filter[max_budget]]["],
+    ids=["empty", "triple", "unbalanced", "bare-word", "unterminated", "bracketed-field"],
+)
+def test_malformed_filter_keys_are_unknown_parameters_not_eq_filters(name):
+    """A malformed key must not fall through to the bare-eq branch and silently filter
+    on a field nobody declared. `field in spec.filters` is the gate that makes this hold,
+    which is also why the parser needs no separate well-formedness guard."""
+    assert _problem({name: "x"}).type == f"{PROBLEM_TYPE_BASE}unknown-query-parameter"
 
 
 def test_in_splits_on_commas_and_coerces_every_member():
