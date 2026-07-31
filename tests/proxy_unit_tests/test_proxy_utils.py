@@ -1791,12 +1791,14 @@ def test_get_temp_budget_increase_non_finite_is_ignored(bad_increase):
         {"temp_budget_increase": "not-a-number", "temp_budget_expiry": None},
         {"temp_budget_increase": None, "temp_budget_expiry": None},
         {"temp_budget_increase": "5", "temp_budget_expiry": "not-a-date"},
+        {"temp_budget_increase": 10**400, "temp_budget_expiry": None},
     ],
 )
 def test_get_temp_budget_increase_malformed_metadata_is_ignored(metadata):
-    """A non-numeric increase or unparseable expiry in raw metadata must fail closed (no boost),
-    not raise. Both multi-window auth and reservation call this now, so an unguarded float()/
-    fromisoformat would turn junk metadata into a 500 instead of enforcing the real budget."""
+    """A non-numeric increase, an unparseable expiry, or an oversized int (float() raises
+    OverflowError) in raw metadata must fail closed (no boost), not raise. Both multi-window
+    auth and reservation call this now, so an unguarded float()/fromisoformat would turn junk
+    metadata into a 500 instead of enforcing the real budget."""
     from datetime import datetime, timedelta, timezone
 
     from litellm.proxy._types import UserAPIKeyAuth

@@ -2703,7 +2703,7 @@ def _get_temp_budget_increase(valid_token: UserAPIKeyAuth) -> Optional[float]:
     try:
         expiry = datetime.fromisoformat(valid_token_metadata["temp_budget_expiry"])
         increase = float(valid_token_metadata["temp_budget_increase"])
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if expiry.tzinfo is None:
         expiry = expiry.replace(tzinfo=timezone.utc)
