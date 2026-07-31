@@ -789,7 +789,9 @@ class PrometheusMetricLabels:
         # Default to no labels instead of raising, so anything that legitimately
         # iterates over every defined metric name (e.g. a wildcard config group)
         # doesn't blow up on a metric like this.
-        default_labels = getattr(PrometheusMetricLabels, label_name, [])
+        default_labels = getattr(
+            PrometheusMetricLabels, label_name, []
+        )  # mutable-ok: empty-list default for getattr fallback, never mutated
         custom_labels = []
 
         # Add custom metadata labels
