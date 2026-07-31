@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 from litellm.types.utils import (
     TranscriptionResponse,
     TranscriptionUsageDurationObject,
+    TranscriptionUsageTokensObject,
 )
 
 
@@ -59,6 +60,75 @@ class TestDiarizedJsonUsageParsing:
             TranscriptionUsageDurationObject(type="duration", seconds=295.8).seconds
             == 295.8
         )
+
+
+class TestTokensUsageParsingIsResilient:
+    """
+    Non-OpenAI OpenAI-compatible servers (e.g. llama.cpp) can return a
+    `usage.type == "tokens"` object that omits or nulls fields OpenAI always
+    sends. A non-conforming usage must never sink a successful transcription
+    (regression for the input_token_details=None ValidationError in #33764).
+    """
+
+    def _convert(self, usage):
+        return convert_to_model_response_object(
+            response_object={"text": "hello world", "usage": usage},
+            model_response_object=TranscriptionResponse(),
+            response_type="audio_transcription",
+        )
+
+    def test_null_input_token_details_does_not_raise(self):
+        result = self._convert(
+            {
+                "type": "tokens",
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "input_token_details": None,
+            }
+        )
+        assert result.text == "hello world"
+        assert isinstance(result.usage, TranscriptionUsageTokensObject)
+        assert result.usage.input_tokens == 10
+        assert result.usage.input_token_details is None
+
+    def test_missing_input_token_details_does_not_raise(self):
+        result = self._convert(
+            {
+                "type": "tokens",
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+            }
+        )
+        assert isinstance(result.usage, TranscriptionUsageTokensObject)
+        assert result.usage.total_tokens == 15
+        assert result.usage.input_token_details is None
+
+    def test_full_token_usage_still_parses(self):
+        result = self._convert(
+            {
+                "type": "tokens",
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "input_token_details": {"audio_tokens": 3, "text_tokens": 7},
+            }
+        )
+        assert isinstance(result.usage, TranscriptionUsageTokensObject)
+        assert result.usage.input_token_details is not None
+        assert result.usage.input_token_details.audio_tokens == 3
+
+    def test_unparseable_usage_is_dropped_not_raised(self):
+        """A tokens usage missing required counts should drop usage, not crash."""
+        result = self._convert({"type": "tokens", "foo": "bar"})
+        assert result.text == "hello world"
+        assert getattr(result, "usage", None) is None
+
+    def test_unknown_usage_type_is_dropped(self):
+        result = self._convert({"type": "something_new", "value": 1})
+        assert result.text == "hello world"
+        assert getattr(result, "usage", None) is None
 
 
 class TestTranscriptionDurationNotInResponseBody:
