@@ -19,7 +19,12 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LitellmUserRoles,
+    ProxyErrorTypes,
+    ProxyException,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
@@ -2187,6 +2192,57 @@ async def test_custom_code_guardrail(
         )
 
 
+def _collect_guardrail_info_from_data(data: dict) -> List[Dict[str, Any]]:
+    """Flatten the StandardLoggingGuardrailInformation entries the guardrail wrote
+    into request metadata (in its finally block) into a JSON-serializable list."""
+    entries: list = []
+    for key in ("metadata", "litellm_metadata"):
+        container = data.get(key) or {}
+        found = container.get("standard_logging_guardrail_information")
+        if found:
+            entries.extend(found if isinstance(found, list) else [found])
+
+    collected: List[Dict[str, Any]] = []
+    for entry in entries:
+        d = entry if isinstance(entry, dict) else dict(entry)
+        mode = d.get("guardrail_mode")
+        collected.append(
+            {
+                "guardrail_name": d.get("guardrail_name"),
+                "guardrail_status": d.get("guardrail_status"),
+                "guardrail_mode": str(mode) if mode is not None else None,
+                "guardrail_provider": d.get("guardrail_provider"),
+                "guardrail_response": d.get("guardrail_response"),
+                "duration": d.get("duration"),
+            }
+        )
+    return collected
+
+
+def _enrich_guardrail_block_exception(e: Exception, data: dict) -> Exception:
+    """When a guardrail blocked the request, attach the structured guardrail
+    classification to the raised HTTPException so the failure (e.g. 403) response
+    carries the same `guardrail_response` detail as the success path."""
+    info = _collect_guardrail_info_from_data(data)
+    if not info or not isinstance(e, HTTPException):
+        return e
+    detail = e.detail
+    if isinstance(detail, dict):
+        message = detail.get("error") or detail.get("message") or str(detail)
+    else:
+        message = str(detail)
+    # Return a ProxyException with provider_specific_fields so the structured
+    # classification stays a real JSON object on the wire (not stringified into
+    # `message`). handle_exception_on_proxy passes ProxyException through as-is.
+    return ProxyException(
+        message=message if isinstance(message, str) else str(message),
+        type=ProxyErrorTypes.internal_server_error,
+        param="None",
+        code=e.status_code,
+        provider_specific_fields={"guardrail_response": info},
+    )
+
+
 @router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailResponse)
 @router.post("/apply_guardrail", response_model=ApplyGuardrailResponse)
 async def apply_guardrail(
@@ -2200,6 +2256,11 @@ async def apply_guardrail(
     """
     from litellm.proxy.utils import handle_exception_on_proxy
 
+    # Defined before the try so the except block can read the guardrail's logged
+    # result (written into request_data["metadata"] in the guardrail's finally
+    # block) for the failure-path classification.
+    request_data: dict = {"messages": request.messages} if request.messages else {}
+
     try:
         active_guardrail: Optional[CustomGuardrail] = (
             GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
@@ -2211,10 +2272,6 @@ async def apply_guardrail(
                 status_code=404,
                 detail=f"Guardrail '{request.guardrail_name}' not found. Please ensure the guardrail is configured in your LiteLLM proxy.",
             )
-
-        request_data: dict = {}
-        if request.messages:
-            request_data["messages"] = request.messages
 
         # Auto-detect input_type: if the caller didn't specify "response" but the
         # guardrail only runs post_call (e.g. LLM-as-a-judge), use "response" so
@@ -2238,9 +2295,14 @@ async def apply_guardrail(
         response_text = guardrailed_inputs.get("texts", [])
 
         return ApplyGuardrailResponse(
-            response_text=response_text[0] if response_text else request.text
+            response_text=response_text[0] if response_text else request.text,
+            # Surface the structured guardrail result on success (HTTP 200).
+            guardrail_response=_collect_guardrail_info_from_data(request_data) or None,
         )
     except Exception as e:
+        # On a guardrail block, surface the structured classification (matching
+        # the success path) instead of a stringified dict in the error message.
+        e = _enrich_guardrail_block_exception(e, request_data)
         raise handle_exception_on_proxy(e)
 
 
