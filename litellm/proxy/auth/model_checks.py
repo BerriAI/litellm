@@ -1,12 +1,13 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
 import copy
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import is_model_allowed_by_pattern
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
@@ -148,7 +149,7 @@ def get_team_models(
     - Empty list if no models set
     - If model_access_groups is provided, only return models that are in the access groups
     """
-    all_models_set: Set[str] = set()
+    all_models_set: set[str] = set()
     if len(team_models) > 0:
         all_models_set.update(team_models)
         if SpecialModelNames.all_team_models.value in all_models_set:
@@ -175,6 +176,75 @@ def get_team_models(
 
     verbose_proxy_logger.debug("ALL TEAM MODELS - {}".format(len(all_models)))
     return all_models
+
+
+def get_user_models(
+    user_models: list[str],
+    proxy_model_list: list[str],
+    model_access_groups: dict[str, list[str]],
+    include_model_access_groups: bool | None = False,
+) -> list[str]:
+    """
+    Returns:
+    - List of model name strings allowed by `LiteLLM_UserTable.models`
+      (the "Personal Models" field).
+    - Empty list if no models set.
+    - Mirrors `get_team_models` semantics (sans `all-team-models`,
+      which has no meaning at the user scope).
+
+    Used by `/v1/models` to apply per-user access restrictions on the
+    listing path so it stays consistent with `can_user_call_model` at
+    inference time (see BerriAI/litellm#26420).
+    """
+    all_models_set: set[str] = set()
+    if len(user_models) > 0:
+        all_models_set.update(user_models)
+        if SpecialModelNames.all_proxy_models.value in all_models_set:
+            all_models_set.update(proxy_model_list)
+            if include_model_access_groups:
+                all_models_set.update(model_access_groups.keys())
+
+    all_models = _get_models_from_access_groups(
+        model_access_groups=model_access_groups,
+        all_models=list(all_models_set),
+        include_model_access_groups=include_model_access_groups,
+    )
+
+    # deduplicate while preserving order
+    all_models = list(dict.fromkeys(all_models))
+
+    verbose_proxy_logger.debug("ALL USER MODELS - {}".format(len(all_models)))
+    return all_models
+
+
+def filter_models_by_user_access(
+    models: list[str],
+    user_allowed_models: list[str],
+) -> list[str]:
+    """
+    Return the subset of `models` that the user is allowed to see, given
+    the (already-expanded) `user_allowed_models` list. Supports exact
+    match plus `*` wildcards (e.g. `anthropic/*`, `*`).
+
+    Wildcard semantics mirror the inference-time check
+    `is_model_allowed_by_pattern` (regex-based, `*` -> `.*`) so a model
+    accepted by `can_user_call_model` cannot be hidden by this filter,
+    and vice versa.
+
+    Caller is responsible for short-circuiting before calling when
+    `user_allowed_models` is empty, contains `all-proxy-models`
+    (no filter), or contains `no-default-models` (empty result).
+    Order of `models` is preserved.
+    """
+    exact = {m for m in user_allowed_models if "*" not in m}
+    patterns = [m for m in user_allowed_models if "*" in m]
+    out: list[str] = []
+    for m in models:
+        if m in exact:
+            out.append(m)
+        elif patterns and any(is_model_allowed_by_pattern(m, p) for p in patterns):
+            out.append(m)
+    return out
 
 
 def get_complete_model_list(
