@@ -5,12 +5,24 @@ import warnings
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-def validate_different_content(v: Union[str, dict, list]) -> str:
+def validate_different_content(v: str | dict | list) -> str | list:
+    """Normalize message content to a string, unless it carries prompt-cache markers.
+
+    Anthropic-style prompt caching requires the ``cache_control`` marker to
+    survive on individual content blocks (see
+    https://help.sap.com/docs/sap-ai-core/generative-ai/prompt-caching). When
+    any block in a list-shaped content carries ``cache_control``, we preserve
+    the list verbatim so downstream serialization keeps the marker. In every
+    other case we flatten to a string for backwards compatibility with the
+    original ``SAPMessage.content: str`` contract.
+    """
     if v in ((), {}, []):
         return ""
     elif isinstance(v, dict) and "text" in v:
         return v["text"]
     elif isinstance(v, list):
+        if any(isinstance(item, dict) and item.get("cache_control") for item in v):
+            return v
         new_v = []
         for item in v:
             if isinstance(item, dict) and "text" in item:
@@ -27,6 +39,7 @@ def validate_different_content(v: Union[str, dict, list]) -> str:
 class TextContent(BaseModel):
     type_: Literal["text"] = Field(default="text", alias="type")
     text: str
+    cache_control: Optional[dict] = None
 
 
 class ImageURLContent(BaseModel):
@@ -88,7 +101,7 @@ class SAPMessage(BaseModel):
     """
 
     role: Literal["system", "developer"] = "system"
-    content: str
+    content: str | list[TextContent] = ""
 
     _content_validator = field_validator("content", mode="before")(validate_different_content)
 
@@ -100,7 +113,7 @@ class SAPUserMessage(BaseModel):
 
 class SAPAssistantMessage(BaseModel):
     role: Literal["assistant"] = "assistant"
-    content: str = ""
+    content: str | list[TextContent] = ""
     refusal: str = ""
     tool_calls: list[MessageToolCall] = []
 
@@ -110,7 +123,7 @@ class SAPAssistantMessage(BaseModel):
 class SAPToolChatMessage(BaseModel):
     role: Literal["tool"] = "tool"
     tool_call_id: str
-    content: str
+    content: str | list[TextContent]
 
     _content_validator = field_validator("content", mode="before")(validate_different_content)
 
