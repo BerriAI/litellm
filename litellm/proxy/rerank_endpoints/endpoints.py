@@ -86,7 +86,6 @@ async def rerank(
         model_id: Final = hidden_params.get("model_id", None) or ""
         cache_key: Final = hidden_params.get("cache_key", None) or ""
         api_base: Final = hidden_params.get("api_base", None) or ""
-        response_cost: Final = hidden_params.get("response_cost", None) or ""
         additional_headers: Final = hidden_params.get("additional_headers", None) or {}
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -96,7 +95,7 @@ async def rerank(
                 cache_key=cache_key,
                 api_base=api_base,
                 version=version,
-                response_cost=response_cost,
+                response_cost=hidden_params.get("response_cost", None),
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 request_data=data,
                 hidden_params=hidden_params,

@@ -46,9 +46,9 @@ def _build_request() -> Request:
     )
 
 
-async def _call_rerank() -> Response:
+async def _call_rerank(hidden_params: dict = HIDDEN_PARAMS) -> Response:
     response = RerankResponse(id="rerank-1", results=[{"index": 0, "relevance_score": 0.9}])
-    response._hidden_params = dict(HIDDEN_PARAMS)
+    response._hidden_params = dict(hidden_params)
 
     fastapi_response = Response()
     proxy_logging_obj = MagicMock()
@@ -102,6 +102,14 @@ async def test_rerank_emits_detailed_timing_headers_when_enabled():
     assert fastapi_response.headers["x-litellm-timing-pre-processing-ms"] == "10.0"
     assert fastapi_response.headers["x-litellm-timing-post-processing-ms"] == "2.5"
     assert fastapi_response.headers["x-litellm-timing-message-copy-ms"] == "0.01"
+
+
+@pytest.mark.asyncio
+async def test_rerank_emits_zero_response_cost_header():
+    """A free deployment costs 0.0, which is a real cost and must not be dropped."""
+    fastapi_response = await _call_rerank({**HIDDEN_PARAMS, "response_cost": 0.0})
+
+    assert fastapi_response.headers["x-litellm-response-cost"] == "0.0"
 
 
 @pytest.mark.asyncio
