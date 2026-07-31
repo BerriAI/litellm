@@ -119,12 +119,25 @@ class _CombinedChunkSplitter:
         order: thinking, then text, then tool_use. Runs downstream of
         ``_split``, which has already peeled ``finish_reason`` and usage onto
         their own finish chunk.
+
+        Chunks that must not be split pass through unchanged: multi-choice
+        chunks (the translators read every choice, so slicing one would drop
+        or repeat payload) and tool-argument continuations (splitting one
+        would close the in-flight ``tool_use`` block mid-arguments). A
+        reasoning piece whose ``thinking_blocks`` carry no signature is
+        normalized to ``reasoning_content`` so the synthesized block start
+        stays empty and the thinking text is emitted exactly once.
         """
         choices = getattr(chunk, "choices", None)
-        if not choices:
+        if not choices or len(choices) != 1:
             return (chunk,)
         delta = getattr(choices[0], "delta", None)
         if delta is None:
+            return (chunk,)
+        tool_calls = getattr(delta, "tool_calls", None)
+        if tool_calls and not any(
+            getattr(getattr(tool_call, "function", None), "name", None) for tool_call in tool_calls
+        ):
             return (chunk,)
         present_groups = tuple(
             group
@@ -138,11 +151,34 @@ class _CombinedChunkSplitter:
         for index, (piece, group) in enumerate(zip(pieces, present_groups)):
             copied_delta = piece.choices[0].delta
             fields = {field: value for field in group if (value := getattr(copied_delta, field, None))}
+            fields = _CombinedChunkSplitter._normalize_reasoning_fields(fields)
             role = getattr(copied_delta, "role", None) if index == 0 else None
             piece.choices[0].delta = Delta(role=role, **fields)
-            for extra_choice in piece.choices[1:]:
-                extra_choice.delta = Delta()
         return pieces
+
+    @staticmethod
+    def _normalize_reasoning_fields(fields: "dict[str, Any]") -> "dict[str, Any]":
+        """Collapse signature-less ``thinking_blocks`` into ``reasoning_content``.
+
+        The block opener seeds a ``thinking_blocks`` start body with the full
+        thinking text while the delta re-emits it, so SSE accumulators would
+        collect it twice; the ``reasoning_content`` branch opens an empty body.
+        Signature-carrying blocks are kept intact so ``signature_delta``
+        suppression of the full-text snapshot still applies.
+        """
+        thinking_blocks = fields.get("thinking_blocks")
+        if not thinking_blocks:
+            return fields
+        if any(block.get("signature") for block in thinking_blocks if isinstance(block, dict)):
+            return fields
+        thinking_text = "".join(
+            block.get("thinking") or ""
+            for block in thinking_blocks
+            if isinstance(block, dict) and block.get("type") == "thinking"
+        )
+        if not thinking_text:
+            return fields
+        return {"reasoning_content": thinking_text}
 
     @staticmethod
     def _split(chunk: Any) -> List[Any]:

@@ -796,6 +796,106 @@ def test_mixed_chunk_with_both_reasoning_fields_keeps_text_sync():
     _assert_deltas_match_their_block_type(events)
 
 
+def test_mixed_thinking_start_body_is_empty_and_thinking_not_doubled_sync():
+    """SSE accumulators seed a block from the ``content_block_start`` body and
+    append every delta, so a thinking start body that already carries the text
+    doubles it client-side. A signature-less thinking_blocks piece must open
+    with an empty body and deliver the text exactly once, via the delta.
+    """
+    chunks = [
+        _make_chunk(
+            Delta(
+                content="Answer.",
+                thinking_blocks=[{"type": "thinking", "thinking": "Thought.", "signature": ""}],
+            )
+        ),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+    events = _drain_sync(wrapper)
+
+    accumulated = ""
+    for event in events:
+        if event.get("type") == "content_block_start" and event["content_block"].get("type") == "thinking":
+            assert not event["content_block"].get("thinking"), event["content_block"]
+            accumulated += event["content_block"].get("thinking") or ""
+        if event.get("type") == "content_block_delta" and event["delta"].get("type") == "thinking_delta":
+            accumulated += event["delta"]["thinking"]
+    assert accumulated == "Thought."
+    assert _text_deltas(events) == ["Answer."]
+
+
+def test_mixed_chunk_with_tool_argument_continuation_is_not_split_sync():
+    """Streaming providers send a tool call's name only on its first chunk;
+    later chunks carry argument fragments with ``name=None``. Splitting a
+    mixed chunk around such a continuation would close the in-flight tool_use
+    block mid-arguments and fabricate a second block with truncated JSON, so
+    continuation chunks must pass through the splitter untouched.
+    """
+    chunks = [
+        _tool_chunk("call_1", "get_weather", '{"ci'),
+        _make_chunk(
+            Delta(
+                content="Answer.",
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id=None,
+                        function=Function(name=None, arguments='ty": "NY"}'),
+                        type="function",
+                        index=0,
+                    )
+                ],
+            )
+        ),
+        _make_chunk(Delta(content=None), finish_reason="tool_calls"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+    events = _drain_sync(wrapper)
+
+    starts = [e["content_block"]["type"] for e in events if e.get("type") == "content_block_start"]
+    assert starts.count("tool_use") == 1, starts
+    assert "".join(_input_json_deltas(events)) == '{"city": "NY"}'
+
+
+def test_multi_choice_mixed_chunk_is_not_split_sync():
+    """The translators read every choice, so slicing a multi-choice chunk into
+    per-kind pieces would drop or repeat the secondary choices' payload. A
+    chunk with more than one choice must pass through the splitter untouched.
+    """
+    chunk = MagicMock()
+    chunk.choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(content="Answer.", reasoning_content="Thought."),
+            logprobs=None,
+        ),
+        StreamingChoices(
+            finish_reason=None,
+            index=1,
+            delta=Delta(
+                content=None,
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id="call_1",
+                        function=Function(name="get_weather", arguments='{"city": "NY"}'),
+                        type="function",
+                        index=0,
+                    )
+                ],
+            ),
+            logprobs=None,
+        ),
+    ]
+    chunk.usage = None
+    chunk._hidden_params = {}
+    chunks = [chunk, _make_chunk(Delta(content=None), finish_reason="stop")]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+    events = _drain_sync(wrapper)
+
+    assert _input_json_deltas(events) == ['{"city": "NY"}']
+
+
 def test_mixed_finish_chunk_emits_usage_once_sync():
     """Usage riding on a mixed finish chunk must surface exactly once, on the
     final ``message_delta``, never duplicated onto the intermediate pieces.
