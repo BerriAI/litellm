@@ -3,6 +3,8 @@ use serde_json::{Map, Value};
 use crate::error::{CoreError, CoreResult, json_type_name};
 use crate::providers::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG;
 use crate::providers::azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG;
+#[cfg(feature = "bedrock-auth")]
+use crate::providers::bedrock::messages::transformation::BEDROCK_MESSAGES_CONFIG;
 
 use super::transformation::AnthropicMessagesProviderConfig;
 
@@ -12,6 +14,8 @@ pub(super) fn messages_provider_config(
     match provider {
         "anthropic" => Some(&ANTHROPIC_MESSAGES_CONFIG),
         "azure_ai" => Some(&AZURE_ANTHROPIC_MESSAGES_CONFIG),
+        #[cfg(feature = "bedrock-auth")]
+        "bedrock" => Some(&BEDROCK_MESSAGES_CONFIG),
         _ => None,
     }
 }
