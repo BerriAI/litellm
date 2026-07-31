@@ -175,3 +175,69 @@ def test_get_openai_client_cache_key(client_type):
     )
     assert isinstance(key, str)
     assert "api_key=sk-test" in key
+
+
+# ---------------------------------------------------------------------------
+# Outbound HTTP/2 on the OpenAI/Azure client builders
+# ---------------------------------------------------------------------------
+class TestOpenAIClientHttp2:
+    @pytest.fixture(autouse=True)
+    def _restore(self):
+        saved = litellm.enable_http2
+        saved_cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+        yield
+        litellm.enable_http2 = saved
+        litellm.in_memory_llm_clients_cache = saved_cache
+
+    @staticmethod
+    def _pool_http2(client):
+        return getattr(client._transport._pool, "_http2", None)
+
+    def test_async_client_default_off_uses_aiohttp(self):
+        litellm.enable_http2 = False
+        client = BaseOpenAILLM._get_async_http_client()
+        assert "Aiohttp" in type(client._transport).__name__
+
+    def test_async_client_http2_enabled(self):
+        litellm.enable_http2 = True
+        client = BaseOpenAILLM._get_async_http_client()
+        assert self._pool_http2(client) is True
+
+    def test_async_shared_session_overrides_http2_and_warns(self):
+        import asyncio
+
+        from aiohttp import ClientSession
+
+        litellm.enable_http2 = True
+
+        async def _build():
+            session = ClientSession()
+            try:
+                with patch(
+                    "litellm.llms.openai.common_utils.verbose_logger"
+                ) as mock_logger:
+                    client = BaseOpenAILLM._get_async_http_client(
+                        shared_session=session
+                    )
+                    return type(client._transport).__name__, mock_logger.warning.called
+            finally:
+                await session.close()
+
+        tname, warned = asyncio.run(_build())
+        assert "Aiohttp" in tname  # fell back to HTTP/1.1 transport
+        assert warned  # and warned rather than silently downgrading
+
+    def test_sync_client_http2_enabled_and_cached(self):
+        litellm.enable_http2 = True
+        litellm.in_memory_llm_clients_cache = None
+        c1 = BaseOpenAILLM._get_sync_http_client()
+        assert self._pool_http2(c1) is True
+        # second call reuses the cached HTTPHandler client (shared pool)
+        c2 = BaseOpenAILLM._get_sync_http_client()
+        assert c1 is c2
+
+    def test_sync_client_default_off_is_http1(self):
+        litellm.enable_http2 = False
+        litellm.in_memory_llm_clients_cache = None
+        client = BaseOpenAILLM._get_sync_http_client()
+        assert self._pool_http2(client) is False
