@@ -7,6 +7,7 @@ from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     build_tool_call_item_kwargs,
     extract_custom_tool_names,
+    serialize_tool_call_arguments,
 )
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -178,10 +179,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             fn_args_delta = ""
             if isinstance(fn, dict):
                 fn_name = str(fn.get("name") or "")
-                fn_args_delta = str(fn.get("arguments") or "")
+                fn_args_delta = serialize_tool_call_arguments(fn.get("arguments"))
             else:
                 fn_name = str(getattr(fn, "name", "") or "")
-                fn_args_delta = str(getattr(fn, "arguments", "") or "")
+                fn_args_delta = serialize_tool_call_arguments(getattr(fn, "arguments", ""))
 
             output_index = self._get_or_assign_tool_output_index(call_id)
 
@@ -245,10 +246,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             fn_args = ""
             if isinstance(fn, dict):
                 fn_name = str(fn.get("name") or "")
-                fn_args = str(fn.get("arguments") or "")
+                fn_args = serialize_tool_call_arguments(fn.get("arguments"))
             else:
                 fn_name = str(getattr(fn, "name", "") or "")
-                fn_args = str(getattr(fn, "arguments", "") or "")
+                fn_args = serialize_tool_call_arguments(getattr(fn, "arguments", ""))
 
             # Track if this is a new tool call that wasn't streamed
             is_new_tool_call = call_id not in self._tool_args_by_call_id
