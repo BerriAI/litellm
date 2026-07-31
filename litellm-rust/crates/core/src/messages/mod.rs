@@ -21,6 +21,7 @@ use prepare::prepare_messages_call;
 use types::{AnthropicMessagesResponse, MessagesRequest};
 
 pub async fn messages(request: MessagesRequest<'_>) -> CoreResult<AnthropicMessagesResponse> {
+    println!("ENTERED RUST MESSAGES");
     execute_messages_provider_call(prepare_messages_call(request)?).await
 }
 

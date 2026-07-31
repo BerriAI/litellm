@@ -16,6 +16,8 @@ pub(super) async fn execute_messages_provider_call(
         request_builder = request_builder.timeout(duration);
     }
 
+    println!("IN EXECUTE MESSAGES PROVIDER CALL");
+
     let response = request_builder
         .send()
         .await
