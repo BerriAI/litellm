@@ -14,20 +14,16 @@ shared fixtures build on it.
 """
 
 import functools
-import os
 from collections.abc import Iterator
 
 import pytest
 import requests
 
 from e2e_config import CONTROL_PLANE_BASE_URL, PROXY_BASE_URL
-from e2e_db import RESET_OPT_IN_ENV, reset_spend_logs, run_spend_log_cleanup
+from e2e_db import reset_database
 from junit_properties import attach_result_properties
 from lifecycle import ProxyClientProvider, ResourceManager
 from proxy_client import ProxyClient, build_proxy_client
-
-
-_E2E_TEST_RAN = pytest.StashKey[bool]()
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -99,29 +95,24 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
         pytest.fail(reason)
 
 
-def pytest_runtest_call(item: pytest.Item) -> None:
-    """Mark that an e2e test body actually ran (setup passed). Sessions that fail
-    setup never reach this hook, so the session-finish cleanup can use it as a
-    guard before truncating the spend-log DB. Tests under `tests/e2e/` without the
-    `e2e` marker (pure unit coverage for the harness itself) never hit the proxy,
-    so they must not arm the destructive DB truncate."""
-    if item.get_closest_marker("e2e") is None:
-        return
-    item.session.stash[_E2E_TEST_RAN] = True
+@pytest.fixture(scope="session", autouse=True)
+def reset_prisma_db_session(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Reset the Prisma database once at the start of the test session.
 
+    `migrate reset` drops the schema and replays every migration, so the suite
+    starts from an empty DB at the migration head. Autouse and session-scoped, so it
+    runs once before the first test rather than per suite or per test.
 
-def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Once the whole e2e session is done (all suites), optionally truncate the
-    spend logs so the DB doesn't accumulate test rows. The truncate is destructive
-    and irreversible, so it runs only when the operator explicitly opts in
-    (`E2E_RESET_SPEND_LOGS=1`) and an e2e test body actually ran; otherwise a
-    `DATABASE_URL` pointing at a shared or staging instance is left untouched.
-    Best-effort: a cleanup failure (no DB reachable) must not fail the run."""
-    run_spend_log_cleanup(
-        opt_in=os.environ.get(RESET_OPT_IN_ENV),
-        e2e_test_ran=session.stash.get(_E2E_TEST_RAN, False),
-        truncate=reset_spend_logs,
-    )
+    Skipped when the session collected no `e2e`-marked test: the harness's own unit
+    coverage (this file's siblings) never touches a database, and dropping the schema
+    to run it would wipe whatever `DATABASE_URL` points at for no reason.
+
+    Fails the session if the reset fails: every downstream test would otherwise run
+    against a half-dropped schema and report confusing unrelated errors.
+    """
+    if any(item.get_closest_marker("e2e") is not None for item in request.session.items):
+        reset_database()
+    yield
 
 
 @pytest.fixture(scope="session")
