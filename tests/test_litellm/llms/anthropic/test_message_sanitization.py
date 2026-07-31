@@ -177,7 +177,7 @@ class TestMessageSanitization:
     def test_case_c_empty_text_content_user(self):
         """
         Test Case C: Empty text content in user message
-        Should replace with placeholder
+        Should handle empty content appropriately
         """
         messages = [
             {"role": "user", "content": ""},
@@ -188,15 +188,12 @@ class TestMessageSanitization:
 
         assert len(sanitized) == 2
         assert sanitized[0]["role"] == "user"
-        assert (
-            sanitized[0]["content"]
-            == "[System: Empty message content sanitised to satisfy protocol]"
-        )
+        assert sanitized[0]["content"] == "."
 
     def test_case_c_whitespace_only_content(self):
         """
         Test Case C: Whitespace-only content
-        Should replace with placeholder
+        Should handle empty content appropriately
         """
         messages = [
             {"role": "user", "content": "   \n  \t  "},
@@ -206,14 +203,8 @@ class TestMessageSanitization:
         sanitized = sanitize_messages_for_tool_calling(messages)
 
         assert len(sanitized) == 2
-        assert (
-            sanitized[0]["content"]
-            == "[System: Empty message content sanitised to satisfy protocol]"
-        )
-        assert (
-            sanitized[1]["content"]
-            == "[System: Empty message content sanitised to satisfy protocol]"
-        )
+        assert sanitized[0]["content"] == "."
+        assert sanitized[1]["content"] is None
 
     def test_case_c_valid_content_preserved(self):
         """
@@ -270,10 +261,7 @@ class TestMessageSanitization:
         assert sanitized[2]["role"] == "tool"
         assert sanitized[2]["tool_call_id"] == "call_1"  # Dummy added
         assert sanitized[3]["role"] == "user"
-        assert (
-            sanitized[3]["content"]
-            == "[System: Empty message content sanitised to satisfy protocol]"
-        )
+        assert sanitized[3]["content"] == "."
         assert sanitized[4]["role"] == "assistant"
 
     def test_modify_params_false_no_sanitization(self):
@@ -363,15 +351,15 @@ class TestMessageSanitization:
         assert len(result) == 1
         assert result[0]["role"] == "user"
         text_blocks = [
-            b for b in result[0]["content"] if isinstance(b, dict) and b.get("type") == "text"
+            b
+            for b in result[0]["content"]
+            if isinstance(b, dict) and b.get("type") == "text"
         ]
         assert len(text_blocks) == 3
         # No text block may be empty — that's the contract Anthropic enforces.
         for block in text_blocks:
             assert block["text"].strip() != ""
-        assert text_blocks[2]["text"] == (
-            "[System: Empty message content sanitised to satisfy protocol]"
-        )
+        assert text_blocks[2]["text"] == "."
 
     def test_empty_text_block_in_list_content_sanitized(self):
         """
@@ -398,12 +386,13 @@ class TestMessageSanitization:
 
         assert len(result) == 1
         text_blocks = [
-            b for b in result[0]["content"] if isinstance(b, dict) and b.get("type") == "text"
+            b
+            for b in result[0]["content"]
+            if isinstance(b, dict) and b.get("type") == "text"
         ]
-        assert len(text_blocks) == 3
+        # Empty text blocks are dropped; only the non-empty one remains
+        assert len(text_blocks) == 1
         assert text_blocks[0]["text"] == "real content"
-        for block in text_blocks[1:]:
-            assert block["text"].strip() != ""
 
     def test_non_empty_content_unchanged_without_modify_params(self):
         """

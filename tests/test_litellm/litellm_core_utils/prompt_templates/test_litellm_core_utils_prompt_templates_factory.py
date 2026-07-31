@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
+    _sanitize_empty_text_content,
     _bedrock_converse_messages_pt,
     _convert_to_bedrock_tool_call_invoke,
     _convert_to_bedrock_tool_call_result,
@@ -2680,3 +2681,246 @@ def test_bedrock_converse_messages_pt_document_rejects_url_source():
         _bedrock_converse_messages_pt(
             messages, "anthropic.claude-sonnet-4-6", "bedrock"
         )
+
+
+def test_sanitize_empty_text_assistant_with_tool_calls():
+    """Assistant messages with tool_calls should not be sanitized
+    (they should be returned as-is with tool_calls preserved)."""
+    message = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"loc": "NY"}'},
+            }
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    # Message should be returned unchanged (with tool_calls intact)
+    assert result.get("tool_calls") is not None
+    assert len(result["tool_calls"]) == 1
+    assert result["tool_calls"][0]["function"]["name"] == "get_weather"
+
+
+def test_sanitize_empty_text_assistant_with_non_text_content():
+    """Assistant messages with non-text content blocks (e.g., tool_use)
+    should not be sanitized - they contain substantive content beyond text."""
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {}}
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    # Message should be returned unchanged (content preserved)
+    assert result.get("content") == message["content"]
+
+
+def test_sanitize_empty_text_assistant_with_only_text_blocks():
+    """Assistant messages with ONLY empty/whitespace text blocks
+    should still be sanitized."""
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": ""},
+            {"type": "text", "text": "   "},
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    # Only-empty-text assistant messages get content=None
+    assert result.get("content") is None
+
+
+def test_sanitize_empty_text_assistant_with_mixed_content():
+    """Assistant messages with mixed content (text + non-text blocks)
+    should be preserved when they have non-text blocks."""
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": ""},
+            {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {}},
+            {"type": "text", "text": "   "},
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    # Message should be returned unchanged because it has non-text content blocks
+    assert result.get("content") == message["content"]
+
+
+def test_sanitize_empty_text_non_assistant_non_user_roles():
+    """Non-user/assistant roles (tool, function) should pass through unchanged."""
+    tool_message = {"role": "tool", "content": "Result data", "tool_call_id": "call_1"}
+    result = _sanitize_empty_text_content(tool_message)
+    assert result["role"] == "tool"
+    assert result["content"] == "Result data"
+
+    function_message = {"role": "function", "content": "Result data", "name": "my_func"}
+    result = _sanitize_empty_text_content(function_message)
+    assert result["role"] == "function"
+    assert result["content"] == "Result data"
+
+
+def test_sanitize_empty_text_assistant_with_string_content():
+    """Assistant messages with plain string content (not a list) and
+    no tool_calls should pass through unchanged when content is non-empty.
+
+    This exercises the isinstance(content, list) -> False branch."""
+    message = {"role": "assistant", "content": "Hello, how can I help?"}
+    result = _sanitize_empty_text_content(message)
+    assert result["role"] == "assistant"
+    assert result["content"] == "Hello, how can I help?"
+
+
+def test_sanitize_empty_text_assistant_with_empty_string_content():
+    """Assistant messages with an empty string content and no tool_calls
+    should be sanitized (replaced with placeholder)."""
+    message = {"role": "assistant", "content": ""}
+    result = _sanitize_empty_text_content(message)
+    assert result["role"] == "assistant"
+    # Empty string should be replaced with None
+    assert result["content"] != ""
+
+
+def test_sanitize_empty_text_assistant_with_missing_type_block():
+    """Assistant messages with content blocks missing a 'type' key should NOT
+    be treated as non-text — they should fall through to sanitization.
+    A dict block without a 'type' key is malformed and should not suppress
+    the empty-text guard."""
+    message = {
+        "role": "assistant",
+        "content": [
+            {"no_type": "value"},  # malformed: dict without 'type' key
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    # The malformed block should not prevent sanitization from running
+    assert result.get("content") is not None
+
+
+def test_sanitize_empty_text_user_all_empty_list():
+    """User messages with a list where ALL text blocks are empty/whitespace
+    should fall back to '.' (the default empty content message)."""
+    message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": ""},
+            {"type": "text", "text": "   "},
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    assert result["content"] == "."
+
+
+def test_sanitize_empty_text_user_mixed_list():
+    """User messages with a mix of non-empty and empty text blocks
+    should drop the empty blocks and keep the non-empty ones."""
+    message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "hello"},
+            {"type": "text", "text": ""},
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    assert result["content"] == [{"type": "text", "text": "hello"}]
+
+
+def test_sanitize_empty_text_user_non_empty_list():
+    """User messages with all non-empty text blocks should pass through unchanged."""
+    message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "first"},
+            {"type": "text", "text": "second"},
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    assert result["content"] == message["content"]
+
+
+def test_sanitize_empty_text_assistant_none_content():
+    """Assistant messages with content=None should pass through unchanged."""
+    message = {"role": "assistant", "content": None}
+    result = _sanitize_empty_text_content(message)
+    assert result["content"] is None
+
+
+def test_sanitize_empty_text_assistant_all_empty_list():
+    """Assistant messages with a list where ALL text blocks are empty/whitespace
+    should fall back to content=None (no text content, no non-text blocks)."""
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": ""},
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    assert result["content"] is None
+
+
+def test_sanitize_empty_text_assistant_mixed_text_list():
+    """Assistant messages with a mix of non-empty and empty text blocks
+    and no non-text blocks should drop the empty blocks."""
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "hello"},
+            {"type": "text", "text": ""},
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    assert result["content"] == [{"type": "text", "text": "hello"}]
+
+
+def test_anthropic_messages_pt_xml_inserts_placeholder_first_message():
+    """When anthropic_messages_pt_xml receives messages starting with assistant
+    (no user message first), it should insert a placeholder user message with
+    _DEFAULT_EMPTY_CONTENT_MESSAGE (".") to satisfy Anthropic's role alternation."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt_xml,
+        _DEFAULT_EMPTY_CONTENT_MESSAGE,
+    )
+    import litellm
+
+    original_modify = litellm.modify_params
+    litellm.modify_params = True
+    try:
+        messages = [
+            {"role": "assistant", "content": "Hello"},
+        ]
+        result = anthropic_messages_pt_xml(messages)
+        assert len(result) >= 2
+        assert result[0]["role"] == "user"
+        # The placeholder should use _DEFAULT_EMPTY_CONTENT_MESSAGE
+        text_blocks = [
+            b
+            for b in result[0]["content"]
+            if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        assert any(b["text"] == _DEFAULT_EMPTY_CONTENT_MESSAGE for b in text_blocks)
+    finally:
+        litellm.modify_params = original_modify
+
+
+def test_anthropic_messages_pt_xml_raises_without_modify_params():
+    """When modify_params=False and the first message is not a user message,
+    anthropic_messages_pt_xml should raise an Exception."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt_xml,
+    )
+    import litellm
+
+    original_modify = litellm.modify_params
+    litellm.modify_params = False
+    try:
+        messages = [
+            {"role": "assistant", "content": "Hello"},
+        ]
+        import pytest
+
+        with pytest.raises(Exception, match="Invalid first message"):
+            anthropic_messages_pt_xml(messages)
+    finally:
+        litellm.modify_params = original_modify
