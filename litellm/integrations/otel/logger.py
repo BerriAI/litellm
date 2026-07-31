@@ -242,6 +242,11 @@ class OpenTelemetryV2(CustomLogger):
         # call id; keep the first span so its start time is the true one.
         if call_id in self._open_llm_calls:
             return
+        # A retry that reuses a call id whose span already closed must not open new spans:
+        # the close callback short-circuits on ``_closed_call_ids``, so those spans would
+        # never be finished or exported (a leak). The completed attempt was already traced.
+        if call_id in self._closed_call_ids:
+            return
         start_time_ns = to_ns(datetime.now())
         spans: tuple[Span, ...] = ()
         # Parent to the anchored root span (ambient on the SDK path); open live only when that
@@ -354,12 +359,20 @@ class OpenTelemetryV2(CustomLogger):
             self._open_llm_calls.pop(data.identity.call_id, None)
         parent_context, links = resolve_mcp_span_context()
         parent_context = self._seed_identity_baggage(data.identity, None, parent_context)
-        self._emitter.emit(
+        # The tool-call span carries ``gen_ai.operation.name`` (execute_tool), so the
+        # fan-out processor treats it as a gen-AI span and skips it; route it to the
+        # request's admin destinations the same way the LLM-call span is, or it would
+        # reach the global exporter only and be missing from every tenant destination.
+        call = LLMCallEvent.from_dict(kwargs)
+        self._emitter.emit_fanout(
             SpanRole.MCP_TOOL_CALL,
             data,
             parent_context=parent_context,
             start_time_ns=to_ns(start_time),
             end_time_ns=to_ns(end_time),
+            tracers=self._tenant_tracers.genai_tracers_for(
+                self.tracer, self._destinations_for_backend(call), call.dynamic_params
+            ),
             links=links,
         )
         return True

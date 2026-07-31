@@ -672,7 +672,12 @@ async def _resolve_logging_exporters(
         backend = (credential.credential_info or {}).get("description")
         if not backend:
             return None
-        values = {str(key): str(value) for key, value in (credential.credential_values or {}).items()}
+        # Drop unset (``None``) values rather than stringifying them: ``str(None)`` is the
+        # literal ``"None"``, which would land in the exporter endpoint/headers and break
+        # the export (e.g. an empty ``otel_endpoint`` becoming the URL ``"None"``).
+        values = {
+            str(key): str(value) for key, value in (credential.credential_values or {}).items() if value is not None
+        }
         destination = build_destination(backend, values)
         return None if destination is None else (backend, destination)
 

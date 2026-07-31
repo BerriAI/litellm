@@ -449,6 +449,48 @@ def test_mcp_tool_call_is_not_logged_as_llm_call():
     assert "gen_ai.request.model" not in span.attributes
 
 
+def test_mcp_tool_call_routes_to_admin_destination():
+    """The MCP tool-call span carries ``gen_ai.operation.name`` (execute_tool), so the
+    fan-out processor skips it; it must still be routed to the request's admin
+    destinations like the LLM-call span, not reach the global exporter only."""
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+    from litellm.integrations.otel.model.destination import OtelDestination
+    from litellm.integrations.otel.plumbing.context import _request_destinations
+    from litellm.integrations.otel.plumbing.providers import build_tracer_provider
+
+    cfg = OpenTelemetryV2Config(
+        service_name="litellm-proxy",
+        exporters=[ExporterSpec(kind="in_memory")],
+    )
+    logger = OpenTelemetryV2(config=cfg, callback_name="generic", tracer_provider=build_tracer_provider(cfg))
+    dest = OtelDestination(callback_name="generic", endpoint="http://collector/v1/traces", headers={"x": "1"})
+
+    token = _request_destinations.set((dest,))
+    try:
+        kwargs = {"standard_logging_object": _mcp_payload()}
+        asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    finally:
+        _request_destinations.reset(token)
+
+    # The destination's clone provider (base in_memory exporter + the destination) must
+    # have exported the tool-call span.
+    assert logger._tenant_tracers._providers, "no destination provider was built for the tool-call"
+    captured = []
+    for provider in logger._tenant_tracers._providers.values():
+        provider.force_flush()
+        for proc in provider._active_span_processor._span_processors:
+            exporter = getattr(proc, "span_exporter", None)
+            if isinstance(exporter, InMemorySpanExporter):
+                captured += exporter.get_finished_spans()
+    assert any(s.attributes.get("mcp.method.name") == "tools/call" for s in captured), (
+        "tool-call span did not reach the admin destination's provider"
+    )
+
+
 def test_mcp_tool_call_captures_io_when_enabled():
     logger, exporter = _logger_capturing()
     kwargs = {"standard_logging_object": _mcp_payload()}
@@ -803,6 +845,28 @@ def test_pre_call_idempotent_keeps_first_span():
         second = logger._open_llm_calls["call_1"]
     server.end()
     assert first is second  # not overwritten
+
+
+def test_pre_call_after_close_does_not_reopen_leaked_span():
+    """A retry that reuses a call id whose span already closed must NOT open a new
+    span: the close callback short-circuits on ``_closed_call_ids``, so a reopened
+    span would never be finished or exported (a leak)."""
+    logger, _ = _logger()
+    kwargs = _kwargs()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    with trace.use_span(server, end_on_exit=False):
+        logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+    assert "call_1" in logger._open_llm_calls
+
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    assert "call_1" not in logger._open_llm_calls
+    assert "call_1" in logger._closed_call_ids
+
+    # A retry reuses the same call id; pre_call must not reopen a carrier/span for it.
+    with trace.use_span(server, end_on_exit=False):
+        logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+    server.end()
+    assert "call_1" not in logger._open_llm_calls
 
 
 # --------------------------------------------------------------------------- #

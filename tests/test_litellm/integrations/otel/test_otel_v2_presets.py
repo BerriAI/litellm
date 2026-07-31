@@ -292,6 +292,10 @@ def test_bare_and_degraded_configs_do_not_console_flood(monkeypatch):
     assert OpenTelemetryV2Config().exporters == []
     # An explicit endpoint (a real destination) still folds into one OTLP exporter.
     assert len(OpenTelemetryV2Config(endpoint="http://collector/v1/traces").exporters) == 1
+    # A deployment that *explicitly* selects console output still gets it -- only the
+    # default/degrade console (exporter left unset) is suppressed.
+    explicit_console = OpenTelemetryV2Config(exporter="console")
+    assert len(explicit_console.exporters) == 1 and explicit_console.exporters[0].kind == "console"
 
     for var in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "WANDB_API_KEY", "WANDB_PROJECT_ID"):
         monkeypatch.delenv(var, raising=False)

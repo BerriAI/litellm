@@ -222,6 +222,7 @@ class SpanEmitter:
         start_time_ns: int | None = None,
         end_time_ns: int | None = None,
         tracers: Sequence[Tracer],
+        links: Sequence[Link] | None = None,
     ) -> Span | None:
         """Emit one logical span once per tracer, deduping the call ONCE.
 
@@ -244,6 +245,7 @@ class SpanEmitter:
                 parent_context=parent_context,
                 start_time_ns=start_time_ns,
                 tracer=tracer,
+                links=links,
             )
             self.finish_span(role, span, data, end_time_ns=end_time_ns)
             if first is None:
