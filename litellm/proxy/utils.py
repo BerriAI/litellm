@@ -41,6 +41,7 @@ from litellm.constants import (
 )
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
+    DB_RETRY_SAFE_ERROR_TYPES,
     CommonProxyErrors,
     ProxyErrorTypes,
     ProxyException,
@@ -108,6 +109,7 @@ from litellm.litellm_core_utils.core_helpers import coerce_token_limit
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -171,10 +173,12 @@ from litellm.types.proxy.policy_engine.pipeline_types import PipelineExecutionRe
 from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
+    from mcp.types import CallToolResult
     from opentelemetry.trace import Span as _Span
     from prisma.client import TransactionManager
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
 
     Span = Union[_Span, Any]
 else:
@@ -182,6 +186,8 @@ else:
 
 
 unified_guardrail = UnifiedLLMGuardrails()
+
+NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES: "frozenset[CallTypes]" = frozenset({CallTypes.anthropic_messages})
 
 
 def print_verbose(print_statement):
@@ -1759,6 +1765,20 @@ class ProxyLogging:
         return caps
 
     @staticmethod
+    def _stream_requires_guardrail_translation(user_api_key_dict: UserAPIKeyAuth) -> bool:
+        from litellm.litellm_core_utils.api_route_to_call_types import (
+            get_call_types_for_route,
+        )
+
+        route = user_api_key_dict.request_route
+        if not route:
+            return False
+        call_types = get_call_types_for_route(route)
+        if not call_types:
+            return False
+        return call_types[0] in NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES
+
+    @staticmethod
     def has_post_call_response_headers_callbacks() -> bool:
         return ProxyLogging._callback_capabilities().has_post_call_response_headers
 
@@ -2468,6 +2488,59 @@ class ProxyLogging:
         if raised:
             raise raised[0]
 
+    async def post_mcp_call_hook(
+        self,
+        response: "CallToolResult",
+        request_data: Mapping[str, Any],
+        user_api_key_dict: UserAPIKeyAuth | None = None,
+    ) -> "CallToolResult":
+        """
+        Run guardrails configured for ``post_mcp_call`` against an MCP tool result.
+
+        The MCP counterpart of ``post_call_success_hook``: guardrails that
+        implement ``apply_guardrail`` see the tool result's text through the
+        unified guardrail seam (``MCPGuardrailTranslationHandler``), so a text
+        guardrail can mask sensitive values in the result without any MCP-specific
+        code of its own. Guardrails that instead implement
+        ``async_post_mcp_tool_call_hook`` are dispatched by
+        ``Logging.async_post_mcp_tool_call_hook`` and are not run here.
+
+        A guardrail that rejects the result raises, and the exception propagates
+        (matching the inbound ``pre_mcp_call`` behavior) rather than being
+        swallowed into an unguarded result.
+        """
+        caps = ProxyLogging._callback_capabilities()
+        if not caps.has_guardrail:
+            return response
+
+        handler_cls = load_guardrail_translation_mappings().get(CallTypes.call_mcp_tool)
+        if handler_cls is None:
+            verbose_proxy_logger.debug("MCP guardrail translation handler unavailable; skipping post_mcp_call hook")
+            return response
+
+        for callback in caps.resolved_callbacks:
+            if not isinstance(callback, CustomGuardrail):
+                continue
+            if "apply_guardrail" not in type(callback).__dict__:
+                continue
+            if (
+                callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_mcp_call)
+                is not True
+            ):
+                continue
+            response = await self._run_guardrail_with_metrics(
+                callback,
+                handler_cls().process_output_response(
+                    response=response,
+                    guardrail_to_apply=callback,
+                    litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                ),
+                "post_mcp_call",
+            )
+        return response
+
     async def post_call_response_headers_hook(
         self,
         data: dict,
@@ -2666,6 +2739,7 @@ class ProxyLogging:
         request_data = _check_and_merge_model_level_guardrails(data=request_data, llm_router=llm_router)
 
         current_response = response
+        stream_needs_translation = ProxyLogging._stream_requires_guardrail_translation(user_api_key_dict)
 
         for resolved_callback, kind in caps.iterator_overrides:
             if isinstance(resolved_callback, CustomGuardrail):
@@ -2674,7 +2748,18 @@ class ProxyLogging:
                     is not True
                 ):
                     continue
-            if kind == "override":
+            effective_kind = (
+                "apply_guardrail"
+                if (
+                    kind == "override"
+                    and stream_needs_translation
+                    and isinstance(resolved_callback, CustomGuardrail)
+                    and resolved_callback.uses_apply_guardrail_interface()
+                    and not resolved_callback.mask_response_content
+                )
+                else kind
+            )
+            if effective_kind == "override":
                 current_response = self._wrap_streaming_iterator_with_enrichment(
                     resolved_callback,
                     resolved_callback.async_post_call_streaming_iterator_hook(
@@ -2685,13 +2770,14 @@ class ProxyLogging:
                 )
             else:
                 # kind == "apply_guardrail": route through unified_guardrail
-                request_data["guardrail_to_apply"] = resolved_callback
                 current_response = self._wrap_streaming_iterator_with_enrichment(
                     resolved_callback,
                     unified_guardrail.async_post_call_streaming_iterator_hook(
                         user_api_key_dict=user_api_key_dict,
                         request_data=request_data,
                         response=current_response,
+                        guardrail_to_apply=resolved_callback,
+                        buffer_until_moderated_default=(kind == "override"),
                     ),
                 )
 
@@ -2728,7 +2814,6 @@ class ProxyLogging:
     async def _arelease_max_parallel_requests_on_disconnect(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict | None = None,
     ) -> None:
         """
         Release the api-key max_parallel_requests slot when a streaming
@@ -2748,7 +2833,7 @@ class ProxyLogging:
         limiter = self.get_proxy_hook("parallel_request_limiter")
         if not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
             return
-        await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict, request_data)
+        await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """
@@ -2917,6 +3002,8 @@ async def prefetch_config_params(prisma_client: Any, param_names: List[str]) -> 
 class PrismaClient:
     spend_log_transactions: List = []
     _spend_log_transactions_lock = asyncio.Lock()
+    tool_usage_transactions: List["ToolUsageTransaction"] = []
+    _tool_usage_transactions_lock = asyncio.Lock()
 
     def __init__(
         self,
@@ -5334,7 +5421,7 @@ class ProxyUpdateSpend:
                             )
 
                 break
-            except DB_CONNECTION_ERROR_TYPES as e:
+            except DB_RETRY_SAFE_ERROR_TYPES as e:
                 if i >= n_retry_times:  # If we've reached the maximum number of retries
                     _raise_failed_update_spend_exception(
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
@@ -5473,12 +5560,15 @@ async def update_spend(
         queue_size = len(prisma_client.spend_log_transactions)
     verbose_proxy_logger.debug("Spend Logs transactions: {}".format(queue_size))
 
+    async with prisma_client._tool_usage_transactions_lock:
+        tool_usage_queue_size = len(prisma_client.tool_usage_transactions)
+
     # Process spend log transactions when called directly.
     # This keeps backwards compatibility with the old behavior.
     # See update_spend_logs_job and _monitor_spend_logs_queue for the new behavior.
     # Safe to keep: under high concurrency this can take up to ~30s to run,
     # so it's unlikely to overlap with monitor_spend_logs_queue.
-    if queue_size > 0:
+    if queue_size > 0 or tool_usage_queue_size > 0:
         await update_spend_logs_job(
             prisma_client=prisma_client,
             db_writer_client=db_writer_client,
@@ -5545,10 +5635,14 @@ async def update_spend_logs_job(
     n_retry_times = 3
     MAX_LOGS_PER_INTERVAL = 10000
 
-    # Atomically pop batch from queue
+    # Atomically pop batch from queue. The tool usage queue counts toward the
+    # emptiness check: a spend-log write failure aborts a run before the tool
+    # drain below, and those entries must not strand once the spend queue drains.
     async with prisma_client._spend_log_transactions_lock:
         queue_size = len(prisma_client.spend_log_transactions)
-    if queue_size == 0:
+    async with prisma_client._tool_usage_transactions_lock:
+        tool_queue_size = len(prisma_client.tool_usage_transactions)
+    if queue_size == 0 and tool_queue_size == 0:
         return
 
     async with prisma_client._spend_log_transactions_lock:
@@ -5579,17 +5673,23 @@ async def update_spend_logs_job(
             guardrail_tracking_err,
         )
 
-    # Tool usage tracking (same batch): SpendLogToolIndex for "last N requests for tool X"
+    # Tool usage tracking: drain the request-time queue into the tool index and the
+    # LiteLLM_DailyToolSpend rollup. Never retried; a dropped batch is permanently
+    # absent from the rollup, so failures log at error.
+    async with prisma_client._tool_usage_transactions_lock:
+        tool_usage_to_process = prisma_client.tool_usage_transactions[:MAX_LOGS_PER_INTERVAL]
+        prisma_client.tool_usage_transactions = prisma_client.tool_usage_transactions[len(tool_usage_to_process) :]
     try:
-        from litellm.proxy.db.spend_log_tool_index import process_spend_logs_tool_usage
+        from litellm.proxy.db.spend_log_tool_index import flush_tool_usage_transactions
 
-        await process_spend_logs_tool_usage(
+        await flush_tool_usage_transactions(
             prisma_client=prisma_client,
-            logs_to_process=logs_to_process,
+            transactions=tool_usage_to_process,
         )
     except Exception as tool_tracking_err:
-        verbose_proxy_logger.warning(
-            "Spend tracking - tool usage tracking failed (non-fatal): %s",
+        verbose_proxy_logger.error(
+            "Spend tracking - tool usage flush failed; %s tool usage transactions dropped: %s",
+            len(tool_usage_to_process),
             tool_tracking_err,
         )
 
@@ -5625,9 +5725,13 @@ async def _monitor_spend_logs_queue(
 
     while True:
         try:
-            # Check queue size with lock protection
+            # Check queue sizes with lock protection; the tool usage queue keeps
+            # the monitor firing when a prior failed run left it nonempty.
             async with prisma_client._spend_log_transactions_lock:
-                queue_size = len(prisma_client.spend_log_transactions)
+                spend_queue_size = len(prisma_client.spend_log_transactions)
+            async with prisma_client._tool_usage_transactions_lock:
+                tool_queue_size = len(prisma_client.tool_usage_transactions)
+            queue_size = spend_queue_size + tool_queue_size
 
             if queue_size > 0:
                 if queue_size >= threshold:

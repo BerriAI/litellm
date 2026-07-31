@@ -151,14 +151,11 @@
     "no-restricted-imports": {
       "count": 1
     },
-    "prefer-const": {
-      "count": 3
-    },
     "react-hooks/purity": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/caching/_components/cache_health.tsx": {
@@ -210,22 +207,12 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-optimization/_components/AutorouterTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/cost-optimization/_components/CostOptimizationView.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
   "src/app/(dashboard)/cost-optimization/_components/PromptCompressionTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/cost-optimization/_components/UsageTab.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1701,7 +1688,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 2
     },
     "prefer-const": {
       "count": 2
@@ -1865,11 +1852,6 @@
     },
     "prefer-const": {
       "count": 1
-    }
-  },
-  "src/app/(dashboard)/users/_components/DefaultUserSettings.tsx": {
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/users/_components/edit_user.tsx": {
@@ -2560,35 +2542,17 @@
       "count": 1
     }
   },
-  "src/components/add_model/add_auto_router_tab.test.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/add_model/add_auto_router_tab.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 2
     }
   },
   "src/components/add_model/add_model_modes.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    }
-  },
-  "src/components/add_model/add_model_tab.test.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/components/add_model/add_model_tab.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 4
     }
   },
   "src/components/add_model/advanced_settings.tsx": {
@@ -2765,7 +2729,7 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 6
+      "count": 4
     }
   },
   "src/components/chat/MCPConnectPicker.tsx": {
@@ -3353,10 +3317,10 @@
       "count": 5
     },
     "no-restricted-syntax": {
-      "count": 154
+      "count": 152
     },
     "prefer-const": {
-      "count": 33
+      "count": 32
     }
   },
   "src/components/object_permissions_view.tsx": {
@@ -4318,11 +4282,6 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/lib/http/client.ts": {
-    "no-nested-ternary": {
       "count": 1
     }
   },

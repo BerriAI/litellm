@@ -21,7 +21,10 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitDescriptor,
     RateLimitDescriptorRateLimitObject,
+    RateLimitResponse,
     _PROXY_MaxParallelRequestsHandler_v3,
+    claim_request_stash_for_data,
+    get_or_create_request_stash,
 )
 from litellm.proxy.hooks.rate_limiter_utils import (
     convert_priority_to_percent,
@@ -373,7 +376,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         priority: Optional[str],
         saturation: float,
-        data: dict,
     ) -> None:
         """
         Check rate limits using THREE-PHASE approach to prevent partial increments.
@@ -400,7 +402,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             user_api_key_dict: User authentication info
             priority: User's priority level
             saturation: Current saturation level
-            data: Request data dictionary
 
         Raises:
             HTTPException: If any limit is exceeded
@@ -550,12 +551,12 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 parent_otel_span=user_api_key_dict.parent_otel_span,
                 read_only=False,
             )
-            data["litellm_proxy_rate_limit_response"] = {
-                "overall_code": atomic_response["overall_code"],
-                "statuses": atomic_response["statuses"] + priority_tracking_response["statuses"],
-            }
+            get_or_create_request_stash().rate_limit_response = RateLimitResponse(
+                overall_code=atomic_response["overall_code"],
+                statuses=atomic_response["statuses"] + priority_tracking_response["statuses"],
+            )
         else:
-            data["litellm_proxy_rate_limit_response"] = atomic_response
+            get_or_create_request_stash().rate_limit_response = atomic_response
 
     async def async_pre_call_hook(
         self,
@@ -601,6 +602,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if "model" not in data:
             return None
 
+        claim_request_stash_for_data(data)
         model = data["model"]
         priority = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
 
@@ -632,7 +634,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 user_api_key_dict=user_api_key_dict,
                 priority=priority,
                 saturation=saturation,
-                data=data,
             )
 
         except HTTPException:

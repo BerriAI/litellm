@@ -1013,17 +1013,6 @@ class AsyncHTTPHandler:
 
         verbose_logger.debug("Creating AiohttpTransport...")
 
-        # Use shared session if provided and valid
-        if shared_session is not None and not shared_session.closed:
-            verbose_logger.debug(f"SHARED SESSION: Reusing existing ClientSession (ID: {id(shared_session)})")
-            return LiteLLMAiohttpTransport(
-                client=shared_session,
-                ssl_verify=ssl_for_transport,
-                owns_session=False,
-            )
-
-        # Create new session only if none provided or existing one is invalid
-        verbose_logger.debug("NEW SESSION: Creating new ClientSession (no shared session provided)")
         transport_connector_kwargs = {
             "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
             "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
@@ -1041,11 +1030,26 @@ class AsyncHTTPHandler:
         if socket_factory is not None:
             transport_connector_kwargs["socket_factory"] = socket_factory
 
-        return LiteLLMAiohttpTransport(
-            client=lambda: ClientSession(
+        def session_factory() -> ClientSession:
+            return ClientSession(
                 connector=TCPConnector(**transport_connector_kwargs),
                 trust_env=trust_env,
-            ),
+            )
+
+        # Use shared session if provided and valid
+        if shared_session is not None and not shared_session.closed:
+            verbose_logger.debug(f"SHARED SESSION: Reusing existing ClientSession (ID: {id(shared_session)})")
+            return LiteLLMAiohttpTransport(
+                client=shared_session,
+                ssl_verify=ssl_for_transport,
+                owns_session=False,
+                session_factory=session_factory,
+            )
+
+        # Create new session only if none provided or existing one is invalid
+        verbose_logger.debug("NEW SESSION: Creating new ClientSession (no shared session provided)")
+        return LiteLLMAiohttpTransport(
+            client=session_factory,
             ssl_verify=ssl_for_transport,
         )
 

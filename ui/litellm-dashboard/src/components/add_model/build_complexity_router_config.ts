@@ -1,4 +1,5 @@
 import { KeywordTierRule } from "./KeywordTierRules";
+import { serializeKeywordTierRules } from "./complexity_router_keywords";
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
@@ -11,6 +12,8 @@ export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
+  classifierContextWindowSize: number | undefined;
+  classifierContextPerTurnChars: number | undefined;
   customTechnicalKeywords: string[];
   keywordTierRules: KeywordTierRule[];
   semanticMatchingEnabled: boolean;
@@ -28,6 +31,8 @@ export interface ComplexityRouterConfigPayload {
   tiers: ComplexityTiers;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  classifier_context_window_size?: number;
+  classifier_context_per_turn_chars?: number;
   custom_technical_keywords?: string[];
   keyword_tier_rules?: { keywords: string[]; tier: KeywordTierRule["tier"] }[];
   semantic_keyword_matching?: boolean;
@@ -68,6 +73,8 @@ export const buildComplexityRouterConfig = ({
   tiers,
   classifierType,
   classifierLlmConfig,
+  classifierContextWindowSize,
+  classifierContextPerTurnChars,
   customTechnicalKeywords,
   keywordTierRules,
   semanticMatchingEnabled,
@@ -82,17 +89,20 @@ export const buildComplexityRouterConfig = ({
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
   const cleanedEscalationKeywords = escalationKeywords.map((keyword) => keyword.trim()).filter(Boolean);
   // Trim keywords and drop empty ones; drop any rule left with no keywords. Clicking
-  // "Add keyword rule" seeds a rule with an empty keywords list, so without this an
-  // unfilled row (common in the heuristic flow, where getSemanticConfigError doesn't run)
-  // would ship keyword_tier_rules the backend validator rejects with a 400.
-  const cleanedKeywordTierRules = keywordTierRules
-    .map((rule) => ({ keywords: rule.keywords.map((k) => k.trim()).filter(Boolean), tier: rule.tier }))
-    .filter((rule) => rule.keywords.length > 0);
+  const cleanedKeywordTierRules = serializeKeywordTierRules(keywordTierRules);
 
   return {
     tiers,
     classifier_type: classifierType,
     ...(classifierType === "llm" && classifierLlmConfig && { classifier_llm_config: classifierLlmConfig }),
+    ...(classifierType === "llm" &&
+      classifierContextWindowSize !== undefined && {
+        classifier_context_window_size: classifierContextWindowSize,
+      }),
+    ...(classifierType === "llm" &&
+      classifierContextPerTurnChars !== undefined && {
+        classifier_context_per_turn_chars: classifierContextPerTurnChars,
+      }),
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
     escalation_keywords: cleanedEscalationKeywords,

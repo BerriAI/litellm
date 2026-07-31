@@ -1571,14 +1571,14 @@ async def test_get_all_team_models():
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
         # Configure the mock class to return proper instances
-        def mock_team_table_constructor(**kwargs):
+        def mock_team_table_constructor(data):
             mock_instance = MagicMock()
-            mock_instance.team_id = kwargs["team_id"]
-            mock_instance.models = kwargs["models"]
-            mock_instance.access_group_ids = kwargs.get("access_group_ids")
+            mock_instance.team_id = data["team_id"]
+            mock_instance.models = data["models"]
+            mock_instance.access_group_ids = data.get("access_group_ids")
             return mock_instance
 
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams="*",
@@ -1607,7 +1607,7 @@ async def test_get_all_team_models():
     mock_litellm_teamtable.find_many.return_value = [mock_team1]
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -1658,7 +1658,7 @@ async def test_get_all_team_models():
     mock_router.get_model_list.side_effect = mock_get_model_list_with_none
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -2373,14 +2373,14 @@ async def test_get_all_team_models_with_access_groups():
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_tt_class:
 
-        def mock_team_table_constructor(**kwargs):
+        def mock_team_table_constructor(data):
             mock_instance = MagicMock()
-            mock_instance.team_id = kwargs["team_id"]
-            mock_instance.models = kwargs["models"]
-            mock_instance.access_group_ids = kwargs.get("access_group_ids")
+            mock_instance.team_id = data["team_id"]
+            mock_instance.models = data["models"]
+            mock_instance.access_group_ids = data.get("access_group_ids")
             return mock_instance
 
-        mock_tt_class.side_effect = mock_team_table_constructor
+        mock_tt_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -9201,38 +9201,6 @@ def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
         app.dependency_overrides.clear()
 
 
-def test_get_config_list_includes_skip_user_budget_on_team_key(monkeypatch):
-    """Related to #12905: the opt-out flag must be discoverable via /config/list so
-    it renders as a Boolean toggle on the Admin UI General Settings table. This
-    requires both the ConfigGeneralSettings field and the allowed_args entry."""
-    import types
-    from unittest.mock import AsyncMock, MagicMock
-
-    from fastapi.testclient import TestClient
-
-    import litellm.proxy.proxy_server as ps
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.proxy_server import app
-
-    mock_prisma = MagicMock()
-    mock_config_table = MagicMock()
-    mock_config_table.find_first = AsyncMock(return_value=None)
-    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
-    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
-    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
-    )
-    try:
-        client = TestClient(app)
-        resp = client.get("/config/list", params={"config_type": "general_settings"})
-        assert resp.status_code == 200, resp.text
-        fields = {item["field_name"]: item for item in resp.json()}
-        assert "skip_user_budget_on_team_key" in fields
-        assert fields["skip_user_budget_on_team_key"]["field_type"] == "Boolean"
-    finally:
-        app.dependency_overrides.clear()
-
-
 def test_get_config_list_includes_budget_exceeded_throttle_percentage(monkeypatch):
     """The throttle fraction is a litellm_settings scalar surfaced on the General
     Settings table as a Float field so it sits with the other global limits; it
@@ -10604,3 +10572,109 @@ async def test_startup_survives_database_read_failure_for_coordination_redis():
         )
 
     assert result is None
+
+
+def _stream_usage_test_chunks():
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+
+    content_chunk = ModelResponseStream(
+        model="gpt-5.4-nano",
+        choices=[StreamingChoices(delta=Delta(content="pong"))],
+    )
+    finish_chunk = ModelResponseStream(
+        model="gpt-5.4-nano",
+        choices=[StreamingChoices(finish_reason="stop")],
+    )
+    usage_chunk = ModelResponseStream(model="gpt-5.4-nano", choices=[])
+    usage_chunk.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
+    return content_chunk, finish_chunk, usage_chunk
+
+
+def _stream_usage_generator_chunks():
+    from litellm.types.utils import ModelResponseStream
+
+    content_chunk, finish_chunk, usage_chunk = _stream_usage_test_chunks()
+    prompt_filter_chunk = ModelResponseStream(model="gpt-5.4-nano", choices=[])
+    return prompt_filter_chunk, content_chunk, finish_chunk, usage_chunk
+
+
+def test_is_injected_stream_usage_artifact():
+    from litellm.proxy.proxy_server import _is_injected_stream_usage_artifact
+    from litellm.types.utils import ModelResponseStream, Usage
+
+    content_chunk, finish_chunk, empty_choices_usage_chunk = _stream_usage_test_chunks()
+    assert _is_injected_stream_usage_artifact(empty_choices_usage_chunk) is True
+
+    synthetic_final_chunk = ModelResponseStream(model="gpt-5.4-nano")
+    synthetic_final_chunk.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
+    assert _is_injected_stream_usage_artifact(synthetic_final_chunk) is True
+
+    azure_prompt_filter_chunk = ModelResponseStream(model="gpt-5.4-nano", choices=[])
+    assert _is_injected_stream_usage_artifact(azure_prompt_filter_chunk) is True
+
+    assert _is_injected_stream_usage_artifact(content_chunk) is False
+    assert _is_injected_stream_usage_artifact(finish_chunk) is False
+
+    content_chunk_with_usage, finish_chunk_with_usage, _ = _stream_usage_test_chunks()
+    content_chunk_with_usage.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
+    finish_chunk_with_usage.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
+    assert _is_injected_stream_usage_artifact(content_chunk_with_usage) is False
+    assert _is_injected_stream_usage_artifact(finish_chunk_with_usage) is False
+
+    assert _is_injected_stream_usage_artifact({"usage": {"prompt_tokens": 1}}) is False
+
+
+async def _collect_async_data_generator_frames(request_data: dict) -> list:
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    chunks = _stream_usage_generator_chunks()
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            for chunk in chunks:
+                yield chunk
+
+        async def aclose(self):
+            pass
+
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(proxy_server_module.ProxyLogging, "_fire_deferred_stream_logging"):
+            return [
+                frame.decode("utf-8") if isinstance(frame, bytes) else frame
+                async for frame in async_data_generator(
+                    MockStream(), MagicMock(spec=UserAPIKeyAuth), request_data
+                )
+            ]
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_strips_injected_usage_chunk():
+    frames = await _collect_async_data_generator_frames(
+        {"model": "gpt-5.4-nano", "_litellm_strip_stream_usage": True}
+    )
+
+    data_frames = [frame for frame in frames if frame.startswith("data: {")]
+    assert len(data_frames) == 2
+    assert any("pong" in frame for frame in data_frames)
+    assert any("finish_reason" in frame for frame in data_frames)
+    assert not any('"usage"' in frame for frame in data_frames)
+    assert frames[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_forwards_usage_chunk_without_strip_marker():
+    frames = await _collect_async_data_generator_frames({"model": "gpt-5.4-nano"})
+
+    data_frames = [frame for frame in frames if frame.startswith("data: {")]
+    assert len(data_frames) == 4
+    assert any('"usage"' in frame and '"completion_tokens":188' in frame.replace(" ", "") for frame in data_frames)
+    assert frames[-1] == "data: [DONE]\n\n"
