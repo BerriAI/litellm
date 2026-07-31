@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use reqwest::Url;
 use serde_json::{Map, Value};
 
 pub const PROVIDER_DEBUG_BODY_MAX_BYTES: usize = 64 * 1024;
@@ -44,7 +45,7 @@ pub fn redact_headers(headers: &[(String, String)]) -> BTreeMap<String, String> 
 }
 
 pub fn redact_url(url: &str) -> String {
-    let Ok(mut parsed) = url::Url::parse(url) else {
+    let Ok(mut parsed) = Url::parse(url) else {
         return url.to_string();
     };
     if !parsed.username().is_empty() {
@@ -76,7 +77,7 @@ fn redact_value(value: Value) -> Value {
         Value::Object(map) => Value::Object(
             map.into_iter()
                 .map(|(key, value)| {
-                    if is_secret_key(&key) {
+                    if is_credential_name(&key) {
                         (key, Value::String("[REDACTED]".to_string()))
                     } else {
                         (key, redact_value(value))
@@ -89,10 +90,6 @@ fn redact_value(value: Value) -> Value {
     }
 }
 
-fn is_secret_key(key: &str) -> bool {
-    is_credential_name(key)
-}
-
 fn is_credential_name(name: &str) -> bool {
     let normalized = name
         .chars()
@@ -101,25 +98,7 @@ fn is_credential_name(name: &str) -> bool {
         .collect::<String>();
     matches!(
         normalized.as_str(),
-        "authorization"
-            | "proxyauthorization"
-            | "xapikey"
-            | "apikey"
-            | "xamzsecuritytoken"
-            | "cookie"
-            | "setcookie"
-            | "xamzsignature"
-            | "xamzcredential"
-            | "key"
-            | "accesstoken"
-            | "signature"
-            | "secret"
-            | "password"
-            | "token"
-            | "clientsecret"
-            | "awssecretaccesskey"
-            | "awsaccesskeyid"
-            | "awssessiontoken"
+        "cookie" | "setcookie" | "key" | "awsaccesskeyid"
     ) || [
         "apikey",
         "secret",
