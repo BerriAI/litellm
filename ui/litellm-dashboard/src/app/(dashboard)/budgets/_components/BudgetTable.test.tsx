@@ -52,6 +52,11 @@ const FORBIDDEN_PROBLEM = {
   detail: "Only proxy admins can view budgets",
 };
 
+const showColumn = async (user: ReturnType<typeof userEvent.setup>, columnId: string) => {
+  await user.click(screen.getByTestId("view-options-trigger"));
+  await user.click(await screen.findByTestId(`view-option-${columnId}`));
+};
+
 const defaultProps = {
   canModify: true,
   onEditClick: vi.fn(),
@@ -72,14 +77,26 @@ describe("BudgetTable", () => {
     expect(screen.getByText("10")).toBeInTheDocument();
   });
 
-  it("should render the reset column with the friendly duration label", () => {
+  it("should open on the four columns the page has always shown, with reset and created off", () => {
     renderWithProviders(<BudgetTable {...defaultProps} list={makeList()} />);
+    const headers = screen.getAllByRole("columnheader").map((header) => header.textContent);
+    expect(headers).toEqual(expect.arrayContaining(["Budget ID", "Max Budget", "TPM", "RPM"]));
+    expect(headers).not.toContain("Reset");
+    expect(headers).not.toContain("Created");
+  });
+
+  it("should render the reset column with the friendly duration label once it is turned on", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<BudgetTable {...defaultProps} list={makeList()} />);
+    await showColumn(user, "budget_duration");
     expect(screen.getByText("monthly")).toBeInTheDocument();
   });
 
-  it("should render 'Not set' when a budget has no reset duration", () => {
+  it("should render 'Not set' when a budget has no reset duration", async () => {
+    const user = userEvent.setup();
     const list = makeList({ rows: [makeBudget({ budget_duration: null })] });
     renderWithProviders(<BudgetTable {...defaultProps} list={list} />);
+    await showColumn(user, "budget_duration");
     expect(screen.getByText("Not set")).toBeInTheDocument();
   });
 
@@ -109,16 +126,21 @@ describe("BudgetTable", () => {
   });
 
   it("should offer sorting on every backend-sortable column", async () => {
+    const user = userEvent.setup();
     renderWithProviders(<BudgetTable {...defaultProps} list={makeList()} />);
+    await showColumn(user, "created_at");
     for (const field of ["budget_id", "max_budget", "tpm_limit", "rpm_limit", "created_at"]) {
       expect(screen.getByTestId(`sort-header-${field}`)).toBeInTheDocument();
     }
   });
 
-  it("should not make the reset column sortable", () => {
+  it("should not make the reset column sortable", async () => {
+    const user = userEvent.setup();
     renderWithProviders(<BudgetTable {...defaultProps} list={makeList()} />);
+    await showColumn(user, "budget_duration");
+    const headers = screen.getAllByRole("columnheader").map((header) => header.textContent);
+    expect(headers).toContain("Reset");
     expect(screen.queryByTestId("sort-header-budget_duration")).not.toBeInTheDocument();
-    expect(screen.getByText("Reset")).toBeInTheDocument();
   });
 
   it("should ask the list for a new sort when a sortable header is clicked", async () => {
