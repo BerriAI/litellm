@@ -10,8 +10,9 @@ imports these inside function bodies to avoid circular imports.
 import inspect
 import os
 import sys
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -85,19 +86,19 @@ class FakeTeamTable:
     raises the same ``TypeError`` the proxy surfaces as an HTTP 500.
     """
 
-    def __init__(self, rows: list, updated_count: int = 1):
-        self._rows = list(rows)
+    def __init__(self, rows: Sequence[MagicMock], updated_count: int = 1):
+        self._rows = tuple(rows)
         self._updated_count = updated_count
-        self.find_unique_calls: list = []
-        self.update_many_calls: list = []
+        self.find_unique_calls: list[dict[str, object]] = []
+        self.update_many_calls: list[dict[str, object]] = []
 
-    async def find_unique(self, **kwargs: Any) -> Any:
+    async def find_unique(self, **kwargs: object) -> Optional[MagicMock]:
         inspect.signature(LiteLLM_TeamTableActions.find_unique).bind(self, **kwargs)
         index = len(self.find_unique_calls)
         self.find_unique_calls.append(kwargs)
         return self._rows[index] if index < len(self._rows) else None
 
-    async def update_many(self, **kwargs: Any) -> int:
+    async def update_many(self, **kwargs: object) -> int:
         inspect.signature(LiteLLM_TeamTableActions.update_many).bind(self, **kwargs)
         self.update_many_calls.append(kwargs)
         return self._updated_count
