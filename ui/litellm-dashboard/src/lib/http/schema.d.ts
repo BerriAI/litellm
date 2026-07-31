@@ -22866,6 +22866,11 @@ export interface components {
              */
             background_health_checks?: boolean | null;
             /**
+             * Batch Input File Read Timeout
+             * @description Seconds the batch rate limiter may spend reading a batch input file to count tokens (default 10). The read runs inline in POST /v1/batches, so this must stay well inside client read timeouts. On timeout, keys whose model allowlist must be validated against the file are rejected; keys with unrestricted model access are admitted without rate limiting.
+             */
+            batch_input_file_read_timeout?: number | null;
+            /**
              * Cancel On Disconnect
              * @description cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure
              */
