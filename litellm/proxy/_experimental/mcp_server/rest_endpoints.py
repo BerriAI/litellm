@@ -26,6 +26,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     list_fault_http_status,
 )
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+    acting_user_auth,
     build_effective_auth_contexts,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
@@ -667,13 +668,19 @@ if MCP_AVAILABLE:
         """Coerce an Optional[str] Query param to str|None, dropping unresolved FastAPI defaults."""
         return value if isinstance(value, str) else None
 
-    async def _resolve_toolset_scope(
+    async def _resolve_acting_auth(
         toolset_name: str | None,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> UserAPIKeyAuth:
-        """Resolve ``toolset_name`` to its scoped ``UserAPIKeyAuth``, or return unchanged."""
+        """The one credential this tools request acts as.
+
+        A toolset name narrows the caller's own credential to that toolset; otherwise a dashboard
+        session is swapped for its admitted subject. The two are mutually exclusive by construction,
+        which is why they share an owner: the admitted subject resolves per grant source and a team
+        source deliberately carries none of the caller's ``object_permission``, so a toolset
+        narrowing layered on top would evaporate on every team-granted server."""
         if not toolset_name:
-            return user_api_key_dict
+            return await acting_user_auth(user_api_key_dict)
 
         from litellm.proxy.utils import get_prisma_client_or_throw
 
@@ -731,14 +738,13 @@ if MCP_AVAILABLE:
         try:
             mcp_server_name = _as_query_str(mcp_server_name)
             toolset_name = _as_query_str(toolset_name)
+            user_api_key_dict = await _resolve_acting_auth(toolset_name, user_api_key_dict)
 
             # The full catalog (allowlist filter skipped) is admin-only so the
             # REST endpoint can't be used to enumerate deliberately-disabled tools.
             apply_tool_filters = not (
                 include_disabled_tools and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             )
-
-            user_api_key_dict = await _resolve_toolset_scope(toolset_name, user_api_key_dict)
 
             if server_id is None:
                 server_id = mcp_server_name
@@ -928,6 +934,7 @@ if MCP_AVAILABLE:
         )
 
         try:
+            user_api_key_dict = await acting_user_auth(user_api_key_dict)
             data = await request.json()
 
             tool_name = data.get("name")
