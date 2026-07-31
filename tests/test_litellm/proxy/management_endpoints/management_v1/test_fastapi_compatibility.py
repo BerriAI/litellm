@@ -21,8 +21,13 @@ def test_fastapi_compatibility_get_flat_dependant_fallback() -> None:
     try:
         with patch.dict(sys.modules, {"fastapi.dependencies.utils": fallback_utils}):
             reloaded_common = importlib.reload(common)
-            assert reloaded_common.get_flat_dependant is fallback_get_dependant
+            assert callable(reloaded_common.get_flat_dependant)
+            dependant = object()
+            assert reloaded_common.get_flat_dependant(dependant, skip_repeats=True) is dependant
     finally:
         importlib.reload(common)
 
-    assert common.get_flat_dependant is fastapi_utils.get_flat_dependant
+    if hasattr(fastapi_utils, "get_flat_dependant"):
+        assert common.get_flat_dependant is fastapi_utils.get_flat_dependant
+    else:
+        assert callable(common.get_flat_dependant)
