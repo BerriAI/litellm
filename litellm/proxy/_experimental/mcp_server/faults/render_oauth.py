@@ -16,8 +16,10 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import TOKEN_NO_CACHE_HE
 def _gateway_rejected_description(code: str) -> str:
     if code == "invalid_target":
         return (
-            "the upstream authorization server rejected the request (invalid_target); "
-            "it may require RFC 8707 resource indicators, which the gateway does not send yet"
+            "the upstream authorization server rejected the request (invalid_target); it did not "
+            "accept this server's RFC 8707 resource indicator. Set upstream_resource on the MCP "
+            "server to the resource identifier the authorization server expects, or unset it if "
+            "that authorization server does not support resource indicators"
         )
     return (
         f"the upstream authorization server rejected the gateway's configured client credentials "

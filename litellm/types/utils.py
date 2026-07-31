@@ -10,6 +10,7 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Sequence,
     Union,
     get_args,
 )
@@ -199,7 +200,12 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost: Optional[float]
     cache_creation_input_token_cost_above_200k_tokens: Optional[float]
+    cache_creation_input_token_cost_above_272k_tokens: Optional[float]
+    cache_creation_input_token_cost_above_272k_tokens_priority: Optional[float]
+    cache_creation_input_token_cost_above_272k_tokens_flex: Optional[float]
     cache_creation_input_token_cost_above_1hr: Optional[float]
+    cache_creation_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
+    cache_creation_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_read_input_token_cost: Optional[float]
     cache_read_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
@@ -207,6 +213,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_200k_tokens_priority: Optional[float]
     cache_read_input_token_cost_above_272k_tokens: Optional[float]
     cache_read_input_token_cost_above_272k_tokens_priority: Optional[float]
+    cache_read_input_token_cost_above_272k_tokens_flex: Optional[float]
     cache_read_input_token_cost_above_512k_tokens: Optional[float]
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
@@ -218,6 +225,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_above_200k_tokens_priority: Optional[float]
     input_cost_per_token_above_272k_tokens: Optional[float]  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
     input_cost_per_token_above_272k_tokens_priority: Optional[float]
+    input_cost_per_token_above_272k_tokens_flex: Optional[float]
     input_cost_per_token_above_512k_tokens: Optional[float]  # MiniMax-M3: prompts >512K priced at 2x input
     input_cost_per_character_above_128k_tokens: Optional[float]  # only for vertex ai models
     input_cost_per_query: Optional[float]  # only for rerank models
@@ -245,6 +253,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_200k_tokens_priority: Optional[float]
     output_cost_per_token_above_272k_tokens: Optional[float]  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
     output_cost_per_token_above_272k_tokens_priority: Optional[float]
+    output_cost_per_token_above_272k_tokens_flex: Optional[float]
     output_cost_per_token_above_512k_tokens: Optional[float]  # MiniMax-M3: prompts >512K priced at 2x output
     output_cost_per_character_above_128k_tokens: Optional[float]  # only for vertex ai models
     output_cost_per_image: Optional[float]
@@ -1534,14 +1543,27 @@ class PromptTokensDetailsWrapper(
     audio_length_seconds: Optional[float] = None
     """Length of audio sent to the model. Used for multimodal embeddings priced per audio-second."""
 
+    cache_write_tokens: Optional[int] = None
+    """Number of cache write (creation) tokens sent to the model. OpenAI naming (prompt_tokens_details.cache_write_tokens); this is the canonical field."""
+
     cache_creation_tokens: Optional[int] = None
-    """Number of cache creation tokens sent to the model. Used for Anthropic prompt caching."""
+    """Number of cache creation tokens sent to the model. Anthropic/Bedrock naming; kept in sync with cache_write_tokens (assigning either mirrors to the other)."""
 
     cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
     """Details of cache creation tokens sent to the model. Used for tracking 5m/1h cache creation tokens for Anthropic prompt caching."""
 
+    def __setattr__(self, name: str, value: object) -> None:
+        super().__setattr__(name, value)
+        if name == "cache_write_tokens":
+            super().__setattr__("cache_creation_tokens", value)
+        elif name == "cache_creation_tokens":
+            super().__setattr__("cache_write_tokens", value)
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.cache_write_tokens = (
+            self.cache_write_tokens if self.cache_write_tokens is not None else self.cache_creation_tokens
+        )
         if self.character_count is None:
             del self.character_count
         if self.image_count is None:
@@ -1554,6 +1576,8 @@ class PromptTokensDetailsWrapper(
             del self.web_search_requests
         if self.tool_use_tokens is None:
             del self.tool_use_tokens
+        if self.cache_write_tokens is None:
+            del self.cache_write_tokens
         if self.cache_creation_tokens is None:
             del self.cache_creation_tokens
         if self.cache_creation_token_details is None:
@@ -1662,10 +1686,10 @@ class Usage(SafeAttributeModel, CompletionUsage):
         if "cache_creation_input_tokens" in params and isinstance(params["cache_creation_input_tokens"], int):
             if _prompt_tokens_details is None:
                 _prompt_tokens_details = PromptTokensDetailsWrapper(
-                    cache_creation_tokens=params["cache_creation_input_tokens"]
+                    cache_write_tokens=params["cache_creation_input_tokens"]
                 )
             else:
-                _prompt_tokens_details.cache_creation_tokens = params["cache_creation_input_tokens"]
+                _prompt_tokens_details.cache_write_tokens = params["cache_creation_input_tokens"]
 
         super().__init__(
             prompt_tokens=prompt_tokens or 0,
@@ -2659,6 +2683,80 @@ class StandardLoggingPromptManagementMetadata(TypedDict):
     prompt_integration: str
 
 
+class StandardLoggingRoutingDecisionTierBoundaries(TypedDict):
+    """Snapshot of the complexity scorer's tier boundaries at decision time, so a
+    historical spend log row stays explainable after the router config changes."""
+
+    simple_medium: float
+    medium_complex: float
+    complex_reasoning: float
+
+
+RoutingDecisionCause = Literal[
+    "heuristic_scorer",
+    # The scorer found 2+ reasoning markers and forced REASONING regardless of score.
+    # A distinct cause rather than a marker inside `signals`, because it is the fact
+    # that tells a reader the score did NOT choose the tier; encoding it as free text
+    # meant anything that filtered `signals` silently changed what the row claimed.
+    "reasoning_override",
+    "llm_classifier",
+    "literal_keyword_match",
+    "semantic_keyword_match",
+    "session_affinity_pin",
+    "session_affinity_escalation",
+    "default_fallback",
+    "keyword",
+    "quality_tier",
+    "bandit",
+]
+
+
+InternalCallOrigin = Literal["autorouter_classifier"]
+"""Which internal litellm feature originated a billed sub-call, so a spend log row
+records that it is not traffic the caller sent."""
+
+AUTOROUTER_CLASSIFIER_CALL_ORIGIN: InternalCallOrigin = "autorouter_classifier"
+
+
+class StandardLoggingRoutingDecision(TypedDict, total=False):
+    """Per-request provenance for a pre-routing strategy (auto-router) decision."""
+
+    router_model_name: str
+    router_type: Literal["complexity", "adaptive", "quality"]
+    routed_model: str
+    cause: RoutingDecisionCause
+    tier: str
+    request_type: str
+    score: float
+    signals: Sequence[str]
+    matched_keyword: str
+    escalation_keyword: str
+    classifier_model: str
+    escalated: bool
+    tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
+
+
+# Fields whose values quote the caller's prompt. Dropped when an operator turns message
+# logging off. Every other field aggregates the prompt without reproducing it and is kept,
+# so a redacted row stays explainable. `test_every_routing_decision_field_is_classified`
+# fails if a field is added to the record without being placed in one set or the other.
+PROMPT_QUOTING_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset({"signals", "matched_keyword", "escalation_keyword"})
+DERIVED_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset(
+    {
+        "router_model_name",
+        "router_type",
+        "routed_model",
+        "cause",
+        "tier",
+        "request_type",
+        "score",
+        "classifier_model",
+        "escalated",
+        "tier_boundaries",
+    }
+)
+
+
 class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     """
     Specific metadata k,v pairs logged to integration for easier cost tracking and prompt management
@@ -2672,6 +2770,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
+    routing_decision: StandardLoggingRoutingDecision | None
     applied_guardrails: Optional[List[str]]
     usage_object: Optional[dict]
     cold_storage_object_key: Optional[str]  # S3/GCS object key for cold storage retrieval
@@ -3074,6 +3173,11 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_creation_input_token_cost: Optional[float] = None
     cache_creation_input_token_cost_above_1hr: Optional[float] = None
     cache_creation_input_token_cost_above_200k_tokens: Optional[float] = None
+    cache_creation_input_token_cost_above_272k_tokens: Optional[float] = None
+    cache_creation_input_token_cost_above_272k_tokens_priority: Optional[float] = None
+    cache_creation_input_token_cost_above_272k_tokens_flex: Optional[float] = None
+    cache_creation_input_token_cost_flex: Optional[float] = None
+    cache_creation_input_token_cost_priority: Optional[float] = None
     cache_creation_input_audio_token_cost: Optional[float] = None
     cache_read_input_token_cost: Optional[float] = None
     cache_read_input_token_cost_flex: Optional[float] = None
@@ -3081,6 +3185,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_read_input_token_cost_above_200k_tokens: Optional[float] = None
     cache_read_input_token_cost_above_200k_tokens_priority: Optional[float] = None
     cache_read_input_token_cost_above_272k_tokens_priority: Optional[float] = None
+    cache_read_input_token_cost_above_272k_tokens_flex: Optional[float] = None
     cache_read_input_audio_token_cost: Optional[float] = None
     input_cost_per_character: Optional[float] = None
     input_cost_per_character_above_128k_tokens: Optional[float] = None
@@ -3090,6 +3195,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     input_cost_per_token_above_200k_tokens: Optional[float] = None
     input_cost_per_token_above_200k_tokens_priority: Optional[float] = None
     input_cost_per_token_above_272k_tokens_priority: Optional[float] = None
+    input_cost_per_token_above_272k_tokens_flex: Optional[float] = None
     input_cost_per_query: Optional[float] = None
     input_cost_per_image: Optional[float] = None
     input_cost_per_image_above_128k_tokens: Optional[float] = None
@@ -3109,6 +3215,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_token_above_200k_tokens: Optional[float] = None
     output_cost_per_token_above_200k_tokens_priority: Optional[float] = None
     output_cost_per_token_above_272k_tokens_priority: Optional[float] = None
+    output_cost_per_token_above_272k_tokens_flex: Optional[float] = None
     output_cost_per_character_above_128k_tokens: Optional[float] = None
     output_cost_per_image: Optional[float] = None
     output_cost_per_image_token: Optional[float] = None
@@ -3196,7 +3303,6 @@ all_litellm_params = (
         "mock_response",
         "mock_timeout",
         "disable_add_transform_inline_image_block",
-        "litellm_proxy_rate_limit_response",
         "api_key",
         "api_version",
         "prompt_id",
@@ -3212,6 +3318,7 @@ all_litellm_params = (
         "model_file_id_mapping",
         "litellm_logging_obj",
         "litellm_call_id",
+        "_litellm_strip_stream_usage",
         "use_client",
         "id",
         "fallbacks",
@@ -3290,11 +3397,6 @@ all_litellm_params = (
         "enable_tag_filtering",
         "enable_json_schema_validation",
         "use_xai_oauth",
-        "_litellm_rate_limit_descriptors",
-        "_litellm_tpm_reserved_tokens",
-        "_litellm_tpm_reserved_model",
-        "_litellm_tpm_reserved_scopes",
-        "_litellm_tpm_reservation_released",
         "auto_router_config_path",
         "auto_router_config",
         "auto_router_default_model",
@@ -3745,6 +3847,7 @@ class ServiceTier(Enum):
     AUTO = "auto"
     FLEX = "flex"
     PRIORITY = "priority"
+    FAST = "fast"
 
 
 class DataResidency(Enum):

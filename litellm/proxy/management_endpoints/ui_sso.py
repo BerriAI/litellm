@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     import httpx
 
 import jwt
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 
 import litellm
@@ -100,6 +100,7 @@ from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
+from litellm.proxy.management_endpoints.sso.saml_sso import SAMLAuthHandler
 from litellm.proxy.management_endpoints.sso_helper_utils import (
     check_is_admin_only_access,
     has_admin_ui_access,
@@ -857,6 +858,27 @@ def process_sso_jwt_access_token(
     return None
 
 
+async def _raise_if_sso_exceeds_free_user_limit(premium_user: bool, prisma_client: PrismaClient | None) -> None:
+    """Free tier allows SSO for up to 5 billable users; beyond that requires an Enterprise license."""
+    if premium_user is True:
+        return
+    if prisma_client is None:
+        raise ProxyException(
+            message=CommonProxyErrors.db_not_connected_error.value,
+            type=ProxyErrorTypes.auth_error,
+            param="premium_user",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+    billable_users = await UserRepository(prisma_client).count_billable_users()
+    if billable_users and billable_users > 5:
+        raise ProxyException(
+            message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You configured SSO (one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, `GENERIC_CLIENT_ID`, or SAML) in your env. Please unset it",
+            type=ProxyErrorTypes.auth_error,
+            param="premium_user",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+
+
 @router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
 async def google_login(
     request: Request,
@@ -876,6 +898,7 @@ async def google_login(
         general_settings,
         premium_user,
         prisma_client,
+        user_api_key_cache,
         user_custom_ui_sso_sign_in_handler,
     )
 
@@ -891,25 +914,13 @@ async def google_login(
             return admin_ui_disabled()
 
     ####### Check if user is a Enterprise / Premium User #######
-    if microsoft_client_id is not None or google_client_id is not None or generic_client_id is not None:
-        if premium_user is not True:
-            # Check if under 'free SSO user' limit
-            if prisma_client is not None:
-                billable_users = await UserRepository(prisma_client).count_billable_users()
-                if billable_users and billable_users > 5:
-                    raise ProxyException(
-                        message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
-                        type=ProxyErrorTypes.auth_error,
-                        param="premium_user",
-                        code=status.HTTP_403_FORBIDDEN,
-                    )
-            else:
-                raise ProxyException(
-                    message=CommonProxyErrors.db_not_connected_error.value,
-                    type=ProxyErrorTypes.auth_error,
-                    param="premium_user",
-                    code=status.HTTP_403_FORBIDDEN,
-                )
+    if (
+        microsoft_client_id is not None
+        or google_client_id is not None
+        or generic_client_id is not None
+        or SAMLAuthHandler.is_saml_configured()
+    ):
+        await _raise_if_sso_exceeds_free_user_limit(premium_user, prisma_client)
 
     ####### Detect DB + MASTER KEY in .env #######
     missing_env_vars = show_missing_vars_in_env()
@@ -947,6 +958,19 @@ async def google_login(
                 "Enterprise features are not available. Custom UI SSO sign-in requires LiteLLM Enterprise."
             )
 
+    if (
+        microsoft_client_id is None
+        and google_client_id is None
+        and generic_client_id is None
+        and SAMLAuthHandler.is_saml_configured()
+    ):
+        verbose_proxy_logger.info("Redirecting to SAML SSO login")
+        return await SAMLAuthHandler.build_login_redirect(
+            request=request,
+            cache=user_api_key_cache,
+            relay_state=return_to,
+        )
+
     # Check if we should use SSO handler
     if (
         SSOAuthenticationHandler.should_use_sso_handler(
@@ -965,15 +989,8 @@ async def google_login(
             state=cli_state,
             request=request,
         )
-        if return_to is not None and sso_redirect is not None:
-            if SSOAuthenticationHandler._validate_return_to(return_to):
-                sso_redirect.set_cookie(
-                    key="litellm_cp_return_to",
-                    value=return_to,
-                    max_age=600,
-                    httponly=True,
-                    samesite="lax",
-                )
+        if sso_redirect is not None:
+            _persist_return_to_cookie(sso_redirect, return_to)
         return sso_redirect
 
     from fastapi.responses import HTMLResponse
@@ -982,13 +999,19 @@ async def google_login(
         os.getenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "false").lower() == "true"
         or general_settings.get("hide_default_credentials_hint", False) is True
     )
-    return HTMLResponse(
+    form_response = HTMLResponse(
         content=build_ui_login_form(
             show_deprecation_banner=True,
             hide_default_credentials_hint=hide_default_credentials_hint,
         ),
         status_code=200,
     )
+    # Preserve return_to across the username/password sign-in too, via the SAME shared, never-raising
+    # helper the SSO branch uses, so /login can resume the connect flow instead of dead-ending at the
+    # dashboard. One implementation → the two sign-in branches cannot diverge (and the login form always
+    # renders, since the helper never raises on a bad return_to).
+    _persist_return_to_cookie(form_response, return_to)
+    return form_response
 
 
 def generic_response_convertor(
@@ -1914,6 +1937,81 @@ async def auth_callback(request: Request, state: Optional[str] = None):
     )
 
 
+@router.get("/sso/saml/login", tags=["experimental"], include_in_schema=False)
+async def saml_login(request: Request, return_to: str | None = None):
+    """SP-initiated SAML login. Redirects the user to the configured IdP."""
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    _disable_ui_flag = os.getenv("DISABLE_ADMIN_UI")
+    if _disable_ui_flag is not None and str_to_bool(value=_disable_ui_flag):
+        return admin_ui_disabled()
+
+    return await SAMLAuthHandler.build_login_redirect(request=request, cache=user_api_key_cache, relay_state=return_to)
+
+
+@router.get("/sso/saml/metadata", tags=["experimental"], include_in_schema=False)
+async def saml_metadata(request: Request):
+    """Service Provider metadata XML, for registering this proxy at the IdP."""
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    metadata = await SAMLAuthHandler.build_sp_metadata(request=request, cache=user_api_key_cache)
+    return Response(content=metadata, media_type="application/xml")
+
+
+@router.post("/sso/saml/callback", tags=["experimental"], include_in_schema=False)
+async def saml_callback(request: Request):
+    """Assertion Consumer Service. Validates the IdP assertion and issues a UI session."""
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        jwt_handler,
+        master_key,
+        premium_user,
+        prisma_client,
+        user_api_key_cache,
+    )
+
+    _disable_ui_flag = os.getenv("DISABLE_ADMIN_UI")
+    if _disable_ui_flag is not None and str_to_bool(value=_disable_ui_flag):
+        return admin_ui_disabled()
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    if master_key is None:
+        raise ProxyException(
+            message="Master Key not set for Proxy. Set `LITELLM_MASTER_KEY` in .env or general_settings:master_key in config.yaml.",
+            type=ProxyErrorTypes.auth_error,
+            param="master_key",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    post_data = await SAMLAuthHandler.read_acs_post_data(request)
+    if "SAMLResponse" not in post_data:
+        raise HTTPException(status_code=400, detail="Missing SAMLResponse in callback request.")
+
+    result = await SAMLAuthHandler.handle_acs(request=request, cache=user_api_key_cache, post_data=post_data)
+
+    await _raise_if_sso_exceeds_free_user_limit(premium_user, prisma_client)
+
+    ui_access_mode = general_settings.get("ui_access_mode", None)
+    relay_state = post_data.get("RelayState")
+    cp_return_to: str | None = (
+        relay_state
+        if isinstance(relay_state, str) and SSOAuthenticationHandler._validate_return_to(relay_state)
+        else None
+    )
+
+    return await SSOAuthenticationHandler.get_redirect_response_from_openid(
+        result=result,
+        request=request,
+        received_response=None,
+        generic_client_id=None,
+        ui_access_mode=ui_access_mode,
+        access_token_payload=None,
+        jwt_handler=jwt_handler,
+        return_to=cp_return_to,
+    )
+
+
 async def _build_cli_sso_user_defined_values(
     result: Union[OpenID, dict],
     parsed_openid_result: ParsedOpenIDResult,
@@ -2416,6 +2514,92 @@ async def sso_readiness():
             "message": f"{configured_provider.capitalize()} SSO is configured but missing required environment variables: {', '.join(missing_vars)}",
         },
     )
+
+
+def _is_same_origin_return_path(return_to: str) -> bool:
+    """True for a strictly relative return path that stays on the gateway's own origin by
+    construction, and is therefore safe to honor without a configured ``control_plane_url``.
+    Used by the MCP gateway DCR authorize round-trip so a browser sent through login lands
+    back on the authorize request.
+
+    Requires a single leading ``/`` (not protocol-relative ``//``), no backslash (browsers
+    fold ``\\`` to ``/``, so ``/\\evil.com`` would escape the origin), and no control or
+    whitespace characters. Rejecting control chars keeps a ``\\r\\n``/tab-bearing value out
+    of the redirect ``Location`` and the ``litellm_cp_return_to`` cookie entirely, rather
+    than relying on downstream header encoding to neutralize it."""
+    if not return_to.startswith("/") or return_to.startswith("//") or "\\" in return_to:
+        return False
+    return not any(ord(ch) < 0x20 or ch in (" ", "\x7f") for ch in return_to)
+
+
+async def _sso_return_to_redirect(
+    return_to: str | None,
+    jwt_token: str,
+    redis_usage_cache,
+    user_api_key_cache,
+) -> RedirectResponse | None:
+    """Resolve the post-SSO redirect for a ``return_to``, or None to fall through to the dashboard.
+
+    Two arms, both clearing the one-shot ``litellm_cp_return_to`` cookie:
+    - **Same-origin relative path** (the MCP gateway DCR authorize round-trip): set the session cookie
+      exactly like the dashboard path, then send the browser back where it came from.
+    - **Control-plane cross-origin** (``control_plane_url``): stash the JWT behind a single-use opaque
+      code (60s TTL) so the token never lands in browser history/logs; the control plane redeems it via
+      ``POST /v3/login/exchange``.
+
+    Extracted from ``get_redirect_response_from_openid`` to keep that method inside the complexity
+    budget; behavior is identical to the inline arms it replaces (including letting
+    ``_validate_return_to`` raise for a mismatched absolute return_to, as before)."""
+    if return_to is None:
+        return None
+
+    if _is_same_origin_return_path(return_to):
+        redirect_response = RedirectResponse(url=return_to, status_code=303)
+        redirect_response.set_cookie(key="token", value=jwt_token)
+        redirect_response.delete_cookie("litellm_cp_return_to")
+        return redirect_response
+
+    if SSOAuthenticationHandler._validate_return_to(return_to):
+        code = secrets.token_urlsafe(32)
+        cache_key = f"login_code:{code}"
+        cache_value = {"token": jwt_token, "redirect_url": return_to}
+        if redis_usage_cache is not None:
+            await redis_usage_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
+        else:
+            await user_api_key_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
+
+        separator = "&" if "?" in return_to else "?"
+        redirect_url = return_to + separator + urlencode({"login": "success", "code": code})
+        verbose_proxy_logger.info("Cross-origin SSO: redirecting to control plane with login code")
+        redirect_response = RedirectResponse(url=redirect_url, status_code=303)
+        redirect_response.delete_cookie("litellm_cp_return_to")
+        return redirect_response
+
+    return None
+
+
+def _persist_return_to_cookie(response: Response, return_to: str | None) -> None:
+    """Best-effort: persist a SAFE ``return_to`` on ``response`` as the one-shot ``litellm_cp_return_to``
+    cookie so ANY sign-in path — SSO / Okta / generic OR the username/password form — can resume there
+    afterwards. THIS is the single source of truth, called by every sign-in branch so they cannot
+    diverge (a per-branch reimplementation is exactly how the two drifted before). Honors a strictly
+    relative same-origin path, and (when ``control_plane_url`` is configured) a return_to matching that
+    origin. It NEVER raises: a mismatched or invalid ``return_to`` is simply not stored, so it can never
+    block sign-in — the login entrypoint must always render."""
+    if return_to is None:
+        return
+    try:
+        safe = _is_same_origin_return_path(return_to) or SSOAuthenticationHandler._validate_return_to(return_to)
+    except HTTPException:
+        return  # a non-matching absolute return_to is ignored, never blocks sign-in
+    if safe:
+        response.set_cookie(
+            key="litellm_cp_return_to",
+            value=return_to,
+            max_age=600,
+            httponly=True,
+            samesite="lax",
+        )
 
 
 class SSOAuthenticationHandler:
@@ -3055,7 +3239,6 @@ class SSOAuthenticationHandler:
         return_to: Optional[str] = None,
         sso_assertion: SSOIdentityAssertion | None = None,
     ) -> RedirectResponse:
-        import jwt
 
         from litellm.proxy.proxy_server import (
             general_settings,
@@ -3219,30 +3402,21 @@ class SSOAuthenticationHandler:
             server_root_path=get_server_root_path(),
         )
 
-        jwt_token = jwt.encode(
-            cast(dict, returned_ui_token_object),
-            master_key or "",
-            algorithm="HS256",
+        from litellm.proxy.auth.login_utils import encode_ui_session_jwt
+
+        jwt_token = encode_ui_session_jwt(returned_ui_token_object, master_key or "")
+
+        # Post-SSO return_to handling (the same-origin DCR round-trip and the control-plane
+        # cross-origin code exchange) lives in one shared helper so this method stays inside the
+        # complexity budget. None falls through to the dashboard redirect below.
+        return_to_redirect = await _sso_return_to_redirect(
+            return_to=return_to,
+            jwt_token=jwt_token,
+            redis_usage_cache=redis_usage_cache,
+            user_api_key_cache=user_api_key_cache,
         )
-
-        # Control-plane cross-origin: store JWT behind a single-use opaque
-        # code (60s TTL) so the token never appears in browser history / logs.
-        # The control plane redeems it via POST /v3/login/exchange.
-        if return_to is not None and SSOAuthenticationHandler._validate_return_to(return_to):
-            code = secrets.token_urlsafe(32)
-            cache_key = f"login_code:{code}"
-            cache_value = {"token": jwt_token, "redirect_url": return_to}
-            if redis_usage_cache is not None:
-                await redis_usage_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
-            else:
-                await user_api_key_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
-
-            separator = "&" if "?" in return_to else "?"
-            redirect_url = return_to + separator + urlencode({"login": "success", "code": code})
-            verbose_proxy_logger.info("Cross-origin SSO: redirecting to control plane with login code")
-            redirect_response = RedirectResponse(url=redirect_url, status_code=303)
-            redirect_response.delete_cookie("litellm_cp_return_to")
-            return redirect_response
+        if return_to_redirect is not None:
+            return return_to_redirect
 
         if user_id is not None and isinstance(user_id, str):
             litellm_dashboard_ui += "?login=success"

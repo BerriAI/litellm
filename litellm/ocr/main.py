@@ -7,9 +7,10 @@ import base64
 import mimetypes
 import os
 import re
+from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from io import IOBase
-from typing import Any, Callable, Coroutine, Union, cast
+from typing import Any, cast
 
 import httpx
 
@@ -42,7 +43,7 @@ class _PreparedOCRRequest:
     provider_config: BaseOCRConfig
     optional_params: dict[str, object]
     litellm_params: dict[str, object]
-    effective_timeout: Union[float, httpx.Timeout]
+    effective_timeout: float | httpx.Timeout
     litellm_logging_obj: LiteLLMLoggingObj
 
 
@@ -63,13 +64,13 @@ _RUST_OCR_PROVIDERS = {
 
 def _prepare_ocr_request(
     model: str,
-    document: dict[str, Any],
+    document: Mapping[str, object],
     api_key: str | None,
     api_base: str | None,
-    timeout: Union[float, httpx.Timeout] | None,
+    timeout: float | httpx.Timeout | None,
     custom_llm_provider: str | None,
-    extra_headers: dict[str, Any] | None,
-    kwargs: dict[str, Any],
+    extra_headers: dict[str, object] | None,
+    kwargs: dict[str, object],
 ) -> _PreparedOCRRequest:
     litellm_logging_obj = cast(LiteLLMLoggingObj, kwargs.pop("litellm_logging_obj"))
     litellm_call_id = cast(str | None, kwargs.get("litellm_call_id", None))
@@ -120,7 +121,7 @@ def _prepare_ocr_request(
 
     verbose_logger.debug(f"OCR call - model: {model}, provider: {custom_llm_provider}")
 
-    litellm_params = GenericLiteLLMParams(**kwargs)
+    litellm_params = GenericLiteLLMParams.model_validate(kwargs)
 
     supported_params = ocr_provider_config.get_supported_ocr_params(model=model)
     non_default_params = {}
@@ -155,7 +156,7 @@ def _prepare_ocr_request(
         api_key=api_key,
         api_base=api_base,
         custom_llm_provider=custom_llm_provider,
-        extra_headers=cast(dict[str, object] | None, extra_headers),
+        extra_headers=extra_headers,
         provider_config=ocr_provider_config,
         optional_params=cast(dict[str, object], optional_params),
         litellm_params=dict(litellm_params),
@@ -305,13 +306,13 @@ async def _run_rust_aocr(
 @client
 async def aocr(
     model: str,
-    document: dict[str, Any],
+    document: Mapping[str, object],
     api_key: str | None = None,
     api_base: str | None = None,
-    timeout: Union[float, httpx.Timeout] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    **kwargs,
+    extra_headers: dict[str, object] | None = None,
+    **kwargs: object,
 ) -> OCRResponse:
     """
     Async OCR function.
@@ -567,14 +568,14 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
 @client
 def ocr(
     model: str,
-    document: dict[str, Any],
+    document: Mapping[str, object],
     api_key: str | None = None,
     api_base: str | None = None,
-    timeout: Union[float, httpx.Timeout] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    **kwargs,
-) -> Union[OCRResponse, Coroutine[Any, Any, OCRResponse]]:
+    extra_headers: dict[str, object] | None = None,
+    **kwargs: object,
+) -> OCRResponse | Coroutine[object, object, OCRResponse]:
     """
     Synchronous OCR function.
 

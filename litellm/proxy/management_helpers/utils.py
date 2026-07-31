@@ -295,14 +295,20 @@ async def add_new_member(
         # same new user is provisioned concurrently), seeding teams on create.
         # The teams append lives in the filtered update below rather than the
         # upsert's update branch so an already-existing user does not get a
-        # duplicate team id.
+        # duplicate team id. The update branch still has to write something:
+        # Prisma only compiles an upsert down to INSERT ... ON CONFLICT when it
+        # is non-empty, and falls back to a racy SELECT-then-INSERT when it is
+        # not, so this re-states user_id as a no-op rather than being empty.
         _returned_user = await UserRepository(prisma_client).table.upsert(
             where={"user_id": new_member.user_id},
-            data={"create": {"teams": [team_id], **new_user_defaults}, "update": {}},
+            data={
+                "create": {"teams": [team_id], **new_user_defaults},
+                "update": {"user_id": new_member.user_id},
+            },
         )
         await _append_team_id_if_absent(prisma_client, new_member.user_id, team_id)
         if _returned_user is not None:
-            returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
+            returned_user = LiteLLM_UserTable.model_validate(_returned_user.model_dump())
     elif new_member.user_email is not None:
         new_user_defaults = get_new_internal_user_defaults(user_id=str(uuid.uuid4()), user_email=new_member.user_email)
         ## user email is not unique acc. to prisma schema -> future improvement
@@ -317,11 +323,11 @@ async def add_new_member(
             _returned_user = await prisma_client.insert_data(data=new_user_defaults, table_name="user")  # type: ignore
 
             if _returned_user is not None:
-                returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
+                returned_user = LiteLLM_UserTable.model_validate(_returned_user.model_dump())
         elif len(existing_user_row) == 1:
             user_info = existing_user_row[0]
             await _append_team_id_if_absent(prisma_client, user_info.user_id, team_id)
-            returned_user = LiteLLM_UserTable(**user_info.model_dump())
+            returned_user = LiteLLM_UserTable.model_validate(user_info.model_dump())
         elif len(existing_user_row) > 1:
             raise HTTPException(
                 status_code=400,
@@ -348,7 +354,7 @@ async def add_new_member(
             include={"litellm_budget_table": True},
         )
 
-        returned_team_membership = LiteLLM_TeamMembership(**_returned_team_membership.model_dump())
+        returned_team_membership = LiteLLM_TeamMembership.model_validate(_returned_team_membership.model_dump())
 
     if returned_user is None:
         raise Exception("Unable to update user table with membership information!")

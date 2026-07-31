@@ -199,6 +199,7 @@ class ClientCredentialsConfig(BaseModel):
     token_url: str | None = None
     scopes: tuple[str, ...] = ()
     audience: str | None = None
+    upstream_resource: str | None = None
     token_endpoint_auth_method: Literal["client_secret_post", "client_secret_basic"] | None = None
 
 
@@ -390,7 +391,8 @@ class Subject(BaseModel):
 
     tenant_id: str
     subject_id: str
-    # Opaque, already-validated inbound identity. Only `token_exchange` / `passthrough` read it.
+    # Opaque, already-validated inbound identity. Read by `token_exchange`, `passthrough`, and
+    # `id_jag` (which falls back to the user's stored SSO assertion when it is absent).
     inbound_token: SecretStr | None = None
 
 

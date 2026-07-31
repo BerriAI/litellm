@@ -240,3 +240,25 @@ async def test_invalid_min_quality_tier_header_treated_as_none():
     assert (
         r.pick_model.await_args.kwargs["min_quality_tier"] is None  # type: ignore[union-attr]
     )
+
+
+@pytest.mark.asyncio
+async def test_routing_decision_reports_bandit_choice():
+    r = _make_router()
+    r.pick_model = AsyncMock(return_value="smart")  # type: ignore[method-assign]
+
+    response = await r.async_pre_routing_hook(
+        model="smart-cheap-router",
+        request_kwargs={},
+        messages=[{"role": "user", "content": "Write a Python function"}],
+    )
+
+    assert response is not None
+    decision = response.routing_decision
+    assert decision is not None
+    assert decision["router_model_name"] == "smart-cheap-router"
+    assert decision["router_type"] == "adaptive"
+    assert decision["cause"] == "bandit"
+    assert decision["routed_model"] == "smart"
+    assert decision["request_type"] == RequestType.CODE_GENERATION.value
+    assert "tier" not in decision

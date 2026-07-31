@@ -28,6 +28,7 @@ import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } fro
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 import type { SkillRegisterRequest } from "./claude_code_plugins/types";
+import type { ObjectPermission } from "./object_permission_types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
@@ -208,12 +209,7 @@ export interface Organization {
   teams: any[] | null;
   users: any[] | null;
   members: any[] | null;
-  object_permission?: {
-    object_permission_id: string;
-    mcp_servers: string[];
-    mcp_access_groups?: string[];
-    vector_stores: string[];
-  };
+  object_permission?: ObjectPermission | null;
 }
 
 export interface CredentialItem {
@@ -997,6 +993,7 @@ export interface UserInfoV2Response {
   updated_at: string | null;
   sso_user_id: string | null;
   teams: string[];
+  object_permission?: ObjectPermission | null;
 }
 
 /**
@@ -1175,35 +1172,6 @@ export const organizationInfoCall = async (accessToken: string, organizationID: 
     }
 
     const data = await response.json();
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const organizationCreateCall = async (
-  accessToken: string,
-  formValues: Record<string, any>, // Assuming formValues is an object
-) => {
-  try {
-    if (formValues.metadata) {
-      // if there's an exception JSON.parse, show it in the message
-      try {
-        formValues.metadata = JSON.parse(formValues.metadata);
-      } catch (error) {
-        console.error("Failed to parse metadata:", error);
-        throw new Error("Failed to parse metadata: " + error);
-      }
-    }
-
-    const data = await apiClient.post(`/organization/new`, {
-      accessToken,
-      body: {
-        ...formValues, // Include formValues in the request body
-      },
-    });
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -1603,6 +1571,7 @@ export const modelInfoCall = async (
   teamId?: string,
   sortBy?: string,
   sortOrder?: string,
+  excludeAutoRouters?: boolean,
 ) => {
   /**
    * Get all models on proxy
@@ -1627,6 +1596,9 @@ export const modelInfoCall = async (
     }
     if (sortOrder && sortOrder.trim()) {
       params.append("sortOrder", sortOrder.trim());
+    }
+    if (excludeAutoRouters) {
+      params.append("exclude_auto_routers", "true");
     }
     if (params.toString()) {
       url += `?${params.toString()}`;
@@ -2120,42 +2092,6 @@ export const adminGlobalActivity = async (
       accessToken,
       query: startTime && endTime ? { start_date: startTime, end_date: endTime } : undefined,
     });
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch spend data:", error);
-    throw error;
-  }
-};
-
-export const adminGlobalCacheActivity = async (
-  accessToken: string,
-  startTime: string | undefined,
-  endTime: string | undefined,
-) => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity/cache_hits` : `/global/activity/cache_hits`;
-
-    if (startTime && endTime) {
-      url += `?start_date=${startTime}&end_date=${endTime}`;
-    }
-
-    const requestOptions = {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      },
-    };
-
-    const response = await fetch(url, requestOptions);
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     return data;
   } catch (error) {
     console.error("Failed to fetch spend data:", error);
@@ -4782,45 +4718,6 @@ export const uiSpendLogDetailsCall = async (accessToken: string, logId: string, 
   }
 };
 
-export const getInternalUserSettings = async (accessToken: string) => {
-  try {
-    const data = await apiClient.get(`/get/internal_user_settings`, { accessToken });
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch SSO settings:", error);
-    throw error;
-  }
-};
-
-export const updateInternalUserSettings = async (accessToken: string, settings: Record<string, any>) => {
-  try {
-    // Construct base URL
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/update/internal_user_settings` : `/update/internal_user_settings`;
-
-    const response = await fetch(url, {
-      method: "PATCH",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(settings),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error(errorData);
-    }
-
-    const data = await response.json();
-    NotificationsManager.success("Internal user settings updated successfully");
-    return data;
-  } catch (error) {
-    console.error("Failed to update internal user settings:", error);
-    throw error;
-  }
-};
-
 export const fetchOpenAPIRegistry = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/openapi-registry` : `/v1/mcp/openapi-registry`;
@@ -4854,9 +4751,12 @@ export const fetchDiscoverableMCPServers = async (accessToken: string) => {
   }
 };
 
-export const fetchMCPServers = async (accessToken: string, teamId?: string | null) => {
+export const fetchMCPServers = async (accessToken: string, teamId?: string | null, connectedAppView?: boolean) => {
   try {
-    return await apiClient.get(`/v1/mcp/server`, { accessToken, query: { team_id: teamId || undefined } });
+    return await apiClient.get(`/v1/mcp/server`, {
+      accessToken,
+      query: { team_id: teamId || undefined, connected_app_view: connectedAppView || undefined },
+    });
   } catch (error) {
     console.error("Failed to fetch MCP servers:", error);
     throw error;
@@ -7581,6 +7481,37 @@ export const fetchToolsList = async (accessToken: string): Promise<ToolRow[]> =>
   const data = await response.json();
   return data.tools ?? [];
 };
+
+export interface ToolSpendEntry {
+  tool_name: string;
+  spend: number;
+  call_count: number;
+  total_tokens: number;
+}
+
+export interface ToolSpendDailyEntry {
+  date: string;
+  tool_name: string;
+  spend: number;
+  call_count: number;
+}
+
+export interface ToolSpendResponse {
+  by_tool: ToolSpendEntry[];
+  daily: ToolSpendDailyEntry[];
+  start_date: string | null;
+  end_date: string | null;
+}
+
+export const getToolSpend = async (
+  accessToken: string,
+  startDate?: string,
+  endDate?: string,
+): Promise<ToolSpendResponse> =>
+  apiClient.get<ToolSpendResponse>(`/v1/tool/spend`, {
+    accessToken,
+    query: { start_date: startDate, end_date: endDate },
+  });
 
 export interface ToolPolicyOverrideRow {
   override_id: string;

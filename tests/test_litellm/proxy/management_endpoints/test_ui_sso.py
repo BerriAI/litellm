@@ -7392,6 +7392,71 @@ async def test_legacy_login_page_hides_credentials_hint_via_general_settings():
 
 
 @pytest.mark.asyncio
+async def test_saml_callback_blocked_when_admin_ui_disabled():
+    """An IdP-initiated assertion must not mint a UI session when the admin UI is
+    disabled; the ACS enforces DISABLE_ADMIN_UI like the SP-initiated login route."""
+    from litellm.proxy.management_endpoints.ui_sso import saml_callback
+
+    with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "true"}):
+        response = await saml_callback(SimpleNamespace(cookies={}))
+
+    assert response.status_code == 200
+    assert "Admin UI is Disabled" in response.body.decode()
+
+
+@pytest.mark.asyncio
+async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
+    """An IdP-initiated assertion must not bypass the >5 free-SSO-user Enterprise gate
+    that /sso/key/generate enforces; the ACS re-checks it after validating the assertion,
+    so the entitlement DB query never runs on unvalidated input."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.ui_sso import saml_callback
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+
+    call_order: list[str] = []
+
+    async def _fake_handle_acs(**kwargs):
+        call_order.append("validate")
+        return CustomOpenID(
+            id="dana@litellm.ai",
+            email="dana@litellm.ai",
+            first_name=None,
+            last_name=None,
+            display_name="dana",
+            picture=None,
+            provider="saml",
+            team_ids=[],
+            user_role=None,
+        )
+
+    async def _fake_count_billable_users():
+        call_order.append("count")
+        return 6
+
+    async def _stream():
+        yield b"SAMLResponse=signed-response"
+
+    request_double = SimpleNamespace(cookies={}, headers={}, stream=_stream)
+
+    with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}), patch(
+        "litellm.proxy.proxy_server.premium_user", False
+    ), patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
+        "litellm.proxy.proxy_server.master_key", "sk-1234"
+    ), patch(
+        "litellm.proxy.management_endpoints.sso.saml_sso.SAMLAuthHandler.handle_acs",
+        new=_fake_handle_acs,
+    ), patch(
+        "litellm.repositories.user_repository.UserRepository.count_billable_users",
+        new=AsyncMock(side_effect=_fake_count_billable_users),
+    ):
+        with pytest.raises(ProxyException) as exc:
+            await saml_callback(request_double)
+
+    assert str(exc.value.code) == "403"
+    assert call_order == ["validate", "count"]
+
+
+@pytest.mark.asyncio
 async def test_cli_poll_key_tolerates_missing_user_row():
     """The CLI poll must still mint the JWT when the user lookup raises,
     e.g. the user row was created moments ago and a negative-cache window
@@ -7763,3 +7828,80 @@ async def test_cli_completion_persists_assertion_under_db_user_id():
 
     retain_mock.assert_awaited_once_with(user_id="cli-user-id", assertion=assertion)
     assert response.status_code == 200
+
+
+class TestSameOriginReturnPath:
+    """The same-origin relative return_to arm added for the MCP gateway DCR authorize
+    round-trip: only strictly relative paths qualify, so login can never redirect the
+    browser off the gateway origin."""
+
+    def test_accepts_relative_paths(self):
+        from litellm.proxy.management_endpoints.ui_sso import _is_same_origin_return_path
+
+        assert _is_same_origin_return_path("/authorize?client_id=llm_dcrc_x&state=s") is True
+        assert _is_same_origin_return_path("/some_server/authorize") is True
+
+    def test_rejects_absolute_protocol_relative_and_backslash_paths(self):
+        from litellm.proxy.management_endpoints.ui_sso import _is_same_origin_return_path
+
+        assert _is_same_origin_return_path("https://evil.example.com/authorize") is False
+        assert _is_same_origin_return_path("//evil.example.com/authorize") is False
+        assert _is_same_origin_return_path("/\\evil.example.com") is False
+        assert _is_same_origin_return_path("javascript:alert(1)") is False
+        assert _is_same_origin_return_path("") is False
+
+
+class TestPersistReturnToCookieSharedHelper:
+    """The single shared return_to helper used by EVERY sign-in branch (SSO / Okta / generic AND the
+    username/password form). It must be best-effort and NEVER raise — a bad return_to can never block
+    sign-in. Regression: the password form previously 400'd because it called _validate_return_to
+    directly (which raises for a non-matching absolute return_to when control_plane_url is set)."""
+
+    @staticmethod
+    def _cookie(resp) -> str:
+        return resp.headers.get("set-cookie", "")
+
+    def test_sets_cookie_for_same_origin_relative_path(self, monkeypatch):
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import _persist_return_to_cookie
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        resp = Response()
+        _persist_return_to_cookie(resp, "/mcp/authorize?client_id=llm_dcrc_abc")
+        assert "litellm_cp_return_to=" in self._cookie(resp)
+
+    def test_bad_absolute_with_control_plane_configured_does_not_raise_and_is_not_stored(self, monkeypatch):
+        """THE regression: a non-matching absolute return_to with control_plane_url set must NOT raise
+        (it did, blocking the login form) and must NOT be stored — sign-in proceeds."""
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import _persist_return_to_cookie
+
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings", {"control_plane_url": "https://cp.example.com"}
+        )
+        resp = Response()
+        _persist_return_to_cookie(resp, "https://evil.example.com/steal")  # must not raise
+        assert "litellm_cp_return_to=" not in self._cookie(resp)
+
+    def test_none_return_to_is_a_noop(self):
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import _persist_return_to_cookie
+
+        resp = Response()
+        _persist_return_to_cookie(resp, None)
+        assert "litellm_cp_return_to=" not in self._cookie(resp)
+
+    def test_control_plane_matching_absolute_is_stored(self, monkeypatch):
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import _persist_return_to_cookie
+
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings", {"control_plane_url": "https://cp.example.com"}
+        )
+        resp = Response()
+        _persist_return_to_cookie(resp, "https://cp.example.com/ui?page=models")
+        assert "litellm_cp_return_to=" in self._cookie(resp)

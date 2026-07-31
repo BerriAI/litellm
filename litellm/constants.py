@@ -1145,6 +1145,7 @@ BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-fable-5",
     "anthropic.claude-sonnet-5",
+    "anthropic.claude-opus-5",
     "anthropic.claude-opus-4-8",
     "anthropic.claude-opus-4-7",
     "anthropic.claude-opus-4-6-v1:0",
@@ -1296,6 +1297,7 @@ X_LITELLM_DISABLE_CALLBACKS = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD = "metadata"
 RETURN_RAW_MODEL_NAME_METADATA_KEY = "_complexity_router_return_raw_model_name"
+INTERNAL_CALL_ORIGIN_METADATA_KEY = "internal_call_origin"
 LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE = (
     "Truncation is a DB storage safeguard. "
@@ -1417,6 +1419,8 @@ LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE = int(
     os.getenv("LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE", 1000)
 )
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
+LITELLM_PROXY_BUDGET_NAME = "litellm-proxy-budget"
+GLOBAL_PROXY_SPEND_CACHE_KEY = f"{LITELLM_PROXY_ADMIN_NAME}:spend"
 
 ########################### CLI SSO AUTHENTICATION CONSTANTS ###########################
 LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
@@ -1454,6 +1458,7 @@ SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = int(os.getenv("SPEND_LOG_CLEA
 SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS = float(
     os.getenv("SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.5)
 )
+TOOL_SPEND_TOP_TOOLS = 100
 SPEND_LOG_PARTITION_INTERVAL = os.getenv("SPEND_LOG_PARTITION_INTERVAL", "day")
 SPEND_LOG_PARTITION_PRECREATE_AHEAD = int(os.getenv("SPEND_LOG_PARTITION_PRECREATE_AHEAD", 7))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
