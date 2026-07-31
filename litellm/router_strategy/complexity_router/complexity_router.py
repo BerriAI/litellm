@@ -25,10 +25,11 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Union, cast
 from pydantic import BaseModel
 
 from litellm._logging import verbose_router_logger
-from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.utils import (
+    AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     ModelResponse,
     RoutingDecisionCause,
     StandardLoggingRoutingDecision,
@@ -116,7 +117,12 @@ def _classifier_call_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]
         k: _sanitize_user_api_key_auth(v) if k == "user_api_key_auth" else v
         for k, v in metadata.items()
         if k not in _BUDGET_RESERVATION_METADATA_KEYS
-    }
+    } | {INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN}
+
+
+def _parent_session_kwargs(request_kwargs: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    kwargs = request_kwargs or {}
+    return {k: kwargs[k] for k in ("litellm_session_id", "litellm_trace_id") if kwargs.get(k) is not None}
 
 
 def _effective_turn_off_message_logging(request_kwargs: Mapping[str, Any] | None) -> bool | None:
@@ -734,6 +740,7 @@ class ComplexityRouter(CustomLogger):
             metadata=metadata,
             proxy_server_request=proxy_server_request,
             turn_off_message_logging=turn_off_message_logging,
+            **_parent_session_kwargs(request_kwargs),
         )
         content = response.choices[0].message.content
         if not content:
@@ -1186,6 +1193,7 @@ class ComplexityRouter(CustomLogger):
                 litellm_metadata=litellm_metadata,
                 proxy_server_request=proxy_server_request,
                 turn_off_message_logging=turn_off_message_logging,
+                **_parent_session_kwargs(request_kwargs),
             )
         )[0]
         route_choice = await routelayer.acall(vector=query_vector)
