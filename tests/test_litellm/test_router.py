@@ -6114,6 +6114,103 @@ async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
         assert mock_sign.call_args.kwargs["data"]["tags"] == request_tags
 
 
+def _batch_and_file_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-gpt",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"},
+                "model_info": {"id": "my-gpt_unified-1"},
+            },
+            {
+                "model_name": "my-azure-gpt",
+                "litellm_params": {
+                    "model": "azure/gpt-4o-mini",
+                    "api_base": "https://fake.openai.azure.com",
+                    "api_key": "fake",
+                    "api_version": "2024-08-01-preview",
+                },
+                "model_info": {"id": "my-azure-gpt_unified-1"},
+            },
+        ],
+        fallbacks=[{"my-gpt": ["my-azure-gpt"]}],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_does_not_fall_back_to_another_model_group():
+    """
+    A batch is owned by the provider that owns `input_file_id`, so a failed
+    `batches.create` must surface that provider's error instead of creating batch
+    state on a fallback model group.
+    """
+    from litellm.types.utils import LiteLLMBatch
+
+    attempted_models: list[str] = []
+
+    async def fake_acreate_batch(**kwargs):
+        model = kwargs["model"]
+        attempted_models.append(model)
+        if model.startswith("openai/"):
+            raise litellm.BadRequestError(
+                message="Invalid value for 'completion_window': '5m'. Supported values are: '24h'",
+                model=model,
+                llm_provider="openai",
+            )
+        return LiteLLMBatch(
+            id="batch_from_fallback_group",
+            completion_window="24h",
+            created_at=0,
+            endpoint="/v1/chat/completions",
+            input_file_id=kwargs.get("input_file_id"),
+            object="batch",
+            status="failed",
+        )
+
+    router = _batch_and_file_router()
+    with patch("litellm.acreate_batch", side_effect=fake_acreate_batch):
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            await router.acreate_batch(
+                model="my-gpt",
+                input_file_id="file-owned-by-openai",
+                endpoint="/v1/chat/completions",
+                completion_window="5m",
+            )
+
+    assert "24h" in str(exc_info.value)
+    assert attempted_models == ["openai/gpt-4o-mini"]
+
+
+@pytest.mark.asyncio
+async def test_acreate_file_does_not_fall_back_to_another_model_group():
+    """
+    The unified file id records the model group the caller asked for, so a failed
+    upload must not silently store the file on a fallback group's provider.
+    """
+    attempted_models: list[str] = []
+
+    async def fake_acreate_file(**kwargs):
+        model = kwargs["model"]
+        attempted_models.append(model)
+        raise litellm.BadRequestError(
+            message="Invalid file format",
+            model=model,
+            llm_provider="openai",
+        )
+
+    router = _batch_and_file_router()
+    with patch("litellm.acreate_file", side_effect=fake_acreate_file):
+        with pytest.raises(litellm.BadRequestError):
+            await router.acreate_file(
+                model="my-gpt",
+                file=("batch.jsonl", b'{"custom_id":"1"}'),
+                purpose="user_data",
+            )
+
+    assert attempted_models == ["openai/gpt-4o-mini"]
+
+
 class TestPreRoutingStrategyRegistryLifecycle:
     """
     Regression tests: a deployment leaving the model_list must release the

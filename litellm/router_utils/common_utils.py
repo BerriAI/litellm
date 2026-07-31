@@ -22,6 +22,20 @@ def _is_proxy_admin_request(request_kwargs: Optional[Mapping[str, object]]) -> b
     return getattr(user_api_key_auth, "user_role", None) == "proxy_admin"
 
 
+def model_group_pinned_fallbacks() -> List[str]:
+    """
+    Fallback list for requests that must stay inside the model group they were sent to.
+
+    Batch and file resources are owned by the provider that created them, so retrying a
+    failed batch/file operation on a different model group would create batch state with
+    credentials that do not own the `input_file_id`, and it replaces the owning provider's
+    error with an unrelated one from the fallback provider.
+
+    Intra-group failover (`num_retries`, order-based and weighted failover) still applies.
+    """
+    return []
+
+
 def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
     """
     Hash of the credential params, used for mapping the file id to the right model
