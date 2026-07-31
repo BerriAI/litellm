@@ -2902,6 +2902,54 @@ if MCP_AVAILABLE:
         # Deprecated: Local MCP Server Tool
         #########################################################
         else:
+            # Gate only what can actually dispatch. When the unprefixed name is
+            # not in the registry either, `_handle_local_mcp_tool` below reports
+            # 404 and nothing runs, so demanding a server here would turn every
+            # unknown tool name into a misleading 503.
+            if global_mcp_tool_registry.get_tool(original_tool_name) is not None:
+                # `mcp_server` is None here because the tool name is not in the
+                # tool -> server mapping, but the name still carries a prefix
+                # that the server-level check above compared against the
+                # caller's `allowed_mcp_servers` by exact `name`. So the named
+                # server is in that list and can carry the tool-level checks,
+                # even with the mapping cold. Resolve it from
+                # `allowed_mcp_servers` rather than the registry: the registry
+                # would happily return a server the caller holds no grant for,
+                # and matching anything other than `name` would accept a server
+                # the check never validated.
+                prefix_server = next(
+                    (candidate for candidate in allowed_mcp_servers if candidate.name == server_name),
+                    None,
+                )
+                if prefix_server is None:
+                    # A non-empty prefix that passed the server-level check
+                    # always matches here, so this arm only fires when the
+                    # prefix was empty, which is exactly the case that check
+                    # skips. Fail closed rather than dispatch with no server to
+                    # evaluate a tool ceiling against.
+                    raise HTTPException(
+                        status_code=503,
+                        detail=(
+                            f"MCP server for tool '{original_tool_name}' is not available; "
+                            "refusing to dispatch without authorization checks. "
+                            "Retry once the server is registered."
+                        ),
+                    )
+
+                from litellm.proxy.proxy_server import proxy_logging_obj
+
+                hook_result = await global_mcp_server_manager.pre_call_tool_check(
+                    name=original_tool_name,
+                    arguments=arguments,
+                    server_name=server_name,
+                    user_api_key_auth=user_api_key_auth,
+                    proxy_logging_obj=proxy_logging_obj,
+                    server=prefix_server,
+                    raw_headers=raw_headers,
+                )
+                if "arguments" in hook_result:
+                    arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
+
             local_content = await _handle_local_mcp_tool(original_tool_name, arguments)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
