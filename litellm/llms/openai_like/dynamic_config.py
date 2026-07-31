@@ -2,7 +2,7 @@
 Dynamic configuration class generator for JSON-based providers.
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
+from typing import Any, Coroutine, Literal, Optional, Union, overload
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -25,20 +25,20 @@ def create_config_class(provider: SimpleProviderConfig):
     class JSONProviderConfig(base_class):  # type: ignore[valid-type,misc]
         @overload
         def _transform_messages(
-            self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-        ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+            self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
+        ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
 
         @overload
         def _transform_messages(
             self,
-            messages: List[AllMessageValues],
+            messages: list[AllMessageValues],
             model: str,
             is_async: Literal[False] = False,
-        ) -> List[AllMessageValues]: ...
+        ) -> list[AllMessageValues]: ...
 
         def _transform_messages(
-            self, messages: List[AllMessageValues], model: str, is_async: bool = False
-        ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+            self, messages: list[AllMessageValues], model: str, is_async: bool = False
+        ) -> Union[list[AllMessageValues], Coroutine[Any, Any, list[AllMessageValues]]]:
             """Transform messages based on special_handling config"""
 
             # Handle content list to string conversion if configured
@@ -71,7 +71,7 @@ def create_config_class(provider: SimpleProviderConfig):
         def transform_request(
             self,
             model: str,
-            messages: List[AllMessageValues],
+            messages: list[AllMessageValues],
             optional_params: dict,
             litellm_params: dict,
             headers: dict,
@@ -89,7 +89,7 @@ def create_config_class(provider: SimpleProviderConfig):
         async def async_transform_request(
             self,
             model: str,
-            messages: List[AllMessageValues],
+            messages: list[AllMessageValues],
             optional_params: dict,
             litellm_params: dict,
             headers: dict,
@@ -106,7 +106,7 @@ def create_config_class(provider: SimpleProviderConfig):
 
         def _get_openai_compatible_provider_info(
             self, api_base: Optional[str], api_key: Optional[str]
-        ) -> Tuple[Optional[str], Optional[str]]:
+        ) -> tuple[Optional[str], Optional[str]]:
             """Get API base and key from JSON config"""
 
             # Resolve base URL
