@@ -140,6 +140,14 @@ vi.mock("@/contexts/ThemeContext", () => {
   const React = require("react");
   return {
     ThemeProvider: ({ children }: any) => React.createElement(React.Fragment, null, children),
+    useTheme: () => ({
+      logoUrl: null,
+      setLogoUrl: () => {},
+      faviconUrl: null,
+      setFaviconUrl: () => {},
+      isDarkMode: false,
+      toggleDarkMode: () => {},
+    }),
   };
 });
 vi.mock("@/lib/cva.config", () => ({

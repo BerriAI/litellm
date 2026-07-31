@@ -1,5 +1,5 @@
 import userEvent from "@testing-library/user-event";
-import React, { useState } from "react";
+import React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import Navbar from "./navbar";
@@ -304,10 +304,9 @@ describe("Navbar", () => {
     expect(window.location.href).toBe("");
   });
 
-  it("should not render dark mode toggle slider", () => {
+  it("renders the dark mode toggle slider", () => {
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    // DO NOT RENDER THIS UNTIL ALL COMPONENTS ARE CONFIRMED TO SUPPORT DARK MODE STYLES. IT IS AN ISSUE IF THIS TEST FAILS.
-    expect(screen.queryByTestId("dark-mode-toggle")).not.toBeInTheDocument();
+    expect(screen.getByTestId("dark-mode-toggle")).toBeInTheDocument();
   });
 });

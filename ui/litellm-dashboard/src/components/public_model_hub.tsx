@@ -1,8 +1,9 @@
-import { ThemeProvider } from "@/contexts/ThemeContext";
+import { ThemeProvider, useTheme } from "@/contexts/ThemeContext";
+import { getAntdTheme } from "@/config/antdTheme";
 import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
 import { ColumnDef } from "@tanstack/react-table";
 import { Button, Card, Text, Title } from "@tremor/react";
-import { Modal, Select, Tabs, Tag, Tooltip } from "antd";
+import { ConfigProvider, Modal, Select, Tabs, Tag, Tooltip } from "antd";
 import { Copy, Info } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { ModelDataTable } from "./model_dashboard/table";
@@ -95,7 +96,7 @@ interface PublicModelHubProps {
   isEmbedded?: boolean; // When true, hides navbar and adjusts layout for embedding in dashboard
 }
 
-const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false }) => {
+const PublicModelHubContent: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false }) => {
   const [modelHubData, setModelHubData] = useState<ModelGroupInfo[] | null>(null);
   const [agentHubData, setAgentHubData] = useState<AgentCard[] | null>(null);
   const [mcpHubData, setMcpHubData] = useState<MCPServerData[] | null>(null);
@@ -115,6 +116,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [selectedAgentSkills, setSelectedAgentSkills] = useState<string[]>([]);
   const [selectedMcpTransports, setSelectedMcpTransports] = useState<string[]>([]);
   const [serviceStatus, setServiceStatus] = useState<string>("I'm alive! ✓");
+  const { isDarkMode, toggleDarkMode } = useTheme();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isAgentModalVisible, setIsAgentModalVisible] = useState(false);
   const [isMcpModalVisible, setIsMcpModalVisible] = useState(false);
@@ -978,8 +980,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   ];
 
   return (
-    <ThemeProvider accessToken={accessToken}>
-      <div className={isEmbedded ? "w-full" : "min-h-screen bg-white"}>
+    <ConfigProvider theme={getAntdTheme(isDarkMode)}>
+      <div className={isEmbedded ? "w-full" : "min-h-screen bg-white dark:bg-[#0e0e0e]"}>
         {/* Navigation - only show when not embedded */}
         {!isEmbedded && (
           <Navbar
@@ -991,8 +993,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
             proxySettings={proxySettings}
             accessToken={accessToken || null}
             isPublicPage={true}
-            isDarkMode={false}
-            toggleDarkMode={() => {}}
+            isDarkMode={isDarkMode}
+            toggleDarkMode={toggleDarkMode}
           />
         )}
 
@@ -2025,8 +2027,14 @@ if __name__ == "__main__":
           )}
         </Modal>
       </div>
-    </ThemeProvider>
+    </ConfigProvider>
   );
 };
+
+const PublicModelHub: React.FC<PublicModelHubProps> = (props) => (
+  <ThemeProvider accessToken={props.accessToken}>
+    <PublicModelHubContent {...props} />
+  </ThemeProvider>
+);
 
 export default PublicModelHub;
