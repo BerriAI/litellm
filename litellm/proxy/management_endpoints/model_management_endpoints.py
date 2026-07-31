@@ -15,6 +15,7 @@ import datetime
 import json
 from collections.abc import Awaitable, Mapping, Sequence
 from json import JSONDecodeError
+from types import MappingProxyType
 from typing import Final, Literal, Protocol, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -79,6 +80,7 @@ from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
     GenericLiteLLMParams,
+    ModelInfo,
     updateDeployment,
 )
 from litellm.utils import get_utc_datetime
@@ -233,6 +235,96 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
+_PTU_MODEL_INFO_FIELDS: Final = ("ptu_count", "cost_per_ptu_per_hour", "ptu_effective_from", "ptu_effective_to")
+
+
+def _explicitly_cleared_ptu_fields(model_info: ModelInfo | None) -> frozenset[str]:
+    """The PTU fields a patch sends as an explicit null, which update_db_model drops."""
+    if model_info is None:
+        return frozenset()
+    return frozenset(
+        field
+        for field in _PTU_MODEL_INFO_FIELDS
+        if field in model_info.model_fields_set and getattr(model_info, field) is None
+    )
+
+
+def _merged_ptu_model_info(*, db_model: Deployment, patch_data: updateDeployment) -> Mapping[str, object]:
+    """The model_info a patch would store, which is the stored blob updated by the patch.
+
+    A PTU invariant holds over the deployment as it will exist, not over whichever subset
+    of fields a caller happened to send.
+    """
+    empty: Final[Mapping[str, object]] = MappingProxyType({})
+    stored: Final = db_model.model_info.model_dump(exclude_none=True) if db_model.model_info else empty
+    incoming: Final = patch_data.model_info.model_dump(exclude_none=True) if patch_data.model_info else empty
+    cleared: Final = _explicitly_cleared_ptu_fields(patch_data.model_info)
+    return MappingProxyType({k: v for k, v in {**stored, **incoming}.items() if k not in cleared})
+
+
+def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
+    """Enforce the PTU cross-field invariant on the effective model_info.
+
+    ptu_count and cost_per_ptu_per_hour must be set together, and a team_id and a
+    ptu_effective_from are required when they are. The start is mandatory rather than
+    defaulted because flat cost accrues from it: inferring one would let a deployment
+    configured today be billed for days it did not exist. Per-field bounds (positive
+    count, non-negative rate) are enforced by ModelInfo itself.
+
+    Window ordering is checked before the count/rate gate. A patch that touches only one
+    end of the window carries no count or rate, and ModelInfo sees one field at a time, so
+    leaving it to either would let an inverted window reach the row; the next load then
+    fails to parse it and drops the deployment out of the router, where no further patch
+    can repair it because each one re-parses the stored value first.
+    """
+    effective_from: Final = _coerce_ptu_datetime(model_info.get("ptu_effective_from"))
+    effective_to: Final = _coerce_ptu_datetime(model_info.get("ptu_effective_to"))
+    if effective_from is not None and effective_to is not None and effective_to <= effective_from:
+        raise HTTPException(status_code=400, detail="ptu_effective_to must be after ptu_effective_from")
+
+    has_count: Final = model_info.get("ptu_count") is not None
+    has_rate: Final = model_info.get("cost_per_ptu_per_hour") is not None
+    if not has_count and not has_rate:
+        return
+    if has_count != has_rate:
+        raise HTTPException(status_code=400, detail="ptu_count and cost_per_ptu_per_hour must be set together")
+    if effective_from is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "ptu_effective_from is required when PTU fields are set. Flat cost accrues from that "
+                "instant, so without it the start would have to be inferred and a deployment configured "
+                "today could be billed for days it did not exist"
+            ),
+        )
+    if not model_info.get("team_id"):
+        raise HTTPException(
+            status_code=400, detail="team_id is required when PTU fields are set (one model maps to one team)"
+        )
+
+
+def _parse_ptu_datetime(value: object) -> datetime.datetime | None:
+    """``value`` as a datetime, parsing an ISO string, else None."""
+    if isinstance(value, datetime.datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _coerce_ptu_datetime(value: object) -> datetime.datetime | None:
+    """Coerce a model_info effective-window value (datetime or ISO string) to UTC, else None."""
+    parsed: Final = _parse_ptu_datetime(value)
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed.astimezone(datetime.timezone.utc)
+
+
 def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
     merged_model_name: Final = updated_patch.model_name or db_model.model_name
     merged_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True)
@@ -270,6 +362,10 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
             if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.model_info, field) is None:
                 merged_model_info.pop(field, None)
                 merged_litellm_params.pop(field, None)
+        for field in _explicitly_cleared_ptu_fields(updated_patch.model_info):
+            merged_model_info.pop(field, None)
+
+    _validate_ptu_model_info(merged_model_info)
 
     # convert to prisma compatible format
 
@@ -715,6 +811,17 @@ async def _update_team_model_in_db(
         prisma_client=prisma_client,
         premium_user=premium_user,
     )
+
+    # Validated before any write, beside the premium check the create path already runs
+    # here. The team ACL is updated below and autocommits, so a validator that raises
+    # further down would leave the team mutated and the deployment row never written.
+    #
+    # The merged view is what gets stored, so that is what has to satisfy the invariants.
+    # Validating the patch alone rejected a partial edit of an already valid deployment:
+    # raising the rate on a configured model carries no ptu_effective_from, which the
+    # stored row supplies.
+    if patch_data.model_info is not None:
+        _validate_ptu_model_info(_merged_ptu_model_info(db_model=db_model, patch_data=patch_data))
 
     patch_team_id: Final = patch_data.model_info.team_id if patch_data.model_info else None
 
@@ -1424,6 +1531,8 @@ async def add_new_model(
 
         model_response: LiteLLM_ProxyModelTable | None = None
         # update DB
+        _validate_ptu_model_info(model_params.model_info.model_dump(exclude_none=True))
+
         if store_model_in_db is True:
             """
             - store model_list in db
