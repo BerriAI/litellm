@@ -90,12 +90,12 @@ class FakeAnthropicMessagesStreamIterator:
             }
             chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
 
-        elif block_type == "tool_use":
+        elif block_type in ("tool_use", "server_tool_use", "mcp_tool_use"):
             content_block_start = {
                 "type": "content_block_start",
                 "index": index,
                 "content_block": {
-                    "type": "tool_use",
+                    "type": block_type,
                     "id": block_dict.get("id"),
                     "name": block_dict.get("name"),
                     "input": {},
@@ -112,6 +112,14 @@ class FakeAnthropicMessagesStreamIterator:
                 },
             }
             chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
+
+        else:
+            content_block_start = {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": block_dict,
+            }
+            chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
 
         content_block_stop = {"type": "content_block_stop", "index": index}
         chunks.append(f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode())
