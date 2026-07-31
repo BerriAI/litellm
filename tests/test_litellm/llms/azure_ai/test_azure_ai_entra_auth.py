@@ -121,7 +121,8 @@ def test_image_generation_authenticates_with_entra_token():
     assert "api-key" not in headers
 
 
-def test_image_generation_keeps_caller_supplied_authorization_header():
+@pytest.mark.parametrize("header_name", ["Authorization", "authorization", "api-key", "API-KEY"])
+def test_image_generation_keeps_caller_supplied_auth_header(header_name):
     with patch.object(litellm.images.main.azure_chat_completions, "image_generation") as mock_image_generation:
         mock_image_generation.return_value = litellm.ImageResponse()
 
@@ -129,12 +130,12 @@ def test_image_generation_keeps_caller_supplied_authorization_header():
             model="azure_ai/FLUX-1.1-pro",
             prompt="a red circle",
             api_base="https://my-resource.services.ai.azure.com",
-            headers={"Authorization": "Bearer caller-token"},
+            headers={header_name: "caller-credential"},
         )
 
     headers = mock_image_generation.call_args.kwargs["headers"]
-    assert headers["Authorization"] == "Bearer caller-token"
-    assert "api-key" not in headers
+    assert headers[header_name] == "caller-credential"
+    assert len(headers) == 2
 
 
 def test_image_generation_still_uses_api_key_header():
