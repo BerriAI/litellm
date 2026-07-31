@@ -150,9 +150,9 @@ def test_manual_request_is_identified_not_ordered():
     assert (unapplied, applied) == (True, False)
 
 
-def test_fresh_pod_adopts_the_revision_without_reloading():
-    """A pod that just booted holds data newer than any earlier request, so its first poll
-    must not re-serve one; the interval is the only thing that can make it due"""
+def test_pod_without_a_seeded_revision_adopts_without_reloading():
+    """Fallback when the startup seed failed: the pod cannot tell whether its boot-time data
+    already satisfies the request, and re-serving one every restart is the worse guess"""
     assert (
         pod_reload_is_due(
             schedule=ReloadSchedule(reload_revision=12),

@@ -137,10 +137,11 @@ def pod_reload_is_due(
 ) -> bool:
     """
     Whether this pod should reload now. A revision it has not applied means a manual reload
-    it has not served; ``pod_applied_revision`` is None only until the pod's first poll, when
-    its data is boot-fresh and it simply adopts whatever revision it finds. Interval reloads
-    compare against this pod's own data, and a schedule that has never run anywhere fires
-    immediately rather than one interval later
+    it has not served; ``pod_applied_revision`` is normally seeded at startup, and is None
+    only if that read failed, in which case the pod adopts rather than re-serving a request
+    its boot-time data may already satisfy. Interval reloads compare against this pod's own
+    data, and a schedule that has never run anywhere fires immediately rather than one
+    interval later
     """
     if pod_applied_revision is not None and schedule.reload_revision != pod_applied_revision:
         verbose_proxy_logger.info("%s reload triggered by manual reload request", description)
