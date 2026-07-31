@@ -386,12 +386,15 @@ def _annotation_node_ids(tree: ast.AST) -> frozenset[int]:
     )
 
 
-def _callable_name(func: ast.expr) -> str | None:
+def _is_freezing_wrapper(func: ast.expr) -> bool:
     if isinstance(func, ast.Name):
-        return func.id
-    if isinstance(func, ast.Attribute):
-        return func.attr
-    return None
+        return func.id in FREEZING_WRAPPERS
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == "MappingProxyType"
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "types"
+    )
 
 
 def _frozen_argument_ids(tree: ast.AST) -> frozenset[int]:
@@ -400,14 +403,14 @@ def _frozen_argument_ids(tree: ast.AST) -> frozenset[int]:
     `MappingProxyType({...})`, `frozenset({...})`, and `tuple([...])` freeze their
     argument before it can escape, so the literal inside is a one-shot build, not a
     mutable value anyone can grow later. Only the argument itself is exempt; a
-    mutable collection nested inside it still trips LIT002.
+    mutable collection nested inside it still trips LIT002. Only bare names (plus
+    `types.MappingProxyType`) qualify, so an unrelated method that happens to share
+    a wrapper's name cannot exempt its argument.
     """
     return frozenset(
         id(node.args[0])
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and len(node.args) == 1
-        and _callable_name(node.func) in FREEZING_WRAPPERS
+        if isinstance(node, ast.Call) and len(node.args) == 1 and _is_freezing_wrapper(node.func)
     )
 
 

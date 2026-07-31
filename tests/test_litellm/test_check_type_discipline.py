@@ -160,6 +160,12 @@ def test_value_frozen_by_wrapper_is_exempt(tmp_path):
     assert "LIT002" not in _codes(tmp_path, "t = tuple([1, 2])\n")
 
 
+def test_same_named_method_does_not_exempt_its_argument(tmp_path):
+    assert "LIT002" in _codes(tmp_path, "t = obj.tuple([1, 2])\n")
+    assert "LIT002" in _codes(tmp_path, "f = obj.frozenset({1, 2})\n")
+    assert "LIT002" in _codes(tmp_path, "m = obj.MappingProxyType({'a': 1})\n")
+
+
 def test_mutable_nested_inside_frozen_wrapper_still_counts(tmp_path):
     assert "LIT002" in _codes(tmp_path, "from types import MappingProxyType\nm = MappingProxyType({'a': []})\n")
 
