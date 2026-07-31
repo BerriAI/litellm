@@ -128,6 +128,29 @@ def test_aggregate_batch_cost_uses_custom_model_info():
     ), f"Expected total cost {expected}, got {cost}"
 
 
+def test_aggregate_batch_cost_normalizes_mixed_responses_and_chat_usage():
+    responses_line = _make_batch_output_line(prompt_tokens=0, completion_tokens=0)
+    responses_line["response"]["body"]["usage"] = {
+        "input_tokens": 20,
+        "output_tokens": 7,
+        "total_tokens": 27,
+        "input_tokens_details": {"cached_tokens": 3},
+    }
+    chat_line = _make_batch_output_line(prompt_tokens=10, completion_tokens=5)
+
+    cost, usage, _ = _aggregate_batch_cost_usage_models(
+        entries=[responses_line, chat_line],
+        custom_llm_provider="openai",
+        model_info=CUSTOM_MODEL_INFO,
+    )
+
+    assert usage.prompt_tokens == 30
+    assert usage.completion_tokens == 12
+    assert usage.total_tokens == 42
+    assert usage.cache_read_input_tokens == 3
+    assert cost == pytest.approx((30 * 0.00125) + (12 * 0.005))
+
+
 @pytest.mark.parametrize("data_residency", ["eu", "us"])
 def test_batch_cost_calculator_applies_data_residency_uplift(
     data_residency, monkeypatch
