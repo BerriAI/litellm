@@ -2010,6 +2010,48 @@ async def test_prepare_key_update_data_budget_limits_serializes_windows():
 
 
 @pytest.mark.asyncio
+async def test_prepare_key_update_data_budget_limits_preserves_reset_at():
+    """
+    Editing a key's budget_limits window max_budget must keep the existing
+    window's reset_at (so its spend window is not restarted), while a new
+    duration is initialized fresh.
+    """
+    from datetime import datetime, timezone
+
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_key_update_data,
+    )
+
+    existing_reset_at = datetime(2027, 1, 1, tzinfo=timezone.utc).isoformat()
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=["gpt-3.5-turbo"],
+        user_id="test-user",
+        team_id=None,
+        metadata={},
+        budget_limits=[{"budget_duration": "365d", "max_budget": 100.0, "reset_at": existing_reset_at}],
+    )
+
+    update_request = UpdateKeyRequest(
+        key="test-token",
+        budget_limits=[
+            {"budget_duration": "365d", "max_budget": 250.0},
+            {"budget_duration": "1d", "max_budget": 5.0},
+        ],
+    )
+
+    result = await prepare_key_update_data(data=update_request, existing_key_row=existing_key)
+
+    stored = {w["budget_duration"]: w for w in json.loads(result["budget_limits"])}
+    assert stored["365d"]["max_budget"] == 250.0
+    assert stored["365d"]["reset_at"] == existing_reset_at
+    assert stored["1d"]["reset_at"] is not None
+    assert stored["1d"]["reset_at"] != existing_reset_at
+
+
+@pytest.mark.asyncio
 async def test_prepare_key_update_data_disable_global_guardrails_false_no_premium(
     monkeypatch,
 ):
