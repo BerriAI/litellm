@@ -53,13 +53,11 @@ def serialize_tool_call_arguments(raw_arguments: object, default: str = "") -> s
     single quotes, which every downstream JSON parser rejects with errors like
     "Expecting ',' delimiter".
     """
-    if raw_arguments is None or raw_arguments == "":
-        return default
     if isinstance(raw_arguments, str):
-        return raw_arguments
-    if isinstance(raw_arguments, (dict, list, tuple, bool, int, float)):
-        return json.dumps(raw_arguments)
-    return str(raw_arguments)
+        return raw_arguments or default
+    if raw_arguments is None:
+        return default
+    return json.dumps(raw_arguments, default=str)
 
 
 def unwrap_custom_tool_arguments(arguments: str) -> str:
