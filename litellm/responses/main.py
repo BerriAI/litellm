@@ -356,7 +356,7 @@ async def aresponses_api_with_mcp(
                     follow_up_input=follow_up_input,
                     model=model,
                     all_tools=all_tools,
-                    response_id=response.id,
+                    previous_response_id=previous_response_id,
                     **follow_up_call_params,
                 )
 
