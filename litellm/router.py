@@ -8613,9 +8613,9 @@ class Router:
         deployment = self.get_deployment(model_id=model_id)
         if deployment is None or self._is_deployment_blocked(deployment):
             return None
-        return CredentialLiteLLMParams(**deployment.litellm_params.model_dump(exclude_none=True)).model_dump(
-            exclude_none=True
-        )
+        return CredentialLiteLLMParams.model_validate(
+            deployment.litellm_params.model_dump(exclude_none=True)
+        ).model_dump(exclude_none=True)
 
     def get_deployment_by_model_group_name(self, model_group_name: str) -> Optional[Deployment]:
         """
@@ -8755,9 +8755,9 @@ class Router:
             return None
 
         # Get basic credentials
-        credentials = CredentialLiteLLMParams(**deployment.litellm_params.model_dump(exclude_none=True)).model_dump(
-            exclude_none=True
-        )
+        credentials = CredentialLiteLLMParams.model_validate(
+            deployment.litellm_params.model_dump(exclude_none=True)
+        ).model_dump(exclude_none=True)
 
         # Resolve litellm_credential_name to actual credentials
         if deployment.litellm_params.litellm_credential_name is not None:
