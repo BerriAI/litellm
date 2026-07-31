@@ -407,21 +407,33 @@ class RouterBudgetLimiting(CustomLogger):
 
         response_cost: float = standard_logging_payload.get("response_cost", 0)
         model_id: str = str(standard_logging_payload.get("model_id", ""))
-        custom_llm_provider: str = kwargs.get("litellm_params", {}).get("custom_llm_provider", None)
-        if custom_llm_provider is None:
-            raise ValueError("custom_llm_provider is required")
+        litellm_params = kwargs.get("litellm_params", {}) or {}
+        if isinstance(litellm_params, dict):
+            custom_llm_provider: Optional[str] = litellm_params.get("custom_llm_provider", None)
+            provider_resolution_params = dict(litellm_params)
+            if not provider_resolution_params.get("model") and kwargs.get("model"):
+                provider_resolution_params["model"] = kwargs.get("model")
+            provider_resolution_model = provider_resolution_params.get("model")
+        else:
+            custom_llm_provider = getattr(litellm_params, "custom_llm_provider", None)
+            provider_resolution_params = litellm_params
+            provider_resolution_model = getattr(litellm_params, "model", None)
 
-        budget_config = self._get_budget_config_for_provider(custom_llm_provider)
-        if budget_config:
-            # increment spend for provider
-            spend_key = f"provider_spend:{custom_llm_provider}:{budget_config.budget_duration}"
-            start_time_key = f"provider_budget_start_time:{custom_llm_provider}"
-            await self._increment_spend_for_key(
-                budget_config=budget_config,
-                spend_key=spend_key,
-                start_time_key=start_time_key,
-                response_cost=response_cost,
-            )
+        if custom_llm_provider is None and provider_resolution_model:
+            custom_llm_provider = self._get_llm_provider_for_deployment({"litellm_params": provider_resolution_params})
+
+        if custom_llm_provider is not None:
+            budget_config = self._get_budget_config_for_provider(custom_llm_provider)
+            if budget_config:
+                # increment spend for provider
+                spend_key = f"provider_spend:{custom_llm_provider}:{budget_config.budget_duration}"
+                start_time_key = f"provider_budget_start_time:{custom_llm_provider}"
+                await self._increment_spend_for_key(
+                    budget_config=budget_config,
+                    spend_key=spend_key,
+                    start_time_key=start_time_key,
+                    response_cost=response_cost,
+                )
 
         deployment_budget_config = self._get_budget_config_for_deployment(model_id)
         if deployment_budget_config:
