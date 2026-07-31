@@ -30,6 +30,10 @@ const IPV4_HOST_REGEX = /^\d{1,3}(\.\d{1,3}){3}$/;
 const GITHUB_ORG_REGEX = /^[A-Za-z0-9-]+$/;
 const GITHUB_REPO_REGEX = /^[A-Za-z0-9._-]+$/;
 
+const SSH_SCP_REGEX = /^([a-z0-9._-]+)@([a-z0-9.-]+\.[a-z]{2,}):([a-z0-9._-]+(?:\/[a-z0-9._-]+)+?)(?:\.git)?\/?$/i;
+const SSH_URL_REGEX =
+  /^ssh:\/\/([a-z0-9._-]+)@([a-z0-9.-]+\.[a-z]{2,})(:\d+)?\/([a-z0-9._-]+(?:\/[a-z0-9._-]+)+?)(?:\.git)?\/?$/i;
+
 const buildRepoUrl = (url: URL): string => `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`;
 
 const pathSegments = (url: URL): string[] => url.pathname.split("/").filter((seg) => seg !== "");
@@ -160,12 +164,54 @@ const parseRawGitSource = (url: URL, subPath?: string): SkillSourcePreview | nul
   };
 };
 
+const withGitSuffix = (path: string): string => `${path.replace(/\.git$/i, "")}.git`;
+
+const parseSshRepoUrl = (raw: string): string | null => {
+  const trimmed = raw.trim();
+  const sshUrl = SSH_URL_REGEX.exec(trimmed);
+  if (sshUrl) {
+    const [, user, host, port, path] = sshUrl;
+    return `ssh://${user}@${host}${port ?? ""}/${withGitSuffix(path)}`;
+  }
+  const scp = SSH_SCP_REGEX.exec(trimmed);
+  if (scp) {
+    const [, user, host, path] = scp;
+    return `${user}@${host}:${withGitSuffix(path)}`;
+  }
+  return null;
+};
+
+const parseSshSource = (cloneUrl: string, subPath?: string): SkillSourcePreview | null => {
+  const repoName = lastSegment(cloneUrl.replace(/\.git$/, "").replace(/^[^:]*:/, ""));
+  const normalized = normalizeSubPath(subPath ?? "");
+  if (normalized !== "") {
+    if (!SUBDIR_PATH_REGEX.test(normalized)) {
+      return null;
+    }
+    return {
+      parsed: { source: "git-subdir", url: cloneUrl, path: normalized },
+      label: `SSH subdir — ${cloneUrl} @ ${normalized}`,
+      suggestedName: toKebabCase(lastSegment(normalized)),
+    };
+  }
+  return {
+    parsed: { source: "url", url: cloneUrl },
+    label: `SSH repo — ${cloneUrl}`,
+    suggestedName: toKebabCase(repoName),
+  };
+};
+
 /**
  * Parse any git-accessible repository URL into a registerable skill source.
- * GitHub URLs keep their `github`/`git-subdir` shorthand; every other host is
- * treated as a raw repo URL, with an optional subfolder turning it into git-subdir.
+ * GitHub https URLs keep their `github`/`git-subdir` shorthand; ssh clone URLs stay ssh so a
+ * private host authenticates with the user's own key; every other host is treated as a raw repo
+ * URL, with an optional subfolder turning it into git-subdir.
  */
 export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourcePreview | null => {
+  const sshCloneUrl = parseSshRepoUrl(rawUrl);
+  if (sshCloneUrl) {
+    return parseSshSource(sshCloneUrl, subPath);
+  }
   const url = parseRepoUrl(rawUrl);
   if (!url) {
     return null;
@@ -268,7 +314,7 @@ export const getSourceLink = (source: PluginSource): string | null => {
     return `https://github.com/${source.repo}`;
   }
   if ((source.source === "url" || source.source === "git-subdir") && source.url) {
-    return source.url;
+    return source.url.startsWith("https://") ? source.url : null;
   }
   return null;
 };
