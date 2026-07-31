@@ -44,6 +44,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     GenericBudgetConfigType,
     ImageResponse,
+    InternalCallOrigin,
     LiteLLMPydanticObjectBase,
     ModelResponse,
     ProviderField,
@@ -53,6 +54,7 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
+    StandardLoggingRoutingDecision,
     StandardLoggingVectorStoreRequest,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
@@ -2460,16 +2462,6 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "is active as a reminder that hard enforcement is relaxed."
         ),
     )
-    skip_user_budget_on_team_key: bool | None = Field(
-        None,
-        description=(
-            "If True, restores the legacy behavior where a user's personal "
-            "max_budget is NOT enforced when their key belongs to a team; only "
-            "the team (and team-member) budgets apply. Defaults to False, meaning "
-            "the user's personal max_budget is always enforced regardless of "
-            "whether the key belongs to a team (see GitHub issue #12905)."
-        ),
-    )
     user_url_validation: Optional[bool] = Field(
         None,
         description=(
@@ -2782,6 +2774,7 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     updated_at: Optional[datetime] = None
     sso_user_id: Optional[str] = None
     teams: List[str] = []  # Just team IDs, not full team objects
+    object_permission: LiteLLM_ObjectPermissionTable | None = None
 
 
 from litellm.models.config import LiteLLM_Config as LiteLLM_Config  # noqa: E402
@@ -3311,6 +3304,8 @@ class SpendLogsMetadata(TypedDict):
     applied_guardrails: Optional[List[str]]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
+    routing_decision: StandardLoggingRoutingDecision | None
+    internal_call_origin: InternalCallOrigin | None
     guardrail_information: Optional[List[StandardLoggingGuardrailInformation]]
     eval_information: Optional[Any]
     status: StandardLoggingPayloadStatus

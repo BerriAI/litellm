@@ -148,7 +148,9 @@ if MCP_AVAILABLE:
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+        admitted_user_context,
         build_effective_auth_contexts,
+        is_ui_session_credential,
     )
     from litellm.proxy._types import (
         LiteLLM_MCPServerTable,
@@ -459,7 +461,7 @@ if MCP_AVAILABLE:
         payload_dict: dict[str, Any] = loaded
 
         try:
-            return MCPServer(**payload_dict)
+            return MCPServer.model_validate(payload_dict)
         except Exception as e:
             verbose_proxy_logger.debug(f"Invalid temporary MCP server payload in Redis cache: {str(e)}")
             return None
@@ -704,7 +706,7 @@ if MCP_AVAILABLE:
         except AttributeError:
             payload_dict = payload.dict()  # type: ignore[attr-defined]
         payload_dict["credentials"] = inherited_credentials
-        return NewMCPServerRequest(**payload_dict)
+        return NewMCPServerRequest.model_validate(payload_dict)
 
     def _build_temporary_mcp_server_record(
         payload: NewMCPServerRequest,
@@ -939,6 +941,16 @@ if MCP_AVAILABLE:
                 aggregated.setdefault(server.server_id, server)
         return list(aggregated.values())
 
+    async def _connected_app_reachable_server_ids(user_api_key_dict: UserAPIKeyAuth) -> frozenset[str]:
+        """Server ids a connected app authorized by this dashboard user is served on the aggregate
+        MCP endpoint, resolved through the one owner of the admitted subject so the page and the
+        session cannot drift. Empty when that identity cannot be built, which is the true answer:
+        the same user cannot open a gateway session either."""
+        admitted = await admitted_user_context(user_api_key_dict)
+        if admitted is None:
+            return frozenset()
+        return frozenset(await global_mcp_server_manager.get_allowed_mcp_servers(admitted))
+
     @router.get(
         "/server",
         description="Returns the mcp server list with associated teams",
@@ -952,6 +964,12 @@ if MCP_AVAILABLE:
             description="Filter MCP servers by team scope. When provided, returns only "
             "servers the team has access to plus globally available (allow_all_keys) servers. "
             "Used by the Create Key UI to show team-scoped MCP servers.",
+        ),
+        connected_app_view: bool = Query(
+            False,
+            description="Annotate each returned server with connected_app_reachable: whether a "
+            "connected app authorized by the calling user (a gateway OAuth session) is served "
+            "this server on the aggregate MCP endpoint.",
         ),
     ):
         """
@@ -1008,6 +1026,11 @@ if MCP_AVAILABLE:
         else:
             servers = await _resolve_accessible_mcp_servers(user_api_key_dict)
             redacted_mcp_servers = _redact_mcp_credentials_list(servers)
+
+        if connected_app_view is True and is_ui_session_credential(user_api_key_dict):
+            reachable_ids = await _connected_app_reachable_server_ids(user_api_key_dict)
+            for server in redacted_mcp_servers:
+                server.connected_app_reachable = server.server_id in reachable_ids
 
         # augment the mcp servers with public status
         if litellm.public_mcp_servers is not None:

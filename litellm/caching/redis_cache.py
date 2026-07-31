@@ -17,7 +17,8 @@ import json
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
+from contextvars import ContextVar
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, TypeVar, Union, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -168,24 +169,97 @@ class RedisCircuitBreaker:
         self._state = self.CLOSED
 
 
+_RedisCallResult = TypeVar("_RedisCallResult")
+
+
+_swallowed_redis_failures: ContextVar[int] = ContextVar("litellm_swallowed_redis_failures", default=0)
+
+
+@functools.lru_cache(maxsize=1)
+def _redis_health_error_types() -> tuple[type, ...]:
+    """Exception types that mean the Redis backend itself is unhealthy.
+
+    Command and data errors say nothing about connectivity: an INCR against a non-numeric
+    value or an undecodable cached entry is a request problem, and counting those would let
+    a caller trip the shared breaker on demand, dropping rate limiting to per-process
+    counters that spreading traffic across replicas can outrun.
+
+    Imported lazily because this module is reachable from a base ``import litellm`` while
+    redis is not a base dependency.
+    """
+    from redis.exceptions import BusyLoadingError, ClusterDownError
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    return (RedisConnectionError, RedisTimeoutError, BusyLoadingError, ClusterDownError, OSError, asyncio.TimeoutError)
+
+
+def _is_redis_health_failure(exc: BaseException) -> bool:
+    """True when ``exc`` indicates Redis is unreachable rather than the request being bad."""
+    try:
+        return isinstance(exc, _redis_health_error_types())
+    except ImportError:
+        return True
+
+
+def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseException) -> None:
+    """Record a Redis failure that the calling method is about to swallow.
+
+    The marker is a ContextVar rather than a counter on the breaker because breakers are
+    shared by every concurrent caller. A plain shared counter cannot tell "my call failed"
+    from "some other in-flight call failed", so a success overlapping someone else's
+    failure would be discarded and a Redis that is answering would still be evicted.
+    asyncio gives each task its own copy of the context, so this is per-call.
+    """
+    if not _is_redis_health_failure(exc):
+        return
+    breaker.record_failure()
+    _swallowed_redis_failures.set(_swallowed_redis_failures.get() + 1)
+
+
+async def _run_under_circuit_breaker(
+    breaker: RedisCircuitBreaker,
+    name: str,
+    call: Callable[[], Awaitable[_RedisCallResult]],
+) -> _RedisCallResult:
+    """Run one Redis coroutine under a circuit breaker.
+
+    Shared by the method decorator and the Lua script executor so both feed the same
+    health signal. Success is recorded only when nothing failed while ``call`` ran,
+    because several Redis methods catch their own connection errors and return a default.
+    """
+    if breaker.is_open():
+        raise Exception(f"Redis circuit breaker is open — skipping {name}")
+    swallowed_before = _swallowed_redis_failures.get()
+    try:
+        result = await call()
+    except Exception as e:
+        if _is_redis_health_failure(e):
+            breaker.record_failure()
+        raise
+    if _swallowed_redis_failures.get() == swallowed_before:
+        breaker.record_success()
+    return result
+
+
 def _redis_circuit_breaker_guard(method):  # type: ignore
     """
     Decorator for RedisCache async methods.
     Checks the circuit breaker before each call; records success/failure after.
     Does not apply to ping/disconnect/test_connection (health/teardown must always run).
+
+    A returning method is not proof of a healthy Redis: several methods catch their own
+    connection errors and return a default so callers degrade rather than fail. Counting
+    those as successes reset the failure streak on every request, so the breaker could
+    never open and Redis was never taken out of the pool. Success is therefore recorded
+    only when no failure was registered while the method ran.
     """
 
     @functools.wraps(method)
     async def wrapper(self, *args, **kwargs):  # type: ignore
-        if self._circuit_breaker.is_open():
-            raise Exception(f"Redis circuit breaker is open — skipping {method.__name__}")
-        try:
-            result = await method(self, *args, **kwargs)
-            self._circuit_breaker.record_success()
-            return result
-        except Exception:
-            self._circuit_breaker.record_failure()
-            raise
+        return await _run_under_circuit_breaker(
+            self._circuit_breaker, method.__name__, lambda: method(self, *args, **kwargs)
+        )
 
     return wrapper
 
@@ -551,13 +625,16 @@ class RedisCache(BaseCache):
         )
 
         async def run_script(keys: Sequence[str], args: Sequence[Any], client: Any = None) -> Any:
-            executor: Optional[Callable[..., Awaitable[Any]]] = litellm.in_memory_llm_clients_cache.get_cache(
-                key=script_cache_key
-            )
-            if executor is None:
-                executor = self._register_script_for_current_loop(script)
-                litellm.in_memory_llm_clients_cache.set_cache(key=script_cache_key, value=executor)
-            return await executor(keys=keys, args=args, client=client)
+            async def execute() -> object:
+                executor: Optional[Callable[..., Awaitable[Any]]] = litellm.in_memory_llm_clients_cache.get_cache(
+                    key=script_cache_key
+                )
+                if executor is None:
+                    executor = self._register_script_for_current_loop(script)
+                    litellm.in_memory_llm_clients_cache.set_cache(key=script_cache_key, value=executor)
+                return await executor(keys=keys, args=args, client=client)
+
+            return await _run_under_circuit_breaker(self._circuit_breaker, "run_script", execute)
 
         return run_script
 
@@ -674,6 +751,7 @@ class RedisCache(BaseCache):
                 str(e),
                 value,
             )
+            _record_swallowed_redis_failure(self._circuit_breaker, e)
 
     async def _pipeline_helper(
         self,
@@ -758,6 +836,7 @@ class RedisCache(BaseCache):
                 str(e),
                 cache_value,
             )
+            _record_swallowed_redis_failure(self._circuit_breaker, e)
 
     async def _set_cache_sadd_helper(
         self,
@@ -842,6 +921,7 @@ class RedisCache(BaseCache):
                 str(e),
                 value,
             )
+            _record_swallowed_redis_failure(self._circuit_breaker, e)
 
     @_redis_circuit_breaker_guard
     async def batch_cache_write(self, key, value, **kwargs):
@@ -1106,6 +1186,7 @@ class RedisCache(BaseCache):
                 )
             )
             print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {str(e)}")
+            _record_swallowed_redis_failure(self._circuit_breaker, e)
 
     @_redis_circuit_breaker_guard
     async def async_batch_get_cache(
@@ -1177,6 +1258,7 @@ class RedisCache(BaseCache):
                 )
             )
             verbose_logger.error(f"Error occurred in async batch get cache - {str(e)}")
+            _record_swallowed_redis_failure(self._circuit_breaker, e)
             return key_value_dict
 
     def sync_ping(self) -> bool:
@@ -1432,6 +1514,7 @@ class RedisCache(BaseCache):
             return ttl
         except Exception as e:
             verbose_logger.debug(f"Redis TTL Error: {e}")
+            _record_swallowed_redis_failure(self._circuit_breaker, e)
             return None
 
     @_redis_circuit_breaker_guard
