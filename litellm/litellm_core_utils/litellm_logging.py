@@ -19,7 +19,9 @@ from typing import (
     Dict,
     List,
     Literal,
+    Mapping,
     Optional,
+    Sequence,
     Tuple,
     Type,
     Union,
@@ -177,6 +179,7 @@ from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 if TYPE_CHECKING:
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.router import Router
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
@@ -211,7 +214,9 @@ except Exception as e:
     PagerDutyAlerting = CustomLogger  # type: ignore
     EnterpriseCallbackControls = None  # type: ignore
     EnterpriseStandardLoggingPayloadSetupVAR = None
-_in_memory_loggers: List[Any] = []
+_in_memory_loggers: List[CustomLogger] = []  # mutable-ok: module-level registry appended to at runtime
+
+LoggingCallbackType = str | Callable[..., object] | CustomLogger
 
 _STANDARD_LOGGING_METADATA_KEYS: frozenset = frozenset(StandardLoggingMetadata.__annotations__.keys())
 
@@ -348,8 +353,12 @@ class Logging(LiteLLMLoggingBaseClass):
         self.litellm_call_id = litellm_call_id
         self.litellm_trace_id: str = litellm_trace_id if litellm_trace_id else str(uuid.uuid4())
         self.function_id = function_id
-        self.streaming_chunks: List[Any] = []  # for generating complete stream response
-        self.sync_streaming_chunks: List[Any] = []  # for generating complete stream response
+        self.streaming_chunks: List[
+            TextCompletionResponse | ModelResponseStream
+        ] = []  # mutable-ok: accumulates chunks across streaming calls, for generating complete stream response
+        self.sync_streaming_chunks: List[
+            TextCompletionResponse | ModelResponseStream
+        ] = []  # mutable-ok: accumulates chunks across streaming calls, for generating complete stream response
         self.log_raw_request_response = log_raw_request_response
 
         # Initialize dynamic callbacks
@@ -1666,7 +1675,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details[f"has_logged_{event_type}"] = True
         return
 
-    def should_run_callback(self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str) -> bool:
+    def should_run_callback(self, callback: LoggingCallbackType, litellm_params: dict, event_hook: str) -> bool:
         if litellm.global_disable_no_log_param:
             return True
 
@@ -2698,7 +2707,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 self._handle_callback_failure(callback=callback)
                 pass
 
-    def _handle_callback_failure(self, callback: Any):
+    def _handle_callback_failure(self, callback: LoggingCallbackType):
         """
         Handle callback logging failures by incrementing Prometheus metrics.
 
@@ -3130,12 +3139,16 @@ class Logging(LiteLLMLoggingBaseClass):
         _filtered_failure_callbacks = self._remove_internal_litellm_callbacks(_filtered_failure_callbacks)
         return len(_filtered_failure_callbacks) > 0
 
-    def get_combined_callback_list(self, dynamic_success_callbacks: Optional[List], global_callbacks: List) -> List:
+    def get_combined_callback_list(
+        self,
+        dynamic_success_callbacks: Optional[Sequence[LoggingCallbackType]],
+        global_callbacks: Sequence[LoggingCallbackType],
+    ) -> List[LoggingCallbackType]:
         if dynamic_success_callbacks is None:
             return list(global_callbacks)
-        return list(dict.fromkeys(dynamic_success_callbacks + global_callbacks))
+        return list(dict.fromkeys(tuple(dynamic_success_callbacks) + tuple(global_callbacks)))
 
-    def _remove_internal_litellm_callbacks(self, callbacks: List) -> List:
+    def _remove_internal_litellm_callbacks(self, callbacks: Sequence[LoggingCallbackType]) -> List[LoggingCallbackType]:
         """
         Creates a filtered list of callbacks, excluding internal LiteLLM callbacks.
 
@@ -3150,7 +3163,7 @@ class Logging(LiteLLMLoggingBaseClass):
         verbose_logger.debug(f"Filtered callbacks: {filtered}")
         return filtered
 
-    def _get_callback_name(self, cb) -> str:
+    def _get_callback_name(self, cb: LoggingCallbackType) -> str:
         """
         Helper to get the name of a callback function
 
@@ -3162,15 +3175,18 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         if isinstance(cb, str):
             return cb
-        if hasattr(cb, "__name__"):
-            return cb.__name__
-        if hasattr(cb, "__func__"):
-            return cb.__func__.__name__
-        if hasattr(cb, "__class__"):
+        if isinstance(cb, CustomLogger):
             return cb.__class__.__name__
+        name = getattr(cb, "__name__", None)
+        if isinstance(name, str):
+            return name
+        func = getattr(cb, "__func__", None)
+        func_name = getattr(func, "__name__", None)
+        if isinstance(func_name, str):
+            return func_name
         return str(cb)
 
-    def _is_internal_litellm_proxy_callback(self, cb) -> bool:
+    def _is_internal_litellm_proxy_callback(self, cb: LoggingCallbackType) -> bool:
         """Helper to check if a callback is internal"""
         INTERNAL_PREFIXES = [
             "_PROXY",
@@ -3186,18 +3202,20 @@ class Logging(LiteLLMLoggingBaseClass):
         cb_name = self._get_callback_name(cb)
         return any(prefix in cb_name for prefix in INTERNAL_PREFIXES)
 
-    def _remove_internal_custom_logger_callbacks(self, callbacks: List) -> List:
+    def _remove_internal_custom_logger_callbacks(
+        self, callbacks: Sequence[LoggingCallbackType]
+    ) -> List[LoggingCallbackType]:
         """
         Removes internal custom logger callbacks from the list.
         """
-        _new_callbacks = []
-        for _c in callbacks:
-            if isinstance(_c, CustomLogger):
-                continue
-            elif isinstance(_c, str) and _c in litellm._known_custom_logger_compatible_callbacks:
-                continue
-            _new_callbacks.append(_c)
-        return _new_callbacks
+        return [
+            _c
+            for _c in callbacks
+            if not (
+                isinstance(_c, CustomLogger)
+                or (isinstance(_c, str) and _c in litellm._known_custom_logger_compatible_callbacks)
+            )
+        ]
 
     def _get_assembled_streaming_response(
         self,
@@ -3564,7 +3582,7 @@ def set_callbacks(callback_list, function_id=None):
 def _init_custom_logger_compatible_class(
     logging_integration: _custom_logger_compatible_callbacks_literal,
     internal_usage_cache: Optional[DualCache],
-    llm_router: Optional[Any],  # expect litellm.Router, but typing errors due to circular import
+    llm_router: Optional["Router"],
     custom_logger_init_args: Optional[dict] = {},
 ) -> Optional[CustomLogger]:
     """
@@ -3954,7 +3972,7 @@ def _init_custom_logger_compatible_class(
 
             dynamic_rate_limiter_obj = _PROXY_DynamicRateLimitHandler(internal_usage_cache=internal_usage_cache)
 
-            if llm_router is not None and isinstance(llm_router, litellm.Router):
+            if llm_router is not None and isinstance(llm_router, litellm.Router):  # pyright: ignore[reportUnnecessaryIsInstance]  # guards malformed llm_router at runtime
                 dynamic_rate_limiter_obj.update_variables(llm_router=llm_router)
             _in_memory_loggers.append(dynamic_rate_limiter_obj)
             return dynamic_rate_limiter_obj  # type: ignore
@@ -3974,7 +3992,7 @@ def _init_custom_logger_compatible_class(
 
             dynamic_rate_limiter_obj_v3 = _PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=internal_usage_cache)
 
-            if llm_router is not None and isinstance(llm_router, litellm.Router):
+            if llm_router is not None and isinstance(llm_router, litellm.Router):  # pyright: ignore[reportUnnecessaryIsInstance]  # guards malformed llm_router at runtime
                 dynamic_rate_limiter_obj_v3.update_variables(llm_router=llm_router)
             _in_memory_loggers.append(dynamic_rate_limiter_obj_v3)
             return dynamic_rate_limiter_obj_v3  # type: ignore
@@ -4058,7 +4076,7 @@ def _init_custom_logger_compatible_class(
             return _otel_logger  # type: ignore
         elif logging_integration == "pagerduty":
             for callback in _in_memory_loggers:
-                if isinstance(callback, PagerDutyAlerting):
+                if isinstance(callback, PagerDutyAlerting):  # pyright: ignore[reportUnnecessaryIsInstance]  # distinct subclass when enterprise import succeeds
                     return callback
             pagerduty_logger = PagerDutyAlerting(**custom_logger_init_args)
             _in_memory_loggers.append(pagerduty_logger)
@@ -4090,28 +4108,28 @@ def _init_custom_logger_compatible_class(
             return _gcs_pubsub_logger  # type: ignore
         elif logging_integration == "generic_api":
             for callback in _in_memory_loggers:
-                if isinstance(callback, GenericAPILogger):
+                if isinstance(callback, GenericAPILogger):  # pyright: ignore[reportUnnecessaryIsInstance]  # distinct subclass when enterprise import succeeds
                     return callback
             generic_api_logger = GenericAPILogger()
             _in_memory_loggers.append(generic_api_logger)
             return generic_api_logger  # type: ignore
         elif logging_integration == "resend_email":
             for callback in _in_memory_loggers:
-                if isinstance(callback, ResendEmailLogger):
+                if isinstance(callback, ResendEmailLogger):  # pyright: ignore[reportUnnecessaryIsInstance]  # distinct subclass when enterprise import succeeds
                     return callback
             resend_email_logger = ResendEmailLogger()
             _in_memory_loggers.append(resend_email_logger)
             return resend_email_logger  # type: ignore
         elif logging_integration == "sendgrid_email":
             for callback in _in_memory_loggers:
-                if isinstance(callback, SendGridEmailLogger):
+                if isinstance(callback, SendGridEmailLogger):  # pyright: ignore[reportUnnecessaryIsInstance]  # distinct subclass when enterprise import succeeds
                     return callback
             sendgrid_email_logger = SendGridEmailLogger()
             _in_memory_loggers.append(sendgrid_email_logger)
             return sendgrid_email_logger  # type: ignore
         elif logging_integration == "smtp_email":
             for callback in _in_memory_loggers:
-                if isinstance(callback, SMTPEmailLogger):
+                if isinstance(callback, SMTPEmailLogger):  # pyright: ignore[reportUnnecessaryIsInstance]  # distinct subclass when enterprise import succeeds
                     return callback
             smtp_email_logger = SMTPEmailLogger()
             _in_memory_loggers.append(smtp_email_logger)
@@ -4180,7 +4198,7 @@ def _init_custom_logger_compatible_class(
     return None
 
 
-def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Optional[Any]:
+def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: List[CustomLogger]) -> Optional[CustomLogger]:
     """If ``LITELLM_OTEL_V2`` is on, build (or reuse) a single ``OpenTelemetryV2``
     instance configured via the preset for ``callback_name``.
 
@@ -4211,7 +4229,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Op
     return v2_logger
 
 
-def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: list) -> None:
+def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: List[CustomLogger]) -> None:
     """
     Auto-initialize ArizePhoenixLogger when Phoenix env vars are detected.
 
@@ -4418,7 +4436,7 @@ def get_custom_logger_compatible_class(
                     return callback
         elif logging_integration == "pagerduty":
             for callback in _in_memory_loggers:
-                if isinstance(callback, PagerDutyAlerting):
+                if isinstance(callback, PagerDutyAlerting):  # pyright: ignore[reportUnnecessaryIsInstance]  # distinct subclass when enterprise import succeeds
                     return callback
         elif logging_integration == "anthropic_cache_control_hook":
             for callback in _in_memory_loggers:
@@ -4438,19 +4456,19 @@ def get_custom_logger_compatible_class(
                     return callback
         elif logging_integration == "generic_api":
             for callback in _in_memory_loggers:
-                if isinstance(callback, GenericAPILogger):
+                if isinstance(callback, GenericAPILogger):  # pyright: ignore[reportUnnecessaryIsInstance]  # distinct subclass when enterprise import succeeds
                     return callback
         elif logging_integration == "resend_email":
             for callback in _in_memory_loggers:
-                if isinstance(callback, ResendEmailLogger):
+                if isinstance(callback, ResendEmailLogger):  # pyright: ignore[reportUnnecessaryIsInstance]  # distinct subclass when enterprise import succeeds
                     return callback
         elif logging_integration == "sendgrid_email":
             for callback in _in_memory_loggers:
-                if isinstance(callback, SendGridEmailLogger):
+                if isinstance(callback, SendGridEmailLogger):  # pyright: ignore[reportUnnecessaryIsInstance]  # distinct subclass when enterprise import succeeds
                     return callback
         elif logging_integration == "smtp_email":
             for callback in _in_memory_loggers:
-                if isinstance(callback, SMTPEmailLogger):
+                if isinstance(callback, SMTPEmailLogger):  # pyright: ignore[reportUnnecessaryIsInstance]  # distinct subclass when enterprise import succeeds
                     return callback
         elif logging_integration == "newrelic":
             for callback in _in_memory_loggers:
@@ -4787,7 +4805,7 @@ class StandardLoggingPayloadSetup:
         base_model: Optional[str],
         custom_pricing: Optional[bool],
         custom_llm_provider: Optional[str],
-        init_response_obj: Union[Any, BaseModel, dict],
+        init_response_obj: BaseModel | Mapping[str, object] | Sequence[object] | str | None,
         api_base: Optional[str] = None,
     ) -> StandardLoggingModelInformation:
         model_cost_name = _select_model_name_for_cost_calc(
@@ -4822,7 +4840,9 @@ class StandardLoggingPayloadSetup:
 
     @staticmethod
     def get_final_response_obj(
-        response_obj: dict, init_response_obj: Union[Any, BaseModel, dict], kwargs: dict
+        response_obj: dict,
+        init_response_obj: BaseModel | Mapping[str, object] | Sequence[object] | str | None,
+        kwargs: dict,
     ) -> Optional[Union[dict, str, list]]:
         """
         Get final response object after redacting the message input/output from logging
@@ -5219,7 +5239,7 @@ def _get_status_fields(
 
 
 def _extract_response_obj_and_hidden_params(
-    init_response_obj: Union[Any, BaseModel, dict],
+    init_response_obj: BaseModel | Mapping[str, object] | Sequence[object] | str | None,
     original_exception: Optional[Exception],
 ) -> Tuple[dict, Optional[dict]]:
     """Extract response_obj and hidden_params from init_response_obj."""
@@ -5256,7 +5276,7 @@ def _extract_response_obj_and_hidden_params(
 
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
-    init_response_obj: Union[Any, BaseModel, dict],
+    init_response_obj: BaseModel | Mapping[str, object] | Sequence[object] | str | None,
     start_time: dt_object,
     end_time: dt_object,
     logging_obj: Logging,
