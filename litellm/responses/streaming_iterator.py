@@ -571,7 +571,9 @@ class BaseResponsesAPIStreamingIterator:
                 max(self._streamed_output_items, default=-1) + 1,
             )
             if _item is not None and isinstance(_output_index, int):
-                self._streamed_output_items[_output_index] = _item  # mutable-ok: incremental index-keyed accumulation across SSE events; no immutable equivalent
+                self._streamed_output_items[_output_index] = (
+                    _item  # mutable-ok: incremental index-keyed accumulation across SSE events; no immutable equivalent
+                )
 
         elif _chunk_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
             _text = getattr(chunk, "text", None)
@@ -601,12 +603,14 @@ class BaseResponsesAPIStreamingIterator:
                             ]
                             + [_slot]
                         )
-                    self._streamed_text_only_items[_output_index] = BaseLiteLLMOpenAIResponseObject(  # mutable-ok: incremental index-keyed fallback accumulation; no immutable equivalent
-                        type="message",
-                        id=getattr(_existing, "id", _item_id),
-                        role="assistant",
-                        status="completed",
-                        content=_content,
+                    self._streamed_text_only_items[_output_index] = (
+                        BaseLiteLLMOpenAIResponseObject(  # mutable-ok: incremental index-keyed fallback accumulation; no immutable equivalent
+                            type="message",
+                            id=getattr(_existing, "id", _item_id),
+                            role="assistant",
+                            status="completed",
+                            content=_content,
+                        )
                     )
 
     async def _call_post_streaming_deployment_hook(self, chunk):
