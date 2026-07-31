@@ -13,11 +13,15 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from litellm.caching.dual_cache import DualCache
-from litellm.router_strategy.complexity_router.cache_warming.refresher import filter_cache_warmable
+from litellm.router_strategy.complexity_router.cache_warming.refresher import (
+    _unverifiable_keyless_tenancy,
+    filter_cache_warmable,
+)
 from litellm.router_strategy.complexity_router.cache_warming.store import CacheWarmingStore
 from litellm.router_strategy.complexity_router.cache_warming.types import (
     CACHE_WARMING_REPLAY_MARKER_KEY,
     CACHE_WARMING_REPLAY_TAG,
+    CacheWarmingAttribution,
 )
 
 from tests.test_litellm.router_strategy.complexity_router.cache_warming.test_store import FakeRedisCache
@@ -356,14 +360,15 @@ async def test_warmth_is_not_shared_between_two_auto_routers_on_one_redis():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("team_blocked,warmed", [(True, False), (False, True)])
-async def test_a_keyless_proxy_caller_is_authorized_through_its_reconstructed_tenancy(team_blocked, warmed):
-    """A JWT caller has api_key None, so before this it fell through to the unattributed path and every tenant
-    control was skipped. Its tenancy is recorded at capture, so the principal is rebuilt from it and the team
-    gate binds: a blocked team stops the replays, an open team still warms."""
+async def test_a_keyless_callers_captured_tenancy_is_never_replayed_on():
+    """A JWT caller has api_key None and so leaves no row to re-read, which makes the tenancy the proxy
+    stamped at capture the only copy of it: once an admin moves that caller out of the team, no tick can tell,
+    and every later replay still spends that team's budget and rate limits and reaches the models it grants.
+    A virtual key has the fresh row to answer with; this shape has nothing. The team here is open and fully
+    resolvable, so nothing but the skip itself can be what stops the replay."""
     llm_router, redis = warming_rig(redis=FakeRedisCache())
     key_cache = DualCache()
-    await key_cache.async_set_cache(key="team_id:jwt-team", value=team("jwt-team", blocked=team_blocked, models=[]))
+    await key_cache.async_set_cache(key="team_id:jwt-team", value=team("jwt-team", blocked=False, models=[]))
     seed_session(
         redis,
         user_api_key=None,
@@ -373,9 +378,19 @@ async def test_a_keyless_proxy_caller_is_authorized_through_its_reconstructed_te
         touched=_VISITED_BOTH_TIERS,
     )
     await tick(llm_router, active=refresher(keys=FakeKeyDirectory({})), user_api_key_cache=key_cache)
-    assert bool(llm_router.completion_calls) is warmed
-    if warmed:
-        assert llm_router.completion_calls[0]["metadata"]["user_api_key_team_id"] == "jwt-team"
+    assert llm_router.completion_calls == []
+
+
+@pytest.mark.parametrize("field", ["user_id", "team_id", "org_id", "project_id"])
+def test_every_recorded_tenancy_field_makes_a_keyless_record_unverifiable(field):
+    """Each of the four ids selects tenant objects that carry their own budgets, rate limits and model grants,
+    so any one of them going stale is enough to make a replay spend under an association the caller may have
+    lost. A record with no tenancy at all keeps warming unattributed, which is the shape a direct SDK caller
+    has and nothing about it can go stale."""
+    keyless = CacheWarmingAttribution(**{f"user_api_key_{field}": "stale-tenant"})
+    assert _unverifiable_keyless_tenancy(keyless) is True
+    assert _unverifiable_keyless_tenancy(CacheWarmingAttribution()) is False
+    assert _unverifiable_keyless_tenancy(keyless.model_copy(update={"user_api_key": "hash-1"})) is False
 
 
 @pytest.mark.asyncio

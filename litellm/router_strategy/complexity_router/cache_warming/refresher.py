@@ -15,6 +15,7 @@ from litellm.router_strategy.complexity_router.cache_warming.store import CacheW
 from litellm.router_strategy.complexity_router.cache_warming.types import (
     CACHE_WARMING_REPLAY_MARKER_KEY,
     CACHE_WARMING_REPLAY_TAG,
+    CacheWarmingAttribution,
     CacheWarmingPayload,
     CacheWarmingRecord,
     decompress_payload,
@@ -69,11 +70,11 @@ def _replay_principal(key_state: "UserAPIKeyAuth | None", record: CacheWarmingRe
 
     (a) virtual key: key_state was just read authoritatively from the database, so it is already complete
     (b) keyless proxy caller (JWT, and anything else the proxy authenticated without a virtual key, where
-        api_key is None): UserAPIKeyAuth is litellm's principal type for those callers too and the proxy
-        stamped their tenancy, which the record carries, so every recorded identity field is restored below and
-        the team, user, organization and project gates resolve by id exactly as for a virtual key. Dropping any
-        of them is what previously let a JWT caller's replays run against an empty principal and escape every
-        tenant control
+        api_key is None) carrying tenancy: never reaches this function, because _unverifiable_keyless_tenancy
+        skips the session. There is no row to re-read for such a caller, so the tenancy the proxy stamped at
+        capture is the only copy and no tick can tell whether it still holds. The restore below still covers
+        that shape rather than dropping the fields, so that if the skip ever misses a record the replay is
+        over-constrained by a stale tenant instead of escaping every tenant control on an empty principal
     (c) direct SDK use with no proxy auth object: nothing was recorded, so there is no tenancy to preserve and
         the principal is genuinely limitless, which is the same unattributed warming as before
 
@@ -242,6 +243,20 @@ def _stamp_identity(data: "dict[str, object]", principal: "UserAPIKeyAuth") -> N
     )
     LiteLLMProxyRequestSetup.apply_dynamic_logging_settings(
         data=data, user_api_key_dict=principal, proxy_config=proxy_config
+    )
+
+
+def _unverifiable_keyless_tenancy(attribution: CacheWarmingAttribution) -> bool:
+    """A keyless caller (JWT, and anything else the proxy authenticated without a virtual key) leaves no row
+    to re-read, so the tenancy the proxy stamped at capture is the only copy of it and no tick can tell
+    whether the caller still belongs to that team, organization, project or user. Replaying on it would
+    spend that tenant's budget, consume its rate limits and reach the models it grants for as long as the
+    record lives, with nothing able to notice the association was withdrawn. Authority that cannot be
+    resolved at use time is not authority warming may spend under, so those sessions are skipped. A caller
+    with no recorded tenancy at all is untouched: there is nothing to go stale and its replay stays
+    unattributed exactly as before."""
+    return attribution.user_api_key is None and any(
+        getattr(attribution, f"user_api_key_{field}") is not None for field in _RECONSTRUCTED_IDENTITY_FIELDS
     )
 
 
@@ -562,6 +577,15 @@ class CacheWarmingRefresher:
             for key in attributed
             if (row := key_states.get(key)) is None or _excluded_from_warming(row, checked_at, proxy_logging_obj)
         )
+        keyless_sessions = frozenset(
+            key for key, record, _ in active if _unverifiable_keyless_tenancy(record.attribution)
+        )
+        if keyless_sessions:
+            warn_once(
+                "cache_warming: a keyless caller's tenancy is stamped once at capture and has no key row to "
+                "re-read, so it cannot be revalidated when a replay runs; sessions carrying it are skipped "
+                "rather than replayed on a tenant the caller may no longer belong to"
+            )
         semaphore = asyncio.Semaphore(self.max_concurrent_replays)
         outcomes = await asyncio.gather(
             *(
@@ -583,7 +607,7 @@ class CacheWarmingRefresher:
                     lease_lost=lease_lost,
                 )
                 for key, record, touched in active
-                if record.attribution.user_api_key not in excluded_keys
+                if record.attribution.user_api_key not in excluded_keys and key not in keyless_sessions
             ),
             return_exceptions=True,
         )

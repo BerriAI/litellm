@@ -219,6 +219,7 @@ def seed_session(
     team_id: str | None = None,
     user_id: str | None = None,
     org_id: str | None = None,
+    project_id: str | None = None,
     touched: tuple[str, ...] | None = None,
 ) -> str:
     payload = CacheWarmingPayload(
@@ -243,6 +244,7 @@ def seed_session(
             user_api_key_team_id=team_id,
             user_api_key_user_id=user_id,
             user_api_key_org_id=org_id,
+            user_api_key_project_id=project_id,
         ),
         auto_router_model_name="smart-router",
     )
