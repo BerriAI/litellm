@@ -2517,8 +2517,18 @@ async def user_api_key_auth(
     # close, and the trace never reaches the backend.
     _ensure_parent_otel_span_on_request_state(request)
 
-    request_data = await _read_request_body(request=request)
-    request_data = populate_request_with_path_params(request_data=request_data, request=request)
+    # A malformed body is still a request from a known caller: authenticate first
+    # and re-raise the parse failure once identity is resolved, so the rejected
+    # request carries key / team / user on its trace instead of being an
+    # anonymous root span.
+    try:
+        parsed_body = await _read_request_body(request=request)
+    except ProxyException as parse_exception:
+        body_parse_exception: ProxyException | None = parse_exception
+        request_data: dict = {}
+    else:
+        body_parse_exception = None
+        request_data = populate_request_with_path_params(request_data=parsed_body, request=request)
     route: str = get_request_route(request=request)
     ## CHECK IF ROUTE IS ALLOWED
 
@@ -2554,7 +2564,7 @@ async def user_api_key_auth(
                 route=route,
             )
         except Exception as e:
-            return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+            recovered_auth_obj = await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
                 e=e,
                 request=request,
                 request_data=request_data,
@@ -2563,6 +2573,9 @@ async def user_api_key_auth(
                 api_key=api_key,
                 resolved_identity=user_api_key_auth_obj,
             )
+            if body_parse_exception is not None:
+                raise body_parse_exception
+            return recovered_auth_obj
 
         # Defense-in-depth: ``_user_api_key_auth_builder`` has multiple early-return
         # paths (no master key, /user/auth route, JWT short-circuits) that bypass
@@ -2599,6 +2612,9 @@ async def user_api_key_auth(
         model=request_data.get("model") if isinstance(request_data, dict) else None,
     )
     user_api_key_auth_obj.request_route = normalize_request_route(route)
+
+    if body_parse_exception is not None:
+        raise body_parse_exception
 
     # Resolve caller identity once, here at the seam, into a single per-request
     # Principal projected off the key object the builder already fetched (no
