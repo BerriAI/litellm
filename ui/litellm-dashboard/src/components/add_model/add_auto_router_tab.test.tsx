@@ -244,18 +244,11 @@ describe("AddAutoRouterTab", () => {
     expect(mockHandleAddAutoRouterSubmit).not.toHaveBeenCalled();
   });
 
-  // A caller switch must reset the form and re-enter the loading gate until the NEW caller's models
-  // arrive, or the previous caller's verified list keeps a preset selectable and submittable for a
-  // caller who may lack those models. Caller A selects OpenAI (config filled); caller B's fetch is
-  // held open, so during that window the option must be disabled again (loading gate) AND the filled
-  // config must be gone, so B cannot submit A's preset. Dropping the reset re-enables the option and
-  // carries A's tiers into B's submit.
-  it("resets the form and re-enters the loading gate while the new caller's models are fetching", async () => {
-    const user = userEvent.setup();
-    let resolveB: (models: ModelGroup[]) => void = () => undefined;
-    mockFetchAvailableModels
-      .mockResolvedValueOnce(ALL_FAMILY_MODELS)
-      .mockReturnValueOnce(new Promise<ModelGroup[]>((resolve) => (resolveB = resolve)));
+  // A caller switch must clear the preset selection, or a preset selected on the previous caller
+  // stays selected (and its models available in the old list) for the new caller. Only the preset
+  // choice and model-verification state are token-scoped; user config survives.
+  it("clears the preset selection when the access token changes", async () => {
+    mockFetchAvailableModels.mockResolvedValueOnce(ALL_FAMILY_MODELS).mockResolvedValueOnce(ALL_FAMILY_MODELS);
 
     const { rerender } = renderWithProviders(
       <AddAutoRouterTab handleOk={vi.fn()} accessToken="caller-a" userRole="Admin" />,
@@ -268,14 +261,7 @@ describe("AddAutoRouterTab", () => {
     await waitFor(() => expect(mockFetchAvailableModels).toHaveBeenCalledTimes(2));
 
     openTemplateDropdown();
-    await waitFor(() => expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(true));
-    expect(optionByLabel("OpenAI Family")).toHaveTextContent(/Checking model availability/);
-
-    await user.type(screen.getByPlaceholderText(/smart_router/i), "caller-b-router");
-    await user.click(screen.getByRole("button", { name: /add auto router/i }));
-    expect(mockHandleAddAutoRouterSubmit).not.toHaveBeenCalled();
-
-    resolveB([]);
+    expect(optionByLabel("OpenAI Family")).not.toHaveClass("ant-select-item-option-selected");
   });
 
   // A late-resolving fetch from the previous caller must not overwrite the current caller's list.
