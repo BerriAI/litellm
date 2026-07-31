@@ -1,18 +1,15 @@
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { PlusOutlined } from "@ant-design/icons";
-import { Button, Flex, Input, Layout, Space, theme, Typography } from "antd";
-import { SearchIcon } from "lucide-react";
+import { Plus, SearchIcon, X } from "lucide-react";
 import { useMemo, useState } from "react";
+import { PageHeader } from "@/components/shared/PageHeader";
+import { Button } from "@/components/ui/button";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { CreateProjectModal } from "./ProjectModals/CreateProjectModal";
 import { ProjectDetail } from "./ProjectDetailsPage";
 import { ProjectsTable } from "./ProjectsTable";
 
-const { Title, Text } = Typography;
-const { Content } = Layout;
-
 export function ProjectsPage() {
-  const { token } = theme.useToken();
   const { data: projects, isLoading } = useProjects();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
 
@@ -48,29 +45,39 @@ export function ProjectsPage() {
   }
 
   return (
-    <Content style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}>
-      <Flex justify="space-between" align="center" style={{ marginBottom: 16 }}>
-        <Space direction="vertical" size={0}>
-          <Title level={2} style={{ margin: 0 }}>
-            Projects
-          </Title>
-          <Text type="secondary">Manage projects within your teams</Text>
-        </Space>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsCreateModalVisible(true)}>
-          Create Project
-        </Button>
-      </Flex>
-
-      <Flex align="center" style={{ marginBottom: 12 }}>
-        <Input
-          prefix={<SearchIcon size={16} />}
-          placeholder="Search projects by name, ID, description, or team..."
-          style={{ maxWidth: 400 }}
-          value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
-          allowClear
+    <div className="p-6 px-12">
+      <div className="mb-4">
+        <PageHeader
+          title="Projects"
+          subtitle="Manage projects within your teams"
+          actions={
+            <Button onClick={() => setIsCreateModalVisible(true)}>
+              <Plus className="size-4" />
+              Create Project
+            </Button>
+          }
         />
-      </Flex>
+      </div>
+
+      <div className="mb-3 flex items-center">
+        <InputGroup className="max-w-[400px]">
+          <InputGroupAddon>
+            <SearchIcon className="size-4 text-muted-foreground" />
+          </InputGroupAddon>
+          <InputGroupInput
+            placeholder="Search projects by name, ID, description, or team..."
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+          />
+          {searchText && (
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchText("")}>
+                <X />
+              </InputGroupButton>
+            </InputGroupAddon>
+          )}
+        </InputGroup>
+      </div>
 
       <ProjectsTable
         projects={filteredProjects}
@@ -82,6 +89,6 @@ export function ProjectsPage() {
       />
 
       <CreateProjectModal isOpen={isCreateModalVisible} onClose={() => setIsCreateModalVisible(false)} />
-    </Content>
+    </div>
   );
 }

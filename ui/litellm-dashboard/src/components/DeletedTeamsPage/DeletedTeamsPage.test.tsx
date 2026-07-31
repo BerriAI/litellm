@@ -42,6 +42,15 @@ it("should render DeletedTeamsPage component", () => {
   expect(screen.getByText("Test Team")).toBeInTheDocument();
 });
 
+it("should show the enterprise notice for a non-premium user", () => {
+  renderWithProviders(<DeletedTeamsPage />);
+
+  expect(screen.getByText("Coming soon to Enterprise")).toBeInTheDocument();
+  expect(
+    screen.getByText("Deleted team auditing is graduating from beta into our Enterprise audit & compliance suite."),
+  ).toBeInTheDocument();
+});
+
 it("should show skeleton rows while the initial load is pending", () => {
   mockUseDeletedTeams.mockReturnValue({
     data: undefined,
