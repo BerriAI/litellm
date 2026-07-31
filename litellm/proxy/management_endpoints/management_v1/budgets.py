@@ -1,8 +1,9 @@
 """`GET /management/v1/budgets`."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from types import MappingProxyType
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
@@ -112,15 +113,19 @@ def _scope(caller: UserAPIKeyAuth) -> Scope:
 
 # budget_duration is deliberately absent from `sortable`: the column holds strings
 # like "7d" and "30d", so a lexicographic ORDER BY puts "30d" ahead of "7d".
+BUDGET_FILTERS: Mapping[str, FilterSpec] = MappingProxyType(
+    {  # mutable-ok: an immutable mapping has no literal form; MappingProxyType freezes this one and it never escapes
+        "budget_duration": FilterSpec(type=str, ops=frozenset(("in", "is_null"))),
+        "max_budget": FilterSpec(type=float, ops=frozenset(("gte", "lte", "is_null"))),
+        "created_at": FilterSpec(type=datetime, ops=frozenset(("gte", "lte"))),
+    }
+)
+
 BUDGETS_LIST_SPEC: ListSpec[BudgetListItem, BudgetListItem] = ListSpec(
     resource="budgets",
-    sortable=frozenset({"budget_id", "max_budget", "tpm_limit", "rpm_limit", "created_at"}),
-    searchable=frozenset({"budget_id"}),
-    filters={
-        "budget_duration": FilterSpec(type=str, ops=frozenset({"in", "is_null"})),
-        "max_budget": FilterSpec(type=float, ops=frozenset({"gte", "lte", "is_null"})),
-        "created_at": FilterSpec(type=datetime, ops=frozenset({"gte", "lte"})),
-    },
+    sortable=frozenset(("budget_id", "max_budget", "tpm_limit", "rpm_limit", "created_at")),
+    searchable=frozenset(("budget_id",)),
+    filters=BUDGET_FILTERS,
     default_sort=(SortKey(field="created_at", descending=True),),
     default_page_size=50,
     max_page_size=100,
@@ -132,8 +137,8 @@ BUDGETS_LIST_SPEC: ListSpec[BudgetListItem, BudgetListItem] = ListSpec(
 
 @router.get(
     "/budgets",
-    tags=["budget management"],
-    dependencies=[Depends(user_api_key_auth)],
+    tags=("budget management",),
+    dependencies=(Depends(user_api_key_auth),),
     response_model=ListResponse[BudgetListItem],
 )
 async def list_budgets(
