@@ -772,7 +772,7 @@ class PrometheusLogger(CustomLogger):
         """Build label filters from validated configurations"""
         from typing import get_args
 
-        label_filters: Dict[str, List[str]] = {}
+        label_filters: dict[str, list[str]] = {}
 
         wildcard_configs = [c for c in parsed_configs if c.metrics == [PROMETHEUS_METRICS_WILDCARD]]
         named_configs = [c for c in parsed_configs if c.metrics != [PROMETHEUS_METRICS_WILDCARD]]
