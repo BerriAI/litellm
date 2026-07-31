@@ -57,7 +57,10 @@ export function ForgotPasswordForm() {
           )}
 
           <div className="mt-4">
-            <a href={getLoginUrl(getProxyBaseUrl())} className="text-sm text-primary underline-offset-4 hover:underline">
+            <a
+              href={getLoginUrl(getProxyBaseUrl())}
+              className="text-sm text-primary underline-offset-4 hover:underline"
+            >
               Back to Login
             </a>
           </div>

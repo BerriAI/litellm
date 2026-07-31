@@ -53,7 +53,10 @@ export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
               This link is invalid or has expired.
             </div>
             <div className="mt-4">
-              <a href={migratedHref("forgot-password")} className="text-sm text-primary underline-offset-4 hover:underline">
+              <a
+                href={migratedHref("forgot-password")}
+                className="text-sm text-primary underline-offset-4 hover:underline"
+              >
                 Request a new link
               </a>
             </div>
@@ -88,7 +91,10 @@ export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
               Password reset successfully.
             </div>
             <div className="mt-4">
-              <a href={getLoginUrl(getProxyBaseUrl())} className="text-sm text-primary underline-offset-4 hover:underline">
+              <a
+                href={getLoginUrl(getProxyBaseUrl())}
+                className="text-sm text-primary underline-offset-4 hover:underline"
+              >
                 Back to Login
               </a>
             </div>
