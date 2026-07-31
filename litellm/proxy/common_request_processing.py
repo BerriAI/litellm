@@ -258,7 +258,7 @@ def _litellm_model_supports_stream_options(litellm_model: str) -> bool:
     return supported_params is not None and "stream_options" in supported_params
 
 
-def _deployment_litellm_model(deployment: Mapping[str, object]) -> Optional[str]:
+def _deployment_litellm_model(deployment: Mapping[str, object]) -> str | None:
     litellm_params = deployment.get("litellm_params")
     if isinstance(litellm_params, Mapping):
         litellm_model = litellm_params.get("model")
@@ -269,11 +269,12 @@ def _deployment_litellm_model(deployment: Mapping[str, object]) -> Optional[str]
 
 def _model_deployments_support_stream_options(
     model: object,
-    llm_router: Optional[Router],
+    llm_router: Router | None,
+    team_id: str | None,
 ) -> bool:
     if not isinstance(model, str):
         return False
-    deployments = llm_router.get_model_list(model_name=model) if llm_router is not None else None
+    deployments = llm_router.get_model_list(model_name=model, team_id=team_id) if llm_router is not None else None
     deployment_models = tuple(
         litellm_model
         for deployment in deployments or ()
@@ -1309,6 +1310,7 @@ class ProxyBaseLLMRequestProcessing:
                 supports_stream_options=lambda: _model_deployments_support_stream_options(
                     model=self.data.get("model"),
                     llm_router=llm_router,
+                    team_id=user_api_key_dict.team_id,
                 ),
             )
         )
