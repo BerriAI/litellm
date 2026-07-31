@@ -459,3 +459,113 @@ async def test_add_team_callbacks_writes_encrypted_callback_vars(monkeypatch):
     recovered = decrypt_callback_vars(written)["logging"][0]["callback_vars"]
     assert recovered["langfuse_secret_key"] == "sk-lf-real-secret"
     assert recovered["langfuse_public_key"] == "pk-lf-real-public"
+
+
+@pytest.mark.asyncio
+async def test_get_team_callbacks_returns_callbacks_stored_under_logging():
+    """GET must surface callbacks written by POST, which persists them under
+    ``metadata["logging"]`` rather than the deprecated ``callback_settings``."""
+    mock_prisma = _patch_prisma(
+        _team_row(
+            team_id="team-1",
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "langsmith",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "langsmith_api_key": "ls-key",
+                            "langsmith_project": "proj",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        response = await get_team_callbacks(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=_admin_auth(),
+        )
+
+    data = response["data"]
+    assert data["success_callbacks"] == ["langsmith"]
+    assert data["failure_callbacks"] == []
+    assert data["callback_vars"]["langsmith_project"] == "proj"
+
+
+@pytest.mark.asyncio
+async def test_add_then_get_team_callbacks_round_trip(monkeypatch):
+    """End-to-end regression: a callback added via POST must appear in the GET
+    response with decrypted callback_vars, matching what the proxy applies."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
+    mock_prisma = _patch_prisma(_team_row(team_id="team-1", metadata={"logging": []}))
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.proxy_server.master_key", None),
+    ):
+        await add_team_callbacks(
+            data=AddTeamCallback(
+                callback_name="langfuse",
+                callback_type="success",
+                callback_vars={
+                    "langfuse_public_key": "pk-lf-real-public",
+                    "langfuse_secret_key": "sk-lf-real-secret",
+                },
+            ),
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=_admin_auth(),
+            litellm_changed_by=None,
+        )
+
+        written_metadata = json.loads(
+            mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"]
+        )
+        mock_prisma.get_data = AsyncMock(
+            return_value=_team_row(team_id="team-1", metadata=written_metadata)
+        )
+
+        response = await get_team_callbacks(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=_admin_auth(),
+        )
+
+    data = response["data"]
+    assert data["success_callbacks"] == ["langfuse"]
+    assert data["callback_vars"]["langfuse_public_key"] == "pk-lf-real-public"
+    assert data["callback_vars"]["langfuse_secret_key"] == "sk-lf-real-secret"
+
+
+@pytest.mark.asyncio
+async def test_get_team_callbacks_falls_back_to_legacy_callback_settings():
+    """Rows written in the deprecated ``callback_settings`` shape must still be
+    returned so pre-existing teams keep working."""
+    mock_prisma = _patch_prisma(
+        _team_row(
+            team_id="team-1",
+            metadata={
+                "callback_settings": {
+                    "success_callback": ["langfuse"],
+                    "failure_callback": [],
+                    "callback_vars": {"langfuse_public_key": "pk-legacy"},
+                }
+            },
+        )
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        response = await get_team_callbacks(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=_admin_auth(),
+        )
+
+    data = response["data"]
+    assert data["success_callbacks"] == ["langfuse"]
+    assert data["callback_vars"]["langfuse_public_key"] == "pk-legacy"

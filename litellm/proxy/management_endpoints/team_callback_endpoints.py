@@ -9,6 +9,7 @@ import copy
 import json
 import traceback
 from datetime import datetime, timezone
+from functools import reduce
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -27,7 +28,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+from litellm.proxy.common_utils.callback_utils import (
+    decrypt_callback_vars,
+    encrypt_callback_vars,
+)
 from litellm.proxy.management_endpoints.team_endpoints import _verify_team_access
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.repositories.team_repository import TeamRepository
@@ -385,6 +389,48 @@ async def disable_team_logging(
         )
 
 
+def _team_callback_metadata_from_metadata(team_metadata: Any) -> TeamCallbackMetadata:
+    """Build the effective ``TeamCallbackMetadata`` from a team's stored metadata.
+
+    Mirrors the request-time precedence in
+    ``litellm_pre_call_utils._get_dynamic_logging_metadata``: callbacks added via
+    ``POST /team/{team_id}/callback`` live under ``team_metadata["logging"]`` (a
+    list of ``AddTeamCallback`` dicts), while older rows carry a pre-aggregated
+    ``team_metadata["callback_settings"]``. Prefer ``logging`` and fall back to
+    ``callback_settings``, decrypting stored callback_vars first.
+    """
+    from litellm.proxy.litellm_pre_call_utils import (
+        _get_validated_callback_metadata,
+        convert_key_logging_metadata_to_callback,
+    )
+
+    if not isinstance(team_metadata, dict):
+        return TeamCallbackMetadata()
+
+    decrypted_metadata = decrypt_callback_vars(team_metadata)
+
+    logging_entries = decrypted_metadata.get("logging")
+    if isinstance(logging_entries, list) and logging_entries:
+        callbacks = tuple(
+            callback
+            for item in logging_entries
+            if (callback := _get_validated_callback_metadata(item=item, source="team-level")) is not None
+        )
+        if callbacks:
+            return reduce(
+                lambda acc, callback: convert_key_logging_metadata_to_callback(
+                    data=callback, team_callback_settings_obj=acc
+                ),
+                callbacks,
+                TeamCallbackMetadata(),
+            )
+
+    callback_settings = decrypted_metadata.get("callback_settings")
+    if isinstance(callback_settings, dict):
+        return TeamCallbackMetadata(**callback_settings)
+    return TeamCallbackMetadata()
+
+
 @router.get(
     "/team/{team_id:path}/callback",
     tags=["team management"],
@@ -443,11 +489,7 @@ async def get_team_callbacks(
         )
 
         # Retrieve team callback settings from metadata
-        team_metadata = _existing_team.metadata
-        team_callback_settings = team_metadata.get("callback_settings", {})
-
-        # Convert to TeamCallbackMetadata object for consistent structure
-        team_callback_settings_obj = TeamCallbackMetadata(**team_callback_settings)
+        team_callback_settings_obj = _team_callback_metadata_from_metadata(_existing_team.metadata)
 
         return {
             "status": "success",
