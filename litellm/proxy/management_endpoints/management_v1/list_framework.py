@@ -7,6 +7,7 @@ lets a caller assert the plan as a value instead of asserting against a live Pri
 client, and it keeps this module free of any database dependency.
 """
 
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -98,6 +99,21 @@ class ListSpec(Generic[TRow, TOut]):
     serialize: Callable[[TRow], TOut]
     tiebreaker: str
 
+    def __post_init__(self) -> None:
+        """A malformed spec is a programming error at import time, so this raises rather than
+        returning a problem: there is no request in flight and no caller to answer."""
+        if not 1 <= self.default_page_size <= self.max_page_size:
+            raise ValueError(
+                f"{self.resource}: default_page_size must be between 1 and max_page_size "
+                f"({self.max_page_size}), got {self.default_page_size}. A default above the cap "
+                f"would serve more rows than the resource allows whenever page_size is omitted."
+            )
+        if not self.tiebreaker:
+            raise ValueError(f"{self.resource}: tiebreaker is required; it is the final sort key on every query.")
+        undeclared = tuple(sorted({key.field for key in self.default_sort} - self.sortable))
+        if undeclared:
+            raise ValueError(f"{self.resource}: default_sort orders by non-sortable field(s): {', '.join(undeclared)}.")
+
 
 @dataclass(frozen=True, slots=True)
 class QueryPlan:
@@ -121,9 +137,10 @@ def order_by_sql(order: tuple[SortKey, ...]) -> str:
     """`ORDER BY` body for a plan, NULLS LAST in both directions.
 
     Postgres sorts nulls last ascending but first descending, so an unqualified flip of
-    the sort direction drags every "Unlimited" row to the top of the table. Field names
-    come from `ListSpec.sortable`/`tiebreaker` and are validated against it before they
-    reach here, so they are never caller-controlled text.
+    the sort direction drags every "Unlimited" row to the top of the table. Every field
+    reaching here is either a member of `ListSpec.sortable` (caller-supplied sort is
+    checked against it, `default_sort` at construction) or the spec's `tiebreaker`, so
+    these are developer-declared column names, never caller-controlled text.
     """
     return ", ".join(f'"{key.field}" {"DESC" if key.descending else "ASC"} NULLS LAST' for key in order)
 
@@ -372,6 +389,11 @@ def build_query_plan(
     )
 
 
+def _duplicate_params(request: Request) -> tuple[str, ...]:
+    counts = Counter(name for name, _ in request.query_params.multi_items())
+    return tuple(sorted(name for name, count in counts.items() if count > 1))
+
+
 async def handle_list(
     spec: ListSpec[TRow, TOut],
     executor: ListExecutor[TRow],
@@ -382,6 +404,21 @@ async def handle_list(
     plan = build_query_plan(spec=spec, params=request.query_params, caller=caller)
     if isinstance(plan, ProblemDetail):
         raise ManagementProblem(plan)
+
+    # Checked here rather than in build_query_plan because a Mapping[str, str] cannot
+    # represent a repeat: query_params.get() silently keeps the last one, so ?page=1&page=999
+    # would page from 999 without the caller ever being told which value won.
+    duplicates = _duplicate_params(request)
+    if duplicates:
+        raise ManagementProblem(
+            _problem(
+                "duplicate-query-parameter",
+                "Duplicate query parameter",
+                400,
+                f"Repeated query parameter(s): {', '.join(duplicates)}. Each may appear once; "
+                f"use a comma-separated list for multiple sort keys or filter values.",
+            )
+        )
 
     total_count = await executor.count(plan.where)
     rows = await executor.find_many(plan)

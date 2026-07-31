@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 import pytest
@@ -73,6 +73,11 @@ def _spec(
         serialize=_serialize,
         tiebreaker="budget_id",
     )
+
+
+def _spec_with(**overrides) -> ListSpec[BudgetRow, BudgetOut]:
+    """`replace` re-runs `__init__`, so the spec's own validation applies to the override."""
+    return replace(_spec(), **overrides)
 
 
 class RecordingExecutor:
@@ -506,20 +511,8 @@ def test_is_null_rejects_a_non_boolean():
     ids=["float", "int", "datetime", "in-member"],
 )
 def test_a_value_that_does_not_match_the_declared_type_is_rejected(params):
-    spec = _spec()
-    spec_with_int_in = ListSpec(
-        resource=spec.resource,
-        sortable=spec.sortable,
-        searchable=spec.searchable,
-        filters={**spec.filters, "created_by": FilterSpec(type=int, ops=frozenset({"in"}))},
-        default_sort=spec.default_sort,
-        default_page_size=spec.default_page_size,
-        max_page_size=spec.max_page_size,
-        scope=spec.scope,
-        serialize=spec.serialize,
-        tiebreaker=spec.tiebreaker,
-    )
-    target = spec_with_int_in if "filter[created_by][in]" in params else spec
+    numeric_in = _spec_with(filters={**_spec().filters, "created_by": FilterSpec(type=int, ops=frozenset({"in"}))})
+    target = numeric_in if "filter[created_by][in]" in params else _spec()
 
     assert _problem(params, spec=target).status == 400
 
@@ -640,6 +633,108 @@ async def test_a_rejected_request_is_raised_as_a_problem_before_any_query():
 
     assert raised.value.problem.status == 400
     assert executor.count_where is None
+
+
+# ------------------------------------------------------- spec construction
+
+
+def test_a_default_page_size_above_the_cap_is_rejected_at_construction():
+    """The cap is only enforced on a supplied page_size, so a default above it would serve
+    more rows than the resource allows on exactly the request that omits page_size."""
+    with pytest.raises(ValueError, match="default_page_size"):
+        _spec_with(default_page_size=200, max_page_size=100)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"default_page_size": 0}, {"default_page_size": -5}, {"max_page_size": 0}],
+    ids=["zero-default", "negative-default", "zero-cap"],
+)
+def test_a_non_positive_page_size_is_rejected_at_construction(overrides):
+    """take=0 divides by zero when handle_list computes total_pages, so the resource would
+    500 on every request instead of failing when it is registered."""
+    with pytest.raises(ValueError, match="default_page_size"):
+        _spec_with(**overrides)
+
+
+def test_a_default_sort_on_a_non_sortable_field_is_rejected_at_construction():
+    """Caller-supplied sort is validated against `sortable`; default_sort is not read from
+    the request, so without this it reaches order_by_sql and yields invalid SQL."""
+    with pytest.raises(ValueError, match="default_sort"):
+        _spec_with(default_sort=(SortKey(field="not_a_column", descending=True),))
+
+
+def test_an_empty_tiebreaker_is_rejected_at_construction():
+    with pytest.raises(ValueError, match="tiebreaker"):
+        _spec_with(tiebreaker="")
+
+
+def test_a_page_size_equal_to_the_cap_is_a_valid_spec():
+    """Guards the bound against being tightened into an off-by-one that bans max==default."""
+    assert _spec_with(default_page_size=100, max_page_size=100).default_page_size == 100
+
+
+# ------------------------------------------------------ repeated parameters
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_query_parameter_is_rejected():
+    """Starlette keeps the last value, so ?page=1&page=999 would page from 999 with nothing
+    telling the caller which one won. The doc rejects silently-altered params for this reason."""
+    executor = RecordingExecutor(rows=())
+
+    with pytest.raises(ManagementProblem) as raised:
+        await handle_list(spec=_spec(), executor=executor, request=_request("page=1&page=999"), caller=CALLER)
+
+    assert raised.value.problem.status == 400
+    assert raised.value.problem.type == f"{PROBLEM_TYPE_BASE}duplicate-query-parameter"
+    assert "page" in raised.value.problem.detail
+    assert executor.count_where is None
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_filter_parameter_is_rejected():
+    executor = RecordingExecutor(rows=())
+
+    with pytest.raises(ManagementProblem) as raised:
+        await handle_list(
+            spec=_spec(),
+            executor=executor,
+            request=_request("filter[created_by][eq]=alice&filter[created_by][eq]=bob"),
+            caller=CALLER,
+        )
+
+    assert raised.value.problem.type == f"{PROBLEM_TYPE_BASE}duplicate-query-parameter"
+    assert "filter[created_by][eq]" in raised.value.problem.detail
+
+
+@pytest.mark.asyncio
+async def test_distinct_parameters_are_not_treated_as_duplicates():
+    """Guards the check against rejecting two different operators on one field, which is
+    how a range filter is expressed."""
+    executor = RecordingExecutor(rows=(), total_count=0)
+
+    response = await handle_list(
+        spec=_spec(),
+        executor=executor,
+        request=_request("filter[max_budget][gte]=5&filter[max_budget][lte]=50&page=2"),
+        caller=CALLER,
+    )
+
+    assert response.meta.page == 2
+    assert executor.count_where is not None
+
+
+@pytest.mark.asyncio
+async def test_a_denied_scope_outranks_a_duplicate_parameter():
+    """Permission is the stronger statement about the caller, so it is answered first."""
+    spec = _spec(scope=lambda caller: ScopeDenied(reason="nope"))
+    executor = RecordingExecutor(rows=())
+
+    with pytest.raises(ManagementProblem) as raised:
+        await handle_list(spec=spec, executor=executor, request=_request("page=1&page=2"), caller=CALLER)
+
+    assert raised.value.problem.status == 403
 
 
 # --------------------------------------------------- facet-mode regression
