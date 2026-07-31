@@ -4,6 +4,7 @@ Transformation logic for Voyage AI's /v1/rerank endpoint.
 Docs - https://docs.voyageai.com/docs/reranker
 """
 
+from collections.abc import Mapping
 from typing import Any, Dict, List, Tuple, Union
 
 import httpx
@@ -137,6 +138,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Dict:
         if api_key is None:
             api_key = get_secret_str("VOYAGE_API_KEY") or get_secret_str("VOYAGE_AI_API_KEY")

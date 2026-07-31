@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Dict, List, Literal, Union
 
 import httpx
@@ -148,6 +149,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         """
         Validate that the Nvidia NIM API key is present.
