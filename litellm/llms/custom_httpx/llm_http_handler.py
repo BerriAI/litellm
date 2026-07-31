@@ -161,6 +161,7 @@ from .http_handler import get_shared_realtime_ssl_context
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
+    from starlette.websockets import WebSocket
 
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
@@ -6137,7 +6138,7 @@ class BaseLLMHTTPHandler:
     async def async_responses_websocket(
         self,
         model: str,
-        websocket: Any,
+        websocket: "WebSocket",
         logging_obj: LiteLLMLoggingObj,
         responses_api_provider_config: Optional[BaseResponsesAPIConfig],
         api_base: Optional[str] = None,
@@ -6300,7 +6301,10 @@ class BaseLLMHTTPHandler:
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
             verbose_logger.exception(f"Error connecting to responses WS backend: {e}")
-            await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
+            await websocket.close(
+                code=e.status_code if isinstance(e.status_code, int) else 1011,
+                reason=_redact_string(str(e)),
+            )
         except Exception as e:
             verbose_logger.exception(f"Error in responses WS: {e}")
             try:

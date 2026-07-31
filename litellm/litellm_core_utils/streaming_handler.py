@@ -14,8 +14,10 @@ from typing import (
     Dict,
     Iterator,
     List,
+    Mapping,
     NoReturn,
     Optional,
+    Sequence,
     Union,
     cast,
 )
@@ -104,13 +106,13 @@ def _json_loads_object(raw: Union[str, bytes]) -> object:
     return json.loads(raw)  # any-ok: json.loads is the untyped-JSON boundary; callers narrow via _require_*
 
 
-def _require_dict(value: object) -> dict[str, object]:
+def _require_dict(value: object) -> Mapping[str, object]:
     if isinstance(value, dict):
         return value
     raise ValueError(f"Expected a JSON object, got: {value!r}")
 
 
-def _require_list(value: object) -> list[object]:
+def _require_list(value: object) -> Sequence[object]:
     if isinstance(value, list):
         return value
     raise ValueError(f"Expected a JSON array, got: {value!r}")
@@ -697,17 +699,17 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def model_response_creator(self, chunk: Optional[dict[str, object]] = None, hidden_params: Optional[dict] = None):
+    def model_response_creator(
+        self,
+        chunk: Optional[Mapping[str, object]] = None,
+        hidden_params: Optional[Mapping[str, object]] = None,
+    ):
         _model = self._cached_model_name
         _logging_obj_llm_provider = self._cached_logging_llm_provider
 
-        if chunk is None:
-            args: dict[str, object] = {"model": _model}
-        else:
-            chunk.pop("model", None)
-            args = {"model": _model}
-            if chunk:
-                args.update({k: v for k, v in chunk.items() if k != "stream"})
+        args: dict[str, object] = {"model": _model}
+        if chunk:
+            args.update({k: v for k, v in chunk.items() if k not in ("model", "stream")})
 
         model_response = ModelResponseStream.model_validate(args)
         if self.response_id is not None:
