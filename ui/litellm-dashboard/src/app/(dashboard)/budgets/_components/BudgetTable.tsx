@@ -226,6 +226,7 @@ const BudgetTable: React.FC<BudgetTableProps> = ({ list, canModify, onEditClick,
       columns={columns}
       getRowId={(budget, index) => budget.budget_id || String(index)}
       defaultColumnVisibility={BUDGET_TABLE_HIDDEN_COLUMNS}
+      fillHeight
       sortingMode="server"
       sorting={list.sorting}
       onSortingChange={list.onSortingChange}

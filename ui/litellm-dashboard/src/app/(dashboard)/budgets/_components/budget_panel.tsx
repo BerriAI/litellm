@@ -7,6 +7,7 @@ import { Plus, Wallet } from "lucide-react";
 import React, { useCallback, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
@@ -78,31 +79,34 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   };
 
   return (
-    <div className="flex flex-col gap-4 p-6 px-12">
+    <div className="flex h-full flex-col gap-4 p-6 px-12">
       <PageHeader
         icon={<Wallet className="size-5" />}
         title="Budgets"
         subtitle="Spend, TPM and RPM limits you can assign to customers."
       />
-      {canModify && (
-        <div>
-          <Button onClick={() => setIsCreateModelVisible(true)}>
-            <Plus className="size-4" />
-            Create Budget
-          </Button>
+      <Tabs defaultValue="budgets" className="min-h-0 flex-1 gap-0">
+        <div className="flex items-center gap-4 border-b border-border">
+          {canModify && (
+            <>
+              <Button onClick={() => setIsCreateModelVisible(true)}>
+                <Plus className="size-4" />
+                Create Budget
+              </Button>
+              <ToolbarSeparator className="h-6" />
+            </>
+          )}
+          <TabsList variant="line">
+            <TabsTrigger value="budgets" className="flex-none px-4">
+              Budgets
+            </TabsTrigger>
+            <TabsTrigger value="examples" className="flex-none px-4">
+              Examples
+            </TabsTrigger>
+          </TabsList>
         </div>
-      )}
-      <Tabs defaultValue="budgets">
-        <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
-          <TabsTrigger value="budgets" className="flex-none rounded-none px-4 py-2">
-            Budgets
-          </TabsTrigger>
-          <TabsTrigger value="examples" className="flex-none rounded-none px-4 py-2">
-            Examples
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent value="budgets">
-          <div className="mt-6">
+        <TabsContent value="budgets" className="flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col pt-6">
             <BudgetModal isModalVisible={isCreateModelVisible} setIsModalVisible={setIsCreateModelVisible} />
             {selectedBudget && (
               <EditBudgetModal
@@ -134,8 +138,8 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
             />
           </div>
         </TabsContent>
-        <TabsContent value="examples">
-          <div className="mt-6">
+        <TabsContent value="examples" className="min-h-0 flex-1 overflow-y-auto">
+          <div className="pt-6">
             <p className="text-base text-muted-foreground">How to use budget id</p>
             <Tabs defaultValue="assign-budget">
               <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
