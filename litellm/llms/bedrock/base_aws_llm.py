@@ -1416,10 +1416,17 @@ class BaseAWSLLM:
             )
             sigv4.add_auth(request)
 
-            # Add back all original headers (including forwarded ones) after signature calculation
+            # Add back caller headers (including forwarded ones) after signing, but
+            # skip any header bound to the fresh signature. Replaying stale retry
+            # headers (e.g. Authorization, x-amz-date, x-amz-security-token) would
+            # overwrite the fresh signature and make AWS reject the request.
+            signed_header_names = self._signed_header_names(request.headers)
             for header_name, header_value in headers.items():
-                if header_value is not None:
-                    request.headers[header_name] = header_value
+                if header_value is None:
+                    continue
+                if header_name.lower() in signed_header_names:
+                    continue
+                request.headers[header_name] = header_value
 
             if (
                 extra_headers is not None and "Authorization" in extra_headers
@@ -1460,6 +1467,40 @@ class BaseAWSLLM:
                 aws_signature_headers[header_name] = header_value
 
         return aws_signature_headers
+
+    @staticmethod
+    def _signed_header_names(signed_headers: dict) -> set:
+        """
+        Return the set of header names bound to a freshly computed SigV4 signature.
+
+        The names are read from the ``SignedHeaders=`` clause of the fresh
+        ``Authorization`` header. SigV4 binds these header names to the current
+        request body; replaying stale retry/fallback values for them (e.g.
+        ``x-amz-date``, ``x-amz-security-token``) would make AWS verify a
+        different canonical request and reject the signature. ``authorization``
+        and ``host`` are always treated as signed.
+        """
+        signed_header_names = {"authorization", "host"}
+        authorization_header = next(
+            (
+                str(header_value)
+                for header_name, header_value in signed_headers.items()
+                if header_name.lower() == "authorization" and header_value is not None
+            ),
+            "",
+        )
+        for auth_part in authorization_header.split(","):
+            auth_part = auth_part.strip()
+            if auth_part.startswith("SignedHeaders="):
+                signed_header_names.update(
+                    signed_header.strip().lower()
+                    for signed_header in auth_part.removeprefix("SignedHeaders=").split(
+                        ";"
+                    )
+                    if signed_header.strip()
+                )
+                break
+        return signed_header_names
 
     def _sign_request(
         self,
@@ -1549,14 +1590,16 @@ class BaseAWSLLM:
         sigv4.add_auth(request)
 
         request_headers_dict = dict(request.headers)
-        # Add back original headers after signing. Only headers in SignedHeaders
-        # are integrity-protected; forwarded headers (x-forwarded-*) must remain unsigned.
+        # Replay caller headers after signing, but skip any header bound to the
+        # fresh signature. Only headers outside SignedHeaders (e.g. forwarded
+        # x-forwarded-* / custom headers) are safe to replay; replaying stale
+        # retry headers would make AWS verify a different canonical request.
+        signed_header_names = self._signed_header_names(request_headers_dict)
         for header_name, header_value in headers.items():
-            if header_value is not None:
-                request_headers_dict[header_name] = header_value
-        if (
-            headers is not None and "Authorization" in headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request_headers_dict["Authorization"] = headers["Authorization"]
+            if header_value is None:
+                continue
+            if header_name.lower() in signed_header_names:
+                continue
+            request_headers_dict[header_name] = header_value
 
         return request_headers_dict, request.body
