@@ -152,7 +152,6 @@ def _replay_body(
     data[get_metadata_variable_name_from_kwargs(data)] = {  # mutable-ok: request metadata, never retained
         CACHE_WARMING_REPLAY_MARKER_KEY: True,
         **({"session_id": record.session_id} if record.session_id is not None else {}),
-        **({"tags": list(record.tags)} if record.tags else {}),
         "spend_logs_metadata": {CACHE_WARMING_REPLAY_TAG: "true"},  # mutable-ok: request metadata, never retained
     }
     return data
@@ -288,6 +287,32 @@ def _tenancy_no_longer_holds(
         return "unverifiable" if any(value is not None for value in captured) else None
     current = tuple(getattr(key_state, field) for field in _RECONSTRUCTED_IDENTITY_FIELDS)
     return "reassigned" if captured != current else None
+
+
+def _apply_tenant_limits(
+    principal: "UserAPIKeyAuth", user: "LiteLLM_UserTable | None", end_user: "LiteLLM_EndUserTable | None"
+) -> None:
+    """The v3 limiter builds its tenant descriptors from limit fields on the principal, so a field the
+    principal lacks is a ceiling that silently does not apply rather than one that refuses.
+
+    Most of them need nothing here: LiteLLM_VerificationTokenView joins the team and organization onto the
+    key row, so get_key_object already returns team, team-member and organization limits and those descriptors
+    are built on a replay unchanged. User and end-user limits are the two the request path adds during auth
+    from objects it loads, so warming adds them from the objects it loads for the same gates, through the same
+    owner where there is one."""
+    from litellm.proxy.auth.user_api_key_auth import (
+        _apply_budget_limits_to_end_user_params,  # pyright: ignore[reportPrivateUsage]  # the owner of this mapping; no public form exists
+    )
+
+    if user is not None:
+        principal.user_tpm_limit = user.tpm_limit
+        principal.user_rpm_limit = user.rpm_limit
+    budget = getattr(end_user, "litellm_budget_table", None)
+    if budget is not None:
+        end_user_params: dict[str, object] = {}  # mutable-ok: the owner's out-parameter shape
+        _apply_budget_limits_to_end_user_params(end_user_params, budget, principal.end_user_id)
+        for field, value in end_user_params.items():
+            setattr(principal, field, value)
 
 
 def _excluded_from_warming(key_state: "UserAPIKeyAuth", now: "datetime", proxy_logging_obj: "ProxyLogging") -> bool:
@@ -871,6 +896,7 @@ class CacheWarmingRefresher:
         skip_budget_checks = _should_skip_budget_checks(
             request_data=data, route=route, request=None, llm_router=llm_router
         )
+        _apply_tenant_limits(principal, user, end_user)
         await _authorize_replay(
             principal=principal,
             data=data,

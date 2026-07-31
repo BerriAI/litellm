@@ -101,18 +101,6 @@ def _capture_allowed(kwargs: Mapping[str, object]) -> bool:
     return _should_store_prompts_and_responses_in_spend_logs()
 
 
-def _caller_tags(metadata_dicts: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
-    """The caller's own request tags, kept so a replay presents the same body the gates read them from.
-    Tag budgets, tag budget reservation and the limiter's tag descriptors all resolve tags through
-    get_tags_from_request_body, so a replay that drops them is not refused by those ceilings, it is simply
-    invisible to them."""
-    for metadata in metadata_dicts:
-        tags = metadata.get("tags")
-        if isinstance(tags, list):
-            return tuple(tag for tag in tags if isinstance(tag, str))
-    return ()
-
-
 def _is_replay(metadata_dicts: Sequence[Mapping[str, object]]) -> bool:
     for metadata in metadata_dicts:
         if metadata.get(CACHE_WARMING_REPLAY_MARKER_KEY):
@@ -254,7 +242,6 @@ async def capture_session(
     await store.upsert_session(
         caller_scope=caller_scope,
         session_id=session_id,
-        tags=_caller_tags(metadata_dicts),
         payload_compressed=blob,
         payload_sha256=sha,
         token_estimate=token_estimate,

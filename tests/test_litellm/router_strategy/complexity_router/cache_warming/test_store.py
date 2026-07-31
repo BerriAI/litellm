@@ -109,7 +109,6 @@ def _record_json(**overrides: object) -> str:
         token_estimate=2048,
         last_activity=1000.0,
         served_model="sonnet",
-        tags=(),
         attribution=CacheWarmingAttribution(user_api_key="hashed"),
         auto_router_model_name="smart-router",
     ).model_dump()
@@ -128,7 +127,6 @@ async def _upsert(store: CacheWarmingStore, session_id: str = "s1", max_sessions
         payload_sha256="sha2",
         token_estimate=4096,
         served_model="sonnet",
-        tags=(),
         attribution=CacheWarmingAttribution(),
         ttl_seconds=1800,
         max_sessions=max_sessions,

@@ -80,7 +80,6 @@ class CacheWarmingRecord(BaseModel):
     last_activity: float
     served_model: str
     session_id: str | None = None
-    tags: tuple[str, ...] = ()
     attribution: CacheWarmingAttribution
     auto_router_model_name: str
 

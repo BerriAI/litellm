@@ -221,7 +221,6 @@ def seed_session(
     org_id: str | None = None,
     project_id: str | None = None,
     touched: tuple[str, ...] | None = None,
-    tags: tuple[str, ...] = (),
 ) -> str:
     payload = CacheWarmingPayload(
         model=served_model,
@@ -240,7 +239,6 @@ def seed_session(
         last_activity=last_activity if last_activity is not None else time.time(),
         served_model=served_model,
         session_id=session_id,
-        tags=tags,
         attribution=CacheWarmingAttribution(
             user_api_key=user_api_key,
             user_api_key_team_id=team_id,

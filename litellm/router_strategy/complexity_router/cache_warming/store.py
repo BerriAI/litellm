@@ -189,7 +189,6 @@ class CacheWarmingStore:
         payload_sha256: str,
         token_estimate: int,
         served_model: str,
-        tags: tuple[str, ...],
         attribution: CacheWarmingAttribution,
         ttl_seconds: int,
         max_sessions: int,
@@ -207,7 +206,6 @@ class CacheWarmingStore:
             last_activity=now,
             served_model=served_model,
             session_id=session_id,
-            tags=tags,
             attribution=attribution,
             auto_router_model_name=self.auto_router_model_name,
         )

@@ -521,18 +521,42 @@ async def test_a_session_is_dropped_once_its_key_leaves_the_tenant_it_was_captur
 
 
 @pytest.mark.asyncio
-async def test_a_replay_presents_the_callers_own_tags_to_the_gates_that_read_them():
-    """Tag budgets, tag budget reservation and the limiter's tag descriptors all resolve tags through one
-    owner, get_tags_from_request_body, which reads them off the request body. Warming already enters through
-    all three, so a replay that drops the caller's tags is not refused by those ceilings, it is invisible to
-    them, and its spend lands outside the tag it belongs to. The marker stays out of this channel because
-    tags feed deployment selection."""
+async def test_a_replay_carries_the_key_and_team_tags_its_owner_re_derives_and_no_client_tags():
+    """Tags have two owners and warming is neither. Key and team tags are re-derived on every replay by
+    add_key_team_project_metadata, so capturing them would snapshot a value that is recomputed anyway; and
+    re-presenting captured tags as request metadata turns proxy-derived tags into client-supplied ones, which
+    _reject_clientside_metadata_tags_check refuses outright when the operator forbids them. So a replay
+    carries exactly what the owner puts there and nothing warming remembered."""
     from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 
     llm_router, redis = warming_rig(redis=FakeRedisCache())
-    seed_session(redis, tags=("cost-center-7",), touched=_VISITED_BOTH_TIERS)
-    await tick(llm_router)
+    seed_session(redis, user_api_key="k", touched=_VISITED_BOTH_TIERS)
+    keys = FakeKeyDirectory({"k": key_state(token="k", metadata={"tags": ["cost-center-7"]})})
+    await tick(llm_router, active=refresher(keys=keys))
     assert llm_router.completion_calls, "expected a replay"
     for call in llm_router.completion_calls:
         assert get_tags_from_request_body(call) == ["cost-center-7"]
         assert CACHE_WARMING_REPLAY_TAG not in get_tags_from_request_body(call)
+
+
+@pytest.mark.asyncio
+async def test_a_users_own_rate_limit_binds_on_a_replay():
+    """The v3 limiter builds tenant descriptors from limit fields on the principal, so one the principal lacks
+    is a ceiling that silently does not apply. Team, team-member and organization limits ride the key row
+    through LiteLLM_VerificationTokenView, but user limits are added during auth from the user object, so
+    warming adds them from the object it loads for the same gates."""
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    limiter, counters = real_limiter()
+    key_cache = DualCache()
+    llm_router, redis = warming_rig(redis=FakeRedisCache())
+    await key_cache.async_set_cache(
+        key="u", value=LiteLLM_UserTable(user_id="u", max_budget=None, spend=0.0, rpm_limit=1)
+    )
+    await counters.async_set_cache(key="{user:u}:window", value=str(int(time.time())))
+    await counters.async_set_cache(key="{user:u}:requests", value=99)
+    seed_session(redis, user_api_key="k", user_id="u", touched=_VISITED_BOTH_TIERS)
+    keys = FakeKeyDirectory({"k": key_state(token="k", user_id="u")})
+    with registered_callbacks(limiter):
+        await tick(llm_router, active=refresher(keys=keys, limiter=limiter), user_api_key_cache=key_cache)
+    assert llm_router.completion_calls == [], "a user at their RPM limit must not be warmed"
