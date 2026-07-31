@@ -160,13 +160,21 @@ export const getRequestLogsTableColumns = ({
     enableSorting: true,
     meta: { numeric: true },
     cell: ({ row }) => {
-      const ms = row.original.request_duration_ms;
+      const log = row.original;
+      const isMultiCallSession = (log.session_total_count || 1) > 1;
+      const ms =
+        isMultiCallSession && log.session_total_duration_ms != null
+          ? log.session_total_duration_ms
+          : log.request_duration_ms;
       if (ms == null) return <span>-</span>;
       return (
-        <CellTooltip
-          content={`${ms}ms`}
-          trigger={<span className="max-w-[15ch] truncate inline-block">{(ms / 1000).toFixed(2)}</span>}
-        />
+        <div className="flex flex-col items-end">
+          <CellTooltip
+            content={`${ms}ms`}
+            trigger={<span className="max-w-[15ch] truncate inline-block">{(ms / 1000).toFixed(2)}</span>}
+          />
+          {isMultiCallSession && <span className="text-[10px] text-gray-400">session total</span>}
+        </div>
       );
     },
   },
