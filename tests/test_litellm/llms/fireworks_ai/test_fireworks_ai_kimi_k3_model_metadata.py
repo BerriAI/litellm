@@ -8,13 +8,17 @@ from litellm.llms.fireworks_ai.cost_calculator import cost_per_token
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 
-@pytest.mark.parametrize(
-    "model",
-    [
-        "fireworks_ai/accounts/fireworks/models/kimi-k3",
-        "fireworks_ai/kimi-k3",
-    ],
-)
+KIMI_K3_MODELS = [
+    "fireworks_ai/accounts/fireworks/models/kimi-k3",
+    "fireworks_ai/kimi-k3",
+]
+KIMI_K3_FAST_MODELS = [
+    "fireworks_ai/accounts/fireworks/models/kimi-k3-fast",
+    "fireworks_ai/kimi-k3-fast",
+]
+
+
+@pytest.mark.parametrize("model", KIMI_K3_MODELS)
 def test_kimi_k3_model_info(model):
     json_path = Path(__file__).parents[4] / "model_prices_and_context_window.json"
     with open(json_path) as f:
@@ -40,6 +44,32 @@ def test_kimi_k3_model_info(model):
     assert info["supports_response_schema"] is True
 
 
+@pytest.mark.parametrize("model", KIMI_K3_FAST_MODELS)
+def test_kimi_k3_fast_model_info(model):
+    json_path = Path(__file__).parents[4] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    info = model_cost.get(model)
+    assert info is not None, f"{model} not found in model_prices_and_context_window.json"
+
+    assert info["litellm_provider"] == "fireworks_ai"
+    assert info["mode"] == "chat"
+
+    assert info["input_cost_per_token"] == 4.5e-06
+    assert info["output_cost_per_token"] == 2.25e-05
+    assert info["cache_read_input_token_cost"] == 4.5e-07
+
+    assert info["max_input_tokens"] == 1040000
+    assert info["max_output_tokens"] == 1040000
+    assert info["max_tokens"] == 1040000
+
+    assert info["supports_function_calling"] is True
+    assert info["supports_vision"] is True
+    assert info["supports_tool_choice"] is True
+    assert info["supports_response_schema"] is True
+
+
 def test_kimi_k3_backup_matches_main():
     repo_root = Path(__file__).parents[4]
     main_path = repo_root / "model_prices_and_context_window.json"
@@ -50,10 +80,7 @@ def test_kimi_k3_backup_matches_main():
     with open(backup_path) as f:
         backup_cost = json.load(f)
 
-    for model in (
-        "fireworks_ai/accounts/fireworks/models/kimi-k3",
-        "fireworks_ai/kimi-k3",
-    ):
+    for model in (*KIMI_K3_MODELS, *KIMI_K3_FAST_MODELS):
         assert backup_cost.get(model) == main_cost.get(model), (
             f"{model} differs between main and backup model cost maps"
         )
