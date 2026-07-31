@@ -143,7 +143,7 @@ async def test_build_effective_auth_contexts_appends_admitted_user_context(monke
 
     contexts = await build_effective_auth_contexts(user_auth)
 
-    assert contexts[-1] is admitted_auth
+    assert contexts[-1].user_id == "user-42" and contexts[-1].team_id is None
     assert [ctx.team_id for ctx in contexts[:-1]] == ["team-one"]
     reload_mock.assert_awaited_once_with("user-42")
 
@@ -197,7 +197,7 @@ async def test_acting_user_auth_returns_admitted_subject_for_non_admin_sessions(
 
     result = await acting_user_auth(user_auth)
 
-    assert result is admitted_auth
+    assert result.user_id == "user-42" and result.team_id is None
     reload_mock.assert_awaited_once_with("user-42")
 
 
@@ -231,3 +231,30 @@ async def test_acting_user_auth_falls_back_to_session_auth_on_reload_failure(mon
     )
 
     assert await acting_user_auth(user_auth) is user_auth
+
+
+@pytest.mark.asyncio
+async def test_admitted_user_context_carries_the_request_span(monkeypatch):
+    """Swapping the principal must not drop the request: the admitted subject is rebuilt from the
+    user row and carries no span of its own, so every consumer would otherwise lose trace linkage
+    for the resolution and logging it drives."""
+    from litellm.proxy._experimental.mcp_server.ui_session_utils import acting_user_auth
+
+    class DummySpan:
+        def __init__(self) -> None:
+            self._lock = threading.RLock()
+
+    parent_span = DummySpan()
+    user_auth = UserAPIKeyAuth(
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        user_id="user-42",
+        user_role="internal_user",
+        parent_otel_span=parent_span,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+        AsyncMock(return_value=UserAPIKeyAuth(user_id="user-42")),
+    )
+
+    assert (await acting_user_auth(user_auth)).parent_otel_span is parent_span
+    assert (await build_effective_auth_contexts(user_auth))[-1].parent_otel_span is parent_span

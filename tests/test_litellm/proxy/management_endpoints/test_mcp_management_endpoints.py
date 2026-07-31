@@ -6234,12 +6234,12 @@ class TestConnectedAppViewAnnotation:
         flagged reachable: the REAL build_effective_auth_contexts appends the admitted-user
         context, so the page and every action endpoint resolve it identically."""
         caller_auth = self._ui_session_auth(user_role=LitellmUserRoles.INTERNAL_USER)
-        admitted_auth = UserAPIKeyAuth(user_id="test_user_id")
+        admitted_auth = UserAPIKeyAuth(user_id="test_user_id", org_id="admitted-org")
         listed_row = generate_mock_mcp_server_db_record(server_id="server-1", alias="TeamGranted")
         user_granted_row = generate_mock_mcp_server_db_record(server_id="server-2", alias="UserGranted")
 
         async def per_context_servers(user_api_key_auth=None):
-            if user_api_key_auth is admitted_auth:
+            if user_api_key_auth is not None and user_api_key_auth.org_id == "admitted-org":
                 return [listed_row, user_granted_row]
             return [listed_row]
 

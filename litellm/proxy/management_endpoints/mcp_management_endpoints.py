@@ -148,6 +148,7 @@ if MCP_AVAILABLE:
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+        admitted_user_context,
         build_effective_auth_contexts,
         is_ui_session_credential,
     )
@@ -940,21 +941,15 @@ if MCP_AVAILABLE:
                 aggregated.setdefault(server.server_id, server)
         return list(aggregated.values())
 
-    async def _connected_app_reachable_server_ids(user_id: str | None) -> frozenset[str]:
-        if not user_id:
+    async def _connected_app_reachable_server_ids(user_api_key_dict: UserAPIKeyAuth) -> frozenset[str]:
+        """Server ids a connected app authorized by this dashboard user is served on the aggregate
+        MCP endpoint, resolved through the one owner of the admitted subject so the page and the
+        session cannot drift. Empty when that identity cannot be built, which is the true answer:
+        the same user cannot open a gateway session either."""
+        admitted = await admitted_user_context(user_api_key_dict)
+        if admitted is None:
             return frozenset()
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-            MCPRequestHandler,
-        )
-
-        try:
-            admitted = await MCPRequestHandler._reload_admitted_user(user_id)
-            return frozenset(await global_mcp_server_manager.get_allowed_mcp_servers(admitted))
-        except HTTPException as e:
-            verbose_proxy_logger.warning(
-                f"connected_app_view: marking every MCP server unreachable; admitted-subject reload failed: {e.detail}"
-            )
-            return frozenset()
+        return frozenset(await global_mcp_server_manager.get_allowed_mcp_servers(admitted))
 
     @router.get(
         "/server",
@@ -1033,7 +1028,7 @@ if MCP_AVAILABLE:
             redacted_mcp_servers = _redact_mcp_credentials_list(servers)
 
         if connected_app_view is True and is_ui_session_credential(user_api_key_dict):
-            reachable_ids = await _connected_app_reachable_server_ids(user_api_key_dict.user_id)
+            reachable_ids = await _connected_app_reachable_server_ids(user_api_key_dict)
             for server in redacted_mcp_servers:
                 server.connected_app_reachable = server.server_id in reachable_ids
 

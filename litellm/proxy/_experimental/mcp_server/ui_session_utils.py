@@ -1,4 +1,4 @@
-"""Helpers to resolve real team contexts for UI session tokens."""
+"""Helpers to resolve the identity a dashboard UI session token acts as."""
 
 from __future__ import annotations
 
@@ -77,22 +77,25 @@ async def resolve_ui_session_team_ids(
     return resolved_team_ids
 
 
-async def _admitted_user_context(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKeyAuth | None:
-    """The user-identity context for a dashboard session: the same admitted-subject auth a
-    gateway OAuth session for this user resolves with, carrying the user row's own object
-    permission. None for any other credential (a caller-passed key is never widened) and on
-    reload failure (falls back to team contexts only)."""
+async def admitted_user_context(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKeyAuth | None:
+    """THE owner of "resolve this dashboard session's user identity": the same admitted-subject auth a
+    gateway OAuth session for this user resolves with, carrying the user row's own object permission,
+    on this request's tracing span. None for any other credential (a caller-passed key is never
+    widened) and on reload failure, which every caller reads as "no user-level identity available"."""
 
-    if not is_ui_session_credential(user_api_key_auth) or user_api_key_auth.user_id is None:
+    user_id = user_api_key_auth.user_id
+    if not is_ui_session_credential(user_api_key_auth) or user_id is None:
         return None
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
 
     try:
-        return await MCPRequestHandler._reload_admitted_user(user_api_key_auth.user_id)
-    except HTTPException:
+        admitted = await MCPRequestHandler._reload_admitted_user(user_id)
+    except HTTPException as e:
+        verbose_logger.warning(f"MCP dashboard session: admitted-subject reload failed for {user_id}: {e.detail}")
         return None
+    return admitted.model_copy(update={"parent_otel_span": user_api_key_auth.parent_otel_span})
 
 
 async def acting_user_auth(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKeyAuth:
@@ -100,7 +103,12 @@ async def acting_user_auth(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKeyAuth:
     session acts as the admitted subject, the same identity a gateway session resolves with, so
     server reachability, per-source tool ceilings, rate limits, and billing bind identically on
     both surfaces. An admin session keeps its operator view and any caller-passed credential is
-    returned unchanged, never widened."""
+    returned unchanged, never widened.
+
+    Do not combine this with a narrowing that rewrites a single credential's ``object_permission``
+    (toolset scope): the admitted subject resolves per grant source and a team source deliberately
+    carries none of the caller's own grants, so the narrowing would silently evaporate on every
+    team-granted server. A request carrying such a scope keeps the caller's own credential."""
 
     if not is_ui_session_credential(user_api_key_auth):
         return user_api_key_auth
@@ -108,14 +116,16 @@ async def acting_user_auth(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKeyAuth:
 
     if _user_has_admin_view(user_api_key_auth):
         return user_api_key_auth
-    admitted = await _admitted_user_context(user_api_key_auth)
+    admitted = await admitted_user_context(user_api_key_auth)
     return admitted if admitted is not None else user_api_key_auth
 
 
 async def build_effective_auth_contexts(
     user_api_key_auth: UserAPIKeyAuth,
 ) -> List[UserAPIKeyAuth]:
-    """Return auth contexts that reflect the actual teams for UI session tokens."""
+    """Every auth context a management or listing surface must resolve a UI session token through:
+    one per real team backing the session, plus the session user's own admitted identity, so a grant
+    made directly to the user row is as visible to the dashboard as it is to a gateway session."""
 
     resolved_team_ids = await resolve_ui_session_team_ids(user_api_key_auth)
     team_contexts = (
@@ -123,7 +133,7 @@ async def build_effective_auth_contexts(
         if resolved_team_ids
         else [user_api_key_auth]
     )
-    admitted_context = await _admitted_user_context(user_api_key_auth)
+    admitted_context = await admitted_user_context(user_api_key_auth)
     if admitted_context is None:
         return team_contexts
     return [*team_contexts, admitted_context]
