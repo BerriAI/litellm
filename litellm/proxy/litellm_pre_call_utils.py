@@ -13,7 +13,11 @@ from starlette.datastructures import Headers
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
-from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS, PRE_CALL_EXECUTED_GUARDRAILS_KEY
+from litellm.constants import (
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    LITELLM_PROXY_MASTER_KEY_ALIAS,
+    PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+)
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     iter_client_callback_metadata_dicts,
@@ -199,6 +203,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS = (
     "applied_policies",
     "policy_sources",
     "routing_decision",
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
     "standard_logging_object",
     "proxy_server_request",
     "secret_fields",
