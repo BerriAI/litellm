@@ -48,6 +48,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.content_text import (
+    assistant_text_from_response,
     content_to_text,
     is_all_text_parts,
     merge_rewritten_text_parts,
@@ -391,47 +392,6 @@ def _is_anthropic_messages_response(response: object) -> bool:
     return isinstance(get_attribute_or_key(response, "content", None), list)
 
 
-def _assistant_text_from_response(response: object) -> str | None:
-    """The assistant's natural-language text from a model response, across chat,
-    Anthropic, and Responses shapes. Preserved when the turn is rebuilt for the
-    retrieval follow-up so the model's reasoning is not lost."""
-    choices = get_attribute_or_key(response, "choices", None)
-    if isinstance(choices, list) and choices:
-        message = get_attribute_or_key(choices[0], "message", None)
-        if message is not None:
-            text = content_to_text(get_attribute_or_key(message, "content", None))
-            if text:
-                return text
-    content = get_attribute_or_key(response, "content", None)
-    if isinstance(content, list):
-        parts = [
-            text
-            for block in content
-            if get_attribute_or_key(block, "type", None) == "text"
-            for text in (get_attribute_or_key(block, "text", None),)
-            if isinstance(text, str) and text
-        ]
-        if parts:
-            return "".join(parts)
-    output = get_attribute_or_key(response, "output", None)
-    if isinstance(output, list):
-        parts = []
-        for item in output:
-            if get_attribute_or_key(item, "type", None) != "message":
-                continue
-            item_content = get_attribute_or_key(item, "content", None)
-            if not isinstance(item_content, list):
-                continue
-            for chunk in item_content:
-                if get_attribute_or_key(chunk, "type", None) == "output_text":
-                    text = get_attribute_or_key(chunk, "text", None)
-                    if isinstance(text, str) and text:
-                        parts.append(text)
-        if parts:
-            return "".join(parts)
-    return None
-
-
 def _build_assistant_message_from_response(
     response: object,
     retrieved: list[tuple[dict[str, object], str]],
@@ -446,7 +406,7 @@ def _build_assistant_message_from_response(
     """
     return {
         "role": "assistant",
-        "content": _assistant_text_from_response(response),
+        "content": assistant_text_from_response(response),
         "tool_calls": [
             {
                 "id": tool_call.get("id"),
@@ -470,7 +430,7 @@ def _build_anthropic_followup_messages(
     assistant text is preserved; non-retrieve tool calls are re-planned by the
     follow-up (see _build_assistant_message_from_response)."""
     assistant_content: list[dict[str, object]] = []
-    text = _assistant_text_from_response(response)
+    text = assistant_text_from_response(response)
     if text:
         assistant_content.append({"type": "text", "text": text})
     assistant_content.extend(
@@ -501,7 +461,7 @@ def _build_responses_followup_items(
     with a function_call_output keyed by the same call_id. The assistant text is
     preserved; non-retrieve tool calls are re-planned by the follow-up."""
     items: list[dict[str, object]] = []
-    text = _assistant_text_from_response(response)
+    text = assistant_text_from_response(response)
     if text:
         items.append({"role": "assistant", "content": text})
     for tool_call, content in retrieved:
