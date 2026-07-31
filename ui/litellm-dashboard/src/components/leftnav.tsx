@@ -53,6 +53,7 @@ import {
   Settings as SettingsIcon,
   Shield,
   ShieldCheck,
+  Shrink,
   Tags,
   Terminal,
   User,
@@ -152,6 +153,13 @@ const menuGroups: MenuGroup[] = [
       { key: "mcp-servers", page: "mcp-servers", label: "MCP Servers", icon: <Server {...ICON} /> },
       { key: "skills", page: "skills", label: "Skills", icon: <Blocks {...ICON} />, roles: all_admin_roles },
       { key: "guardrails", page: "guardrails", label: "Guardrails", icon: <Shield {...ICON} /> },
+      {
+        key: "compression",
+        page: "compression",
+        label: "Compression",
+        icon: <Shrink {...ICON} />,
+        roles: all_admin_roles,
+      },
       {
         key: "policies",
         page: "policies",

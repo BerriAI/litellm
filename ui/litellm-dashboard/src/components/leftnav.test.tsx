@@ -106,6 +106,7 @@ describe("Sidebar (leftnav)", () => {
       "Agentic",
       "MCP Servers",
       "Guardrails",
+      "Compression",
       "Policies",
       "Tools",
       "Usage",
@@ -284,6 +285,10 @@ describe("getBreadcrumb", () => {
   it("resolves a top-level page to its section + title", () => {
     expect(getBreadcrumb("api-keys")).toEqual({ section: "AI Gateway", title: "Virtual Keys" });
     expect(getBreadcrumb("logs")).toEqual({ section: "Observability", title: "Logs" });
+  });
+
+  it("resolves compression as a top-level AI Gateway page", () => {
+    expect(getBreadcrumb("compression")).toEqual({ section: "AI Gateway", title: "Compression" });
   });
 
   it("resolves a nested child page to its parent section", () => {

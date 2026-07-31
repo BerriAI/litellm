@@ -5,7 +5,6 @@ import { PiggyBank } from "lucide-react";
 import { Alert, Tabs } from "antd";
 
 import UsageTab from "./UsageTab";
-import PromptCompressionTab from "./PromptCompressionTab";
 import PromptCachingTab from "./PromptCachingTab";
 import { useDailyActivityRange } from "./useDailyActivityRange";
 
@@ -25,11 +24,6 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
       children: <UsageTab accessToken={accessToken} activity={activity} />,
     },
     {
-      key: "compression",
-      label: "Prompt Compression",
-      children: <PromptCompressionTab accessToken={accessToken} />,
-    },
-    {
       key: "caching",
       label: "Prompt Caching",
       children: <PromptCachingTab accessToken={accessToken} activity={activity} />,
@@ -44,8 +38,8 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
           <h1 className="text-xl font-semibold text-foreground">Cost Optimization</h1>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers
-          live under Models + Endpoints, on the Auto-Routers tab
+          Track what the money-saving mechanisms are actually saving you. Prompt compression is configured under AI
+          Gateway, on the Compression page; auto routers live under Models + Endpoints, on the Auto-Routers tab
         </p>
       </div>
 
