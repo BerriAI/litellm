@@ -15,6 +15,7 @@ raw-SQL executor with every caller-supplied value bound to a placeholder.
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import partial, reduce
 from math import ceil
 from typing import Generic, Literal, Protocol, TypeVar
 
@@ -213,12 +214,23 @@ def _sql_operator(op: ComparisonOp) -> str:
             assert_never(op)
 
 
+def _placeholder(index: int, value: FilterValue) -> str:
+    """`$n`, cast when the bind is a datetime.
+
+    Binds cross into the query engine as JSON, so a datetime arrives as text and
+    Postgres refuses `timestamp >= text` outright. Prisma stores DateTime as a naive
+    `TIMESTAMP(3)` holding UTC, so the bind is read as an instant and then dropped to
+    naive UTC to match the column, the same cast `/spend/logs/ui` applies.
+    """
+    return f"${index}::timestamptz AT TIME ZONE 'UTC'" if isinstance(value, datetime) else f"${index}"
+
+
 def _render(predicate: Predicate, index: int) -> tuple[str, tuple[object, ...]]:
     match predicate:
         case IsNull(field=field, negated=negated):
             return f'"{field}" IS {"NOT NULL" if negated else "NULL"}', ()
         case Within(field=field, values=values):
-            placeholders = ", ".join(f"${index + offset}" for offset in range(len(values)))
+            placeholders = ", ".join(_placeholder(index + offset, value) for offset, value in enumerate(values))
             return f'"{field}" IN ({placeholders})', values
         case AnyOf(clauses=clauses):
             rendered, params = _render_all(clauses, index)
@@ -226,17 +238,31 @@ def _render(predicate: Predicate, index: int) -> tuple[str, tuple[object, ...]]:
         case Compare(field=field, op="contains", value=value):
             return f"\"{field}\" ILIKE ${index} ESCAPE '\\'", (f"%{escape_like(str(value))}%",)
         case Compare(field=field, op=op, value=value):
-            return f'"{field}" {_sql_operator(op)} ${index}', (value,)
+            return f'"{field}" {_sql_operator(op)} {_placeholder(index, value)}', (value,)
         case _:
             assert_never(predicate)
 
 
+def _render_one(
+    rendered: tuple[tuple[str, ...], tuple[object, ...]],
+    predicate: Predicate,
+    first_index: int,
+) -> tuple[tuple[str, ...], tuple[object, ...]]:
+    """Append one predicate, numbering it after the binds already consumed."""
+    clauses, params = rendered
+    clause, clause_params = _render(predicate, first_index + len(params))
+    return (*clauses, clause), (*params, *clause_params)
+
+
 def _render_all(predicates: tuple[Predicate, ...], index: int) -> tuple[tuple[str, ...], tuple[object, ...]]:
-    if not predicates:
-        return (), ()
-    head, head_params = _render(predicates[0], index)
-    tail, tail_params = _render_all(predicates[1:], index + len(head_params))
-    return (head, *tail), head_params + tail_params
+    """Render every predicate, numbering placeholders continuously across them.
+
+    Folded rather than self-recursive: walking a predicate list is a running index, and
+    recursing per predicate grew the stack with the filter count for nothing. `_render`
+    still re-enters here for `AnyOf`, whose clauses are plain `Compare`s from `?q=`, so
+    that nesting is one level deep and cannot be driven deeper by a caller.
+    """
+    return reduce(partial(_render_one, first_index=index), predicates, ((), ()))
 
 
 def where_sql(where: tuple[Predicate, ...], first_index: int = 1) -> tuple[str, tuple[object, ...]]:
