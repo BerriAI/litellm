@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from pydantic import SecretStr
 from typing_extensions import assert_never
 
+from litellm.proxy._experimental.mcp_server.oauth_utils import resolve_upstream_resource
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
     AuthorizationCodeConfig,
@@ -144,6 +145,7 @@ def _client_credentials_spec(server: MCPServer, resource: str) -> ServerSpec:
             token_url=server.token_url,
             scopes=tuple(server.scopes or ()),
             audience=server.audience,
+            upstream_resource=resolve_upstream_resource(server),
             token_endpoint_auth_method=server.token_endpoint_auth_method,
         ),
     )

@@ -949,4 +949,89 @@ describe("ModelInfoView", () => {
     expect(screen.queryByAltText("zzz-internal logo")).not.toBeInTheDocument();
     expect(screen.getByText("z")).toBeInTheDocument();
   });
+
+  // EditAutoRouterModal only speaks complexity and semantic. Offering it for an adaptive or
+  // quality router lets a save write auto_router_config onto a row that stores its settings
+  // elsewhere. These rows stay reachable from Health Status and direct ?model= links even
+  // though the Models table now excludes auto-routers, so the button itself has to be gated.
+  describe("Edit Auto Router affordance", () => {
+    const withRouter = (litellmParams: Record<string, unknown>) => {
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [{ ...defaultModelData, litellm_params: { ...litellmParams } }] },
+        isLoading: false,
+        error: null,
+      });
+    };
+
+    it.each([
+      ["auto_router/adaptive_router", "adaptive"],
+      ["auto_router/quality_router", "quality"],
+    ])("is absent for a %s router", async (model) => {
+      withRouter({ model });
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      expect(await screen.findByText("GPT-4")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /edit auto router/i })).not.toBeInTheDocument();
+    });
+
+    it("is present for a complexity router, which the modal does understand", async () => {
+      withRouter({ model: "auto_router/complexity_router", complexity_router_config: { tiers: {} } });
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      expect(await screen.findByRole("button", { name: /edit auto router/i })).toBeInTheDocument();
+    });
+  });
+
+  // An auto router has no upstream credential, so the credential actions are meaningless for
+  // every strategy, and the destructive action should name what it actually removes.
+  describe("auto-router header actions", () => {
+    const withParams = (litellmParams: Record<string, unknown>) => {
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [{ ...defaultModelData, litellm_params: { ...litellmParams } }] },
+        isLoading: false,
+        error: null,
+      });
+    };
+
+    it.each([
+      ["auto_router/complexity_router"],
+      ["auto_router/adaptive_router"],
+      ["auto_router/quality_router"],
+      ["auto_router/my-semantic"],
+    ])("hides the credential actions and renames delete for %s", async (model) => {
+      withParams({ model });
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      expect(await screen.findByTestId("delete-model-button")).toHaveTextContent("Delete Auto-Router");
+      expect(screen.queryByTestId("update-api-key-button")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("reuse-credentials-button")).not.toBeInTheDocument();
+    });
+
+    it("keeps both credential actions and the Delete Model label for an ordinary model", async () => {
+      withParams({ model: "gpt-4", api_base: "https://api.openai.com/v1" });
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      expect(await screen.findByTestId("delete-model-button")).toHaveTextContent("Delete Model");
+      expect(screen.getByTestId("update-api-key-button")).toBeInTheDocument();
+      expect(screen.getByTestId("reuse-credentials-button")).toBeInTheDocument();
+    });
+
+    it.each([["auto_router/adaptive_router"], ["auto_router/quality_router"]])(
+      "offers no Test Connection for %s, whose targets it cannot build",
+      async (model) => {
+        withParams({ model });
+        render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+        await screen.findByTestId("delete-model-button");
+        expect(screen.queryByTestId("test-connection-button")).not.toBeInTheDocument();
+      },
+    );
+
+    it("keeps Test Connection for a complexity router", async () => {
+      withParams({ model: "auto_router/complexity_router", complexity_router_config: { tiers: {} } });
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      expect(await screen.findByTestId("test-connection-button")).toBeInTheDocument();
+    });
+  });
 });

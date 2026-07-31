@@ -123,7 +123,8 @@ class VertexAIBatchTransformation:
         Gets the output file id from the Vertex AI Batch response
         """
 
-        output_file_id: str = response.get("outputInfo", OutputInfo()).get("gcsOutputDirectory", "")
+        output_info = response.get("outputInfo") or OutputInfo()
+        output_file_id: str = output_info.get("gcsOutputDirectory", "")
         if output_file_id:
             output_file_id = output_file_id.rstrip("/") + "/predictions.jsonl"
         if output_file_id and output_file_id != "/predictions.jsonl":

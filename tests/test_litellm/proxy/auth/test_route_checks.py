@@ -1960,6 +1960,7 @@ ADMIN_VIEWER_SETTINGS_ROUTES = [
     "/config/field/info",
     # Budgets page
     "/budget/list",
+    "/management/v1/budgets",
     "/budget/settings",
     # Invitation viewing (admin viewer cannot create/delete; can read)
     "/invitation/info",

@@ -2,7 +2,7 @@ import { Form } from "antd";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "../../../../../../tests/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import BaseSSOSettingsForm, { renderProviderFields } from "./BaseSSOSettingsForm";
+import BaseSSOSettingsForm, { renderProviderFields, ssoProviderConfigs } from "./BaseSSOSettingsForm";
 
 describe("BaseSSOSettingsForm", () => {
   afterEach(() => {
@@ -285,13 +285,70 @@ describe("renderProviderFields", () => {
   it("should return fields for okta provider", () => {
     const result = renderProviderFields("okta");
     expect(result).not.toBeNull();
-    expect(result?.length).toBe(5);
+    expect(result?.length).toBe(6);
   });
 
   it("should return fields for generic provider", () => {
     const result = renderProviderFields("generic");
     expect(result).not.toBeNull();
-    expect(result?.length).toBe(5);
+    expect(result?.length).toBe(6);
+  });
+
+  it.each(["okta", "generic"])(
+    "renders an optional generic_scope field for %s so editing cannot clear it",
+    (provider) => {
+      const scopeField = ssoProviderConfigs[provider].fields.find((field) => field.name === "generic_scope");
+      expect(scopeField).toBeDefined();
+      expect(scopeField?.required).toBe(false);
+      expect(ssoProviderConfigs[provider].envVarMap.generic_scope).toBe("GENERIC_SCOPE");
+    },
+  );
+
+  it("submits generic_scope untouched, so saving an unrelated edit cannot clear GENERIC_SCOPE", async () => {
+    // update_sso_settings clears the env var for any mapped field its payload
+    // omits, and antd only submits mounted fields. So the Scopes field being
+    // present is what stops an unrelated edit from downgrading a custom scope
+    // to the provider default. Dropping the field from ssoProviderConfigs must
+    // fail here rather than silently in production.
+    const handleSubmit = vi.fn();
+    let form: any;
+    const TestWrapper = () => {
+      const [formInstance] = Form.useForm();
+      form = formInstance;
+      return <BaseSSOSettingsForm form={formInstance} onFormSubmit={handleSubmit} />;
+    };
+
+    renderWithProviders(<TestWrapper />);
+
+    // Mirror EditSSOSettingsModal hydrating the form from the GET response.
+    await act(async () => {
+      form.setFieldsValue({
+        sso_provider: "generic",
+        generic_client_id: "client-id",
+        generic_client_secret: "client-secret",
+        generic_authorization_endpoint: "https://idp.example.com/authorize",
+        generic_token_endpoint: "https://idp.example.com/token",
+        generic_userinfo_endpoint: "https://idp.example.com/userinfo",
+        generic_scope: "openid email profile groups",
+        proxy_base_url: "https://gateway.example.com",
+        user_email: "admin@example.com",
+      });
+    });
+
+    // The admin edits something else entirely and saves.
+    await act(async () => {
+      form.setFieldsValue({ generic_token_endpoint: "https://idp.example.com/token/v2" });
+      form.submit();
+    });
+
+    await waitFor(() => {
+      expect(handleSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          generic_token_endpoint: "https://idp.example.com/token/v2",
+          generic_scope: "openid email profile groups",
+        }),
+      );
+    });
   });
 
   it("renders provider logos in the dropdown and falls back to a letter avatar on load error", async () => {
