@@ -44,13 +44,15 @@ export class ApiError extends Error {
  * Lives here because error parsing is the client's job; networking.tsx re-exports
  * it so existing `@/components/networking` import paths keep working.
  */
+const deriveDetailMessage = (detail: any): string | undefined => {
+  if (Array.isArray(detail)) return detail.map((d: any) => d?.msg || JSON.stringify(d)).join("; ");
+  if (typeof detail === "string") return detail;
+  if (typeof detail?.error === "string") return detail.error;
+  return undefined;
+};
+
 export const deriveErrorMessage = (errorData: any): string => {
-  const detail = errorData?.detail;
-  const detailStr = Array.isArray(detail)
-    ? detail.map((d: any) => d?.msg || JSON.stringify(d)).join("; ")
-    : typeof detail === "string"
-      ? detail
-      : undefined;
+  const detailStr = deriveDetailMessage(errorData?.detail);
   return (
     (errorData?.error &&
       (errorData.error.message || (typeof errorData.error === "string" ? errorData.error : undefined))) ||

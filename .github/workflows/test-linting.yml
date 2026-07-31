@@ -104,6 +104,7 @@ jobs:
       - name: Check basedpyright budget (delta vs base)
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          NODE_OPTIONS: --max-old-space-size=12288
         run: |
           (uv run --no-sync basedpyright --outputjson || true) | uv run --no-sync python scripts/type_check_gate.py --base "$BASE_SHA"
 
