@@ -317,6 +317,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
         aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
         aws_external_id = optional_params.pop("aws_external_id", None)
+        aws_session_tags = optional_params.pop("aws_session_tags", None)
         optional_params.pop("aws_region_name", None)
 
         litellm_params["aws_region_name"] = aws_region_name  # [DO NOT DELETE] important for async calls
@@ -332,6 +333,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
             aws_external_id=aws_external_id,
+            aws_session_tags=aws_session_tags,
         )
 
         ### SET RUNTIME ENDPOINT ###
