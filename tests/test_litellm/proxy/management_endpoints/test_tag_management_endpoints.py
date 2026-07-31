@@ -2,7 +2,8 @@ import inspect
 import json
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from collections.abc import Sequence
+from typing import Optional
 
 import pytest
 from fastapi import HTTPException
@@ -13,7 +14,7 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -33,11 +34,11 @@ class FakeVerificationTokenTable:
     surfaces as an HTTP 500.
     """
 
-    def __init__(self, records: List[Any]):
-        self._records = records
-        self.calls: List[Dict[str, Any]] = []
+    def __init__(self, records: Sequence[Mock]):
+        self._records = tuple(records)
+        self.calls: list[dict[str, object]] = []
 
-    async def find_many(self, **kwargs: Any) -> List[Any]:
+    async def find_many(self, **kwargs: object) -> tuple[Mock, ...]:
         inspect.signature(LiteLLM_VerificationTokenActions.find_many).bind(
             self, **kwargs
         )
