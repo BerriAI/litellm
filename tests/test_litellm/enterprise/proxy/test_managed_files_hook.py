@@ -443,3 +443,46 @@ async def test_store_unified_file_id_is_idempotent_via_upsert():
         assert upsert_data["create"]["unified_file_id"] == file_id
         assert json.loads(upsert_data["create"]["model_mappings"]) == model_mappings
         assert json.loads(upsert_data["update"]["model_mappings"]) == model_mappings
+
+
+def _make_managed_file_row(unified_file_id: str, file_object: object):
+    row = MagicMock()
+    row.unified_file_id = unified_file_id
+    row.file_object = file_object
+    return row
+
+
+@pytest.mark.asyncio
+async def test_get_user_created_file_ids_skips_rows_without_file_object():
+    """Regression test for GET /v1/files 500'ing with "argument after ** must be a mapping,
+    not NoneType": the batch cost poller registers a completed batch's output/error file ids
+    with file_object=None, so a single such row must not take down the whole listing."""
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _PROXY_LiteLLMManagedFiles,
+    )
+
+    valid_json_row = _make_managed_file_row(
+        "litellm_proxy_unified_id_json", _make_file_object("file-json").model_dump_json()
+    )
+    valid_dict_row = _make_managed_file_row(
+        "litellm_proxy_unified_id_dict", _make_file_object("file-dict").model_dump()
+    )
+    null_row = _make_managed_file_row("litellm_proxy_unified_output_id_null", None)
+    garbage_row = _make_managed_file_row("litellm_proxy_unified_id_garbage", "not-json")
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_managedfiletable.find_many = AsyncMock(
+        return_value=[valid_json_row, null_row, valid_dict_row, garbage_row]
+    )
+
+    managed_files = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=MagicMock(),
+        prisma_client=mock_prisma,
+    )
+
+    result = await managed_files.get_user_created_file_ids(
+        user_api_key_dict=_make_user_api_key_dict(),
+        model_object_ids=["file-json", "file-dict"],
+    )
+
+    assert [file_object.id for file_object in result] == ["file-json", "file-dict"]

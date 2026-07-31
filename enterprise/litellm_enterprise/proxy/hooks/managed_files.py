@@ -73,6 +73,24 @@ else:
     PrismaClient = Any
 
 
+def _parse_managed_file_object(
+    raw_file_object: object, unified_file_id: str
+) -> Optional[OpenAIFileObject]:
+    if not raw_file_object:
+        return None
+    try:
+        return (
+            OpenAIFileObject.model_validate_json(raw_file_object)
+            if isinstance(raw_file_object, str)
+            else OpenAIFileObject.model_validate(raw_file_object)
+        )
+    except Exception as e:
+        verbose_logger.warning(
+            f"Failed to parse managed file object {unified_file_id}: {e}"
+        )
+        return None
+
+
 class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     # Class variables or attributes
     def __init__(
@@ -382,7 +400,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "flat_model_file_ids": {"hasSome": model_object_ids},
             }
         )
-        return [OpenAIFileObject(**file_object.file_object) for file_object in file_ids]
+        return [
+            parsed_file_object
+            for row in file_ids
+            if (
+                parsed_file_object := _parse_managed_file_object(
+                    row.file_object, row.unified_file_id
+                )
+            )
+            is not None
+        ]
 
     async def check_managed_file_id_access(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth
