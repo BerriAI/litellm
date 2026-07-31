@@ -56,9 +56,12 @@ def to_otel_span_kind(kind: LiteLLMSpanKind) -> SpanKind:
     return _SPAN_KIND_BY_ROLE_KIND[kind]
 
 
-# Custom exporter factories keyed by ``ExporterSpec.kind``. A preset registers one when its
-# destination needs construction logic the built-in kinds can't express (e.g. an exporter that
-# fetches an auth token lazily on first export). Keeps this module vendor-agnostic.
+# Custom exporter factories keyed by ``ExporterSpec.kind``. A preset registers
+# one here when its destination needs construction logic the built-in kinds
+# can't express — e.g. an exporter that fetches an auth token lazily on its
+# first export (off the event loop) instead of blocking at config-build time.
+# Keeping the registry here lets this module stay vendor-agnostic: the factory
+# lives with the integration that needs it.
 _EXPORTER_FACTORIES: dict[str, Callable[[ExporterSpec], SpanExporter]] = {}
 
 
@@ -99,12 +102,16 @@ class LiteLLMBaggageSpanProcessor(SpanProcessor):
 def _otlp_traces_endpoint(endpoint: str | None) -> str | None:
     """Point an OTLP/HTTP base endpoint at the ``/v1/traces`` signal path.
 
-    An explicitly passed endpoint is used verbatim (unlike ``OTEL_EXPORTER_OTLP_ENDPOINT``), so a
-    base URL would POST to the root and 404; append the signal path here, leaving a correct path intact.
+    ``OTEL_EXPORTER_OTLP_ENDPOINT`` is a base URL (e.g. ``http://host:4318``).
+    The OTLP/HTTP exporter only appends the ``/v1/traces`` path when it reads
+    that env var itself; when an endpoint is passed explicitly it is used
+    verbatim, so a base URL would POST to the root and the collector returns
+    404. Append the signal path here (leaving an already-correct path intact).
     """
     if not endpoint:
         return endpoint
     endpoint = endpoint.rstrip("/")
+    # Splunk Observability uses ``/v2/trace/otlp``; never rewrite it.
     if endpoint.endswith("/v1/traces") or "/v2/trace/otlp" in endpoint or endpoint.endswith("/api/trace"):
         return endpoint
     for other_signal in ("/v1/logs", "/v1/metrics"):
@@ -123,10 +130,8 @@ def default_otlp_kind_for_backend(callback_name: "str | None") -> str:
 
 def destination_resource_attrs(destination: "OtelDestination") -> Mapping[str, str]:
     """The destination's builder-declared Resource attributes (e.g. Arize's
-    ``model_id`` / ``arize.project.name``; empty for header-routed backends).
-
-    Both export paths to a destination -- the fan-out processor and the per-tenant
-    clone provider -- read these so the gen-AI span and its parents share one Resource.
+    ``model_id`` / ``arize.project.name``; empty for header-routed backends), read
+    by both export paths so the gen-AI span and its parents share one Resource.
     """
     return dict(destination.resource_attributes)
 
@@ -198,8 +203,10 @@ def build_span_exporter(config: OpenTelemetryV2Config) -> SpanExporter:
 def _otlp_metrics_endpoint(endpoint: str | None) -> str | None:
     """Point an OTLP/HTTP base endpoint at the ``/v1/metrics`` signal path.
 
-    Mirrors ``_otlp_traces_endpoint`` for the metrics signal (an explicitly passed endpoint is
-    used verbatim, so a base URL would POST to the root).
+    The OTLP/HTTP exporter only appends ``/v1/metrics`` when it reads
+    ``OTEL_EXPORTER_OTLP_ENDPOINT`` itself; an explicitly passed endpoint is used
+    verbatim, so a base URL would POST to the root. Mirror ``_otlp_traces_endpoint``
+    for the metrics signal (rewriting a sibling signal path when present).
     """
     if not endpoint:
         return endpoint
@@ -265,8 +272,10 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
 def _otlp_logs_endpoint(endpoint: str | None) -> str | None:
     """Point an OTLP/HTTP base endpoint at the ``/v1/logs`` signal path.
 
-    Mirrors ``_otlp_traces_endpoint`` for the logs signal (an explicitly passed endpoint is used
-    verbatim, so a base URL would POST to the root).
+    The OTLP/HTTP exporter only appends ``/v1/logs`` when it reads
+    ``OTEL_EXPORTER_OTLP_ENDPOINT`` itself; an explicitly passed endpoint is used
+    verbatim, so a base URL would POST to the root. Mirror ``_otlp_traces_endpoint``
+    for the logs signal (rewriting a sibling signal path when present).
     """
     if not endpoint:
         return endpoint
@@ -282,8 +291,10 @@ def _otlp_logs_endpoint(endpoint: str | None) -> str | None:
 def build_log_exporter(config: OpenTelemetryV2Config) -> LogExporter:
     """Build a log exporter mirroring the exporter selection of the other signals.
 
-    ``console`` (and any unrecognized kind) to the console; ``otlp_http``/``otlp_grpc`` over OTLP;
-    ``in_memory`` buffers for tests. Events ride the single-destination shorthand fields, not ``exporters``.
+    ``console`` (and any unrecognized kind) exports to the console; ``otlp_http``
+    and ``otlp_grpc`` export over OTLP with the configured endpoint/headers;
+    ``in_memory`` buffers for tests. Like GenAI metrics, events ride the
+    single-destination shorthand fields, not the multi-exporter ``exporters`` list.
     """
     kind = (config.exporter or "console").lower()
     if kind in ("in_memory", "inmemory", "memory"):
@@ -318,8 +329,11 @@ def build_logger_provider(
 ) -> SDKLoggerProvider:
     """Build the :class:`LoggerProvider` GenAI events export through.
 
-    ``log_exporter`` is an explicit override (tests); otherwise selected from the config via
-    :func:`build_log_exporter`. Console/in-memory get a Simple processor, everything else Batch.
+    ``log_exporter`` is an explicit override (tests inject an
+    ``InMemoryLogExporter``); otherwise the exporter is selected from the config's
+    exporter kind via :func:`build_log_exporter`. Console and in-memory exporters
+    get a Simple processor (synchronous export, which tests rely on), everything
+    else a Batch processor — the same split as span processing.
     """
     exporter = log_exporter if log_exporter is not None else build_log_exporter(config)
     provider = SDKLoggerProvider(resource=build_resource(config))
@@ -334,12 +348,14 @@ def resolve_logger_provider(
     config: OpenTelemetryV2Config,
     logger_provider: SDKLoggerProvider | None = None,
 ) -> SDKLoggerProvider | None:
-    """Resolve the :class:`LoggerProvider` GenAI events record through, or ``None`` when the
-    operator opted out of the logs signal.
+    """Resolve the :class:`LoggerProvider` GenAI events record through, or ``None``
+    when the operator has opted out of the logs signal.
 
-    An injected provider wins (DI/tests); an operator-configured SDK global is reused; an explicit
-    ``NoOpLoggerProvider`` is an opt-out (``None``). Only the default placeholder global makes V2
-    build and publish one from the config.
+    Same resolution order as :func:`resolve_meter_provider`: an injected provider
+    wins (DI/tests); an operator-configured SDK global is reused so events ride
+    their pipeline; an explicit ``NoOpLoggerProvider`` global is an opt-out and
+    yields ``None``, so no event is ever built. Only the default placeholder
+    global makes V2 build a provider from the config and publish it as the global.
     """
     if logger_provider is not None:
         return logger_provider
@@ -379,10 +395,14 @@ def resolve_meter_provider(
 ) -> MeterProvider:
     """Resolve the :class:`MeterProvider` GenAI metrics record through.
 
-    An injected provider wins (DI/tests); otherwise reuse the operator's configured global (a real
-    SDK provider or an explicit ``NoOpMeterProvider`` opt-out). Only the default proxy placeholder
-    makes V2 build and publish one from the config; the built provider is returned so its reader
-    thread stays live.
+    An injected provider wins (DI/tests). Otherwise reuse whatever the operator has
+    configured as the global, whether a real SDK provider or an explicit
+    ``NoOpMeterProvider``, so the GenAI histograms ride the operator's
+    readers/exporters and an explicit opt-out is honored. Only when the global is
+    still the default proxy placeholder does V2 build one from the config and
+    publish it as the global, mirroring how V2 owns trace export. The built
+    provider is the one returned, so its reader thread is always live, never
+    orphaned.
     """
     if meter_provider is not None:
         return meter_provider
@@ -416,13 +436,10 @@ def build_tracer_provider(
     tenant_fan_out_owner: str | None = None,
     attach_tenant_fan_out: bool = False,
 ) -> TracerProvider:
-    """Build the shared :class:`TracerProvider`: the Baggage processor first, then one
-    ``SpanProcessor`` per ``config.exporters`` entry (``exporter`` overrides with a test exporter).
-
-    ``attach_tenant_fan_out``/``tenant_fan_out_owner`` add a ``TenantFanOutSpanProcessor`` that
-    forwards proxy-internal spans to the request's destinations. The main v2 provider always opts
-    in (so the server span reaches the destination and its gen-AI child isn't orphaned); per-tenant
-    clone providers pass neither.
+    """Build the shared :class:`TracerProvider`: Baggage processor first, then one
+    ``SpanProcessor`` per ``config.exporters`` entry (``exporter`` overrides for tests).
+    ``attach_tenant_fan_out``/``tenant_fan_out_owner`` add a ``TenantFanOutSpanProcessor``
+    forwarding proxy-internal spans to the request's destinations.
     """
     provider = TracerProvider(resource=build_resource(config))
     if baggage_processor is None:

@@ -1,23 +1,7 @@
 """Per-request multi-tenant tracer routing and span fan-out.
 
-``TenantTracerCache`` routes the gen-AI LLM-call span, building per-tenant clone
-``TracerProvider``s that export to the request's admin-owned destinations plus the
-configured/global exporter. ``TenantFanOutSpanProcessor`` (at the bottom) forwards the
-proxy-internal spans (server, auth, DB, cost) to every destination. The destinations both
-read from a server-only contextvar, so a caller can neither redirect a trace nor spawn
-providers through them.
-
-Separately, ``genai_tracers_for`` also routes the gen-AI span by the request's
-``standard_callback_dynamic_params`` (team/key OTLP credentials), restoring the per-request
-credential routing that predates the admin-destination refactor: it rewrites only the owned
-exporter's headers, bounded by the same LRU. Those params are partly caller-influenced, so
-this path can spawn a per-request provider; closing that for request-body-supplied credentials
-(vs admin-configured team ``callback_vars``) is tracked separately.
-
-The gen-AI path (``tracers_for``) groups destinations by their backend-required Resource
-attributes and builds one provider per group, because a span carries exactly one Resource and
-a backend like Arize selects its project FROM it, so two Arize projects each get a correctly
-tagged span instead of a last-wins merge. Empty destinations -> the logger's default (global only).
+``TenantTracerCache`` routes the gen-AI span to per-tenant/destination providers;
+``TenantFanOutSpanProcessor`` forwards proxy-internal spans to every admin-resolved destination.
 """
 
 import threading
@@ -42,18 +26,23 @@ from litellm.integrations.otel.presets import dynamic_otlp_headers
 if TYPE_CHECKING:
     from litellm.types.utils import StandardCallbackDynamicParams
 
+# Exporter kinds that ignore headers — never rewritten with dynamic credentials.
 _NON_OTLP_KINDS = ("console", "in_memory", "inmemory", "memory")
 
+# Cap on distinct credential-scoped providers held at once. ``dynamic_params``
+# can be populated from request metadata, so an unbounded cache lets a caller
+# spawn one ``TracerProvider`` (plus its ``BatchSpanProcessor`` background
+# thread) per unique credential set and exhaust the proxy. The LRU bound keeps
+# the working set of active tenants resident while flushing and shutting down
+# evicted providers so their threads are reclaimed.
 _MAX_CACHED_PROVIDERS = 256
 
 
 def _shutdown_in_background(evicted: "TracerProvider | SpanProcessor") -> None:
     """Reclaim an evicted provider/processor's ``BatchSpanProcessor`` worker thread.
 
-    Dropping it from the cache without ``shutdown`` leaves that daemon thread running for
-    the life of the process (it does not "drain on its own"). ``shutdown`` force-flushes
-    and can do network I/O, so it runs fire-and-forget on a daemon thread rather than on
-    the request path; the evicted object is otherwise unreferenced.
+    Dropping it without ``shutdown`` leaks the daemon thread; ``shutdown`` force-flushes and can
+    do network I/O, so it runs fire-and-forget on a daemon thread rather than the request path.
     """
 
     def _run() -> None:
@@ -98,14 +87,9 @@ class TenantTracerCache:
     ) -> "tuple[Tracer, ...]":
         """The tracers for this request's gen-AI span, one per distinct Resource group.
 
-        A backend like Arize selects its project from the Resource, so destinations are grouped
-        by ``destination_resource_attrs`` and the caller emits the span once per tracer. The
-        configured/global exporters ride the FIRST group only, so the global receives the span
-        once. Empty ``destinations`` -> the logger's default tracer (deny).
-
-        ``include_base_on_first`` is set to ``False`` by ``genai_tracers_for`` when a
-        credential-scoped tracer already carries the configured/global exporters, so the
-        destination groups don't also export the span to the global collector a second time.
+        Destinations are grouped by ``destination_resource_attrs`` (a backend like Arize selects its
+        project from the Resource); the configured/global exporters ride the first group only, and
+        ``include_base_on_first=False`` drops them when a credential-scoped tracer already carries them.
         """
         if not destinations:
             return (default,)
@@ -120,15 +104,9 @@ class TenantTracerCache:
         destinations: "tuple[OtelDestination, ...]",
         dynamic_params: "StandardCallbackDynamicParams | None",
     ) -> "tuple[Tracer, ...]":
-        """The gen-AI span's tracers, layering per-request credential routing over the
-        admin-destination fan-out.
-
-        When the request carries this backend's team/key OTLP credentials
-        (``standard_callback_dynamic_params``), the global export rides a credential-scoped
-        provider (the configured exporters with this backend's own exporter rewritten to those
-        credentials), and the admin-destination groups omit the base exporters so the span
-        reaches the global collector exactly once. Without dynamic credentials this is the plain
-        destination fan-out (empty destinations -> the default tracer).
+        """The gen-AI span's tracers, layering per-request credential routing over the destination
+        fan-out: with this backend's team/key OTLP credentials the global export rides a
+        credential-scoped provider and the destination groups omit the base exporters; else plain fan-out.
         """
         headers = dynamic_otlp_headers(self._callback_name, dynamic_params)
         if not headers:
@@ -161,12 +139,14 @@ class TenantTracerCache:
         return get_tracer(provider, self._tracer_name)
 
     def _config_with_headers(self, headers: "dict[str, str]") -> OpenTelemetryV2Config:
-        """Clone the config, stamping ``headers`` onto this backend's own exporter only.
+        """Clone the config, stamping ``headers`` onto the credential's own exporter.
 
-        ``headers`` are the per-request credentials of ``self._callback_name``, so they apply
-        only to the exporter that integration contributed (``spec.owner``). A request carrying
-        one tenant's Arize key must never rewrite a co-configured Langfuse or self-hosted
-        collector exporter, which would leak that key to a different backend.
+        ``headers`` are the per-request credentials of ``self._callback_name`` (the
+        integration that built this cache), so they apply only to the exporter that
+        integration contributed (``spec.owner``). A request that carries one
+        tenant's Arize key must never rewrite the headers of a co-configured
+        Langfuse or self-hosted collector exporter, which would leak that key to a
+        different backend.
         """
         header_str = ",".join(f"{key}={value}" for key, value in headers.items())
         exporters = [
@@ -260,13 +240,11 @@ class TenantTracerCache:
         *,
         include_base_exporters: bool = True,
     ) -> OpenTelemetryV2Config:
-        """Clone the config, appending one exporter per resolved destination (its resolved host
-        and own auth headers) so one span exports to every destination.
+        """Clone the config, appending one exporter per destination so one span exports to every one.
 
-        ``include_base_exporters`` keeps the configured/global exporters; ``tracers_for`` sets it
-        only on the first Resource group so the global gets the span once, not once per group. The
-        clone's Resource folds in the destinations' ``destination_resource_attrs`` (Arize needs
-        ``model_id`` / ``arize.project.name``); callers group by those first so the merge is lossless."""
+        ``include_base_exporters`` keeps the configured/global exporters (``tracers_for`` sets it only on
+        the first group); the clone's Resource folds in the destinations' ``destination_resource_attrs``.
+        """
         from litellm.integrations.otel.plumbing.providers import (
             destination_resource_attrs,
         )
