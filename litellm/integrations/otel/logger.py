@@ -162,7 +162,7 @@ class OpenTelemetryV2(CustomLogger):
             event_recorder=self._init_events(logger_provider),
         )
         self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
-        self._open_llm_calls: OrderedDict[str, _LLMCallSpan] = OrderedDict()  # mutable-ok: bounded LRU of open call spans
+        self._open_llm_calls: OrderedDict[str, _LLMCallSpan] = OrderedDict()  # mutable-ok: open-call span LRU
         self._closed_call_ids: OrderedDict[str, None] = OrderedDict()  # mutable-ok: bounded LRU of emitted call ids
         self._init_otel_logger_on_litellm_proxy()
 

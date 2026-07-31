@@ -31,8 +31,8 @@ from litellm.integrations.otel.presets.phoenix import phoenix_preset
 from litellm.integrations.otel.presets.weave import weave_dynamic_headers, weave_preset
 from litellm.types.utils import StandardCallbackDynamicParams
 
-#: Callback name -> per-request OTLP header builder (team/key multi-tenant
-#: routing). Only integrations that support dynamic credentials appear here;
+#: Callback name → per-request OTLP header builder (team/key multi-tenant
+#: routing). Only integrations that support dynamic credentials appear here —
 #: Arize-Phoenix/Langtrace/Levo/AgentOps/generic don't, so they use the logger's
 #: default tracer.
 DYNAMIC_HEADERS_BY_CALLBACK: dict[str, Callable[[StandardCallbackDynamicParams], dict[str, str]]] = {
@@ -48,7 +48,7 @@ def dynamic_otlp_headers(
 ) -> dict[str, str] | None:
     """Per-request OTLP headers for ``callback_name``, or ``None`` if N/A.
 
-    ``None`` means "no per-request routing" -- the caller uses its default tracer.
+    ``None`` means "no per-request routing" — the caller uses its default tracer.
     """
     builder = DYNAMIC_HEADERS_BY_CALLBACK.get(callback_name or "")
     if builder is None or not dynamic_params:
