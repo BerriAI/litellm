@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7314,6 +7315,131 @@ async def test_debug_sso_callback_handles_missing_raw_response():
     assert '"raw_claims": {}' in body
     assert '"access_token_claims": {}' in body
     assert "user@example.com" in body
+
+
+# ── The debug page is where an operator lands when ID-JAG is failing ──────────
+
+_GOOGLE_DEBUG_CLIENT_ID = "debug-google-client-id"
+_GENERIC_DEBUG_CLIENT_ID = "debug-generic-client-id"
+
+
+async def _render_debug_page(provider_env, id_jag_registered, gap_override=None):
+    """Drive /sso/debug/callback and return the raw response body."""
+    from litellm.proxy.management_endpoints.ui_sso import GoogleSSOHandler, debug_sso_callback
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://proxy.example.com/"
+    mock_request.cookies = {}
+    mock_request.query_params = {}
+
+    parsed = {"sub": "user_123", "email": "u@example.com"}
+
+    async def fake_generic(**kwargs):
+        return parsed, {"sub": "user_123"}, {"scope": "openid"}, None
+
+    async def fake_google(**kwargs):
+        return parsed
+
+    stack = [
+        patch.dict(os.environ, provider_env, clear=False),
+        patch("litellm.proxy.management_endpoints.ui_sso.get_generic_sso_response", side_effect=fake_generic),
+        patch.object(GoogleSSOHandler, "get_google_callback_response", side_effect=fake_google),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.ema_assertion_retention_enabled",
+            AsyncMock(return_value=id_jag_registered),
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.jwt_handler", MagicMock(spec=JWTHandler)),
+    ]
+    if gap_override is not None:
+        stack.append(
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.id_jag_capture_gap_to_surface",
+                AsyncMock(return_value=gap_override["value"]),
+            )
+        )
+
+    with ExitStack() as es:
+        for ctx in stack:
+            es.enter_context(ctx)
+        for var in ("MICROSOFT_CLIENT_ID", "GOOGLE_CLIENT_ID", "GENERIC_CLIENT_ID", "SAML_IDP_METADATA_URL"):
+            if var not in provider_env:
+                os.environ.pop(var, None)
+        response = await debug_sso_callback(mock_request)
+
+    return response.body.decode()
+
+
+@pytest.mark.asyncio
+async def test_debug_page_surfaces_the_capture_gap_to_the_operator_reading_it():
+    """This page is exactly where someone lands when ID-JAG is failing, so the reason has to be
+    on it; a diagnostic that cannot reach the surface the operator is staring at has a hole."""
+    body = await _render_debug_page({"GOOGLE_CLIENT_ID": _GOOGLE_DEBUG_CLIENT_ID}, id_jag_registered=True)
+
+    assert "id_jag_assertion_capture" in body
+    assert "google" in body
+    assert "GENERIC_CLIENT_ID" in body
+
+
+@pytest.mark.asyncio
+async def test_debug_page_gap_text_carries_no_configuration_values():
+    """Only the provider name and the remedy belong in rendered HTML; the client id the operator
+    configured is not ours to echo back onto a page."""
+    body = await _render_debug_page({"GOOGLE_CLIENT_ID": _GOOGLE_DEBUG_CLIENT_ID}, id_jag_registered=True)
+
+    assert _GOOGLE_DEBUG_CLIENT_ID not in body
+
+
+@pytest.mark.asyncio
+async def test_debug_page_is_byte_identical_when_the_provider_captures():
+    """A deployment with no gap must get the page it got before this change, to the byte. The
+    comparison is against the endpoint with the diagnostic forced inert, not against a guess."""
+    with_feature = await _render_debug_page(
+        {"GENERIC_CLIENT_ID": _GENERIC_DEBUG_CLIENT_ID}, id_jag_registered=True
+    )
+    pre_change = await _render_debug_page(
+        {"GENERIC_CLIENT_ID": _GENERIC_DEBUG_CLIENT_ID},
+        id_jag_registered=True,
+        gap_override={"value": None},
+    )
+
+    assert with_feature == pre_change
+    assert "id_jag" not in with_feature
+
+
+@pytest.mark.asyncio
+async def test_debug_page_is_byte_identical_when_no_id_jag_server_is_registered():
+    """Most deployments run Google SSO and no id_jag server at all; their debug page must not
+    grow an ID-JAG section about a feature they do not use."""
+    with_feature = await _render_debug_page(
+        {"GOOGLE_CLIENT_ID": _GOOGLE_DEBUG_CLIENT_ID}, id_jag_registered=False
+    )
+    pre_change = await _render_debug_page(
+        {"GOOGLE_CLIENT_ID": _GOOGLE_DEBUG_CLIENT_ID},
+        id_jag_registered=False,
+        gap_override={"value": None},
+    )
+
+    assert with_feature == pre_change
+    assert "id_jag" not in with_feature
+
+
+@pytest.mark.asyncio
+async def test_debug_page_survives_a_store_outage():
+    """The page's job is to render claims; an unreachable MCP table must cost it the annotation,
+    not the page."""
+    from litellm.proxy.management_endpoints.ui_sso import id_jag_capture_gap_to_surface
+
+    with (
+        patch.dict(os.environ, {"GOOGLE_CLIENT_ID": _GOOGLE_DEBUG_CLIENT_ID}, clear=False),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.ema_assertion_retention_enabled",
+            AsyncMock(side_effect=Exception("db down")),
+        ),
+    ):
+        assert await id_jag_capture_gap_to_surface() is None
 
 
 async def _render_legacy_login_page(env_overrides, general_settings):
