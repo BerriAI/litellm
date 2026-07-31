@@ -1,7 +1,7 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
-import { Copy, MoreHorizontal, Trash2 } from "lucide-react";
+import { Copy, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { DateCell, IdentityCell, StatusBadge } from "@/components/shared/table_cells";
@@ -43,10 +43,11 @@ function PluginCategoryBadge({ category }: { category?: string }) {
 interface PluginRowActionsProps {
   plugin: Plugin;
   isAdmin: boolean;
+  onEditClick: (plugin: Plugin) => void;
   onDeleteClick: (pluginName: string, displayName: string) => void;
 }
 
-function PluginRowActions({ plugin, isAdmin, onDeleteClick }: PluginRowActionsProps) {
+function PluginRowActions({ plugin, isAdmin, onEditClick, onDeleteClick }: PluginRowActionsProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -66,6 +67,10 @@ function PluginRowActions({ plugin, isAdmin, onDeleteClick }: PluginRowActionsPr
         </DropdownMenuItem>
         {isAdmin && (
           <>
+            <DropdownMenuItem data-testid="plugin-action-edit" onClick={() => onEditClick(plugin)}>
+              <Pencil />
+              Edit
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
               variant="destructive"
@@ -85,12 +90,14 @@ function PluginRowActions({ plugin, isAdmin, onDeleteClick }: PluginRowActionsPr
 interface PluginTableColumnsDeps {
   isAdmin: boolean;
   onPluginClick: (pluginId: string) => void;
+  onEditClick: (plugin: Plugin) => void;
   onDeleteClick: (pluginName: string, displayName: string) => void;
 }
 
 export const getPluginTableColumns = ({
   isAdmin,
   onPluginClick,
+  onEditClick,
   onDeleteClick,
 }: PluginTableColumnsDeps): ColumnDef<Plugin>[] => [
   {
@@ -173,7 +180,12 @@ export const getPluginTableColumns = ({
     enableHiding: false,
     cell: ({ row }) => (
       <div className="flex justify-end">
-        <PluginRowActions plugin={row.original} isAdmin={isAdmin} onDeleteClick={onDeleteClick} />
+        <PluginRowActions
+          plugin={row.original}
+          isAdmin={isAdmin}
+          onEditClick={onEditClick}
+          onDeleteClick={onDeleteClick}
+        />
       </div>
     ),
   },

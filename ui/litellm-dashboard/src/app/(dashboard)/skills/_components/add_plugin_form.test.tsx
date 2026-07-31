@@ -259,6 +259,53 @@ describe("AddPluginForm", () => {
     });
   });
 
+  describe("edit mode", () => {
+    const existingSkill = {
+      id: "plugin-id",
+      name: "my-skill",
+      version: "1.0.0",
+      description: "Does a thing",
+      source: { source: "git-subdir" as const, url: "https://gitlab.com/group/repo", path: "plugins/x" },
+      keywords: ["search", "web"],
+      category: "Development",
+      enabled: true,
+    };
+
+    it("prefills the repository URL, subfolder, and metadata and locks the name", () => {
+      renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} skill={existingSkill} />);
+
+      expect((screen.getByPlaceholderText(URL_PLACEHOLDER) as HTMLInputElement).value).toBe(
+        "https://gitlab.com/group/repo",
+      );
+      expect((screen.getByPlaceholderText(SUBPATH_PLACEHOLDER) as HTMLInputElement).value).toBe("plugins/x");
+      expect((screen.getByPlaceholderText("my-skill") as HTMLInputElement).value).toBe("my-skill");
+      expect(screen.getByPlaceholderText("my-skill")).toBeDisabled();
+      expect((screen.getByPlaceholderText("search, web, api") as HTMLInputElement).value).toBe("search, web");
+    });
+
+    it("submits the edited metadata under the same name", async () => {
+      renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} skill={existingSkill} />);
+
+      await act(async () => {
+        fireEvent.change(screen.getByPlaceholderText("1.0.0"), { target: { value: "2.0.0" } });
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+      });
+
+      await waitFor(() => {
+        expect(mockRegister).toHaveBeenCalledWith(
+          "sk-test",
+          expect.objectContaining({
+            name: "my-skill",
+            version: "2.0.0",
+            source: { source: "git-subdir", url: "https://gitlab.com/group/repo", path: "plugins/x" },
+          }),
+        );
+      });
+    });
+  });
+
   it("surfaces the backend error message when registration fails", async () => {
     mockRegister.mockRejectedValueOnce(new Error("Plugin 'claude-code' already exists"));
     renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);

@@ -12,6 +12,7 @@ import { getPluginTableColumns } from "./PluginTableColumns";
 interface PluginTableProps {
   pluginsList: Plugin[];
   isLoading: boolean;
+  onEditClick: (plugin: Plugin) => void;
   onDeleteClick: (pluginName: string, displayName: string) => void;
   isAdmin: boolean;
   onPluginClick: (pluginId: string) => void;
@@ -31,12 +32,19 @@ function EmptyState() {
   );
 }
 
-const PluginTable: React.FC<PluginTableProps> = ({ pluginsList, isLoading, onDeleteClick, isAdmin, onPluginClick }) => {
+const PluginTable: React.FC<PluginTableProps> = ({
+  pluginsList,
+  isLoading,
+  onEditClick,
+  onDeleteClick,
+  isAdmin,
+  onPluginClick,
+}) => {
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
 
   const columns = useMemo(
-    () => getPluginTableColumns({ isAdmin, onPluginClick, onDeleteClick }),
-    [isAdmin, onPluginClick, onDeleteClick],
+    () => getPluginTableColumns({ isAdmin, onPluginClick, onEditClick, onDeleteClick }),
+    [isAdmin, onPluginClick, onEditClick, onDeleteClick],
   );
 
   return (

@@ -27,11 +27,13 @@ const mockPlugins: Plugin[] = [
 ];
 
 const mockOnDeleteClick = vi.fn();
+const mockOnEditClick = vi.fn();
 const mockOnPluginClick = vi.fn();
 
 const defaultProps = {
   pluginsList: mockPlugins,
   isLoading: false,
+  onEditClick: mockOnEditClick,
   onDeleteClick: mockOnDeleteClick,
   isAdmin: true,
   onPluginClick: mockOnPluginClick,
@@ -95,6 +97,14 @@ describe("PluginTable", () => {
     expect(mockOnDeleteClick).toHaveBeenCalledWith("newer-skill", "newer-skill");
   });
 
+  it("should edit a skill through the actions menu when admin", async () => {
+    const user = userEvent.setup();
+    render(<PluginTable {...defaultProps} />);
+    await user.click(screen.getByTestId("plugin-actions-newer-skill"));
+    await user.click(await screen.findByTestId("plugin-action-edit"));
+    expect(mockOnEditClick).toHaveBeenCalledWith(mockPlugins[0]);
+  });
+
   it("should copy the skill ID through the actions menu", async () => {
     const user = userEvent.setup();
     render(<PluginTable {...defaultProps} />);
@@ -103,11 +113,12 @@ describe("PluginTable", () => {
     expect(await window.navigator.clipboard.readText()).toBe("plugin-id-newer");
   });
 
-  it("should hide the delete action for non-admins but keep copy available", async () => {
+  it("should hide the edit and delete actions for non-admins but keep copy available", async () => {
     const user = userEvent.setup();
     render(<PluginTable {...defaultProps} isAdmin={false} />);
     await user.click(screen.getByTestId("plugin-actions-newer-skill"));
     expect(await screen.findByTestId("plugin-action-copy")).toBeInTheDocument();
+    expect(screen.queryByTestId("plugin-action-edit")).not.toBeInTheDocument();
     expect(screen.queryByTestId("plugin-action-delete")).not.toBeInTheDocument();
   });
 });

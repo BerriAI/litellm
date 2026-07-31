@@ -11,9 +11,11 @@ import {
   parseKeywords,
   parseSkillSource,
   isValidSubPath,
+  formatKeywords,
+  sourceToFormFields,
   SkillSourcePreview,
 } from "@/components/claude_code_plugins/helpers";
-import { PluginAuthor, PluginSource, SkillRegisterRequest } from "@/components/claude_code_plugins/types";
+import { Plugin, PluginAuthor, PluginSource, SkillRegisterRequest } from "@/components/claude_code_plugins/types";
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -23,6 +25,8 @@ interface AddPluginFormProps {
   onClose: () => void;
   accessToken: string | null;
   onSuccess: () => void;
+  /** When set, the form edits this skill instead of registering a new one */
+  skill?: Plugin | null;
 }
 
 interface AddPluginFormValues {
@@ -76,11 +80,31 @@ const PREDEFINED_CATEGORIES = [
   "Documentation",
 ];
 
-const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessToken, onSuccess }) => {
+const toFormValues = (skill: Plugin): AddPluginFormValues => ({
+  ...sourceToFormFields(skill.source),
+  name: skill.name,
+  version: skill.version,
+  description: skill.description,
+  authorName: skill.author?.name,
+  authorEmail: skill.author?.email ?? undefined,
+  homepage: skill.homepage,
+  category: skill.category,
+  keywords: formatKeywords(skill.keywords),
+  domain: skill.domain,
+  namespace: skill.namespace,
+});
+
+const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessToken, onSuccess, skill }) => {
   const [form] = Form.useForm();
+  const initialValues = skill ? toFormValues(skill) : undefined;
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [urlPreview, setUrlPreview] = useState<SkillSourcePreview | null>(null);
-  const [urlEncodesSubdir, setUrlEncodesSubdir] = useState(false);
+  const [urlPreview, setUrlPreview] = useState<SkillSourcePreview | null>(() =>
+    initialValues ? parseSkillSource(initialValues.skillUrl ?? "", initialValues.subPath) : null,
+  );
+  const [urlEncodesSubdir, setUrlEncodesSubdir] = useState(
+    () => parseSkillSource(initialValues?.skillUrl ?? "")?.parsed.source === "git-subdir",
+  );
+  const isEditing = Boolean(skill);
 
   const recomputePreview = (skillUrl: string, subPath: string) => {
     const encodesSubdir = parseSkillSource(skillUrl)?.parsed.source === "git-subdir";
@@ -137,20 +161,28 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
     setIsSubmitting(true);
     try {
       await registerClaudeCodePlugin(accessToken, buildRegisterRequest(values, urlPreview.parsed));
-      MessageManager.success("Skill registered successfully");
+      MessageManager.success(isEditing ? "Skill updated successfully" : "Skill registered successfully");
       form.resetFields();
       setUrlPreview(null);
       setUrlEncodesSubdir(false);
       onSuccess();
       onClose();
     } catch (error) {
-      console.error("Error registering skill:", error);
-      const reason = error instanceof Error && error.message ? error.message : "Failed to register skill";
-      MessageManager.error(`Failed to register skill: ${reason}`);
+      console.error("Error saving skill:", error);
+      const action = isEditing ? "update" : "register";
+      const reason = error instanceof Error && error.message ? error.message : `Failed to ${action} skill`;
+      MessageManager.error(`Failed to ${action} skill: ${reason}`);
     } finally {
       setIsSubmitting(false);
     }
   };
+
+  const submitLabel = (() => {
+    if (isEditing) {
+      return isSubmitting ? "Saving..." : "Save Changes";
+    }
+    return isSubmitting ? "Adding..." : "Add Skill";
+  })();
 
   const handleCancel = () => {
     form.resetFields();
@@ -160,8 +192,15 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
   };
 
   return (
-    <Modal title="Add New Skill" open={visible} onCancel={handleCancel} footer={null} width={700} className="top-8">
-      <Form form={form} layout="vertical" onFinish={handleSubmit} className="mt-4">
+    <Modal
+      title={isEditing ? `Edit Skill: ${skill?.name}` : "Add New Skill"}
+      open={visible}
+      onCancel={handleCancel}
+      footer={null}
+      width={700}
+      className="top-8"
+    >
+      <Form form={form} layout="vertical" onFinish={handleSubmit} className="mt-4" initialValues={initialValues}>
         {/* Smart URL Input */}
         <Form.Item
           label="Repository URL"
@@ -221,9 +260,13 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
               message: "Name must be kebab-case (lowercase, numbers, hyphens only)",
             },
           ]}
-          tooltip="Unique identifier in kebab-case format (e.g., my-skill)"
+          tooltip={
+            isEditing
+              ? "The name identifies the skill in the marketplace and cannot be changed"
+              : "Unique identifier in kebab-case format (e.g., my-skill)"
+          }
         >
-          <Input placeholder="my-skill" className="rounded-lg" />
+          <Input placeholder="my-skill" className="rounded-lg" disabled={isEditing} />
         </Form.Item>
 
         {/* Domain and Namespace — side by side */}
@@ -300,7 +343,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
               Cancel
             </Button>
             <Button type="submit" loading={isSubmitting}>
-              {isSubmitting ? "Adding..." : "Add Skill"}
+              {submitLabel}
             </Button>
           </div>
         </Form.Item>
