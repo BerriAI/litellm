@@ -3,6 +3,7 @@
 import importlib
 import os
 from datetime import datetime, timezone
+from itertools import chain, count
 from typing import Any, Dict, List, Literal, Optional, Set, Type, cast
 
 from pydantic import ValidationError
@@ -64,6 +65,8 @@ guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.GRAYSWAN.value: initialize_grayswan,
     SupportedGuardrailIntegrations.LLM_AS_A_JUDGE.value: initialize_llm_as_a_judge,
 }
+
+CONFIG_GUARDRAIL_ID_NAMESPACE = uuid.UUID("625f63f4-935a-50e5-98b5-fbe77babc74a")
 
 guardrail_class_registry: Dict[str, Type[CustomGuardrail]] = {
     SupportedGuardrailIntegrations.BEDROCK.value: BedrockGuardrail,
@@ -407,6 +410,11 @@ class InMemoryGuardrailHandler:
         and never deleted by reconciliation.
         """
 
+    def _stable_guardrail_id(self, guardrail_name: str) -> str:
+        seeds = chain((guardrail_name,), (f"{guardrail_name}:{occurrence}" for occurrence in count(1)))
+        candidate_ids = (str(uuid.uuid5(CONFIG_GUARDRAIL_ID_NAMESPACE, seed.encode("utf-8"))) for seed in seeds)
+        return next(candidate_id for candidate_id in candidate_ids if candidate_id not in self.IN_MEMORY_GUARDRAILS)
+
     def initialize_guardrail(
         self,
         guardrail: Guardrail,
@@ -419,7 +427,7 @@ class InMemoryGuardrailHandler:
 
         Returns a Guardrail object if the guardrail is initialized successfully
         """
-        guardrail_id = guardrail.get("guardrail_id") or str(uuid.uuid4())
+        guardrail_id = guardrail.get("guardrail_id") or self._stable_guardrail_id(guardrail["guardrail_name"])
         guardrail["guardrail_id"] = guardrail_id
         if guardrail_id in self.IN_MEMORY_GUARDRAILS:
             verbose_proxy_logger.debug("guardrail_id already exists in IN_MEMORY_GUARDRAILS")

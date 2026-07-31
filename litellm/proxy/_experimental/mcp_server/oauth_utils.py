@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, NoReturn, Optional
 from urllib.parse import ParseResult, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
+from starlette.types import Scope
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
@@ -177,6 +178,37 @@ def well_known_root_suffix() -> str:
     """
     root = os.getenv("SERVER_ROOT_PATH", "")
     return "" if root == "/" else root
+
+
+def get_passthrough_resource_metadata_url(scope: Scope, server_name: str) -> str:
+    """The per-server protected-resource metadata URL matching the spelling the request
+    arrived on, so a strict RFC 9728 client resolves the same route the proxy registered.
+    ``_original_path`` preserves the ``/{server}/mcp`` spelling through the
+    ``dynamic_mcp_route`` rewrite; the ``SERVER_ROOT_PATH`` segment is inserted exactly as
+    the route decorators insert it (see :func:`well_known_root_suffix`)."""
+    request = Request(scope)
+    base_url = get_request_base_url(request)
+    _path = scope.get("_original_path") or scope.get("path", "") or ""
+
+    if _path.startswith(f"/{server_name}/mcp"):
+        return f"{base_url}/.well-known/oauth-protected-resource{well_known_root_suffix()}/{server_name}/mcp"
+    return f"{base_url}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp/{server_name}"
+
+
+def get_passthrough_www_authenticate(
+    scope: Scope,
+    server_name: str,
+    invalid_token: bool = False,
+) -> str:
+    """The RFC 9728 ``WWW-Authenticate`` value advertising the per-server
+    protected-resource metadata, with the RFC 6750 ``invalid_token`` error code when the
+    caller presented a bearer that failed rather than no credential at all."""
+    resource_metadata_url = get_passthrough_resource_metadata_url(
+        scope=scope,
+        server_name=server_name,
+    )
+    error_attr = 'error="invalid_token", ' if invalid_token else ""
+    return f'Bearer {error_attr}resource_metadata="{resource_metadata_url}"'
 
 
 def validate_loopback_redirect_uri(redirect_uri: str) -> None:
