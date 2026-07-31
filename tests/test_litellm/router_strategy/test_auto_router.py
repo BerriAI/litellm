@@ -316,3 +316,70 @@ class TestAutoRouter:
 
         # Assert
         assert result is None
+
+    @patch("semantic_router.routers.SemanticRouter")
+    def test_init_defaults_savings_baseline_model(self, mock_semantic_router_class, mock_router_instance):
+        """Unconfigured deployments fall back to the flagship default, not an empty baseline."""
+        mock_semantic_router_class.from_json.return_value = mock_semantic_router_class
+
+        auto_router = AutoRouter(
+            model_name="test-auto-router",
+            auto_router_config_path="test/path/router.json",
+            default_model="gpt-4o-mini",
+            embedding_model="text-embedding-model",
+            litellm_router_instance=mock_router_instance,
+        )
+
+        assert auto_router.savings_baseline_model == AutoRouter.DEFAULT_SAVINGS_BASELINE_MODEL
+
+    @patch("semantic_router.routers.SemanticRouter")
+    def test_init_honors_configured_savings_baseline_model(self, mock_semantic_router_class, mock_router_instance):
+        """An operator-configured baseline overrides the flagship default."""
+        mock_semantic_router_class.from_json.return_value = mock_semantic_router_class
+
+        auto_router = AutoRouter(
+            model_name="test-auto-router",
+            auto_router_config_path="test/path/router.json",
+            default_model="gpt-4o-mini",
+            embedding_model="text-embedding-model",
+            litellm_router_instance=mock_router_instance,
+            savings_baseline_model="claude-sonnet-5",
+        )
+
+        assert auto_router.savings_baseline_model == "claude-sonnet-5"
+
+    @pytest.mark.asyncio
+    @patch("semantic_router.routers.SemanticRouter")
+    @patch("litellm.router_strategy.auto_router.litellm_encoder.LiteLLMRouterEncoder")
+    async def test_async_pre_routing_hook_carries_savings_baseline_model(
+        self,
+        mock_encoder_class,
+        mock_semantic_router_class,
+        mock_router_instance,
+        mock_route_choice,
+    ):
+        """The hook response must carry the baseline so the spend writer can price
+        auto-router savings; without it the dashboard's driver silently stays zero."""
+        mock_loaded_router = MagicMock()
+        mock_loaded_router.routes = ["route1", "route2"]
+        mock_semantic_router_class.from_json.return_value = mock_loaded_router
+
+        mock_routelayer = MagicMock()
+        mock_routelayer.return_value = mock_route_choice
+        mock_semantic_router_class.return_value = mock_routelayer
+
+        auto_router = AutoRouter(
+            model_name="test-auto-router",
+            auto_router_config_path="test/path/router.json",
+            default_model="gpt-4o-mini",
+            embedding_model="text-embedding-model",
+            litellm_router_instance=mock_router_instance,
+            savings_baseline_model="claude-opus-5",
+        )
+
+        result = await auto_router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert result is not None
+        assert result.savings_baseline_model == "claude-opus-5"

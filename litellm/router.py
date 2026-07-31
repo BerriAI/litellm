@@ -7670,6 +7670,7 @@ class Router:
             default_model=default_model,
             embedding_model=embedding_model,
             litellm_router_instance=self,
+            savings_baseline_model=deployment.litellm_params.auto_router_savings_baseline_model,
         )
         self._register_pre_routing_strategy(
             registry=self.auto_routers,
@@ -11175,6 +11176,10 @@ class Router:
             request_kwargs=request_kwargs,
             routing_decision=(pre_routing_hook_response.routing_decision if pre_routing_hook_response else None),
         )
+        self._record_savings_baseline_model(
+            request_kwargs=request_kwargs,
+            baseline_model=(pre_routing_hook_response.savings_baseline_model if pre_routing_hook_response else None),
+        )
 
         # `model` (the alias, e.g. "smart-router") is never the deployment actually
         # called - apply the alias's own litellm_params (besides `model` itself,
@@ -11221,6 +11226,26 @@ class Router:
         metadata_bucket["routing_decision"] = Router._redact_prompt_text_if_needed(
             request_kwargs=request_kwargs, routing_decision=routing_decision
         )
+
+    @staticmethod
+    def _record_savings_baseline_model(
+        request_kwargs: dict,
+        baseline_model: str | None,
+    ) -> None:
+        """Stash the auto-router's savings baseline for this attempt, same write-or-clear
+        discipline as `_record_routing_decision`: a fallback that re-enters this hook
+        without an auto-router strategy must clear a prior attempt's baseline, or the
+        spend writer would price savings against a model this attempt never routed
+        against.
+        """
+        if baseline_model is None:
+            for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata")):
+                if isinstance(bucket, dict):
+                    bucket.pop("auto_router_savings_baseline_model", None)
+            return
+
+        _, metadata_bucket = get_or_create_metadata_bucket(request_kwargs)
+        metadata_bucket["auto_router_savings_baseline_model"] = baseline_model
 
     @staticmethod
     def _redact_prompt_text_if_needed(

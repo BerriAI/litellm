@@ -38,7 +38,7 @@ const EMPTY_TOOL_SPEND: ToolSpendResponse = {
   end_date: null,
 };
 
-const SAVINGS_COLORS = ["emerald", "blue"] as const;
+const SAVINGS_COLORS = ["emerald", "blue", "amber"] as const;
 
 const shortDate = (iso: string): string =>
   new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -47,6 +47,7 @@ const isoDay = (d: Date): string => d.toISOString().slice(0, 10);
 
 const compressionOf = (m: SpendMetrics): number => m.compression_savings_spend ?? 0;
 const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ?? 0;
+const autorouterOf = (m: SpendMetrics): number => m.autorouter_savings_spend ?? 0;
 const savedTokensOf = (m: SpendMetrics): number => m.compression_saved_tokens ?? 0;
 
 const SummaryCard = ({ label, value, hint, info }: { label: string; value: string; hint?: string; info?: string }) => (
@@ -105,8 +106,9 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
 
   const compressionTotal = useMemo(() => results.reduce((sum, d) => sum + compressionOf(d.metrics), 0), [results]);
   const cachingTotal = useMemo(() => results.reduce((sum, d) => sum + cachingOf(d.metrics), 0), [results]);
+  const autorouterTotal = useMemo(() => results.reduce((sum, d) => sum + autorouterOf(d.metrics), 0), [results]);
   const savedTokensTotal = useMemo(() => results.reduce((sum, d) => sum + savedTokensOf(d.metrics), 0), [results]);
-  const totalSaved = compressionTotal + cachingTotal;
+  const totalSaved = compressionTotal + cachingTotal + autorouterTotal;
 
   const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
 
@@ -122,6 +124,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
           date: shortDate(d.date),
           Compression: compressionOf(d.metrics),
           "Prompt caching": cachingOf(d.metrics),
+          "Auto-router": autorouterOf(d.metrics),
         })),
     [results],
   );
@@ -148,8 +151,9 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
       [
         { driver: "Compression", usd: compressionTotal },
         { driver: "Prompt caching", usd: cachingTotal },
+        { driver: "Auto-router", usd: autorouterTotal },
       ].filter((d) => d.usd > 0),
-    [compressionTotal, cachingTotal],
+    [compressionTotal, cachingTotal, autorouterTotal],
   );
 
   const topTools = useMemo(() => topToolsBySpend(toolSpend?.by_tool ?? []), [toolSpend]);
@@ -174,11 +178,11 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
         <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
         <SummaryCard
           label="Total saved"
           value={usd(totalSaved)}
-          hint={loading || isFetchingMore ? "Loading..." : "Compression + prompt caching"}
+          hint={loading || isFetchingMore ? "Loading..." : "Compression + prompt caching + auto-router"}
         />
         <SummaryCard
           label="Compression savings"
@@ -191,6 +195,12 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
           value={usd(cachingTotal)}
           hint="Cache read discount"
           info="Tokens the provider served from cache, priced at the discount between the input and cache-read rates."
+        />
+        <SummaryCard
+          label="Auto-router savings"
+          value={usd(autorouterTotal)}
+          hint="vs. the router's baseline model"
+          info="Cost of the auto-router's configured baseline model minus the cost of the model it actually routed to, net of any cache-write cost from switching models."
         />
       </div>
 
@@ -247,7 +257,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
               data={byDriver}
               index="driver"
               category="usd"
-              colors={["emerald", "blue"]}
+              colors={SAVINGS_COLORS}
               valueFormatter={usd}
               showLabel
               label={usd(totalSaved)}

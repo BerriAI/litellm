@@ -228,6 +228,37 @@ describe("UsageTab", () => {
     expect(slices).toEqual([{ driver: "Compression", usd: expect.closeTo(0.04, 5) }]);
   });
 
+  it("carries auto-router savings into the summary card, donut slice, and cumulative series", () => {
+    const { getByText, getByTestId } = renderWith([
+      day("2026-07-12", {
+        compression_savings_spend: 0.04,
+        prompt_caching_savings_spend: 0.006,
+        autorouter_savings_spend: 0.02,
+      }),
+      day("2026-07-13", {
+        compression_savings_spend: 0.1,
+        prompt_caching_savings_spend: 0.01,
+        autorouter_savings_spend: 0.05,
+      }),
+    ]);
+
+    // Total saved now sums three drivers, and the auto-router card carries its own total.
+    expect(getByText("$0.2260")).toBeInTheDocument();
+    expect(getByText("$0.0700")).toBeInTheDocument();
+
+    // The driver donut gains a third slice priced from the range totals.
+    const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
+    expect(slices).toEqual([
+      { driver: "Compression", usd: expect.closeTo(0.14, 5) },
+      { driver: "Prompt caching", usd: expect.closeTo(0.016, 5) },
+      { driver: "Auto-router", usd: expect.closeTo(0.07, 5) },
+    ]);
+
+    // And the cumulative line accumulates the auto-router series alongside the others.
+    const series = readSeries(getByTestId("area-chart"));
+    expect(series[2]["Auto-router"]).toBeCloseTo(0.07, 5);
+  });
+
   it("renders spend-by-tool bars from the tool spend endpoint", async () => {
     const toolSpend = {
       by_tool: [

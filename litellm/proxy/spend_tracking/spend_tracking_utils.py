@@ -117,6 +117,7 @@ def _get_spend_logs_metadata(
             max_retries=None,
             cost_breakdown=None,
             compression_savings=None,
+            auto_router_savings_baseline_model=None,
             litellm_call_id=litellm_call_id,
         )
     verbose_proxy_logger.debug(

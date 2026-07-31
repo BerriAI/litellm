@@ -3321,6 +3321,7 @@ class SpendLogsMetadata(TypedDict):
     max_retries: Optional[int]  # Max retries configured for this request
     cost_breakdown: Optional[CostBreakdown]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
     compression_savings: CompressionSavingsMetadata | None
+    auto_router_savings_baseline_model: str | None  # counterfactual model for the auto-router savings driver
 
 
 class SpendLogsPayload(TypedDict):

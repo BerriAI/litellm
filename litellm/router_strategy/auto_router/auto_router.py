@@ -20,6 +20,10 @@ else:
 
 class AutoRouter(CustomLogger):
     DEFAULT_AUTO_SYNC_VALUE = "local"
+    # Flagship the auto-router's savings are measured against when the deployment
+    # does not configure `auto_router_savings_baseline_model`. Bare key (no
+    # provider prefix) to match the pricing map's canonical entry.
+    DEFAULT_SAVINGS_BASELINE_MODEL = "claude-opus-5"
 
     def __init__(
         self,
@@ -29,6 +33,7 @@ class AutoRouter(CustomLogger):
         litellm_router_instance: "Router",
         auto_router_config_path: Optional[str] = None,
         auto_router_config: Optional[str] = None,
+        savings_baseline_model: str | None = None,
     ):
         """
         Auto-Router class that uses a semantic router to route requests to the appropriate model.
@@ -40,6 +45,7 @@ class AutoRouter(CustomLogger):
             default_model: The default model to use if no route is found.
             embedding_model: The embedding model to use for the auto-router.
             litellm_router_instance: The instance of the LiteLLM Router.
+            savings_baseline_model: The counterfactual model the dashboard measures savings against; falls back to DEFAULT_SAVINGS_BASELINE_MODEL.
         """
         from semantic_router.routers import SemanticRouter
 
@@ -51,6 +57,7 @@ class AutoRouter(CustomLogger):
         self.default_model = default_model
         self.embedding_model: str = embedding_model
         self.litellm_router_instance: "Router" = litellm_router_instance
+        self.savings_baseline_model: str = savings_baseline_model or self.DEFAULT_SAVINGS_BASELINE_MODEL
 
     def _load_semantic_routing_routes(self) -> List[Route]:
         from semantic_router.routers import SemanticRouter
@@ -156,4 +163,5 @@ class AutoRouter(CustomLogger):
         return PreRoutingHookResponse(
             model=model,
             messages=messages,
+            savings_baseline_model=self.savings_baseline_model,
         )
