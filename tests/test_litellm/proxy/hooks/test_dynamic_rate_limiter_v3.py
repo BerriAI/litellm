@@ -1754,7 +1754,6 @@ async def test_priority_429_includes_model_name_and_configured_limits():
                 user_api_key_dict=user,
                 priority="prod",
                 saturation=0.95,
-                data={"model": model},
             )
 
     assert exc_info.value.status_code == 429

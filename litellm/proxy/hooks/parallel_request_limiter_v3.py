@@ -8,16 +8,18 @@ import asyncio
 import binascii
 import os
 import uuid
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
     Dict,
+    FrozenSet,
     List,
     Literal,
     Optional,
-    Set,
     Tuple,
     TypedDict,
     Union,
@@ -28,7 +30,6 @@ from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -291,53 +292,11 @@ DEFAULT_CHARS_PER_TOKEN = 4
 # (baseline floor) and to the smallest configured TPM limit (capped floor for
 # small per-tenant TPM caps).
 _TPM_FLOOR_FRACTION = 4
-# Stash for the reserved-token count on the request data dict so success/
-# failure callbacks can reconcile against the upfront reservation.
-TPM_RESERVED_TOKENS_KEY = "_litellm_tpm_reserved_tokens"
-# Stash for the model identifier the reservation was charged against.
-# Reconciliation must target the same key that was incremented at reservation
-TPM_RESERVED_MODEL_KEY = "_litellm_tpm_reserved_model"
-# Stash for the (scope_key, scope_value) pairs whose :tokens counter the
-# upfront reservation incremented. Reconciliation applies the delta to these
-# scopes only; scopes without a configured TPM limit were never charged at
-# pre-call and must receive the full actual usage instead of the delta —
-# otherwise their counters drift negative whenever actual < reserved.
-TPM_RESERVED_SCOPES_KEY = "_litellm_tpm_reserved_scopes"
-# Idempotency marker for the reservation refund path. Set when any failure
-# callback releases the reservation so the next callback in the same flow
-# (e.g. async_log_failure_event firing after async_post_call_failure_hook)
-# does not double-refund.
-TPM_RESERVATION_RELEASED_KEY = "_litellm_tpm_reservation_released"
-RATE_LIMIT_DESCRIPTORS_KEY = "_litellm_rate_limit_descriptors"
-# Pre-call RateLimitResponse stashed here so streaming success logging can
-# mirror ``x-ratelimit-*`` headers into the SLP. Streaming exits
-# common_request_processing before ``async_post_call_success_hook`` runs.
-RATE_LIMIT_RESPONSE_KEY = "_litellm_proxy_rate_limit_response"
-# Holds the acquisition the pre-call hook made for this request: the slot id
-# plus the gauge counter keys it was registered under. The success/failure
-# callbacks release only this exact acquisition: those callbacks also fire
-# for requests rejected at pre-call (which never acquired a slot), and an
-# id-less release would free a slot still owned by another in-flight request
-# — every rejection would then raise effective concurrency above the
-# configured limit.
-MAX_PARALLEL_SLOT_ACQUIRED_KEY = "_litellm_max_parallel_slot_acquired"
 # How long an acquired slot counts toward the in-flight total before it is
 # considered leaked (worker crashed without any release callback firing) and
 # pruned. Also the longest request duration the gauge can track: a request
 # running longer than this stops occupying its slot.
 PARALLEL_REQUEST_SLOT_TTL_SECONDS = 3600
-# Stash keys live ONLY in metadata channels — never at the top level of the
-# request body. Top-level keys are forwarded as body params to upstream
-# providers, which reject unknown fields with 400/429 errors.
-_LITELLM_STASH_KEYS: Tuple[str, ...] = (
-    TPM_RESERVED_TOKENS_KEY,
-    TPM_RESERVED_MODEL_KEY,
-    TPM_RESERVED_SCOPES_KEY,
-    TPM_RESERVATION_RELEASED_KEY,
-    RATE_LIMIT_DESCRIPTORS_KEY,
-    RATE_LIMIT_RESPONSE_KEY,
-    MAX_PARALLEL_SLOT_ACQUIRED_KEY,
-)
 
 
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
@@ -380,6 +339,79 @@ class RateLimitResponse(TypedDict):
 class RateLimitResponseWithDescriptors(TypedDict):
     descriptors: List[RateLimitDescriptor]
     response: RateLimitResponse
+
+
+@dataclass(slots=True)
+class RequestRateLimiterStash:
+    """
+    Per-request bookkeeping the pre-call hook hands to the success/failure/
+    disconnect callbacks. Lives on a ContextVar instead of the request body so
+    it never reaches provider-facing ``metadata`` channels.
+
+    A single mutable instance is shared by every context forked from the
+    request task (the SDK call, streaming generators, and the logging worker's
+    captured context all see the same object), which is what makes the
+    ``reservation_released`` flag and ``parallel_slot`` clearing effective
+    across sibling callbacks: the first release wins, later callbacks observe
+    the cleared state.
+
+    Because the stash is context-inherited, nested LiteLLM calls made inside
+    the request (LLM-judge guardrails, silent experiments) would also see it
+    from their own logging callbacks. ``owner_litellm_call_id`` pins the stash
+    to the proxy request's ``litellm_call_id`` so those callbacks can tell the
+    owning request's events apart from a nested call's: router retries and
+    fallbacks reuse the request's call id and keep access, while nested calls
+    mint fresh ids and are ignored.
+    """
+
+    owner_litellm_call_id: Optional[str] = None
+    rate_limit_response: Optional[RateLimitResponse] = None
+    parallel_slot: Optional[ParallelSlotAcquisition] = None
+    reserved_tokens: int = 0
+    reserved_model: Optional[str] = None
+    reserved_scopes: FrozenSet[Tuple[str, str]] = field(default_factory=frozenset)
+    reservation_released: bool = False
+
+
+_request_stash: ContextVar[Optional[RequestRateLimiterStash]] = ContextVar(
+    "litellm_v3_rate_limiter_request_stash", default=None
+)
+
+
+def get_request_stash() -> Optional[RequestRateLimiterStash]:
+    return _request_stash.get()
+
+
+def get_or_create_request_stash() -> RequestRateLimiterStash:
+    stash = _request_stash.get()
+    if stash is None:
+        stash = RequestRateLimiterStash()
+        _request_stash.set(stash)
+    return stash
+
+
+def claim_request_stash_for_data(data: dict) -> RequestRateLimiterStash:
+    stash = get_or_create_request_stash()
+    owner_call_id = data.get("litellm_call_id")
+    if isinstance(owner_call_id, str):
+        stash.owner_litellm_call_id = owner_call_id
+    return stash
+
+
+def get_request_stash_for_call(litellm_call_id: Optional[str]) -> Optional[RequestRateLimiterStash]:
+    stash = _request_stash.get()
+    if stash is None:
+        return None
+    if stash.owner_litellm_call_id is None or litellm_call_id is None:
+        return stash
+    return stash if litellm_call_id == stash.owner_litellm_call_id else None
+
+
+def _call_id_from_callback_kwargs(kwargs: object) -> Optional[str]:
+    if not isinstance(kwargs, dict):
+        return None
+    call_id = kwargs.get("litellm_call_id")
+    return call_id if isinstance(call_id, str) else None
 
 
 class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
@@ -2343,12 +2375,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
 
-        # Reject caller-supplied stash values before any read/write. Otherwise
-        # a client can inject ``_litellm_rate_limit_descriptors`` /
-        # ``_litellm_tpm_reserved_tokens`` in body ``metadata`` and have
-        # ``async_post_call_failure_hook`` refund TPM counters against scopes
-        # they name (e.g. another tenant's api_key).
-        self._strip_stash_keys_from_all_channels(data)
+        stash = claim_request_stash_for_data(data)
 
         #########################################################
         # Check if the call type has a specific rate limiter
@@ -2444,23 +2471,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     requested_model=requested_model,
                 )
             else:
-                # add descriptors to request headers
-                data["litellm_proxy_rate_limit_response"] = response
-                # Mirror into metadata so streaming success logging can find
-                # it via ``kwargs["litellm_params"]["metadata"]``.
-                self._stash_value_in_internal_metadata(
-                    data=data,
-                    key=RATE_LIMIT_RESPONSE_KEY,
-                    value=response,
-                )
+                stash.rate_limit_response = response
                 if parallel_slot_id is not None:
-                    self._stash_value_in_internal_metadata(
-                        data=data,
-                        key=MAX_PARALLEL_SLOT_ACQUIRED_KEY,
-                        value={
-                            "slot_id": parallel_slot_id,
-                            "counter_keys": parallel_counter_keys,
-                        },
+                    stash.parallel_slot = ParallelSlotAcquisition(
+                        slot_id=parallel_slot_id,
+                        counter_keys=parallel_counter_keys,
                     )
 
             # ----------------------------------------------------------------
@@ -2521,38 +2536,29 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
 
                 if tpm_response["overall_code"] == "OVER_LIMIT":
-                    acquisition = self._get_parallel_slot_acquisition(kwargs=data)
+                    acquisition = stash.parallel_slot
                     if acquisition is not None:
                         await self._release_parallel_request_slots(
                             acquisition=acquisition,
                             parent_otel_span=user_api_key_dict.parent_otel_span,
                         )
-                        self._clear_parallel_slot_marker(data)
+                        stash.parallel_slot = None
                     self._handle_rate_limit_error(
                         response=tpm_response,
                         descriptors=descriptors,
                         requested_model=requested_model,
                     )
                 else:
-                    self._stash_value_in_internal_metadata(
-                        data=data,
-                        key=RATE_LIMIT_DESCRIPTORS_KEY,
-                        value=descriptors,
-                    )
                     # Capture the exact (key, value) scopes the reservation
                     # incremented so post-call reconciliation only applies
                     # the (actual - reserved) delta to those — unreserved
                     # scopes get charged the full actual usage instead.
-                    reserved_scopes: List[Tuple[str, str]] = [
+                    stash.reserved_tokens = estimated_tokens
+                    stash.reserved_model = requested_model
+                    stash.reserved_scopes = frozenset(
                         (d["key"], d["value"])
                         for d in descriptors
                         if (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
-                    ]
-                    self._stash_reservation_in_data(
-                        data=data,
-                        estimated_tokens=estimated_tokens,
-                        reserved_model=requested_model,
-                        reserved_scopes=reserved_scopes,
                     )
 
                     # Merge TPM statuses into the stored rate-limit response
@@ -2560,43 +2566,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     # headers reach the client. Without this, the RPM-only
                     # response from should_rate_limit (skip_tpm_check=True)
                     # silently drops all token headers.
-                    stored_response = data.get("litellm_proxy_rate_limit_response")
-                    if isinstance(stored_response, dict):
-                        stored_response.setdefault("statuses", []).extend(tpm_response["statuses"])
-                    elif tpm_response["statuses"]:
-                        data["litellm_proxy_rate_limit_response"] = tpm_response
-                        # Keep the metadata stash in sync when this is the
-                        # first snapshot written.
-                        self._stash_value_in_internal_metadata(
-                            data=data,
-                            key=RATE_LIMIT_RESPONSE_KEY,
-                            value=tpm_response,
-                        )
+                    stored_response = stash.rate_limit_response
+                    if stored_response is not None:
+                        stored_response["statuses"].extend(tpm_response["statuses"])
 
                     verbose_proxy_logger.debug(f"TPM tokens reserved: {estimated_tokens} for model {requested_model}")
-
-        # Defense-in-depth: scrub any stash key that escaped onto data
-        # top-level (stale cache hit, router pass, test fixture) before the
-        # body is forwarded to the provider.
-        self._strip_stash_keys_from_top_level(data)
-
-    @staticmethod
-    def _strip_stash_keys_from_top_level(data: Any) -> None:
-        if not isinstance(data, dict):
-            return
-        for stash_key in _LITELLM_STASH_KEYS:
-            data.pop(stash_key, None)
-
-    @classmethod
-    def _strip_stash_keys_from_all_channels(cls, data: Any) -> None:
-        if not isinstance(data, dict):
-            return
-        cls._strip_stash_keys_from_top_level(data)
-        for channel in ("metadata", "litellm_metadata"):
-            channel_dict = data.get(channel)
-            if isinstance(channel_dict, dict):
-                for stash_key in _LITELLM_STASH_KEYS:
-                    channel_dict.pop(stash_key, None)
 
     def _create_pipeline_operations(
         self,
@@ -2803,202 +2777,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             merged[f"{prefix}-limit-{status['rate_limit_type']}"] = status["current_limit"]
         return merged
 
-    @staticmethod
-    def _stash_value_in_internal_metadata(
-        data: Dict[str, Any],
-        key: str,
-        value: Any,
-    ) -> None:
-        # Writes only the proxy-internal bucket. Routes that own
-        # ``litellm_metadata`` (Responses, /v1/messages, batches, files) expose
-        # ``metadata`` as a provider request parameter, so creating or adding to
-        # it here would forward internal state upstream.
-        _, metadata_bucket = get_or_create_metadata_bucket(data)
-        metadata_bucket[key] = value
-
-    @classmethod
-    def _stash_reservation_in_data(
-        cls,
-        data: Dict[str, Any],
-        estimated_tokens: int,
-        reserved_model: Optional[str],
-        reserved_scopes: Optional[List[Tuple[str, str]]] = None,
-    ) -> None:
-        """
-        ``reserved_scopes`` is serialized as a list of [key, value] pairs so
-        it round-trips through JSON-based metadata transports.
-        """
-        scopes_payload: Optional[List[List[str]]] = [[k, v] for k, v in reserved_scopes] if reserved_scopes else None
-
-        cls._stash_value_in_internal_metadata(data=data, key=TPM_RESERVED_TOKENS_KEY, value=estimated_tokens)
-        if reserved_model:
-            cls._stash_value_in_internal_metadata(data=data, key=TPM_RESERVED_MODEL_KEY, value=reserved_model)
-        if scopes_payload is not None:
-            cls._stash_value_in_internal_metadata(data=data, key=TPM_RESERVED_SCOPES_KEY, value=scopes_payload)
-
-    @staticmethod
-    def _lookup_stashed_value(
-        kwargs: Any,
-        standard_logging_metadata: Optional[Dict[str, Any]],
-        key: str,
-    ) -> Any:
-        """
-        Resolve a stashed value from any metadata channel the request data
-        can flow through to a callback. Top-level ``kwargs`` is not checked
-        because stash keys must never live there.
-        """
-        candidate: Any = None
-        if isinstance(kwargs, dict):
-            for channel in ("metadata", "litellm_metadata"):
-                channel_dict = kwargs.get(channel)
-                if isinstance(channel_dict, dict) and key in channel_dict:
-                    candidate = channel_dict.get(key)
-                    if candidate is not None:
-                        return candidate
-            litellm_params = kwargs.get("litellm_params")
-            if isinstance(litellm_params, dict):
-                for channel in ("litellm_metadata", "metadata"):
-                    lp_metadata = litellm_params.get(channel)
-                    if isinstance(lp_metadata, dict) and lp_metadata.get(key) is not None:
-                        return lp_metadata[key]
-        if candidate is None and isinstance(standard_logging_metadata, dict):
-            candidate = standard_logging_metadata.get(key)
-        return candidate
-
-    @classmethod
-    def _get_reserved_tokens_from_kwargs(
-        cls,
-        kwargs: Any,
-        standard_logging_metadata: Optional[Dict[str, Any]] = None,
-    ) -> int:
-        candidate = cls._lookup_stashed_value(kwargs, standard_logging_metadata, TPM_RESERVED_TOKENS_KEY)
-        try:
-            return int(candidate or 0)
-        except (TypeError, ValueError):
-            return 0
-
-    @classmethod
-    def _get_reserved_model_from_kwargs(
-        cls,
-        kwargs: Any,
-        standard_logging_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Optional[str]:
-        """
-        Resolve the model the upfront reservation was charged against. Used to
-        target reconciliation at the same key that was incremented, regardless
-        of whether the router later set a different ``model_group`` in
-        ``litellm_params.metadata``.
-        """
-        candidate = cls._lookup_stashed_value(kwargs, standard_logging_metadata, TPM_RESERVED_MODEL_KEY)
-        return candidate if isinstance(candidate, str) and candidate else None
-
-    @classmethod
-    def _get_reserved_scopes_from_kwargs(
-        cls,
-        kwargs: Any,
-        standard_logging_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Set[Tuple[str, str]]:
-        """
-        Resolve the (scope_key, scope_value) pairs the upfront reservation
-        actually charged. Reconciliation distinguishes these from
-        unreserved scopes — applying the delta to reserved scopes (which
-        already carry +reserved on the counter) and the full actual to
-        unreserved ones (which were never charged).
-        """
-        candidate = cls._lookup_stashed_value(kwargs, standard_logging_metadata, TPM_RESERVED_SCOPES_KEY)
-        if not isinstance(candidate, list):
-            return set()
-        scopes: Set[Tuple[str, str]] = set()
-        for entry in candidate:
-            if (
-                isinstance(entry, (list, tuple))
-                and len(entry) == 2
-                and isinstance(entry[0], str)
-                and isinstance(entry[1], str)
-            ):
-                scopes.add((entry[0], entry[1]))
-        return scopes
-
-    @classmethod
-    def _is_reservation_released(
-        cls,
-        kwargs: Any,
-        standard_logging_metadata: Optional[Dict[str, Any]] = None,
-    ) -> bool:
-        """True if a prior callback already refunded this request's reservation."""
-        return bool(cls._lookup_stashed_value(kwargs, standard_logging_metadata, TPM_RESERVATION_RELEASED_KEY))
-
-    @classmethod
-    def _get_parallel_slot_acquisition(
-        cls,
-        kwargs: Any,
-        standard_logging_metadata: dict[str, Any] | None = None,
-    ) -> ParallelSlotAcquisition | None:
-        """The slot acquisition this request's pre-call hook made, if any."""
-        candidate = cls._lookup_stashed_value(kwargs, standard_logging_metadata, MAX_PARALLEL_SLOT_ACQUIRED_KEY)
-        if not isinstance(candidate, dict):
-            return None
-        slot_id = candidate.get("slot_id")
-        counter_keys = candidate.get("counter_keys")
-        if not isinstance(slot_id, str) or not slot_id:
-            return None
-        if not isinstance(counter_keys, list) or not counter_keys:
-            return None
-        if not all(isinstance(key, str) and key for key in counter_keys):
-            return None
-        return ParallelSlotAcquisition(slot_id=slot_id, counter_keys=counter_keys)
-
-    @staticmethod
-    def _clear_parallel_slot_marker(data: Any) -> None:
-        """
-        Remove the acquired-slot marker from every metadata channel a sibling
-        callback might read, so one release per acquire is an invariant even
-        when multiple callbacks fire for the same request.
-        """
-        if not isinstance(data, dict):
-            return
-        for channel in ("metadata", "litellm_metadata"):
-            channel_dict = data.get(channel)
-            if isinstance(channel_dict, dict):
-                channel_dict.pop(MAX_PARALLEL_SLOT_ACQUIRED_KEY, None)
-        litellm_params = data.get("litellm_params")
-        if isinstance(litellm_params, dict):
-            lp_metadata = litellm_params.get("metadata")
-            if isinstance(lp_metadata, dict):
-                lp_metadata.pop(MAX_PARALLEL_SLOT_ACQUIRED_KEY, None)
-        slo = data.get("standard_logging_object")
-        if isinstance(slo, dict):
-            slo_meta = slo.get("metadata")
-            if isinstance(slo_meta, dict):
-                slo_meta.pop(MAX_PARALLEL_SLOT_ACQUIRED_KEY, None)
-
-    @staticmethod
-    def _mark_reservation_released(data: Any) -> None:
-        """
-        Stamp the released flag into every metadata channel a sibling
-        callback might read from. async_post_call_failure_hook receives the
-        request data dict; async_log_failure_event reads kwargs +
-        standard_logging_object.metadata. Same dict identity across
-        ``request_data["metadata"]`` and ``kwargs["litellm_params"]["metadata"]``
-        means writes here propagate to the other hook.
-        """
-        if not isinstance(data, dict):
-            return
-        for channel in ("metadata", "litellm_metadata"):
-            existing = data.get(channel)
-            if isinstance(existing, dict):
-                existing[TPM_RESERVATION_RELEASED_KEY] = True
-        litellm_params = data.get("litellm_params")
-        if isinstance(litellm_params, dict):
-            lp_metadata = litellm_params.get("metadata")
-            if isinstance(lp_metadata, dict):
-                lp_metadata[TPM_RESERVATION_RELEASED_KEY] = True
-        slo = data.get("standard_logging_object")
-        if isinstance(slo, dict):
-            slo_meta = slo.get("metadata")
-            if isinstance(slo_meta, dict):
-                slo_meta[TPM_RESERVATION_RELEASED_KEY] = True
-
     def _collect_tpm_scope_targets(
         self,
         standard_logging_metadata: Dict[str, Any],
@@ -3064,7 +2842,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _build_reservation_aware_tpm_ops(
         self,
         targets: List[Tuple[str, str]],
-        reserved_scopes: Set[Tuple[str, str]],
+        reserved_scopes: FrozenSet[Tuple[str, str]],
         actual_tokens: int,
         reserved_tokens: int,
     ) -> List[RedisPipelineIncrementOperation]:
@@ -3139,18 +2917,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if total_tokens == 0:
             total_tokens = self._aggregate_only_total_tokens(usage=_usage)
 
-        reserved_tokens = self._get_reserved_tokens_from_kwargs(
-            kwargs=kwargs,
-            standard_logging_metadata=standard_logging_metadata,
-        )
-        reserved_model = self._get_reserved_model_from_kwargs(
-            kwargs=kwargs,
-            standard_logging_metadata=standard_logging_metadata,
-        )
-        reserved_scopes = self._get_reserved_scopes_from_kwargs(
-            kwargs=kwargs,
-            standard_logging_metadata=standard_logging_metadata,
-        )
+        stash = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
+        reserved_tokens = stash.reserved_tokens if stash is not None else 0
+        reserved_model = stash.reserved_model if stash is not None else None
+        reserved_scopes: FrozenSet[Tuple[str, str]] = stash.reserved_scopes if stash is not None else frozenset()
         # Reconciliation must target the same model-scoped counter that the
         # pre-call reservation incremented. If a reservation was made,
         # ``reserved_model`` is authoritative; otherwise fall back to the
@@ -3206,18 +2976,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         try:
             verbose_proxy_logger.debug("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
 
-            standard_logging_object = kwargs.get("standard_logging_object") or {}
-            standard_logging_metadata = standard_logging_object.get("metadata") or {}
-            acquisition = self._get_parallel_slot_acquisition(
-                kwargs=kwargs,
-                standard_logging_metadata=standard_logging_metadata,
-            )
-            if acquisition is not None:
+            stash = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
+            acquisition = stash.parallel_slot if stash is not None else None
+            if stash is not None and acquisition is not None:
                 await self._release_parallel_request_slots(
                     acquisition=acquisition,
                     parent_otel_span=litellm_parent_otel_span,
                 )
-                self._clear_parallel_slot_marker(kwargs)
+                stash.parallel_slot = None
 
             pipeline_operations = self._build_success_event_pipeline_operations(
                 kwargs=kwargs,
@@ -3267,23 +3033,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if not isinstance(kwargs, dict):
             return
 
-        standard_logging_object = kwargs.get("standard_logging_object")
-        standard_logging_metadata: Optional[Dict[str, Any]] = None
-        if isinstance(standard_logging_object, dict):
-            slp_metadata = standard_logging_object.get("metadata")
-            if isinstance(slp_metadata, dict):
-                standard_logging_metadata = slp_metadata
-
-        statuses = self._narrow_ratelimit_statuses(
-            self._lookup_stashed_value(
-                kwargs=kwargs,
-                standard_logging_metadata=standard_logging_metadata,
-                key=RATE_LIMIT_RESPONSE_KEY,
-            )
-        )
+        stash = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
+        rate_limit_response = stash.rate_limit_response if stash is not None else None
+        statuses = rate_limit_response["statuses"] if rate_limit_response is not None else []
         if not statuses:
             return
 
+        standard_logging_object = kwargs.get("standard_logging_object")
         if isinstance(standard_logging_object, dict):
             hidden_params = standard_logging_object.get("hidden_params")
             if not isinstance(hidden_params, dict):
@@ -3303,43 +3059,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 statuses=statuses,
             )
 
-    @staticmethod
-    def _narrow_ratelimit_statuses(stashed: Any) -> List[RateLimitStatus]:
-        """
-        Narrow a stashed ``RateLimitResponse``-shaped dict to a typed
-        ``statuses`` list. Entries missing any header-write field are dropped;
-        an empty list means "nothing to mirror".
-        """
-        if not isinstance(stashed, dict):
-            return []
-        raw_statuses = stashed.get("statuses")
-        if not isinstance(raw_statuses, list):
-            return []
-        narrowed: List[RateLimitStatus] = []
-        for entry in raw_statuses:
-            if not isinstance(entry, dict):
-                continue
-            descriptor_key = entry.get("descriptor_key")
-            rate_limit_type = entry.get("rate_limit_type")
-            current_limit = entry.get("current_limit")
-            limit_remaining = entry.get("limit_remaining")
-            if (
-                isinstance(descriptor_key, str)
-                and rate_limit_type in ("requests", "tokens", "max_parallel_requests")
-                and isinstance(current_limit, int)
-                and isinstance(limit_remaining, int)
-            ):
-                narrowed.append(
-                    RateLimitStatus(
-                        code=entry.get("code", "OK") if isinstance(entry.get("code"), str) else "OK",
-                        current_limit=current_limit,
-                        limit_remaining=limit_remaining,
-                        rate_limit_type=rate_limit_type,
-                        descriptor_key=descriptor_key,
-                    )
-                )
-        return narrowed
-
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
         On failure: decrement max_parallel_requests and refund the upfront
@@ -3353,55 +3072,36 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         try:
             litellm_parent_otel_span: Union[Span, None] = _get_parent_otel_span_from_kwargs(kwargs)
-            standard_logging_object = kwargs.get("standard_logging_object") or {}
-            standard_logging_metadata = standard_logging_object.get("metadata") or {}
 
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
 
-            acquisition = self._get_parallel_slot_acquisition(
-                kwargs=kwargs,
-                standard_logging_metadata=standard_logging_metadata,
-            )
-            if acquisition is not None:
+            stash = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
+            acquisition = stash.parallel_slot if stash is not None else None
+            if stash is not None and acquisition is not None:
                 await self._release_parallel_request_slots(
                     acquisition=acquisition,
                     parent_otel_span=litellm_parent_otel_span,
                 )
-                self._clear_parallel_slot_marker(kwargs)
+                stash.parallel_slot = None
 
             # Skip the reservation refund if async_post_call_failure_hook
             # already released it (proxy-level rejection that also bubbles up
             # here as an LLM-error callback). max_parallel_requests is its
             # own counter and is always decremented per call.
-            already_released = self._is_reservation_released(
-                kwargs=kwargs,
-                standard_logging_metadata=standard_logging_metadata,
-            )
-            reserved_tokens = (
-                0
-                if already_released
-                else self._get_reserved_tokens_from_kwargs(
-                    kwargs=kwargs,
-                    standard_logging_metadata=standard_logging_metadata,
-                )
-            )
-            if reserved_tokens > 0:
+            reserved_tokens = 0
+            if stash is not None and not stash.reservation_released:
+                reserved_tokens = stash.reserved_tokens
+            if stash is not None and reserved_tokens > 0:
                 verbose_proxy_logger.debug(f"Releasing reserved TPM tokens on failure: {reserved_tokens}")
                 # Refund only against the scopes the reservation actually
                 # charged. _build_reservation_aware_tpm_ops with
                 # actual_tokens=0 emits -reserved on reserved scopes and 0
                 # on unreserved (skipped), so unreserved scopes can't drift
-                # negative. Targets are derived purely from the reserved
-                # set so we don't even need to re-collect them from
-                # metadata.
-                reserved_scopes = self._get_reserved_scopes_from_kwargs(
-                    kwargs=kwargs,
-                    standard_logging_metadata=standard_logging_metadata,
-                )
+                # negative.
                 pipeline_operations.extend(
                     self._build_reservation_aware_tpm_ops(
-                        targets=list(reserved_scopes),
-                        reserved_scopes=reserved_scopes,
+                        targets=list(stash.reserved_scopes),
+                        reserved_scopes=stash.reserved_scopes,
                         actual_tokens=0,
                         reserved_tokens=reserved_tokens,
                     )
@@ -3412,15 +3112,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     increment_list=pipeline_operations,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 )
-            if reserved_tokens > 0:
-                self._mark_reservation_released(kwargs)
+            if stash is not None and reserved_tokens > 0:
+                stash.reservation_released = True
         except Exception as e:
             verbose_proxy_logger.exception(f"Error in rate limit failure event: {str(e)}")
 
     async def async_release_max_parallel_requests_on_disconnect(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict | None = None,
     ) -> None:
         """
         Release the api-key ``max_parallel_requests`` slot that
@@ -3432,20 +3131,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         client cancels a stream mid-flight, the cancellation surfaces as
         ``asyncio.CancelledError`` / ``GeneratorExit`` and neither callback
         runs, so without this the slot leaks per cancelled stream until its
-        TTL prunes it. ``request_data`` carries the stashed acquisition;
-        its presence (not the key object's current max_parallel_requests
-        configuration, which can change mid-request) decides whether there
-        is anything to release.
+        TTL prunes it. The stashed acquisition's presence (not the key
+        object's current max_parallel_requests configuration, which can
+        change mid-request) decides whether there is anything to release.
         """
-        acquisition = self._get_parallel_slot_acquisition(kwargs=request_data)
-        if acquisition is None:
+        stash = get_request_stash()
+        if stash is None or stash.parallel_slot is None:
             return
 
         await self._release_parallel_request_slots(
-            acquisition=acquisition,
+            acquisition=stash.parallel_slot,
             parent_otel_span=None,
         )
-        self._clear_parallel_slot_marker(request_data)
+        stash.parallel_slot = None
 
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
@@ -3454,10 +3152,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         try:
             from pydantic import BaseModel
 
-            litellm_proxy_rate_limit_response = cast(
-                Optional[RateLimitResponse],
-                data.get("litellm_proxy_rate_limit_response", None),
-            )
+            stash = get_request_stash()
+            litellm_proxy_rate_limit_response = stash.rate_limit_response if stash is not None else None
 
             if litellm_proxy_rate_limit_response is not None:
                 # Update response headers
@@ -3502,59 +3198,42 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         rejections, so a leaked slot would occupy the gauge for the full
         PARALLEL_REQUEST_SLOT_TTL_SECONDS.
 
-        Idempotent: the slot release clears the acquisition marker (and slot
+        Idempotent: the slot release clears the stashed acquisition (and slot
         removal is a no-op ZREM on a second run), and the TPM refund is
-        guarded by TPM_RESERVATION_RELEASED_KEY — if both this hook and
-        async_log_failure_event end up running in the same flow, only the
-        first release/refund applies.
+        guarded by the stash's ``reservation_released`` flag — if both this
+        hook and async_log_failure_event end up running in the same flow, only
+        the first release/refund applies.
         """
         try:
-            acquisition = self._get_parallel_slot_acquisition(kwargs=request_data)
-            if acquisition is not None:
+            stash = get_request_stash()
+            if stash is None:
+                return
+            if stash.parallel_slot is not None:
                 await self._release_parallel_request_slots(
-                    acquisition=acquisition,
+                    acquisition=stash.parallel_slot,
                     parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
-                self._clear_parallel_slot_marker(request_data)
+                stash.parallel_slot = None
 
-            if self._is_reservation_released(kwargs=request_data):
+            if stash.reservation_released:
                 return
-            reserved_tokens = self._get_reserved_tokens_from_kwargs(kwargs=request_data)
+            reserved_tokens = stash.reserved_tokens
             if reserved_tokens <= 0:
                 return
 
-            # Refund directly against the descriptors we reserved against —
-            # the pre-call hook stashes them in the request-data metadata
-            # channels before success/failure callbacks run.
-            stashed = self._lookup_stashed_value(
-                kwargs=request_data,
-                standard_logging_metadata=None,
-                key=RATE_LIMIT_DESCRIPTORS_KEY,
+            ops = self._build_reservation_aware_tpm_ops(
+                targets=list(stash.reserved_scopes),
+                reserved_scopes=stash.reserved_scopes,
+                actual_tokens=0,
+                reserved_tokens=reserved_tokens,
             )
-            descriptors: List[RateLimitDescriptor] = stashed if isinstance(stashed, list) else []
-            ops: List[RedisPipelineIncrementOperation] = []
-            for descriptor in descriptors:
-                rate_limit = descriptor.get("rate_limit") or {}
-                if rate_limit.get("tokens_per_unit") is None:
-                    continue
-                ops.append(
-                    RedisPipelineIncrementOperation(
-                        key=self.create_rate_limit_keys(
-                            descriptor["key"],
-                            descriptor["value"],
-                            "tokens",
-                        ),
-                        increment_value=-reserved_tokens,
-                        ttl=self.window_size,
-                    )
-                )
             if ops:
                 verbose_proxy_logger.debug(f"Releasing reserved TPM tokens on proxy-level rejection: {reserved_tokens}")
                 await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                     increment_list=ops,
                     litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
-            self._mark_reservation_released(request_data)
+            stash.reservation_released = True
         except Exception as e:
             verbose_proxy_logger.exception(f"Error releasing TPM reservation on post-call failure: {e}")
         return None

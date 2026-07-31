@@ -517,6 +517,7 @@ class LLMCachingHandler:
                 cached_result=final_embedding_cached_response,
                 is_async=True,
                 is_embedding=True,
+                custom_llm_provider=custom_llm_provider,
             )
             self._async_log_cache_hit_on_callbacks(
                 logging_obj=logging_obj,

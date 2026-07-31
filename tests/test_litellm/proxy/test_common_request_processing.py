@@ -1,7 +1,7 @@
 import asyncio
 import copy
 import datetime
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Callable, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -5111,3 +5111,246 @@ class TestStreamingClientDisconnectBilling:
         )
 
         proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+
+
+def _apply_stream_usage_tracking(
+    data: dict,
+    general_settings: dict,
+    route_type: str,
+    supports_stream_options: Callable[[], bool] = lambda: True,
+) -> None:
+    from litellm.proxy.common_request_processing import _stream_usage_tracking_updates
+
+    data.update(
+        _stream_usage_tracking_updates(
+            data=data,
+            general_settings=general_settings,
+            route_type=route_type,
+            supports_stream_options=supports_stream_options,
+        )
+    )
+
+
+class TestApplyStreamUsageTracking:
+    def test_default_injects_usage_and_marks_strip_for_chat_completions(self):
+        data = {"stream": True, "model": "gpt-5.4-nano"}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"] == {"include_usage": True}
+        assert data["_litellm_strip_stream_usage"] is True
+
+    def test_default_preserves_other_client_stream_options_keys(self):
+        data = {"stream": True, "stream_options": {"include_obfuscation": True}}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"] == {"include_obfuscation": True, "include_usage": True}
+        assert data["_litellm_strip_stream_usage"] is True
+
+    def test_client_requested_usage_is_left_untouched_and_not_stripped(self):
+        data = {"stream": True, "stream_options": {"include_usage": True}}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"] == {"include_usage": True}
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_client_include_usage_false_is_overridden_and_stripped(self):
+        data = {"stream": True, "stream_options": {"include_usage": False}}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"]["include_usage"] is True
+        assert data["_litellm_strip_stream_usage"] is True
+
+    def test_explicit_false_flag_disables_injection_entirely(self):
+        data = {"stream": True}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": False},
+            route_type="acompletion",
+        )
+
+        assert "stream_options" not in data
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_flag_true_injects_without_strip_marker(self):
+        data = {"stream": True}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": True},
+            route_type="acompletion",
+        )
+
+        assert data["stream_options"] == {"include_usage": True}
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_flag_true_respects_client_explicit_include_usage_false(self):
+        data = {"stream": True, "stream_options": {"include_usage": False}}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": True},
+            route_type="acompletion",
+        )
+
+        assert data["stream_options"] == {"include_usage": False}
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_default_does_not_touch_non_chat_completion_routes(self):
+        data = {"stream": True}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="anthropic_messages")
+
+        assert "stream_options" not in data
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_non_streaming_request_is_untouched(self):
+        data = {"model": "gpt-5.4-nano"}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert "stream_options" not in data
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_default_skips_injection_when_provider_lacks_stream_options_support(self):
+        data = {"stream": True, "model": "bytez-model"}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={},
+            route_type="acompletion",
+            supports_stream_options=lambda: False,
+        )
+
+        assert "stream_options" not in data
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_client_supplied_strip_marker_is_neutralized(self):
+        data = {
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "_litellm_strip_stream_usage": True,
+        }
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["_litellm_strip_stream_usage"] is False
+        assert data["stream_options"] == {"include_usage": True}
+
+    def test_client_supplied_strip_marker_is_neutralized_with_flag_true(self):
+        data = {
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "_litellm_strip_stream_usage": True,
+        }
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": True},
+            route_type="acompletion",
+        )
+
+        assert data["_litellm_strip_stream_usage"] is False
+
+    def test_client_supplied_strip_marker_is_neutralized_on_non_streaming_request(self):
+        data = {"_litellm_strip_stream_usage": True}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["_litellm_strip_stream_usage"] is False
+
+
+class TestModelDeploymentsSupportStreamOptions:
+    def _support(self, model, llm_router=None, team_id=None) -> bool:
+        from litellm.proxy.common_request_processing import (
+            _model_deployments_support_stream_options,
+        )
+
+        return _model_deployments_support_stream_options(model=model, llm_router=llm_router, team_id=team_id)
+
+    def test_openai_compatible_deployment_supports_stream_options(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "azure-nano",
+                    "litellm_params": {
+                        "model": "azure/gpt-5.4-nano",
+                        "api_key": "fake",
+                        "api_base": "https://example.openai.azure.com",
+                    },
+                }
+            ]
+        )
+
+        assert self._support("azure-nano", router) is True
+
+    def test_deployment_on_provider_rejecting_stream_options_is_not_injected(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "tiny",
+                    "litellm_params": {"model": "bytez/openai-community/gpt2", "api_key": "fake"},
+                }
+            ]
+        )
+
+        assert self._support("tiny", router) is False
+
+    def test_mixed_provider_model_group_is_not_injected(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "mixed",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+                },
+                {
+                    "model_name": "mixed",
+                    "litellm_params": {"model": "oci/cohere.command-r-plus", "api_key": "fake"},
+                },
+            ]
+        )
+
+        assert self._support("mixed", router) is False
+
+    def test_wildcard_route_resolves_provider_support(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {"model": "openai/*", "api_key": "fake"},
+                }
+            ]
+        )
+
+        assert self._support("openai/gpt-4o", router) is True
+
+    def test_provider_prefixed_model_without_router_is_resolved_directly(self):
+        assert self._support("openai/gpt-4o", None) is True
+        assert self._support("bytez/openai-community/gpt2", None) is False
+
+    def test_unmapped_model_name_is_not_injected(self):
+        assert self._support("some-unmapped-public-alias", None) is False
+
+    def test_team_alias_model_resolves_with_team_id(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "model_name_team-1_8b6a0b3f",
+                    "litellm_params": {"model": "azure/gpt-5.4-nano", "api_key": "fake"},
+                    "model_info": {
+                        "team_id": "team-1",
+                        "team_public_model_name": "team-gpt",
+                    },
+                }
+            ]
+        )
+
+        assert self._support("team-gpt", router, team_id="team-1") is True
+        assert self._support("team-gpt", router, team_id=None) is False
+
+    def test_non_string_model_is_not_injected(self):
+        assert self._support(None, None) is False
