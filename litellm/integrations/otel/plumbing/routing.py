@@ -379,7 +379,11 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 )
 
     def shutdown(self) -> None:
-        for processor in self._processors.values():
+        # Snapshot before iterating: ``on_end`` mutates ``self._processors`` (insert /
+        # move_to_end / popitem) on the span-ending thread and can run concurrently with
+        # this SDK-driven shutdown, so iterating the live mapping risks a
+        # "mutated during iteration" RuntimeError that the per-item except can't catch.
+        for processor in tuple(self._processors.values()):
             try:
                 processor.shutdown()
             except Exception as exc:  # noqa: BLE001  # a single processor's shutdown failure must not abort shutting down the rest
@@ -388,7 +392,10 @@ class TenantFanOutSpanProcessor(SpanProcessor):
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         all_ok = True
-        for processor in self._processors.values():
+        # Snapshot before iterating (see ``shutdown``): a concurrent ``on_end`` mutating
+        # the processor cache must not abort the flush and drop the remaining destinations'
+        # buffered spans.
+        for processor in tuple(self._processors.values()):
             try:
                 if not processor.force_flush(timeout_millis):
                     all_ok = False

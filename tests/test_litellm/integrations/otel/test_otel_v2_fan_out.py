@@ -285,6 +285,48 @@ def test_fan_out_caches_processor_per_destination_key(monkeypatch):
     assert len(fan_out._processors) == 2
 
 
+def test_fan_out_flush_and_shutdown_survive_concurrent_cache_mutation():
+    """force_flush/shutdown snapshot the processor cache before iterating, so a
+    concurrent ``on_end`` inserting or evicting a processor cannot raise a
+    'mutated during iteration' RuntimeError and drop the remaining destinations'
+    buffered spans."""
+    _provider, fan_out = _build_provider_with_fan_out("langfuse_otel", InMemorySpanExporter())
+
+    touched: list[str] = []
+
+    class _MutatingProc:
+        def __init__(self, name: str, mutate: bool = False) -> None:
+            self.name = name
+            self.mutate = mutate
+
+        def _maybe_mutate(self, key: str) -> None:
+            if self.mutate:  # simulate a concurrent on_end caching a new processor
+                fan_out._processors[(key, "x")] = _MutatingProc(key)
+
+        def force_flush(self, timeout_millis: int = 30000) -> bool:
+            touched.append(self.name)
+            self._maybe_mutate("late-flush")
+            return True
+
+        def shutdown(self) -> None:
+            touched.append("sd-" + self.name)
+            self._maybe_mutate("late-shutdown")
+
+    fan_out._processors.clear()
+    fan_out._processors[("a", "1")] = _MutatingProc("a", mutate=True)
+    fan_out._processors[("b", "2")] = _MutatingProc("b")
+    fan_out._processors[("c", "3")] = _MutatingProc("c")
+
+    # No RuntimeError despite the mutation mid-iteration; every original processor ran.
+    assert fan_out.force_flush() is True
+    assert {"a", "b", "c"} <= set(touched)
+
+    touched.clear()
+    fan_out._processors[("a", "1")] = _MutatingProc("a", mutate=True)
+    fan_out.shutdown()
+    assert "sd-a" in touched
+
+
 def test_fan_out_per_request_isolation_with_concurrent_tasks(monkeypatch):
     """Two requests running concurrently with different destinations must each
     see only THEIR destination's spans. The contextvar scopes per asyncio task,

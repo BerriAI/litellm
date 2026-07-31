@@ -273,7 +273,27 @@ def test_generic_preset_needs_no_global_env_and_emits_genai(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     cfg = generic_preset()  # must not raise, no env needed
     assert "genai" in cfg.mapper_names
-    # no vendor (owned) exporter contributed -- only the base/global passthrough, if any
-    assert all(e.owner is None for e in cfg.exporters)
+    # A credential-less generic config must contribute NO exporter at all. In particular
+    # it must not degrade to the default console exporter, which prints every span
+    # (including prompt/completion content) to stdout synchronously on the request path.
+    assert cfg.exporters == []
     # the degrade flag is accepted (Preset protocol) and irrelevant -- still builds
-    assert generic_preset(allow_missing_credentials=True) is not None
+    assert generic_preset(allow_missing_credentials=True).exporters == []
+
+
+def test_bare_and_degraded_configs_do_not_console_flood(monkeypatch):
+    # The "nothing configured" degrade case (bare config, or a credential-mandatory
+    # preset degrading with allow_missing_credentials) must export nothing rather than
+    # folding the default console exporter in and dumping every span to stdout.
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+    from litellm.integrations.otel.presets.langfuse import langfuse_preset
+    from litellm.integrations.otel.presets.weave import weave_preset
+
+    assert OpenTelemetryV2Config().exporters == []
+    # An explicit endpoint (a real destination) still folds into one OTLP exporter.
+    assert len(OpenTelemetryV2Config(endpoint="http://collector/v1/traces").exporters) == 1
+
+    for var in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "WANDB_API_KEY", "WANDB_PROJECT_ID"):
+        monkeypatch.delenv(var, raising=False)
+    assert langfuse_preset(allow_missing_credentials=True).exporters == []
+    assert weave_preset(allow_missing_credentials=True).exporters == []

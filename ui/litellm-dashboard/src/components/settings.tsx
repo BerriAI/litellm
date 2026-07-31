@@ -296,17 +296,6 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       resolvedScope: resolveScope(c.credential_info?.access),
     }));
 
-  const handleDeleteDestination = async (name: string) => {
-    if (!accessToken) return;
-    try {
-      await credentialDeleteCall(accessToken, name);
-      NotificationsManager.success("Logging destination deleted");
-      refetchCredentials();
-    } catch (error) {
-      NotificationsManager.fromBackend(parseErrorMessage(error));
-    }
-  };
-
   useEffect(() => {
     if (!accessToken) {
       return;
@@ -633,13 +622,22 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
 
     try {
       setIsDeletingCallback(true);
-      await deleteCallback(accessToken, callbackToDelete.name);
-      NotificationsManager.success(`Callback ${callbackToDelete.name} deleted successfully`);
-
-      // Refresh the callbacks list
-      if (userID && userRole) {
-        const data = await getCallbacksCall(accessToken, userID, userRole);
-        setCallbacks(data.callbacks);
+      // A destination row carries a credentialName; it is a logging credential and is
+      // deleted (with its stored collector secrets) through the credential endpoint. A
+      // plain config callback is deleted through the callback endpoint. Both run only
+      // after the same delete confirmation, so a mis-click can't drop either instantly.
+      if (callbackToDelete.credentialName) {
+        await credentialDeleteCall(accessToken, callbackToDelete.credentialName);
+        NotificationsManager.success("Logging destination deleted");
+        refetchCredentials();
+      } else {
+        await deleteCallback(accessToken, callbackToDelete.name);
+        NotificationsManager.success(`Callback ${callbackToDelete.name} deleted successfully`);
+        // Refresh the callbacks list
+        if (userID && userRole) {
+          const data = await getCallbacksCall(accessToken, userID, userRole);
+          setCallbacks(data.callbacks);
+        }
       }
 
       setShowDeleteConfirmModal(false);
@@ -682,9 +680,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 onEditAccess={(cb) =>
                   cb.credentialName && setEditAccessFor({ name: cb.credentialName, access: cb.access })
                 }
-                onDelete={(cb) =>
-                  cb.credentialName ? handleDeleteDestination(cb.credentialName) : handleDeleteCallback(cb)
-                }
+                onDelete={(cb) => handleDeleteCallback(cb)}
                 onTest={async (cb) => {
                   try {
                     await serviceHealthCheck(accessToken, cb.name);
