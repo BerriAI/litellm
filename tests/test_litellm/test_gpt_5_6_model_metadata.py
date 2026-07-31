@@ -7,7 +7,14 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
 GPT_5_6_MODELS = ("gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
 
-STANDARD_PRICING = {
+OPENAI_STANDARD_PRICING = {
+    "gpt-5.6": (5e-06, 3e-05, 5e-07, 6.25e-06),
+    "gpt-5.6-sol": (5e-06, 3e-05, 5e-07, 6.25e-06),
+    "gpt-5.6-terra": (2e-06, 1.2e-05, 2e-07, 2.5e-06),
+    "gpt-5.6-luna": (2e-07, 1.2e-06, 2e-08, 2.5e-07),
+}
+
+AZURE_STANDARD_PRICING = {
     "gpt-5.6": (5e-06, 3e-05, 5e-07, 6.25e-06),
     "gpt-5.6-sol": (5e-06, 3e-05, 5e-07, 6.25e-06),
     "gpt-5.6-terra": (2.5e-06, 1.5e-05, 2.5e-07, 3.125e-06),
@@ -27,7 +34,7 @@ def test_openai_gpt_5_6_model_info(model):
     assert info["litellm_provider"] == "openai"
     assert info["mode"] == "chat"
 
-    input_cost, output_cost, cache_read_cost, cache_write_cost = STANDARD_PRICING[model]
+    input_cost, output_cost, cache_read_cost, cache_write_cost = OPENAI_STANDARD_PRICING[model]
     assert info["input_cost_per_token"] == input_cost
     assert info["output_cost_per_token"] == output_cost
     assert info["cache_read_input_token_cost"] == cache_read_cost
@@ -95,7 +102,7 @@ def test_azure_gpt_5_6_global_model_info(model):
     assert info["litellm_provider"] == "azure"
     assert info["mode"] == "chat"
 
-    input_cost, output_cost, cache_read_cost, _ = STANDARD_PRICING[_tier_key(model)]
+    input_cost, output_cost, cache_read_cost, _ = AZURE_STANDARD_PRICING[_tier_key(model)]
     assert info["input_cost_per_token"] == input_cost
     assert info["output_cost_per_token"] == output_cost
     assert info["cache_read_input_token_cost"] == cache_read_cost
@@ -124,7 +131,7 @@ def test_azure_gpt_5_6_regional_model_info(model):
     assert info["litellm_provider"] == "azure"
     assert info["mode"] == "chat"
 
-    input_cost, output_cost, cache_read_cost, _ = STANDARD_PRICING[_tier_key(model)]
+    input_cost, output_cost, cache_read_cost, _ = AZURE_STANDARD_PRICING[_tier_key(model)]
 
     assert info["input_cost_per_token"] == pytest.approx(input_cost * 1.1)
     assert info["output_cost_per_token"] == pytest.approx(output_cost * 1.1)
@@ -142,6 +149,55 @@ def test_azure_gpt_5_6_regional_model_info(model):
     assert provider == "azure"
 
 
+BEDROCK_MANTLE_MODELS = (
+    "bedrock_mantle/openai.gpt-5.6-sol",
+    "bedrock_mantle/openai.gpt-5.6-terra",
+    "bedrock_mantle/openai.gpt-5.6-luna",
+)
+
+BEDROCK_MANTLE_PRICING = {
+    "bedrock_mantle/openai.gpt-5.6-sol": (5.5e-06, 3.3e-05, 5.5e-07, 6.875e-06),
+    "bedrock_mantle/openai.gpt-5.6-terra": (2.2e-06, 1.32e-05, 2.2e-07, 2.75e-06),
+    "bedrock_mantle/openai.gpt-5.6-luna": (2.2e-07, 1.32e-06, 2.2e-08, 2.75e-07),
+}
+
+
+@pytest.mark.parametrize("model", BEDROCK_MANTLE_MODELS)
+def test_bedrock_mantle_gpt_5_6_model_info(model):
+    model_cost = _load_main()
+    info = model_cost.get(model)
+    assert info is not None, f"{model} not found in model_prices_and_context_window.json"
+
+    assert info["litellm_provider"] == "bedrock_mantle"
+    assert info["mode"] == "responses"
+
+    input_cost, output_cost, cache_read_cost, cache_write_cost = BEDROCK_MANTLE_PRICING[model]
+    assert info["input_cost_per_token"] == input_cost
+    assert info["output_cost_per_token"] == output_cost
+    assert info["cache_read_input_token_cost"] == cache_read_cost
+    assert info["cache_creation_input_token_cost"] == cache_write_cost
+
+    assert info["cache_read_input_token_cost"] == pytest.approx(input_cost * 0.1)
+    assert info["cache_creation_input_token_cost"] == pytest.approx(input_cost * 1.25)
+
+    _, provider, _, _ = get_llm_provider(model=model)
+    assert provider == "bedrock_mantle"
+
+
+def test_bedrock_mantle_gpt_5_6_carries_the_regional_uplift_over_openai():
+    model_cost = _load_main()
+
+    for mantle_model, openai_model in (
+        ("bedrock_mantle/openai.gpt-5.6-terra", "gpt-5.6-terra"),
+        ("bedrock_mantle/openai.gpt-5.6-luna", "gpt-5.6-luna"),
+    ):
+        mantle_input, mantle_output, _, _ = BEDROCK_MANTLE_PRICING[mantle_model]
+        openai_info = model_cost[openai_model]
+        uplift = openai_info["regional_processing_uplift_multiplier_us"]
+        assert mantle_input == pytest.approx(openai_info["input_cost_per_token"] * uplift)
+        assert mantle_output == pytest.approx(openai_info["output_cost_per_token"] * uplift)
+
+
 def test_gpt_5_6_backup_matches_main():
     """Ensure the bundled model cost map stays in sync with the canonical file."""
     repo_root = Path(__file__).parents[2]
@@ -153,7 +209,7 @@ def test_gpt_5_6_backup_matches_main():
     with open(backup_path) as f:
         backup_cost = json.load(f)
 
-    for model in GPT_5_6_MODELS + AZURE_GLOBAL_MODELS + AZURE_REGIONAL_MODELS:
+    for model in GPT_5_6_MODELS + AZURE_GLOBAL_MODELS + AZURE_REGIONAL_MODELS + BEDROCK_MANTLE_MODELS:
         assert backup_cost.get(model) == main_cost.get(model), (
             f"{model} differs between main and backup model cost maps"
         )
