@@ -23,7 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError } from "@/lib/http/client";
 
-import { getBudgetTableColumns } from "./BudgetTableColumns";
+import { BUDGET_TABLE_HIDDEN_COLUMNS, getBudgetTableColumns } from "./BudgetTableColumns";
 
 interface BudgetTableProps {
   list: ResourceListResult<budgetItem>;
@@ -225,6 +225,7 @@ const BudgetTable: React.FC<BudgetTableProps> = ({ list, canModify, onEditClick,
       data={list.rows}
       columns={columns}
       getRowId={(budget, index) => budget.budget_id || String(index)}
+      defaultColumnVisibility={BUDGET_TABLE_HIDDEN_COLUMNS}
       sortingMode="server"
       sorting={list.sorting}
       onSortingChange={list.onSortingChange}

@@ -75,6 +75,12 @@ function BudgetRowActions({ budget, onEditClick, onDeleteClick }: BudgetRowActio
   );
 }
 
+/** Off by default so the table opens on the four columns it has always shown; the Columns menu turns them on. */
+export const BUDGET_TABLE_HIDDEN_COLUMNS: Record<string, boolean> = {
+  budget_duration: false,
+  created_at: false,
+};
+
 interface BudgetTableColumnsDeps {
   canModify: boolean;
   onEditClick: (budget: budgetItem) => void;

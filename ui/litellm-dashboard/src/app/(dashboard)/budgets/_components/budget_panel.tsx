@@ -3,8 +3,10 @@
  *
  */
 
+import { Plus, Wallet } from "lucide-react";
 import React, { useCallback, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
@@ -76,11 +78,19 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   };
 
   return (
-    <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
+    <div className="flex flex-col gap-4 p-6 px-12">
+      <PageHeader
+        icon={<Wallet className="size-5" />}
+        title="Budgets"
+        subtitle="Spend, TPM and RPM limits you can assign to customers."
+      />
       {canModify && (
-        <Button size="sm" className="mb-2" onClick={() => setIsCreateModelVisible(true)}>
-          + Create Budget
-        </Button>
+        <div>
+          <Button onClick={() => setIsCreateModelVisible(true)}>
+            <Plus className="size-4" />
+            Create Budget
+          </Button>
+        </div>
       )}
       <Tabs defaultValue="budgets">
         <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
@@ -101,7 +111,6 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                 existingBudget={selectedBudget}
               />
             )}
-            <p className="mb-4 text-sm text-muted-foreground">Create a budget to assign to customers.</p>
             <BudgetTable
               list={budgetList}
               canModify={canModify}
