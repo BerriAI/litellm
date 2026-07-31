@@ -135,10 +135,8 @@ class BaseResponsesAPIStreamingIterator:
         self.finished = False
         self.responses_api_provider_config = responses_api_provider_config
         self.completed_response: Any | None = None
-        # mutable-ok: accumulated across _process_chunk calls; reset per stream instance
-        self._streamed_output_items: dict[int, BaseLiteLLMOpenAIResponseObject] = {}
-        # mutable-ok: OUTPUT_TEXT_DONE fallback for providers that emit no OUTPUT_ITEM_DONE
-        self._streamed_text_only_items: dict[int, BaseLiteLLMOpenAIResponseObject] = {}
+        self._streamed_output_items: dict[int, BaseLiteLLMOpenAIResponseObject] = {}  # mutable-ok: keyed accumulator reset per stream; no immutable equivalent for incremental index-keyed updates
+        self._streamed_text_only_items: dict[int, BaseLiteLLMOpenAIResponseObject] = {}  # mutable-ok: keyed fallback accumulator reset per stream; no immutable equivalent for incremental index-keyed updates
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
         self._yielded_first_chunk = False
@@ -319,7 +317,7 @@ class BaseResponsesAPIStreamingIterator:
                                     item.model_dump() if hasattr(item, "model_dump") else item
                                     for _, item in sorted(_merged_items.items())
                                 ]
-                                _response_obj.output = _backfill  # mutable-ok
+                                _response_obj.output = _backfill  # mutable-ok: patching response obj from provider before it's stored; no immutable path here
                             except Exception:
                                 verbose_logger.warning(
                                     "streaming_iterator: failed to backfill %s output",
@@ -573,7 +571,7 @@ class BaseResponsesAPIStreamingIterator:
                 max(self._streamed_output_items, default=-1) + 1,
             )
             if _item is not None and isinstance(_output_index, int):
-                self._streamed_output_items[_output_index] = _item  # mutable-ok
+                self._streamed_output_items[_output_index] = _item  # mutable-ok: incremental index-keyed accumulation across SSE events; no immutable equivalent
 
         elif _chunk_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
             _text = getattr(chunk, "text", None)
@@ -603,7 +601,7 @@ class BaseResponsesAPIStreamingIterator:
                             ]
                             + [_slot]
                         )
-                    self._streamed_text_only_items[_output_index] = BaseLiteLLMOpenAIResponseObject(  # mutable-ok
+                    self._streamed_text_only_items[_output_index] = BaseLiteLLMOpenAIResponseObject(  # mutable-ok: incremental index-keyed fallback accumulation; no immutable equivalent
                         type="message",
                         id=getattr(_existing, "id", _item_id),
                         role="assistant",
