@@ -48,6 +48,11 @@ async def resolve_ui_session_team_ids(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             user_id_upsert=False,
+            # UI-session authorization must observe grants, revocations, and
+            # offboarding on the next request. A cached user row can retain a
+            # pre-login or pre-reconciliation team list until its management
+            # TTL expires, which makes both grants and revocations stale.
+            check_db_only=True,
             parent_otel_span=user_api_key_auth.parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -71,9 +76,22 @@ async def resolve_ui_session_team_ids(
 async def build_effective_auth_contexts(
     user_api_key_auth: UserAPIKeyAuth,
 ) -> List[UserAPIKeyAuth]:
-    """Return auth contexts that reflect the actual teams for UI session tokens."""
+    """Return the live admitted-user context behind a UI session token.
 
-    resolved_team_ids = await resolve_ui_session_team_ids(user_api_key_auth)
-    if resolved_team_ids:
-        return [clone_user_api_key_auth_with_team(user_api_key_auth, team_id) for team_id in resolved_team_ids]
+    A UI session key is intentionally not granted MCP servers itself. Treating
+    it like an ordinary virtual key after only swapping in an employee team id
+    therefore applies the key-level MCP ceiling and hides every team server
+    when ``require_key_mcp_access_defined`` is enabled.
+
+    Reuse the same server-only admitted-user path as DCR bridge credentials so
+    discovery and tool execution apply the employee's current direct and team
+    grants, roster membership, organization ceilings, and rate limits.
+    """
+
+    if user_api_key_auth.team_id == UI_SESSION_TOKEN_TEAM_ID and user_api_key_auth.user_id:
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+
+        return [await MCPRequestHandler._reload_admitted_user(user_api_key_auth.user_id)]
     return [user_api_key_auth]

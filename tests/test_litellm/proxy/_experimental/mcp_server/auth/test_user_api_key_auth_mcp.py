@@ -6399,6 +6399,7 @@ class TestGatewaySessionAdmission:
                 self._scope(token)
             )
         assert get_user_object.await_args.kwargs["user_id"] == "sso-user-42"
+        assert get_user_object.await_args.kwargs["check_db_only"] is True
         assert auth_result.user_id == "sso-user-42"
         mock_auth.assert_not_called()
         # Identity-only admission injects no per-server upstream credential (unlike the
@@ -6528,8 +6529,10 @@ class TestUserSubjectTeamUnion:
         async def _get_team_object(team_id, **kw):
             return teams_by_id.get(team_id)
 
-        async def _get_user_object(user_id, **kw):
+        async def _get_user_object_impl(user_id, **kw):
             return MagicMock(user_id=user_id, teams=user_teams or [])
+
+        get_user_object = AsyncMock(side_effect=_get_user_object_impl)
 
         async def _get_org_object(org_id, **kw):
             return (orgs_by_id or {}).get(org_id)
@@ -6541,7 +6544,7 @@ class TestUserSubjectTeamUnion:
 
         with (
             patch("litellm.proxy.auth.auth_checks.get_team_object", _get_team_object),
-            patch("litellm.proxy.auth.auth_checks.get_user_object", _get_user_object),
+            patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),
             patch("litellm.proxy.auth.auth_checks.get_org_object", _get_org_object),
             patch("litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups", AsyncMock(return_value=[])),
             patch("litellm.proxy.proxy_server.get_current_spend", _spend_from_fallback),
@@ -6549,7 +6552,7 @@ class TestUserSubjectTeamUnion:
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
             patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         ):
-            yield
+            yield get_user_object
 
     async def test_keyless_user_unions_servers_across_all_their_teams(self):
         teams = {"team-a": _make_team("team-a", ["srv1", "srv2"]), "team-b": _make_team("team-b", ["srv2", "srv3"])}
@@ -6557,6 +6560,17 @@ class TestUserSubjectTeamUnion:
         with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
             result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
         assert set(result) == {"srv1", "srv2", "srv3"}
+
+    async def test_admitted_subject_team_membership_is_loaded_from_db(self):
+        auth = _make_admitted_subject("sso-user")
+        with self._patch(
+            teams_by_id={"team-a": _make_team("team-a", ["srv1"])},
+            user_teams=["team-a"],
+        ) as get_user_object:
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+
+        assert set(result) == {"srv1"}
+        assert get_user_object.await_args.kwargs["check_db_only"] is True
 
     async def test_key_based_caller_uses_single_team_only(self):
         """A key-based caller (api_key set) with a team_id sees ONLY that team, even though the
