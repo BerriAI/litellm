@@ -382,7 +382,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "flat_model_file_ids": {"hasSome": model_object_ids},
             }
         )
-        return [OpenAIFileObject(**file_object.file_object) for file_object in file_ids]
+        return [
+            OpenAIFileObject(**file_object.file_object)
+            for file_object in file_ids
+            if file_object.file_object is not None
+        ]
 
     async def check_managed_file_id_access(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth
