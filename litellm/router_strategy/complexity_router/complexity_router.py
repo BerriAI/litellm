@@ -42,6 +42,7 @@ from .config import (
     DEFAULT_REASONING_KEYWORDS,
     DEFAULT_SIMPLE_KEYWORDS,
     DEFAULT_TECHNICAL_KEYWORDS,
+    NO_SIGNAL_MARKER,
     TIER_SEVERITY_ORDER,
     ComplexityRouterConfig,
     ComplexityTier,
@@ -473,9 +474,26 @@ class ComplexityRouter(CustomLogger):
 
     def _score_and_classify(
         self, prompt: str, system_prompt: str | None = None
-    ) -> tuple[ComplexityTier, float, tuple[str, ...], Literal["heuristic_scorer", "reasoning_override"]]:
+    ) -> tuple[
+        ComplexityTier,
+        float,
+        tuple[str, ...],
+        Literal["heuristic_scorer", "reasoning_override", "no_signal_default"],
+    ]:
         """
         Classify a prompt by complexity, reporting whether the score chose the tier.
+
+        When no dimension fires at all, the prompt carries no evidence either way, so
+        `default_tier` (MEDIUM unless configured otherwise) is returned instead of letting
+        the score of 0.0 fall through the band mapping into SIMPLE.
+
+        That check reads the signals, not the score, and not the individual dimension
+        scores either. A weighted score of zero does not mean nothing was recognised,
+        because contributions cancel: "hi, quick python question" comes to zero with three
+        dimensions firing and is genuinely simple. A dimension scoring zero does not mean
+        it stayed silent either, since a scorer is free to treat "no match" as a nonzero
+        baseline or to report a neutral finding; a signal is the one thing a dimension
+        emits only when it recognised something.
 
         Args:
             prompt: The user's prompt/message.
@@ -557,6 +575,9 @@ class ComplexityRouter(CustomLogger):
         # Reuse match count from _score_keyword_match to avoid scanning twice
         if reasoning_match_count >= 2:
             return ComplexityTier.REASONING, weighted_score, tuple(signals), "reasoning_override"
+
+        if not signals:
+            return self.config.default_tier, weighted_score, (NO_SIGNAL_MARKER,), "no_signal_default"
 
         # Map score to tier
         boundaries = self._effective_tier_boundaries()
@@ -850,11 +871,20 @@ class ComplexityRouter(CustomLogger):
         from litellm.types.router import RoutingContext
 
         tier_key = tier.value
+        candidates = list(self._tier_pools().get(tier_key, []))
+        if not candidates:
+            # Distinct from the plugin denial below: nothing was filtered out, the tier was
+            # never given models. Saying "after routing-plugin filtering" would send an
+            # operator to read plugin code for what is a gap in `tiers`.
+            raise ValueError(
+                f"Tier {tier_key} has no models configured. Routing plugins are configured, so "
+                f"default_model is not consulted: a model the plugins never vetted must not serve"
+            )
         metadata_key = "litellm_metadata" if "litellm_metadata" in request_kwargs else "metadata"
         context = RoutingContext(
             raw_messages=raw_messages or [],
             structured_messages=resolved_messages or [],
-            candidate_models=list(self._tier_pools().get(tier_key, [])),
+            candidate_models=candidates,
             metadata=request_kwargs.get(metadata_key) or {},
         )
         for plugin in self.config.plugins:

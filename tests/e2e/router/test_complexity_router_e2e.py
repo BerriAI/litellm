@@ -14,9 +14,13 @@ to the openai backend and every higher tier to the anthropic backend. The prompt
 below carries none of the heuristic scorer's reasoning/technical/code keywords and
 stays short, so heuristic scoring lands it in SIMPLE (openai), but an LLM classifier
 reads it as a decision that has to weigh tradeoffs and lands it above SIMPLE
-(anthropic). The served deployment is read back from the spend log's `model`, so
-anthropic proves the classifier ran and openai proves it silently fell back - the
-exact failure before the fix.
+(anthropic). The router config pins `default_tier: SIMPLE` to keep that split intact:
+a prompt with no scoring signal otherwise abstains to MEDIUM, the same anthropic
+backend the LLM arm picks, and the fallback would stop being visible.
+
+The served deployment is read back from the spend log's `model`, so anthropic proves
+the classifier ran and openai proves it silently fell back - the exact failure before
+the fix.
 """
 
 import pytest

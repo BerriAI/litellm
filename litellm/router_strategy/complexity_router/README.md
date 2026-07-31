@@ -34,6 +34,8 @@ The weighted sum is mapped to tiers using configurable boundaries:
 | COMPLEX | 0.35 - 0.60 | Technical, multi-part requests |
 | REASONING | > 0.60 | Chain-of-thought, analysis |
 
+A prompt that matches nothing at all never reaches that table. When no dimension fires, the scorer has no evidence in either direction, so the request goes to `default_tier` (MEDIUM unless you change it) rather than falling through a score of 0.0 into SIMPLE. See [No-Signal Default](#no-signal-default) below.
+
 ## Configuration
 
 ### Basic Configuration
@@ -71,6 +73,9 @@ model_list:
           simple_medium: 0.15
           medium_complex: 0.35
           complex_reasoning: 0.60
+
+        # Tier for prompts that match nothing at all (default: MEDIUM)
+        default_tier: MEDIUM
         
         # Token count thresholds
         token_thresholds:
@@ -125,6 +130,23 @@ response = litellm.completion(
 ```
 
 ## Special Behaviors
+
+### No-Signal Default
+
+The scorer only recognizes what is on its keyword lists, so a prompt can be genuinely hard and still match nothing: a logic puzzle, a business tradeoff, a piece of prose to edit. Every dimension then scores 0, and treating that silence as evidence of simplicity is how unmatched traffic used to end up on the cheapest model.
+
+When no dimension fires, the router returns `default_tier` instead of consulting the boundaries, and logs the classification with `signals=['no-signal']`:
+
+```yaml
+complexity_router_config:
+  default_tier: MEDIUM  # SIMPLE | MEDIUM | COMPLEX | REASONING
+```
+
+Set `default_tier: SIMPLE` to keep unmatched traffic on the cheapest tier, which is how the router behaved before this setting existed. A `default_tier` you set explicitly has to have a model behind it, either its own non-empty entry in `tiers` or a `default_model`; the config is rejected at load time otherwise, rather than failing on the first unmatched request.
+
+The check is on the individual dimensions, not on the weighted score, because contributions cancel. `"hi, quick python question"` scores zero with three dimensions firing (short prompt, a simple indicator, a code keyword); it has real evidence of being simple and stays SIMPLE. Prompts shorter than the `simple` token threshold or longer than the `complex` one also fire `tokenCount`, so they score normally and are outside this path.
+
+The LLM classifier falls back to this scorer when it times out or errors, so `default_tier` also decides where unmatched traffic lands during a classifier outage.
 
 ### Reasoning Override
 

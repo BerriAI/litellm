@@ -2699,6 +2699,7 @@ RoutingDecisionCause = Literal[
     # that tells a reader the score did NOT choose the tier; encoding it as free text
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
+    "no_signal_default",
     "llm_classifier",
     "literal_keyword_match",
     "semantic_keyword_match",

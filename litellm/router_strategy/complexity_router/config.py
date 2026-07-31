@@ -34,6 +34,8 @@ DEFAULT_TIER_DISTANCE_PENALTY: float = 0.5
 DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE: int = 3
 DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS: int = 200
 
+NO_SIGNAL_MARKER: str = "no-signal"
+
 
 class KeywordTierRule(BaseModel):
     """A deterministic override: if any keyword matches, route to this tier."""
@@ -269,6 +271,17 @@ class ComplexityRouterConfig(BaseModel):
         description="Score boundaries between tiers",
     )
 
+    default_tier: ComplexityTier = Field(
+        default=ComplexityTier.MEDIUM,
+        description=(
+            "Tier used when no scoring dimension fires, i.e. the prompt matched no keyword, "
+            "pattern or token-count threshold and the scorer has no evidence either way. "
+            "When set explicitly it must have a model behind it: a non-empty entry in `tiers`, "
+            "or `default_model`. "
+            "Set to SIMPLE to restore the previous behavior of treating unmatched traffic as simple"
+        ),
+    )
+
     # Token count thresholds
     token_thresholds: dict[str, int] = Field(
         default_factory=lambda: DEFAULT_TOKEN_THRESHOLDS.copy(),
@@ -458,6 +471,34 @@ class ComplexityRouterConfig(BaseModel):
         if self.classifier_type == "llm" and self.classifier_llm_config is None:
             raise ValueError("classifier_llm_config is required when classifier_type is 'llm'")
         return self
+
+    @model_validator(mode="after")
+    def _validate_default_tier_is_servable(self) -> "ComplexityRouterConfig":
+        if "default_tier" not in self.model_fields_set:
+            return self
+        if self.tiers.get(self.default_tier.value):
+            return self
+        # default_model rescues this only without plugins. The plugin path never falls back
+        # to it, since a model the plugins did not vet must not serve, so accepting it here
+        # would validate a config whose every no-signal request fails at routing time.
+        if self.default_model and not self.plugins:
+            return self
+        remedy = (
+            "Add it to tiers, or name a tier that is configured"
+            if self.plugins
+            else "Add it to tiers, name a tier that is configured, or set default_model in complexity_router_config"
+        )
+        because = (
+            "routing plugins are configured, so default_model is not consulted: a model the plugins "
+            "never vetted must not serve"
+            if self.plugins
+            else "the deployment-level complexity_router_default_model does not count here, because "
+            "falling through to it would serve every no-signal request from a model this tier never names"
+        )
+        raise ValueError(
+            f"default_tier {self.default_tier.value} is not a non-empty entry in tiers "
+            f"({sorted(self.tiers)}). {remedy}; {because}"
+        )
 
     @model_validator(mode="after")
     def _validate_adaptive_pools(self) -> "ComplexityRouterConfig":
