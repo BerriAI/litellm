@@ -1172,6 +1172,175 @@ def test_response_completed_preserves_usage_with_cached_tokens():
     ), "cached_tokens should be preserved from input_tokens_details"
 
 
+def test_response_incomplete_preserves_usage_and_length_finish_reason():
+    """
+    When chat completions are bridged to the Responses API and the model hits
+    max_output_tokens, Azure/OpenAI emits response.incomplete with the real
+    usage (including reasoning_tokens). That usage must map into the chat
+    stream chunk; otherwise stream_chunk_builder falls back to local
+    token_counter and under-reports completion_tokens / drops reasoning_tokens.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.incomplete",
+        "response": {
+            "id": "resp_incomplete",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [],
+                    "content": [],
+                },
+                {
+                    "type": "message",
+                    "id": "msg_incomplete",
+                    "role": "assistant",
+                    "status": "incomplete",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "truncated answer",
+                            "annotations": [],
+                        }
+                    ],
+                },
+            ],
+            "usage": {
+                "input_tokens": 1299,
+                "output_tokens": 1024,
+                "total_tokens": 2323,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 516},
+            },
+            "max_output_tokens": 1024,
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result.usage is not None, "usage should be set on response.incomplete chunk"
+    assert result.usage.prompt_tokens == 1299
+    assert result.usage.completion_tokens == 1024
+    assert result.usage.completion_tokens_details is not None
+    assert result.usage.completion_tokens_details.reasoning_tokens == 516
+    assert len(result.choices) > 0
+    assert result.choices[0].finish_reason == "length"
+
+
+def test_response_incomplete_content_filter_finish_reason():
+    """
+    response.incomplete with reason=content_filter must map to chat
+    finish_reason=content_filter, not length.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.incomplete",
+        "response": {
+            "id": "resp_filtered",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "content_filter"},
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_filtered",
+                    "role": "assistant",
+                    "status": "incomplete",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "partial",
+                            "annotations": [],
+                        }
+                    ],
+                }
+            ],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 4,
+                "total_tokens": 14,
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result.usage is not None
+    assert result.usage.completion_tokens == 4
+    assert len(result.choices) > 0
+    assert result.choices[0].finish_reason == "content_filter"
+
+
+def test_finish_reason_for_incomplete_response_object_attr():
+    """Cover getattr path when incomplete_details is not a dict."""
+    from types import SimpleNamespace
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    finish = LiteLLMResponsesTransformationHandler._finish_reason_for_incomplete_response
+    assert (
+        finish(SimpleNamespace(reason="content_filter")) == "content_filter"
+    )
+    assert finish(SimpleNamespace(reason="max_output_tokens")) == "length"
+    assert finish(SimpleNamespace(reason=None)) == "length"
+    assert finish(SimpleNamespace()) == "length"
+    assert finish(None) == "length"
+
+
+def test_response_failed_preserves_usage():
+    """response.failed must still forward upstream usage like completed."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.failed",
+        "response": {
+            "id": "resp_failed",
+            "status": "failed",
+            "output": [],
+            "usage": {
+                "input_tokens": 20,
+                "output_tokens": 3,
+                "total_tokens": 23,
+                "output_tokens_details": {"reasoning_tokens": 1},
+            },
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 20
+    assert result.usage.completion_tokens == 3
+    assert result.usage.completion_tokens_details is not None
+    assert result.usage.completion_tokens_details.reasoning_tokens == 1
+    assert result.choices[0].finish_reason == "stop"
+
+
 def test_function_call_done_emits_is_finished():
     """
     Test that OUTPUT_ITEM_DONE for a function_call does NOT emit finish_reason.
