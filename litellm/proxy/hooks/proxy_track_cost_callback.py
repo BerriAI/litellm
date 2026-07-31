@@ -17,6 +17,10 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     log_db_metrics,
 )
+from litellm.proxy.auth.resolvers.divergence import (
+    SpendIdentity,
+    log_identity_divergence,
+)
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.spend_log_error_logger import (
@@ -355,6 +359,20 @@ class _ProxyDBLogger(CustomLogger):
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                 )
+                try:
+                    log_identity_divergence(
+                        key_obj,
+                        SpendIdentity(
+                            user_id=metadata.get("user_api_key_user_id"),
+                            team_id=metadata.get("user_api_key_team_id"),
+                            org_id=metadata.get("user_api_key_org_id"),
+                        ),
+                    )
+                except Exception as divergence_error:
+                    verbose_proxy_logger.debug(
+                        "Spend identity divergence guard failed (non-fatal): %s",
+                        divergence_error,
+                    )
                 if metadata.get("user_api_key_alias") is None:
                     metadata["user_api_key_alias"] = key_obj.key_alias
                 if metadata.get("user_api_key_user_id") is None:
