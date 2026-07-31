@@ -9,12 +9,11 @@ Self-service password reset endpoints for internal (non-SSO) users.
 import asyncio
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Optional, cast
 
 from fastapi import APIRouter, HTTPException, Request
 
 from litellm._logging import verbose_proxy_logger
-from litellm.models.user import LiteLLM_UserTable
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_client_ip
 from litellm.proxy.auth.trusted_proxy_utils import get_trusted_proxy_cidrs
@@ -26,6 +25,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.types.proxy.management_endpoints.password_reset_endpoints import (
     ForgotPasswordRequest,
     ResetPasswordRequest,
+    ValidateResetPasswordTokenRequest,
 )
 
 router = APIRouter()
@@ -45,9 +45,26 @@ async def _send_reset_email_safely(receiver_email: str, subject: str, html: str)
         verbose_proxy_logger.warning("Password reset email not sent, SMTP misconfigured: %s", e)
 
 
+async def _revoke_ui_sessions_for_user(tx, user_id: str) -> list:
+    """Delete the user's dashboard UI-session keys inside the reset transaction.
+
+    Stops an already-issued session cookie from continuing to authenticate after
+    a password reset. Scoped to `team_id == UI_SESSION_TOKEN_TEAM_ID` so the
+    user's own personal API keys (used for LLM calls, not the dashboard) are left
+    untouched. Returns the deleted rows so callers can evict them from the auth
+    cache outside the transaction.
+    """
+    ui_session_tokens = await tx.litellm_verificationtoken.find_many(
+        where={"user_id": user_id, "team_id": UI_SESSION_TOKEN_TEAM_ID}
+    )
+    if ui_session_tokens:
+        await tx.litellm_verificationtoken.delete_many(where={"user_id": user_id, "team_id": UI_SESSION_TOKEN_TEAM_ID})
+    return ui_session_tokens
+
+
 @router.post("/user/forgot_password", include_in_schema=False)
 async def forgot_password(data: ForgotPasswordRequest, request: Request):
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import prisma_client, spend_counter_cache
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
@@ -57,10 +74,13 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request):
         request, TrustedProxyConfig(use_forwarded_for=bool(cidrs), trusted_proxy_cidrs=cidrs)
     )
     client_ip = resolved_ip or "unknown"
-    email_count = await user_api_key_cache.async_increment_cache(
+    # spend_counter_cache (unlike user_api_key_cache) is always Redis-backed when Redis is
+    # configured, regardless of the enable_redis_auth_cache flag, so these counters stay
+    # accurate across multi-worker/multi-pod deployments instead of being process-local.
+    email_count = await spend_counter_cache.async_increment_cache(
         key=f"password_reset_rl:email:{data.email.lower()}", value=1, ttl=_RATE_LIMIT_WINDOW_SECONDS
     )
-    ip_count = await user_api_key_cache.async_increment_cache(
+    ip_count = await spend_counter_cache.async_increment_cache(
         key=f"password_reset_rl:ip:{client_ip}", value=1, ttl=_RATE_LIMIT_WINDOW_SECONDS
     )
 
@@ -70,11 +90,8 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request):
         verbose_proxy_logger.warning("Password reset rate limit exceeded for ip=%s", client_ip)
         raise HTTPException(status_code=429, detail={"error": "Too many requests. Please try again later."})
 
-    user_obj = cast(
-        Optional[LiteLLM_UserTable],
-        await UserRepository(prisma_client).table.find_first(
-            where={"user_email": {"equals": data.email, "mode": "insensitive"}}
-        ),
+    user_obj = await UserRepository(prisma_client).table.find_first(
+        where={"user_email": {"equals": data.email, "mode": "insensitive"}}
     )
 
     if user_obj is None or user_obj.password is None:
@@ -104,7 +121,10 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request):
     )
 
     reset_base_url = configured_base_url.rstrip("/") + "/ui/reset-password"
-    reset_link = f"{reset_base_url}?token={raw_token}"
+    # The token lives in the URL fragment, not the query string: fragments are never sent to
+    # the server, so they don't land in access logs, Referer headers, or (server-side) browser
+    # history entries the way a `?token=` query param would.
+    reset_link = f"{reset_base_url}#token={raw_token}"
 
     asyncio.create_task(
         _send_reset_email_safely(
@@ -120,8 +140,8 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request):
     return {"message": _GENERIC_FORGOT_PASSWORD_MESSAGE}
 
 
-@router.get("/user/reset_password/validate", include_in_schema=False)
-async def validate_reset_password_token(token: str):
+@router.post("/user/reset_password/validate", include_in_schema=False)
+async def validate_reset_password_token(data: ValidateResetPasswordTokenRequest):
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -129,7 +149,7 @@ async def validate_reset_password_token(token: str):
 
     token_repo = PasswordResetTokenRepository(prisma_client)
     now = datetime.now(timezone.utc)
-    token_row = await token_repo.find_valid_by_hash(token_hash=hash_token(token), now=now)
+    token_row = await token_repo.find_valid_by_hash(token_hash=hash_token(data.token), now=now)
 
     if token_row is None:
         raise HTTPException(status_code=400, detail={"error": _GENERIC_INVALID_TOKEN_MESSAGE})
@@ -143,7 +163,7 @@ async def validate_reset_password_token(token: str):
 
 @router.post("/user/reset_password", include_in_schema=False)
 async def reset_password(data: ResetPasswordRequest):
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
@@ -158,8 +178,11 @@ async def reset_password(data: ResetPasswordRequest):
     hashed_pw = hash_password(data.new_password)
 
     async with prisma_client.db.tx() as tx:
+        # Re-check expiry inside the atomic claim: without it, a token that expires between
+        # find_valid_by_hash above and this update still gets claimed, since the predicate
+        # would otherwise only check token_hash/used_at.
         updated_count = await tx.litellm_passwordresettoken.update_many(
-            where={"token_hash": token_hash, "used_at": None},
+            where={"token_hash": token_hash, "used_at": None, "expires_at": {"gt": now}},
             data={"used_at": now},
         )
         if updated_count == 0:
@@ -173,5 +196,11 @@ async def reset_password(data: ResetPasswordRequest):
             where={"user_id": token_row.user_id, "used_at": None},
             data={"used_at": now},
         )
+
+        revoked_ui_sessions = await _revoke_ui_sessions_for_user(tx, token_row.user_id)
+
+    for session_token in revoked_ui_sessions:
+        user_api_key_cache.delete_cache(key=session_token.token)
+        await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=session_token.token)
 
     return {"message": "Password reset successfully. Please log in with your new password."}

@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Any, Optional, Type
 
 from litellm.models.password_reset_token import LiteLLM_PasswordResetToken
 from litellm.repositories.base_repository import BaseRepository
@@ -7,20 +6,20 @@ from litellm.repositories.base_repository import BaseRepository
 
 class PasswordResetTokenRepository(BaseRepository[LiteLLM_PasswordResetToken]):
     @property
-    def table(self) -> Any:
+    def table(self):
         return self.prisma_client.db.litellm_passwordresettoken
 
     @property
-    def model_class(self) -> Type[LiteLLM_PasswordResetToken]:
+    def model_class(self) -> type[LiteLLM_PasswordResetToken]:
         return LiteLLM_PasswordResetToken
 
-    def _to_model(self, record: Any) -> Optional[LiteLLM_PasswordResetToken]:
+    def _to_model(self, record):
         if record is None:
             return None
         data = record.dict() if hasattr(record, "dict") else dict(record)
         return LiteLLM_PasswordResetToken(**data)
 
-    async def find_valid_by_hash(self, token_hash: str, now: datetime) -> Optional[LiteLLM_PasswordResetToken]:
+    async def find_valid_by_hash(self, token_hash: str, now: datetime) -> LiteLLM_PasswordResetToken | None:
         record = await self.table.find_unique(where={"token_hash": token_hash})
         model = self._to_model(record)
         if model is None:

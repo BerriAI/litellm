@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy.management_endpoints.password_reset_endpoints import _send_reset_email_safely
 from litellm.proxy.proxy_server import app
 from litellm.proxy.utils import hash_token
@@ -15,13 +16,13 @@ client = TestClient(app)
 
 @pytest.fixture(autouse=True)
 def clear_rate_limit_cache():
-    """The endpoint rate limits against the module-global `user_api_key_cache`, whose
+    """The endpoint rate limits against the module-global `spend_counter_cache`, whose
     in-memory state would otherwise leak between tests reusing the same email/IP."""
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.proxy_server import spend_counter_cache
 
-    user_api_key_cache.in_memory_cache.flush_cache()
+    spend_counter_cache.in_memory_cache.flush_cache()
     yield
-    user_api_key_cache.in_memory_cache.flush_cache()
+    spend_counter_cache.in_memory_cache.flush_cache()
 
 
 def _mock_user(user_id="user-1", email="alice@example.com", password="scrypt:hash"):
@@ -86,7 +87,7 @@ async def test_forgot_password_emailed_token_matches_stored_hash(mocker, monkeyp
 
     assert response.status_code == 200
     html = mock_send_email.call_args.kwargs["html"]
-    expected_prefix = "https://proxy.example.com/ui/reset-password?token="
+    expected_prefix = "https://proxy.example.com/ui/reset-password#token="
     match = re.search(rf"{re.escape(expected_prefix)}([A-Za-z0-9_-]+)", html)
     assert match is not None, f"no reset link starting with {expected_prefix!r} found in {html!r}"
     emailed_token = match.group(1)
@@ -140,7 +141,7 @@ async def test_forgot_password_rate_limits_on_forwarded_ip_behind_trusted_proxy(
         "litellm.proxy.management_endpoints.password_reset_endpoints.send_email",
         new=AsyncMock(),
     )
-    mock_cache = mocker.patch("litellm.proxy.proxy_server.user_api_key_cache")
+    mock_cache = mocker.patch("litellm.proxy.proxy_server.spend_counter_cache")
     mock_cache.async_increment_cache = AsyncMock(return_value=1.0)
     lb_client = TestClient(app, client=("10.1.2.3", 44444))
 
@@ -170,7 +171,7 @@ async def test_forgot_password_ignores_forwarded_ip_without_trusted_proxies(mock
         "litellm.proxy.management_endpoints.password_reset_endpoints.send_email",
         new=AsyncMock(),
     )
-    mock_cache = mocker.patch("litellm.proxy.proxy_server.user_api_key_cache")
+    mock_cache = mocker.patch("litellm.proxy.proxy_server.spend_counter_cache")
     mock_cache.async_increment_cache = AsyncMock(return_value=1.0)
     lb_client = TestClient(app, client=("10.1.2.3", 44444))
 
@@ -199,18 +200,14 @@ async def test_forgot_password_unknown_email_same_response_no_email_sent(mocker)
     response = client.post("/user/forgot_password", json={"email": "unknown@example.com"})
 
     assert response.status_code == 200
-    assert response.json() == {
-        "message": "If an account exists for this email, a password reset link has been sent."
-    }
+    assert response.json() == {"message": "If an account exists for this email, a password reset link has been sent."}
     mock_send_email.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_forgot_password_sso_only_user_same_response_no_email_sent(mocker):
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_usertable.find_first = AsyncMock(
-        return_value=_mock_user(password=None)
-    )
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=_mock_user(password=None))
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     mock_send_email = mocker.patch(
         "litellm.proxy.management_endpoints.password_reset_endpoints.send_email",
@@ -220,9 +217,7 @@ async def test_forgot_password_sso_only_user_same_response_no_email_sent(mocker)
     response = client.post("/user/forgot_password", json={"email": "alice@example.com"})
 
     assert response.status_code == 200
-    assert response.json() == {
-        "message": "If an account exists for this email, a password reset link has been sent."
-    }
+    assert response.json() == {"message": "If an account exists for this email, a password reset link has been sent."}
     mock_send_email.assert_not_called()
 
 
@@ -235,7 +230,7 @@ async def test_forgot_password_rate_limited_by_email(mocker):
         "litellm.proxy.management_endpoints.password_reset_endpoints.send_email",
         new=AsyncMock(),
     )
-    mock_cache = mocker.patch("litellm.proxy.proxy_server.user_api_key_cache")
+    mock_cache = mocker.patch("litellm.proxy.proxy_server.spend_counter_cache")
     mock_cache.async_increment_cache = AsyncMock(side_effect=[4.0, 1.0])
 
     response = client.post("/user/forgot_password", json={"email": "alice@example.com"})
@@ -259,9 +254,7 @@ async def test_forgot_password_no_proxy_base_url_same_response_no_email_sent(moc
     response = client.post("/user/forgot_password", json={"email": "alice@example.com"})
 
     assert response.status_code == 200
-    assert response.json() == {
-        "message": "If an account exists for this email, a password reset link has been sent."
-    }
+    assert response.json() == {"message": "If an account exists for this email, a password reset link has been sent."}
     mock_send_email.assert_not_called()
     mock_prisma.db.litellm_passwordresettoken.create.assert_not_awaited()
 
@@ -283,7 +276,7 @@ async def test_validate_reset_token_valid(mocker):
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=_mock_user())
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
-    response = client.get("/user/reset_password/validate", params={"token": "raw-token"})
+    response = client.post("/user/reset_password/validate", json={"token": "raw-token"})
 
     assert response.status_code == 200
     assert response.json() == {"user_email": "alice@example.com"}
@@ -295,17 +288,19 @@ async def test_validate_reset_token_invalid_returns_generic_400(mocker):
     mock_prisma.db.litellm_passwordresettoken.find_unique = AsyncMock(return_value=None)
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
-    response = client.get("/user/reset_password/validate", params={"token": "bogus"})
+    response = client.post("/user/reset_password/validate", json={"token": "bogus"})
 
     assert response.status_code == 400
     assert response.json() == {"detail": {"error": "This link is invalid or has expired."}}
 
 
-def _install_tx_context(mock_prisma):
+def _install_tx_context(mock_prisma, ui_session_tokens=None):
     tx_cm = MagicMock()
     tx_cm.__aenter__ = AsyncMock(return_value=mock_prisma.db)
     tx_cm.__aexit__ = AsyncMock(return_value=None)
     mock_prisma.db.tx = MagicMock(return_value=tx_cm)
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=ui_session_tokens or [])
+    mock_prisma.db.litellm_verificationtoken.delete_many = AsyncMock(return_value=len(ui_session_tokens or []))
 
 
 @pytest.mark.asyncio
@@ -402,3 +397,109 @@ async def test_reset_password_empty_new_password_rejected(mocker):
 
     assert response.status_code == 422
     mock_prisma.db.litellm_usertable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reset_password_atomic_claim_checks_expiry(mocker):
+    """Regression: a token that expires between find_valid_by_hash and the atomic
+    claim must not be claimable. The update_many predicate has to re-check
+    expires_at itself, not just token_hash/used_at."""
+    mock_prisma = MagicMock()
+    now = datetime.now(timezone.utc)
+    token_row = MagicMock()
+    token_row.dict.return_value = {
+        "token_hash": hash_token("raw-token"),
+        "user_id": "user-1",
+        "requested_ip": None,
+        "created_at": now,
+        "expires_at": now.replace(year=now.year + 1),
+        "used_at": None,
+    }
+    mock_prisma.db.litellm_passwordresettoken.find_unique = AsyncMock(return_value=token_row)
+    mock_prisma.db.litellm_passwordresettoken.update_many = AsyncMock(return_value=1)
+    mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=_mock_user())
+    _install_tx_context(mock_prisma)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    response = client.post(
+        "/user/reset_password", json={"token": "raw-token", "new_password": "correct horse battery staple"}
+    )
+
+    assert response.status_code == 200
+    claim_call = mock_prisma.db.litellm_passwordresettoken.update_many.call_args_list[0]
+    where = claim_call.kwargs["where"]
+    assert where["expires_at"] == {"gt": mocker.ANY}
+
+
+@pytest.mark.asyncio
+async def test_reset_password_revokes_ui_session_keys(mocker):
+    """A password reset must kill any already-issued dashboard session key so a
+    stolen session can't keep authenticating after the reset."""
+    mock_prisma = MagicMock()
+    now = datetime.now(timezone.utc)
+    token_row = MagicMock()
+    token_row.dict.return_value = {
+        "token_hash": hash_token("raw-token"),
+        "user_id": "user-1",
+        "requested_ip": None,
+        "created_at": now,
+        "expires_at": now.replace(year=now.year + 1),
+        "used_at": None,
+    }
+    mock_prisma.db.litellm_passwordresettoken.find_unique = AsyncMock(return_value=token_row)
+    mock_prisma.db.litellm_passwordresettoken.update_many = AsyncMock(return_value=1)
+    mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=_mock_user())
+
+    session_key = MagicMock()
+    session_key.token = "hashed-session-token"
+    _install_tx_context(mock_prisma, ui_session_tokens=[session_key])
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    mock_user_api_key_cache = mocker.patch("litellm.proxy.proxy_server.user_api_key_cache")
+    mock_proxy_logging_obj = mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj")
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+
+    response = client.post(
+        "/user/reset_password", json={"token": "raw-token", "new_password": "correct horse battery staple"}
+    )
+
+    assert response.status_code == 200
+    find_where = mock_prisma.db.litellm_verificationtoken.find_many.call_args.kwargs["where"]
+    assert find_where == {"user_id": "user-1", "team_id": UI_SESSION_TOKEN_TEAM_ID}
+    mock_prisma.db.litellm_verificationtoken.delete_many.assert_awaited_once_with(
+        where={"user_id": "user-1", "team_id": UI_SESSION_TOKEN_TEAM_ID}
+    )
+    mock_user_api_key_cache.delete_cache.assert_called_once_with(key="hashed-session-token")
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache.assert_awaited_once_with(
+        key="hashed-session-token"
+    )
+
+
+@pytest.mark.asyncio
+async def test_reset_password_no_ui_sessions_skips_revocation_calls(mocker):
+    """When the user has no dashboard sessions, delete_many/cache-eviction must not
+    run at all (find_many already returned an empty list)."""
+    mock_prisma = MagicMock()
+    now = datetime.now(timezone.utc)
+    token_row = MagicMock()
+    token_row.dict.return_value = {
+        "token_hash": hash_token("raw-token"),
+        "user_id": "user-1",
+        "requested_ip": None,
+        "created_at": now,
+        "expires_at": now.replace(year=now.year + 1),
+        "used_at": None,
+    }
+    mock_prisma.db.litellm_passwordresettoken.find_unique = AsyncMock(return_value=token_row)
+    mock_prisma.db.litellm_passwordresettoken.update_many = AsyncMock(return_value=1)
+    mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=_mock_user())
+    _install_tx_context(mock_prisma, ui_session_tokens=[])
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    mock_user_api_key_cache = mocker.patch("litellm.proxy.proxy_server.user_api_key_cache")
+
+    response = client.post(
+        "/user/reset_password", json={"token": "raw-token", "new_password": "correct horse battery staple"}
+    )
+
+    assert response.status_code == 200
+    mock_prisma.db.litellm_verificationtoken.delete_many.assert_not_called()
+    mock_user_api_key_cache.delete_cache.assert_not_called()
