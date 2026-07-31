@@ -5,6 +5,7 @@ import math
 import time
 import traceback
 from datetime import datetime
+from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -39,6 +40,9 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
+from litellm.litellm_core_utils.get_supported_openai_params import (
+    get_supported_openai_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
@@ -245,25 +249,64 @@ async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None
             pass
 
 
+@lru_cache(maxsize=512)
+def _litellm_model_supports_stream_options(litellm_model: str) -> bool:
+    try:
+        supported_params = get_supported_openai_params(model=litellm_model)
+    except Exception:  # noqa: BLE001  # unmapped or malformed model strings must disable injection, not fail the request
+        return False
+    return supported_params is not None and "stream_options" in supported_params
+
+
+def _deployment_litellm_model(deployment: Mapping[str, object]) -> Optional[str]:
+    litellm_params = deployment.get("litellm_params")
+    if isinstance(litellm_params, Mapping):
+        litellm_model = litellm_params.get("model")
+    else:
+        litellm_model = getattr(litellm_params, "model", None)
+    return litellm_model if isinstance(litellm_model, str) else None
+
+
+def _model_deployments_support_stream_options(
+    model: object,
+    llm_router: Optional[Router],
+) -> bool:
+    if not isinstance(model, str):
+        return False
+    deployments = llm_router.get_model_list(model_name=model) if llm_router is not None else None
+    deployment_models = tuple(
+        litellm_model
+        for deployment in deployments or ()
+        for litellm_model in (_deployment_litellm_model(deployment),)
+        if litellm_model is not None
+    )
+    candidate_models = deployment_models if deployment_models else (model,)
+    return all(_litellm_model_supports_stream_options(m) for m in candidate_models)
+
+
 def _stream_usage_tracking_updates(
     data: Mapping[str, object],
     general_settings: Mapping[str, object],
     route_type: str,
+    supports_stream_options: Callable[[], bool],
 ) -> Mapping[str, object]:
+    scrub = {"_litellm_strip_stream_usage": False} if "_litellm_strip_stream_usage" in data else {}
     if data.get("stream", False) is not True:
-        return {}
+        return scrub
     always_include = general_settings.get("always_include_stream_usage")
     stream_options = data.get("stream_options")
     if always_include is True:
         if "stream_options" not in data:
-            return {"stream_options": {"include_usage": True}}
+            return {**scrub, "stream_options": {"include_usage": True}}
         if isinstance(stream_options, dict) and "include_usage" not in stream_options:
-            return {"stream_options": {**stream_options, "include_usage": True}}
-        return {}
+            return {**scrub, "stream_options": {**stream_options, "include_usage": True}}
+        return scrub
     if always_include is False or route_type != "acompletion":
-        return {}
+        return scrub
     if isinstance(stream_options, dict) and stream_options.get("include_usage") is True:
-        return {}
+        return scrub
+    if not supports_stream_options():
+        return scrub
     merged_stream_options = {**stream_options} if isinstance(stream_options, dict) else {}
     return {
         "stream_options": {**merged_stream_options, "include_usage": True},
@@ -1264,6 +1307,10 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 general_settings=general_settings,
                 route_type=route_type,
+                supports_stream_options=lambda: _model_deployments_support_stream_options(
+                    model=self.data.get("model"),
+                    llm_router=llm_router,
+                ),
             )
         )
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
