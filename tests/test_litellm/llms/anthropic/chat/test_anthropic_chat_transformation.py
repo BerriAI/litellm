@@ -119,6 +119,97 @@ def test_calculate_usage_clamps_text_tokens_when_reasoning_estimate_exceeds_outp
     assert usage.completion_tokens_details.text_tokens == 0
 
 
+def test_calculate_usage_prefers_provider_reported_thinking_tokens():
+    """
+    Anthropic / Bedrock report extended-thinking usage as
+    ``output_tokens_details.thinking_tokens``; it must win over the
+    token_counter estimate of the thinking text.
+    """
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 70,
+            "output_tokens": 548,
+            "output_tokens_details": {"thinking_tokens": 275},
+        },
+        reasoning_content="short thinking text",
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 275
+    assert usage.completion_tokens_details.text_tokens == 548 - 275
+
+
+def test_calculate_usage_reports_thinking_tokens_when_thinking_text_is_empty():
+    """
+    Bedrock returns thinking blocks whose text is empty (redacted / truncated),
+    which used to log reasoning_tokens=0 even though the model reasoned.
+    """
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 78,
+            "output_tokens": 64,
+            "output_tokens_details": {"thinking_tokens": 64},
+        },
+        reasoning_content="",
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 64
+    assert usage.completion_tokens_details.text_tokens == 0
+
+
+def test_calculate_usage_falls_back_to_estimate_without_thinking_tokens():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={"input_tokens": 10, "output_tokens": 500},
+        reasoning_content="some reasoning text that tokenizes to a few tokens",
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens > 0
+
+
+def test_calculate_usage_ignores_non_int_thinking_tokens():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 10,
+            "output_tokens": 500,
+            "output_tokens_details": {"thinking_tokens": None},
+        },
+        reasoning_content=None,
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 0
+    assert usage.completion_tokens_details.text_tokens == 500
+
+
+def test_calculate_usage_sums_thinking_tokens_across_iterations():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "iterations": [
+                {"input_tokens": 10, "output_tokens": 100, "output_tokens_details": {"thinking_tokens": 40}},
+                {"input_tokens": 10, "output_tokens": 200, "output_tokens_details": {"thinking_tokens": 60}},
+            ]
+        },
+        reasoning_content=None,
+    )
+
+    assert usage.completion_tokens == 300
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 100
+    assert usage.completion_tokens_details.text_tokens == 200
+
+
 def test_calculate_usage_handles_mocked_output_tokens_with_reasoning_content():
     config = AnthropicConfig()
 

@@ -669,6 +669,7 @@ class AnthropicPassthroughLoggingHandler:
         tool_search_requests: Optional[int] = None
         inference_geo: Optional[str] = None
         stop_reason: Optional[str] = None
+        thinking_tokens: Optional[int] = None
         found_usage = False
         resolved_model = model
         for _chunk_str in all_chunks:
@@ -693,6 +694,9 @@ class AnthropicPassthroughLoggingHandler:
                         inference_geo = usage.get("inference_geo")
                     if usage.get("output_tokens") is not None:
                         output_tokens = usage.get("output_tokens")
+                    _otd = usage.get("output_tokens_details")
+                    if isinstance(_otd, dict) and _otd.get("thinking_tokens") is not None:
+                        thinking_tokens = _otd.get("thinking_tokens")
                     found_usage = True
                 elif event_type == "message_delta":
                     _delta_stop = (data.get("delta") or {}).get("stop_reason")
@@ -711,6 +715,9 @@ class AnthropicPassthroughLoggingHandler:
                         cache_read = usage.get("cache_read_input_tokens")
                     if usage.get("inference_geo") is not None:
                         inference_geo = usage.get("inference_geo")
+                    _otd = usage.get("output_tokens_details")
+                    if isinstance(_otd, dict) and _otd.get("thinking_tokens") is not None:
+                        thinking_tokens = _otd.get("thinking_tokens")
                     found_usage = True
         if not found_usage:
             return None
@@ -742,6 +749,8 @@ class AnthropicPassthroughLoggingHandler:
             usage_object["server_tool_use"] = _server_tool_use
         if inference_geo is not None:
             usage_object["inference_geo"] = inference_geo
+        if thinking_tokens is not None:
+            usage_object["output_tokens_details"] = {"thinking_tokens": thinking_tokens}
         usage_obj = AnthropicConfig().calculate_usage(usage_object=usage_object, reasoning_content=None)
         return ModelResponse(
             model=resolved_model,
