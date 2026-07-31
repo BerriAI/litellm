@@ -1,3 +1,4 @@
+import copy
 import os
 import sys
 from unittest.mock import patch
@@ -817,6 +818,49 @@ def test_convert_schema_types_type_array_conversion():
         input_schema["properties"]["studio"]["description"] == "The studio ID or name"
     )
     assert input_schema["required"] == ["studio"]
+
+
+def test_build_vertex_schema_type_array_null_becomes_nullable():
+    """
+    A nullable field written as a JSON-Schema *type array* (`"type": ["string", "null"]`,
+    the OpenAI structured-output style for optional fields) must be normalized the same
+    way as the equivalent `anyOf` form: the `null` branch stripped and `nullable: True`
+    set on the remaining branch.
+
+    Regression: `_build_vertex_schema` ran `convert_anyof_null_to_nullable` *before*
+    `_convert_schema_types`, so the anyOf produced from the type array (which only
+    happens in `_convert_schema_types`) still carried a stray `{"type": "null"}` branch
+    and never got `nullable: True`. Vertex/Gemini `responseSchema` rejects a bare
+    `null`-typed branch and expects `nullable` instead.
+    """
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    type_array_schema = {
+        "type": "object",
+        "properties": {"name": {"type": ["string", "null"]}},
+        "required": ["name"],
+    }
+    anyof_schema = {
+        "type": "object",
+        "properties": {"name": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
+        "required": ["name"],
+    }
+
+    out_type_array = _build_vertex_schema(copy.deepcopy(type_array_schema))
+    out_anyof = _build_vertex_schema(copy.deepcopy(anyof_schema))
+
+    # The type-array form must be normalized identically to the anyOf form.
+    assert out_type_array["properties"]["name"] == out_anyof["properties"]["name"]
+
+    name_schema = out_type_array["properties"]["name"]
+    branches = name_schema.get("anyOf", [name_schema])
+    # No stray null-typed branch may survive.
+    assert all(branch.get("type") != "null" for branch in branches)
+    # The remaining (string) branch must be marked nullable.
+    assert any(
+        branch.get("type") == "string" and branch.get("nullable") is True
+        for branch in branches
+    )
 
 
 def test_fix_enum_empty_strings():
