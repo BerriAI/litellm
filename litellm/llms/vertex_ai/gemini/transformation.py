@@ -657,10 +657,11 @@ def _collect_tool_call_thought_signatures(
     tool_calls = assistant_msg.get("tool_calls")
     if isinstance(tool_calls, list):
         for tool in tool_calls:
-            if isinstance(tool, dict):
-                signature = _get_thought_signature_from_tool(tool)
-                if signature:
-                    signatures += (signature,)
+            if not isinstance(tool, dict):
+                continue
+            signature = _get_thought_signature_from_tool(tool)
+            if signature:
+                signatures += (signature,)
 
     function_call = assistant_msg.get("function_call")
     if isinstance(function_call, dict):
@@ -669,15 +670,20 @@ def _collect_tool_call_thought_signatures(
             signatures += (signature,)
 
     provider_specific_fields = assistant_msg.get("provider_specific_fields")
-    if isinstance(provider_specific_fields, dict):
-        invocations = provider_specific_fields.get("server_side_tool_invocations")
-        if isinstance(invocations, list):
-            for invocation in invocations:
-                if isinstance(invocation, dict):
-                    for key in ("thought_signature", "response_thought_signature"):
-                        invocation_signature = invocation.get(key)
-                        if isinstance(invocation_signature, str) and invocation_signature:
-                            signatures += (invocation_signature,)
+    if not isinstance(provider_specific_fields, dict):
+        return frozenset(signatures)
+
+    invocations = provider_specific_fields.get("server_side_tool_invocations")
+    if not isinstance(invocations, list):
+        return frozenset(signatures)
+
+    for invocation in invocations:
+        if not isinstance(invocation, dict):
+            continue
+        for key in ("thought_signature", "response_thought_signature"):
+            invocation_signature = invocation.get(key)
+            if isinstance(invocation_signature, str) and invocation_signature:
+                signatures += (invocation_signature,)
 
     return frozenset(signatures)
 
