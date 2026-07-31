@@ -4893,6 +4893,27 @@ class TestNoSignalDefaultTier:
                 },
             )
 
+    def test_default_model_does_not_rescue_the_default_tier_when_plugins_are_configured(self, mock_router_instance):
+        """The plugin path builds candidates from the tier pool alone and never consults
+        default_model, since a model the plugins did not vet must not serve. Accepting
+        default_model here would validate a config whose every no-signal request raises."""
+
+        class NoOpPlugin:
+            async def run(self, context):
+                return context
+
+        with pytest.raises(ValidationError, match="routing plugins are configured"):
+            ComplexityRouter(
+                model_name="test-router",
+                litellm_router_instance=mock_router_instance,
+                complexity_router_config={
+                    "tiers": {"SIMPLE": "simple-model", "MEDIUM": "medium-model"},
+                    "default_tier": "COMPLEX",
+                    "default_model": "fallback-model",
+                    "plugins": [NoOpPlugin()],
+                },
+            )
+
     def test_default_tier_outside_tiers_is_allowed_with_default_model(self, mock_router_instance):
         router = ComplexityRouter(
             model_name="test-router",

@@ -476,14 +476,28 @@ class ComplexityRouterConfig(BaseModel):
     def _validate_default_tier_is_servable(self) -> "ComplexityRouterConfig":
         if "default_tier" not in self.model_fields_set:
             return self
-        if self.tiers.get(self.default_tier.value) or self.default_model:
+        if self.tiers.get(self.default_tier.value):
             return self
+        # default_model rescues this only without plugins. The plugin path never falls back
+        # to it, since a model the plugins did not vet must not serve, so accepting it here
+        # would validate a config whose every no-signal request fails at routing time.
+        if self.default_model and not self.plugins:
+            return self
+        remedy = (
+            "Add it to tiers, or name a tier that is configured"
+            if self.plugins
+            else "Add it to tiers, name a tier that is configured, or set default_model in complexity_router_config"
+        )
+        because = (
+            "routing plugins are configured, so default_model is not consulted: a model the plugins "
+            "never vetted must not serve"
+            if self.plugins
+            else "the deployment-level complexity_router_default_model does not count here, because "
+            "falling through to it would serve every no-signal request from a model this tier never names"
+        )
         raise ValueError(
             f"default_tier {self.default_tier.value} is not a non-empty entry in tiers "
-            f"({sorted(self.tiers)}). Add it to tiers, name a tier that is configured, or set "
-            f"default_model in complexity_router_config; the deployment-level "
-            f"complexity_router_default_model does not count here, because falling through to it "
-            f"would serve every no-signal request from a model this tier never names"
+            f"({sorted(self.tiers)}). {remedy}; {because}"
         )
 
     @model_validator(mode="after")
