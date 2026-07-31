@@ -46,6 +46,7 @@ from .handler import (
     GenAIHubOrchestrationError,
     AsyncSAPStreamIterator,
     SAPStreamIterator,
+    normalize_reasoning_content,
 )
 
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
@@ -402,7 +403,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        response = ModelResponse.model_validate(raw_response.json()["final_result"])
+        response = ModelResponse.model_validate(normalize_reasoning_content(raw_response.json()["final_result"]))
 
         # Strip markdown code blocks if JSON response_format was used with Anthropic models
         # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```

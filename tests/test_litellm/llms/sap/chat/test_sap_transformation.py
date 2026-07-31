@@ -639,3 +639,115 @@ class TestSAPTransformationIntegration:
                 config["config"]["modules"][1]["translation"]["input"]["type"]
                 == "sap_document_translation"
             )
+
+
+class TestSAPReasoningContentNormalization:
+    """SAP returns reasoning_content as a list of blocks for some models (e.g. gemini-3.5-flash)."""
+
+    @pytest.fixture
+    def mock_config(self):
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        config = GenAIHubOrchestrationConfig()
+        config.token_creator = lambda: "Bearer TEST_TOKEN"
+        config._base_url = "https://api.test-sap.com"
+        config._resource_group = "test-group"
+        return config
+
+    def _raw_response(self, reasoning_content):
+        from unittest.mock import MagicMock
+
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "final_result": {
+                "id": "test-id",
+                "model": "gemini-3.5-flash",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Hello!",
+                            "reasoning_content": reasoning_content,
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+        }
+        raw_response.text = "{}"
+        return raw_response
+
+    def _transform(self, mock_config, raw_response):
+        from unittest.mock import MagicMock
+        from litellm.types.utils import ModelResponse
+
+        return mock_config.transform_response(
+            model="gemini-3.5-flash",
+            raw_response=raw_response,
+            model_response=ModelResponse(id="test", model="test"),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hi!"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+    def test_list_reasoning_blocks_are_joined_into_a_string(self, mock_config):
+        raw_response = self._raw_response(
+            [
+                {"content": "first thought ", "signature": "sig-1"},
+                {"content": "second thought", "signature": "sig-2"},
+            ]
+        )
+
+        result = self._transform(mock_config, raw_response)
+
+        message = result.choices[0].message
+        assert message.content == "Hello!"
+        assert message.reasoning_content == "first thought second thought"
+        assert message.thinking_blocks == [
+            {"type": "thinking", "thinking": "first thought ", "signature": "sig-1"},
+            {"type": "thinking", "thinking": "second thought", "signature": "sig-2"},
+        ]
+
+    def test_empty_reasoning_blocks_become_none(self, mock_config):
+        raw_response = self._raw_response([{"content": "", "signature": "sig"}])
+
+        result = self._transform(mock_config, raw_response)
+
+        assert getattr(result.choices[0].message, "reasoning_content", None) is None
+
+    def test_string_reasoning_content_is_preserved(self, mock_config):
+        raw_response = self._raw_response("already a string")
+
+        result = self._transform(mock_config, raw_response)
+
+        assert result.choices[0].message.reasoning_content == "already a string"
+
+    def test_streaming_chunk_with_list_reasoning_blocks(self):
+        from litellm.llms.sap.chat.handler import _StreamParser
+
+        chunk = _StreamParser.to_openai_chunk(
+            {
+                "orchestration_result": {
+                    "id": "chunk-1",
+                    "model": "gemini-3.5-flash",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "role": "assistant",
+                                "content": "",
+                                "reasoning_content": [{"content": "thinking...", "signature": "sig"}],
+                            },
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            }
+        )
+
+        assert chunk is not None
+        assert chunk.choices[0].delta.reasoning_content == "thinking..."
