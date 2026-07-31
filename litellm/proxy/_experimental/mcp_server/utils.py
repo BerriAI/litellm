@@ -2,8 +2,12 @@
 MCP Server Utilities
 """
 
+import hashlib
+import importlib
 import json
+import os
 import re
+from collections.abc import MutableMapping, MutableSequence
 from typing import (
     Any,
     Dict,
@@ -16,11 +20,9 @@ from typing import (
     Tuple,
     Union,
 )
-
-import hashlib
-import importlib
-import os
 from urllib.parse import quote
+
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 # Constants
 #
@@ -325,13 +327,85 @@ def iter_known_server_prefixes(server: Any) -> Iterator[str]:
     yield from _emit(server_id)
 
 
+def iter_known_tool_name_spellings(tool_name: str, server: MCPServer) -> Iterator[str]:
+    """Yield every name that denotes the bare ``tool_name`` on ``server``: the bare name,
+    then its wire spelling under each prefix ``iter_known_server_prefixes`` accepts.
+    ``get_server_prefix`` covers only the currently published one, and that moves with the
+    alias and with ``LITELLM_USE_SHORT_MCP_TOOL_PREFIX``.
+    """
+    yield tool_name
+    for prefix in iter_known_server_prefixes(server):
+        yield add_server_prefix_to_name(tool_name, prefix)
+
+
+def openapi_tool_name(operation_id: str) -> str:
+    """Return the tool name ``_register_openapi_tools`` registers ``operation_id`` under.
+
+    The single transform between a spec's operationId and the name the gateway serves.
+    Policy recovers the link by replaying this exact function, which is what keeps it from
+    deciding for a tool it does not name: two operationIds that register as two tools
+    necessarily normalize to two names here, because this is the map that registered them.
+    """
+    return operation_id.replace(" ", "_").lower()
+
+
+def match_known_tool_name(tool_name: str, server: MCPServer, names: Iterable[str]) -> str | None:
+    """Return the entry of ``names`` that denotes ``tool_name`` on ``server``, else ``None``.
+
+    The single question every tool-name-keyed site asks: the allow list, the deny list,
+    ``allowed_params`` and the discovery filter, so discovery hides exactly what dispatch
+    refuses. It spans every spelling routing accepts and no more, because a tool's identity
+    is the exact name routing dispatches; anything looser lets one policy decide two tools.
+
+    On an OpenAPI server the configured entry holds the spec's operationId while routing
+    holds :func:`openapi_tool_name` of it, so both sides go through that map first. Doing it
+    with the registering function rather than a lookalike is the whole safety argument: a
+    coarser one collapses operationIds that registration keeps apart.
+
+    Callers read the returned entry rather than testing a container's values, which is what
+    stops an explicitly empty ``allowed_params`` list from reading as "nothing configured".
+    """
+    normalize = openapi_tool_name if getattr(server, "spec_path", None) else str
+    spellings = {normalize(spelling) for spelling in iter_known_tool_name_spellings(tool_name, server)}
+    return next((name for name in names if normalize(name) in spellings), None)
+
+
 def split_server_prefix_from_name(prefixed_name: str) -> Tuple[str, str]:
-    """Return the unprefixed name plus the server name used as prefix."""
+    """Return the unprefixed name plus the server name used as prefix.
+
+    Cuts at the FIRST separator, so the two halves are only trustworthy as a
+    pair: they reassemble into ``prefixed_name`` exactly, which is what makes
+    this safe for routing. Reading one half on its own is a guess about where the
+    boundary fell, and that guess is wrong whenever the prefix itself contains
+    the separator. Callers that compare a half against configuration must use
+    :func:`match_known_server_prefix` or :func:`strip_known_server_prefix`.
+    """
     if MCP_TOOL_PREFIX_SEPARATOR in prefixed_name:
         parts = prefixed_name.split(MCP_TOOL_PREFIX_SEPARATOR, 1)
         if len(parts) == 2:
             return parts[1], parts[0]
     return prefixed_name, ""
+
+
+def match_known_server_prefix(name: str, known_prefixes: Iterable[str]) -> tuple[str, str] | None:
+    """Return ``(matched_prefix, bare_name)`` when ``name`` carries a known prefix.
+
+    Candidates are normalized and tried LONGEST first, so a prefix that itself
+    contains :data:`MCP_TOOL_PREFIX_SEPARATOR` (the UUID ``server_id`` used when
+    a server has no alias, or a legacy hyphenated alias) wins over a shorter
+    prefix that is merely its leading segment. Returns ``None`` when no candidate
+    matches, i.e. ``name`` carries none of these prefixes.
+    """
+    candidates = sorted(
+        {normalize_server_name(prefix) for prefix in known_prefixes if prefix},
+        key=len,
+        reverse=True,
+    )
+    for prefix in candidates:
+        separator_suffixed = prefix + MCP_TOOL_PREFIX_SEPARATOR
+        if name.startswith(separator_suffixed):
+            return prefix, name[len(separator_suffixed) :]
+    return None
 
 
 def strip_known_server_prefix(name: str, server: Optional[Any]) -> str:
@@ -351,11 +425,8 @@ def strip_known_server_prefix(name: str, server: Optional[Any]) -> str:
     """
     if server is None:
         return split_server_prefix_from_name(name)[0]
-    for prefix in iter_known_server_prefixes(server):
-        candidate = normalize_server_name(prefix) + MCP_TOOL_PREFIX_SEPARATOR
-        if name.startswith(candidate):
-            return name[len(candidate) :]
-    return name
+    matched = match_known_server_prefix(name, iter_known_server_prefixes(server))
+    return name if matched is None else matched[1]
 
 
 def is_tool_name_prefixed(
@@ -366,15 +437,16 @@ def is_tool_name_prefixed(
     Check if tool name has a known MCP server prefix.
 
     When ``known_server_prefixes`` is provided the function verifies that the
-    substring before the first separator is an actual registered server
-    prefix.  Without it the check falls back to the legacy heuristic
+    name actually starts with one of those prefixes followed by the separator,
+    matching the longest candidate first so a prefix containing the separator
+    still resolves.  Without it the check falls back to the legacy heuristic
     (separator present anywhere in the name), which can produce false
     positives for non-MCP tools whose names contain hyphens
     (e.g. ``text-to-speech``, ``code-review``).
 
     Args:
         tool_name: Tool name to check.
-        known_server_prefixes: Optional set of normalised server prefixes
+        known_server_prefixes: Optional set of normalized server prefixes
             currently registered in the MCP manager.  Pass this whenever
             the caller has access to the server registry so that the check
             is accurate.
@@ -386,8 +458,7 @@ def is_tool_name_prefixed(
         return False
 
     if known_server_prefixes is not None:
-        candidate_prefix = tool_name.split(MCP_TOOL_PREFIX_SEPARATOR, 1)[0]
-        return normalize_server_name(candidate_prefix) in known_server_prefixes
+        return match_known_server_prefix(tool_name, known_server_prefixes) is not None
 
     # Legacy fallback – separator present somewhere in the name.
     return True
@@ -432,6 +503,56 @@ def extract_mcp_tool_result_error_message(result: object) -> Optional[str]:
             if isinstance(text, str) and text:
                 return text
     return "MCP tool call returned isError=true"
+
+
+def mcp_tool_result_content_list(result: object) -> MutableSequence[object] | None:  # mutable-ok: see below
+    """The mutable content list of an MCP tool result, or ``None`` when it has none.
+
+    Deliberately mutable: a guardrail masking the result rewrites entries in place,
+    because the logging payload captured before the guardrail runs references this
+    same list, so handing back a copy would leave the unmasked text in the spend log
+    and the OTel span.
+
+    Accepts both ``mcp.types.CallToolResult`` objects and their dict
+    equivalents, duck-typed so the ``mcp`` package is not required.
+    """
+    content: object = result.get("content") if isinstance(result, Mapping) else getattr(result, "content", None)
+    if isinstance(content, MutableSequence):
+        return content
+    return None
+
+
+def mcp_content_item_text(item: object) -> str | None:
+    """The ``text`` of a rewritable MCP content item, or ``None``.
+
+    Only mappings and Pydantic-style models report a text, because those are the
+    only shapes ``with_mcp_content_item_text`` can rewrite; a caller therefore
+    never reads text it would be unable to write back (e.g. masked by a
+    guardrail). Non-text content (images, embedded resources) has no ``text``
+    and is reported as ``None``.
+    """
+    text: object
+    if isinstance(item, Mapping):
+        text = item.get("text")
+    elif callable(getattr(item, "model_copy", None)):
+        text = getattr(item, "text", None)
+    else:
+        return None
+    return text if isinstance(text, str) else None
+
+
+def with_mcp_content_item_text(item: object, text: str) -> object:
+    """A copy of an MCP content item carrying ``text`` instead of its own.
+
+    Only meaningful for items ``mcp_content_item_text`` returned a text for; any
+    other item is returned unchanged.
+    """
+    if isinstance(item, Mapping):
+        return {**item, "text": text}
+    model_copy = getattr(item, "model_copy", None)
+    if callable(model_copy):
+        return model_copy(update={"text": text})
+    return item
 
 
 TOOL_DISPLAY_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -618,3 +739,112 @@ def merge_mcp_headers(
         merged.update({str(k): str(v) for k, v in static_headers.items()})
 
     return merged or None
+
+
+# Local rather than litellm.constants: this module deliberately imports no litellm
+# package, so pulling one in for a single integer would drag in litellm/__init__.
+MAX_STRUCTURED_CONTENT_SCAN_DEPTH = 100
+
+
+JSONLeafPath = tuple[str | int, ...]
+
+
+def _flatten_leaf_groups(
+    groups: Iterable[tuple[tuple[JSONLeafPath, str], ...] | None],
+) -> tuple[tuple[JSONLeafPath, str], ...] | None:
+    """Concatenate child leaf groups, propagating the too-deep sentinel."""
+    materialized = tuple(groups)
+    if any(group is None for group in materialized):
+        return None
+    return tuple(leaf for group in materialized if group is not None for leaf in group)
+
+
+def json_string_leaves(value: object, path: JSONLeafPath = ()) -> tuple[tuple[JSONLeafPath, str], ...] | None:
+    """Depth-first, deterministically ordered string leaves of a JSON value.
+
+    Returns ``None`` when the value is nested past ``MAX_STRUCTURED_CONTENT_SCAN_DEPTH``,
+    so the caller blocks rather than letting deeper values through unscanned; an
+    empty tuple means there was simply nothing to scan. A sentinel rather than an
+    exception because this module is reloaded by tests (see the note above the
+    environment-backed constants), which would give a custom exception class a new
+    identity and let it escape a caller's ``except``.
+    """
+    if len(path) > MAX_STRUCTURED_CONTENT_SCAN_DEPTH:
+        return None
+    if isinstance(value, str):
+        return ((path, value),)
+    if isinstance(value, dict):
+        return _flatten_leaf_groups(json_string_leaves(item, (*path, key)) for key, item in value.items())
+    if isinstance(value, list):
+        return _flatten_leaf_groups(json_string_leaves(item, (*path, index)) for index, item in enumerate(value))
+    return ()
+
+
+def with_json_string_leaves(
+    value: object,
+    replacements: Mapping[JSONLeafPath, str],
+    path: JSONLeafPath = (),
+) -> object:
+    """Rebuild a JSON value with the guardrail's rewritten string leaves."""
+    if isinstance(value, str):
+        return replacements.get(path, value)
+    if isinstance(value, dict):
+        return {key: with_json_string_leaves(item, replacements, (*path, key)) for key, item in value.items()}
+    if isinstance(value, list):
+        return [with_json_string_leaves(item, replacements, (*path, index)) for index, item in enumerate(value)]
+    return value
+
+
+def json_unrewritable_labels(value: object, path_depth: int = 0) -> tuple[str, ...] | None:
+    """Strings in a JSON value that carry meaning but cannot be rewritten.
+
+    Dictionary keys and non-string scalars: masking either would change the
+    payload's contract rather than redact a value, so a caller scans these and
+    blocks on a match instead of rewriting, matching what the content filter
+    already does for MCP tool call arguments. ``None`` means the value is nested
+    past the scan depth, same contract as ``json_string_leaves``.
+    """
+    if path_depth > MAX_STRUCTURED_CONTENT_SCAN_DEPTH:
+        return None
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return ()
+    if isinstance(value, (int, float)):
+        return (str(value),)
+    if isinstance(value, dict):
+        own = tuple(key for key in value if isinstance(key, str))
+        nested = tuple(json_unrewritable_labels(item, path_depth + 1) for item in value.values())
+        if any(group is None for group in nested):
+            return None
+        return own + tuple(label for group in nested if group is not None for label in group)
+    if isinstance(value, list):
+        nested = tuple(json_unrewritable_labels(item, path_depth + 1) for item in value)
+        if any(group is None for group in nested):
+            return None
+        return tuple(label for group in nested if group is not None for label in group)
+    return ()
+
+
+def mcp_tool_result_structured_content(result: object) -> object:
+    """The ``structuredContent`` of an MCP tool result, or ``None`` when it has none."""
+    if isinstance(result, Mapping):
+        return result.get("structuredContent")
+    return getattr(result, "structuredContent", None)
+
+
+def set_mcp_tool_result_structured_content(result: object, value: object) -> bool:
+    """Replace ``structuredContent`` in place; ``False`` when the shape does not carry it.
+
+    In place for the same reason the content list is: the logging payload captured
+    before the guardrail ran references this object, so a copy would leave the
+    unmasked value in the spend log and the OTel span.
+    """
+    if isinstance(result, MutableMapping):
+        result["structuredContent"] = value
+        return True
+    if not hasattr(result, "structuredContent"):
+        return False
+    try:
+        setattr(result, "structuredContent", value)  # attribute name is fixed by the MCP result shape
+        return True
+    except (AttributeError, TypeError, ValueError):
+        return False

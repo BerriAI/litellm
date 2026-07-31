@@ -57,6 +57,98 @@ class MockDynamicGuardrail(CustomGuardrail):
         return inputs
 
 
+class MockRecordingGuardrail(CustomGuardrail):
+    """Mock guardrail that records the request_data it was handed."""
+
+    def __init__(self, guardrail_name: str):
+        super().__init__(guardrail_name=guardrail_name)
+        self.request_data: Optional[dict] = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.request_data = request_data
+        return inputs
+
+
+class TestAnthropicMessagesHandlerStreamingRequestData:
+    """Post-call guardrails on streaming /v1/messages receive the response and identity metadata"""
+
+    @pytest.mark.asyncio
+    async def test_terminal_chunk_passes_assembled_response_and_metadata(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        handler = AnthropicMessagesHandler()
+        guardrail = MockRecordingGuardrail(guardrail_name="test")
+        mock_response = ModelResponse(
+            id="msg_123",
+            created=1234567890,
+            model="claude-sonnet-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello world", role="assistant"),
+                )
+            ],
+        )
+
+        with (
+            patch.object(handler, "_check_streaming_has_ended", return_value=True),
+            patch(
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                return_value=mock_response,
+            ),
+        ):
+            await handler.process_output_streaming_response(
+                responses_so_far=[b"data: some chunk"],
+                guardrail_to_apply=guardrail,
+                litellm_logging_obj=MagicMock(),
+                user_api_key_dict=UserAPIKeyAuth(user_id="u-1", team_id="t-1"),
+                request_data={"model": "claude-sonnet-4-5"},
+            )
+
+        assert guardrail.request_data is not None
+        assert guardrail.request_data["response"] is mock_response
+        assert (
+            guardrail.request_data["litellm_metadata"]["user_api_key_user_id"] == "u-1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_mid_stream_chunk_passes_responses_so_far_and_metadata(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        handler = AnthropicMessagesHandler()
+        guardrail = MockRecordingGuardrail(guardrail_name="test")
+        responses_so_far = [b"data: some chunk"]
+
+        with (
+            patch.object(handler, "_check_streaming_has_ended", return_value=False),
+            patch.object(
+                handler, "get_streaming_string_so_far", return_value="partial text"
+            ),
+        ):
+            await handler.process_output_streaming_response(
+                responses_so_far=responses_so_far,
+                guardrail_to_apply=guardrail,
+                litellm_logging_obj=MagicMock(),
+                user_api_key_dict=UserAPIKeyAuth(user_id="u-1", team_id="t-1"),
+                request_data={"model": "claude-sonnet-4-5"},
+            )
+
+        assert guardrail.request_data is not None
+        assert guardrail.request_data["responses"] is responses_so_far
+        assert (
+            guardrail.request_data["litellm_metadata"]["user_api_key_user_id"] == "u-1"
+        )
+
+
 class TestAnthropicMessagesHandlerStreamingOutputProcessing:
     """Test streaming output processing functionality"""
 
@@ -373,3 +465,132 @@ class TestAnthropicMessagesHandlerToolInjection:
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])
+
+
+class TestAnthropicMessagesIncrementalScan:
+    """PR #33278: only_scan_new_messages through the real /v1/messages translation
+    handler (the path Claude Code uses). Encodes the wire payloads observed in the
+    live validation against a real Bedrock guardrail.
+    """
+
+    def _bedrock_guardrail(self):
+        from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+
+        return BedrockGuardrail(
+            guardrail_name="bedrock-incremental-anthropic",
+            guardrailIdentifier="test-guardrail",
+            guardrailVersion="DRAFT",
+            default_on=True,
+            only_scan_new_messages=True,
+        )
+
+    def _data(self, messages, session_id):
+        return {
+            "model": "claude-sonnet-4-5",
+            "messages": messages,
+            "system": "You are a helpful geography assistant.",
+            "litellm_session_id": session_id,
+        }
+
+    @pytest.mark.asyncio
+    async def test_first_turn_scans_all_eligible_then_second_turn_scans_only_diff(self):
+        from unittest.mock import AsyncMock, patch
+
+        handler = AnthropicMessagesHandler()
+        guardrail = self._bedrock_guardrail()
+        sid = "anth-sess-diff"
+        turn1 = [{"role": "user", "content": "What is the capital of France?"}]
+        turn2 = turn1 + [
+            {"role": "assistant", "content": "Paris."},
+            {"role": "user", "content": "What is the capital of Germany?"},
+        ]
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await handler.process_input_messages(
+                data=self._data(turn1, sid), guardrail_to_apply=guardrail
+            )
+            assert mock_api.call_count == 1
+            assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == [
+                "What is the capital of France?"
+            ]
+            mock_api.reset_mock()
+            await handler.process_input_messages(
+                data=self._data(turn2, sid), guardrail_to_apply=guardrail
+            )
+            assert mock_api.call_count == 1
+            assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == [
+                "Paris.",
+                "What is the capital of Germany?",
+            ]
+
+    @pytest.mark.asyncio
+    async def test_identical_resend_makes_no_guardrail_call(self):
+        from unittest.mock import AsyncMock, patch
+
+        handler = AnthropicMessagesHandler()
+        guardrail = self._bedrock_guardrail()
+        sid = "anth-sess-resend"
+        msgs = [
+            {"role": "user", "content": "What is the capital of France?"},
+            {"role": "assistant", "content": "Paris."},
+            {"role": "user", "content": "What is the capital of Germany?"},
+        ]
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await handler.process_input_messages(data=self._data(msgs, sid), guardrail_to_apply=guardrail)
+            assert mock_api.call_count == 1
+            mock_api.reset_mock()
+            await handler.process_input_messages(data=self._data(msgs, sid), guardrail_to_apply=guardrail)
+            mock_api.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_edited_history_message_is_rescanned(self):
+        from unittest.mock import AsyncMock, patch
+
+        handler = AnthropicMessagesHandler()
+        guardrail = self._bedrock_guardrail()
+        sid = "anth-sess-edit"
+        msgs = [{"role": "user", "content": "What is the capital of France?"}]
+        edited = [{"role": "user", "content": "What is the capital and population of France?"}]
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await handler.process_input_messages(data=self._data(msgs, sid), guardrail_to_apply=guardrail)
+            mock_api.reset_mock()
+            await handler.process_input_messages(data=self._data(edited, sid), guardrail_to_apply=guardrail)
+            assert mock_api.call_count == 1
+            assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == [
+                "What is the capital and population of France?"
+            ]
+
+    @pytest.mark.asyncio
+    async def test_mixed_text_and_tool_use_keeps_text_segments(self):
+        """A message carrying both text and a tool_use block must not lose its text.
+        (tool_use inputs and tool_result content are dropped from texts on the
+        anthropic input path today; that is pre-existing baseline behavior.)"""
+        from unittest.mock import AsyncMock, patch
+
+        handler = AnthropicMessagesHandler()
+        guardrail = self._bedrock_guardrail()
+        sid = "anth-sess-tools"
+        msgs = [
+            {"role": "user", "content": "Search for the weather in Paris"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Let me look that up for you."},
+                    {"type": "tool_use", "id": "toolu_1", "name": "search", "input": {"query": "canary-args"}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "canary-result"}],
+            },
+            {"role": "user", "content": "Thanks, summarize the result."},
+        ]
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await handler.process_input_messages(data=self._data(msgs, sid), guardrail_to_apply=guardrail)
+            scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
+            assert "Let me look that up for you." in scanned, "text beside a tool_use must be scanned"
+            assert "Search for the weather in Paris" in scanned
+            assert "Thanks, summarize the result." in scanned

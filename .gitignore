@@ -141,3 +141,4 @@ crash.*.log
 .coverage
 
 ui/litellm-dashboard/out/
+litellm.log

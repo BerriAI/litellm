@@ -75,7 +75,7 @@ export const getBudgetTableColumns = ({
     header: "Budget ID",
     size: 220,
     enableSorting: false,
-    cell: ({ row }) => <IdCell value={row.original.budget_id} variant="plain" />,
+    cell: ({ row }) => <IdCell value={row.original.budget_id} variant="plain" className="max-w-full" />,
   },
   {
     id: "max_budget",

@@ -558,10 +558,10 @@ def _custom_logger_class_exists_in_success_callbacks(
     e.g if `LangfusePromptManagement` is passed in, it will return True if an instance of `LangfusePromptManagement` exists in litellm.success_callback or litellm._async_success_callback
 
     Prevents double adding a custom logger callback to the litellm callbacks
+
+    Matches on the exact class; an instance of a subclass does not count as registered
     """
-    return any(
-        isinstance(cb, type(callback_class)) for cb in litellm.success_callback + litellm._async_success_callback
-    )
+    return any(type(cb) is type(callback_class) for cb in litellm.success_callback + litellm._async_success_callback)
 
 
 def _custom_logger_class_exists_in_failure_callbacks(
@@ -573,10 +573,10 @@ def _custom_logger_class_exists_in_failure_callbacks(
     e.g if `LangfusePromptManagement` is passed in, it will return True if an instance of `LangfusePromptManagement` exists in litellm.failure_callback or litellm._async_failure_callback
 
     Prevents double adding a custom logger callback to the litellm callbacks
+
+    Matches on the exact class; an instance of a subclass does not count as registered
     """
-    return any(
-        isinstance(cb, type(callback_class)) for cb in litellm.failure_callback + litellm._async_failure_callback
-    )
+    return any(type(cb) is type(callback_class) for cb in litellm.failure_callback + litellm._async_failure_callback)
 
 
 def get_request_guardrails(kwargs: Dict[str, Any]) -> List[str]:
@@ -836,7 +836,7 @@ def function_setup(
                         llm_router=None,  # type: ignore
                     )
                     if callback is None or any(
-                        isinstance(cb, type(callback)) for cb in litellm._async_success_callback
+                        type(cb) is type(callback) for cb in litellm._async_success_callback
                     ):  # don't double add a callback
                         continue
                 if callback not in litellm.input_callback:
@@ -1118,7 +1118,7 @@ def function_setup(
         if "metadata" in kwargs:
             litellm_params["metadata"] = kwargs["metadata"]
         if "litellm_metadata" in kwargs and isinstance(kwargs["litellm_metadata"], dict):
-            litellm_params["litellm_metadata"] = kwargs["litellm_metadata"].copy()
+            litellm_params["litellm_metadata"] = kwargs["litellm_metadata"]
             # For endpoints like /v1/messages that use "litellm_metadata" instead
             # of "metadata" (to avoid conflicting with provider API metadata fields),
             # populate litellm_params["metadata"] so callbacks (e.g. Langfuse) that
@@ -1934,7 +1934,9 @@ def client(original_function):
                     except Exception:
                         pass
 
-            setattr(e, "num_retries", num_retries)  ## IMPORTANT: returns the deployment's num_retries to the router
+            deployment_num_retries = kwargs.get("num_retries")
+            if deployment_num_retries is not None:
+                setattr(e, "num_retries", deployment_num_retries)
 
             timeout = _get_wrapper_timeout(kwargs=kwargs, exception=e)
             setattr(e, "timeout", timeout)
@@ -5478,6 +5480,19 @@ def _get_model_info_helper(
                 cache_creation_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_creation_input_token_cost_above_200k_tokens", None
                 ),
+                cache_creation_input_token_cost_above_272k_tokens=_model_info.get(
+                    "cache_creation_input_token_cost_above_272k_tokens", None
+                ),
+                cache_creation_input_token_cost_above_272k_tokens_priority=_model_info.get(
+                    "cache_creation_input_token_cost_above_272k_tokens_priority", None
+                ),
+                cache_creation_input_token_cost_above_272k_tokens_flex=_model_info.get(
+                    "cache_creation_input_token_cost_above_272k_tokens_flex", None
+                ),
+                cache_creation_input_token_cost_flex=_model_info.get("cache_creation_input_token_cost_flex", None),
+                cache_creation_input_token_cost_priority=_model_info.get(
+                    "cache_creation_input_token_cost_priority", None
+                ),
                 cache_read_input_token_cost=_model_info.get("cache_read_input_token_cost", None),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
@@ -5491,6 +5506,9 @@ def _get_model_info_helper(
                 ),
                 cache_read_input_token_cost_above_272k_tokens_priority=_model_info.get(
                     "cache_read_input_token_cost_above_272k_tokens_priority", None
+                ),
+                cache_read_input_token_cost_above_272k_tokens_flex=_model_info.get(
+                    "cache_read_input_token_cost_above_272k_tokens_flex", None
                 ),
                 cache_read_input_token_cost_above_512k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_512k_tokens", None
@@ -5509,6 +5527,9 @@ def _get_model_info_helper(
                 input_cost_per_token_above_272k_tokens=_model_info.get("input_cost_per_token_above_272k_tokens", None),
                 input_cost_per_token_above_272k_tokens_priority=_model_info.get(
                     "input_cost_per_token_above_272k_tokens_priority", None
+                ),
+                input_cost_per_token_above_272k_tokens_flex=_model_info.get(
+                    "input_cost_per_token_above_272k_tokens_flex", None
                 ),
                 input_cost_per_token_above_512k_tokens=_model_info.get("input_cost_per_token_above_512k_tokens", None),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
@@ -5550,6 +5571,9 @@ def _get_model_info_helper(
                 ),
                 output_cost_per_token_above_272k_tokens_priority=_model_info.get(
                     "output_cost_per_token_above_272k_tokens_priority", None
+                ),
+                output_cost_per_token_above_272k_tokens_flex=_model_info.get(
+                    "output_cost_per_token_above_272k_tokens_flex", None
                 ),
                 output_cost_per_token_above_512k_tokens=_model_info.get(
                     "output_cost_per_token_above_512k_tokens", None

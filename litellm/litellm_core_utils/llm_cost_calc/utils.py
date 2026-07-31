@@ -2,7 +2,8 @@
 ## Helper utilities for cost_per_token()
 
 from dataclasses import dataclass
-from typing import Any, Literal, Optional, Tuple, TypedDict, cast
+from types import MappingProxyType
+from typing import Any, Literal, Mapping, Optional, Tuple, TypedDict, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -38,6 +39,14 @@ _VALID_DATA_RESIDENCIES = frozenset(r.value for r in DataResidency)
 # request in the cost-calc path, so the f-strings are built once here instead
 # of being rebuilt for every model_info key on every call.
 _SERVICE_TIER_SUFFIXES: tuple[str, ...] = tuple(f"_{st.value}" for st in ServiceTier)
+
+_SERVICE_TIER_TO_COST_KEY_SUFFIX: Mapping[str, str] = MappingProxyType(
+    {
+        ServiceTier.FLEX.value: ServiceTier.FLEX.value,
+        ServiceTier.PRIORITY.value: ServiceTier.PRIORITY.value,
+        ServiceTier.FAST.value: ServiceTier.PRIORITY.value,
+    }
+)
 
 
 def _get_token_detail_value(details: object, key: str) -> Optional[int]:
@@ -177,7 +186,7 @@ def _get_service_tier_cost_key(base_key: str, service_tier: Optional[str]) -> st
 
     Args:
         base_key: The base cost key (e.g., "input_cost_per_token")
-        service_tier: The service tier ("flex", "priority", or None for standard)
+        service_tier: The service tier ("flex", "priority", "fast", or None for standard)
 
     Returns:
         str: The cost key to use (e.g., "input_cost_per_token_flex" or "input_cost_per_token")
@@ -185,12 +194,11 @@ def _get_service_tier_cost_key(base_key: str, service_tier: Optional[str]) -> st
     if service_tier is None:
         return base_key
 
-    # Only use service tier specific keys for "flex" and "priority"
-    if service_tier.lower() in [ServiceTier.FLEX.value, ServiceTier.PRIORITY.value]:
-        return f"{base_key}_{service_tier.lower()}"
+    suffix = _SERVICE_TIER_TO_COST_KEY_SUFFIX.get(service_tier.lower())
+    if suffix is None:
+        return base_key
 
-    # For any other service tier, use standard pricing
-    return base_key
+    return f"{base_key}_{suffix}"
 
 
 def _parse_above_token_threshold(key: str) -> float:
@@ -457,7 +465,8 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
     cache_creation_tokens = (
         cast(
             Optional[int],
-            getattr(usage.prompt_tokens_details, "cache_creation_tokens", 0),
+            getattr(usage.prompt_tokens_details, "cache_write_tokens", 0)
+            or getattr(usage.prompt_tokens_details, "cache_creation_tokens", 0),
         )
         or 0
     )
@@ -906,10 +915,6 @@ def get_token_type_cost_breakdown(
         cache_read_tokens = prompt_tokens_details["cache_hit_tokens"]
         cache_creation_tokens = prompt_tokens_details["cache_creation_tokens"]
         cache_creation_token_details = prompt_tokens_details["cache_creation_token_details"]
-        # Some OpenAI-compatible providers (e.g. kimi-k2) report cache-write tokens
-        # under `cache_write_tokens`; mirror the total-cost normalization path.
-        if not cache_creation_tokens:
-            cache_creation_tokens = _coerce_token_count(getattr(usage.prompt_tokens_details, "cache_write_tokens", 0))
     # Fall back to the private top-level counters the Usage constructor mirrors cache
     # tokens onto, so providers/callers that bypass prompt_tokens_details are covered.
     if not cache_read_tokens:

@@ -5,6 +5,7 @@ import math
 import time
 import traceback
 from datetime import datetime
+from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -12,6 +13,7 @@ from typing import (
     Callable,
     Dict,
     Literal,
+    Mapping,
     Optional,
     Tuple,
     Union,
@@ -38,6 +40,9 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
+from litellm.litellm_core_utils.get_supported_openai_params import (
+    get_supported_openai_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
@@ -51,7 +56,7 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.guardrails import GuardrailEventHooks
@@ -242,6 +247,71 @@ async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None
             await task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
+
+
+@lru_cache(maxsize=512)
+def _litellm_model_supports_stream_options(litellm_model: str) -> bool:
+    try:
+        supported_params = get_supported_openai_params(model=litellm_model)
+    except Exception:  # noqa: BLE001  # unmapped or malformed model strings must disable injection, not fail the request
+        return False
+    return supported_params is not None and "stream_options" in supported_params
+
+
+def _deployment_litellm_model(deployment: Mapping[str, object]) -> str | None:
+    litellm_params = deployment.get("litellm_params")
+    if isinstance(litellm_params, Mapping):
+        litellm_model = litellm_params.get("model")
+    else:
+        litellm_model = getattr(litellm_params, "model", None)
+    return litellm_model if isinstance(litellm_model, str) else None
+
+
+def _model_deployments_support_stream_options(
+    model: object,
+    llm_router: Router | None,
+    team_id: str | None,
+) -> bool:
+    if not isinstance(model, str):
+        return False
+    deployments = llm_router.get_model_list(model_name=model, team_id=team_id) if llm_router is not None else None
+    deployment_models = tuple(
+        litellm_model
+        for deployment in deployments or ()
+        if (litellm_model := _deployment_litellm_model(deployment)) is not None
+    )
+    candidate_models = deployment_models if deployment_models else (model,)
+    return all(_litellm_model_supports_stream_options(m) for m in candidate_models)
+
+
+def _stream_usage_tracking_updates(
+    data: Mapping[str, object],
+    general_settings: Mapping[str, object],
+    route_type: str,
+    supports_stream_options: Callable[[], bool],
+) -> Mapping[str, object]:
+    scrub = {"_litellm_strip_stream_usage": False} if "_litellm_strip_stream_usage" in data else {}
+    if data.get("stream", False) is not True:
+        return scrub
+    always_include = general_settings.get("always_include_stream_usage")
+    stream_options = data.get("stream_options")
+    if always_include is True:
+        if "stream_options" not in data:
+            return {**scrub, "stream_options": {"include_usage": True}}
+        if isinstance(stream_options, dict) and "include_usage" not in stream_options:
+            return {**scrub, "stream_options": {**stream_options, "include_usage": True}}
+        return scrub
+    if always_include is False or route_type != "acompletion":
+        return scrub
+    if isinstance(stream_options, dict) and stream_options.get("include_usage") is True:
+        return scrub
+    if not supports_stream_options():
+        return scrub
+    merged_stream_options = {**stream_options} if isinstance(stream_options, dict) else {}
+    return {
+        "stream_options": {**merged_stream_options, "include_usage": True},
+        "_litellm_strip_stream_usage": True,
+    }
 
 
 def _serialize_http_exception_detail(
@@ -1232,17 +1302,18 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         ### AUTO STREAM USAGE TRACKING ###
-        # If always_include_stream_usage is enabled and this is a streaming request
-        # automatically add stream_options={'include_usage': True} if not already set
-        if (
-            general_settings.get("always_include_stream_usage", False) is True
-            and self.data.get("stream", False) is True
-        ):
-            # Only set if stream_options is not already provided by the client
-            if "stream_options" not in self.data:
-                self.data["stream_options"] = {"include_usage": True}
-            elif isinstance(self.data["stream_options"], dict) and "include_usage" not in self.data["stream_options"]:
-                self.data["stream_options"]["include_usage"] = True
+        self.data.update(
+            _stream_usage_tracking_updates(
+                data=self.data,
+                general_settings=general_settings,
+                route_type=route_type,
+                supports_stream_options=lambda: _model_deployments_support_stream_options(
+                    model=self.data.get("model"),
+                    llm_router=llm_router,
+                    team_id=user_api_key_dict.team_id,
+                ),
+            )
+        )
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
@@ -1255,6 +1326,21 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
+
+        # Merge model-level guardrails before pre_call_hook so DB/UI-configured
+        # guardrails actually execute on pre_call. Without this, guardrails set
+        # via litellm_params.guardrails are only honored on post_call paths
+        # (#29652, partial fix in #23774 covered non-streaming post_call only).
+        # trust_client_model_info=False on pre_call: route_request hasn't run
+        # and add_litellm_data_to_request preserves client-supplied
+        # model_info when allow_client_pricing_override is set, so a caller
+        # could otherwise spoof an unguarded model_info.id while requesting
+        # a guarded alias and bypass guardrails (veria-ai HIGH on #29654).
+        self.data = _check_and_merge_model_level_guardrails(
+            data=self.data,
+            llm_router=llm_router,
+            trust_client_model_info=False,
+        )
 
         self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict,
@@ -2715,9 +2801,7 @@ class ProxyBaseLLMRequestProcessing:
                     and proxy_logging_obj is not None
                     and user_api_key_dict is not None
                 ):
-                    await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(
-                        user_api_key_dict, request_data
-                    )
+                    await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
 
             if hasattr(response, "aclose"):
                 try:

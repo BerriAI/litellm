@@ -3,48 +3,77 @@ Team repository for database operations on LiteLLM_TeamTable.
 """
 
 import json
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
 
-from litellm.models.team import LiteLLM_TeamTable
-from litellm.repositories.base_repository import BaseRepository
+from pydantic import TypeAdapter
+
+from litellm.models.team import LiteLLM_TeamTable, Member
+from litellm.repositories.base_repository import (
+    BaseRepository,
+    DbRecord,
+    record_to_dict,
+)
+
+if TYPE_CHECKING:
+    from prisma import Prisma
+
+_MEMBERS_WITH_ROLES_ADAPTER = TypeAdapter(list[Member])
+_JSON_ENCODED_TEAM_FIELDS = (
+    "metadata",
+    "model_spend",
+    "model_max_budget",
+    "router_settings",
+    "budget_limits",
+    "members_with_roles",
+)
 
 
 class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
     """Repository for team database operations."""
 
     @property
-    def table(self) -> Any:
+    def table(self) -> Any:  # any-ok: PrismaClient.db is an untyped runtime wrapper
         return self.prisma_client.db.litellm_teamtable
 
     @property
-    def deleted_table(self) -> Any:
+    def deleted_table(self) -> Any:  # any-ok: PrismaClient.db is an untyped runtime wrapper
         return self.prisma_client.db.litellm_deletedteamtable
 
     @property
     def model_class(self) -> Type[LiteLLM_TeamTable]:
         return LiteLLM_TeamTable
 
-    def _to_model(self, record: Any) -> Optional[LiteLLM_TeamTable]:
+    def _to_model(self, record: Optional[DbRecord]) -> Optional[LiteLLM_TeamTable]:
         """Convert a database record to a Team model."""
         if record is None:
             return None
 
-        data = record.dict() if hasattr(record, "dict") else dict(record)
+        data = {
+            field: json.loads(value) if field in _JSON_ENCODED_TEAM_FIELDS and isinstance(value, str) else value
+            for field, value in record_to_dict(record).items()
+        }
 
-        json_fields = [
-            "metadata",
-            "model_spend",
-            "model_max_budget",
-            "router_settings",
-            "budget_limits",
-            "members_with_roles",
-        ]
-        for field in json_fields:
-            if isinstance(data.get(field), str):
-                data[field] = json.loads(data[field])
+        return LiteLLM_TeamTable.model_validate(data)
 
-        return LiteLLM_TeamTable(**data)
+    async def get_members_with_roles_locked(self, tx: "Prisma", team_id: str) -> List[Member]:
+        """Return the team's members_with_roles, locking the row FOR UPDATE.
+
+        Must be called inside a transaction so the row lock is held until
+        commit. This serializes concurrent membership writers on the team row
+        so the losing writer appends onto the winner's committed result instead
+        of overwriting it from a stale snapshot.
+        """
+        rows = await tx.query_raw(
+            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = $1 FOR UPDATE',
+            team_id,
+        )
+        raw_value = rows[0]["members_with_roles"] if rows else None
+        parsed = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+        if not parsed:
+            return []
+        return _MEMBERS_WITH_ROLES_ADAPTER.validate_python(parsed)
 
     async def find_by_id(self, team_id: str, id_field: str = "team_id") -> Optional[LiteLLM_TeamTable]:
         return await super().find_by_id(team_id, id_field)
@@ -78,8 +107,8 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         organization_id: Optional[str] = None,
         admins: Optional[List[str]] = None,
         members: Optional[List[str]] = None,
-        members_with_roles: Optional[Dict[str, Any]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        members_with_roles: Optional[Mapping[str, object]] = None,
+        metadata: Optional[Mapping[str, object]] = None,
         max_budget: Optional[float] = None,
         soft_budget: Optional[float] = None,
         models: Optional[List[str]] = None,
@@ -90,7 +119,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         object_permission_id: Optional[str] = None,
     ) -> LiteLLM_TeamTable:
         """Create a new team."""
-        data: Dict[str, Any] = {"team_id": team_id}
+        data: Dict[str, object] = {"team_id": team_id}
         if team_alias is not None:
             data["team_alias"] = team_alias
         if organization_id is not None:
@@ -129,8 +158,8 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         organization_id: Optional[str] = None,
         admins: Optional[List[str]] = None,
         members: Optional[List[str]] = None,
-        members_with_roles: Optional[Dict[str, Any]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        members_with_roles: Optional[Mapping[str, object]] = None,
+        metadata: Optional[Mapping[str, object]] = None,
         max_budget: Optional[float] = None,
         soft_budget: Optional[float] = None,
         models: Optional[List[str]] = None,
@@ -142,7 +171,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         object_permission_id: Optional[str] = None,
     ) -> Optional[LiteLLM_TeamTable]:
         """Update a team."""
-        data: Dict[str, Any] = {}
+        data: Dict[str, object] = {}
         if team_alias is not None:
             data["team_alias"] = team_alias
         if organization_id is not None:
@@ -203,9 +232,9 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
 
         return team
 
-    def _build_archive_data(self, team: LiteLLM_TeamTable) -> Dict[str, Any]:
+    def _build_archive_data(self, team: LiteLLM_TeamTable) -> Dict[str, object]:
         """Build archive data dict with only columns that exist in LiteLLM_DeletedTeamTable."""
-        data: Dict[str, Any] = {"team_id": team.team_id}
+        data: Dict[str, object] = {"team_id": team.team_id}
         if team.team_alias is not None:
             data["team_alias"] = team.team_alias
         if team.organization_id is not None:

@@ -18,6 +18,7 @@ import {
   type OnChangeFn,
   type Row,
   type RowData,
+  type RowSelectionState,
   type Table,
   type TableOptions,
   useReactTable,
@@ -70,6 +71,8 @@ export function validateDataTableConfig<TData extends RowData, TValue>(
   const bothSortingSources = props.defaultSorting !== undefined && props.sorting !== undefined;
   const bothFilterSources = props.defaultColumnFilters !== undefined && props.columnFilters !== undefined;
 
+  const controlledSelectionIncomplete = props.rowSelection !== undefined && props.onRowSelectionChange === undefined;
+
   return [
     serverSortingIncomplete ? "sortingMode='server' requires both `sorting` and `onSortingChange`." : null,
     serverPaginationIncomplete
@@ -79,6 +82,9 @@ export function validateDataTableConfig<TData extends RowData, TValue>(
     bothSortingSources ? "Provide either `defaultSorting` (uncontrolled) or `sorting` (controlled), not both." : null,
     bothFilterSources
       ? "Provide either `defaultColumnFilters` (uncontrolled) or `columnFilters` (controlled), not both."
+      : null,
+    controlledSelectionIncomplete
+      ? "Controlled `rowSelection` requires `onRowSelectionChange`; without it selection changes are dropped."
       : null,
   ].filter((message): message is string => message !== null);
 }
@@ -448,6 +454,9 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
     renderSubComponent,
     expanded,
     onExpandedChange,
+    enableRowSelection,
+    rowSelection,
+    onRowSelectionChange,
   } = props;
 
   const sortingState = useControllable(sorting, onSortingChange, defaultSorting ?? []);
@@ -462,6 +471,7 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
   );
   const globalFilterState = useControllable<string>(globalFilter, onGlobalFilterChange, "");
   const expandedState = useControllable<ExpandedState>(expanded, onExpandedChange, {});
+  const rowSelectionState = useControllable<RowSelectionState>(rowSelection, onRowSelectionChange, {});
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(defaultColumnVisibility ?? {});
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const columnPinning = React.useMemo(() => derivePinning(columns), [columns]);
@@ -476,6 +486,7 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
       columnFilters: filterState.value,
       globalFilter: globalFilterState.value,
       expanded: expandedState.value,
+      rowSelection: rowSelectionState.value,
       columnVisibility,
       columnSizing,
     },
@@ -491,11 +502,13 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
     onColumnFiltersChange: filterState.onChange,
     onGlobalFilterChange: globalFilterState.onChange,
     onExpandedChange: expandedState.onChange,
+    onRowSelectionChange: rowSelectionState.onChange,
     onColumnVisibilityChange: setColumnVisibility,
     onColumnSizingChange: setColumnSizing,
     getCoreRowModel: getCoreRowModel(),
     ...buildRowModels(sortingMode, paginationMode, filterMode, expansionGuard),
     ...(getRowId !== undefined ? { getRowId } : {}),
+    ...(enableRowSelection !== undefined ? { enableRowSelection } : {}),
     ...(paginationMode === "server" && rowCount !== undefined ? { rowCount } : {}),
   };
 

@@ -1,7 +1,7 @@
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { cx } from "@/lib/cva.config";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
-import { Input } from "antd";
 import { LucideIcon } from "lucide-react";
 import React, { useEffect, useState } from "react";
 
@@ -30,12 +30,13 @@ export const FilterInput: React.FC<FilterInputProps> = ({ placeholder, value, on
   };
 
   return (
-    <Input
-      placeholder={placeholder}
-      value={localValue}
-      onChange={handleChange}
-      prefix={Icon ? <Icon size={16} className="text-gray-500" /> : undefined}
-      className={cx("w-64", className)}
-    />
+    <InputGroup className={cx("w-64", className)}>
+      {Icon && (
+        <InputGroupAddon>
+          <Icon className="size-4 text-muted-foreground" />
+        </InputGroupAddon>
+      )}
+      <InputGroupInput placeholder={placeholder} value={localValue} onChange={handleChange} />
+    </InputGroup>
   );
 };

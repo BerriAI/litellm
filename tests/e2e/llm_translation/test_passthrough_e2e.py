@@ -15,7 +15,8 @@ import pytest
 
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, require_successful_call
-from models import SpendLogRow
+from lifecycle import ResourceManager
+from models import KeyGenerateBody, SpendLogRow
 from passthrough_client import (
     AnthropicTool,
     GeminiFunctionDeclaration,
@@ -157,3 +158,25 @@ def test_anthropic_passthrough_tool_call_logs_cost(
 
     row = _fetch_cost_breakdown(client, result)
     assert row.custom_llm_provider == "anthropic"
+
+
+class TestPassthroughModelAllowlist:
+    """A passthrough route must honor the calling key's model allow-list.
+
+    The customer fronts native provider calls through the proxy with custom auth,
+    so a key scoped to one model must not reach a different model just because the
+    request goes through the passthrough route rather than /chat/completions.
+    """
+
+    @pytest.mark.covers("other.auth.passthrough.model_allowlist_enforced")
+    def test_passthrough_denies_model_outside_key_allowlist(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        key = client.proxy.generate_key(KeyGenerateBody(models=["gemini-2.5-flash"]))
+        resources.defer(lambda: client.proxy.delete_key(key))
+
+        result = client.anthropic_message(key, "claude-haiku-4-5", f"say hi {unique_marker()}")
+        assert result.status_code == 403, (
+            "a key restricted to gemini-2.5-flash must be denied a claude passthrough call, "
+            f"got {result.status_code}: {result.body[:300]}"
+        )

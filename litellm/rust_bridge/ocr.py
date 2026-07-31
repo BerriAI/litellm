@@ -72,17 +72,28 @@ def use_litellm_rust(
     messages: RustMessages | None | _Unset = _UNSET,
     amessages: RustAmessages | None | _Unset = _UNSET,
     responses_websocket: Any | None | _Unset = _UNSET,
+    transcription: Any | None | _Unset = _UNSET,
+    atranscription: Any | None | _Unset = _UNSET,
 ) -> None:
     global _rust_ocr_enabled, _rust_ocr_impl, _rust_aocr_impl
     configuring_ocr = not isinstance(ocr, _Unset) or not isinstance(aocr, _Unset)
     configuring_messages = not isinstance(messages, _Unset) or not isinstance(amessages, _Unset)
     configuring_responses_websocket = not isinstance(responses_websocket, _Unset)
+    configuring_transcription = not isinstance(transcription, _Unset) or not isinstance(atranscription, _Unset)
     if configuring_ocr or (not configuring_messages and not configuring_responses_websocket):
         _rust_ocr_enabled = enabled
     if not isinstance(ocr, _Unset):
         _rust_ocr_impl = ocr
     if not isinstance(aocr, _Unset):
         _rust_aocr_impl = aocr
+    if configuring_transcription:
+        from litellm.rust_bridge.transcription import configure_rust_transcription
+
+        configure_rust_transcription(
+            enabled=enabled,
+            transcription=transcription,
+            atranscription=atranscription,
+        )
     if not configuring_messages and not configuring_responses_websocket:
         return
     if configuring_messages:

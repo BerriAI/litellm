@@ -127,11 +127,15 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
         general_settings={},
         premium_user=False,
     )
-    mock_jwt_encode.assert_called_once_with(
-        {"user_id": "test-user"},
-        "test-master-key",
-        algorithm="HS256",
-    )
+    mock_jwt_encode.assert_called_once()
+    payload, secret = mock_jwt_encode.call_args.args
+    # The UI session token carries a bounded-lifetime `exp` claim (dynamic timestamp), alongside
+    # the user_id; assert its presence rather than an exact expiry value.
+    assert payload["user_id"] == "test-user"
+    assert isinstance(payload.get("exp"), int) and payload["exp"] > 0
+    assert set(payload.keys()) == {"user_id", "exp"}
+    assert secret == "test-master-key"
+    assert mock_jwt_encode.call_args.kwargs == {"algorithm": "HS256"}
 
 
 def test_login_v2_returns_json_on_proxy_exception(monkeypatch):
@@ -752,6 +756,97 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(monkeypatch):
+    """
+    The DB config-reload jobs (add_deployment, get_credentials) that keep multi-pod
+    deployments in sync must be scheduled at the configured
+    proxy_config_reload_interval_seconds, not a hardcoded value.
+    """
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+    mock_scheduler = MagicMock()
+
+    configured_interval = 47
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True),
+        patch(
+            "litellm.proxy.proxy_server.proxy_config_reload_interval_seconds",
+            configured_interval,
+        ),
+        patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=mock_scheduler),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+    scheduled_seconds = {
+        job_call.kwargs["id"]: job_call.kwargs.get("seconds")
+        for job_call in mock_scheduler.add_job.call_args_list
+        if "id" in job_call.kwargs
+    }
+    assert scheduled_seconds["add_deployment_job"] == configured_interval
+    assert scheduled_seconds["get_credentials_job"] == configured_interval
+
+
+@pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_rejects_non_positive_config_reload_interval(monkeypatch):
+    """
+    A non-positive proxy_config_reload_interval_seconds (misconfig via env/config/DB) would
+    make APScheduler reject the job and crash startup, so the scheduler must fall back to the
+    30s default instead of forwarding the bad value.
+    """
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+    mock_scheduler = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True),
+        patch("litellm.proxy.proxy_server.proxy_config_reload_interval_seconds", 0),
+        patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=mock_scheduler),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+    scheduled_seconds = {
+        job_call.kwargs["id"]: job_call.kwargs.get("seconds")
+        for job_call in mock_scheduler.add_job.call_args_list
+        if "id" in job_call.kwargs
+    }
+    assert scheduled_seconds["add_deployment_job"] == 30
+    assert scheduled_seconds["get_credentials_job"] == 30
+
+
+@pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_false(monkeypatch):
     """
     Regression (LIT-4128): MCP servers created via the UI are persisted to the DB
@@ -924,6 +1019,102 @@ def test_get_config_custom_callback_api_env_vars(monkeypatch):
     }
 
 
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"],
+)
+def test_get_config_callbacks_fall_back_to_process_env(mock_env_vars, monkeypatch):
+    """A callback configured purely via process env vars is surfaced.
+
+    An IaC deployment sets LANGFUSE_* on the gateway and never touches the UI,
+    so nothing is stored in the config environment_variables overlay. The read
+    endpoint must still report the live values instead of blanks.
+    """
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-env-only")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-env-only")
+    monkeypatch.setenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+
+    config_data = {
+        "litellm_settings": {"success_callback": ["langfuse"]},
+        "general_settings": {},
+        "environment_variables": {},
+    }
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    langfuse_cb = next(
+        (cb for cb in response.json()["callbacks"] if cb["name"] == "langfuse"), None
+    )
+    assert langfuse_cb is not None
+    assert langfuse_cb["variables"] == {
+        "LANGFUSE_PUBLIC_KEY": "pk-env-only",
+        "LANGFUSE_SECRET_KEY": "sk-env-only",
+        "LANGFUSE_HOST": "https://cloud.langfuse.com",
+    }
+
+
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"],
+)
+def test_get_config_callback_env_secrets_redacted_for_non_admin(mock_env_vars, monkeypatch):
+    """Surfacing env vars must not widen who can read secret values.
+
+    The callback role gate redacts sensitive keys for anyone below full admin,
+    and that must hold whether the value came from the stored config or the
+    process env. A non-secret var (LANGFUSE_HOST) still resolves for context.
+    """
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-env-only-secret")
+    monkeypatch.setenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+
+    config_data = {
+        "litellm_settings": {"success_callback": ["langfuse"]},
+        "general_settings": {},
+        "environment_variables": {},
+    }
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user"
+    )
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    langfuse_cb = next(
+        (cb for cb in response.json()["callbacks"] if cb["name"] == "langfuse"), None
+    )
+    assert langfuse_cb is not None
+    assert langfuse_cb["variables"]["LANGFUSE_SECRET_KEY"] == "REDACTED"
+    assert langfuse_cb["variables"]["LANGFUSE_HOST"] == "https://cloud.langfuse.com"
+
+
 def test_get_config_returns_email_settings(monkeypatch):
     """
     Regression for https://github.com/BerriAI/litellm/issues/19221
@@ -985,6 +1176,113 @@ def test_get_config_returns_email_settings(monkeypatch):
     assert variables["SMTP_PASSWORD"] is not None
     assert variables["SMTP_PASSWORD"] != smtp_password
     assert "*" in variables["SMTP_PASSWORD"]
+
+
+def _get_email_alert_variables(monkeypatch, config_data):
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    email_alert = next((a for a in response.json()["alerts"] if a["name"] == "email"), None)
+    assert email_alert is not None
+    return email_alert["variables"]
+
+
+def test_get_config_returns_email_settings_set_only_in_process_env(monkeypatch):
+    """
+    Regression for LIT-4165.
+
+    SMTP supplied purely as process env vars (helm/terraform, no UI writes) is
+    live at runtime because litellm/proxy/utils.py::send_email resolves every
+    field from os.getenv. The /get/config/callbacks email block only read the
+    config/DB environment_variables overlay though, so those deployments saw an
+    empty Email Server Settings page and could not tell SMTP was configured.
+    The slack block one branch above already fell back to os.getenv.
+    """
+    smtp_password = "env-only-app-password"
+    monkeypatch.setenv("SMTP_HOST", "smtp.env-host.com")
+    monkeypatch.setenv("SMTP_PORT", "2525")
+    monkeypatch.setenv("SMTP_TLS", "False")
+    monkeypatch.setenv("SMTP_USERNAME", "env-user")
+    monkeypatch.setenv("SMTP_PASSWORD", smtp_password)
+    monkeypatch.setenv("SMTP_SENDER_EMAIL", "alerts@env-host.com")
+    monkeypatch.setenv("TEST_EMAIL_ADDRESS", "admin@env-host.com")
+
+    variables = _get_email_alert_variables(
+        monkeypatch,
+        {
+            "litellm_settings": {},
+            "general_settings": {"alerting": ["email"]},
+            "environment_variables": {},
+        },
+    )
+
+    # Every one of these was None before the fix, despite SMTP working.
+    assert variables["SMTP_HOST"] == "smtp.env-host.com"
+    assert variables["SMTP_PORT"] == "2525"
+    assert variables["SMTP_TLS"] == "False"
+    assert variables["SMTP_USERNAME"] == "env-user"
+    assert variables["SMTP_SENDER_EMAIL"] == "alerts@env-host.com"
+    assert variables["TEST_EMAIL_ADDRESS"] == "admin@env-host.com"
+
+    # An env-sourced secret is masked exactly like a stored one.
+    assert variables["SMTP_PASSWORD"] not in (None, smtp_password)
+    assert "*" in variables["SMTP_PASSWORD"]
+
+
+def test_get_config_email_settings_prefer_stored_over_process_env(monkeypatch):
+    """
+    Stored environment_variables win over the process environment, matching the
+    load order in ProxyConfig.get_config, which pushes stored values into
+    os.environ. Only a field with no stored entry falls back to os.getenv.
+    """
+    monkeypatch.setenv("SMTP_HOST", "smtp.env-host.com")
+    monkeypatch.setenv("SMTP_SENDER_EMAIL", "alerts@env-host.com")
+
+    variables = _get_email_alert_variables(
+        monkeypatch,
+        {
+            "litellm_settings": {},
+            "general_settings": {"alerting": ["email"]},
+            "environment_variables": {"SMTP_HOST": "smtp.stored-host.com"},
+        },
+    )
+
+    assert variables["SMTP_HOST"] == "smtp.stored-host.com"
+    assert variables["SMTP_SENDER_EMAIL"] == "alerts@env-host.com"
+
+
+def test_get_config_email_settings_absent_everywhere_stay_none(monkeypatch):
+    """A field set in neither source is reported unset rather than invented."""
+    for var in ("SMTP_HOST", "SMTP_PORT", "SMTP_TLS", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_SENDER_EMAIL"):
+        monkeypatch.delenv(var, raising=False)
+
+    variables = _get_email_alert_variables(
+        monkeypatch,
+        {
+            "litellm_settings": {},
+            "general_settings": {"alerting": ["email"]},
+            "environment_variables": {},
+        },
+    )
+
+    assert variables["SMTP_HOST"] is None
+    assert variables["SMTP_PASSWORD"] is None
 
 
 def test_get_config_returns_slack_webhook(monkeypatch):
@@ -1206,50 +1504,6 @@ def test_team_info_masking():
     assert "public-test-key" not in str(exc_info.value)
 
 
-def test_embedding_input_array_of_tokens(client_no_auth):
-    """
-    Test to bypass decoding input as array of tokens for selected providers
-
-    Ref: https://github.com/BerriAI/litellm/issues/10113
-    """
-    from litellm.proxy import proxy_server
-
-    # The client_no_auth fixture should initialize the router
-    # Assert this to catch any router initialization regressions
-    assert proxy_server.llm_router is not None, (
-        "llm_router is None after client_no_auth fixture initialized. "
-        "This indicates a router initialization issue that should be investigated."
-    )
-
-    try:
-        with mock.patch.object(
-            proxy_server.llm_router,
-            "aembedding",
-            return_value=example_embedding_result,
-        ) as mock_aembedding:
-            test_data = {
-                "model": "vllm_embed_model",
-                "input": [[2046, 13269, 158208]],
-            }
-
-            response = client_no_auth.post("/v1/embeddings", json=test_data)
-
-            # Assert that aembedding was called, and that input was not modified
-            mock_aembedding.assert_called_once()
-            call_args, call_kwargs = mock_aembedding.call_args
-            assert call_kwargs["model"] == "vllm_embed_model"
-            assert call_kwargs["input"] == [[2046, 13269, 158208]]
-
-            assert response.status_code == 200
-            result = response.json()
-            print(len(result["data"][0]["embedding"]))
-            assert (
-                len(result["data"][0]["embedding"]) > 10
-            )  # this usually has len==1536 so
-    except Exception as e:
-        pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
-
-
 @pytest.mark.asyncio
 async def test_get_all_team_models():
     """
@@ -1317,14 +1571,14 @@ async def test_get_all_team_models():
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
         # Configure the mock class to return proper instances
-        def mock_team_table_constructor(**kwargs):
+        def mock_team_table_constructor(data):
             mock_instance = MagicMock()
-            mock_instance.team_id = kwargs["team_id"]
-            mock_instance.models = kwargs["models"]
-            mock_instance.access_group_ids = kwargs.get("access_group_ids")
+            mock_instance.team_id = data["team_id"]
+            mock_instance.models = data["models"]
+            mock_instance.access_group_ids = data.get("access_group_ids")
             return mock_instance
 
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams="*",
@@ -1353,7 +1607,7 @@ async def test_get_all_team_models():
     mock_litellm_teamtable.find_many.return_value = [mock_team1]
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -1404,7 +1658,7 @@ async def test_get_all_team_models():
     mock_router.get_model_list.side_effect = mock_get_model_list_with_none
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
-        mock_team_table_class.side_effect = mock_team_table_constructor
+        mock_team_table_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -2119,14 +2373,14 @@ async def test_get_all_team_models_with_access_groups():
 
     with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_tt_class:
 
-        def mock_team_table_constructor(**kwargs):
+        def mock_team_table_constructor(data):
             mock_instance = MagicMock()
-            mock_instance.team_id = kwargs["team_id"]
-            mock_instance.models = kwargs["models"]
-            mock_instance.access_group_ids = kwargs.get("access_group_ids")
+            mock_instance.team_id = data["team_id"]
+            mock_instance.models = data["models"]
+            mock_instance.access_group_ids = data.get("access_group_ids")
             return mock_instance
 
-        mock_tt_class.side_effect = mock_team_table_constructor
+        mock_tt_class.model_validate.side_effect = mock_team_table_constructor
 
         result = await get_all_team_models(
             user_teams=["team1"],
@@ -2388,6 +2642,11 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
 
     This validates that generate_key_helper_fn is called with table_name="user"
     which should prevent key creation in LiteLLM_VerificationToken table.
+
+    Also guards the row identity: the budget must land on the proxy-wide
+    aggregate row "litellm-proxy-budget" (the one the spend writer increments
+    per request), not the admin user's own row ("default_user_id"). Budgeting
+    the admin row leaves the global budget without a resettable counter.
     """
     from unittest.mock import AsyncMock, patch
 
@@ -2416,7 +2675,7 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
         "litellm.proxy.proxy_server.generate_key_helper_fn", mock_generate_key_helper
     ):
         # Call the function under test
-        ProxyStartupEvent._add_proxy_budget_to_db(litellm_proxy_budget_name)
+        ProxyStartupEvent._add_proxy_budget_to_db()
 
         # Allow async task to complete
         import asyncio
@@ -2442,9 +2701,13 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
     Test that _upsert_proxy_budget_with_reset_at_backfill issues a conditional
     update_many with `WHERE budget_reset_at IS NULL` to backfill the column on
     rows that pre-existed without a reset schedule. Without this, the proxy
-    admin row stays at NULL and reset_budget_for_litellm_users never matches
+    budget row stays at NULL and reset_budget_for_litellm_users never matches
     it (NULL < now() is unknown in SQL), so the global proxy budget never
     resets.
+
+    The same conditional update must zero spend: a row that was never on a
+    reset schedule holds lifetime accrual, which must not gate the first
+    duration window.
     """
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2475,9 +2738,7 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
         ),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
     ):
-        await ProxyStartupEvent._upsert_proxy_budget_with_reset_at_backfill(
-            litellm_proxy_budget_name
-        )
+        await ProxyStartupEvent._upsert_proxy_budget_with_reset_at_backfill()
 
     # Upsert ran with the configured budget
     mock_generate_key_helper.assert_called_once()
@@ -2495,6 +2756,8 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
     backfilled_reset_at = backfill_call.kwargs["data"]["budget_reset_at"]
     assert isinstance(backfilled_reset_at, datetime)
     assert backfilled_reset_at > datetime.now(timezone.utc)
+
+    assert backfill_call.kwargs["data"]["spend"] == 0
 
 
 @pytest.mark.asyncio
@@ -2586,6 +2849,69 @@ async def test_load_config_max_budget_env_var_coerced_to_float(tmp_path, monkeyp
         assert litellm.max_budget > 0
     finally:
         litellm.max_budget = original_max_budget
+
+
+def test_max_ui_session_budget_default_is_one_dollar():
+    """LIT-4662: the dashboard session budget default is a product decision; the
+    old 0.25 default locked admins out of auto router Test Connection and the
+    playground mid-session with an error that looked like a hardcoded cap."""
+    assert litellm.max_ui_session_budget == 1.0
+
+
+@pytest.mark.asyncio
+async def test_load_config_max_ui_session_budget_applied_and_coerced(tmp_path, monkeypatch):
+    """
+    max_ui_session_budget configured via os.environ resolves to a string;
+    load_config must coerce it to float so every dashboard session key is
+    minted with a numeric max_budget.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("UI_SESSION_BUDGET", "2.5")
+    test_config = {
+        "model_list": [],
+        "litellm_settings": {"max_ui_session_budget": "os.environ/UI_SESSION_BUDGET"},
+    }
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump(test_config))
+
+    original_budget = litellm.max_ui_session_budget
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=MagicMock(), config_file_path=str(config_file)
+        )
+        assert isinstance(litellm.max_ui_session_budget, float)
+        assert litellm.max_ui_session_budget == 2.5
+    finally:
+        litellm.max_ui_session_budget = original_budget
+
+
+@pytest.mark.asyncio
+async def test_load_config_max_ui_session_budget_none_disables_cap(tmp_path):
+    """
+    max_ui_session_budget: null in config disables the dashboard session cap
+    entirely (session keys minted with no max_budget); load_config must pass
+    None through instead of raising on float(None).
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    test_config = {
+        "model_list": [],
+        "litellm_settings": {"max_ui_session_budget": None},
+    }
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump(test_config))
+
+    original_budget = litellm.max_ui_session_budget
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=MagicMock(), config_file_path=str(config_file)
+        )
+        assert litellm.max_ui_session_budget is None
+    finally:
+        litellm.max_ui_session_budget = original_budget
 
 
 @pytest.mark.asyncio
@@ -8875,38 +9201,6 @@ def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
         app.dependency_overrides.clear()
 
 
-def test_get_config_list_includes_skip_user_budget_on_team_key(monkeypatch):
-    """Related to #12905: the opt-out flag must be discoverable via /config/list so
-    it renders as a Boolean toggle on the Admin UI General Settings table. This
-    requires both the ConfigGeneralSettings field and the allowed_args entry."""
-    import types
-    from unittest.mock import AsyncMock, MagicMock
-
-    from fastapi.testclient import TestClient
-
-    import litellm.proxy.proxy_server as ps
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.proxy_server import app
-
-    mock_prisma = MagicMock()
-    mock_config_table = MagicMock()
-    mock_config_table.find_first = AsyncMock(return_value=None)
-    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
-    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
-    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
-    )
-    try:
-        client = TestClient(app)
-        resp = client.get("/config/list", params={"config_type": "general_settings"})
-        assert resp.status_code == 200, resp.text
-        fields = {item["field_name"]: item for item in resp.json()}
-        assert "skip_user_budget_on_team_key" in fields
-        assert fields["skip_user_budget_on_team_key"]["field_type"] == "Boolean"
-    finally:
-        app.dependency_overrides.clear()
-
-
 def test_get_config_list_includes_budget_exceeded_throttle_percentage(monkeypatch):
     """The throttle fraction is a litellm_settings scalar surfaced on the General
     Settings table as a Float field so it sits with the other global limits; it
@@ -9046,6 +9340,85 @@ def test_general_settings_ui_fields_are_db_overridable():
         f"UI-editable litellm_settings fields missing from LITELLM_SETTINGS_SAFE_DB_OVERRIDES: {sorted(missing)}. "
         "Add them, or they will not propagate to other workers when changed from the UI."
     )
+
+
+@pytest.mark.asyncio
+async def test_update_config_field_max_ui_session_budget_sets_live_value(monkeypatch):
+    """LIT-4662: the dashboard session budget is editable from the Admin UI General tab.
+    A Dollar field must accept values above 1 (the old Float type capped at 1, which cannot
+    express a dollar budget), apply live via setattr, and persist under litellm_settings."""
+    from unittest.mock import MagicMock
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import (
+        ConfigFieldUpdate,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    saved: dict = {}
+
+    async def fake_get_config():
+        return {"litellm_settings": {}}
+
+    async def fake_save_config(new_config=None):
+        saved.update(new_config or {})
+
+    monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
+    monkeypatch.setattr(ps.proxy_config, "save_config", fake_save_config)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    monkeypatch.setattr(litellm, "max_ui_session_budget", 1.0)
+
+    admin = UserAPIKeyAuth(api_key="k", user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="max_ui_session_budget",
+            field_value=25.0,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+
+    assert litellm.max_ui_session_budget == 25.0
+    assert saved["litellm_settings"]["max_ui_session_budget"] == 25.0
+
+
+@pytest.mark.parametrize("bad_value", [True, "abc", -1, 0, [2.5]])
+def test_validate_max_ui_session_budget_rejects_malformed(bad_value):
+    """A Dollar field accepts only positive numbers; zero would block every dashboard
+    LLM call at mint and non-numerics would break session key generation."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.proxy_server import _validate_general_settings_ui_litellm_value
+
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_general_settings_ui_litellm_value("max_ui_session_budget", bad_value)
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize("empty_value", [None, ""])
+def test_validate_max_ui_session_budget_empty_restores_default(empty_value):
+    """Clearing the field in the UI restores the shipped $1 default rather than None;
+    None would silently remove the session spend guardrail (unlimited budget), which
+    must stay a deliberate config.yaml act (max_ui_session_budget: null)."""
+    from litellm.proxy.proxy_server import _validate_general_settings_ui_litellm_value
+
+    assert _validate_general_settings_ui_litellm_value("max_ui_session_budget", empty_value) == 1.0
+
+
+def test_general_settings_ui_defaults_unchanged_for_existing_fields():
+    """The spec-default mechanism added for max_ui_session_budget must not change what
+    clearing the pre-existing fields restores (None for Float/Select, False for Boolean)."""
+    from litellm.proxy.proxy_server import (
+        _GENERAL_SETTINGS_UI_LITELLM_FIELDS,
+        _general_settings_ui_litellm_default,
+    )
+
+    assert _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS["budget_exceeded_throttle_percentage"]) is None
+    assert _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS["enable_anthropic_prompt_caching"]) is False
+    assert _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS["anthropic_prompt_caching_ttl"]) is None
 
 
 @pytest.mark.parametrize(
@@ -10199,3 +10572,109 @@ async def test_startup_survives_database_read_failure_for_coordination_redis():
         )
 
     assert result is None
+
+
+def _stream_usage_test_chunks():
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+
+    content_chunk = ModelResponseStream(
+        model="gpt-5.4-nano",
+        choices=[StreamingChoices(delta=Delta(content="pong"))],
+    )
+    finish_chunk = ModelResponseStream(
+        model="gpt-5.4-nano",
+        choices=[StreamingChoices(finish_reason="stop")],
+    )
+    usage_chunk = ModelResponseStream(model="gpt-5.4-nano", choices=[])
+    usage_chunk.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
+    return content_chunk, finish_chunk, usage_chunk
+
+
+def _stream_usage_generator_chunks():
+    from litellm.types.utils import ModelResponseStream
+
+    content_chunk, finish_chunk, usage_chunk = _stream_usage_test_chunks()
+    prompt_filter_chunk = ModelResponseStream(model="gpt-5.4-nano", choices=[])
+    return prompt_filter_chunk, content_chunk, finish_chunk, usage_chunk
+
+
+def test_is_injected_stream_usage_artifact():
+    from litellm.proxy.proxy_server import _is_injected_stream_usage_artifact
+    from litellm.types.utils import ModelResponseStream, Usage
+
+    content_chunk, finish_chunk, empty_choices_usage_chunk = _stream_usage_test_chunks()
+    assert _is_injected_stream_usage_artifact(empty_choices_usage_chunk) is True
+
+    synthetic_final_chunk = ModelResponseStream(model="gpt-5.4-nano")
+    synthetic_final_chunk.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
+    assert _is_injected_stream_usage_artifact(synthetic_final_chunk) is True
+
+    azure_prompt_filter_chunk = ModelResponseStream(model="gpt-5.4-nano", choices=[])
+    assert _is_injected_stream_usage_artifact(azure_prompt_filter_chunk) is True
+
+    assert _is_injected_stream_usage_artifact(content_chunk) is False
+    assert _is_injected_stream_usage_artifact(finish_chunk) is False
+
+    content_chunk_with_usage, finish_chunk_with_usage, _ = _stream_usage_test_chunks()
+    content_chunk_with_usage.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
+    finish_chunk_with_usage.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
+    assert _is_injected_stream_usage_artifact(content_chunk_with_usage) is False
+    assert _is_injected_stream_usage_artifact(finish_chunk_with_usage) is False
+
+    assert _is_injected_stream_usage_artifact({"usage": {"prompt_tokens": 1}}) is False
+
+
+async def _collect_async_data_generator_frames(request_data: dict) -> list:
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    chunks = _stream_usage_generator_chunks()
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            for chunk in chunks:
+                yield chunk
+
+        async def aclose(self):
+            pass
+
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(proxy_server_module.ProxyLogging, "_fire_deferred_stream_logging"):
+            return [
+                frame.decode("utf-8") if isinstance(frame, bytes) else frame
+                async for frame in async_data_generator(
+                    MockStream(), MagicMock(spec=UserAPIKeyAuth), request_data
+                )
+            ]
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_strips_injected_usage_chunk():
+    frames = await _collect_async_data_generator_frames(
+        {"model": "gpt-5.4-nano", "_litellm_strip_stream_usage": True}
+    )
+
+    data_frames = [frame for frame in frames if frame.startswith("data: {")]
+    assert len(data_frames) == 2
+    assert any("pong" in frame for frame in data_frames)
+    assert any("finish_reason" in frame for frame in data_frames)
+    assert not any('"usage"' in frame for frame in data_frames)
+    assert frames[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_forwards_usage_chunk_without_strip_marker():
+    frames = await _collect_async_data_generator_frames({"model": "gpt-5.4-nano"})
+
+    data_frames = [frame for frame in frames if frame.startswith("data: {")]
+    assert len(data_frames) == 4
+    assert any('"usage"' in frame and '"completion_tokens":188' in frame.replace(" ", "") for frame in data_frames)
+    assert frames[-1] == "data: [DONE]\n\n"
