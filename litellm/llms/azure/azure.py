@@ -467,7 +467,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=str(e),
             )
-            raise AzureOpenAIError(status_code=500, message=str(e))
+            raise
         except Exception as e:
             message = getattr(e, "message", str(e))
             body = getattr(e, "body", None)
