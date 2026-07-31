@@ -1951,7 +1951,7 @@ class TestMCPServerManager:
         with pytest.raises(HTTPException) as exc_info:
             await manager.preflight_token_exchange(
                 server=self._id_jag_server("id-jag-preflight-412"),
-                oauth2_headers={"Authorization": "Bearer sk-litellm-virtual-key"},
+                oauth2_headers=None,
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
             )
         assert exc_info.value.status_code == 412
@@ -1980,12 +1980,14 @@ class TestMCPServerManager:
         assert exc_info.value.status_code == 503
 
     @pytest.mark.asyncio
-    async def test_preflight_id_jag_runs_off_the_stored_subject_not_the_inbound_bearer(self):
-        """The ID-JAG preflight must resolve the same subject egress resolves: the identity assertion
-        stored for the authenticated user, never the inbound Authorization. That header is a LiteLLM
-        virtual key here, so feeding it in as an identity token would let the preflight pass while the
-        session still fails; and requiring one (the OBO arm's no-bearer early return) would skip the
-        preflight entirely on the store-sourced flow that is the whole point of the mode."""
+    async def test_preflight_id_jag_hands_the_resolver_the_same_subject_egress_does(self):
+        """The ID-JAG preflight must never reject a request the session would have served, so it
+        resolves with whatever egress resolves with. A caller presenting its own IdP identity token
+        wins there, so the preflight has to forward that bearer too; sourcing only from the store
+        would 412 a caller whose inbound token the tool call would have accepted. With no bearer the
+        subject comes from the assertion stored for the user, and that case must still pre-flight:
+        copying the OBO no-bearer early return here would skip the store-sourced flow entirely, which
+        is the one flow whose failure the session cannot report."""
         from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
             StaticHeaderAuth,
         )
@@ -1995,20 +1997,32 @@ class TestMCPServerManager:
 
         class _FakeProvider:
             async def resolve_credentials(self, subject, server):
-                subjects.append((subject.subject_id, subject.inbound_token))
+                subjects.append(
+                    (
+                        subject.subject_id,
+                        subject.inbound_token.get_secret_value() if subject.inbound_token else None,
+                    )
+                )
                 return Ok(StaticHeaderAuth("Bearer minted-id-jag", header_name="Authorization"))
 
         manager = MCPServerManager(cred_provider=_FakeProvider())
+        caller = UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1")
 
         assert (
             await manager.preflight_token_exchange(
-                server=self._id_jag_server("id-jag-preflight-ok"),
-                oauth2_headers={"Authorization": "Bearer sk-litellm-virtual-key"},
-                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                server=self._id_jag_server("id-jag-preflight-inbound"),
+                oauth2_headers={"Authorization": "Bearer caller-idp-id-token"},
+                user_api_key_auth=caller,
             )
             is None
         )
-        assert subjects == [("u-1", None)]
+        await manager.preflight_token_exchange(
+            server=self._id_jag_server("id-jag-preflight-stored"),
+            oauth2_headers=None,
+            user_api_key_auth=caller,
+        )
+
+        assert subjects == [("u-1", "caller-idp-id-token"), ("u-1", None)]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

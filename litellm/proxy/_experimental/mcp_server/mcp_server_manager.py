@@ -3029,26 +3029,22 @@ class MCPServerManager:
         failure surfaces as a failure instead of the session continuing into an empty tool list.
         A successful exchange is cached by the exchanger, so the session's list/call reuses it.
 
-        Each mode pre-flights with the subject it mints from at egress, so the pre-flight cannot
-        pass where the session would fail. ``oauth2_token_exchange`` mints from the caller's inbound
-        bearer, so with no bearer there is nothing to exchange and the missing-subject case stays the
-        preemptive challenge's job. ``oauth2_id_jag`` never reads the inbound bearer: its subject is
-        the identity assertion captured for this user at SSO login, so it pre-flights with no inbound
-        token at all, which is what brings its missing/expired-assertion 412 and its store-outage 503
-        forward to the edge. Only OBO has a discovery challenge to raise; ID-JAG's failures are plain
-        statuses whose body already names what the user has to do, so they map through
-        ``raise_public`` exactly as they do at egress.
+        Both modes pre-flight with the caller's inbound bearer, the same subject egress hands the
+        resolver, so the pre-flight can never reject a request the session would have served. What
+        differs is what an absent bearer means. ``oauth2_token_exchange`` can only mint from one, so
+        without it there is nothing to exchange and the missing-subject case stays the preemptive
+        challenge's job. ``oauth2_id_jag`` falls back to the identity assertion captured for this
+        user at SSO login, so an absent bearer is its normal path rather than a reason to skip;
+        gating it the way OBO is gated would skip the pre-flight on exactly the store-sourced flow
+        whose missing-assertion 412 and store-outage 503 the session cannot report. Only OBO has a
+        discovery challenge to raise; ID-JAG's failures are plain statuses whose body already names
+        what the user has to do, so they map through ``raise_public`` as they do at egress.
         """
-        subject_token: Optional[str]
-        match server.auth_type:
-            case MCPAuth.oauth2_token_exchange:
-                subject_token = self._extract_bearer_token(oauth2_headers, None)
-                if not subject_token:
-                    return
-            case MCPAuth.oauth2_id_jag:
-                subject_token = None
-            case _:
-                return
+        if server.auth_type not in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag):
+            return
+        subject_token = self._extract_bearer_token(oauth2_headers, None)
+        if not subject_token and server.auth_type == MCPAuth.oauth2_token_exchange:
+            return
         spec = _to_server_spec_fail_closed(server)
         if spec is None or not isinstance(spec.config, (TokenExchangeConfig, IdJagConfig)):
             return
