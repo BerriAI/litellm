@@ -2,7 +2,10 @@
 MCP Server Utilities
 """
 
+import hashlib
+import importlib
 import json
+import os
 import re
 from collections.abc import MutableMapping, MutableSequence
 from typing import (
@@ -17,11 +20,9 @@ from typing import (
     Tuple,
     Union,
 )
-
-import hashlib
-import importlib
-import os
 from urllib.parse import quote
+
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 # Constants
 #
@@ -326,13 +327,85 @@ def iter_known_server_prefixes(server: Any) -> Iterator[str]:
     yield from _emit(server_id)
 
 
+def iter_known_tool_name_spellings(tool_name: str, server: MCPServer) -> Iterator[str]:
+    """Yield every name that denotes the bare ``tool_name`` on ``server``: the bare name,
+    then its wire spelling under each prefix ``iter_known_server_prefixes`` accepts.
+    ``get_server_prefix`` covers only the currently published one, and that moves with the
+    alias and with ``LITELLM_USE_SHORT_MCP_TOOL_PREFIX``.
+    """
+    yield tool_name
+    for prefix in iter_known_server_prefixes(server):
+        yield add_server_prefix_to_name(tool_name, prefix)
+
+
+def openapi_tool_name(operation_id: str) -> str:
+    """Return the tool name ``_register_openapi_tools`` registers ``operation_id`` under.
+
+    The single transform between a spec's operationId and the name the gateway serves.
+    Policy recovers the link by replaying this exact function, which is what keeps it from
+    deciding for a tool it does not name: two operationIds that register as two tools
+    necessarily normalize to two names here, because this is the map that registered them.
+    """
+    return operation_id.replace(" ", "_").lower()
+
+
+def match_known_tool_name(tool_name: str, server: MCPServer, names: Iterable[str]) -> str | None:
+    """Return the entry of ``names`` that denotes ``tool_name`` on ``server``, else ``None``.
+
+    The single question every tool-name-keyed site asks: the allow list, the deny list,
+    ``allowed_params`` and the discovery filter, so discovery hides exactly what dispatch
+    refuses. It spans every spelling routing accepts and no more, because a tool's identity
+    is the exact name routing dispatches; anything looser lets one policy decide two tools.
+
+    On an OpenAPI server the configured entry holds the spec's operationId while routing
+    holds :func:`openapi_tool_name` of it, so both sides go through that map first. Doing it
+    with the registering function rather than a lookalike is the whole safety argument: a
+    coarser one collapses operationIds that registration keeps apart.
+
+    Callers read the returned entry rather than testing a container's values, which is what
+    stops an explicitly empty ``allowed_params`` list from reading as "nothing configured".
+    """
+    normalize = openapi_tool_name if getattr(server, "spec_path", None) else str
+    spellings = {normalize(spelling) for spelling in iter_known_tool_name_spellings(tool_name, server)}
+    return next((name for name in names if normalize(name) in spellings), None)
+
+
 def split_server_prefix_from_name(prefixed_name: str) -> Tuple[str, str]:
-    """Return the unprefixed name plus the server name used as prefix."""
+    """Return the unprefixed name plus the server name used as prefix.
+
+    Cuts at the FIRST separator, so the two halves are only trustworthy as a
+    pair: they reassemble into ``prefixed_name`` exactly, which is what makes
+    this safe for routing. Reading one half on its own is a guess about where the
+    boundary fell, and that guess is wrong whenever the prefix itself contains
+    the separator. Callers that compare a half against configuration must use
+    :func:`match_known_server_prefix` or :func:`strip_known_server_prefix`.
+    """
     if MCP_TOOL_PREFIX_SEPARATOR in prefixed_name:
         parts = prefixed_name.split(MCP_TOOL_PREFIX_SEPARATOR, 1)
         if len(parts) == 2:
             return parts[1], parts[0]
     return prefixed_name, ""
+
+
+def match_known_server_prefix(name: str, known_prefixes: Iterable[str]) -> tuple[str, str] | None:
+    """Return ``(matched_prefix, bare_name)`` when ``name`` carries a known prefix.
+
+    Candidates are normalized and tried LONGEST first, so a prefix that itself
+    contains :data:`MCP_TOOL_PREFIX_SEPARATOR` (the UUID ``server_id`` used when
+    a server has no alias, or a legacy hyphenated alias) wins over a shorter
+    prefix that is merely its leading segment. Returns ``None`` when no candidate
+    matches, i.e. ``name`` carries none of these prefixes.
+    """
+    candidates = sorted(
+        {normalize_server_name(prefix) for prefix in known_prefixes if prefix},
+        key=len,
+        reverse=True,
+    )
+    for prefix in candidates:
+        separator_suffixed = prefix + MCP_TOOL_PREFIX_SEPARATOR
+        if name.startswith(separator_suffixed):
+            return prefix, name[len(separator_suffixed) :]
+    return None
 
 
 def strip_known_server_prefix(name: str, server: Optional[Any]) -> str:
@@ -352,11 +425,8 @@ def strip_known_server_prefix(name: str, server: Optional[Any]) -> str:
     """
     if server is None:
         return split_server_prefix_from_name(name)[0]
-    for prefix in iter_known_server_prefixes(server):
-        candidate = normalize_server_name(prefix) + MCP_TOOL_PREFIX_SEPARATOR
-        if name.startswith(candidate):
-            return name[len(candidate) :]
-    return name
+    matched = match_known_server_prefix(name, iter_known_server_prefixes(server))
+    return name if matched is None else matched[1]
 
 
 def is_tool_name_prefixed(
@@ -367,15 +437,16 @@ def is_tool_name_prefixed(
     Check if tool name has a known MCP server prefix.
 
     When ``known_server_prefixes`` is provided the function verifies that the
-    substring before the first separator is an actual registered server
-    prefix.  Without it the check falls back to the legacy heuristic
+    name actually starts with one of those prefixes followed by the separator,
+    matching the longest candidate first so a prefix containing the separator
+    still resolves.  Without it the check falls back to the legacy heuristic
     (separator present anywhere in the name), which can produce false
     positives for non-MCP tools whose names contain hyphens
     (e.g. ``text-to-speech``, ``code-review``).
 
     Args:
         tool_name: Tool name to check.
-        known_server_prefixes: Optional set of normalised server prefixes
+        known_server_prefixes: Optional set of normalized server prefixes
             currently registered in the MCP manager.  Pass this whenever
             the caller has access to the server registry so that the check
             is accurate.
@@ -387,8 +458,7 @@ def is_tool_name_prefixed(
         return False
 
     if known_server_prefixes is not None:
-        candidate_prefix = tool_name.split(MCP_TOOL_PREFIX_SEPARATOR, 1)[0]
-        return normalize_server_name(candidate_prefix) in known_server_prefixes
+        return match_known_server_prefix(tool_name, known_server_prefixes) is not None
 
     # Legacy fallback – separator present somewhere in the name.
     return True

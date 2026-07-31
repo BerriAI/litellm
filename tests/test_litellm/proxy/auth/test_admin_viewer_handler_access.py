@@ -51,7 +51,6 @@ def admin_viewer_client(monkeypatch):
     mock_budget_table = MagicMock()
     mock_budget_table.find_many = AsyncMock(return_value=[])
     mock_budget_table.find_first = AsyncMock(return_value=None)
-    mock_budget_table.count = AsyncMock(return_value=0)
 
     mock_invitation_table = MagicMock()
     mock_invitation_table.find_unique = AsyncMock(return_value=None)
@@ -59,10 +58,14 @@ def admin_viewer_client(monkeypatch):
     mock_config_table = MagicMock()
     mock_config_table.find_first = AsyncMock(return_value=None)
 
+    # /management/v1/budgets reads through query_raw: count first, then the page.
+    mock_query_raw = AsyncMock(side_effect=[[{"count": 0}], []])
+
     mock_prisma.db = types.SimpleNamespace(
         litellm_budgettable=mock_budget_table,
         litellm_invitationlink=mock_invitation_table,
         litellm_config=mock_config_table,
+        query_raw=mock_query_raw,
     )
 
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
