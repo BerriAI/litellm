@@ -258,3 +258,32 @@ def test_compute_savings_spend_without_usage_object_keeps_other_drivers():
     )
     assert result.compression == pytest.approx(1000 * input_cost)
     assert result.autorouter == 0.0
+
+
+def test_malformed_usage_object_does_not_fail_the_spend_write():
+    """The daily spend write must survive an unusable usage_object; losing one row's
+    savings is recoverable, losing the row is not."""
+    result = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=1000,
+        cache_read_input_tokens=0,
+        baseline_model="claude-opus-5",
+        usage_object={"prompt_tokens": ["not", "a", "number"]},
+    )
+    assert result.autorouter == 0.0
+    assert result.compression > 0
+
+
+def test_model_without_cache_read_pricing_yields_no_caching_savings():
+    """A model with no discounted cache-read rate cannot have saved anything by
+    reading from cache, so the driver must report zero rather than the full input rate."""
+    model = "azure/gpt-3.5-turbo"
+    assert litellm.get_model_info(model=model).get("cache_read_input_token_cost") is None
+    result = compute_savings_spend(
+        model=model,
+        custom_llm_provider="azure",
+        compression_saved_tokens=0,
+        cache_read_input_tokens=5000,
+    )
+    assert result.prompt_caching == 0.0
