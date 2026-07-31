@@ -20,6 +20,19 @@ from litellm.proxy.management_endpoints.logging_exporter_access import (
     resolved_logging_exporter_names,
 )
 
+import pytest
+
+from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+
+@pytest.fixture(autouse=True)
+def _reset_otel_v2_flag_cache():
+    """``is_otel_v2_enabled`` is lru-cached; clear it around each test so ``LITELLM_OTEL_V2``
+    toggles take effect and don't leak between tests."""
+    is_otel_v2_enabled.cache_clear()
+    yield
+    is_otel_v2_enabled.cache_clear()
+
 
 # --- is_logging_credential: the access-validation + merge gate ---------------
 
@@ -183,6 +196,7 @@ def test_resolved_names_are_access_only(monkeypatch):
     """A destination name appears iff its access grants the (team_id, org_id).
     Included: team-granted, org-granted, global. Excluded: empty-access,
     granted-but-not-logging (provider) credentials, access for another team."""
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     monkeypatch.setattr(
         litellm,
         "credential_list",
@@ -200,6 +214,7 @@ def test_resolved_names_are_access_only(monkeypatch):
 
 
 def test_resolved_names_empty_scope_gets_global_only(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     monkeypatch.setattr(
         litellm,
         "credential_list",
@@ -212,5 +227,21 @@ def test_resolved_names_empty_scope_gets_global_only(monkeypatch):
 
 
 def test_resolved_names_empty_registry(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     monkeypatch.setattr(litellm, "credential_list", [])
     assert resolved_logging_exporter_names("t1", "o1") == ()
+
+
+def test_resolved_names_gated_off_when_v2_disabled(monkeypatch):
+    """Disclosure mirrors the resolver, which returns nothing with the v2 flag off.
+    A granting destination is disclosed only when ``LITELLM_OTEL_V2`` is enabled, so
+    ``/team/info`` never claims traces are exported while the feature is inert."""
+    monkeypatch.setattr(litellm, "credential_list", [_cred("team-granted", access={"teams": ["t1"]})])
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "false")
+    is_otel_v2_enabled.cache_clear()
+    assert resolved_logging_exporter_names("t1", None) == ()
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    assert resolved_logging_exporter_names("t1", None) == ("team-granted",)

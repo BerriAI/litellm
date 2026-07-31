@@ -13,6 +13,7 @@ one-element scope built with ``identity_scope``.
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
+from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.models.credentials import CredentialAccess, CredentialInfo
 
 
@@ -76,7 +77,13 @@ def resolved_logging_exporter_names(
     Mirrors the request-time resolver's selection: a logging destination is included
     when its ``access`` grants the identity. Names only; endpoints, headers, and the
     access map itself stay proxy-admin information.
+
+    Gated on ``is_otel_v2_enabled`` for parity with the resolver, which returns nothing
+    when the flag is off: disclosing a destination the request path would never fire
+    would claim traces are exported when none are.
     """
+    if not is_otel_v2_enabled():
+        return ()
     team_ids, org_ids = identity_scope(team_id, org_id)
     selected = tuple(
         credential.credential_name
