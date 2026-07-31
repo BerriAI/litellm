@@ -1619,8 +1619,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 system_prompt_indices.append(idx)
                 system_message_block = ChatCompletionSystemMessage(**message)
                 if isinstance(system_message_block["content"], str):
-                    # Skip empty text blocks - Anthropic API raises errors for empty text
-                    if not system_message_block["content"]:
+                    # Skip empty or whitespace-only text blocks - Anthropic API
+                    # raises errors for empty / whitespace-only text content.
+                    if not system_message_block["content"].strip():
                         continue
                     # Skip system messages containing x-anthropic-billing-header metadata
                     if system_message_block["content"].startswith(
@@ -1640,9 +1641,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     )
                 elif isinstance(message["content"], list):
                     for _content in message["content"]:
-                        # Skip empty text blocks - Anthropic API raises errors for empty text
+                        # Skip empty or whitespace-only text blocks - Anthropic API
+                        # raises errors for empty / whitespace-only text content.
                         text_value = _content.get("text")
-                        if _content.get("type") == "text" and not text_value:
+                        if _content.get("type") == "text" and (
+                            not text_value or not text_value.strip()
+                        ):
                             continue
                         # Skip system messages containing x-anthropic-billing-header metadata
                         if (
