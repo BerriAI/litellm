@@ -294,19 +294,23 @@ class TestUnifiedGuardrailCallTypeResolution:
 
         response_body = {"candidates": [{"content": {"parts": [{"text": "hello"}]}}]}
 
-        with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail.load_guardrail_translation_mappings"
-        ) as mock_load:
-            mock_handler_instance = AsyncMock()
-            mock_handler_instance.process_output_response = AsyncMock(
-                return_value=response_body
-            )
-            mock_handler_class = MagicMock(return_value=mock_handler_instance)
+        import litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail as ug
+        from litellm.types.utils import CallTypes
 
-            from litellm.types.utils import CallTypes
+        mock_handler_instance = AsyncMock()
+        mock_handler_instance.process_output_response = AsyncMock(
+            return_value=response_body
+        )
+        mock_handler_class = MagicMock(return_value=mock_handler_instance)
 
-            mock_load.return_value = {CallTypes.pass_through: mock_handler_class}
-
+        # endpoint_guardrail_translation_mappings is a module global cached
+        # across tests; patch it directly rather than the loader, which is
+        # only consulted while the cache is still None.
+        with patch.object(
+            ug,
+            "endpoint_guardrail_translation_mappings",
+            {CallTypes.pass_through: mock_handler_class},
+        ):
             result = await unified.async_post_call_success_hook(
                 data=data,
                 user_api_key_dict=user_api_key_dict,

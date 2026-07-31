@@ -72,6 +72,27 @@ def _isolate_proxy_module_globals():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_unified_guardrail_translation_cache():
+    """
+    Reset UnifiedLLMGuardrails' lazily-populated translation registry cache
+    before and after each test.
+
+    The cache is a module-level global gated by an ``is None`` check in 4
+    hook methods; once any test exercises a hook for real, the global stays
+    populated for the rest of the xdist worker's lifetime, silently
+    bypassing any later test's attempt to inject a translation mapping via
+    the loader function instead of the global itself.
+    """
+    import litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail as ug
+
+    ug.endpoint_guardrail_translation_mappings = None
+    try:
+        yield
+    finally:
+        ug.endpoint_guardrail_translation_mappings = None
+
+
+@pytest.fixture(autouse=True)
 def _reset_graceful_shutdown_state():
     """Graceful shutdown state is process-scoped; keep it from leaking between tests."""
     from litellm.proxy.shutdown.graceful_shutdown_manager import (
