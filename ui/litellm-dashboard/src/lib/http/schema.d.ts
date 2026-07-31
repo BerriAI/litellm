@@ -7169,6 +7169,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/budgets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Budgets
+         * @description The budgets defined on this proxy, paged, sortable and filterable, for the
+         *     Budgets page.
+         *
+         *     Readable by a proxy admin or an admin viewer; anyone else is refused 403. The
+         *     older `/budget/list` answers with the whole table as a bare array and has no
+         *     way to page, sort or filter it.
+         *
+         *     `sort` takes a comma-separated list of `budget_id`, `max_budget`, `tpm_limit`,
+         *     `rpm_limit` or `created_at`, each optionally prefixed with `-` for descending,
+         *     and defaults to `-created_at,budget_id`. `q` is a case-insensitive substring
+         *     match on `budget_id`. `page_size` defaults to 50 and is capped at 100.
+         *     Filters are `filter[budget_duration][in|is_null]`,
+         *     `filter[max_budget][gte|lte|is_null]` and `filter[created_at][gte|lte]`.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/budgets?sort=-max_budget&filter[budget_duration][in]=7d,30d&page_size=25'         --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["list_budgets_management_v1_budgets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/spend_logs/end_users": {
         parameters: {
             query?: never;
@@ -24771,6 +24808,7 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
+        JsonValue: unknown;
         /** KeyHealthResponse */
         KeyHealthResponse: {
             /**
@@ -24923,6 +24961,36 @@ export interface components {
             guardrails: components["schemas"]["GuardrailInfoResponse"][];
         };
         /**
+         * ListLinks
+         * @description Hypermedia for an entity list. `first`/`last` exist here because `total_pages` is known.
+         */
+        ListLinks: {
+            /** First */
+            first: string;
+            /** Last */
+            last: string;
+            /** Next */
+            next?: string | null;
+            /** Prev */
+            prev?: string | null;
+            /** Self */
+            self: string;
+        };
+        /**
+         * ListMeta
+         * @description An entity list can afford the COUNT(*) a facet cannot, so it reports a real total.
+         */
+        ListMeta: {
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Total Count */
+            total_count: number;
+            /** Total Pages */
+            total_pages: number;
+        };
+        /**
          * ListPluginsResponse
          * @description Response from listing plugins.
          */
@@ -24936,6 +25004,18 @@ export interface components {
         ListPromptsResponse: {
             /** Prompts */
             prompts: components["schemas"]["PromptSpec"][];
+        };
+        /**
+         * ListResponse
+         * @description One page of an entity collection. Rows are flat: no `{type, id, attributes}` wrapper.
+         */
+        ListResponse: {
+            /** Data */
+            data: {
+                [key: string]: components["schemas"]["JsonValue"];
+            }[];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
         };
         /**
          * ListRunsResponse
@@ -43412,6 +43492,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_budgets_management_v1_budgets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse"];
                 };
             };
         };
