@@ -5265,12 +5265,12 @@ class TestApplyStreamUsageTracking:
 
 
 class TestModelDeploymentsSupportStreamOptions:
-    def _support(self, model, llm_router=None) -> bool:
+    def _support(self, model, llm_router=None, team_id=None) -> bool:
         from litellm.proxy.common_request_processing import (
             _model_deployments_support_stream_options,
         )
 
-        return _model_deployments_support_stream_options(model=model, llm_router=llm_router)
+        return _model_deployments_support_stream_options(model=model, llm_router=llm_router, team_id=team_id)
 
     def test_openai_compatible_deployment_supports_stream_options(self):
         router = litellm.Router(
@@ -5334,6 +5334,23 @@ class TestModelDeploymentsSupportStreamOptions:
 
     def test_unmapped_model_name_is_not_injected(self):
         assert self._support("some-unmapped-public-alias", None) is False
+
+    def test_team_alias_model_resolves_with_team_id(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "model_name_team-1_8b6a0b3f",
+                    "litellm_params": {"model": "azure/gpt-5.4-nano", "api_key": "fake"},
+                    "model_info": {
+                        "team_id": "team-1",
+                        "team_public_model_name": "team-gpt",
+                    },
+                }
+            ]
+        )
+
+        assert self._support("team-gpt", router, team_id="team-1") is True
+        assert self._support("team-gpt", router, team_id=None) is False
 
     def test_non_string_model_is_not_injected(self):
         assert self._support(None, None) is False
