@@ -40,6 +40,28 @@ class PassThroughStreamingHandler:
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
     ):
+        # Use the true request-entry timestamp held on the logging object
+        # when it's earlier than the start_time passed in. The caller's
+        # start_time is captured at the streaming-iterator constructor,
+        # which runs AFTER the upstream HTTP response has already been
+        # received — too late to represent when the client's request
+        # entered the proxy. Without this override, SpendLogs.startTime
+        # is artificially deflated by the full TTFT, making
+        # `endTime - startTime` shorter than reality.
+        # Guard the `<` comparison: a tz-aware vs tz-naive mix raises
+        # `TypeError: can't compare offset-naive and offset-aware datetimes`,
+        # which would propagate before the first chunk is yielded and
+        # break the whole stream.
+        true_start = getattr(litellm_logging_obj, "start_time", None)
+        if isinstance(true_start, datetime):
+            try:
+                if not isinstance(start_time, datetime) or true_start < start_time:
+                    start_time = true_start
+            except TypeError:
+                # tzinfo mismatch — skip the override rather than
+                # crashing the stream. The caller-supplied start_time stays.
+                pass
+
         raw_bytes: List[bytes] = []
         logging_scheduled = False
         model_name = PassThroughStreamingHandler._extract_model_for_cost_injection(
@@ -62,6 +84,15 @@ class PassThroughStreamingHandler:
             if not cost_injection_active:
                 # Hot path: just buffer for end-of-stream logging and forward.
                 async for chunk in response.aiter_bytes():
+                    # Record TTFT on the first chunk so spend_logs
+                    # `completionStartTime` reflects real time-to-first-token.
+                    # Without this, the fallback in litellm_logging.py sets
+                    # completion_start_time = end_time, making TTFT equal to
+                    # total Duration for every passthrough streaming request.
+                    if litellm_logging_obj.completion_start_time is None:
+                        litellm_logging_obj._update_completion_start_time(
+                            completion_start_time=datetime.now()
+                        )
                     raw_bytes.append(chunk)
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
                     yield chunk
@@ -72,6 +103,10 @@ class PassThroughStreamingHandler:
                 assert model_name is not None
                 resolved_model_name: str = model_name
                 async for chunk in response.aiter_bytes():
+                    if litellm_logging_obj.completion_start_time is None:
+                        litellm_logging_obj._update_completion_start_time(
+                            completion_start_time=datetime.now()
+                        )
                     raw_bytes.append(chunk)
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
                     if endpoint_type == EndpointType.VERTEX_AI:
