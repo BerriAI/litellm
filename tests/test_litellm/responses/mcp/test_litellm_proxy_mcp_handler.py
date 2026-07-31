@@ -451,6 +451,44 @@ async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_functio
 
 
 @pytest.mark.asyncio
+async def test_execute_tool_calls_threads_logging_obj_into_call_tool(monkeypatch):
+    """The Responses-API MCP path must hand the request's litellm_logging_obj to
+    global_mcp_server_manager.call_tool, otherwise pre_call_tool_check /
+    _create_during_hook_task get None and the guardrail-recording bridge no-ops,
+    so MCP tool calls made through the Responses API report zero guardrail
+    evaluations in the monitor. Drop the litellm_logging_obj kwarg on the call_tool
+    invocation and this fails."""
+    _setup_proxy_logging(monkeypatch)
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+
+    sentinel_logging_obj = MagicMock()
+    sentinel_logging_obj.async_post_mcp_tool_call_hook = AsyncMock()
+    sentinel_logging_obj.async_success_handler = AsyncMock()
+
+    handler_module = importlib.import_module(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler"
+    )
+    monkeypatch.setattr(
+        handler_module,
+        "function_setup",
+        lambda *_args, **_kwargs: (sentinel_logging_obj, None),
+    )
+
+    tool_name = "deepwiki-read_wiki_structure"
+    tool_calls = [{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}]
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+    )
+
+    assert call_tool_mock.await_count == 1
+    assert call_tool_mock.await_args is not None
+    assert call_tool_mock.await_args.kwargs["litellm_logging_obj"] is sentinel_logging_obj
+
+
+@pytest.mark.asyncio
 async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch):
     """
     Regression test for 872e5b98...:
