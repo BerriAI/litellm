@@ -26,6 +26,11 @@ interface McpCrudPermissionPanelProps {
   value: string[] | undefined;
   /** Called whenever the allowed set changes. Always emits a concrete string[]. */
   onChange: (allowed: string[]) => void;
+  /**
+   * Tools that are allowed by a grant this panel cannot edit, so they stay allowed whatever is
+   * ticked here. They render allowed and disabled, and a group toggle leaves them on.
+   */
+  lockedTools?: readonly string[];
   readOnly?: boolean;
   /**
    * Optional search filter string. When set, only tools whose name or description
@@ -62,10 +67,13 @@ const GROUP_HEADER_BG: Record<CrudOp, string> = {
 
 // ---------------------------------------------------------------------------
 
+const NO_LOCKED_TOOLS: readonly string[] = [];
+
 const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
   tools,
   value,
   onChange,
+  lockedTools = NO_LOCKED_TOOLS,
   readOnly = false,
   searchFilter = "",
 }) => {
@@ -91,6 +99,8 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
     return new Set(value);
   }, [value, tools]);
 
+  const locked: Set<string> = useMemo(() => new Set(lockedTools), [lockedTools]);
+
   const isToolAllowed = (name: string) => effectiveAllowed.has(name);
 
   const isGroupFullyAllowed = (op: CrudOp) => {
@@ -106,7 +116,7 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
   };
 
   const toggleTool = (toolName: string) => {
-    if (readOnly) return;
+    if (readOnly || locked.has(toolName)) return;
     const next = new Set(effectiveAllowed);
     if (next.has(toolName)) {
       next.delete(toolName);
@@ -122,7 +132,7 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
     for (const tool of grouped[op]) {
       if (enable) {
         next.add(tool.name);
-      } else {
+      } else if (!locked.has(tool.name)) {
         next.delete(tool.name);
       }
     }
@@ -220,18 +230,19 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
                   )
                   .map((tool) => {
                     const allowed = isToolAllowed(tool.name);
+                    const isLocked = locked.has(tool.name);
                     return (
                       <div
                         key={tool.name}
                         className={`flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-gray-50 ${
-                          !readOnly ? "cursor-pointer" : ""
+                          !readOnly && !isLocked ? "cursor-pointer" : ""
                         } ${allowed ? "" : "opacity-60"}`}
                         onClick={() => toggleTool(tool.name)}
                       >
                         <Checkbox
                           checked={allowed}
                           onChange={() => toggleTool(tool.name)}
-                          disabled={readOnly}
+                          disabled={readOnly || isLocked}
                           onClick={(e) => e.stopPropagation()}
                         />
                         <div className="flex-1 min-w-0">
