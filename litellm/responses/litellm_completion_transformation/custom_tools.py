@@ -45,6 +45,23 @@ def is_custom_tool_call(tool_name: str, custom_tool_names: set[str]) -> bool:
     return tool_name in custom_tool_names
 
 
+def serialize_tool_call_arguments(raw_arguments: object, default: str = "") -> str:
+    """Render tool call arguments as the JSON string tool-call schemas require.
+
+    Arguments normally arrive already JSON-encoded, but clients and providers
+    also send the decoded object. ``str()`` on a dict yields a Python repr with
+    single quotes, which every downstream JSON parser rejects with errors like
+    "Expecting ',' delimiter".
+    """
+    if raw_arguments is None or raw_arguments == "":
+        return default
+    if isinstance(raw_arguments, str):
+        return raw_arguments
+    if isinstance(raw_arguments, (dict, list, tuple, bool, int, float)):
+        return json.dumps(raw_arguments)
+    return str(raw_arguments)
+
+
 def unwrap_custom_tool_arguments(arguments: str) -> str:
     """Extract the raw content string from JSON-wrapped arguments.
 
