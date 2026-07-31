@@ -116,16 +116,22 @@ export const fetchTeamFilterOptions = async (
  * @param organizationId Optional organization ID to filter teams
  * @returns Array of all teams
  */
-export const fetchAllTeams = async (accessToken: string | null, organizationId?: string | null): Promise<Team[]> => {
+export const fetchAllTeams = async (
+  accessToken: string | null,
+  organizationId?: string | null,
+  userId?: string | null,
+  userRole?: string | null,
+): Promise<Team[]> => {
   if (!accessToken) return [];
 
   try {
+    const isAdmin = userRole === "Admin" || userRole === "Admin Viewer";
     let allTeams: Team[] = [];
     let currentPage = 1;
     let hasMorePages = true;
 
     while (hasMorePages) {
-      const response = await teamListCall(accessToken, organizationId || null, null);
+      const response = await teamListCall(accessToken, organizationId || null, isAdmin ? null : userId || null);
 
       // Add teams from this page
       allTeams = [...allTeams, ...response];

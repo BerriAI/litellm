@@ -195,10 +195,10 @@ export function useLogFilterLogic({
   };
 
   const allTeamsQueryOptions: UseQueryOptions<Team[], Error> = {
-    queryKey: ["allTeamsForLogFilters", accessToken],
+    queryKey: ["allTeamsForLogFilters", accessToken, userID ?? "", userRole ?? ""],
     queryFn: async () => {
       if (!accessToken) return [];
-      const teamsData = await fetchAllTeams(accessToken);
+      const teamsData = await fetchAllTeams(accessToken, undefined, userID, userRole);
       return teamsData || [];
     },
     enabled: !!accessToken,

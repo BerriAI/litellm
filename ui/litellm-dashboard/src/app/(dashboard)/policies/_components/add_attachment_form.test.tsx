@@ -18,8 +18,9 @@ vi.mock("./impact_preview_alert", () => ({
     React.createElement("div", { "data-testid": "impact-preview" }, `${impactResult.affected_keys_count} keys`),
 }));
 
+const mockUseAuthorized = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
-  default: () => ({ userId: "admin-user-id", userRole: "Admin", accessToken: "test-token" }),
+  default: () => mockUseAuthorized(),
 }));
 
 const makePolicy = (overrides: Partial<Policy> = {}): Policy => ({
@@ -51,6 +52,7 @@ const teamListResult = (aliases: string[]) =>
 describe("AddAttachmentForm", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue({ userId: "admin-user-id", userRole: "Admin", accessToken: "test-token" });
     vi.mocked(networking.teamListCall).mockResolvedValue([]);
     vi.mocked(networking.keyListCall).mockResolvedValue({ keys: [] });
     vi.mocked(networking.modelAvailableCall).mockResolvedValue({ data: [] });
@@ -79,6 +81,13 @@ describe("AddAttachmentForm", () => {
     renderWithProviders(<AddAttachmentForm {...defaultProps} />);
     await waitFor(() => expect(networking.teamListCall).toHaveBeenCalled());
     expect(networking.teamListCall).toHaveBeenCalledWith("test-token", null, null);
+  });
+
+  it("passes userId for non-admin callers", async () => {
+    mockUseAuthorized.mockReturnValue({ userId: "member-1", userRole: "internal_user", accessToken: "test-token" });
+    renderWithProviders(<AddAttachmentForm {...defaultProps} />);
+    await waitFor(() => expect(networking.teamListCall).toHaveBeenCalled());
+    expect(networking.teamListCall).toHaveBeenCalledWith("test-token", null, "member-1");
   });
 
   it("should not fetch teams, keys, or models when accessToken is null", () => {

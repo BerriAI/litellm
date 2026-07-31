@@ -30,6 +30,7 @@ import {
   type ToolPolicyOverrideRow,
 } from "@/components/networking";
 import type { Team } from "@/components/key_team_helpers/key_list";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface ToolDetailProps {
   toolName: string;
@@ -60,6 +61,7 @@ function getDefaultLogsDateRange(): { start: string; end: string } {
 }
 
 export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
+  const { userId, userRole } = useAuthorized();
   const queryClient = useQueryClient();
   const [overrideSaving, setOverrideSaving] = useState(false);
   const [inputPolicySaving, setInputPolicySaving] = useState(false);
@@ -88,8 +90,11 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
   });
 
   const { data: teamsData } = useQuery({
-    queryKey: ["teams-list-tool-detail"],
-    queryFn: () => teamListCall(accessToken!, null, null),
+    queryKey: ["teams-list-tool-detail", userId ?? "", userRole ?? ""],
+    queryFn: () => {
+      const isAdmin = userRole === "Admin" || userRole === "Admin Viewer";
+      return teamListCall(accessToken!, null, isAdmin ? null : userId || null);
+    },
     enabled: !!accessToken,
   });
 

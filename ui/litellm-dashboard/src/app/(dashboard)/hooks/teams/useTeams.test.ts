@@ -895,4 +895,26 @@ describe("useAllTeams", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
   });
+
+  it("includes user_id in /v2/team/list for non-admin users", async () => {
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userId: "non-admin-user-id",
+      userRole: "app_user",
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+    fetchMock.mockResolvedValue(pageResponse(mockTeams, 1, 1));
+
+    const { result } = renderHook(() => useAllTeams(), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const firstUrl = fetchMock.mock.calls[0][0] as string;
+    expect(firstUrl).toContain("user_id=non-admin-user-id");
+  });
 });
