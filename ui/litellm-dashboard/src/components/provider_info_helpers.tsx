@@ -113,6 +113,7 @@ export enum Providers {
   Hosted_Vllm = "vllm",
   HUGGINGFACE = "Huggingface",
   HYPERBOLIC = "Hyperbolic",
+  INCEPTION = "Inception",
   Infinity = "Infinity",
   JinaAI = "Jina AI",
   LAMBDA_AI = "Lambda Ai",
@@ -221,6 +222,7 @@ export const provider_map: Record<string, string> = {
   Hosted_Vllm: "hosted_vllm",
   HUGGINGFACE: "huggingface",
   HYPERBOLIC: "hyperbolic",
+  INCEPTION: "inception",
   Infinity: "infinity",
   JinaAI: "jina_ai",
   LAMBDA_AI: "lambda_ai",
@@ -400,49 +402,33 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
   return { logo, displayName };
 };
 
-export const getPlaceholder = (selectedProvider: string): string => {
-  if (selectedProvider === Providers.AIML) {
-    return "aiml/flux-pro/v1.1";
-  } else if (selectedProvider === Providers.Vertex_AI) {
-    return "gemini-pro";
-  } else if (selectedProvider == Providers.Anthropic) {
-    return "claude-3-opus";
-  } else if (selectedProvider == Providers.Bedrock) {
-    return "claude-3-opus";
-  } else if (selectedProvider == Providers.SageMaker) {
-    return "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b";
-  } else if (selectedProvider == Providers.Google_AI_Studio) {
-    return "gemini-pro";
-  } else if (selectedProvider == Providers.Azure_AI_Studio) {
-    return "azure_ai/command-r-plus";
-  } else if (selectedProvider == Providers.Azure) {
-    return "my-deployment";
-  } else if (selectedProvider == Providers.Oracle) {
-    return "oci/xai.grok-4";
-  } else if (selectedProvider == Providers.Snowflake) {
-    return "snowflake/mistral-7b";
-  } else if (selectedProvider == Providers.Voyage) {
-    return "voyage/";
-  } else if (selectedProvider == Providers.JinaAI) {
-    return "jina_ai/";
-  } else if (selectedProvider == Providers.VolcEngine) {
-    return "volcengine/<any-model-on-volcengine>";
-  } else if (selectedProvider == Providers.DeepInfra) {
-    return "deepinfra/<any-model-on-deepinfra>";
-  } else if (selectedProvider == Providers.FalAI) {
-    return "fal_ai/fal-ai/flux-pro/v1.1-ultra";
-  } else if (selectedProvider == Providers.RunwayML) {
-    return "runwayml/gen4_turbo";
-  } else if (selectedProvider === Providers.WATSONX) {
-    return "watsonx/ibm/granite-3-3-8b-instruct";
-  } else if (selectedProvider === Providers.Cursor) {
-    return "cursor/claude-4-sonnet";
-  } else if (selectedProvider === Providers.ZAI) {
-    return "zai/glm-4.5";
-  } else {
-    return "gpt-3.5-turbo";
-  }
+const DEFAULT_MODEL_PLACEHOLDER = "gpt-3.5-turbo";
+
+const providerPlaceholders: Partial<Record<Providers, string>> = {
+  [Providers.AIML]: "aiml/flux-pro/v1.1",
+  [Providers.Vertex_AI]: "gemini-pro",
+  [Providers.Anthropic]: "claude-3-opus",
+  [Providers.Bedrock]: "claude-3-opus",
+  [Providers.SageMaker]: "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
+  [Providers.Google_AI_Studio]: "gemini-pro",
+  [Providers.Azure_AI_Studio]: "azure_ai/command-r-plus",
+  [Providers.Azure]: "my-deployment",
+  [Providers.Oracle]: "oci/xai.grok-4",
+  [Providers.Snowflake]: "snowflake/mistral-7b",
+  [Providers.Voyage]: "voyage/",
+  [Providers.JinaAI]: "jina_ai/",
+  [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",
+  [Providers.DeepInfra]: "deepinfra/<any-model-on-deepinfra>",
+  [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
+  [Providers.RunwayML]: "runwayml/gen4_turbo",
+  [Providers.WATSONX]: "watsonx/ibm/granite-3-3-8b-instruct",
+  [Providers.Cursor]: "cursor/claude-4-sonnet",
+  [Providers.ZAI]: "zai/glm-4.5",
+  [Providers.INCEPTION]: "inception/mercury-2",
 };
+
+export const getPlaceholder = (selectedProvider: string): string =>
+  providerPlaceholders[selectedProvider as Providers] ?? DEFAULT_MODEL_PLACEHOLDER;
 
 export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {
   let providerKey = provider;

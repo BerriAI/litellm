@@ -94,6 +94,11 @@ describe("provider_info_helpers", () => {
       expect(result.displayName).toBe(Providers.ZAI);
     });
 
+    it("should resolve the inception provider value to the Inception display name", () => {
+      const result = getProviderLogoAndName("inception");
+      expect(result.displayName).toBe(Providers.INCEPTION);
+    });
+
     it("should return provider value as display name when no mapping exists", () => {
       const unknownProvider = "unknown_provider";
       const result = getProviderLogoAndName(unknownProvider);
@@ -127,6 +132,7 @@ describe("provider_info_helpers", () => {
         Providers.GALADRIEL,
         Providers.GradientAI,
         Providers.HEROKU,
+        Providers.INCEPTION,
         Providers.LEMONADE,
         Providers.LLAMAFILE,
         Providers.MARITALK,
@@ -223,6 +229,10 @@ describe("provider_info_helpers", () => {
 
     it("should return zai/glm-4.5 placeholder for Z.AI provider", () => {
       expect(getPlaceholder(Providers.ZAI)).toBe("zai/glm-4.5");
+    });
+
+    it("should return inception/mercury-2 placeholder for Inception provider", () => {
+      expect(getPlaceholder(Providers.INCEPTION)).toBe("inception/mercury-2");
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {
@@ -361,6 +371,16 @@ describe("provider_info_helpers", () => {
       expect(result).toContain("fireworks-base");
       expect(result).toContain("fireworks-embed");
       expect(result).not.toContain("openai-model");
+    });
+
+    it("should populate Inception models without leaking the text-completion-inception ones", () => {
+      const modelMap = {
+        "inception/mercury-2": { litellm_provider: "inception" },
+        "text-completion-inception/mercury-edit-2": { litellm_provider: "text-completion-inception" },
+        "vercel_ai_gateway/inception/mercury-coder-small": { litellm_provider: "vercel_ai_gateway" },
+      };
+      const result = getProviderModels("INCEPTION" as Providers, modelMap);
+      expect(result).toEqual(["inception/mercury-2"]);
     });
 
     it("should filter out models with null values", () => {
