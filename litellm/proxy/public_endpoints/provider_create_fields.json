@@ -1533,6 +1533,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "INCEPTION",
+    "provider_display_name": "Inception",
+    "litellm_provider": "inception",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "inception/mercury-2"
+  },
+  {
     "provider": "Infinity",
     "provider_display_name": "Infinity",
     "litellm_provider": "infinity",
