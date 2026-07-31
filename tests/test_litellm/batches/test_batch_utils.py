@@ -42,6 +42,14 @@ def _usage(p, c, t=None):
     }
 
 
+def _responses_usage(i, o, t=None):
+    return {
+        "input_tokens": i,
+        "output_tokens": o,
+        "total_tokens": t if t is not None else i + o,
+    }
+
+
 def _success_row(model="gpt-4o", usage=None, **body_extra):
     body = {"model": model, **body_extra}
     if usage is not None:
@@ -121,6 +129,15 @@ def test_get_usage_from_response_body_missing_is_zero():
         0,
         0,
         0,
+    )
+
+
+def test_get_usage_from_responses_api_shaped_body():
+    usage = bu._get_batch_job_usage_from_response_body({"usage": _responses_usage(33, 57)})
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (
+        33,
+        57,
+        90,
     )
 
 
@@ -403,6 +420,35 @@ def test_total_usage_sums_successful_only(monkeypatch):
         15,
         45,
     )
+
+
+def test_aggregate_sums_mixed_responses_and_chat_shapes(monkeypatch):
+    import litellm.cost_calculator as cc
+
+    costed = []
+
+    def _batch_cost_calculator(**kw):
+        costed.append(kw["usage"])
+        return (0.1, 0.2)
+
+    monkeypatch.setattr(cc, "batch_cost_calculator", _batch_cost_calculator)
+
+    cost, usage, _ = bu._aggregate_batch_cost_usage_models(
+        entries=[
+            _success_row(usage=_responses_usage(33, 57)),
+            _success_row(usage=_usage(10, 5)),
+        ],
+        custom_llm_provider="openai",
+        model_info={"input_cost_per_token": 0.0},  # type: ignore[arg-type]
+    )
+
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (
+        43,
+        62,
+        105,
+    )
+    assert cost == pytest.approx(0.6)
+    assert [(u.prompt_tokens, u.completion_tokens) for u in costed] == [(33, 57), (10, 5)]
 
 
 def test_total_usage_empty_is_zero():
