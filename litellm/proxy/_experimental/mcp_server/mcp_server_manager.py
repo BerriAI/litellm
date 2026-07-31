@@ -116,12 +116,15 @@ from litellm.proxy._experimental.mcp_server.utils import (
     get_server_prefix,
     interpolate_headers,
     is_short_mcp_tool_prefix_enabled,
-    is_tool_name_prefixed,
     iter_known_server_prefixes,
+    iter_known_tool_name_spellings,
+    match_known_server_prefix,
+    match_known_tool_name,
     merge_mcp_headers,
     normalize_server_name,
+    openapi_tool_name,
     parse_admin_env_vars,
-    split_server_prefix_from_name,
+    strip_known_server_prefix,
     validate_mcp_server_name,
 )
 from litellm.proxy._types import (
@@ -1783,7 +1786,7 @@ class MCPServerManager:
 
                     # Generate tool name (without prefix initially)
                     operation_id = operation.get("operationId", f"{method}_{path.replace('/', '_')}")
-                    base_tool_name = operation_id.replace(" ", "_").lower()
+                    base_tool_name = openapi_tool_name(operation_id)
 
                     # Add server prefix to tool name
                     prefixed_tool_name = add_server_prefix_to_name(base_tool_name, server_prefix)
@@ -4185,10 +4188,8 @@ class MCPServerManager:
             # Register every known prefix form (alias, server_name, server_id,
             # short ID) so call_tool can resolve regardless of which form a
             # caller / cached client is using.
-            self.tool_name_to_mcp_server_name_mapping[original_name] = prefix
-            for known_prefix in iter_known_server_prefixes(server):
-                qualified = add_server_prefix_to_name(original_name, known_prefix)
-                self.tool_name_to_mcp_server_name_mapping[qualified] = prefix
+            for spelling in iter_known_tool_name_spellings(original_name, server):
+                self.tool_name_to_mcp_server_name_mapping[spelling] = prefix
 
         verbose_logger.info(f"Successfully fetched {len(prefixed_tools)} tools from server {server.name}")
         return prefixed_tools
@@ -4261,28 +4262,29 @@ class MCPServerManager:
 
     def check_allowed_or_banned_tools(self, tool_name: str, server: MCPServer) -> bool:
         """
-        Check if the tool is allowed or banned for the given server
+        Check if the tool is allowed or banned for the given server.
+
+        ``tool_name`` is bare: every caller resolves the boundary against the server's
+        registered prefixes before dispatch (``server.py``'s ``original_tool_name``, the
+        Responses handler's ``sanitized_tool_name``). Configured entries are matched by
+        deriving the spellings routing accepts, never by stripping the entry, which would
+        cut a second boundary out of a native name that opens with the server prefix.
         """
         from litellm.proxy._experimental.mcp_server.utils import (
             server_applies_tool_allowlist,
         )
 
         if server_applies_tool_allowlist(server):
-            if not server.allowed_tools:
-                return False
-            return tool_name in server.allowed_tools or f"{server.name}-{tool_name}" in server.allowed_tools
-        if server.disallowed_tools:
-            return (
-                tool_name not in server.disallowed_tools and f"{server.name}-{tool_name}" not in server.disallowed_tools
-            )
-        return True
+            return match_known_tool_name(tool_name, server, server.allowed_tools or ()) is not None
+        return match_known_tool_name(tool_name, server, server.disallowed_tools or ()) is None
 
     def validate_allowed_params(self, tool_name: str, arguments: dict[str, Any], server: MCPServer) -> None:
         """
         Filter arguments to only include allowed parameters for the given tool.
 
         Args:
-            tool_name: Name of the tool (with or without prefix)
+            tool_name: Bare tool name, already resolved against the server's
+                registered prefixes by the caller
             arguments: Dictionary of arguments to filter
             server: MCPServer configuration
 
@@ -4292,23 +4294,12 @@ class MCPServerManager:
         Raises:
             HTTPException: If allowed_params is configured for this tool but arguments contain disallowed params
         """
-        from litellm.proxy._experimental.mcp_server.utils import (
-            split_server_prefix_from_name,
-        )
-
-        # If no allowed_params configured, return all arguments
-        if not server.allowed_params:
+        allowed_params = server.allowed_params or {}
+        matched = match_known_tool_name(tool_name, server, allowed_params)
+        if matched is None:
             return
 
-        # Get the unprefixed tool name to match against config
-        unprefixed_tool_name, _ = split_server_prefix_from_name(tool_name)
-
-        # Check both prefixed and unprefixed tool names
-        allowed_params_list = server.allowed_params.get(tool_name) or server.allowed_params.get(unprefixed_tool_name)
-
-        # If this tool doesn't have allowed_params specified, allow all params
-        if allowed_params_list is None:
-            return None
+        allowed_params_list = allowed_params[matched]
 
         # Filter arguments to only include allowed parameters
         disallowed_params = [param for param in arguments.keys() if param not in allowed_params_list]
@@ -4390,8 +4381,11 @@ class MCPServerManager:
             global_mcp_tool_registry,
         )
 
-        # Get the tool from the registry
-        tool = global_mcp_tool_registry.get_tool(f"{server.name}-{tool_name}")
+        # Registration used add_server_prefix_to_name(base, get_server_prefix(server)),
+        # and tool_name is the bare base name by the time call_tool reaches here, so
+        # rebuilding the key the same way reproduces it exactly
+        registry_key = add_server_prefix_to_name(tool_name, get_server_prefix(server))
+        tool = global_mcp_tool_registry.get_tool(registry_key)
         if tool is None:
             # Tool not found in registry
             error_msg = f"OpenAPI tool {tool_name} not found in registry"
@@ -5251,7 +5245,7 @@ class MCPServerManager:
             for tool in tools:
                 # The tool.name here is already prefixed from _get_tools_from_server
                 # Extract original name for mapping
-                original_name, _ = split_server_prefix_from_name(tool.name)
+                original_name = strip_known_server_prefix(tool.name, server)
                 self.tool_name_to_mcp_server_name_mapping[original_name] = server.name
                 self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
 
@@ -5288,13 +5282,10 @@ class MCPServerManager:
 
         # If not found and tool name is prefixed, extract the prefix and
         # match against any known form.
-        if is_tool_name_prefixed(tool_name, known_server_prefixes=set(prefix_to_server.keys())):
-            (
-                original_tool_name,
-                server_name_from_prefix,
-            ) = split_server_prefix_from_name(tool_name)
-            normalised_prefix = normalize_server_name(server_name_from_prefix)
-            matched_server = prefix_to_server.get(normalised_prefix)
+        matched = match_known_server_prefix(tool_name, prefix_to_server.keys())
+        if matched is not None:
+            matched_prefix, original_tool_name = matched
+            matched_server = prefix_to_server.get(matched_prefix)
             if matched_server is not None and (
                 original_tool_name in self.tool_name_to_mcp_server_name_mapping
                 or tool_name in self.tool_name_to_mcp_server_name_mapping
