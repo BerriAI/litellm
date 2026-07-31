@@ -62,6 +62,37 @@ vi.mock("./build_complexity_router_config", async (importOriginal) => {
   return { ...actual, getMissingTiersError: vi.fn(actual.getMissingTiersError) };
 });
 
+// Real bundled presets carry no deliberately-falsy fields, so a synthetic preset is appended to
+// prove prefill preserves a 0 match threshold and an empty escalation list (a preset switching
+// escalation off) instead of overwriting them with the create-form defaults. Defined via
+// vi.hoisted so it exists when the hoisted vi.mock factory below references it.
+const { FALSY_PRESET } = vi.hoisted(() => ({
+  FALSY_PRESET: {
+    key: "falsy_family",
+    label: "Falsy Family",
+    description: "Preset that deliberately disables escalation and pins a zero match threshold",
+    complexity_router_config: {
+      tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: ["gpt-5-mini"], COMPLEX: ["gpt-5"], REASONING: ["o3"] },
+      classifier_type: "heuristic" as const,
+      semantic_keyword_matching: true,
+      embedding_model: "gpt-5-nano",
+      match_threshold: 0,
+      keyword_tier_rules: [{ keywords: ["foo"], tier: "SIMPLE" as const }],
+      escalation_keywords: [],
+    },
+  },
+}));
+
+vi.mock("@/lib/autorouter_presets", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/autorouter_presets")>();
+  const withSynthetic = [...actual.getAllPresets(), FALSY_PRESET];
+  return {
+    ...actual,
+    getAllPresets: () => withSynthetic,
+    getPresetByKey: (key: string) => withSynthetic.find((preset) => preset.key === key),
+  };
+});
+
 // A real TeamDropdown fetches teams and renders an antd Select; the wiring under test is
 // whether team_id is registered, validated and forwarded, so a plain control stands in.
 vi.mock("../common_components/team_dropdown", () => ({
@@ -211,6 +242,85 @@ describe("AddAutoRouterTab", () => {
 
     // No preset was applied, so the tiers are empty and tier validation blocks the submit.
     expect(mockHandleAddAutoRouterSubmit).not.toHaveBeenCalled();
+  });
+
+  // A caller switch must reset the form and re-enter the loading gate until the NEW caller's models
+  // arrive, or the previous caller's verified list keeps a preset selectable and submittable for a
+  // caller who may lack those models. Caller A selects OpenAI (config filled); caller B's fetch is
+  // held open, so during that window the option must be disabled again (loading gate) AND the filled
+  // config must be gone, so B cannot submit A's preset. Dropping the reset re-enables the option and
+  // carries A's tiers into B's submit.
+  it("resets the form and re-enters the loading gate while the new caller's models are fetching", async () => {
+    const user = userEvent.setup();
+    let resolveB: (models: ModelGroup[]) => void = () => undefined;
+    mockFetchAvailableModels
+      .mockResolvedValueOnce(ALL_FAMILY_MODELS)
+      .mockReturnValueOnce(new Promise<ModelGroup[]>((resolve) => (resolveB = resolve)));
+
+    const { rerender } = renderWithProviders(
+      <AddAutoRouterTab handleOk={vi.fn()} accessToken="caller-a" userRole="Admin" />,
+    );
+    openTemplateDropdown();
+    await waitFor(() => expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(false));
+    fireEvent.click(optionByLabel("OpenAI Family")!);
+
+    rerender(<AddAutoRouterTab handleOk={vi.fn()} accessToken="caller-b" userRole="Admin" />);
+    await waitFor(() => expect(mockFetchAvailableModels).toHaveBeenCalledTimes(2));
+
+    openTemplateDropdown();
+    await waitFor(() => expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(true));
+    expect(optionByLabel("OpenAI Family")).toHaveTextContent(/Checking model availability/);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "caller-b-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+    expect(mockHandleAddAutoRouterSubmit).not.toHaveBeenCalled();
+
+    resolveB([]);
+  });
+
+  // A late-resolving fetch from the previous caller must not overwrite the current caller's list.
+  // Caller A's request is held open, caller B's resolves empty; when A finally resolves with the
+  // full family, the ignore guard drops it so the preset stays greyed out for B. Without the guard,
+  // A's response would land after B's and wrongly re-enable the preset.
+  it("ignores a stale in-flight model fetch that resolves after the token changed", async () => {
+    let resolveA: (models: ModelGroup[]) => void = () => undefined;
+    mockFetchAvailableModels
+      .mockReturnValueOnce(new Promise<ModelGroup[]>((resolve) => (resolveA = resolve)))
+      .mockResolvedValueOnce([]);
+
+    const { rerender } = renderWithProviders(
+      <AddAutoRouterTab handleOk={vi.fn()} accessToken="caller-a" userRole="Admin" />,
+    );
+    rerender(<AddAutoRouterTab handleOk={vi.fn()} accessToken="caller-b" userRole="Admin" />);
+    await waitFor(() => expect(mockFetchAvailableModels).toHaveBeenCalledTimes(2));
+
+    resolveA(ALL_FAMILY_MODELS);
+
+    openTemplateDropdown();
+    await waitFor(() => expect(optionByLabel("OpenAI Family")).toBeTruthy());
+    expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(true);
+  });
+
+  // Prefill must preserve a preset's deliberately-falsy fields (a 0 match threshold, an empty
+  // escalation list). Using `||` instead of `??` would swap the 0 for the create-form default and
+  // re-enable escalation the preset meant to turn off, so this asserts the exact submitted values.
+  it("preserves a preset's zero match threshold and empty escalation list through submit", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+    renderWithProviders(<Harness />);
+    openTemplateDropdown();
+
+    await waitFor(() => expect(isOptionDisabled(optionByLabel("Falsy Family")!)).toBe(false));
+    fireEvent.click(optionByLabel("Falsy Family")!);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "falsy-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(mockHandleAddAutoRouterSubmit).toHaveBeenCalled());
+    const payload = mockHandleAddAutoRouterSubmit.mock.calls.at(-1)?.[0];
+    expect(payload.complexity_router_config.match_threshold).toBe(0);
+    expect(payload.complexity_router_config.escalation_keywords).toEqual([]);
   });
 
   it("offers no team selector to a proxy admin, who may create an unscoped router", () => {

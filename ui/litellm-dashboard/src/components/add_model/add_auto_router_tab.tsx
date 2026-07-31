@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } from "antd";
 import { TextInput } from "@tremor/react";
 import { modelAvailableCall } from "../networking";
@@ -106,19 +106,44 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     fetchModelAccessGroups();
   }, [accessToken]);
 
+  const resetToCustom = useCallback(() => {
+    setComplexityRouterConfig({
+      tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
+      classifier_type: "heuristic",
+    });
+    setCustomTechnicalKeywords([]);
+    setKeywordTierRules([]);
+    setSemanticMatchingEnabled(false);
+    setEmbeddingModel(undefined);
+    setMatchThreshold(DEFAULT_MATCH_THRESHOLD);
+    setEscalationKeywords(DEFAULT_ESCALATION_KEYWORDS);
+  }, []);
+
   useEffect(() => {
+    let ignore = false;
+
     const loadModels = async () => {
+      setModelsLoadState("loading");
+      setModelInfo([]);
+      setSelectedPreset(undefined);
+      resetToCustom();
       try {
         const uniqueModels = await fetchAvailableModels(accessToken);
+        if (ignore) return;
         setModelInfo(uniqueModels);
         setModelsLoadState("loaded");
       } catch (error) {
         console.error("Error fetching model info for auto router:", error);
+        if (ignore) return;
         setModelsLoadState("error");
       }
     };
     loadModels();
-  }, [accessToken]);
+
+    return () => {
+      ignore = true;
+    };
+  }, [accessToken, resetToCustom]);
 
   const isAdmin = all_admin_roles.includes(userRole);
 
@@ -128,7 +153,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   }));
 
   const availableModelSet = new Set(modelInfo.map((m) => m.model_group));
-  const presets = getAllPresets();
+  const presets = React.useMemo(() => getAllPresets(), []);
 
   // A preset's models can only be trusted against a successfully loaded list. Selection and the
   // greyed-out state derive from this one function, so a preset that cannot be selected can never
@@ -140,19 +165,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     if (modelsLoadState === "error") return { kind: "unverifiable" };
     const missing = getMissingModelsInPreset(preset, availableModelSet);
     return missing.length > 0 ? { kind: "missing_models", models: missing } : { kind: "available" };
-  };
-
-  const resetToCustom = () => {
-    setComplexityRouterConfig({
-      tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
-      classifier_type: "heuristic",
-    });
-    setCustomTechnicalKeywords([]);
-    setKeywordTierRules([]);
-    setSemanticMatchingEnabled(false);
-    setEmbeddingModel(undefined);
-    setMatchThreshold(DEFAULT_MATCH_THRESHOLD);
-    setEscalationKeywords(DEFAULT_ESCALATION_KEYWORDS);
   };
 
   const handlePresetChange = (presetKey: string | undefined) => {
@@ -182,12 +194,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     };
     setComplexityRouterConfig(presetComplexityRouterConfig);
 
-    setCustomTechnicalKeywords(config.custom_technical_keywords || []);
-    setKeywordTierRules(hydrateKeywordTierRules(config.keyword_tier_rules || []));
-    setSemanticMatchingEnabled(config.semantic_keyword_matching || false);
+    setCustomTechnicalKeywords(config.custom_technical_keywords ?? []);
+    setKeywordTierRules(hydrateKeywordTierRules(config.keyword_tier_rules ?? []));
+    setSemanticMatchingEnabled(config.semantic_keyword_matching ?? false);
     setEmbeddingModel(config.embedding_model);
-    setMatchThreshold(config.match_threshold || DEFAULT_MATCH_THRESHOLD);
-    setEscalationKeywords(config.escalation_keywords || DEFAULT_ESCALATION_KEYWORDS);
+    setMatchThreshold(config.match_threshold ?? DEFAULT_MATCH_THRESHOLD);
+    setEscalationKeywords(config.escalation_keywords ?? DEFAULT_ESCALATION_KEYWORDS);
   };
 
   const submitRecommendedRouter = (name: string) => {
